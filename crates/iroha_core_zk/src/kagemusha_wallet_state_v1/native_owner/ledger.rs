@@ -28,7 +28,8 @@ fn proof_original(bytes: &[u8]) -> Result<SumeragiFinalityProof, Error> {
     if bytes.is_empty() || bytes.len() > LEDGER_PROOF_MAX_BYTES_V1 {
         return Err(Error::Invalid("ledger proof original bound"));
     }
-    let proof: SumeragiFinalityProof = archive::decode(bytes)?;
+    let proof: SumeragiFinalityProof =
+        archive::decode(bytes).map_err(|_| Error::Invalid("ledger proof canonical original"))?;
     if proof.committee.len() > 31 || proof.block_wire.len() > MAX_FINALITY_BLOCK_BYTES {
         return Err(Error::Invalid("ledger proof decoded bound"));
     }
@@ -38,7 +39,7 @@ fn payout_original(bytes: &[u8]) -> Result<KagemushaWalletPayoutRecordV1, Error>
     if bytes.is_empty() || bytes.len() > PAYOUT_RECORD_MAX_BYTES_V1 {
         return Err(Error::Invalid("payout original bound"));
     }
-    archive::decode(bytes)
+    archive::decode(bytes).map_err(|_| Error::Invalid("payout canonical original"))
 }
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     fn selected_ledger(
@@ -105,7 +106,12 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         genesis: &SumeragiFinalityVerifier,
         bytes: &[u8],
     ) -> Result<LedgerProgressV1, Error> {
+        if !matches!(self.status()?, SlotStatus::Released(_)) {
+            return Err(Error::NoHead);
+        }
         let candidate = proof_original(bytes)?;
+        // Reconcile only cleanup already authorized by the selected manifest. An invalid
+        // new candidate can trigger that old cleanup, but can never select a new tip.
         self.clean_retired_ledger()?;
         let (root, mut manifest) = self.sync_manifest()?;
         let (mut verifier, previous) = self.selected_ledger(&manifest, genesis)?;

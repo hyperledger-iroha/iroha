@@ -161,6 +161,12 @@ mod decoded_field_tests {
 
     #[test]
     fn canonical_field_visitation_preserves_explicit_none_and_original_value_retirement() {
+        struct Original<'a>(&'a std::cell::Cell<u8>);
+        impl Drop for Original<'_> {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
         let mut field = DecodedField::<Option<u8>>::default();
         assert!(field.is_missing());
         assert_eq!(field.as_ref(), None);
@@ -173,12 +179,6 @@ mod decoded_field_tests {
         assert_eq!(DecodedField::Decoded(Some(7)).into_value(), Some(Some(7)));
         assert_eq!(DecodedField::<Option<u8>>::Missing.into_value(), None);
 
-        struct Original<'a>(&'a std::cell::Cell<u8>);
-        impl Drop for Original<'_> {
-            fn drop(&mut self) {
-                self.0.set(self.0.get() + 1);
-            }
-        }
         let retired = std::cell::Cell::new(0);
         let mut owner = DecodedField::<Original<'_>>::default();
         assert!(owner.is_missing());

@@ -9,6 +9,9 @@ use iroha_data_model::{
 #[path = "issuer_worker_configuration_tests.rs"]
 mod configuration_tests;
 
+#[path = "issuer_worker_protocol_tests.rs"]
+mod protocol_tests;
+
 #[test]
 fn retained_evidence_rechecks_original_configuration_and_time() {
     for apple in [false, true] {
@@ -57,7 +60,7 @@ fn fixture(apple: bool) -> VerifierRequestV1 {
     .unwrap();
     let app = KagemushaWalletAppPolicyV1 {
         version: 1,
-        scheme_id: [1; 32],
+        scheme_id: scheme().scheme_id(),
         identity: if apple {
             KagemushaWalletAppIdentityV1::Apple {
                 app_id: "TEAM.org.example.wallet".into(),
@@ -136,19 +139,96 @@ fn fixture(apple: bool) -> VerifierRequestV1 {
             .payload()
             .try_into()
             .unwrap();
-    VerifierRequestV1::from_retained(
-        RequestV1 {
-            body,
-            account_signature,
-        },
-        &app,
-        &policy,
-        1_000,
-        601_000,
-        [7; 32],
-    )
-    .unwrap()
+    let request = RequestV1 {
+        body,
+        account_signature,
+    };
+    let preparation = prepare(&request, 1_000, [7; 32]).unwrap();
+    VerifierRequestV1::from_prepared(request, &preparation, 601_000).unwrap()
 }
+
+fn scheme() -> KagemushaWalletSchemeV1 {
+    let root = p256::ecdsa::SigningKey::from_slice(&[17; 32]).unwrap();
+    KagemushaWalletSchemeV1 {
+        version: 1,
+        network_id: *Hash::new(b"private worker vector DATA").as_ref(),
+        scheme_root_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            root.verifying_key().to_encoded_point(false).as_bytes(),
+        )
+        .unwrap(),
+        relation_id: [19; 32],
+        provider_contract: kagemusha_wallet_provider_contract_v1(),
+    }
+}
+fn dispatch(request: &RequestV1) -> PreKeyDispatchV1 {
+    use p256::ecdsa::signature::Signer as _;
+    let scheme = scheme();
+    let root = p256::ecdsa::SigningKey::from_slice(&[17; 32]).unwrap();
+    let body = KagemushaWalletSignerCertificateBodyV1 {
+        version: 1,
+        scheme_id: scheme.scheme_id(),
+        role: KagemushaWalletSignerRoleV1::Enrollment,
+        key: scheme.scheme_root_key,
+        serial: 1,
+    };
+    let signature: p256::ecdsa::Signature = root.sign(&body.signing_message());
+    let certificate = KagemushaWalletSignerCertificateV1::sign(
+        body,
+        &scheme,
+        KagemushaWalletSignerOutputV1::Raw(signature.to_bytes().into()),
+    )
+    .unwrap();
+    PreKeyDispatchV1 {
+        version: 1,
+        request_id: [1; 32],
+        platform: if matches!(
+            request.body.policy.platform,
+            KagemushaWalletEnrollmentPlatformV1::Apple { .. }
+        ) {
+            KagemushaEnrollmentPermitPlatformV1::Apple
+        } else {
+            KagemushaEnrollmentPermitPlatformV1::Android
+        },
+        purpose: KagemushaEnrollmentPermitPurposeV1::Fresh,
+        client_nonce: [2; 32],
+        native_dispatch_nonce: [3; 32],
+        manifest_digest: [4; 32],
+        release_digest: [5; 32],
+        service_origin_digest: [6; 32],
+        fi_digest: [7; 32],
+        actor_digest: [8; 32],
+        scheme,
+        app: request.body.app.clone(),
+        policy: request.body.policy,
+        enrollment_certificate: certificate,
+        account: request.body.account.clone(),
+        asset: request.body.asset.clone(),
+        previous_permit: None,
+    }
+}
+fn prepare(
+    request: &RequestV1,
+    created: u64,
+    config: [u8; 32],
+) -> Result<VerifierPreparationV1, Error> {
+    VerifierPreparationV1::from_selected(
+        &dispatch(request),
+        request.body.challenge,
+        created,
+        config,
+    )
+}
+fn exchange(request: &VerifierRequestV1, id: [u8; 32]) -> VerifierExchangeV1 {
+    request
+        .packet(
+            ActionV1::Complete,
+            [10; 32],
+            id,
+            request.verification_time_ms,
+        )
+        .unwrap()
+}
+
 fn projection(request: &VerifierRequestV1) -> Value {
     let body = &request.request.body;
     let (kind, originals, items, key, counter) =
@@ -207,13 +287,27 @@ fn framed(value: &Value) -> Vec<u8> {
     frame.extend(bytes);
     frame
 }
-fn response(request: &VerifierRequestV1, outcome: &str, evidence: Value) -> Value {
+fn reply_with(
+    configuration: [u8; 32],
+    exchange: &VerifierExchangeV1,
+    outcome: &str,
+    evidence: Value,
+) -> Value {
+    let packet = decode(&exchange.frame()[4..], MAX_PACKET).unwrap();
     norito::json!({
-        "schema": (SCHEMA), "version": (1_u16), "exchange_id": (hex::encode([9; 32])),
-        "original_sha256": (hex::encode(Sha256::digest(request.original()))),
+        "schema": (SCHEMA), "version": (1_u16), "exchange_id": (packet["exchange_id"].clone()),
+        "request_sha256": (hex::encode(Sha256::digest(&exchange.frame()[4..]))),
+        "journal_incarnation": (hex::encode([10;32])), "config_sha256": (hex::encode(configuration)),
         "outcome": (outcome), "evidence_base64": (evidence),
     })
 }
+fn reply(exchange: &VerifierExchangeV1, outcome: &str, evidence: Value) -> Value {
+    reply_with([7; 32], exchange, outcome, evidence)
+}
+fn response(request: &VerifierRequestV1, outcome: &str, evidence: Value) -> Value {
+    reply(&exchange(request, [9; 32]), outcome, evidence)
+}
+
 fn change(value: &mut Value, key: &str, next: Value) {
     *value.get_mut(key).unwrap() = next;
 }
@@ -242,8 +336,11 @@ fn retained_request_has_exact_python_fields_and_no_extra_lifetime_ceiling() {
             binary(text(&decoded, "challenge_transcript_base64").unwrap(), 194).unwrap(),
             request.request.body.challenge.transcript()
         );
-        for action in [ActionV1::Verify, ActionV1::Recover] {
-            let packet = request.packet(action, [8; 32]).unwrap();
+        for action in [ActionV1::Complete, ActionV1::Recover] {
+            let packet = request
+                .packet(action, [10; 32], [8; 32], request.verification_time_ms)
+                .unwrap();
+            let packet = packet.frame();
             assert_eq!(
                 u32::from_le_bytes(packet[..4].try_into().unwrap()) as usize,
                 packet.len() - 4
@@ -254,7 +351,16 @@ fn retained_request_has_exact_python_fields_and_no_extra_lifetime_ceiling() {
                 request.original()
             );
         }
-        assert!(request.packet(ActionV1::Verify, [0; 32]).is_err());
+        assert!(
+            request
+                .packet(
+                    ActionV1::Complete,
+                    [10; 32],
+                    [0; 32],
+                    request.verification_time_ms
+                )
+                .is_err()
+        );
         let body = &request.request.body;
         for (created, now) in [
             (0, 1_000),
@@ -263,43 +369,28 @@ fn retained_request_has_exact_python_fields_and_no_extra_lifetime_ceiling() {
             (u64::MAX, u64::MAX),
         ] {
             assert!(
-                VerifierRequestV1::from_retained(
-                    request.request.clone(),
-                    &body.app,
-                    &body.policy,
-                    created,
-                    now,
-                    [7; 32]
-                )
-                .is_err()
+                prepare(&request.request, created, [7; 32])
+                    .and_then(|prepared| VerifierRequestV1::from_prepared(
+                        request.request.clone(),
+                        &prepared,
+                        now
+                    ))
+                    .is_err()
             );
         }
         let mut other = body.policy;
         other.challenge_lifetime_ms += 1;
         assert!(
-            VerifierRequestV1::from_retained(
-                request.request.clone(),
-                &body.app,
-                &other,
-                1_000,
-                1_001,
-                [7; 32]
-            )
+            {
+                let mut changed = request.request.clone();
+                changed.body.policy = other;
+                VerifierRequestV1::from_prepared(changed, &request.preparation, 1_001)
+            }
             .is_err()
         );
         let mut forged = request.request.clone();
         forged.account_signature[0] ^= 1;
-        assert!(
-            VerifierRequestV1::from_retained(
-                forged,
-                &body.app,
-                &body.policy,
-                1_000,
-                1_001,
-                [7; 32]
-            )
-            .is_err()
-        );
+        assert!(VerifierRequestV1::from_prepared(forged, &request.preparation, 1_001).is_err());
     }
 }
 
@@ -313,7 +404,9 @@ fn worker_originals_rederive_digest_and_keep_exact_private_result() {
             "evidence",
             Value::from(STANDARD.encode(&original)),
         );
-        let OutcomeV1::Evidence(result) = request.response([9; 32], &framed(&value)).unwrap()
+        let OutcomeV1::Evidence(result) = request
+            .response(&exchange(&request, [9; 32]), &framed(&value))
+            .unwrap()
         else {
             panic!("evidence projection")
         };
@@ -397,32 +490,49 @@ fn uncertain_and_unavailable_outcomes_never_become_evidence() {
     let request = fixture(false);
     for outcome in ["outcome_unknown", "unavailable", "rejected"] {
         let value = response(&request, outcome, Value::Null);
-        let result = request.response([9; 32], &framed(&value)).unwrap();
+        let result = request
+            .response(&exchange(&request, [9; 32]), &framed(&value))
+            .unwrap();
         assert!(matches!(
             (outcome, result),
             ("outcome_unknown", OutcomeV1::OutcomeUnknown)
                 | ("unavailable", OutcomeV1::Unavailable)
                 | ("rejected", OutcomeV1::Rejected)
         ));
-        assert!(request.response([8; 32], &framed(&value)).is_err());
+        assert!(
+            request
+                .response(&exchange(&request, [8; 32]), &framed(&value))
+                .is_err()
+        );
         let mut wrong = value.clone();
         change(
             &mut wrong,
-            "original_sha256",
+            "request_sha256",
             Value::from(hex::encode([8; 32])),
         );
-        assert!(request.response([9; 32], &framed(&wrong)).is_err());
+        assert!(
+            request
+                .response(&exchange(&request, [9; 32]), &framed(&wrong))
+                .is_err()
+        );
         change(
             &mut wrong,
             "evidence_base64",
             Value::from(STANDARD.encode(b"injected")),
         );
-        assert!(request.response([9; 32], &framed(&wrong)).is_err());
+        assert!(
+            request
+                .response(&exchange(&request, [9; 32]), &framed(&wrong))
+                .is_err()
+        );
     }
     for outcome in ["accepted", "", "success", "evidence"] {
         assert!(
             request
-                .response([9; 32], &framed(&response(&request, outcome, Value::Null)))
+                .response(
+                    &exchange(&request, [9; 32]),
+                    &framed(&response(&request, outcome, Value::Null))
+                )
                 .is_err()
         );
     }
@@ -451,15 +561,28 @@ fn private_decode_rejects_duplicate_fields_bad_numbers_and_noncanonical_binary()
     assert!(digest(&norito::json!({"x": ("AA".repeat(32))}), "x").is_err());
     let request = fixture(false);
     let frame = framed(&response(&request, "unavailable", Value::Null));
-    assert!(request.response([0; 32], &frame).is_err());
     assert!(
         request
-            .response([9; 32], &frame[..frame.len() - 1])
+            .packet(
+                ActionV1::Complete,
+                [10; 32],
+                [0; 32],
+                request.verification_time_ms
+            )
+            .is_err()
+    );
+    assert!(
+        request
+            .response(&exchange(&request, [9; 32]), &frame[..frame.len() - 1])
             .is_err()
     );
     let mut appended = frame;
     appended.push(0);
-    assert!(request.response([9; 32], &appended).is_err());
+    assert!(
+        request
+            .response(&exchange(&request, [9; 32]), &appended)
+            .is_err()
+    );
 }
 
 #[test]

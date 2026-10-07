@@ -2,7 +2,8 @@
 //!
 //! This codec owns no issuer key and grants no platform or policy authority. The issuer must
 //! authenticate its worker/runtime/configuration, retain the original request before dispatch,
-//! enforce challenge single use and recover uncertain attempts without verifying them again.
+//! enforce challenge single use and complete only a durably prepared operation. Recovery may
+//! win an unclaimed preparation; an already claimed operation never repeats verification.
 //! The node journal retains these original requests and checked replies before signing.
 //! TODO: connect the node service's approved policy, private process custody and signer.
 
@@ -11,7 +12,11 @@ use iroha_data_model::kagemusha::*;
 use norito::json::{self, Value};
 use sha2::{Digest as _, Sha256};
 
-use super::{IssuerEvidenceV1, PlatformEvidenceV1, RequestV1};
+use super::{IssuerEvidenceV1, PlatformEvidenceV1, PreKeyDispatchV1, RequestV1};
+
+#[path = "issuer_worker_protocol.rs"]
+mod protocol;
+pub use protocol::{VerifierExchangeV1, VerifierPreparationV1};
 
 #[path = "issuer_worker_configuration.rs"]
 mod configuration;
@@ -37,14 +42,15 @@ pub struct VerifierRequestV1 {
     original: Vec<u8>,
     configuration: [u8; 32],
     verification_time_ms: u64,
+    preparation: VerifierPreparationV1,
 }
 
 /// Action selected by the durable issuer owner. An uncertain verification must only recover.
 #[derive(Debug, Clone, Copy)]
 pub enum ActionV1 {
-    /// Exactly one dispatch after durable attempt selection.
-    Verify,
-    /// Read the retained result for exactly the same original request.
+    /// Claim the durably prepared operation or return its exact retained outcome.
+    Complete,
+    /// Recover this exact prepared operation; only an unclaimed preparation can verify once.
     Recover,
 }
 
@@ -143,30 +149,24 @@ fn binary(value: &str, maximum: usize) -> Result<Vec<u8>, Error> {
 }
 
 impl VerifierRequestV1 {
-    /// Build from exact issuer-retained E5, approved policy originals and genuine journal time.
-    /// The caller must establish authentication, current account eligibility and exclusive
-    /// challenge ownership before dispatch. The resulting bytes must be retained unchanged.
-    pub fn from_retained(
+    /// Bind an exact account-signed E5 to its selected pre-key preparation and issuer time.
+    /// This checks DATA consistency; the durable journal must retain the preparation and
+    /// authenticated worker acknowledgment before exposing the challenge or dispatching E5.
+    /// # Errors
+    /// Foreign account/policy/challenge, invalid signature, or time outside the selected window.
+    pub fn from_prepared(
         request: RequestV1,
-        approved_app: &KagemushaWalletAppPolicyV1,
-        approved_policy: &KagemushaWalletEnrollmentPolicyV1,
-        challenge_created_at_ms: u64,
+        preparation: &VerifierPreparationV1,
         verification_time_ms: u64,
-        configuration: [u8; 32],
     ) -> Result<Self, Error> {
         request.validate().map_err(Error)?;
-        if request.body.app != *approved_app
-            || request.body.policy != *approved_policy
-            || configuration == [0; 32]
-        {
-            return Err(Error("approved configuration binding"));
-        }
+        preparation.require_request(&request)?;
+        let approved_policy = &preparation.policy;
+        let challenge_created_at_ms = preparation.created_at_ms;
         approved_policy
             .require_live_challenge(challenge_created_at_ms, verification_time_ms)
             .map_err(|_| Error("retained challenge time"))?;
-        let expires = challenge_created_at_ms
-            .checked_add(approved_policy.challenge_lifetime_ms)
-            .ok_or(Error("challenge expiry overflow"))?;
+        let expires = preparation.expires_at_ms;
         let mobile =
             PlatformEvidenceV1::decode(&request.body.evidence, approved_policy).map_err(Error)?;
         let (platform, evidence) = match mobile {
@@ -212,8 +212,9 @@ impl VerifierRequestV1 {
         Ok(Self {
             request,
             original,
-            configuration,
+            configuration: preparation.configuration,
             verification_time_ms,
+            preparation: preparation.clone(),
         })
     }
 
@@ -222,73 +223,38 @@ impl VerifierRequestV1 {
         &self.original
     }
 
-    /// One framed private exchange. The process owner supplies a fresh nonzero random exchange
-    /// identity; it must not reuse it within a worker session, including during recovery.
-    pub fn packet(&self, action: ActionV1, exchange: [u8; 32]) -> Result<Vec<u8>, Error> {
-        if exchange == [0; 32] {
-            return Err(Error("empty exchange identity"));
-        }
-        let action = match action {
-            ActionV1::Verify => "verify",
-            ActionV1::Recover => "recover",
-        };
-        let bytes = encode(
-            &norito::json!({
-                "schema": (SCHEMA), "version": (1_u16), "exchange_id": (hex::encode(exchange)),
-                "action": (action), "original_base64": (STANDARD.encode(&self.original)),
-            }),
-            MAX_PACKET,
-        )?;
-        let mut framed = Vec::with_capacity(bytes.len() + 4);
-        framed.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-        framed.extend_from_slice(&bytes);
-        Ok(framed)
+    /// Retain a complete or recovery exchange with a fresh nonzero session identifier.
+    /// The immutable request time is unchanged; this fresh issuer time selects the first
+    /// verification time only if the worker wins the prepared operation's atomic claim.
+    /// # Errors
+    /// Empty identities, backwards dispatch time, or packet bounds.
+    pub fn packet(
+        &self,
+        action: ActionV1,
+        incarnation: [u8; 32],
+        exchange: [u8; 32],
+        dispatch_time_ms: u64,
+    ) -> Result<VerifierExchangeV1, Error> {
+        protocol::request_exchange(self, action, incarnation, exchange, dispatch_time_ms)
     }
 
-    /// Decode one complete length-framed response from the authenticated private worker.
-    /// Every identity, original, kind, fact and recorded time is checked before projection.
-    pub fn response(&self, exchange: [u8; 32], frame: &[u8]) -> Result<OutcomeV1, Error> {
-        if exchange == [0; 32] || frame.len() < 4 || frame.len() > MAX_PACKET + 4 {
-            return Err(Error("response frame bound"));
-        }
-        let length =
-            u32::from_le_bytes(frame[..4].try_into().map_err(|_| Error("frame prefix"))?) as usize;
-        if length != frame.len() - 4 {
-            return Err(Error("response frame length"));
-        }
-        let value = decode(&frame[4..], MAX_PACKET)?;
-        fields(
-            &value,
-            &[
-                "schema",
-                "version",
-                "exchange_id",
-                "original_sha256",
-                "outcome",
-                "evidence_base64",
-            ],
-        )?;
-        if text(&value, "schema")? != SCHEMA
-            || integer(&value, "version")? != 1
-            || digest(&value, "exchange_id")? != exchange
-            || digest(&value, "original_sha256")?
-                != <[u8; 32]>::from(Sha256::digest(&self.original))
-        {
-            return Err(Error("response identity"));
-        }
+    /// Check the exact exchange and every reply binding before projecting evidence.
+    /// The caller must independently authenticate the worker channel and preserve its custody.
+    /// # Errors
+    /// A foreign exchange/request/preparation, malformed response, or invalid evidence binding.
+    pub fn response(
+        &self,
+        exchange: &VerifierExchangeV1,
+        frame: &[u8],
+    ) -> Result<OutcomeV1, Error> {
+        let (value, dispatch_time_ms) = exchange.request_response(self, frame)?;
         if text(&value, "outcome")? == "evidence" {
             let original = binary(text(&value, "evidence_base64")?, MAX_RESULT)?;
-            return self.projection(original).map(OutcomeV1::Evidence);
+            return self
+                .projection_at(original, dispatch_time_ms)
+                .map(OutcomeV1::Evidence);
         }
-        if value.get("evidence_base64") != Some(&Value::Null) {
-            return Err(Error("failure evidence"));
-        }
-        match text(&value, "outcome")? {
-            "outcome_unknown" => Ok(OutcomeV1::OutcomeUnknown),
-            "unavailable" => Ok(OutcomeV1::Unavailable),
-            "rejected" => Ok(OutcomeV1::Rejected),
-            _ => Err(Error("unknown outcome")),
-        }
+        protocol::failure(&value)
     }
 
     /// Recheck an exact evidence original retained by the issuer after an authenticated reply.
@@ -302,6 +268,14 @@ impl VerifierRequestV1 {
     }
 
     fn projection(&self, original_result: Vec<u8>) -> Result<EvidenceProjectionV1, Error> {
+        self.projection_at(original_result, u64::MAX)
+    }
+
+    fn projection_at(
+        &self,
+        original_result: Vec<u8>,
+        latest_time_ms: u64,
+    ) -> Result<EvidenceProjectionV1, Error> {
         let value = decode(&original_result, MAX_RESULT)?;
         fields(
             &value,
@@ -323,6 +297,7 @@ impl VerifierRequestV1 {
             ],
         )?;
         let body = &self.request.body;
+        let evidence_time_ms = integer(&value, "time_ms")?;
         if digest(&value, "config_sha256")? != self.configuration
             || digest(&value, "challenge_digest")? != body.challenge.challenge_digest()
             || digest(&value, "key_binding")?
@@ -332,7 +307,9 @@ impl VerifierRequestV1 {
                 )
             || binary(text(&value, "payment_key_base64")?, 65)?
                 != body.marker.payment_key.as_sec1_bytes()
-            || integer(&value, "time_ms")? != self.verification_time_ms
+            || evidence_time_ms < self.verification_time_ms
+            || evidence_time_ms >= self.preparation.expires_at_ms
+            || evidence_time_ms > latest_time_ms
         {
             return Err(Error("evidence identity"));
         }
@@ -429,7 +406,7 @@ impl VerifierRequestV1 {
         };
         let evidence = KagemushaWalletEvidenceV1 {
             digest: originals.digest(body, kind).map_err(Error)?,
-            time_ms: self.verification_time_ms,
+            time_ms: evidence_time_ms,
             facts: u32::try_from(integer(&value, "facts")?).map_err(|_| Error("fact range"))?,
             os_patch_level: u32::try_from(integer(&value, "os_patch_level")?)
                 .map_err(|_| Error("patch range"))?,

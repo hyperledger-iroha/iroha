@@ -53,6 +53,7 @@ EXPECTED_BUILD_ENVIRONMENT_FIELDS = {
     "schema",
     "hermetic_runner_schema",
     "hermetic_runner_sha256",
+    "wallet_runtime_trust_ed25519_hex",
     "environment_profiles",
     "cargo_build_jobs",
     "rust_toolchain_channel",
@@ -92,6 +93,7 @@ COMMON_BUILD_ENVIRONMENT = {
     "IROHA_GIT_COMMIT_HASH",
     "LANG",
     "LC_ALL",
+    "MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX",
     "NORITO_SKIP_BINDINGS_SYNC",
     "PATH",
     "RUSTC",
@@ -169,7 +171,6 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_wallet_close_v1",
     "connect_norito_kagemusha_wallet_activity_v1",
     "connect_norito_kagemusha_wallet_setup_v1",
-    "connect_norito_kagemusha_wallet_enrollment_v1",
     "connect_norito_kagemusha_wallet_execute_v1",
     "connect_norito_kagemusha_wallet_load_original_validate_v1",
     "connect_norito_kagemusha_wallet_request_status_v1",
@@ -178,6 +179,11 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_wallet_fold_v1",
     "connect_norito_kagemusha_wallet_credit_status_v1",
     "connect_norito_kagemusha_wallet_snapshot_v1",
+    "connect_norito_kagemusha_wallet_review_v1",
+    "connect_norito_kagemusha_wallet_execute_reviewed_v1",
+    "connect_norito_kagemusha_wallet_discard_review_v1",
+    "connect_norito_kagemusha_wallet_install_runtime_v1",
+    "connect_norito_kagemusha_wallet_enrollment_v1",
 ]
 EXPECTED_FORBIDDEN_SYMBOLS = [
     "connect_norito_kagemusha_v1_payment_request_validate",
@@ -316,6 +322,9 @@ def _validate_build_environment(root: Path, environment: object) -> None:
             f"(missing={sorted(EXPECTED_BUILD_ENVIRONMENT_FIELDS - actual)}, "
             f"unexpected={sorted(actual - EXPECTED_BUILD_ENVIRONMENT_FIELDS)})"
         )
+    public_root = environment["wallet_runtime_trust_ed25519_hex"]
+    if not isinstance(public_root, str) or SHA256.fullmatch(public_root) is None or public_root == "0" * 64:
+        raise ValidationError("artifact Native runtime public root is not exact")
     if environment["environment_profiles"] != EXPECTED_ENVIRONMENT_PROFILES:
         raise ValidationError("artifact build environment allowlists are not exact")
     if (

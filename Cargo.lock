@@ -1803,7 +1803,12 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_fs",
+ "iroha_genesis",
+ "iroha_kagemusha_proof",
  "iroha_model_base",
+ "iroha_pasta",
+ "iroha_plonk",
  "iroha_primitives",
  "iroha_torii_shared",
  "iroha_version",
@@ -1811,6 +1816,7 @@ dependencies = [
  "jni 0.21.1",
  "libc",
  "norito",
+ "p256",
  "rand 0.9.4",
  "sorafs_car",
  "sorafs_chunker",
@@ -5233,6 +5239,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "trybuild",
+ "zeroize",
 ]
 
 [[package]]
@@ -6194,6 +6201,7 @@ dependencies = [
  "url",
  "urlencoding",
  "x509-parser",
+ "zeroize",
  "zstd",
 ]
 

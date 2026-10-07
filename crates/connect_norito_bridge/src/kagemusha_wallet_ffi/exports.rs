@@ -44,7 +44,10 @@ impl Default for WalletResult {
         }
     }
 }
-unsafe fn output(out: *mut WalletResult, action: impl FnOnce() -> Result<Response>) -> i32 {
+pub(super) unsafe fn output(
+    out: *mut WalletResult,
+    action: impl FnOnce() -> Result<Response>,
+) -> i32 {
     if out.is_null() {
         return INVALID;
     }
@@ -84,7 +87,11 @@ unsafe fn output(out: *mut WalletResult, action: impl FnOnce() -> Result<Respons
     unsafe { out.write(value) };
     status
 }
-unsafe fn input<'a>(pointer: *const u8, length: usize, bound: usize) -> Result<&'a [u8]> {
+pub(super) unsafe fn input<'a>(
+    pointer: *const u8,
+    length: usize,
+    bound: usize,
+) -> Result<&'a [u8]> {
     if length > bound || (pointer.is_null() && length != 0) {
         return Err(Failure::code(INVALID));
     }
@@ -207,7 +214,8 @@ pub extern "C" fn connect_norito_kagemusha_wallet_activity_v1(
 }
 /// Typed lifecycle input. Unused original slots and amount limbs must be zero/empty.
 /// Selectors: Load0, Send1, Receive2, Credential3, SchemePolicy4, Blacklist5,
-/// TimeAnchor6, QuotaShare7, Unload8, Retire9. These never select proof keys.
+/// TimeAnchor6, QuotaShare7, Unload8, Retire9, ReceiveFromOffer10. These never select proof keys.
+/// ReceiveFromOffer carries exact Payment and signed Offer originals; Native extracts payer custody.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct WalletOperationRequest {
@@ -353,6 +361,9 @@ mod setup_boundary_tests {
                 setup::Setup::Bootstrap => (1, 0, vec![0, 255, 1]),
                 setup::Setup::FeeClaim { .. } => (31, 0, vec![1; state::FEE_CLAIM_MAX_BYTES_V1]),
                 setup::Setup::FeeOriginal { original, .. } => (12, 0, original),
+                setup::Setup::FeeClaimTransport { .. } => {
+                    (36, 0, vec![0xf1; KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1])
+                }
                 setup::Setup::LedgerFinality(_) | setup::Setup::LedgerStatus => {
                     (33, u128::from(u64::MAX), vec![7; 32])
                 }
@@ -489,9 +500,21 @@ mod setup_boundary_tests {
             (16, 12, 0, vec![0, 0, 255]),
             (17, 12, 0, vec![1, 0, 255]),
             (19, 30, 0, vec![0xc1; 16_384]),
+            (20, 31, 0, vec![1; state::FEE_CLAIM_MAX_BYTES_V1]),
+            (21, 12, 0, vec![0, 255, 7]),
+            (22, 12, 0, vec![0, 255, 7]),
+            (23, 33, u64::MAX, vec![7; 32]),
+            (24, 33, u64::MAX, vec![7; 32]),
+            (25, 35, 0, vec![]),
+            (
+                26,
+                36,
+                0,
+                vec![0xf1; KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1],
+            ),
         ] {
             let mut request = request(
-                if matches!(selector, 1 | 2 | 19) {
+                if matches!(selector, 1 | 2 | 19 | 20 | 25) {
                     &id
                 } else {
                     &zero
@@ -504,9 +527,13 @@ mod setup_boundary_tests {
                     high: u64::MAX,
                 };
             }
-            if matches!(selector, 2 | 3 | 16 | 17) {
+            if matches!(selector, 2 | 3 | 16 | 17 | 21..=23 | 25 | 26) {
                 request.first = original.as_ptr();
                 request.first_length = original.len();
+            }
+            if matches!(selector, 25 | 26) {
+                request.second = original.as_ptr();
+                request.second_length = original.len();
             }
             let mut out = WalletResult::default();
             assert_eq!(
@@ -528,7 +555,7 @@ mod setup_boundary_tests {
                 crate::connect_norito_free(out.bytes);
             }
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 9);
+        assert_eq!(calls.load(Ordering::SeqCst), 16);
         let mut status = WalletResult::default();
         assert_eq!(
             unsafe {
@@ -539,13 +566,13 @@ mod setup_boundary_tests {
         assert_eq!((status.status, status.detail, status.length), (29, 0, 0));
         assert_eq!(
             calls.load(Ordering::SeqCst),
-            9,
+            16,
             "worker status does not acquire the wallet"
         );
         assert_failure(handle, &request(&zero, 19), INVALID);
         close(handle).unwrap();
         assert_failure(handle, &request(&zero, 0), CLOSED);
-        assert_eq!(calls.load(Ordering::SeqCst), 9);
+        assert_eq!(calls.load(Ordering::SeqCst), 16);
     }
     #[test]
     fn setup_c_routes_cancellation_and_every_envelope_form_to_the_same_owner() {

@@ -2,7 +2,9 @@
 use super::*;
 use iroha_core_zk::kagemusha_wallet_enrollment_v1::{
     PreKeyDispatchV1, RequestV1, ResultV1,
-    issuer_worker::{EvidenceProjectionV1, OutcomeV1, VerifierRequestV1},
+    issuer_worker::{
+        ActionV1, EvidenceProjectionV1, OutcomeV1, VerifierExchangeV1, VerifierRequestV1,
+    },
 };
 use iroha_data_model::kagemusha::KagemushaWalletCredentialBodyV1;
 
@@ -10,7 +12,7 @@ impl EnrollmentJournalV1 {
     /// Reconstruct the exact private request from retained account-signed E5 and issuer time.
     /// The independently admitted process must match the original configuration pin. This
     /// returns codec state only: a reread `Verifying` attempt permits `Recover`, never another
-    /// `Verify`. Later terminal phases already have their original outcome in this journal.
+    /// fresh E5 selection. Later terminal phases already have their original outcome in this journal.
     /// # Errors
     /// Refuses an unselected or stale attempt, configuration substitution, invalid E5, changed
     /// issuer bindings or any mismatch with the exact previously published worker request.
@@ -33,15 +35,11 @@ impl EnrollmentJournalV1 {
         {
             return Err(Conflict);
         }
-        let app = request.body.app.clone();
-        let policy = request.body.policy;
-        let worker = VerifierRequestV1::from_retained(
+        let preparation = self.require_worker_prepared(attempt, configuration)?;
+        let worker = VerifierRequestV1::from_prepared(
             request,
-            &app,
-            &policy,
-            attempt.selection().created_at_ms,
+            &preparation,
             attempt.record.verification_time_ms,
-            configuration,
         )
         .map_err(|_| Invalid)?;
         if worker.original() != attempt.record.worker_request {
@@ -50,9 +48,35 @@ impl EnrollmentJournalV1 {
         Ok(worker)
     }
 
+    /// Bind one Complete/Recover exchange to the durable preparation and exact account-signed
+    /// E5. A reread attempt must use Recover; the worker atomically claims an unclaimed prepared
+    /// row and never repeats verification after a claim, even when its result remains unknown.
+    /// The caller supplies a fresh exchange nonce and trusted current dispatch time.
+    /// # Errors
+    /// Unprepared/mismatched originals, malformed time/nonce or unavailable custody.
+    pub fn worker_exchange(
+        &self,
+        attempt: &EnrollmentAttemptV1,
+        configuration: [u8; 32],
+        action: ActionV1,
+        exchange: [u8; 32],
+        dispatch_time_ms: u64,
+    ) -> Result<VerifierExchangeV1> {
+        let worker = self.retained_worker_request(attempt, configuration)?;
+        let incarnation = attempt
+            .record
+            .worker_preparation
+            .as_ref()
+            .ok_or(Conflict)?
+            .incarnation;
+        worker
+            .packet(action, incarnation, exchange, dispatch_time_ms)
+            .map_err(|_| Invalid)
+    }
+
     /// Validate and retain an authenticated worker's exact reply before permitting signing.
     /// Worker custody remains the calling service's responsibility. Unknown/unavailable
-    /// outcomes never clear the consumed attempt or authorize another Verify dispatch.
+    /// outcomes never clear the consumed attempt or authorize another E5 selection.
     /// # Errors
     /// Refuses a stale/configuration-substituted request, malformed response, changed result
     /// or failure to durably retain a definitive outcome.
@@ -60,19 +84,28 @@ impl EnrollmentJournalV1 {
         &mut self,
         attempt: &mut EnrollmentAttemptV1,
         configuration: [u8; 32],
-        exchange: [u8; 32],
+        exchange: &VerifierExchangeV1,
         frame: &[u8],
     ) -> Result<OutcomeV1> {
         let worker = self.retained_worker_request(attempt, configuration)?;
+        let selected = attempt.record.worker_preparation.as_ref().ok_or(Conflict)?;
+        if exchange.journal_incarnation() != Some(selected.incarnation) {
+            return Err(Conflict);
+        }
         let outcome = worker.response(exchange, frame).map_err(|_| Invalid)?;
         match &outcome {
             OutcomeV1::Evidence(projection) => {
-                self.retain_worker_result(attempt, projection.original_result.clone(), false)?;
+                self.retain_worker_result(
+                    attempt,
+                    projection.original_result.clone(),
+                    false,
+                    projection.evidence.time_ms,
+                )?;
             }
             // A fresh Recover exchange changes its envelope but cannot replace the first
             // definitive rejection original or restore this terminal attempt to Verifying.
             OutcomeV1::Rejected if attempt.phase() == EnrollmentJournalPhaseV1::Rejected => {}
-            OutcomeV1::Rejected => self.retain_worker_result(attempt, frame.to_vec(), true)?,
+            OutcomeV1::Rejected => self.retain_worker_result(attempt, frame.to_vec(), true, 0)?,
             OutcomeV1::OutcomeUnknown | OutcomeV1::Unavailable => {}
         }
         Ok(outcome)
@@ -91,9 +124,14 @@ impl EnrollmentJournalV1 {
         if !matches!(attempt.phase(), Evidence | Signing | Issued) {
             return Err(Conflict);
         }
-        self.retained_worker_request(attempt, configuration)?
+        let evidence = self
+            .retained_worker_request(attempt, configuration)?
             .retained_evidence(&attempt.record.worker_result)
-            .map_err(|_| Invalid)
+            .map_err(|_| Invalid)?;
+        if evidence.evidence.time_ms != attempt.record.worker_result_time_ms {
+            return Err(Invalid);
+        }
+        Ok(evidence)
     }
 
     /// Freeze the exact initial credential body and original issue time before invoking the
@@ -129,7 +167,10 @@ impl EnrollmentJournalV1 {
         let time = retained
             .as_ref()
             .map_or(issued_at_ms, |body| body.issued_at_ms);
-        if time == 0 || time < attempt.record.verification_time_ms {
+        if time == 0
+            || time < attempt.record.verification_time_ms
+            || time < evidence.evidence.time_ms
+        {
             return Err(Invalid);
         }
         let request = &request.body;

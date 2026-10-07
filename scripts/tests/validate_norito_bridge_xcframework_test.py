@@ -29,6 +29,11 @@ SPEC.loader.exec_module(validator)
 WALLET_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
     for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "enrollment", "execute", "snapshot")
+] + [
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_installRuntime",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_review",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_executeReviewed",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_discardReview",
 ]
 LOAD_ORIGINAL_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate",
@@ -135,6 +140,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "cargo_features": ["privacy-production-enabled"],
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",
+                "wallet_runtime_trust_ed25519_hex": "3" * 64,
                 "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
                 "hermetic_runner_sha256": hashlib.sha256(
                     (ROOT / "scripts/run_mobile_hermetic_command.py").read_bytes()
@@ -562,6 +568,18 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                 self.write_manifest()
                 with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
                     self.validate()
+
+    def test_every_current_review_installation_enrollment_export_is_mandatory(self) -> None:
+        for suffix in ("review", "execute_reviewed", "discard_review", "install_runtime", "enrollment"):
+            symbol = "connect_norito_kagemusha_wallet_" + suffix + "_v1"
+            for replacement in (None, symbol + "_optional"):
+                with self.subTest(symbol=symbol, replacement=replacement):
+                    self.payload["required_symbols"] = [current for current in validator.EXPECTED_REQUIRED_SYMBOLS if current != symbol]
+                    if replacement is not None:
+                        self.payload["required_symbols"].append(replacement)
+                    self.write_manifest()
+                    with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+                        self.validate()
 
     def test_rejects_manifests_omitting_either_retired_mint_stage_export(self) -> None:
         for missing in (

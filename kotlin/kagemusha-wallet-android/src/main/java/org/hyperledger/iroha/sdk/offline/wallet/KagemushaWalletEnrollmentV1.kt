@@ -5,8 +5,8 @@ import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
 
 /** Native-selected key target. This is evidence collection input, never an attestation verdict. */
 class KagemushaWalletEnrollmentTargetV1 internal constructor(bytes: ByteArray) {
-    private val original = bytes.copyOf()
     init { require(bytes.size == 161) }
+    private val original = bytes.copyOf()
     fun slot(): ByteArray = original.copyOfRange(0, 32)
     fun paymentKey(): ByteArray = original.copyOfRange(32, 97)
     fun challengeDigest(): ByteArray = original.copyOfRange(97, 129)
@@ -36,8 +36,10 @@ private object NativeEnrollmentDriver : KagemushaWalletEnrollmentDriverV1 {
     override fun close(handle: Long) = KagemushaWalletNativeV1.close(handle)
 }
 /** Exclusive native enrollment owner, created by trusted native deployment initialization. */
-class KagemushaWalletEnrollmentV1 internal constructor(handle: Long, private val driver: KagemushaWalletEnrollmentDriverV1) : Closeable {
+class KagemushaWalletEnrollmentV1 internal constructor(handle: Long, private val driver: KagemushaWalletEnrollmentDriverV1) : Closeable, KagemushaWalletCleanupResourceV1 {
     private var owner = handle
+    private var retired = false
+    private var closeFailure: Throwable? = null
     init { require(handle > 0) }
     constructor(nativeEnrollmentHandle: Long) : this(nativeEnrollmentHandle, NativeEnrollmentDriver) {
         if (!PrivacyNativeBridge.isNativeAvailable()) throw KagemushaWalletExceptionV1(-101)
@@ -45,6 +47,7 @@ class KagemushaWalletEnrollmentV1 internal constructor(handle: Long, private val
         catch (_: LinkageError) { throw KagemushaWalletExceptionV1(-101) }
     }
     private fun call(selector: Int, first: ByteArray = byteArrayOf(), second: ByteArray = byteArrayOf(), third: ByteArray = byteArrayOf(), certificates: List<ByteArray> = emptyList()): KagemushaWalletCallV1 {
+        if (retired) throw closeFailure ?: KagemushaWalletExceptionV1(-2)
         if (owner == 0L) throw KagemushaWalletExceptionV1(-2)
         val limits = when (selector) { 0 -> listOf(32,4096,1024); 1,5 -> listOf(64,0,0); 2,7,10 -> listOf(0,0,0); 3 -> listOf(65536,0,0); 4 -> listOf(32,65536,4096); 6 -> listOf(262144,0,0); 9 -> listOf(2048,0,0); else -> throw IllegalArgumentException("selector") }
         require(listOf(first,second,third).zip(limits).all { (bytes,bound) -> bytes.size <= bound })
@@ -96,8 +99,23 @@ class KagemushaWalletEnrollmentV1 internal constructor(handle: Long, private val
     /** Permanently abandon this unused enrollment; return exact native-retained ledger bytes.
      * Native refuses after Bootstrap commits. This does not mean the ledger accepted them. */
     @Synchronized fun abandon(): ByteArray = exact(call(10),28)
-    @Synchronized override fun close() {
-        val handle = owner; owner = 0
-        if (handle != 0L) { val status = driver.close(handle); if (status != 0) throw KagemushaWalletExceptionV1(status) }
+    @Synchronized override fun close() { closeFailure?.let { throw it }; closeAttempt() }
+    @Synchronized override fun retryCleanup() { closeAttempt() }
+    @Synchronized override fun cleanupReleased(): Boolean = owner == 0L
+    private fun closeAttempt() {
+        retired = true
+        val handle = owner
+        if (handle != 0L) {
+            try {
+                val status = driver.close(handle)
+                if (status != 0) throw KagemushaWalletExceptionV1(status)
+                owner = 0
+                closeFailure = null
+            } catch (failure: Throwable) {
+                closeFailure = failure
+                KagemushaWalletInstalledRuntimeV1.retainFailure(this, failure)
+                throw failure
+            }
+        }
     }
 }

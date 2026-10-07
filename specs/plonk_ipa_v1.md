@@ -381,13 +381,18 @@ Oracle mode differs from production in four ways:
 - The prover accepts a caller-seeded random stream, to reproduce vendored proofs from their seeds.
 
 It is compiled only with `--cfg iroha_plonk_oracle`, passed through `RUSTFLAGS` into a separate
-target directory. That run is manual today (`crates/iroha_plonk_oracle/README.md` lists the
-commands); TODO: an oracle CI job on x86_64 and aarch64. It is never a Cargo feature, because
+target directory. `native_prover_parity.yml` runs all five oracle harnesses on native
+x86_64 and aarch64 hosts, with exact required-case admission and every ignored correctness
+case included. Hosted execution is still unobserved; retained local captures and commands
+are recorded in `specs/native_prover_migration_inventory.md`. It is never a Cargo feature, because
 resolver-2 feature unification would leak it into shipping binaries. A stray `RUSTFLAGS` setting
 could still compile it in, so `iroha_plonk::ORACLE_BUILD` reports the cfg and every shipping root
 that links `iroha_plonk` (node, CLI, SDK and wallet bridges) must fail its build on it with
-`const _: () = assert!(!iroha_plonk::ORACLE_BUILD);`. No shipping root links the crate yet; the
-first one adds the assertion.
+`const _: () = assert!(!iroha_plonk::ORACLE_BUILD);`. The current source audit found
+these shipping-root assertions still missing; the dependency graph guard does not
+substitute for rejecting a stray cfg. This remains a release blocker until the
+compile-time guards and negative build checks land. The temporary oracle remains
+a separate nonpublishable test owner.
 
 Assignment-table import (`keygen_from_tables`, `Witness::from_columns`) is public API, not an
 oracle hook. It has no soundness effect, because the verifier evaluates only `D` and the key.
@@ -677,9 +682,14 @@ in `iroha_kagemusha_proof` need their own goldens once their artifact set is fro
 Every verdict difference from the vendored verifier is a stricter rejection listed below with a
 named test. The oracle's `deviation_registry` test ties every row to a named native test that
 mentions it, and every verdict-corpus deviation to its row. A mismatch missing from this list fails
-the oracle run, which is manual today (TODO: a CI job, see 6.4). The tamper corpora run on both
-proving paths. On the KAGEMUSHA path only DEV-04 occurs, because the vendored augmented verifier
-already requires the exact length.
+the oracle run (§6.4). The tamper corpora run on both proving paths. The historical
+KAGEMUSHA augmented wrapper already requires exact length, so its corpus has only DEV-04.
+The separately captured raw snark-verifier succinct reader accepts a valid prefix with
+trailing bytes (DEV-05); its native-loader group-equation assertion also panics on malformed
+statements. `succinct_parity` preserves these original outcomes while requiring normal
+native rejection, complete generator decisions and equality of every actual challenge.
+The frozen Sigma/Wide corpus and native-only replay remain after oracle retirement; they
+do not establish equality with the distinct PIPA-AS accumulation transcript.
 
 | ID | Item | Vendored | PIPA-v1 | Modes |
 | --- | --- | --- | --- | --- |

@@ -478,6 +478,11 @@ pub(super) fn run<C: RunContext>(
         Command::ExportProfile(_) => eyre::bail!("profile export has no deployment definition"),
     };
     let verification_origins = command.verification_origins(&trust)?;
+    let runtime_update = args
+        .verification_runtime_update
+        .as_deref()
+        .map(|path| runtime_update::Verified::admit(path, &trust, context.config().network_id))
+        .transpose()?;
     let deadline = operation_deadline(args.timeout_ms)?;
     let binding = DefinitionBinding::new(
         definition,
@@ -606,6 +611,7 @@ pub(super) fn run<C: RunContext>(
         apply,
         deadline,
         &verification_origins,
+        runtime_update.as_ref(),
     )?;
     print_saved_report(&report, apply, |report| context.print_data(report))
 }

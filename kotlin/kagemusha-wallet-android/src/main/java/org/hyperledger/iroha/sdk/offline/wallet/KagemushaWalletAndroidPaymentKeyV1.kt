@@ -298,6 +298,17 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
         }
     }
 
+    /** Read-only original chain intake, bound to the exact public key reconciled by Native. */
+    fun enrollmentAttestationChain(slot: ByteArray, expectedPaymentKey: ByteArray): KagemushaWalletAndroidAttestationChainV1 = synchronized(lock) {
+        when (val probed = probeEntry(kagemushaWalletAndroidAliasV1(slot))) {
+            is Probed.Present -> if (probed.chain.publicKeySec1.contentEquals(expectedPaymentKey)) {
+                KagemushaWalletAndroidAttestationChainV1.Present(probed.chain.der)
+            } else KagemushaWalletAndroidAttestationChainV1.Unavailable(KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE)
+            Probed.Absent -> KagemushaWalletAndroidAttestationChainV1.Absent
+            is Probed.Unavailable -> KagemushaWalletAndroidAttestationChainV1.Unavailable(probed.reason)
+        }
+    }
+
     /**
      * One provider generation call. The fresh-only caller already burned the alias; the API
      * 31+ caller may retry a failure only after definitive absence. Success marks the alias used.

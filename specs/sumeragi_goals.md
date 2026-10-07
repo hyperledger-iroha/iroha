@@ -92,6 +92,14 @@ duplicate or unfinished statuses cannot establish a pass or a mutation kill.
 Nexus happy-day and restart checks require the selected native test's successful
 terminal between one running header and one matching summary, together with the
 unique Rust experiment completion marker. A marker and summary alone cannot pass.
+Standalone Nexus campaign acceptance and saved-evidence validation also require
+every validator boot's clean terminal exit, including both boots across restart;
+a successful Rust test cannot substitute for validator process closure.
+Soak runs must schedule every requested fault within the configured duration and
+record an actual positive fault window. Expired, late or clear-only injection and an
+unconfirmed peer exit fail the harness; report-only analysis enforces the same
+requested-fault coverage contract. These controls do not qualify signed RS16
+withholding by themselves.
 Each new safety, liveness or custody rule requires its current registered named
 mutation control under spec §13.4. A prepared runner is not execution evidence.
 Regenerate State inventory with its canonical Rust generator on the candidate;

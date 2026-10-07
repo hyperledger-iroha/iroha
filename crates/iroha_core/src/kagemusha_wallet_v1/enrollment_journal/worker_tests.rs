@@ -4,7 +4,7 @@ use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_core_zk::kagemusha_wallet_enrollment_v1::{
     IssuerEvidenceV1, PlatformEvidenceV1, PreKeyDispatchV1, RequestV1, ResultV1,
-    issuer_worker::{OutcomeV1, VerifierRequestV1},
+    issuer_worker::{ActionV1, OutcomeV1, VerifierExchangeV1, VerifierRequestV1},
 };
 use iroha_data_model::kagemusha::*;
 use norito::json::Value;
@@ -21,6 +21,7 @@ struct Fixture {
     attempt: EnrollmentAttemptV1,
     signer: SigningKey,
     request: RequestV1,
+    packet: VerifierExchangeV1,
 }
 impl Fixture {
     fn new() -> Self {
@@ -33,7 +34,11 @@ impl Fixture {
         journal
             .select_verification(&mut attempt, request.clone(), CONFIGURATION, 2_000)
             .unwrap();
+        let packet = journal
+            .worker_exchange(&attempt, CONFIGURATION, ActionV1::Complete, EXCHANGE, 2_000)
+            .unwrap();
         Self {
+            packet,
             temp,
             _parent: parent,
             journal,
@@ -80,13 +85,28 @@ impl Fixture {
         self.frame_for(EXCHANGE, outcome, projection)
     }
     fn frame_for(&self, exchange: [u8; 32], outcome: &str, projection: Option<Value>) -> Vec<u8> {
+        let packet = self
+            .worker()
+            .packet(ActionV1::Complete, [41; 32], exchange, 2_000)
+            .unwrap();
+        self.frame_for_packet(&packet, outcome, projection)
+    }
+    fn frame_for_packet(
+        &self,
+        packet: &VerifierExchangeV1,
+        outcome: &str,
+        projection: Option<Value>,
+    ) -> Vec<u8> {
+        let request: Value = norito::json::from_slice(&packet.frame()[4..]).unwrap();
         let evidence = projection
             .map(|v| Value::from(STANDARD.encode(norito::json::to_vec(&v).unwrap())))
             .unwrap_or(Value::Null);
         let json = norito::json!({
             "schema": ("iroha.kagemusha.wallet-e1-verifier.v1"), "version": (1_u16),
-            "exchange_id": (hex::encode(exchange)),
-            "original_sha256": (hex::encode(Sha256::digest(self.worker().original()))),
+            "exchange_id": (request.get("exchange_id").unwrap().clone()),
+            "request_sha256": (hex::encode(Sha256::digest(&packet.frame()[4..]))),
+            "journal_incarnation": (request.get("journal_incarnation").unwrap().clone()),
+            "config_sha256": (hex::encode(CONFIGURATION)),
             "outcome": (outcome), "evidence_base64": (evidence),
         });
         let bytes = norito::json::to_vec(&json).unwrap();
@@ -97,8 +117,12 @@ impl Fixture {
     fn evidence(&mut self) {
         let frame = self.frame("evidence", Some(self.projection()));
         assert!(matches!(
-            self.journal
-                .retain_worker_response(&mut self.attempt, CONFIGURATION, EXCHANGE, &frame),
+            self.journal.retain_worker_response(
+                &mut self.attempt,
+                CONFIGURATION,
+                &self.packet,
+                &frame
+            ),
             Ok(OutcomeV1::Evidence(_))
         ));
     }
@@ -135,7 +159,7 @@ fn unknown_unavailable_and_foreign_worker_responses_never_restore_verify() {
         let frame = f.frame(outcome, None);
         assert!(
             f.journal
-                .retain_worker_response(&mut f.attempt, CONFIGURATION, EXCHANGE, &frame)
+                .retain_worker_response(&mut f.attempt, CONFIGURATION, &f.packet, &frame)
                 .is_ok()
         );
         assert_eq!(f.attempt.phase(), EnrollmentJournalPhaseV1::Verifying);
@@ -147,15 +171,55 @@ fn unknown_unavailable_and_foreign_worker_responses_never_restore_verify() {
         ));
     }
     let frame = f.frame("evidence", Some(f.projection()));
+    let foreign_packet = f
+        .journal
+        .worker_exchange(
+            &f.attempt,
+            CONFIGURATION,
+            ActionV1::Complete,
+            [99; 32],
+            2_000,
+        )
+        .unwrap();
     assert!(matches!(
         f.journal
-            .retain_worker_response(&mut f.attempt, CONFIGURATION, [99; 32], &frame),
+            .retain_worker_response(&mut f.attempt, CONFIGURATION, &foreign_packet, &frame),
         Err(Invalid)
     ));
     assert!(matches!(
         f.journal
-            .retain_worker_response(&mut f.attempt, [99; 32], EXCHANGE, &frame),
+            .retain_worker_response(&mut f.attempt, [99; 32], &f.packet, &frame),
         Err(Conflict)
+    ));
+    let foreign_journal = f
+        .worker()
+        .packet(ActionV1::Recover, [99; 32], EXCHANGE, 2_000)
+        .unwrap();
+    let foreign_frame = f.frame_for_packet(&foreign_journal, "evidence", Some(f.projection()));
+    assert!(matches!(
+        f.journal.retain_worker_response(
+            &mut f.attempt,
+            CONFIGURATION,
+            &foreign_journal,
+            &foreign_frame
+        ),
+        Err(Conflict)
+    ));
+    let preparation = f
+        .journal
+        .worker_preparation(&f.attempt, CONFIGURATION)
+        .unwrap()
+        .packet([41; 32], EXCHANGE)
+        .unwrap();
+    let prepared_frame = super::preparation::tests::response(&preparation, "prepared");
+    assert!(matches!(
+        f.journal.retain_worker_response(
+            &mut f.attempt,
+            CONFIGURATION,
+            &preparation,
+            &prepared_frame
+        ),
+        Err(Invalid)
     ));
     let mut foreign = f.projection();
     foreign
@@ -165,7 +229,7 @@ fn unknown_unavailable_and_foreign_worker_responses_never_restore_verify() {
     let frame = f.frame("evidence", Some(foreign));
     assert!(matches!(
         f.journal
-            .retain_worker_response(&mut f.attempt, CONFIGURATION, EXCHANGE, &frame),
+            .retain_worker_response(&mut f.attempt, CONFIGURATION, &f.packet, &frame),
         Err(Invalid)
     ));
     assert_eq!(f.attempt.phase(), EnrollmentJournalPhaseV1::Verifying);
@@ -182,18 +246,28 @@ fn rejection_is_durable_and_cannot_select_a_credential() {
     let frame = f.frame("rejected", None);
     assert!(matches!(
         f.journal
-            .retain_worker_response(&mut f.attempt, CONFIGURATION, EXCHANGE, &frame),
+            .retain_worker_response(&mut f.attempt, CONFIGURATION, &f.packet, &frame),
         Ok(OutcomeV1::Rejected)
     ));
     assert_eq!(f.attempt.worker_result(), Some(frame.as_slice()));
     let recovery_exchange = [33; 32];
+    let recovery_packet = f
+        .journal
+        .worker_exchange(
+            &f.attempt,
+            CONFIGURATION,
+            ActionV1::Complete,
+            recovery_exchange,
+            2_000,
+        )
+        .unwrap();
     let recovery = f.frame_for(recovery_exchange, "rejected", None);
     assert_ne!(recovery, frame);
     assert!(matches!(
         f.journal.retain_worker_response(
             &mut f.attempt,
             CONFIGURATION,
-            recovery_exchange,
+            &recovery_packet,
             &recovery,
         ),
         Ok(OutcomeV1::Rejected)
@@ -207,7 +281,7 @@ fn rejection_is_durable_and_cannot_select_a_credential() {
     let evidence = f.frame("evidence", Some(f.projection()));
     assert!(matches!(
         f.journal
-            .retain_worker_response(&mut f.attempt, CONFIGURATION, EXCHANGE, &evidence),
+            .retain_worker_response(&mut f.attempt, CONFIGURATION, &f.packet, &evidence),
         Err(Conflict)
     ));
     drop(f.journal);
@@ -282,12 +356,69 @@ fn signing_selection_and_exact_e6_survive_restart_without_refreshing_time() {
 }
 
 #[test]
+fn recovered_first_claim_freezes_actual_evidence_time_before_credential_signing() {
+    let mut f = Fixture::new();
+    let packet = f
+        .journal
+        .worker_exchange(
+            &f.attempt,
+            CONFIGURATION,
+            ActionV1::Recover,
+            [66; 32],
+            2_500,
+        )
+        .unwrap();
+    let mut projection = f.projection();
+    projection
+        .as_object_mut()
+        .unwrap()
+        .insert("time_ms".into(), Value::from(2_500_u64));
+    let frame = f.frame_for_packet(&packet, "evidence", Some(projection.clone()));
+    f.journal
+        .retain_worker_response(&mut f.attempt, CONFIGURATION, &packet, &frame)
+        .unwrap();
+    assert_eq!(f.attempt.record.verification_time_ms, 2_000);
+    assert_eq!(f.attempt.record.worker_result_time_ms, 2_500);
+    assert!(matches!(
+        f.journal
+            .select_credential_body(&mut f.attempt, &f.dispatch, CONFIGURATION, 2_499),
+        Err(Invalid)
+    ));
+    let body = f
+        .journal
+        .select_credential_body(&mut f.attempt, &f.dispatch, CONFIGURATION, 2_500)
+        .unwrap();
+    assert_eq!(body.enrollment_evidence.time_ms, 2_500);
+    assert_eq!(body.issued_at_ms, 2_500);
+    let retry = f
+        .journal
+        .worker_exchange(
+            &f.attempt,
+            CONFIGURATION,
+            ActionV1::Recover,
+            [67; 32],
+            900_000,
+        )
+        .unwrap();
+    let frame = f.frame_for_packet(&retry, "evidence", Some(projection));
+    f.journal
+        .retain_worker_response(&mut f.attempt, CONFIGURATION, &retry, &frame)
+        .unwrap();
+    assert_eq!(
+        f.journal
+            .select_credential_body(&mut f.attempt, &f.dispatch, CONFIGURATION, 999_000)
+            .unwrap(),
+        body
+    );
+}
+
+#[test]
 fn altered_retained_worker_originals_cannot_reach_signing() {
     let mut f = Fixture::new();
     f.evidence();
     let frame = f.frame("evidence", Some(f.projection()));
     f.journal
-        .retain_worker_response(&mut f.attempt, CONFIGURATION, EXCHANGE, &frame)
+        .retain_worker_response(&mut f.attempt, CONFIGURATION, &f.packet, &frame)
         .unwrap();
     let mut changed = f.attempt.record.clone();
     let mut value: Value = norito::json::from_slice(&changed.worker_result).unwrap();

@@ -73,6 +73,7 @@ fn authorize(account: &AccountId, message: &[u8; 32], signature: &[u8]) -> Resul
 #[derive(Clone)]
 struct Scope {
     challenge: KagemushaWalletEnrollmentChallengeV1,
+    dates: KagemushaWalletEnrollmentDatesV1,
     account: AccountId,
     asset: KagemushaWalletAssetScopeV1,
 }
@@ -226,7 +227,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             .provider
             .read_intent(slot)?
             .ok_or(Error::Original("selected enrollment intent"))?;
-        if intent.challenge != scope.challenge {
+        if intent.challenge != scope.challenge || intent.dates != scope.dates {
             return Err(Error::Original("selected enrollment intent"));
         }
         let bytes = self.provider.abandon_enrollment(slot)?;
@@ -255,6 +256,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             .read_intent(slot)?
             .ok_or(Error::Original("selected enrollment intent"))?;
         if intent.challenge != scope.challenge
+            || intent.dates != scope.dates
             || marker.marker().scheme_id != scope.challenge.scheme_id
             || marker.marker().asset_digest != scope.challenge.asset_digest
             || marker.marker().wallet_id != scope.challenge.wallet_id(marker.payment_key())
@@ -387,14 +389,57 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         ])
     }
 
-    fn verify_result(&self, request: &RequestV1, result: &ResultV1) -> Result<(), Error> {
-        result
+    fn verify_result(&mut self, request: &RequestV1, result: &ResultV1) -> Result<(), Error> {
+        let credential = result
             .verify_for(
                 &self.config.scheme,
                 &self.config.enrollment_certificate,
                 request,
             )
-            .map(|_| ())
-            .map_err(Error::Original)
+            .map_err(Error::Original)?;
+        let (scope, slot) = self.selected.as_ref().ok_or(Error::Phase)?;
+        let intent = self
+            .provider
+            .read_intent(slot)?
+            .ok_or(Error::Original("selected enrollment intent"))?;
+        if intent.challenge != scope.challenge
+            || intent.dates != scope.dates
+            || !super::credential::evidence_matches_policy(
+                self.config.policy.platform,
+                intent.key_profile()?,
+                credential.body.evidence_kind,
+            )
+            || !(intent.dates.issued_at_ms..intent.dates.expires_at_ms)
+                .contains(&credential.body.issued_at_ms)
+            || !(intent.dates.issued_at_ms..intent.dates.expires_at_ms)
+                .contains(&credential.body.enrollment_evidence.time_ms)
+        {
+            return Err(Error::Original(
+                "initial enrollment credential policy/dates",
+            ));
+        }
+        let status = self.provider.status(slot)?;
+        let marker = match status {
+            KagemushaWalletSlotStatusV1::Enrollment(marker) => marker,
+            KagemushaWalletSlotStatusV1::Pending(marker)
+            | KagemushaWalletSlotStatusV1::Released(marker) => {
+                if self.provider.credential(slot, 0)?.as_deref()
+                    != Some(result.credential.as_slice())
+                {
+                    return Err(Error::Original(
+                        "initial enrollment credential changed or lost",
+                    ));
+                }
+                marker
+            }
+            _ => return Err(Error::Phase),
+        };
+        super::credential::verify_initial_credential_marker(
+            &credential,
+            &self.config.scheme,
+            &self.config.enrollment_certificate,
+            &scope.challenge,
+            marker.marker(),
+        )
     }
 }

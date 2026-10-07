@@ -75,7 +75,7 @@ fn fixture(
         originals_digest: [17; 32],
         enrollment_certificate: certificate.certificate_digest(),
         created_at_ms: 1000,
-        expires_at_ms: 121000,
+        expires_at_ms: 121_000,
         observed_at_ms: 2000,
     };
     (scheme, certificate, signer, body)
@@ -84,11 +84,11 @@ fn signed(
     scheme: &KagemushaWalletSchemeV1,
     certificate: &KagemushaWalletSignerCertificateV1,
     signer: &SigningKey,
-    body: KagemushaEnrollmentPermitBodyV1,
+    body: &KagemushaEnrollmentPermitBodyV1,
 ) -> KagemushaEnrollmentPermitV1 {
     let signature: Signature = signer.sign(&body.signing_message().unwrap());
     KagemushaEnrollmentPermitV1::from_issuer_der(
-        body,
+        *body,
         scheme,
         certificate,
         signature.to_der().as_bytes(),
@@ -111,7 +111,7 @@ fn canonical_roundtrip_both_platforms_and_dispatch_roles() {
                 &scheme,
                 &certificate,
                 &signer,
-                KagemushaEnrollmentPermitBodyV1 {
+                &KagemushaEnrollmentPermitBodyV1 {
                     platform,
                     purpose,
                     ..original
@@ -142,7 +142,7 @@ fn exact_new_transcript_and_message_are_distinct_from_certificate_domain() {
     assert_eq!(&bytes[4..198], &body.challenge.transcript());
     assert_eq!(
         &bytes[550..],
-        &[1000u64, 121000, 2000]
+        &[1000u64, 121_000, 2000]
             .into_iter()
             .flat_map(u64::to_le_bytes)
             .collect::<Vec<_>>()
@@ -174,7 +174,7 @@ fn fresh_retry_has_actual_observation_and_never_extends_original_window() {
 #[test]
 fn every_signed_identity_nonce_and_time_change_rejects_original_signature() {
     let (scheme, certificate, signer, body) = fixture(KagemushaWalletSignerRoleV1::Enrollment);
-    let value = signed(&scheme, &certificate, &signer, body);
+    let value = signed(&scheme, &certificate, &signer, &body);
     let mut changes = Vec::new();
     macro_rules! change {
         ($field:ident) => {{
@@ -206,7 +206,7 @@ fn every_signed_identity_nonce_and_time_change_rejects_original_signature() {
             0 => v.body.created_at_ms += 1,
             1 => v.body.expires_at_ms += 1,
             _ => v.body.observed_at_ms += 1,
-        };
+        }
         changes.push(v);
     }
     for select in 0..6 {
@@ -228,7 +228,7 @@ fn every_signed_identity_nonce_and_time_change_rejects_original_signature() {
 #[test]
 fn rooted_wrong_role_and_wrong_message_do_not_authorize_pre_key() {
     let (scheme, certificate, signer, body) = fixture(KagemushaWalletSignerRoleV1::Enrollment);
-    let value = signed(&scheme, &certificate, &signer, body);
+    let value = signed(&scheme, &certificate, &signer, &body);
     let (_, wrong_role, _, _) = fixture(KagemushaWalletSignerRoleV1::RegulatoryPolicy);
     assert!(value.verify(&scheme, &wrong_role).is_err());
     let signature: Signature = signer.sign(&certificate.body.signing_message());
@@ -256,7 +256,7 @@ fn rooted_wrong_role_and_wrong_message_do_not_authorize_pre_key() {
 #[test]
 fn truncated_oversized_and_trailing_canonical_originals_refuse() {
     let (scheme, certificate, signer, body) = fixture(KagemushaWalletSignerRoleV1::Enrollment);
-    let bytes = signed(&scheme, &certificate, &signer, body)
+    let bytes = signed(&scheme, &certificate, &signer, &body)
         .encode_canonical()
         .unwrap();
     for end in 0..bytes.len() {

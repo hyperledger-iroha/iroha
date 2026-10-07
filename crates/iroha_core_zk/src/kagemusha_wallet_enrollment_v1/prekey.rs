@@ -247,11 +247,17 @@ pub(crate) struct GenerationAuthorizationV1 {
     slot: crate::kagemusha_wallet_advance_v1::KagemushaWalletSlotIdV1,
     generation_policy: crate::kagemusha_wallet_advance_v1::KagemushaWalletKeyGenerationPolicyV1,
     fresh: bool,
+    dates: crate::kagemusha_wallet_advance_v1::KagemushaWalletEnrollmentDatesV1,
     started: KagemushaWalletMonotonicReadingV1,
     observed_at_ms: u64,
     expires_at_ms: u64,
 }
 impl GenerationAuthorizationV1 {
+    pub(crate) fn dates(
+        &self,
+    ) -> crate::kagemusha_wallet_advance_v1::KagemushaWalletEnrollmentDatesV1 {
+        self.dates
+    }
     pub(crate) fn selection(
         &self,
     ) -> (
@@ -285,6 +291,10 @@ impl GenerationAuthorizationV1 {
             slot,
             generation_policy,
             fresh,
+            dates: crate::kagemusha_wallet_advance_v1::KagemushaWalletEnrollmentDatesV1 {
+                issued_at_ms: permit.body.created_at_ms,
+                expires_at_ms: permit.body.expires_at_ms,
+            },
             started,
             observed_at_ms: permit.body.observed_at_ms,
             expires_at_ms: permit.body.expires_at_ms,

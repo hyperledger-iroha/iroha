@@ -229,3 +229,20 @@ RUSTFLAGS="--cfg iroha_plonk_oracle" cargo test --release \
     -p iroha_plonk_oracle --test vendored_goldens timing -- \
     --ignored --nocapture --test-threads=1
 ```
+
+### Independent succinct-verifier corpus
+
+The oracle-only `succinct_parity` module invokes the original
+`PlonkSuccinctVerifier<IpaAs<_, Bgh19>>` on both Sigma/Wide golden families and
+both Pasta curves, with two seeds per source. It compares all challenges against
+the original Halo2 verifier and compares the returned G/u obligation against the
+native oracle verifier, then requires both complete generator decisions. Five
+mutations per case preserve original parse errors, exact group-assertion panics
+and DEV-05 trailing-prefix acceptance; native verification rejects normally.
+
+`fixtures/native_prover/succinct_v1.json` retains eight complete proof/key/input
+records and their exact challenge/accumulator/mutation results. Native-only replay
+in `iroha_plonk::verifier::captured_succinct_tests` remains after this crate is
+removed. The path-filtered parity CI requires all four named oracle cases; this
+corpus does not qualify the current operation catalog or claim parity with the
+deliberately different PIPA-AS-v1 accumulation transcript.

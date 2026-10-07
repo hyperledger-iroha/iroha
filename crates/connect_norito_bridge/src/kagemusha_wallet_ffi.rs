@@ -15,20 +15,40 @@ use std::{
 
 mod platform;
 pub use platform::{CallbackPlatform, PlatformCallbacks, PlatformReply};
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 mod android;
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 pub use android::AndroidPlatform;
+mod background;
+mod closing;
 pub(crate) mod enrollment;
 mod exports;
+mod installed;
 pub use enrollment::{NativeEnrollmentRuntime, retain_native_enrollment};
+pub use installed::{WalletRuntimeOriginals, connect_norito_kagemusha_wallet_install_runtime_v1};
 pub(crate) mod open;
-pub use open::{NativeStartupFailure, retain_native_runtime, start_native_wallet};
-mod background;
+pub use open::{
+    NativeRegistrationRetry, NativeStartupFailure, retain_native_runtime, start_native_wallet,
+};
 pub(crate) mod requests;
 pub(crate) mod setup;
 mod transport;
 pub use exports::*;
+pub(crate) mod review;
+pub use review::{
+    WalletReviewRequest, connect_norito_kagemusha_wallet_discard_review_v1,
+    connect_norito_kagemusha_wallet_execute_reviewed_v1, connect_norito_kagemusha_wallet_review_v1,
+};
 #[cfg(test)]
 mod tests;
 
@@ -190,6 +210,15 @@ fn completion(value: Option<state::Completion>) -> Response {
 }
 trait Wallet: Send {
     fn snapshot(&mut self) -> Result<state::Snapshot>;
+    fn review(&mut self, _input: review::Input) -> Result<Response> {
+        Err(Failure::code(INVALID))
+    }
+    fn execute_reviewed(&mut self, _token: u64, _request: [u8; 32]) -> Result<Response> {
+        Err(Failure::code(INVALID))
+    }
+    fn discard_review(&mut self, _token: u64) -> Result<()> {
+        Err(Failure::code(INVALID))
+    }
     fn setup(&mut self, input: setup::Setup) -> Result<Response>;
     fn execute(&mut self, request: state::OperationRequestV1) -> Result<Response>;
     fn request_status(&mut self, request: &[u8; 32]) -> Result<Response>;
@@ -202,12 +231,22 @@ struct NativeWallet<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     wallet: state::NativeWalletCoordinatorV1<advance::KagemushaWalletStdFsV1, P, S>,
     times: BTreeMap<u64, state::DirectTimeExchangeV1>,
     next_time: u64,
+    reviews: review::Tokens<state::ReviewedOperationV1>,
 }
 impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
     for NativeWallet<P, S>
 {
     fn setup(&mut self, input: setup::Setup) -> Result<Response> {
         self.setup_inner(input)
+    }
+    fn review(&mut self, input: review::Input) -> Result<Response> {
+        self.review_inner(input)
+    }
+    fn execute_reviewed(&mut self, token: u64, request: [u8; 32]) -> Result<Response> {
+        self.execute_reviewed_inner(token, request)
+    }
+    fn discard_review(&mut self, token: u64) -> Result<()> {
+        self.reviews.take(token).map(drop)
     }
     fn snapshot(&mut self) -> Result<state::Snapshot> {
         Ok(self.wallet.snapshot()?)
@@ -267,9 +306,10 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
 }
 struct Owner {
     background: background::Background,
+    closing: Arc<closing::CloseState>,
     scheduler: state::Scheduler,
-    // None is the closing linearization point. Lookups captured before close cannot perform
-    // another operation once the current call returns. Drop releases exclusive filesystem custody.
+    // The shared closing state blocks new calls; this owner remains registered until
+    // the actual scheduler join and custody drop complete successfully.
     wallet: Mutex<Option<Box<dyn Wallet>>>,
 }
 #[derive(Default)]
@@ -298,6 +338,7 @@ fn install(wallet: Box<dyn Wallet>, scheduler: state::Scheduler) -> Result<u64> 
         id,
         Arc::new(Owner {
             background: background::Background::default(),
+            closing: Arc::new(closing::CloseState::default()),
             scheduler,
             wallet: Mutex::new(Some(wallet)),
         }),
@@ -305,40 +346,27 @@ fn install(wallet: Box<dyn Wallet>, scheduler: state::Scheduler) -> Result<u64> 
     Ok(id)
 }
 fn owner(id: u64) -> Result<Arc<Owner>> {
-    registry()
+    let owner = registry()
         .lock()
         .map_err(|_| Failure::code(INTERNAL))?
         .owners
         .get(&id)
         .cloned()
-        .ok_or(Failure::code(CLOSED))
+        .ok_or(Failure::code(CLOSED))?;
+    owner.closing.require_open()?;
+    Ok(owner)
 }
 pub(crate) fn close(id: u64) -> Result<()> {
-    let (owner, runtime) = {
-        let mut registry = registry().lock().map_err(|_| Failure::code(INTERNAL))?;
-        (registry.owners.remove(&id), registry.runtimes.remove(&id))
-    };
-    if let Some(runtime) = runtime {
-        return open::close(runtime);
-    }
-    let owner = owner.ok_or(Failure::code(CLOSED))?;
-    owner.background.stop();
-    owner.scheduler.set_activity(false, false);
-    let _priority = owner.scheduler.payment();
-    let joined = owner.background.join();
-    let wallet = owner
-        .wallet
-        .lock()
-        .map_err(|_| Failure::code(INTERNAL))?
-        .take();
-    drop(wallet);
-    joined
+    closing::close_with(registry(), id)
 }
 pub(crate) fn activity(id: u64, foreground: bool, charging: bool) -> Result<()> {
-    let owner = owner(id)?;
-    // Do not acquire the wallet mutex: a running fold needs this cancellation signal.
+    // Order activity with the closing mark without acquiring the wallet mutex:
+    // a running fold needs this cancellation signal.
+    let selected = registry().lock().map_err(|_| Failure::code(INTERNAL))?;
+    let owner = selected.owners.get(&id).ok_or(Failure::code(CLOSED))?;
+    owner.closing.require_open()?;
     owner.scheduler.set_activity(foreground, charging);
-    if let Err(error) = owner.background.activity(&owner, foreground || charging) {
+    if let Err(error) = owner.background.activity(owner, foreground || charging) {
         owner.scheduler.set_activity(false, false);
         return Err(error);
     }
@@ -350,9 +378,18 @@ fn with_wallet<T>(
     action: impl FnOnce(&mut dyn Wallet) -> Result<T>,
 ) -> Result<T> {
     let owner = owner(id)?;
+    with_wallet_owner(owner, payment, action)
+}
+fn with_wallet_owner<T>(
+    owner: Arc<Owner>,
+    payment: bool,
+    action: impl FnOnce(&mut dyn Wallet) -> Result<T>,
+) -> Result<T> {
+    owner.closing.require_open()?;
     // Signal and join before the owner lock. Reversing these locks deadlocks against proving.
     let _priority = payment.then(|| owner.background.payment(&owner.scheduler));
     let mut guard = owner.wallet.lock().map_err(|_| Failure::code(INTERNAL))?;
+    owner.closing.require_open()?;
     action(guard.as_deref_mut().ok_or(Failure::code(CLOSED))?)
 }
 pub(crate) fn snapshot(id: u64) -> Result<state::Snapshot> {
@@ -366,6 +403,12 @@ pub(crate) fn setup(id: u64, input: setup::Setup) -> Result<Response> {
     with_wallet(id, true, |wallet| wallet.setup(input))
 }
 pub(crate) fn execute(id: u64, request: state::OperationRequestV1) -> Result<Response> {
+    if matches!(
+        &request.action,
+        state::OperationActionV1::Send { .. } | state::OperationActionV1::Unload { .. }
+    ) {
+        return Err(Failure::code(INVALID));
+    }
     with_wallet(id, true, |wallet| wallet.execute(request))
 }
 pub(crate) fn request_status(id: u64, request: &[u8]) -> Result<Response> {

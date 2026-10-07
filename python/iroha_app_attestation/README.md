@@ -41,12 +41,16 @@ the exact E1 and originals with its audited DATA journal, and sign a compact cre
 its actual root-delegated Enrollment-role P256 key. Python request input exposes no signing
 authority. An interrupted external attempt retrieves its original; it never resets a counter
 or repeats a consumed assertion. `wallet_enrollment_worker.py` implements the current private
-verification/recovery channel. Its protected SQLite journal retains exact request and result
-originals with their configuration pin; Apple assertion counter/challenge consumption and the
-recoverable evidence result commit in one FULL-synchronous transaction. An unknown attempt
-can only recover, never dispatch another verification. If the worker crashed before recording
-the attempt, recovery returns `outcome_unknown` without running verification or inserting a
-new attempt; a conflicting retained original still fails. The inherited configuration, crypto
+verification/recovery channel. Before exposing E1, Native retains the worker's actual journal
+incarnation, selects its immutable preparation and durably retains the worker acknowledgement.
+Complete or Recover can atomically claim that prepared row once. A delayed first claim uses
+fresh trusted Native dispatch time without changing its original request. Once claimed, an
+unknown result stays `outcome_unknown`; neither action repeats external verification. Missing
+prepared custody remains `unavailable`, never a definitive evidence rejection or permission
+to recreate a row. Native prohibits Prepare after E5 selection, including during recovery.
+The journal retains exact request/result originals and their configuration pin. Apple assertion
+counter/challenge consumption and the recoverable evidence result commit in one FULL-synchronous
+transaction. Changed retained originals are rejected. The inherited configuration, crypto
 original and storage identities are rechecked before exposure. These components do not alone
 enable issuance: the genuine Native issuer, audited DATA and authenticated installed runtime
 must admit and retain every original.
@@ -58,7 +62,7 @@ startup never initializes missing files or repairs missing tables. Database, gen
 schema loss remains unavailable; interrupted initialization retains its originals for explicit
 operator reconciliation. SQLite connections use existing-only `mode=rw`, so a missing database
 between the custody check and open cannot become an empty replacement. Held descriptor/path
-checks reject substitution, and all three counter/attempt tables retain their original contents
+checks reject substitution, and the counter/attempt tables and journal generation retain their original contents
 across restart. These checks do not detect privileged rollback of the entire store. Native
 installation/runtime admission and service dispatch still require integration.
 

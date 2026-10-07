@@ -95,6 +95,10 @@ impl EnrollmentJournalV1 {
         {
             return Err(Conflict);
         }
+        // No signed E1 can leave the service before its selected private worker has durably
+        // prepared that exact operation under the incarnation retained in this journal.
+        let preparation = attempt.record.worker_preparation.as_ref().ok_or(Conflict)?;
+        self.require_worker_prepared(attempt, preparation.configuration)?;
         if dispatch.purpose == KagemushaEnrollmentPermitPurposeV1::Resume {
             let original = dispatch.previous_permit.as_ref().ok_or(Invalid)?;
             let previous = KagemushaEnrollmentPermitV1::decode_canonical(

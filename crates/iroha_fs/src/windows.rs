@@ -498,6 +498,8 @@ pub(super) struct Directory {
     links: Vec<Arc<Link>>,
 }
 
+#[path = "windows/custody_io.rs"]
+mod custody_io;
 #[path = "windows/private_files.rs"]
 mod private_files;
 
@@ -1177,7 +1179,16 @@ impl Directory {
             OPEN_ALWAYS,
             false,
             true,
-        )?;
+        )
+        .map_err(|error| {
+            if error.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION.cast_signed())
+            {
+                io::Error::from(io::ErrorKind::WouldBlock)
+            } else {
+                error
+            }
+        })?;
         snapshot(&file, true, false)?;
         file.sync_all()?;
         self.sync()?;

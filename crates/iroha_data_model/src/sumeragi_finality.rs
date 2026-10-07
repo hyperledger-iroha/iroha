@@ -526,14 +526,18 @@ impl SumeragiFinalityProof {
         let certificate = block
             .commit_certificate()
             .ok_or_else(|| FinalityError("embedded commit certificate missing".into()))?;
-        let commitment = match validation.as_deref_mut() {
-            Some(validation) => ExecutionResultCommitment::decode_with_validation(
-                certificate.result_preimage(),
-                validation,
-            ),
-            None => ExecutionResultCommitment::decode(certificate.result_preimage()),
-        }
-        .map_err(malformed)?;
+        let commitment = validation
+            .as_deref_mut()
+            .map_or_else(
+                || ExecutionResultCommitment::decode(certificate.result_preimage()),
+                |validation| {
+                    ExecutionResultCommitment::decode_with_validation(
+                        certificate.result_preimage(),
+                        validation,
+                    )
+                },
+            )
+            .map_err(malformed)?;
         need(
             commitment.height == self.height(),
             "result height differs from its block",
@@ -556,11 +560,12 @@ impl SumeragiFinalityProof {
                     }),
             "proof roster differs from its complete epoch context",
         )?;
-        let epoch = match validation.as_deref_mut() {
-            Some(validation) => validation.core_epoch(&commitment.schedule.current),
-            None => core_epoch(&commitment.schedule.current),
-        }
-        .map_err(malformed)?;
+        let epoch = validation
+            .map_or_else(
+                || core_epoch(&commitment.schedule.current),
+                |validation| validation.core_epoch(&commitment.schedule.current),
+            )
+            .map_err(malformed)?;
         let result = result_of_preimage(certificate.result_preimage());
         let (len, hash) = block.executed_block_wire_identity().map_err(malformed)?;
         need(
@@ -853,7 +858,7 @@ impl SumeragiFinalityVerifier {
         self.instance
     }
     /// Exact initial epoch reconstructed from this owner's authenticated signed
-    /// genesis, including its network, generation and original ordered key PoPs.
+    /// genesis, including its network, generation and original ordered key `PoPs`.
     /// This does not authenticate any genesis execution result or later epoch.
     /// The installation owner must independently select and pin the genesis root.
     #[must_use]
@@ -951,7 +956,13 @@ impl SumeragiFinalityVerifier {
             .ok_or_else(|| FinalityError("decision is outside authenticated prefix".into()))?;
         let (decoded, proposal, crypto) =
             candidate.decode_parts_with_validation(validation.as_deref_mut())?;
-        self.check_trusted(candidate, &decoded, &proposal, &crypto, validation)?;
+        self.check_trusted(
+            candidate,
+            &decoded,
+            proposal.as_deref(),
+            &crypto,
+            validation,
+        )?;
         // check() releases these original owners before returning its decoded graph. Preserve
         // that reverse-binding drop order before the retained comparison on this direct path.
         drop(crypto);
@@ -985,7 +996,7 @@ impl SumeragiFinalityVerifier {
     }
     fn check(&self, proof: &SumeragiFinalityProof) -> Result<DecodedSumeragiBlock, FinalityError> {
         let (decoded, proposal, crypto) = proof.decode_parts()?;
-        self.check_trusted(proof, &decoded, &proposal, &crypto, None)?;
+        self.check_trusted(proof, &decoded, proposal.as_deref(), &crypto, None)?;
         Ok(decoded)
     }
 
@@ -1001,7 +1012,7 @@ impl SumeragiFinalityVerifier {
         &self,
         proof: &SumeragiFinalityProof,
         decoded: &DecodedSumeragiBlock,
-        proposal: &Option<Vec<u8>>,
+        proposal: Option<&[u8]>,
         crypto: &ProofCrypto,
         mut validation: Option<&mut EpochValidationScope>,
     ) -> Result<(), FinalityError> {
@@ -1025,28 +1036,39 @@ impl SumeragiFinalityVerifier {
                     && decoded.commitment.schedule.current == self.genesis_epoch,
                 "genesis proof differs from independently selected signed root",
             )?;
-            match validation.as_deref_mut() {
-                Some(validation) => ConsensusSchedule::from_genesis_outcome_with_validation(
-                    &decoded.commitment.schedule,
-                    validation,
-                ),
-                None => ConsensusSchedule::from_genesis_outcome(&decoded.commitment.schedule),
-            }
-            .map_err(malformed)?;
+            validation
+                .as_deref_mut()
+                .map_or_else(
+                    || ConsensusSchedule::from_genesis_outcome(&decoded.commitment.schedule),
+                    |validation| {
+                        ConsensusSchedule::from_genesis_outcome_with_validation(
+                            &decoded.commitment.schedule,
+                            validation,
+                        )
+                    },
+                )
+                .map_err(malformed)?;
         } else {
             let parent = self
                 .decisions
                 .get(&(height - 1))
                 .ok_or_else(|| FinalityError("authenticated parent is missing".into()))?;
-            match validation.as_deref_mut() {
-                Some(validation) => parent
-                    .schedule
-                    .validate_successor_with_validation(&decoded.commitment.schedule, validation),
-                None => parent
-                    .schedule
-                    .validate_successor(&decoded.commitment.schedule),
-            }
-            .map_err(malformed)?;
+            validation
+                .as_deref_mut()
+                .map_or_else(
+                    || {
+                        parent
+                            .schedule
+                            .validate_successor(&decoded.commitment.schedule)
+                    },
+                    |validation| {
+                        parent.schedule.validate_successor_with_validation(
+                            &decoded.commitment.schedule,
+                            validation,
+                        )
+                    },
+                )
+                .map_err(malformed)?;
             if let Some(boundary) = &decoded.commitment.schedule.boundary {
                 need(
                     boundary.selection_anchor == parent.block_hash,
@@ -1097,17 +1119,17 @@ impl SumeragiFinalityVerifier {
                 scheduled.height == height,
                 "availability configuration height differs",
             )?;
-            let config = match validation.as_deref_mut() {
-                Some(validation) => scheduled.height_config_with_validation(validation),
-                None => scheduled.height_config(),
-            }
-            .map_err(malformed)?;
+            let config = validation
+                .map_or_else(
+                    || scheduled.height_config(),
+                    |validation| scheduled.height_config_with_validation(validation),
+                )
+                .map_err(malformed)?;
             let availability = decoded
                 .availability
                 .as_ref()
                 .ok_or_else(|| FinalityError("mandatory availability frame is absent".into()))?;
             let payload = proposal
-                .as_deref()
                 .ok_or_else(|| FinalityError("canonical proposal image is absent".into()))?;
             verify_payload_availability(
                 self.instance,

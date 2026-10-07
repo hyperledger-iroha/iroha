@@ -53,6 +53,8 @@ mod finality;
 mod lane_manifest;
 #[path = "taira_dataspace_deploy_profile.rs"]
 mod profile;
+#[path = "taira_dataspace_runtime_update.rs"]
+mod runtime_update;
 
 pub(crate) use finality::authenticated_height::{
     AuthenticatedHeightObserverV1, HeightObservationV1, VerifiedCommittedHeightV1,
@@ -100,6 +102,10 @@ impl Command {
             status || args.verification_peer_urls.is_empty(),
             "--verification-peer-url is only available for read-only dataspace status",
         )?;
+        require(
+            status || args.verification_runtime_update.is_none(),
+            "--verification-runtime-update is only available for read-only dataspace status",
+        )?;
         finality::verification_origins(trust, &args.verification_peer_urls)
     }
 }
@@ -118,6 +124,9 @@ pub(crate) struct DefinitionArgs {
     /// Signed peer identities and retained deployment intent are never changed.
     #[arg(long = "verification-peer-url", value_name = "URL")]
     pub(crate) verification_peer_urls: Vec<String>,
+    /// Actual completed preserved-state update on this Linux guest; verify its compiled build identity.
+    #[arg(long, value_name = "DIRECTORY")]
+    pub(crate) verification_runtime_update: Option<PathBuf>,
     /// Total time budget for planning, dispatch and fresh verification.
     #[arg(long, default_value_t = DEFAULT_OPERATION_TIMEOUT_MS,
           value_parser = clap::value_parser!(u64).range(1..))]
@@ -1516,7 +1525,12 @@ fn run_saved_until<C: RunContext>(
     apply: bool,
     deadline: Instant,
     verification_origins: &[String],
+    runtime_update: Option<&runtime_update::Verified>,
 ) -> Result<ReportV1> {
+    require(
+        !apply || runtime_update.is_none(),
+        "runtime verification cannot authorize an apply",
+    )?;
     require_operation_budget(deadline, "validate retained operation")?;
     operation_id(&plan.operation_id)?;
     plan.verify()
@@ -1734,8 +1748,13 @@ fn run_saved_until<C: RunContext>(
     if report.state == "applied_verification_pending" {
         eprintln!("[dataspace] starting fresh four-validator finality verification");
         let verification: Result<()> = (|| {
-            let mut completion =
-                finality::Completion::new(plan, journal, deadline, verification_origins)?;
+            let mut completion = finality::Completion::new(
+                plan,
+                journal,
+                deadline,
+                verification_origins,
+                runtime_update,
+            )?;
             complete_until(apply, deadline, &mut report, |report| {
                 completion.complete(context, report)
             })
@@ -2730,6 +2749,7 @@ mod tests {
                 apply,
                 Instant::now(),
                 &[],
+                None,
             )
             .unwrap_err();
             assert!(error.to_string().contains("deadline elapsed"));
@@ -2750,6 +2770,7 @@ mod tests {
             true,
             operation_deadline(60_000).unwrap(),
             &[],
+            None,
         )
         .unwrap_err();
         assert!(

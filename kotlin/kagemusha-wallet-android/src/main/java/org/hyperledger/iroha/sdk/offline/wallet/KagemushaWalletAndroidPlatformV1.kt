@@ -126,6 +126,11 @@ class KagemushaWalletAndroidPlatformV1 private constructor(
                 KagemushaWalletAndroidKeyGenerationV1.AlreadyPresent -> KagemushaWalletNativeReplyV1(3)
                 is KagemushaWalletAndroidKeyGenerationV1.Unavailable -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
             }
+            12 -> when(val result=attestationChain(slot)) {
+                is KagemushaWalletAndroidAttestationChainV1.Present -> KagemushaWalletNativeReplyV1(0,chain=result.certificatesDer().toTypedArray())
+                KagemushaWalletAndroidAttestationChainV1.Absent -> KagemushaWalletNativeReplyV1(1)
+                is KagemushaWalletAndroidAttestationChainV1.Unavailable -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
+            }
             else -> KagemushaWalletNativeReplyV1(2)
         }
 
@@ -206,6 +211,9 @@ internal class KagemushaWalletAndroidPlatformAdapterV1(
 
     /** Export the attestation chain of the payment key of [slot], leaf first. */
     fun attestationChain(slot: ByteArray): KagemushaWalletAndroidAttestationChainV1 = paymentKey.attestationChain(slot)
+
+    fun enrollmentAttestationChain(slot: ByteArray, expectedPaymentKey: ByteArray): KagemushaWalletAndroidAttestationChainV1 =
+        paymentKey.enrollmentAttestationChain(slot, expectedPaymentKey)
 
     /** Rust `KagemushaWalletAnchorPolicyV1` tag: Android keeps no rollback anchor. */
     fun anchorPolicyTag(): Int = KAGEMUSHA_WALLET_ANDROID_ANCHOR_NOT_REQUIRED_TAG_V1

@@ -67,6 +67,7 @@ mod model {
     /// Internal balance-bucket identifier for a concrete owner/scope bucket.
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Getters, Decode, Encode, IntoSchema)]
     #[getset(get = "pub")]
+    #[norito(decode_fields)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::asset::id::model::AssetId")]
     pub struct AssetId {

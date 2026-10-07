@@ -100,6 +100,25 @@ impl DirectoryOriginalsV1 {
         self.require(identity)
     }
 
+    /// Open one retained immutable original through the genuine bounded no-follow reader.
+    /// Cloned native source owners share directory ancestry, never proving-key buffers.
+    /// # Errors
+    /// Missing/unavailable native storage or changed mode, file or retained ancestry.
+    pub fn open_original(&self, sha256: [u8; 32]) -> Result<Box<dyn Read>, Error> {
+        self.reader(sha256)
+            .map(|reader| -> Box<dyn Read> { Box::new(reader) })
+            .map_err(|error| {
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput
+                ) {
+                    Error::Inventory
+                } else {
+                    Error::Unavailable
+                }
+            })
+    }
+
     fn reader(&self, digest: [u8; 32]) -> io::Result<StableOriginal> {
         self.reader_optional(digest)?
             .ok_or_else(|| io::ErrorKind::NotFound.into())
@@ -229,6 +248,36 @@ mod tests {
         let root = root.canonicalize().unwrap();
         let source = DirectoryOriginalsV1::open_existing(root, 1024).unwrap();
         (temp, source)
+    }
+
+    #[test]
+    fn owned_reader_retains_the_actual_original_when_source_owner_is_released() {
+        let (_temp, mut source) = directory();
+        let bytes = b"retained owned source reader";
+        let identity = BlobV1::of(bytes);
+        source.store_original(identity, bytes).unwrap();
+        let mut reader = source.open_original(identity.sha256).unwrap();
+        drop(source);
+        let mut actual = Vec::new();
+        reader.read_to_end(&mut actual).unwrap();
+        assert_eq!(actual, bytes);
+    }
+
+    #[test]
+    fn owned_reader_never_falls_back_after_namespace_replacement() {
+        let (_temp, mut source) = directory();
+        let bytes = b"one immutable original";
+        let identity = BlobV1::of(bytes);
+        source.store_original(identity, bytes).unwrap();
+        let root = source.root().unwrap().to_owned();
+        let mut reader = source.open_original(identity.sha256).unwrap();
+        std::fs::rename(
+            root.join(hex::encode(identity.sha256)),
+            root.join("retained-old"),
+        )
+        .unwrap();
+        std::fs::write(root.join(hex::encode(identity.sha256)), bytes).unwrap();
+        assert!(reader.read(&mut [0; 1]).is_err());
     }
 
     #[test]

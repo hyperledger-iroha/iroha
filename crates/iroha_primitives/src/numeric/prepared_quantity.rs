@@ -7,7 +7,8 @@
 
 use core::convert::Infallible;
 use iroha_allocation::{
-    AllocationBudget, AllocationCharge, ChargedBuffer, ChargedBufferFromChargeError,
+    AllocationBudget, AllocationCharge, ChargedBuffer, ChargedBufferError,
+    ChargedBufferFromChargeError,
 };
 use norito::core::{
     CanonicalField, DecodeField, DecodeIntoError, DecodeRecordFields, FieldDestination,
@@ -26,44 +27,46 @@ pub struct QuantityDecodePlan {
     scale: u32,
 }
 
-struct NumericPlanFields {
+type MantissaRetainer<'retain, E> = dyn FnMut(&[u8]) -> Result<(), DecodeIntoError<E>> + 'retain;
+
+struct NumericPlanFields<'retain, E> {
     magnitude: [u8; MAX_MANTISSA_BYTES],
     magnitude_len: usize,
     negative: bool,
     signed_len: usize,
     scale: u32,
-    probe_backing: bool,
+    retain_mantissa: &'retain mut MantissaRetainer<'retain, E>,
 }
-impl Default for NumericPlanFields {
-    fn default() -> Self {
+impl<'retain, E> NumericPlanFields<'retain, E> {
+    fn new(retain_mantissa: &'retain mut MantissaRetainer<'retain, E>) -> Self {
         Self {
             magnitude: [0; MAX_MANTISSA_BYTES],
             magnitude_len: 0,
             negative: false,
             signed_len: 0,
             scale: 0,
-            probe_backing: false,
+            retain_mantissa,
         }
     }
 }
-impl FieldDestination for NumericPlanFields {
-    type Error = Infallible;
+impl<E> FieldDestination for NumericPlanFields<'_, E> {
+    type Error = E;
 }
-impl DecodeField<0, BigInt> for NumericPlanFields {
+impl<E> DecodeField<0, BigInt> for NumericPlanFields<'_, E> {
     type Value = ();
     fn decode_field(
         &mut self,
         field: CanonicalField<'_, BigInt>,
-    ) -> Result<(), DecodeIntoError<Infallible>> {
+    ) -> Result<(), DecodeIntoError<E>> {
         field.with_payload(|bytes| {
             let (payload, used) = crate::bigint::canonical_twos_payload(bytes)?;
             if used != bytes.len() {
                 return Err(Error::LengthMismatch.into());
             }
-            if self.probe_backing {
-                crate::bigint::CanonicalNativeDigits::from_payload(payload)
-                    .reserve_decode_backing()?;
-            }
+            // The shared field relation reaches this synchronous owner boundary
+            // before scale or numeric-domain validation. No complete-value preview
+            // can move a later deterministic error ahead of original admission.
+            (self.retain_mantissa)(payload)?;
             self.signed_len = payload.len();
             self.negative = payload.last().is_some_and(|byte| *byte & 0x80 != 0);
             // A wider canonical BigInt must survive through scale decoding: the
@@ -88,12 +91,9 @@ impl DecodeField<0, BigInt> for NumericPlanFields {
         })
     }
 }
-impl DecodeField<1, u32> for NumericPlanFields {
+impl<E> DecodeField<1, u32> for NumericPlanFields<'_, E> {
     type Value = ();
-    fn decode_field(
-        &mut self,
-        field: CanonicalField<'_, u32>,
-    ) -> Result<(), DecodeIntoError<Infallible>> {
+    fn decode_field(&mut self, field: CanonicalField<'_, u32>) -> Result<(), DecodeIntoError<E>> {
         self.scale = field.with_payload(|bytes| {
             let (scale, used) = <u32 as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
             if used != bytes.len() {
@@ -122,50 +122,20 @@ impl QuantityDecodePlan {
         Self::decode_payload_with_probe(bytes, false)
     }
     fn decode_payload_with_probe(bytes: &[u8], probe_backing: bool) -> Result<Self, Error> {
-        let mut fields = NumericPlanFields {
-            probe_backing,
-            ..NumericPlanFields::default()
+        let mut retain_mantissa = |payload: &[u8]| {
+            if probe_backing {
+                crate::bigint::CanonicalNativeDigits::from_payload(payload)
+                    .reserve_decode_backing()?;
+            }
+            Ok::<_, DecodeIntoError<Infallible>>(())
         };
+        let mut fields = NumericPlanFields::new(&mut retain_mantissa);
         let (_, used) = scale_::NumericScaleHelper::decode_fields(bytes, &mut fields)
             .map_err(DecodeIntoError::into_codec)?;
         if used != bytes.len() {
             return Err(Error::LengthMismatch);
         }
-        if fields.scale > MAX_DECIMAL_SCALE {
-            return Err(Error::Message(format!(
-                "invalid numeric: {}",
-                NumericError::ScaleTooLarge
-            )));
-        }
-        if fields.signed_len > MAX_MANTISSA_BYTES {
-            return Err(Error::Message(format!(
-                "invalid numeric: {}",
-                NumericError::MantissaTooLarge
-            )));
-        }
-        let mut words = [0_u64; MAX_MANTISSA_BYTES / core::mem::size_of::<u64>()];
-        for (word, bytes) in words.iter_mut().zip(fields.magnitude.chunks_exact(8)) {
-            *word = u64::from_le_bytes(bytes.try_into().expect("fixed eight-byte chunk"));
-        }
-        let limbs = fields.magnitude_len.div_ceil(8).max(1);
-        infallible_observed(validate_decimal_parts_observed(
-            fields.scale,
-            fields.magnitude_len == 0,
-            u16::try_from(limbs).expect("512-bit domain fits limb count"),
-            || magnitude_divisible_by_ten(words.iter().rev().copied()),
-            &mut |_| Ok::<_, Infallible>(()),
-        ))
-        .map_err(|error| Error::Message(format!("invalid numeric: {error}")))?;
-        if fields.negative {
-            return Err(Error::Message(
-                NumericOperationError::NegativeQuantity.to_string(),
-            ));
-        }
-        Ok(Self {
-            magnitude: fields.magnitude,
-            digit_count: fields.magnitude_len.div_ceil(UNBOUNDED_BIGINT_DIGIT_BYTES),
-            scale: fields.scale,
-        })
+        fields.finish()
     }
 
     /// Exact final native-digit layout; zero keeps a zero-byte original charge.
@@ -173,6 +143,92 @@ impl QuantityDecodePlan {
     pub fn allocation_layout(&self) -> Layout {
         Layout::array::<NativeBigDigit>(self.digit_count)
             .expect("the bounded 512-bit native-digit array is representable")
+    }
+}
+
+impl<E> NumericPlanFields<'_, E> {
+    // The original Quantity plan and the one-pass owner use exactly this scalar
+    // relation. Canonical failures still own their existing diagnostic String;
+    // this primitive does not claim physical admission for that error storage.
+    fn finish(self) -> Result<QuantityDecodePlan, Error> {
+        if self.scale > MAX_DECIMAL_SCALE {
+            return Err(Error::Message(format!(
+                "invalid numeric: {}",
+                NumericError::ScaleTooLarge
+            )));
+        }
+        if self.signed_len > MAX_MANTISSA_BYTES {
+            return Err(Error::Message(format!(
+                "invalid numeric: {}",
+                NumericError::MantissaTooLarge
+            )));
+        }
+        let mut words = [0_u64; MAX_MANTISSA_BYTES / core::mem::size_of::<u64>()];
+        for (word, bytes) in words.iter_mut().zip(self.magnitude.chunks_exact(8)) {
+            *word = u64::from_le_bytes(bytes.try_into().expect("fixed eight-byte chunk"));
+        }
+        let limbs = self.magnitude_len.div_ceil(8).max(1);
+        infallible_observed(validate_decimal_parts_observed(
+            self.scale,
+            self.magnitude_len == 0,
+            u16::try_from(limbs).expect("512-bit domain fits limb count"),
+            || magnitude_divisible_by_ten(words.iter().rev().copied()),
+            &mut |_| Ok::<_, Infallible>(()),
+        ))
+        .map_err(|error| Error::Message(format!("invalid numeric: {error}")))?;
+        if self.negative {
+            return Err(Error::Message(
+                NumericOperationError::NegativeQuantity.to_string(),
+            ));
+        }
+        Ok(QuantityDecodePlan {
+            magnitude: self.magnitude,
+            digit_count: self.magnitude_len.div_ceil(UNBOUNDED_BIGINT_DIGIT_BYTES),
+            scale: self.scale,
+        })
+    }
+}
+
+/// Canonical Quantity failure or original-pool admission at its mantissa boundary.
+#[derive(Debug)]
+pub enum QuantityDecodeAdmissionError {
+    /// Original field, cumulative work or scalar validation cause.
+    Codec(Error),
+    /// Exact native-digit backing could not be admitted or physically allocated.
+    Allocation(ChargedBufferError),
+    /// A complete derived field walk did not initialize its mantissa destination.
+    /// This is a local invariant failure, not a protocol-invalid scalar.
+    Incomplete,
+}
+impl From<Error> for QuantityDecodeAdmissionError {
+    fn from(error: Error) -> Self {
+        Self::Codec(error)
+    }
+}
+impl From<DecodeIntoError<ChargedBufferError>> for QuantityDecodeAdmissionError {
+    fn from(error: DecodeIntoError<ChargedBufferError>) -> Self {
+        match error {
+            DecodeIntoError::Codec(error) => Self::Codec(error),
+            DecodeIntoError::Destination(error) => Self::Allocation(error),
+        }
+    }
+}
+impl core::fmt::Display for QuantityDecodeAdmissionError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Codec(error) => error.fmt(formatter),
+            Self::Allocation(error) => error.fmt(formatter),
+            Self::Incomplete => formatter.write_str("unfinished one-pass quantity destination"),
+        }
+    }
+}
+impl std::error::Error for QuantityDecodeAdmissionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Codec(error) => Some(error),
+            Self::Allocation(error) => Some(error),
+            Self::Incomplete => None,
+        }
     }
 }
 
@@ -230,6 +286,54 @@ pub struct PreparedQuantityDecode {
     scale: Option<u32>,
 }
 impl PreparedQuantityDecode {
+    /// Decode once and retain exact native digits from the original finite pool.
+    ///
+    /// The sole canonical field walk validates the signed mantissa and consumes
+    /// its nominal storage work, then prepays and fills its actual native-digit
+    /// backing before visiting scale. Later scale/domain failure destroys those
+    /// digits before physical refund; successful prefix logical work is never
+    /// reset or refunded. No whole-Quantity preview or second decode is used.
+    ///
+    /// The caller supplies the original flags/field context and retains the
+    /// enclosing source, decoder controls and any complete diagnostic owner.
+    /// In particular existing `Error::Message` strings are not funded here. A
+    /// refusal retains no prepared backing across a later execution attempt;
+    /// retry uses the same borrowed source and consumes new cumulative work.
+    ///
+    /// # Errors
+    /// Preserves the original codec cause or distinct physical admission failure.
+    /// An incomplete derived walk is a local invariant failure.
+    pub fn try_decode_payload(
+        bytes: &[u8],
+        budget: &AllocationBudget,
+    ) -> Result<ChargedQuantity, QuantityDecodeAdmissionError> {
+        let mut retained = None;
+        let plan = {
+            let mut retain_mantissa = |payload: &[u8]| {
+                let canonical = crate::bigint::CanonicalNativeDigits::from_payload(payload);
+                canonical.reserve_decode_backing()?;
+                let mut digits = ChargedBuffer::new(canonical.as_slice().len(), budget)
+                    .map_err(DecodeIntoError::Destination)?;
+                for &digit in canonical.as_slice() {
+                    digits.push_reserved(digit);
+                }
+                retained = Some(digits);
+                Ok::<_, DecodeIntoError<ChargedBufferError>>(())
+            };
+            let mut fields = NumericPlanFields::new(&mut retain_mantissa);
+            let (_, used) = scale_::NumericScaleHelper::decode_fields(bytes, &mut fields)
+                .map_err(QuantityDecodeAdmissionError::from)?;
+            if used != bytes.len() {
+                return Err(Error::LengthMismatch.into());
+            }
+            fields.finish()?
+        };
+        let digits = retained.ok_or(QuantityDecodeAdmissionError::Incomplete)?;
+        // Valid Quantity's canonical magnitude is positive, minimal and bounded
+        // by the same scalar relation. This exact filled Vec cannot resize.
+        Ok(Self::bind_complete(digits, plan.scale))
+    }
+
     /// Physically allocate the exact final magnitude before decoding a value.
     ///
     /// # Errors
@@ -310,12 +414,16 @@ impl PreparedQuantityDecode {
     /// # Errors
     /// Returns the unchanged destination unless a complete canonical fill succeeded.
     /// No normalization, conversion allocation, refund or new admission occurs here.
-    #[allow(unsafe_code)]
     pub fn finish(self) -> Result<ChargedQuantity, Self> {
         let Some(scale) = self.scale else {
             return Err(self);
         };
         let Self { digits, scale: _ } = self;
+        Ok(Self::bind_complete(digits, scale))
+    }
+
+    #[allow(unsafe_code)]
+    fn bind_complete(digits: ChargedBuffer<NativeBigDigit>, scale: u32) -> ChargedQuantity {
         // SAFETY: filled digits are minimal and fill exact capacity. The pinned
         // native-digit constructor therefore preserves this Vec allocation. The
         // concrete immutable value and original charge are immediately paired;
@@ -323,7 +431,7 @@ impl PreparedQuantityDecode {
         let (digits, charge) = unsafe { digits.into_allocation_parts() };
         let mantissa = BigInt::from_prepared_quantity_digits(digits);
         let value = Quantity(Numeric { mantissa, scale });
-        Ok(ChargedQuantity { value, charge })
+        ChargedQuantity { value, charge }
     }
 }
 

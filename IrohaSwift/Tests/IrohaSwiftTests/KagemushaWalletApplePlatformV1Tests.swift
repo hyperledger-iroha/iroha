@@ -1060,7 +1060,18 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
       let one = Data([1])
       let originals = try KagemushaWalletOpenOriginalsV1(credential: one,
         enrollmentCertificates: one, account: one, assetScope: one)
-      let runtime = try KagemushaWalletRuntimeV1(nativeRuntimeHandle: UInt64(Int64.max))
+      // This ID was never registered. Real Native performs begin/refusal; only fixture
+      // cleanup acknowledges release of synthetic test DATA and cannot admit custody.
+      final class UnregisteredRuntimeCleanup: KagemushaWalletNativeCloseDriverV1, @unchecked Sendable {
+        private(set) var ids: [UInt64] = []
+        func closeNativeLease(_ owner: UInt64) -> Int32 {
+          ids.append(owner); return owner == UInt64(Int64.max) ? 0 : -1
+        }
+      }
+      let cleanup = UnregisteredRuntimeCleanup()
+      let runtime = try KagemushaWalletRuntimeV1(nativeRuntimeHandle: UInt64(Int64.max),
+        driver: KagemushaWalletNativeDriverV1(), platformOwner: platform, cleanupDriver: cleanup)
+      defer { try? runtime.close() }
       try withExtendedLifetime(platform) {
         for _ in 0..<2 {
           XCTAssertThrowsError(try runtime.begin(originals)) { error in
@@ -1071,6 +1082,9 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
       XCTAssertEqual(keychain.operations, before)
       XCTAssertEqual(try files(), originalFiles)
       XCTAssertTrue(keychain.generationAttributes.isEmpty)
+      try runtime.close()
+      XCTAssertEqual(cleanup.ids, [UInt64(Int64.max)])
+      XCTAssertNoThrow(try KagemushaWalletInstalledRuntimeV1.requireNoUnreleasedAdmissions())
     }
 
     func testNativeKeyEnumerationCallbackReturnsExactOriginalSlotBytesAndNoWrite() throws {

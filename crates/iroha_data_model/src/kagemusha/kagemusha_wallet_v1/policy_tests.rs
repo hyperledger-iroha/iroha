@@ -1333,12 +1333,12 @@ fn kagemusha_wallet_v1_quota_intersections_and_charges() {
     // An interval spanning midnight is charged in both daily windows and the month.
     let spanning = interval(T0_MS + DAY_MS - 5, T0_MS + DAY_MS + 5);
     let original = state;
-    let (charges, charged) = state
+    let (charges, next_usage) = state
         .check_send_quota(Some(&share), &usage, &spanning, 100)
         .expect("charge");
     assert_eq!(charges.len(), 3);
     assert_eq!(
-        charged
+        next_usage
             .slots()
             .iter()
             .flatten()
@@ -1347,7 +1347,7 @@ fn kagemusha_wallet_v1_quota_intersections_and_charges() {
         [1_000, 100, 100]
     );
     assert!(
-        charged
+        next_usage
             .leaf(1)
             .expect("daily leaf")
             .matches_window(&windows[1])
@@ -1360,7 +1360,7 @@ fn kagemusha_wallet_v1_quota_intersections_and_charges() {
             100,
         )
         .expect("exact sequential native openings"),
-        charged.root()
+        next_usage.root()
     );
     assert_eq!(state, original);
     assert!(is_invalid(
@@ -1419,7 +1419,7 @@ fn kagemusha_wallet_v1_quota_intersections_and_charges() {
         "quota_usage.alignment"
     ));
     assert!(is_invalid(
-        state.check_send_quota(Some(&share), &charged, &spanning, 1),
+        state.check_send_quota(Some(&share), &next_usage, &spanning, 1),
         "state.core.quota_usage_root"
     ));
 }
@@ -2126,7 +2126,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     let mut state = f.controlled_state(None, Some(&share), None);
     let usage = KagemushaWalletQuotaUsageArrayV1::zero_for(&windows).expect("usage");
     assert_eq!(usage.root(), state.core.quota_usage_root);
-    let (charges, charged) = state
+    let (charges, next_usage) = state
         .check_send_quota(Some(&share), &usage, &interval(T0_MS, T0_MS + 10), 400)
         .expect("original quota charges");
     assert_eq!(
@@ -2137,9 +2137,9 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
             400
         )
         .expect("authentic window and usage openings"),
-        charged.root()
+        next_usage.root()
     );
-    state.core.quota_usage_root = charged.root();
+    state.core.quota_usage_root = next_usage.root();
     let original = state;
     let mut lowered = windows.clone();
     lowered[0].limit = 399;
@@ -2147,12 +2147,12 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     let refresh = state
         .refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &lower_share,
-            usage: &charged,
+            usage: &next_usage,
         })
         .expect("lowering a cap never restores consumed quota");
     let kept = refresh.quota_usage.expect("rebuilt array");
-    assert_eq!(kept, charged);
-    assert_eq!(refresh.core.quota_usage_root, charged.root());
+    assert_eq!(kept, next_usage);
+    assert_eq!(refresh.core.quota_usage_root, next_usage.root());
     assert_eq!(refresh.core.time_anchor_max_response_ms, MAX_RESPONSE_MS);
     let mut lower_head = state;
     lower_head.core = refresh.core;
@@ -2167,7 +2167,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     assert!(is_invalid(
         state.refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &changed_share,
-            usage: &charged,
+            usage: &next_usage,
         }),
         "quota_usage.window_end_ms"
     ));
@@ -2175,7 +2175,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     assert!(is_invalid(
         state.refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &omitted_share,
-            usage: &charged,
+            usage: &next_usage,
         }),
         "quota_usage.dropped"
     ));
@@ -2185,7 +2185,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     assert!(is_invalid(
         state.refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &short_share,
-            usage: &charged,
+            usage: &next_usage,
         }),
         "quota_share.window_length"
     ));
@@ -2208,7 +2208,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     assert!(is_invalid(
         state.refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &past_share,
-            usage: &charged,
+            usage: &next_usage,
         }),
         "quota_share.window_start_ms"
     ));
@@ -2230,7 +2230,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     let refresh = ended
         .refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &omitted_share,
-            usage: &charged,
+            usage: &next_usage,
         })
         .expect("ended charged key may leave the array");
     let ended_usage = refresh.quota_usage.expect("rebuilt ended array");

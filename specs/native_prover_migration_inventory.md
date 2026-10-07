@@ -114,7 +114,7 @@ the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 | --- | --- | --- | --- |
 | `irohad`, `iroha_torii` (`zk_prover.rs`, routing), `iroha_cli` (`zk.rs`), `iroha_kagami` (genesis), `iroha_test_network` | Verify dispatch and confidential | All nodes and operators | M2 (dispatch) |
 | `iroha_deploy` (`localnet.rs` registers confidential VK records; `genesis/staging.rs`) | Confidential VKs | Localnet, staging | M2(c) fixtures |
-| `connect_norito_bridge` (`confidential_prover_ffi`, `confidential_note_ffi`) | Confidential prover and note hash | iOS and Android apps (staticlib/cdylib) | Step 3, M2(c): source-admitted ABI-26 macOS JNI/C# consumers and earlier ABI-25 Swift confidential consumers pass as recorded below. Current Swift execution, release artifacts, size reports and physical-device qualification remain open. |
+| `connect_norito_bridge` (`confidential_prover_ffi`, `confidential_note_ffi`) | Confidential prover and note hash | iOS and Android apps (staticlib/cdylib) | Step 3, M2(c): source-admitted ABI-26 macOS JNI/C#/Swift consumers pass as recorded below. Release artifacts, size reports and physical-device qualification remain open. |
 | `iroha_python_rs` (`confidential_wallet.rs`), `iroha_js_host` | Confidential wallet | PyPI wheels, npm | M2(c) |
 | `integration_tests` (dev) | Proof fixtures, `queries/proof.rs` | Test | M2 (4-peer cutover tests) |
 
@@ -144,9 +144,11 @@ source drift; its retained dylib SHA-256 is
 It includes the signed pre-key permit, exact E6 custody, Abandon, native Credited,
 background scheduling, CloseLoads and shared immutable IPA parameter tables.
 The matching local macOS Swift archive passed normalization, a real complete C
-consumer link/run, packaging and final provenance verification; Swift runtime
-execution is separately pending. Actual JNI tests pass 4/4 and the managed wallet
-suite passes 86/86 without skips. Compiler and packaging scratch stays in private
+consumer link/run, packaging and final provenance verification. Its original-source
+Swift runtime passes **133/133**, zero failures: 19 confidential and 114
+wallet/load/platform/vector cases, with unchanged SDK source and producer pins
+(`target/qualification/native-enrollment/close-loads-swift`). Actual JNI tests pass
+4/4 and the managed wallet suite passes 86/86 without skips. Compiler and packaging scratch stays in private
 capture directories under `target/qualification`; guard tests reject missing,
 public, redirected and external scratch. The supplemental private attestation
 worker source inventory also stayed unchanged through both captures; it is not
@@ -240,5 +242,22 @@ Retired formats, verifiers and compatibility paths are not retained in the relea
   into the temporary oracle. Only the exact nonpublishable oracle root is exempt;
   dev-only edges and the distinct Orchard/Zcash package identities remain allowed.
   The current graph and nine regression tests covering direct/transitive/build/platform/alias paths pass.
-- Still to capture (TODO): snark-verifier succinct challenges and BGH19 accumulators, per-family
-  goldens and tamper corpora. The 45 non-measurement oracle tests and the 73 companion cases have passed on native aarch64 and the captured x86_64 executables under Rosetta; hardware and timing gates remain separate.
+- The succinct oracle capture now compares all original snark-verifier and Halo2
+  challenges, exact BGH19 accumulator G/xi fields, and both final decisions for
+  eight Sigma/Wide cases across both Pasta curves and seeds 42/43. The frozen
+  `fixtures/native_prover/succinct_v1.json` also retains complete proofs,
+  descriptors, keys, instances and 40 mutation outcomes. Four live-original oracle
+  tests and two independent native corpus replays pass on aarch64 and on actual
+  x86_64 Mach-O executables under Rosetta, with unchanged consumed inputs, tools
+  and runtime source (`target/qualification/snark-succinct-parity/{arm-tape,x86-tape}`).
+  Strict lint passes for both owners. The native replay has no retired prover
+  dependency and retains the corpus after oracle deletion. The original verifier's
+  explicit invalid-equation panic and trailing-prefix acceptance are captured
+  faithfully; native validation rejects those mutations normally. This captures
+  the Sigma/Wide BGH19 succinct subset, not the intentionally distinct PIPA-AS-v1
+  accumulation transcript or the deleted private KAGEMUSHA relation corpus.
+- Still to capture (TODO): remaining per-family relation goldens and tamper corpora
+  and the current complete KAGEMUSHA catalog. The earlier 45 non-measurement oracle
+  tests and 73 companion cases passed on both instruction targets; hardware and
+  timing gates remain separate. These component results do not authorize M7
+  deletion while its retained-consumer, operation and release gates remain open.

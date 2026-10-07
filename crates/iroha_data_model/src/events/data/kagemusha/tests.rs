@@ -52,7 +52,7 @@ fn event_binds_complete_validated_receipt_and_exact_filter() {
         assert!(DataEventFilter::KagemushaLoadCommitted(Some(event.receipt_digest)).matches(&data));
         assert!(!DataEventFilter::KagemushaLoadCommitted(Some([0; 32])).matches(&data));
     }
-    let mut changed = receipt.clone();
+    let mut changed = receipt;
     changed.amount += 1;
     assert_ne!(
         KagemushaLoadCommittedV1::from_receipt(&changed).unwrap(),
@@ -222,11 +222,11 @@ fn native_capture_for(
     builder.push_transaction(transaction);
     let mut block = builder.build(BlockSignatures::default());
     NativeFinalityFixture::install_network_results(&mut block, vec![Ok(vec![])]);
-    let proof = fixture.certify_with_events(block, &[boxed.clone()]);
-    let verified = fixture.verifier().verify_retained_decision(&proof).unwrap();
-    let committed = crate::block::output_test_support::committed(verified.block(), 0);
+    let proof = fixture.certify_with_events(block, std::slice::from_ref(&boxed));
+    let decision = fixture.verifier().verify_retained_decision(&proof).unwrap();
+    let committed = crate::block::output_test_support::committed(decision.block(), 0);
     let exact = verify_finalized_kagemusha_wallet_load_v1(
-        &verified,
+        &decision,
         &committed,
         fixture.network_id(),
         fixture.chain_id(),
@@ -236,13 +236,13 @@ fn native_capture_for(
     )
     .unwrap();
     assert_eq!(exact.receipt(), &receipt);
-    let event_commitment = verified.execution().event_commitment.unwrap();
-    let certificate = verified.block().commit_certificate().unwrap();
+    let event_commitment = decision.execution().event_commitment.unwrap();
+    let certificate = decision.block().commit_certificate().unwrap();
     let core_header: iroha_sumeragi::message::BlockHeader =
         norito::decode_canonical(certificate.consensus_header()).unwrap();
     let qc: iroha_sumeragi::message::Qc =
         norito::decode_canonical(certificate.commit_qc()).unwrap();
-    let committee_public_keys_hex: Vec<String> = verified
+    let committee_public_keys_hex: Vec<String> = decision
         .commitment()
         .schedule
         .current
@@ -255,7 +255,7 @@ fn native_capture_for(
             hex::encode(payload)
         })
         .collect();
-    let committee_proofs_of_possession_hex: Vec<String> = verified
+    let committee_proofs_of_possession_hex: Vec<String> = decision
         .commitment()
         .schedule
         .current
@@ -293,25 +293,25 @@ fn native_capture_for(
         "event_box_hash_preimage_hex": (hex::encode(&hash_preimage)),
         "event_box_hash_hex": (HashOf::new(&boxed).to_string()),
         "event_codec_identity_hex": (hex::encode(norito::schema::identity::frame_hash::<KagemushaLoadCommittedV1>())),
-        "result_preimage_hex": (hex::encode(verified.commitment().preimage().unwrap())),
-        "result_hash_hex": (hex::encode(verified.result().0)),
-        "result_height": (verified.height()),
+        "result_preimage_hex": (hex::encode(decision.commitment().preimage().unwrap())),
+        "result_hash_hex": (hex::encode(decision.result().0)),
+        "result_height": (decision.height()),
         "result_alignment": (core::mem::align_of::<ExecutionResultCommitment>()),
         "result_codec_identity_hex": (hex::encode(norito::schema::identity::frame_hash::<ExecutionResultCommitment>())),
-        "execution_commitment_frame_hex": (hex::encode(norito::encode_canonical(verified.execution()).unwrap())),
+        "execution_commitment_frame_hex": (hex::encode(norito::encode_canonical(decision.execution()).unwrap())),
         "execution_commitment_alignment": (core::mem::align_of::<ExecutionCommitment>()),
         "event_commitment_root_hex": (hex::encode(event_commitment.root().as_ref())),
         "event_commitment_count": (event_commitment.leaf_count().get()),
         "commit_vote_preimage_hex": (hex::encode(qc.preimage())),
         "block_hash_preimage_hex": (hex::encode(iroha_sumeragi::preimage::block_hash_preimage(&core_header))),
-        "consensus_block_hash_hex": (hex::encode(verified.core_hash().0)),
+        "consensus_block_hash_hex": (hex::encode(decision.core_hash().0)),
         "consensus_header_frame_hex": (hex::encode(certificate.consensus_header())),
         "commit_qc_frame_hex": (hex::encode(certificate.commit_qc())),
         "qc_bitmap_hex": (hex::encode(qc.signers.as_bytes())),
         "qc_aggregate_signature_hex": (hex::encode(qc.agg_sig.0)),
         "committee_public_keys_hex": (committee_public_keys_hex),
         "committee_proofs_of_possession_hex": (committee_proofs_of_possession_hex),
-        "authenticated_schedule": (schedule_capture(&verified.commitment().schedule)),
+        "authenticated_schedule": (schedule_capture(&decision.commitment().schedule)),
     })
 }
 
@@ -410,18 +410,18 @@ fn npos_schedule_capture() -> norito::json::Value {
             let blocks: Vec<_> = chain
                 .iter()
                 .map(|proof| {
-                    let verified = verifier.verify_retained_decision(proof).unwrap();
-                    let certificate = verified.block().commit_certificate().unwrap();
+                    let decision = verifier.verify_retained_decision(proof).unwrap();
+                    let certificate = decision.block().commit_certificate().unwrap();
                     norito::json!({
-                        "height": (verified.height()),
+                        "height": (decision.height()),
                         "proof_frame_hex": (hex::encode(norito::encode_canonical(proof).unwrap())),
-                        "result_preimage_hex": (hex::encode(verified.commitment().preimage().unwrap())),
-                        "result_hash_hex": (hex::encode(verified.result().0)),
-                        "block_hash_hex": (hex::encode(verified.block().hash().as_ref())),
-                        "consensus_block_hash_hex": (hex::encode(verified.core_hash().0)),
+                        "result_preimage_hex": (hex::encode(decision.commitment().preimage().unwrap())),
+                        "result_hash_hex": (hex::encode(decision.result().0)),
+                        "block_hash_hex": (hex::encode(decision.block().hash().as_ref())),
+                        "consensus_block_hash_hex": (hex::encode(decision.core_hash().0)),
                         "consensus_header_frame_hex": (hex::encode(certificate.consensus_header())),
                         "commit_qc_frame_hex": (hex::encode(certificate.commit_qc())),
-                        "schedule": (schedule_capture(&verified.commitment().schedule)),
+                        "schedule": (schedule_capture(&decision.commitment().schedule)),
                     })
                 })
                 .collect();

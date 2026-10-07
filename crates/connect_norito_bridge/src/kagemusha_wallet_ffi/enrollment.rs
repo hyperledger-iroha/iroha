@@ -147,8 +147,7 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
             match loaded {
                 Ok(runtime) => {
                     self.open_originals = Some(selected_originals);
-                    self.installed =
-                        Some(open::Runtime(Some(open::Phase::Ready(Box::new(runtime)))));
+                    self.installed = Some(open::Runtime::new(runtime));
                     Ok(response(26, Vec::new()))
                 }
                 Err((owner, (originals, error))) => {
@@ -207,12 +206,12 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
             .cancel()
     }
 }
-/// Register native enrollment startup. Every registration failure returns the exact owner.
-/// # Errors
-/// Registry capacity or poison; no provider, key or original source is discarded on failure.
 /// Native enrollment registration failure retaining the actual sole runtime custody.
 pub type NativeEnrollmentRegistrationFailure<P, S> = Box<(NativeEnrollmentRuntime<P, S>, Failure)>;
 
+/// Register native enrollment startup. Every registration failure returns the exact owner.
+/// # Errors
+/// Registry capacity or poison; no provider, key or original source is discarded on failure.
 pub fn retain_native_enrollment<P, S>(
     runtime: NativeEnrollmentRuntime<P, S>,
 ) -> std::result::Result<u64, NativeEnrollmentRegistrationFailure<P, S>>
@@ -220,50 +219,15 @@ where
     P: advance::KagemushaWalletPlatformV1 + 'static,
     S: OriginalSourceV1 + Send + 'static,
 {
-    let mut registry = match registry().lock() {
-        Ok(value) => value,
-        Err(_) => return Err(Box::new((runtime, Failure::code(INTERNAL)))),
-    };
-    if registry.owners.len() + registry.runtimes.len() >= MAX_OWNERS {
-        return Err(Box::new((runtime, Failure::code(RESOURCE))));
-    }
-    let Some(id) = registry
-        .next
-        .checked_add(1)
-        .filter(|id| *id <= i64::MAX as u64)
-    else {
-        return Err(Box::new((runtime, Failure::code(RESOURCE))));
-    };
-    registry.next = id;
-    registry.runtimes.insert(
-        id,
-        Arc::new(open::RuntimeOwner {
-            admission: Mutex::new(Some(Box::new(runtime))),
-            finished: Mutex::new(None),
-        }),
-    );
-    Ok(id)
+    open::retain_registration(registry(), runtime, |runtime| open::RuntimeOwner {
+        closing: Arc::new(closing::CloseState::default()),
+        admission: Mutex::new(Some(Box::new(runtime))),
+        finished: Mutex::new(None),
+    })
+    .map_err(|(runtime, failure)| Box::new((runtime, failure)))
 }
 pub(crate) fn call(id: u64, action: Action<'_>) -> Result<Response> {
-    let owner = open::runtime(id)?;
-    let mut admission = owner
-        .admission
-        .lock()
-        .map_err(|_| Failure::code(INTERNAL))?;
-    if owner
-        .finished
-        .lock()
-        .map_err(|_| Failure::code(INTERNAL))?
-        .is_some()
-    {
-        return Err(Failure::code(CONFLICT));
-    }
-    let mut reply = admission
-        .as_deref_mut()
-        .ok_or(Failure::code(CLOSED))?
-        .enrollment(action)?;
-    reply.sequence = u128::from(id);
-    Ok(reply)
+    open::enroll(id, action)
 }
 
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {

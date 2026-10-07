@@ -991,10 +991,17 @@ fn persisted_complete_sources_open_real_bootstrap_and_reopen_exact_output() {
         Err(failure) => failure,
     };
     let (runtime, _) = failure.into_parts();
+    let mut changed_account = frames[2].clone();
+    changed_account.push(0);
+    let failure = match runtime.begin(&frames[0], &frames[1], &changed_account, &frames[3]) {
+        Ok(_) => panic!("pending account originals changed"),
+        Err(failure) => failure,
+    };
+    let (runtime, _) = failure.into_parts();
     let pending = runtime
         .begin(&frames[0], &frames[1], &frames[2], &frames[3])
         .unwrap();
-    assert_ne!(pending.challenge(), first_challenge);
+    assert_eq!(pending.challenge(), first_challenge);
     let signature = sign(&f, pending.challenge());
     let mut wallet = pending.finish(&signature).unwrap();
     let before = device.platform.with(|state| state.sign_calls);
@@ -1037,9 +1044,95 @@ fn persisted_complete_sources_open_real_bootstrap_and_reopen_exact_output() {
     let pending = runtime
         .begin(&frames[0], &frames[1], &frames[2], &frames[3])
         .unwrap();
+    assert_ne!(pending.challenge(), first_challenge);
     let signature = sign(&f, pending.challenge());
     let mut recovered = pending.finish(&signature).unwrap();
     assert_eq!(recovered.bootstrap().unwrap(), completed);
     assert_eq!(recovered.snapshot().unwrap(), snapshot);
     assert_eq!(device.platform.with(|state| state.sign_calls), signed);
+}
+
+#[test]
+fn enrollment_owner_preserves_signed_policy_dates_above_ten_minutes_across_restart() {
+    let mut f = fixture();
+    f.config.policy.challenge_lifetime_ms = 600_001;
+    f.challenge.enrollment_policy = f.config.policy.policy_digest().unwrap();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 137);
+    let mut current = owner(&f, &d);
+    let original_dispatch = dispatch(&f, &mut current);
+    let signed = permit(&f, &original_dispatch);
+    let message = current
+        .accept_permit(&signed.encode_canonical().unwrap())
+        .unwrap();
+    current.authorize(&sign(&f, &message)).unwrap();
+    let provider = current.into_provider();
+    let slots = provider.slots().unwrap();
+    let dates = KagemushaWalletEnrollmentDatesV1 {
+        issued_at_ms: signed.body.created_at_ms,
+        expires_at_ms: signed.body.expires_at_ms,
+    };
+    assert_eq!(
+        provider.read_intent(&slots[0]).unwrap().unwrap().dates,
+        dates
+    );
+    drop(provider);
+    d.fs.restart();
+    let mut restored = enrolled(&f, &d);
+    request(&f, &mut restored);
+    let provider = restored.into_provider();
+    assert_eq!(provider.slots().unwrap(), slots);
+    assert_eq!(
+        provider.read_intent(&slots[0]).unwrap().unwrap().dates,
+        dates
+    );
+    d.platform.with(|state| assert_eq!(state.generate_calls, 1));
+}
+
+#[test]
+fn enrollment_e6_requires_issuance_and_evidence_inside_original_permit_dates() {
+    use p256::ecdsa::{Signature as P256Signature, signature::Signer as _};
+    let f = fixture();
+    let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 139);
+    let mut current = enrolled(&f, &d);
+    let requested = RequestV1::decode(&request(&f, &mut current)).unwrap();
+    let valid = issuer_result(&f, &requested);
+    for (issued, evidence) in [(999, 1000), (121000, 1000), (2000, 999), (2000, 121000)] {
+        let mut altered = valid.clone();
+        let mut body = KagemushaWalletCredentialV1::decode_canonical(
+            &valid.credential,
+            &f.config.scheme.scheme_id(),
+        )
+        .unwrap()
+        .body;
+        body.issued_at_ms = issued;
+        body.enrollment_evidence.time_ms = evidence;
+        body.fresh_evidence = body.enrollment_evidence;
+        let signature: P256Signature = signing_key(79).sign(&body.signing_message());
+        altered.credential = KagemushaWalletCredentialV1::sign(
+            body,
+            &f.config.enrollment_certificate,
+            KagemushaWalletSignerOutputV1::Raw(signature.to_bytes().into()),
+        )
+        .unwrap()
+        .to_canonical_bytes()
+        .unwrap();
+        // These are genuine signatures bound to the selected request; only the original
+        // permit interval makes them unsuitable for this enrollment attempt.
+        altered
+            .verify_for(
+                &f.config.scheme,
+                &f.config.enrollment_certificate,
+                &requested,
+            )
+            .unwrap();
+        assert!(
+            current
+                .accept_credential(&altered.encode().unwrap())
+                .is_err()
+        );
+    }
+    assert_eq!(
+        current.accept_credential(&valid.encode().unwrap()).unwrap(),
+        valid.encode().unwrap()
+    );
 }

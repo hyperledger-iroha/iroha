@@ -10,6 +10,9 @@ impl EnrollmentJournalV1 {
         worker_request: Vec<u8>,
         verification_time_ms: u64,
     ) -> Result<EnrollmentVerificationDispatchV1> {
+        if attempt.record.worker_preparation.is_none() {
+            attempt.record.worker_preparation = Some(prepared_worker_data());
+        }
         self.select_verification_bound(
             attempt,
             request,
@@ -17,6 +20,20 @@ impl EnrollmentJournalV1 {
             verification_time_ms,
             [9; 32],
         )
+    }
+}
+
+// Deliberately unadmitted DATA for the private storage-ordering primitive only.
+fn prepared_worker_data() -> preparation::WorkerPreparationSelection {
+    preparation::WorkerPreparationSelection {
+        dispatch: vec![1],
+        configuration: [9; 32],
+        incarnation: [10; 32],
+        original: vec![2],
+        ready: Some(preparation::PreparedOriginal {
+            exchange: [11; 32],
+            response: vec![3],
+        }),
     }
 }
 
@@ -85,7 +102,7 @@ fn original_selection_deadline_and_exact_result_survive_restart() {
         .unwrap();
     assert_eq!(dispatch.into_original(), b"worker request DATA");
     journal
-        .retain_worker_result(&mut attempt, b"worker result DATA".to_vec(), false)
+        .retain_worker_result(&mut attempt, b"worker result DATA".to_vec(), false, 601_000)
         .unwrap();
     let mut signing = attempt.record.clone();
     signing.phase = EnrollmentJournalPhaseV1::Signing;
@@ -158,18 +175,18 @@ fn rejection_is_terminal_and_mismatched_result_cannot_replace_it() {
         .select_verification_originals(&mut attempt, vec![1], vec![2], 2_000)
         .unwrap();
     journal
-        .retain_worker_result(&mut attempt, vec![3], true)
+        .retain_worker_result(&mut attempt, vec![3], true, 0)
         .unwrap();
     journal
-        .retain_worker_result(&mut attempt, vec![3], true)
+        .retain_worker_result(&mut attempt, vec![3], true, 0)
         .unwrap();
     assert_eq!(attempt.phase(), EnrollmentJournalPhaseV1::Rejected);
     assert_eq!(
-        journal.retain_worker_result(&mut attempt, vec![3], false),
+        journal.retain_worker_result(&mut attempt, vec![3], false, 1_000),
         Err(Conflict)
     );
     assert_eq!(
-        journal.retain_worker_result(&mut attempt, vec![4], true),
+        journal.retain_worker_result(&mut attempt, vec![4], true, 0),
         Err(Conflict)
     );
     assert_eq!(journal.retain_issued(&mut attempt, vec![5]), Err(Conflict));
@@ -200,11 +217,11 @@ fn challenge_interval_and_all_original_bounds_fail_before_dispatch() {
         .select_verification_originals(&mut attempt, vec![1], vec![2], 1_000)
         .unwrap();
     assert_eq!(
-        journal.retain_worker_result(&mut attempt, Vec::new(), false),
+        journal.retain_worker_result(&mut attempt, Vec::new(), false, 1_000),
         Err(Invalid)
     );
     journal
-        .retain_worker_result(&mut attempt, vec![3], false)
+        .retain_worker_result(&mut attempt, vec![3], false, 1_000)
         .unwrap();
     let mut signing = attempt.record.clone();
     signing.phase = EnrollmentJournalPhaseV1::Signing;
@@ -299,6 +316,7 @@ fn failed_publication_poison_is_cleared_only_by_reopen_and_recovery() {
         record.worker_request = vec![2];
         record.verification_time_ms = 1_000;
         record.worker_configuration = [9; 32];
+        record.worker_preparation = Some(prepared_worker_data());
         let outcome = journal.publish_with(
             &filename(&selection().key).unwrap(),
             &encode(&record).unwrap(),

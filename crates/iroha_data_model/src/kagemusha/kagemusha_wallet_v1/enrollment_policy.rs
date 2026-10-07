@@ -25,14 +25,14 @@ pub const KAGEMUSHA_WALLET_ENROLLMENT_POLICY_MAX_BYTES_V1: usize = 1024;
 // these shipping-library assertions qualify layout only, not actual native/device operation.
 const _: () = {
     assert!(
-        norito::core::Header::SIZE
-            % norito::core::archived_payload_align::<KagemushaWalletAppPolicyV1>()
-            == 0
+        norito::core::Header::SIZE.is_multiple_of(norito::core::archived_payload_align::<
+            KagemushaWalletAppPolicyV1,
+        >())
     );
     assert!(
-        norito::core::Header::SIZE
-            % norito::core::archived_payload_align::<KagemushaWalletEnrollmentPolicyV1>()
-            == 0
+        norito::core::Header::SIZE.is_multiple_of(norito::core::archived_payload_align::<
+            KagemushaWalletEnrollmentPolicyV1,
+        >())
     );
 };
 
@@ -192,7 +192,7 @@ impl WalletVersionsV1 for KagemushaWalletAppPolicyV1 {
     }
 }
 
-/// Current KeyMint hardware levels; no software or disabled selector exists.
+/// Current `KeyMint` hardware levels; no software or disabled selector exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletAndroidHardwareV1"
@@ -201,7 +201,7 @@ pub enum KagemushaWalletAndroidHardwareV1 {
     /// Transcript tag 1: only hardware TEE level 1.
     #[codec(index = 1)]
     Tee,
-    /// Transcript tag 2: only StrongBox level 2.
+    /// Transcript tag 2: only `StrongBox` level 2.
     #[codec(index = 2)]
     StrongBox,
     /// Transcript tag 3: either of the two hardware levels.
@@ -229,7 +229,7 @@ pub enum KagemushaWalletPlayIntegrityLevelV1 {
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletEnrollmentPlatformV1"
 )]
 pub enum KagemushaWalletEnrollmentPlatformV1 {
-    /// Transcript tag 1: KeyMint, current Google revocation and server Google decode all run.
+    /// Transcript tag 1: `KeyMint`, current Google revocation and server Google decode all run.
     #[codec(index = 1)]
     Android {
         /// Nonzero SHA-256 pin of the genuine selected Google root DER.

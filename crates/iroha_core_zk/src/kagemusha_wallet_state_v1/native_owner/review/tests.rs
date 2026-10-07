@@ -1,6 +1,25 @@
 //! Engineering original/binding tests. These never install an owner or qualify a fold/phone.
 
 use super::*;
+use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::account::{AccountId, MultisigMember, MultisigPolicy};
+
+fn account_original(seed: u8, algorithm: Algorithm) -> (AccountId, Vec<u8>) {
+    let key = KeyPair::from_seed(vec![seed; 32], algorithm);
+    let account = AccountId::new(key.public_key().clone());
+    let original = norito::encode_canonical(&account).unwrap();
+    (account, original)
+}
+
+fn receiver_original() -> Vec<u8> {
+    // Public fixed DATA seed owned by Model vectors_tests::RECEIVER_SEED, not a wallet key.
+    let (account, original) = account_original(0x52, Algorithm::Ed25519);
+    assert_eq!(
+        kagemusha_wallet_account_digest_v1(&account).unwrap(),
+        request().body.receiver_account_digest
+    );
+    original
+}
 
 fn vectors() -> norito::json::Value {
     norito::json::from_str(include_str!(concat!(
@@ -46,6 +65,7 @@ fn unadmitted_review_fixture() -> ReviewedOperationV1 {
             net_destination_amount: request.body.amount,
             receiver_wallet_id: Some(request.body.receiver_wallet_id),
             destination_account_digest: request.body.receiver_account_digest,
+            destination_account_original: Some(receiver_original()),
             request_digest: request.request_digest(),
             charge_quote_digest: [0; 32],
             scheme_id: request.body.scheme_id,
@@ -164,6 +184,7 @@ fn hardware_ui_data_and_copied_originals_cannot_replace_retained_action() {
     data.fee = 0;
     data.gross_debit = 1;
     data.receiver_wallet_id = Some([99; 32]);
+    data.destination_account_original.as_mut().unwrap()[0] ^= 1;
     let mut copied = original.clone();
     copied[0] ^= 1;
     assert_ne!(data, *review.projection());
@@ -174,6 +195,103 @@ fn hardware_ui_data_and_copied_originals_cannot_replace_retained_action() {
         request.action,
         OperationActionV1::Send { request: original }
     );
+}
+
+#[test]
+fn recipient_original_is_bound_to_the_genuine_signed_request_destination() {
+    let request = request();
+    request.verify(&scheme()).unwrap();
+    let original = receiver_original();
+    assert_eq!(
+        send_destination_original(&original, &request).unwrap(),
+        original
+    );
+    let (_, foreign) = account_original(0x53, Algorithm::Ed25519);
+    assert!(send_destination_original(&foreign, &request).is_err());
+    assert_eq!(
+        request.body.receiver_account_digest,
+        request.receiver_credential.body.account_digest
+    );
+    let mut retargeted = request.clone();
+    retargeted.body.receiver_account_digest[0] ^= 1;
+    assert!(retargeted.verify(&scheme()).is_err());
+    assert!(send_destination_original(&original, &retargeted).is_err());
+}
+
+#[test]
+fn recipient_original_rejects_bounds_noncanonical_and_unsupported_accounts() {
+    let request = request();
+    request.verify(&scheme()).unwrap();
+    let original = receiver_original();
+    let mut trailing = original.clone();
+    trailing.push(0);
+    let mut broken = original.clone();
+    broken[0] ^= 1;
+    for malformed in [
+        vec![],
+        vec![0; ACCOUNT_ORIGINAL_MAX_BYTES_V1 + 1],
+        trailing,
+        broken,
+        norito::encode_canonical(&[0_u8; 32]).unwrap(),
+    ] {
+        assert!(send_destination_original(&malformed, &request).is_err());
+    }
+    let (secp, secp_original) = account_original(0x54, Algorithm::Secp256k1);
+    let mut unsupported = request.clone();
+    unsupported.body.receiver_account_digest = kagemusha_wallet_account_digest_v1(&secp).unwrap();
+    // Even a matching digest cannot relax the existing single-Ed25519 account rule.
+    assert!(send_destination_original(&secp_original, &unsupported).is_err());
+    let members = [0x55, 0x56]
+        .into_iter()
+        .map(|seed| {
+            let (account, _) = account_original(seed, Algorithm::Ed25519);
+            MultisigMember::new(account.try_signatory().unwrap().clone(), 1).unwrap()
+        })
+        .collect();
+    let multisig = AccountId::new_multisig(MultisigPolicy::new(2, members).unwrap());
+    unsupported.body.receiver_account_digest =
+        kagemusha_wallet_account_digest_v1(&multisig).unwrap();
+    assert!(
+        send_destination_original(&norito::encode_canonical(&multisig).unwrap(), &unsupported)
+            .is_err()
+    );
+}
+
+#[test]
+fn original_replacement_or_omission_cannot_pass_retained_review_recheck() {
+    let review = unadmitted_review_fixture();
+    for mutation in 0..3 {
+        let mut fresh = unadmitted_review_fixture();
+        match mutation {
+            0 => fresh.projection.destination_account_original = None,
+            1 => {
+                fresh.projection.destination_account_original =
+                    Some(account_original(0x57, Algorithm::Ed25519).1)
+            }
+            _ => fresh
+                .projection
+                .destination_account_original
+                .as_mut()
+                .unwrap()
+                .push(0),
+        }
+        assert!(matches!(
+            review.require_recheck(&fresh),
+            Err(Error::OperationConflict)
+        ));
+    }
+    let mut copied = review.projection().clone();
+    copied
+        .destination_account_original
+        .as_mut()
+        .unwrap()
+        .fill(0);
+    assert_eq!(
+        review.projection().destination_account_original.as_deref(),
+        Some(receiver_original().as_slice())
+    );
+    // Copying DATA supplies no constructor for the privately retained review/action.
+    assert_ne!(copied, *review.projection());
 }
 
 #[test]

@@ -10334,31 +10334,90 @@ fn identifier_execution_error(error: identifier_resolution::IdentifierResolution
     ) {
         return Error::AppServiceUnavailable {
             code: "ram_lfe_backend_unavailable",
-            message: "This backend does not support encrypted execution.".to_owned(),
+            message: "This backend does not support authenticated owner PRF execution.".to_owned(),
         };
     }
     identifier_internal_error(error.to_string())
 }
 #[cfg(feature = "app_api")]
-fn parse_encrypted_identifier_ciphertext(
-    raw: &str,
-) -> Result<iroha_crypto::BfvIdentifierCiphertext, Error> {
-    let literal = raw.trim();
-    if literal.is_empty() {
+fn identifier_owner_unauthorized() -> Error {
+    Error::AppUnauthorized {
+        code: "identifier_owner_required",
+        message: "The current ledger identifier policy owner must authenticate this exact request."
+            .to_owned(),
+    }
+}
+#[cfg(feature = "app_api")]
+fn authenticate_identifier_owner_request(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+) -> Result<AccountId, Error> {
+    if method != axum::http::Method::POST
+        || uri.query().is_some()
+        || body.is_empty()
+        || body.len() > 16_384
+    {
         return Err(identifier_conversion_error(
-            "encrypted identifier ciphertext must not be empty",
+            "owner PRF requires a bounded exact POST body without a query",
         ));
     }
-    let bytes = hex::decode(literal.trim_start_matches("0x")).map_err(|err| {
-        identifier_conversion_error(format!(
-            "encrypted identifier ciphertext is not valid hex: {err}"
-        ))
-    })?;
-    norito::decode_from_bytes::<iroha_crypto::BfvIdentifierCiphertext>(&bytes).map_err(|err| {
-        identifier_conversion_error(format!(
-            "encrypted identifier ciphertext is not valid Norito BFV data: {err}"
-        ))
-    })
+    require_signed_account_request(
+        app,
+        headers,
+        method,
+        uri,
+        body,
+        "identifier_owner_required",
+        "The current ledger identifier policy owner must authenticate this exact request.",
+    )
+}
+#[cfg(feature = "app_api")]
+fn require_identifier_program_owner(
+    caller: &AccountId,
+    program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
+) -> Result<(), Error> {
+    if caller != &program_policy.owner {
+        return Err(identifier_owner_unauthorized());
+    }
+    Ok(())
+}
+#[cfg(feature = "app_api")]
+fn identifier_claim_is_live_at(
+    claim: &iroha_data_model::identifier::IdentifierClaimRecord,
+    now_ms: u64,
+) -> bool {
+    now_ms > 0
+        && claim.verified_at_ms <= now_ms
+        && claim.expires_at_ms.is_none_or(|expiry| expiry > now_ms)
+}
+#[cfg(feature = "app_api")]
+fn parse_identifier_input_nonce(raw: &str) -> Result<[u8; 32], Error> {
+    if raw.len() != 64
+        || !raw
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(identifier_conversion_error(
+            "input_nonce must be exactly 64 lowercase hexadecimal characters",
+        ));
+    }
+    let bytes = zeroize::Zeroizing::new(
+        hex::decode(raw).map_err(|_| identifier_conversion_error("invalid input_nonce"))?,
+    );
+    if bytes.len() != 32 {
+        return Err(identifier_conversion_error("invalid input_nonce length"));
+    }
+    let mut nonce = [0_u8; 32];
+    nonce.copy_from_slice(bytes.as_slice());
+    if nonce.iter().all(|byte| *byte == 0) {
+        return Err(identifier_conversion_error(
+            "input_nonce must be privately generated and nonzero",
+        ));
+    }
+    Ok(nonce)
 }
 #[cfg(feature = "app_api")]
 fn parse_hex_bytes(raw: &str, field_name: &str) -> Result<Vec<u8>, Error> {
@@ -10383,12 +10442,18 @@ fn derive_ram_lfe_request_draft(
     resolver: &identifier_resolution::IdentifierResolutionService,
     program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
     request: &routing::RamLfeExecuteRequestDto,
+    network_id: &iroha_data_model::NetworkId,
 ) -> Result<identifier_resolution::RamLfeExecutionDraft, Error> {
     identifier_resolution::require_supported_program_policy(program_policy)
         .map_err(identifier_execution_error)?;
-    let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
+    let nonce = zeroize::Zeroizing::new(parse_identifier_input_nonce(&request.input_nonce)?);
     resolver
-        .execute_encrypted(program_policy, &ciphertext)
+        .execute_owner_prf(
+            program_policy,
+            &request.normalized_input,
+            &nonce,
+            network_id,
+        )
         .map_err(identifier_execution_error)
 }
 #[cfg(feature = "app_api")]
@@ -10399,54 +10464,28 @@ fn derive_identifier_request_draft(
     request: &routing::IdentifierResolveRequestDto,
     network_id: &iroha_data_model::NetworkId,
 ) -> Result<identifier_resolution::IdentifierResolutionDraft, Error> {
-    identifier_resolution::require_supported_program_policy(program_policy)
-        .map_err(identifier_execution_error)?;
-    let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
-    let phone_like = policy.id.kind.as_ref() == "phone"
-        || policy.normalization == iroha_data_model::identifier::IdentifierNormalization::PhoneE164
-        || policy.program_id.to_string() == "phone_retail";
-    if phone_like {
-        if !policy.id.is_phone_retail() {
-            return Err(identifier_conversion_error(
-                "first-release phone requests require exactly phone#retail",
-            ));
-        }
-        let canonicality = request.phone_retail_canonicality.clone().ok_or_else(|| {
-            identifier_conversion_error(
-                "phone#retail requires a trusted canonical E.164 nullifier attestation",
-            )
-        })?;
-        return resolver
-            .derive_phone_retail_encrypted(
-                policy,
-                program_policy,
-                &ciphertext,
-                request.output_opening.clone(),
-                canonicality,
-                network_id,
-            )
-            .map_err(|err| identifier_conversion_error(err.to_string()));
-    }
-    if request.phone_retail_canonicality.is_some() {
+    if request.phase != "claim" {
         return Err(identifier_conversion_error(
-            "phone canonicality attestation is only valid for phone#retail",
+            "identifier receipt resolution requires phase claim",
         ));
     }
-    match program_policy.commitment.backend {
-        iroha_crypto::RamLfeBackend::BfvAffineV1 | iroha_crypto::RamLfeBackend::BfvProgrammedV1 => {
-            resolver
-                .derive_encrypted(
-                    policy,
-                    program_policy,
-                    &ciphertext,
-                    request.output_opening.clone(),
-                )
-                .map_err(identifier_execution_error)
-        }
-        _ => Err(identifier_conversion_error(
-            "identifier encrypted input requires a BFV-backed RAM-LFE program",
-        )),
-    }
+    identifier_resolution::require_supported_program_policy(program_policy)
+        .map_err(identifier_execution_error)?;
+    let nonce = zeroize::Zeroizing::new(parse_identifier_input_nonce(&request.input_nonce)?);
+    let opening = request.output_opening.clone().ok_or_else(|| {
+        identifier_conversion_error("claim requires the original signed native owner PRF opening")
+    })?;
+    resolver
+        .derive_owner_prf(
+            policy,
+            program_policy,
+            &request.normalized_input,
+            &nonce,
+            opening,
+            request.phone_retail_canonicality.clone(),
+            network_id,
+        )
+        .map_err(identifier_execution_error)
 }
 #[cfg(feature = "app_api")]
 fn ram_lfe_proof_verifier_metadata_dto(
@@ -10515,9 +10554,22 @@ fn identifier_resolution_receipt_payload_dto(
     payload: &iroha_data_model::identifier::IdentifierResolutionReceiptPayload,
 ) -> routing::IdentifierResolutionReceiptPayloadDto {
     routing::IdentifierResolutionReceiptPayloadDto {
+        network_id: hex::encode(payload.network_id.as_bytes()),
         policy_id: payload.policy_id.to_string(),
         execution: ram_lfe_execution_receipt_payload_dto(&payload.execution),
-        opening: payload.opening.clone(),
+        opening: routing::IdentifierOutputOpeningDto {
+            payload: routing::IdentifierOutputOpeningPayloadDto {
+                program_id: payload.opening.payload.program_id.to_string(),
+                input_ciphertext_hash: payload.opening.payload.input_ciphertext_hash.to_string(),
+                output_ciphertext_hash: payload.opening.payload.output_ciphertext_hash.to_string(),
+                parameter_digest: payload.opening.payload.parameter_digest.to_string(),
+                evaluation_key_digest: payload.opening.payload.evaluation_key_digest.to_string(),
+                opened_output_hash: payload.opening.payload.opened_output_hash.to_string(),
+                opened_at_ms: payload.opening.payload.opened_at_ms,
+                expires_at_ms: payload.opening.payload.expires_at_ms,
+            },
+            signature: hex::encode(payload.opening.signature.payload()),
+        },
         opaque_id: payload.opaque_id.to_string(),
         receipt_hash: payload.receipt_hash.to_string(),
         uaid: payload.uaid.to_string(),
@@ -10614,9 +10666,12 @@ fn ram_lfe_execute_response(
 ) -> routing::RamLfeExecuteResponseDto {
     routing::RamLfeExecuteResponseDto {
         program_id: receipt.payload.program_id.to_string(),
+        program_id_canonical: hex::encode_upper(identifier_resolution::program_id_bytes(
+            &receipt.payload.program_id,
+        )),
         opaque_hash: draft.opaque_hash.to_string(),
         receipt_hash: draft.receipt_hash.to_string(),
-        output_ciphertext: hex::encode_upper(&draft.output),
+        opaque_output: hex::encode_upper(&draft.output),
         output_hash: draft.output_hash.to_string(),
         associated_data_hash: draft.associated_data_hash.to_string(),
         executed_at_ms: draft.executed_at_ms,
@@ -32700,10 +32755,12 @@ async fn handler_ram_lfe_program_policies(
 #[cfg(feature = "app_api")]
 async fn handler_ram_lfe_execute(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(program_id_literal): AxPath<String>,
-    NoritoJson(request): NoritoJson<routing::RamLfeExecuteRequestDto>,
+    body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     check_access(
@@ -32713,6 +32770,11 @@ async fn handler_ram_lfe_execute(
         "v1/ram-lfe/programs/{program_id}/execute",
     )
     .await?;
+    let caller =
+        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let request: routing::RamLfeExecuteRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|error| identifier_conversion_error(error.to_string()))?;
+
     let program_id = iroha_data_model::ram_lfe::RamLfeProgramId::from_str(
         program_id_literal.trim(),
     )
@@ -32728,16 +32790,26 @@ async fn handler_ram_lfe_execute(
     if !program_policy.active {
         return Ok(StatusCode::CONFLICT.into_response());
     }
+    require_identifier_program_owner(&caller, &program_policy)?;
     identifier_resolution::require_supported_program_policy(&program_policy)
         .map_err(identifier_execution_error)?;
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
-    let draft = derive_ram_lfe_request_draft(resolver, &program_policy, &request)?;
+    let draft = derive_ram_lfe_request_draft(
+        resolver,
+        &program_policy,
+        &request,
+        app.state.network_id_ref(),
+    )?;
     let receipt = resolver
         .issue_execution_receipt(&program_policy, &draft)
         .map_err(identifier_execution_error)?;
-    json_ok(ram_lfe_execute_response(&receipt, &draft))
+    let response = ram_lfe_execute_response(&receipt, &draft);
+    let response = json_ok(response)?;
+    identifier_resolution::validate_owner_prf_lease(draft.executed_at_ms, draft.expires_at_ms)
+        .map_err(identifier_execution_error)?;
+    Ok(response)
 }
 #[cfg(feature = "app_api")]
 async fn handler_ram_lfe_receipt_verify(
@@ -32852,11 +32924,18 @@ async fn handler_identifier_policies(
 #[cfg(feature = "app_api")]
 async fn handler_identifier_resolve(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<routing::IdentifierResolveRequestDto>,
+    body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
     check_access(&app, &headers, Some(remote.ip()), "v1/identifiers/resolve").await?;
+    let caller =
+        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let request: routing::IdentifierResolveRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|error| identifier_conversion_error(error.to_string()))?;
+
     let policy_id = iroha_data_model::identifier::IdentifierPolicyId::from_str(&request.policy_id)
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -32880,6 +32959,10 @@ async fn handler_identifier_resolve(
     if !program_policy.active {
         return Ok(StatusCode::CONFLICT.into_response());
     }
+    require_identifier_program_owner(&caller, &program_policy)?;
+    if caller != policy.owner || policy.program_id != program_policy.program_id {
+        return Err(identifier_owner_unauthorized());
+    }
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
@@ -32888,7 +32971,7 @@ async fn handler_identifier_resolve(
         &policy,
         &program_policy,
         &request,
-        &app.signed_query_admission.network_id(),
+        app.state.network_id_ref(),
     )?;
     let Some(claim) = world.resolve_identifier_claim(&policy.id, &draft.opaque_id) else {
         return Ok(StatusCode::NOT_FOUND.into_response());
@@ -32902,27 +32985,39 @@ async fn handler_identifier_resolve(
     {
         return Ok(StatusCode::CONFLICT.into_response());
     }
-    if claim
-        .expires_at_ms
-        .is_some_and(|expires_at_ms| expires_at_ms <= draft.resolved_at_ms)
-    {
+    let now_ms = identifier_resolution::owner_prf_now_ms().map_err(identifier_execution_error)?;
+    if !identifier_claim_is_live_at(&claim, now_ms) {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
     let receipt = resolver
         .sign_receipt(&policy, &program_policy, &draft, &claim)
         .map_err(identifier_execution_error)?;
-    json_ok(identifier_receipt_response(
+    let response = json_ok(identifier_receipt_response(
         &receipt,
         draft.backend.as_str(),
-    )?)
+    )?)?;
+    let delivery_now_ms =
+        identifier_resolution::owner_prf_now_ms().map_err(identifier_execution_error)?;
+    identifier_resolution::validate_owner_prf_lease_at(
+        receipt.payload.opening.payload.opened_at_ms,
+        receipt.payload.opening.payload.expires_at_ms,
+        delivery_now_ms,
+    )
+    .map_err(identifier_execution_error)?;
+    if !identifier_claim_is_live_at(&claim, delivery_now_ms) {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    Ok(response)
 }
 #[cfg(feature = "app_api")]
 async fn handler_identifier_claim_receipt(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_literal): AxPath<String>,
-    NoritoJson(request): NoritoJson<routing::IdentifierResolveRequestDto>,
+    body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     check_access(
@@ -32932,6 +33027,11 @@ async fn handler_identifier_claim_receipt(
         "v1/accounts/{account_id}/identifiers/claim-receipt",
     )
     .await?;
+    let caller =
+        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let request: routing::IdentifierResolveRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|error| identifier_conversion_error(error.to_string()))?;
+
     let account_id = parse_account_id_for_endpoint(
         &app,
         &account_literal,
@@ -32960,6 +33060,10 @@ async fn handler_identifier_claim_receipt(
     if !program_policy.active {
         return Ok(StatusCode::CONFLICT.into_response());
     }
+    require_identifier_program_owner(&caller, &program_policy)?;
+    if caller != policy.owner || policy.program_id != program_policy.program_id {
+        return Err(identifier_owner_unauthorized());
+    }
     let Some(account) = world.account(&account_id).ok() else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
@@ -32969,20 +33073,125 @@ async fn handler_identifier_claim_receipt(
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
+    let network_id = app.state.network_id_ref().clone();
+    if request.phase == "prepare" {
+        if request.output_opening.is_some() || request.phone_retail_canonicality.is_some() {
+            return Err(identifier_conversion_error(
+                "prepare cannot contain an opening or phone attestation",
+            ));
+        }
+        let normalized = zeroize::Zeroizing::new(
+            policy
+                .normalization
+                .normalize(&request.normalized_input)
+                .map_err(|error| identifier_conversion_error(error.to_string()))?,
+        );
+        if policy.program_id != program_policy.program_id
+            || policy.owner != program_policy.owner
+            || normalized.as_str() != request.normalized_input.as_str()
+        {
+            return Err(identifier_conversion_error(
+                "prepare input must match the exact native policy normalization",
+            ));
+        }
+        let nonce = zeroize::Zeroizing::new(parse_identifier_input_nonce(&request.input_nonce)?);
+        let execution = resolver
+            .execute_owner_prf(
+                &program_policy,
+                &request.normalized_input,
+                &nonce,
+                &network_id,
+            )
+            .map_err(identifier_execution_error)?;
+        let output_opening = resolver
+            .owner_prf_opening(&program_policy, &execution)
+            .map_err(identifier_execution_error)?;
+        let phone_like = policy.id.kind.as_ref() == "phone"
+            || policy.normalization
+                == iroha_data_model::identifier::IdentifierNormalization::PhoneE164
+            || policy.program_id.to_string() == "phone_retail";
+        let phone_retail_canonicality_payload = if phone_like {
+            if !policy.id.is_phone_retail()
+                || policy.normalization
+                    != iroha_data_model::identifier::IdentifierNormalization::PhoneE164
+                || policy.program_id.to_string() != "phone_retail"
+            {
+                return Err(identifier_conversion_error(
+                    "prepare requires the exact phone#retail contract",
+                ));
+            }
+            let key = policy
+                .phone_retail_attestor_public_key
+                .as_ref()
+                .ok_or_else(|| {
+                    identifier_conversion_error(
+                        "phone#retail requires an independently pinned attestor key",
+                    )
+                })?;
+            if key == &program_policy.resolver_public_key
+                || key == &program_policy.output_opening_public_key
+            {
+                return Err(identifier_conversion_error(
+                    "phone attestor must be independent of native resolver and opener",
+                ));
+            }
+            Some(
+                iroha_data_model::identifier::PhoneRetailCanonicalityPayloadV1 {
+                    network_id,
+                    policy_id: policy.id.clone(),
+                    program_id: policy.program_id.clone(),
+                    input_ciphertext_hash: execution.input_ciphertext_hash,
+                    output_ciphertext_hash: execution.output_ciphertext_hash,
+                    opened_output_hash: execution.output_hash,
+                    canonical_phone_nullifier: execution.output_hash,
+                    uaid,
+                    account_id: account_id.clone(),
+                    issued_at_ms: output_opening.payload.opened_at_ms,
+                    expires_at_ms: output_opening.payload.expires_at_ms.ok_or_else(|| {
+                        identifier_conversion_error("native opening requires a bounded expiry")
+                    })?,
+                },
+            )
+        } else {
+            None
+        };
+        let original_opened_at_ms = output_opening.payload.opened_at_ms;
+        let original_expires_at_ms = output_opening.payload.expires_at_ms;
+        let response = json_ok(routing::IdentifierPrfPrepareResponseDto {
+            network_id: hex::encode(network_id.as_bytes()),
+            policy_id: policy.id.to_string(),
+            account_id: account_id.to_string(),
+            uaid: uaid.to_string(),
+            output_opening,
+            phone_retail_canonicality_payload,
+        })?;
+        identifier_resolution::validate_owner_prf_lease(
+            original_opened_at_ms,
+            original_expires_at_ms,
+        )
+        .map_err(identifier_execution_error)?;
+        return Ok(response);
+    }
     let draft = derive_identifier_request_draft(
         resolver,
         &policy,
         &program_policy,
         &request,
-        &app.signed_query_admission.network_id(),
+        app.state.network_id_ref(),
     )?;
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, account_id)
         .map_err(identifier_execution_error)?;
-    json_ok(identifier_receipt_response(
+    let response = json_ok(identifier_receipt_response(
         &receipt,
         draft.backend.as_str(),
-    )?)
+    )?)?;
+    identifier_resolution::validate_owner_prf_lease(
+        receipt.payload.opening.payload.opened_at_ms,
+        receipt.payload.opening.payload.expires_at_ms,
+    )
+    .map_err(identifier_execution_error)?;
+    Ok(response)
 }
 #[cfg(feature = "app_api")]
 async fn handler_identifier_receipt_lookup(

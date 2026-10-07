@@ -68,6 +68,9 @@
     clippy::useless_let_if_seq
 )]
 #![cfg_attr(test, allow(clippy::large_stack_arrays))]
+// Oracle-only transcript and randomness hooks must never enter a shipping consumer.
+const _: () = assert!(!iroha_plonk::ORACLE_BUILD, "iroha_plonk_oracle is test-only");
+
 /// Native STARK/FRI verifier under `zk-stark` (`stark/fri/*`).
 #[cfg(feature = "zk-stark")]
 pub mod stark;

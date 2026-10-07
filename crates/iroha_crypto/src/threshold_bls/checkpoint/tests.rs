@@ -254,7 +254,7 @@ fn accepted_contributions_restart_preserves_every_original_private_equation_with
     assert!(shares.belongs_to(&budget));
     assert_eq!(shares.as_slice().len(), 4);
     for (i, (share, expected)) in shares.as_slice().iter().zip(&expected).enumerate() {
-        assert_eq!(share.dealer_index(), (i + 1) as u16);
+        assert_eq!(share.dealer_index(), u16::try_from(i + 1).unwrap());
         assert_eq!(share.recipient_index(), 3);
         assert_eq!(*share.components_for_authenticated_encryption(), **expected);
     }

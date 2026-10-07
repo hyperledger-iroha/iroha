@@ -562,6 +562,7 @@ mod tests {
     fn correction_retains_actual_source_prefix_with_minimal_scratch() {
         use p256::elliptic_curve::group::prime::PrimeCurveAffine;
         let params = PinnedParams::<Eq>::derive(16).unwrap();
+        let insufficient = PinnedParams::<Eq>::derive(3).unwrap();
         for k in [12, 14] {
             let original = FoldInput::<Eq>::from_opening(
                 iroha_pasta::EqAffine::generator(),
@@ -580,6 +581,21 @@ mod tests {
             assert_eq!(selected.challenges(), original.challenges());
             assert_ne!(selected.g(), original.g());
             selected.decide(&params, MemoryBudget::DEFAULT).unwrap();
+            // Parameter coverage is a real fallible contract for each source prefix.
+            for budget in [MemoryBudget::DEFAULT, MemoryBudget::new(0)] {
+                assert!(matches!(original.decide(&insufficient, budget),
+                    Err(iroha_plonk_recursion::Error::Parameters(IpaError::ParamsTooSmall {
+                        needed, available: 3
+                    })) if needed == k as u32));
+                assert!(matches!(original.corrected(&insufficient, budget),
+                    Err(iroha_plonk_recursion::Error::Parameters(IpaError::ParamsTooSmall {
+                        needed, available: 3
+                    })) if needed == k as u32));
+                assert!(matches!(
+                    corrected_point(&original, &insufficient, budget, None),
+                    Err(Error::Proof("native fold source or proof"))
+                ));
+            }
             // The complete MSM narrows its window when scratch is unavailable;
             // the budget is not an artificial proof-validation failure.
             assert_eq!(
@@ -592,6 +608,12 @@ mod tests {
             );
         }
         let deciding = AccumulatorT::<Eq>::trivial(&params, MemoryBudget::DEFAULT).unwrap();
+        assert!(matches!(
+            deciding
+                .as_input()
+                .corrected(&params, MemoryBudget::DEFAULT),
+            Err(iroha_plonk_recursion::Error::NotCorrected)
+        ));
         assert!(
             corrected_point(&deciding.as_input(), &params, MemoryBudget::DEFAULT, None).is_err()
         );
@@ -620,6 +642,50 @@ mod tests {
                 Err(Error::Proof(_))
             ));
         }
+    }
+
+    #[test]
+    fn zero_scratch_correction_preserves_binding_and_actual_sigma_modes() {
+        use p256::elliptic_curve::group::prime::PrimeCurveAffine;
+        let params = PinnedParams::<Eq>::derive(3).unwrap();
+        let original = FoldInput::<Eq>::from_opening(
+            iroha_pasta::EqAffine::generator(),
+            &[Fp::from(2), Fp::from(3), Fp::from(5)],
+        )
+        .unwrap();
+        let zero = MemoryBudget::new(0);
+        assert!(matches!(
+            original.decide(&params, zero),
+            Err(iroha_plonk_recursion::Error::Undecidable)
+        ));
+        // The small source also checks exact Accept/Corrected mode selection through
+        // the allocation-free fallback on the same retained parameter owner.
+        let point = corrected_point(&original, &params, zero, None).unwrap();
+        assert_eq!(
+            point,
+            corrected_point(&original, &params, MemoryBudget::DEFAULT, None).unwrap()
+        );
+        let selected =
+            FoldInput::<Eq>::from_normalized(point, original.source_k(), *original.challenges())
+                .unwrap();
+        assert_eq!(selected.source_k(), 3);
+        assert_eq!(selected.challenges(), original.challenges());
+        assert_ne!(selected.g(), original.g());
+        selected.decide(&params, zero).unwrap();
+        assert_eq!(
+            sigma_mode(&params, true, Some(&original), zero, None).unwrap(),
+            IncomingMode::Corrected
+        );
+        assert_eq!(
+            sigma_mode(&params, true, Some(&selected), zero, None).unwrap(),
+            IncomingMode::Accept
+        );
+        // An already deciding source cannot supply the distinct correction witness.
+        assert!(matches!(
+            selected.corrected(&params, zero),
+            Err(iroha_plonk_recursion::Error::NotCorrected)
+        ));
+        assert!(corrected_point(&selected, &params, zero, None).is_err());
     }
 
     #[test]

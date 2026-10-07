@@ -346,6 +346,7 @@ def test_core_custody_mutations_have_distinct_source_owners():
         "HC127": {"snapshot.rs"},
         "HC147": {"query/native_receipts/amx_read.rs"},
         "HC148": {"query/native_receipts/amx_read.rs"},
+        "HC149": {"sumeragi/amx/native.rs"},
     }
     registered = gate.index_mutations(gate.CORE_MUTATIONS)
     source = gate.REPO / "crates/iroha_core/src"
@@ -2853,3 +2854,24 @@ def test_model_build_script_selects_only_registered_owned_test_cfg(model_build_s
     assert (f'cargo:rustc-cfg=sumeragi_model_mutation="{mutation}"' in result.stdout) == emitted
     for prefix in ("sumeragi_mutation", "sumeragi_core_mutation", "sumeragi_daemon_mutation"):
         assert f"cargo:rustc-cfg={prefix}=" not in result.stdout
+
+
+def test_native_amx_leg_mutation_keeps_original_pool_rule_and_actual_allocator_control():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC149"]
+    name = "sumeragi::amx::native::tests::native_leg_decode_refuses_occupied_original_pool_before_any_copy_and_retries_exact_source"
+    assert rule.tests == (name,)
+    assert not rule.scenarios
+    assert gate.has_switch("HC149", core=True)
+    assert not gate.has_switch("HC149")
+    assert not gate.has_switch("HC149", model=True)
+    assert not gate.has_switch("HC149", daemon=True)
+    implementation = (ROOT / "crates/iroha_core/src/sumeragi/amx/native.rs").read_text()
+    assert 'all(test, sumeragi_core_mutation = "HC149")' in implementation
+    assert 'AllocationBudget::new(budget.limit_bytes())' in implementation
+    assert 'PendingAmxTransferLegDecodeV1::new(bytes, budget).try_decode()' in implementation
+    control = (ROOT / "crates/iroha_core/src/sumeragi/amx/native/tests.rs").read_text()
+    assert 'fn ' + name.rsplit('::', 1)[-1] + '(' in control
+    assert 'crate::test_allocations::allocations_during' in control
+    assert 'budget.try_reserve_layouts(controls)' in control
+    assert 'no key, alignment, quantity or graph copy may precede original pool refusal' in control
+    assert 'budget.set_limit_bytes(0)' in control

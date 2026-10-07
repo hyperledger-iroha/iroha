@@ -53,6 +53,44 @@ impl RetainedFeeClaim {
         }
         Ok(bytes)
     }
+    /// Construct the canonical online claim from exact retained originals and a canonical
+    /// beneficiary account. Native checks the historical schedule's payout binding; this DATA
+    /// conversion does not verify proofs, submit a transaction or acknowledge payment.
+    /// # Errors
+    /// Changed Payment/Request, foreign scheme/beneficiary, zero fee or an oversized frame.
+    pub fn ledger_claim_bytes(
+        &self,
+        scheme: &[u8; 32],
+        beneficiary_original: &[u8],
+    ) -> Result<Vec<u8>, Error> {
+        self.to_canonical_bytes(scheme)?;
+        if beneficiary_original.is_empty()
+            || beneficiary_original.len() > KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1
+        {
+            return Err(Error::Invalid("fee beneficiary original bound"));
+        }
+        let beneficiary: iroha_data_model::account::AccountId =
+            archive::decode(beneficiary_original)
+                .map_err(|_| Error::Invalid("fee beneficiary canonical original"))?;
+        let payment = valid(KagemushaWalletPaymentV1::decode_canonical(
+            &self.payment,
+            scheme,
+        ))?;
+        let request: KagemushaWalletRequestV1 = archive::decode(&self.request)
+            .map_err(|_| Error::Invalid("fee Request canonical original"))?;
+        let schedule = request
+            .fee_schedule
+            .schedule()
+            .ok_or(Error::Invalid("fee claim requires historical schedule"))?;
+        let claim = KagemushaWalletFeeClaimV1 {
+            version: KAGEMUSHA_WALLET_VERSION_V1,
+            payment,
+            beneficiary,
+        };
+        valid(claim.payout(schedule))?;
+        valid(claim.to_canonical_bytes())
+    }
+
     /// Decode exact DATA originals under the native wallet's selected scheme. This is not
     /// proof verification, earned-fee admission or a payout acknowledgement.
     /// # Errors
@@ -61,8 +99,15 @@ impl RetainedFeeClaim {
         if bytes.is_empty() || bytes.len() > FEE_CLAIM_MAX_BYTES_V1 {
             return Err(Error::Invalid("fee claim frame bound"));
         }
-        let value: Self = archive::decode(bytes)?;
-        if value.to_canonical_bytes(scheme)? != bytes {
+        let value: Self =
+            archive::decode(bytes).map_err(|_| Error::Invalid("fee claim canonical frame"))?;
+        // This parser receives transport DATA. Lost selected archive originals are classified
+        // separately by read_fee_claim; malformed offered pairs never imply local custody loss.
+        if value
+            .to_canonical_bytes(scheme)
+            .map_err(|_| Error::Invalid("fee claim original bindings"))?
+            != bytes
+        {
             return Err(Error::Invalid("fee claim canonical frame"));
         }
         Ok(value)

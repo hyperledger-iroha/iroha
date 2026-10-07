@@ -2507,7 +2507,7 @@ impl KagemushaWalletStateV1 {
     /// credential must be the exact successor of the current one; the new floor is
     /// `F = max(old floor, t)` with `t` the update's signed time (the old floor for a scheme
     /// policy). A Blacklist update also inserts `(list_version, entries_root)` into the
-    /// blacklist history. A QuotaShare update requires every window to be longer than
+    /// blacklist history. A `QuotaShare` update requires every window to be longer than
     /// `time_anchor_max_response_ms`, sets `quota_share_expires_at_ms` to the share's expiry and
     /// rebuilds the quota-usage array from the predecessor's
     /// ([`KagemushaWalletQuotaUsageArrayV1::rebuild_for_share`]); every other update keeps
@@ -2916,15 +2916,15 @@ impl KagemushaWalletStateV1 {
         if span > self.core.time_anchor_max_response_ms {
             return Err(invalid_v1("quota_share.time_span"));
         }
-        let mut charged = *usage;
+        let mut next_usage = *usage;
         let mut charges = Vec::new();
         for slot in touched_quota_slots_v1(windows, interval)? {
             let window = windows[usize::from(slot)];
-            let usage_leaf = charged
+            let usage_leaf = next_usage
                 .leaf(slot)
                 .ok_or_else(|| invalid_v1("quota_usage.alignment"))?;
-            let usage_opening = charged.opening(slot)?;
-            charged.charge(slot, gross, window.limit)?;
+            let usage_opening = next_usage.opening(slot)?;
+            next_usage.charge(slot, gross, window.limit)?;
             charges.push(KagemushaWalletQuotaChargeV1 {
                 window,
                 window_opening: kagemusha_wallet_quota_window_opening_v1(windows, slot)?,
@@ -2932,7 +2932,7 @@ impl KagemushaWalletStateV1 {
                 usage_opening,
             });
         }
-        Ok((charges, charged))
+        Ok((charges, next_usage))
     }
 }
 

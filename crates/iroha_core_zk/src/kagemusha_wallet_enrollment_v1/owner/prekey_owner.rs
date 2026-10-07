@@ -190,6 +190,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
             self.selected = Some((
                 Scope {
                     challenge: permit.body.challenge,
+                    dates: KagemushaWalletEnrollmentDatesV1 {
+                        issued_at_ms: permit.body.created_at_ms,
+                        expires_at_ms: permit.body.expires_at_ms,
+                    },
                     account: dispatch.account.clone(),
                     asset: dispatch.asset.clone(),
                 },
@@ -393,6 +397,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         self.selected = Some((
             Scope {
                 challenge: permit.body.challenge,
+                dates: KagemushaWalletEnrollmentDatesV1 {
+                    issued_at_ms: permit.body.created_at_ms,
+                    expires_at_ms: permit.body.expires_at_ms,
+                },
                 account: dispatch.account.clone(),
                 asset: dispatch.asset.clone(),
             },

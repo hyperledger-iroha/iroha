@@ -55,9 +55,17 @@ fn rows(output: &mut String, originals: &[BlobV1], maximum: usize) -> io::Result
     Ok(())
 }
 
-fn verify_metadata(directory: &PrivateDirectory, name: &str, bytes: &[u8]) -> io::Result<()> {
+fn verify_metadata(
+    directory: &PrivateDirectory,
+    name: &str,
+    bytes: &[u8],
+) -> io::Result<Option<()>> {
     directory.revalidate()?;
-    let mut original = directory.open_retained_read_only(name, bytes.len())?;
+    // Only the first native child open can establish absence. A later NotFound
+    // from retained-file or directory validation must never authorize publication.
+    let Some(mut original) = directory.open_retained_read_only_optional(name, bytes.len())? else {
+        return Ok(None);
+    };
     if original.len()? != bytes.len() as u64 {
         return Err(invalid("existing metadata extent differs"));
     }
@@ -92,17 +100,16 @@ fn verify_metadata(directory: &PrivateDirectory, name: &str, bytes: &[u8]) -> io
         return Err(invalid("existing metadata original differs"));
     }
     directory.sync()?;
-    directory.revalidate()
+    directory.revalidate()?;
+    Ok(Some(()))
 }
 
 fn publish_metadata(directory: &PrivateDirectory, name: &str, bytes: &[u8]) -> io::Result<()> {
     if bytes.is_empty() {
         return Err(invalid("empty metadata original"));
     }
-    match verify_metadata(directory, name, bytes) {
-        Ok(()) => return Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+    if verify_metadata(directory, name, bytes)?.is_some() {
+        return Ok(());
     }
     let mut nonce = [0_u8; 16];
     rand::rngs::OsRng
@@ -119,7 +126,7 @@ fn publish_metadata(directory: &PrivateDirectory, name: &str, bytes: &[u8]) -> i
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error),
     }
-    verify_metadata(directory, name, bytes)
+    verify_metadata(directory, name, bytes)?.ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
 }
 
 impl WalletArtifactOriginalsV1 {
@@ -130,7 +137,7 @@ impl WalletArtifactOriginalsV1 {
     /// Invalid/nonascending identity, excessive row count or JSON byte ceiling.
     pub fn transport_json(&self) -> io::Result<Vec<u8>> {
         let mut output = String::from(
-            "{\"schema\":\"bpng.current-wallet-artifact-original-transport.v1\",\"walletOriginals\":",
+            "{\"schema\":\"iroha.kagemusha.wallet-artifact-original-transport.v1\",\"walletOriginals\":",
         );
         rows(&mut output, &self.wallet_originals, WALLET_MAX_ROWS)?;
         output.push_str(",\"finalityOriginals\":");
@@ -183,17 +190,13 @@ impl WalletArtifactOriginalsV1 {
             finality.verify_original(*blob)?;
         }
         directory.revalidate()?;
+        publish_metadata(&directory, "verifier-pack.norito", &self.verifier_pack)?;
         publish_metadata(
             &directory,
-            "wallet-verifier-pack.norito",
-            &self.verifier_pack,
-        )?;
-        publish_metadata(
-            &directory,
-            "wallet-producer-inventory.norito",
+            "producer-inventory.norito",
             &self.producer_inventory,
         )?;
-        publish_metadata(&directory, "wallet-artifact-transport.json", &transport)?;
+        publish_metadata(&directory, "transport.json", &transport)?;
         wallet.root()?;
         finality.root()?;
         directory.sync()?;
@@ -266,7 +269,7 @@ mod tests {
             .unwrap();
         let directory = PrivateDirectory::open_exact(&root).unwrap();
         let before = directory
-            .open_retained_read_only("wallet-verifier-pack.norito", PACK_MAX_BYTES)
+            .open_retained_read_only("verifier-pack.norito", PACK_MAX_BYTES)
             .unwrap()
             .identity()
             .unwrap();
@@ -274,19 +277,38 @@ mod tests {
             .write_bundle_metadata(&root, &wallet, &finality)
             .unwrap();
         let after = directory
-            .open_retained_read_only("wallet-verifier-pack.norito", PACK_MAX_BYTES)
+            .open_retained_read_only("verifier-pack.norito", PACK_MAX_BYTES)
             .unwrap()
             .identity()
             .unwrap();
         assert_eq!(before, after);
         assert_eq!(
-            std::fs::read(root.join("wallet-verifier-pack.norito")).unwrap(),
+            std::fs::read(root.join("verifier-pack.norito")).unwrap(),
             originals.verifier_pack
         );
         assert_eq!(
-            std::fs::read(root.join("wallet-artifact-transport.json")).unwrap(),
+            std::fs::read(root.join("transport.json")).unwrap(),
             originals.transport_json().unwrap()
         );
+    }
+
+    #[test]
+    fn metadata_initial_absence_never_masks_changed_directory_custody() {
+        let (temp, root, _wallet, _finality, _originals) = fixture();
+        let directory = PrivateDirectory::open_exact(&root).unwrap();
+        let name = "metadata.norito";
+        let bytes = b"exact retained metadata";
+        assert_eq!(verify_metadata(&directory, name, bytes).unwrap(), None);
+        publish_metadata(&directory, name, bytes).unwrap();
+        assert_eq!(verify_metadata(&directory, name, bytes).unwrap(), Some(()));
+
+        let retained = temp.path().join("retained-bundle");
+        std::fs::rename(&root, &retained).unwrap();
+        PrivateDirectory::open_or_create(&root).unwrap();
+        assert!(verify_metadata(&directory, name, bytes).is_err());
+        assert!(publish_metadata(&directory, name, bytes).is_err());
+        assert!(!root.join(name).exists());
+        assert_eq!(std::fs::read(retained.join(name)).unwrap(), bytes);
     }
 
     #[test]
@@ -298,8 +320,8 @@ mod tests {
                 .write_bundle_metadata(&root, &wallet, &finality)
                 .is_err()
         );
-        assert!(!root.join("wallet-verifier-pack.norito").exists());
-        assert!(!root.join("wallet-artifact-transport.json").exists());
+        assert!(!root.join("verifier-pack.norito").exists());
+        assert!(!root.join("transport.json").exists());
     }
 
     #[test]
@@ -329,7 +351,7 @@ mod tests {
                     .write_bundle_metadata(&root, &wallet, &finality)
                     .is_err()
             );
-            assert!(!root.join("wallet-verifier-pack.norito").exists());
+            assert!(!root.join("verifier-pack.norito").exists());
         }
     }
 
@@ -353,7 +375,7 @@ mod tests {
                 .write_bundle_metadata(&root, &wallet, &finality)
                 .is_err()
         );
-        assert!(!root.join("wallet-verifier-pack.norito").exists());
+        assert!(!root.join("verifier-pack.norito").exists());
     }
 
     #[test]
@@ -384,7 +406,7 @@ mod tests {
         let (_temp, root, wallet, finality, originals) = fixture();
         let directory = PrivateDirectory::open_exact(&root).unwrap();
         let mut writer = directory
-            .create_retained_private("wallet-producer-inventory.norito", 8)
+            .create_retained_private("producer-inventory.norito", 8)
             .unwrap();
         writer.write_all(b"conflict").unwrap();
         let sealed = writer.seal_read_only().unwrap();
@@ -394,14 +416,14 @@ mod tests {
                 .write_bundle_metadata(&root, &wallet, &finality)
                 .is_err()
         );
-        assert!(root.join("wallet-verifier-pack.norito").exists());
-        assert!(!root.join("wallet-artifact-transport.json").exists());
+        assert!(root.join("verifier-pack.norito").exists());
+        assert!(!root.join("transport.json").exists());
         let existing = directory
-            .open_retained_read_only("wallet-producer-inventory.norito", 8)
+            .open_retained_read_only("producer-inventory.norito", 8)
             .unwrap();
         assert_eq!(before, existing.identity().unwrap());
         assert_eq!(
-            std::fs::read(root.join("wallet-producer-inventory.norito")).unwrap(),
+            std::fs::read(root.join("producer-inventory.norito")).unwrap(),
             b"conflict"
         );
     }

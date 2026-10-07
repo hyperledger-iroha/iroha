@@ -12,6 +12,7 @@ import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.LocalState
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
@@ -59,6 +60,13 @@ private object NativeBridgeBuildContract {
     const val sourceSealSchema = "iroha.norito-bridge-source-seal.v1"
     const val buildEnvironmentSchema = "iroha.mobile-native-build-environment.v1"
     const val hermeticRunnerSchema = "iroha.mobile-hermetic-command.v1"
+    const val walletRuntimeTrustInput = "MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX"
+    fun validateWalletRuntimeTrust(value: String?): String {
+        require(value != null && Regex("^[0-9a-f]{64}$").matches(value) && value.any { it != '0' }) {
+            "$walletRuntimeTrustInput must be one nonzero lowercase 32-byte Ed25519 public key"
+        }
+        return value
+    }
     const val pinnedRustToolchain = "1.93.1"
     const val pinnedCargoNdkVersion = "4.1.2"
     const val pinnedPythonSeries = "3.12"
@@ -106,6 +114,7 @@ private object NativeBridgeBuildContract {
         val cargoHome: java.nio.file.Path,
         val cargoInvocationDirectory: java.nio.file.Path,
         val diagnosticConfiguration: ByteArray?,
+        val walletRuntimeTrustPublicKeyHex: String,
         val cargoRelease: String,
         val cargoCommitHash: String,
         val rustcRelease: String,
@@ -480,7 +489,9 @@ private object NativeBridgeBuildContract {
         androidNdkDirectory: File,
         cargoTargetDirectory: File,
         armv7Diagnostic: Boolean = false,
+        walletRuntimeTrustPublicKeyHex: String? = null,
     ): BuildTools {
+        val walletRuntimeTrust = validateWalletRuntimeTrust(walletRuntimeTrustPublicKeyHex)
         val python = trustedPython(execOperations, irohaRoot)
         val homeText = commandOutput(
             execOperations,
@@ -807,6 +818,7 @@ private object NativeBridgeBuildContract {
             cargoHome = cargoHome,
             cargoInvocationDirectory = cargoInvocationDirectory,
             diagnosticConfiguration = diagnosticConfiguration,
+            walletRuntimeTrustPublicKeyHex = walletRuntimeTrust,
             cargoRelease = cargoRelease,
             cargoCommitHash = cargoCommitHash,
             rustcRelease = rustcRelease,
@@ -824,14 +836,15 @@ private object NativeBridgeBuildContract {
         )
     }
 
-    fun buildEnvironmentDocument(tools: BuildTools): Map<String, Any> {
+    fun buildEnvironmentDocument(tools: BuildTools): Map<String, Any?> {
         return linkedMapOf(
         "schema" to buildEnvironmentSchema,
         "hermetic_runner_schema" to hermeticRunnerSchema,
         "hermetic_runner_sha256" to sha256Hex(tools.hermeticRunner),
         "environment_profile" to if (tools.diagnosticConfiguration == null) "android-cargo"
             else "android-armv7-diagnostic-cargo",
-        "environment_allowlist" to androidCargoEnvironmentAllowlist,
+        "environment_allowlist" to (androidCargoEnvironmentAllowlist + walletRuntimeTrustInput).sorted(),
+        "wallet_runtime_trust_ed25519_hex" to tools.walletRuntimeTrustPublicKeyHex,
         "cargo_build_jobs" to 1,
         "rust_toolchain_channel" to pinnedRustToolchain,
         "cargo_release" to tools.cargoRelease,
@@ -1056,6 +1069,9 @@ abstract class CompileNativeBridgeTask @Inject constructor(
     private val fileSystemOperations: FileSystemOperations,
 ) : DefaultTask() {
     @get:Input
+    abstract val walletRuntimeTrustPublicKeyHex: Property<String>
+
+    @get:Input
     abstract val sourceSealPlatform: Property<String>
 
     @get:Input
@@ -1116,6 +1132,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             androidNdkDirectory.get().asFile,
             cargoTargetRoot,
             armv7Diagnostic = platform == NativeBridgeBuildContract.armv7DiagnosticPlatform,
+            walletRuntimeTrustPublicKeyHex = walletRuntimeTrustPublicKeyHex.orNull,
         )
         val sourceSeal = NativeBridgeBuildContract.captureSourceSeal(
             execOperations,
@@ -1244,6 +1261,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                         "RUSTUP_HOME=${tools.home.resolve(".rustup")}",
                         "--set",
                         "TMPDIR=${tools.temporaryDirectory.absolutePath}",
+                    ) + listOf("--set", "${NativeBridgeBuildContract.walletRuntimeTrustInput}=${tools.walletRuntimeTrustPublicKeyHex}") + listOf(
                         "--",
                         tools.cargo.toString(),
                         "ndk",
@@ -1362,6 +1380,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             androidNdkDirectory.get().asFile,
             cargoTargetDirectory.get().asFile,
             armv7Diagnostic = sourceSealPlatform.get() == NativeBridgeBuildContract.armv7DiagnosticPlatform,
+            walletRuntimeTrustPublicKeyHex = walletRuntimeTrustPublicKeyHex.orNull,
         )
         NativeBridgeBuildContract.requireLibraries(outputRoot, NativeBridgeBuildContract.buildAbis(sourceSealPlatform.get()))
         require(Files.isRegularFile(sealFile.toPath(), LinkOption.NOFOLLOW_LINKS))
@@ -1390,6 +1409,9 @@ abstract class CompileNativeBridgeTask @Inject constructor(
 abstract class InspectArmv7DiagnosticTask @Inject constructor(
     private val execOperations: ExecOperations,
 ) : DefaultTask() {
+    @get:Input
+    abstract val walletRuntimeTrustPublicKeyHex: Property<String>
+
     @get:Input abstract val localIntegration: Property<Boolean>
     @get:Internal abstract val irohaDirectory: DirectoryProperty
     @get:Internal abstract val hermeticRunner: RegularFileProperty
@@ -1418,6 +1440,7 @@ abstract class InspectArmv7DiagnosticTask @Inject constructor(
             execOperations, root, hermeticRunner.get().asFile,
             androidNdkDirectory.get().asFile, cargoTargetDirectory.get().asFile,
             armv7Diagnostic = true,
+            walletRuntimeTrustPublicKeyHex = walletRuntimeTrustPublicKeyHex.orNull,
         )
         val profile = NativeBridgeBuildContract.armv7DiagnosticPlatform
         val sealFile = sourceSealFile.get().asFile
@@ -1523,6 +1546,9 @@ abstract class StripNativeBridgeTask @Inject constructor(
     private val fileSystemOperations: FileSystemOperations,
 ) : DefaultTask() {
     @get:Input
+    abstract val walletRuntimeTrustPublicKeyHex: Property<String>
+
+    @get:Input
     abstract val localIntegration: Property<Boolean>
 
     @get:InputDirectory
@@ -1570,6 +1596,7 @@ abstract class StripNativeBridgeTask @Inject constructor(
             hermeticRunner.get().asFile,
             androidNdkDirectory.get().asFile,
             cargoTargetDirectory.get().asFile,
+            walletRuntimeTrustPublicKeyHex = walletRuntimeTrustPublicKeyHex.orNull,
         )
         require(Files.isRegularFile(sealFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             "Android source seal must be a non-symbolic regular file: $sealFile"
@@ -2001,6 +2028,11 @@ require(!providers.gradleProperty("privacyProductionEnabled").isPresent) {
     "privacyProductionEnabled has been removed; the native bridge always includes privacy support"
 }
 val nativeBuildMode = "production"
+val walletRuntimeTrustPublicKeyInput =
+    providers.environmentVariable(NativeBridgeBuildContract.walletRuntimeTrustInput)
+// Selection is public build DATA. Release admission independently joins the
+// emitted original to the committed app runtime signer; this grants no Ready.
+walletRuntimeTrustPublicKeyInput.orNull?.let { NativeBridgeBuildContract.validateWalletRuntimeTrust(it) }
 // Native app and instrumentation packages always include the sealed bridge.
 // The ordinary JVM unit-test task graph does not execute these packaging owners.
 require(!providers.gradleProperty("irohaDebugNativeBridge").isPresent) {
@@ -2348,6 +2380,8 @@ tasks.register("verifyAndroidNdkIdentityContract") {
 }
 
 val compileNativeLibs = tasks.register<CompileNativeBridgeTask>("compileNativeLibs") {
+    walletRuntimeTrustPublicKeyHex.set(walletRuntimeTrustPublicKeyInput)
+    walletRuntimeTrustPublicKeyHex.disallowChanges()
     group = "native"
     description = "Compile connect_norito_bridge .so from Rust source (requires cargo-ndk + Android NDK)"
     irohaDirectory.set(file(irohaDir()))
@@ -2378,6 +2412,8 @@ val compileNativeLibs = tasks.register<CompileNativeBridgeTask>("compileNativeLi
 // Explicit development-only armv7 lane. It shares the pinned native recipe but
 // never supplies generated JNI directories, AAR contents or admitted provenance.
 val compileArmv7DiagnosticRaw = tasks.register<CompileNativeBridgeTask>("compileArmv7DiagnosticRaw") {
+    walletRuntimeTrustPublicKeyHex.set(walletRuntimeTrustPublicKeyInput)
+    walletRuntimeTrustPublicKeyHex.disallowChanges()
     group = "native"
     description = "Compile the sealed armv7 bridge in the owned diagnostic scope"
     // A fixed warm lane must never reuse artifacts from another feature recipe.
@@ -2397,6 +2433,8 @@ val compileArmv7DiagnosticRaw = tasks.register<CompileNativeBridgeTask>("compile
     dependsOn(requireAndroidArtifactDirectory)
 }
 val compileArmv7Diagnostic = tasks.register<InspectArmv7DiagnosticTask>("compileArmv7Diagnostic") {
+    walletRuntimeTrustPublicKeyHex.set(walletRuntimeTrustPublicKeyInput)
+    walletRuntimeTrustPublicKeyHex.disallowChanges()
     group = "native"
     description = "Build and inspect an armv7 diagnostic; no AAR/JNI or release promotion"
     localIntegration.set(localAndroidIntegration)
@@ -2433,6 +2471,8 @@ tasks.register("verifyArmv7DiagnosticContract") {
 }
 
 val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
+    walletRuntimeTrustPublicKeyHex.set(walletRuntimeTrustPublicKeyInput)
+    walletRuntimeTrustPublicKeyHex.disallowChanges()
     group = "native"
     description = "Canonically strip the compiled Android native bridge libraries"
     localIntegration.set(localAndroidIntegration)

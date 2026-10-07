@@ -1188,7 +1188,14 @@ pub(super) fn enrolled_device(
     let f = wallet_fixture(seed);
     let mut provider = device.open();
     let super::KagemushaWalletEnrollmentStepV1::Enrolled { slot, marker } = provider
-        .test_begin_enrollment(&enrollment_challenge(seed), PROFILE)
+        .test_begin_enrollment(
+            &enrollment_challenge(seed),
+            PROFILE,
+            crate::kagemusha_wallet_advance_v1::KagemushaWalletEnrollmentDatesV1 {
+                issued_at_ms: 1,
+                expires_at_ms: 600_001,
+            },
+        )
         .expect("begin")
     else {
         panic!("not enrolled");

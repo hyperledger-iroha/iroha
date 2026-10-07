@@ -112,11 +112,11 @@ mod enrollment;
 mod layout;
 mod marker;
 mod platform;
-mod provider;
 mod prekey_custody;
-pub(crate) use prekey_custody::{PreKeyPublicationV1, PreKeyRecordV1};
+mod provider;
 #[cfg(test)]
 use enrollment::KagemushaWalletChallengeLivenessV1;
+pub(crate) use prekey_custody::{PreKeyPublicationV1, PreKeyRecordV1};
 mod reconcile;
 mod retained;
 mod setup;
@@ -128,7 +128,6 @@ pub use self::store::{
     KagemushaWalletSimFaultV1, KagemushaWalletSimFsV1, KagemushaWalletSimLockV1,
     KagemushaWalletSimPowerLossV1, KagemushaWalletSimStagedFileV1, KagemushaWalletSimStepV1,
 };
-#[cfg(unix)]
 pub use self::store::{KagemushaWalletStdFsLockV1, KagemushaWalletStdFsV1};
 pub use self::{
     advance::{
@@ -145,7 +144,7 @@ pub use self::{
     capsule::{KAGEMUSHA_WALLET_FROZEN_FILE_OVERHEAD_BYTES_V1, KagemushaWalletFrozenFrameV1},
     completion::KagemushaWalletCompletionFrameV1,
     enrollment::{
-        KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1,
+        KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1, KagemushaWalletEnrollmentDatesV1,
         KagemushaWalletEnrollmentRecordV1, KagemushaWalletEnrollmentStepV1,
         KagemushaWalletFreshGenerationV1, KagemushaWalletIntentV1,
     },

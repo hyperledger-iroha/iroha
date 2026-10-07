@@ -15,6 +15,8 @@ use crate::{
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use std::time::Duration;
 
+type ReceiptMutation = Box<dyn Fn(&mut KagemushaWalletLoadReceiptV1)>;
+
 fn payer() -> AccountId {
     AccountId::new(
         KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519)
@@ -110,7 +112,7 @@ fn certify_event(
     let mut block = block_builder.build(BlockSignatures::default());
     NativeFinalityFixture::install_network_results(&mut block, vec![Ok(vec![])]);
     let events = [11, receipt.amount, 17].map(|amount| {
-        let mut value = receipt.clone();
+        let mut value = receipt;
         value.amount = amount;
         EventBox::Data(
             DataEvent::from(KagemushaLoadCommittedV1::from_receipt(&value).unwrap()).into(),
@@ -177,7 +179,7 @@ fn native_event_inclusion_rejects_every_substituted_receipt_term_and_bad_geometr
             candidate,
         )
     };
-    let changes: Vec<Box<dyn Fn(&mut KagemushaWalletLoadReceiptV1)>> = vec![
+    let changes: Vec<ReceiptMutation> = vec![
         Box::new(|r| r.scheme_id[0] ^= 1),
         Box::new(|r| r.asset_digest[0] ^= 1),
         Box::new(|r| r.wallet_id[0] ^= 1),
@@ -193,7 +195,7 @@ fn native_event_inclusion_rejects_every_substituted_receipt_term_and_bad_geometr
         Box::new(|r| r.payer_account_digest[0] ^= 1),
     ];
     for change in changes {
-        let mut candidate = receipt.clone();
+        let mut candidate = receipt;
         change(&mut candidate);
         assert!(check(&candidate, &proof).is_err());
     }
@@ -322,7 +324,7 @@ fn native_load_authenticates_exact_request_and_original_receipt() {
         norito::json::from_str::<KagemushaWalletLoadReceiptV1>(&json).unwrap(),
         *receipt
     );
-    let mut substituted = receipt.clone();
+    let mut substituted = *receipt;
     substituted.request_id = [5; 32];
     assert_ne!(
         substituted.receipt_digest().unwrap(),
@@ -337,11 +339,11 @@ fn native_load_rejects_every_changed_request_term_and_wrong_instruction_index() 
     let expected = load();
     let (verified, committed) = certify(&mut fixture, expected.clone(), Ok(vec![]));
     let mut changes = Vec::new();
-    let mut changed = expected.clone();
-    changed.scheme = [9; 32];
-    changes.push(changed);
+    let mut candidate = expected.clone();
+    candidate.scheme = [9; 32];
+    changes.push(candidate);
     for field in 0..6 {
-        let mut changed = expected.clone();
+        let mut candidate = expected.clone();
         let KagemushaWalletLedgerActionV1::IssueLoad {
             wallet,
             asset,
@@ -349,7 +351,7 @@ fn native_load_rejects_every_changed_request_term_and_wrong_instruction_index() 
             request_id,
             amount,
             charge,
-        } = &mut changed.action
+        } = &mut candidate.action
         else {
             unreachable!()
         };
@@ -366,11 +368,11 @@ fn native_load_rejects_every_changed_request_term_and_wrong_instruction_index() 
                 })
             }
         }
-        changes.push(changed);
+        changes.push(candidate);
     }
-    for changed in changes {
+    for candidate in changes {
         assert_eq!(
-            verify(&fixture, &verified, &committed, &changed).unwrap_err(),
+            verify(&fixture, &verified, &committed, &candidate).unwrap_err(),
             Error::WrongTerms
         );
     }
@@ -510,7 +512,7 @@ fn receipt_shape_refuses_missing_terms_genesis_and_inconsistent_charges() {
     };
     good.validate().unwrap();
     for field in 0..12 {
-        let mut invalid = good.clone();
+        let mut invalid = good;
         match field {
             0 => invalid.version = 2,
             1 => invalid.scheme_id = [0; 32],
@@ -529,7 +531,7 @@ fn receipt_shape_refuses_missing_terms_genesis_and_inconsistent_charges() {
         assert!(invalid.to_canonical_bytes().is_err());
         assert!(invalid.receipt_digest().is_err());
     }
-    let mut noncanonical = good.clone();
+    let mut noncanonical = good;
     noncanonical.online_charge = 1;
     noncanonical.charge_quote = crate::kagemusha::KAGEMUSHA_WALLET_FIELD_MODULUS_V1;
     assert!(noncanonical.validate().is_err());

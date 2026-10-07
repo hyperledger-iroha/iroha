@@ -9,11 +9,10 @@
 //! capability and never replaces the complete source-qualified wallet-open boundary.
 
 mod carrier;
+mod credential;
 pub mod issuer_worker;
 mod owner;
 mod prekey;
-pub use prekey::{PREKEY_DISPATCH_MAX_BYTES, PreKeyDispatchV1};
-pub(crate) use prekey::GenerationAuthorizationV1;
 pub use carrier::{
     EVIDENCE_MAX_BYTES, IssuerEvidenceV1, PlatformEvidenceV1, REQUEST_MAX_BYTES, RESULT_MAX_BYTES,
     RequestBodyV1, RequestV1, ResultV1,
@@ -21,3 +20,5 @@ pub use carrier::{
 pub use owner::{
     EnrollmentConfigV1, EnrollmentOwnerV1, EnrollmentProgressV1, Error, RequestPreparationV1,
 };
+pub(crate) use prekey::GenerationAuthorizationV1;
+pub use prekey::{PREKEY_DISPATCH_MAX_BYTES, PreKeyDispatchV1};

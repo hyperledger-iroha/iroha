@@ -33,7 +33,14 @@ fn intent_only(seed: u8) -> (DeviceV1, KagemushaWalletSlotIdV1) {
         .with(|state| state.generate_unavailable = Some(false));
     let mut provider = device.open();
     assert!(matches!(
-        provider.test_begin_enrollment(&enrollment_challenge(seed), PROFILE),
+        provider.test_begin_enrollment(
+            &enrollment_challenge(seed),
+            PROFILE,
+            crate::kagemusha_wallet_advance_v1::KagemushaWalletEnrollmentDatesV1 {
+                issued_at_ms: 1,
+                expires_at_ms: 600_001
+            }
+        ),
         Err(KagemushaWalletProviderErrorV1::Unavailable(_))
     ));
     device

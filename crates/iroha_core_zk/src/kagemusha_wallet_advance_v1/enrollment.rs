@@ -66,6 +66,29 @@ use super::{
     store::KagemushaWalletDurableStoreV1,
 };
 
+mod dates_policy;
+
+/// Exact original Core E1 dates; DATA retained before the original generation grant.
+/// Core authenticates the ticket and enforces trusted time independently. These values
+/// do not assert a hardware clock, a periodic lease or issuer authority.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_wallet_advance_v1::EnrollmentDatesV1")]
+pub struct KagemushaWalletEnrollmentDatesV1 {
+    /// Original Core issuance time; never refreshed on retry.
+    pub issued_at_ms: u64,
+    /// Original Core exclusive expiration bound.
+    pub expires_at_ms: u64,
+}
+impl KagemushaWalletEnrollmentDatesV1 {
+    /// Whether the original dates satisfy the current Core finite-ticket contract.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        dates_policy::valid(self.issued_at_ms, self.expires_at_ms)
+    }
+}
+
 /// Version of the enrollment-phase records.
 pub const KAGEMUSHA_WALLET_ENROLLMENT_FILE_VERSION_V1: u16 = 1;
 /// Sole first-release intent codec including the exact creation policy.
@@ -73,7 +96,7 @@ pub const KAGEMUSHA_WALLET_INTENT_FILE_VERSION_V1: u16 = 1;
 /// Maximum encoded intent or abandoned-slot record.
 pub const KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1: usize = 1_024;
 /// Maximum retained credential request.
-pub const KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1: usize = 131_072;
+pub const KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1: usize = 524_288;
 /// Envelope overhead of the request and credential records.
 const RECORD_OVERHEAD_BYTES: usize = 512;
 
@@ -148,6 +171,8 @@ pub struct KagemushaWalletIntentV1 {
     pub profile: u8,
     /// Creation policy chosen at the original enrollment, never recomputed on resume.
     pub generation_policy: u8,
+    /// Exact original Core dates published in this intent before generation.
+    pub dates: KagemushaWalletEnrollmentDatesV1,
 }
 
 impl KagemushaWalletIntentV1 {
@@ -362,6 +387,86 @@ where
     C: KagemushaWalletAdvanceCapsuleV1,
     R: KagemushaWalletCompletionFrameV1,
 {
+    /// Locate this exact issuer challenge before starting or retrying enrollment.
+    /// An existing durable intent always resumes its original slot; it never grants a new
+    /// fresh-only generation attempt. Unknown reads and duplicate intents refuse creation.
+    /// # Errors
+    /// Invalid challenge/profile binding, ambiguous retained intent, or provider unavailability.
+    #[cfg(test)]
+    pub(crate) fn test_begin_or_resume_enrollment(
+        &mut self,
+        challenge: &KagemushaWalletEnrollmentChallengeV1,
+        profile: KagemushaWalletKeyProfileV1,
+        dates: KagemushaWalletEnrollmentDatesV1,
+    ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
+        if !dates.is_valid() {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "enrollment.dates",
+            });
+        }
+        challenge
+            .validate()
+            .map_err(|_| KagemushaWalletProviderErrorV1::Invalid { field: "challenge" })?;
+        if challenge.scheme_id != self.scheme_id {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "challenge.scheme_id",
+            });
+        }
+        if let Some(slot) = self.enrollment_slot(challenge, profile, dates)? {
+            self.test_resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live)
+        } else {
+            self.test_begin_enrollment(challenge, profile, dates)
+        }
+    }
+
+    /// Locate a unique durable original intent; never create a slot or generation grant.
+    /// # Errors
+    /// Unknown storage, changed original dates/profile, or an ambiguous intent.
+    pub(crate) fn enrollment_slot(
+        &mut self,
+        challenge: &KagemushaWalletEnrollmentChallengeV1,
+        profile: KagemushaWalletKeyProfileV1,
+        dates: KagemushaWalletEnrollmentDatesV1,
+    ) -> Result<Option<KagemushaWalletSlotIdV1>, KagemushaWalletProviderErrorV1> {
+        if !dates.is_valid()
+            || challenge.validate().is_err()
+            || challenge.scheme_id != self.scheme_id
+        {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "enrollment.originals",
+            });
+        }
+        let mut selected = None;
+        for slot in self.slots()? {
+            let Some(intent) = self.read_intent(&slot)? else {
+                // A missing intent is not permission to replace a surviving key or wallet.
+                // Reconcile first, preserving unknown key/storage answers on older Android.
+                match self.status(&slot)? {
+                    KagemushaWalletSlotStatusV1::Empty
+                    | KagemushaWalletSlotStatusV1::SlotAbandoned => continue,
+                    _ => {
+                        return Err(KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                            object: "enrollment intent",
+                        });
+                    }
+                }
+            };
+
+            if intent.challenge != *challenge {
+                continue;
+            }
+            if intent.profile != profile.tag()
+                || intent.dates != dates
+                || selected.replace(slot).is_some()
+            {
+                return Err(KagemushaWalletProviderErrorV1::Invalid {
+                    field: "enrollment.retained_intent",
+                });
+            }
+        }
+        Ok(selected)
+    }
+
     /// Begin an enrollment under `challenge` (E2-E4) in a fresh slot, generating the payment
     /// key under the issuer's hardware key `profile`.
     ///
@@ -382,9 +487,20 @@ where
         {
             return Ok(KagemushaWalletEnrollmentStepV1::Pending { slot });
         }
-        self.begin_enrollment_inner(&challenge, profile, slot, generation_policy, |provider| {
-            authorization.check(provider)
-        })
+        let dates = authorization.dates();
+        if self.enrollment_slot(&challenge, profile, dates)?.is_some() {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "pre-key retained intent already exists",
+            });
+        }
+        self.begin_enrollment_inner(
+            &challenge,
+            profile,
+            dates,
+            slot,
+            generation_policy,
+            |provider| authorization.check(provider),
+        )
     }
 
     // Explicit provider simulator fixture. Production callers require the verified permit above.
@@ -393,6 +509,7 @@ where
         &mut self,
         challenge: &KagemushaWalletEnrollmentChallengeV1,
         profile: KagemushaWalletKeyProfileV1,
+        dates: KagemushaWalletEnrollmentDatesV1,
     ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
         let slot = KagemushaWalletSlotIdV1::generate()
             .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
@@ -400,17 +517,23 @@ where
             .platform
             .key_generation_policy()
             .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
-        self.begin_enrollment_inner(challenge, profile, slot, policy, |_| Ok(()))
+        self.begin_enrollment_inner(challenge, profile, dates, slot, policy, |_| Ok(()))
     }
 
     fn begin_enrollment_inner(
         &mut self,
         challenge: &KagemushaWalletEnrollmentChallengeV1,
         profile: KagemushaWalletKeyProfileV1,
+        dates: KagemushaWalletEnrollmentDatesV1,
         slot: KagemushaWalletSlotIdV1,
         generation_policy: KagemushaWalletKeyGenerationPolicyV1,
         check: impl Fn(&Self) -> Result<(), KagemushaWalletProviderErrorV1>,
     ) -> Result<KagemushaWalletEnrollmentStepV1, KagemushaWalletProviderErrorV1> {
+        if !dates.is_valid() {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "enrollment.dates",
+            });
+        }
         challenge
             .validate()
             .map_err(|_| KagemushaWalletProviderErrorV1::Invalid { field: "challenge" })?;
@@ -448,6 +571,7 @@ where
             anchor_kind: self.platform.anchor_policy().tag(),
             profile: profile.tag(),
             generation_policy: generation_policy.tag(),
+            dates,
         };
         let bytes = encode_envelope_v1(&intent, KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1)?;
         match self.store.write_new(
@@ -513,6 +637,7 @@ where
         if intent.challenge != challenge
             || intent.key_profile()? != profile
             || intent.key_generation_policy()? != generation_policy
+            || intent.dates != authorization.dates()
         {
             return Err(KagemushaWalletProviderErrorV1::Invalid {
                 field: "pre-key retained intent",
@@ -754,6 +879,22 @@ where
         }
     }
 
+    /// Recover an earlier original request through the same guarded durable adoption
+    /// path used before its first send. A readable uncertain publication is not enough.
+    ///
+    /// # Errors
+    /// The original read, reconciliation, guarded rewrite and publication errors.
+    pub fn recover_enrollment_request(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+    ) -> Result<Option<Vec<u8>>, KagemushaWalletProviderErrorV1> {
+        let Some(record) = self.enrollment_record(slot)? else {
+            return Ok(None);
+        };
+        self.retain_enrollment_request(slot, &record.request)
+            .map(Some)
+    }
+
     /// Retained credential request of `slot`, read without side effects.
     ///
     /// # Errors
@@ -893,6 +1034,41 @@ where
         }
     }
 
+    /// Read the actual enrolled key's leaf-first DER chain without exporting its custody.
+    /// The Core evidence verifier, rather than this DATA read, authenticates the certificates.
+    /// # Errors
+    /// A non-enrollment marker, changed key, unavailable platform or invalid chain extent.
+    pub fn enrollment_attestation_chain(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+    ) -> Result<Vec<Vec<u8>>, KagemushaWalletProviderErrorV1> {
+        let KagemushaWalletSlotStatusV1::Enrollment(marker) = self.status(slot)? else {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "enrollment.marker",
+            });
+        };
+        match self.platform.key_probe(slot) {
+            KagemushaWalletProbeV1::Present(key) if key == *marker.payment_key() => {}
+            KagemushaWalletProbeV1::Unavailable(reason) => {
+                return Err(KagemushaWalletProviderErrorV1::Unavailable(reason));
+            }
+            _ => return Err(KagemushaWalletProviderErrorV1::KeyLost),
+        }
+        let chain = self
+            .platform
+            .key_attestation_chain(slot)
+            .into_result()?
+            .ok_or(KagemushaWalletProviderErrorV1::KeyLost)?;
+        if !(2..=8).contains(&chain.len())
+            || chain.iter().any(|der| der.is_empty() || der.len() > 16_384)
+        {
+            return Err(KagemushaWalletProviderErrorV1::Invalid {
+                field: "enrollment.chain",
+            });
+        }
+        Ok(chain)
+    }
+
     /// Durable intent of `slot`.
     ///
     /// # Errors
@@ -916,6 +1092,7 @@ where
                     && intent.anchor().is_ok()
                     && intent.key_profile().is_ok()
                     && intent.key_generation_policy().is_ok()
+                    && intent.dates.is_valid()
                     && intent.challenge.scheme_id == self.scheme_id
                     && intent.challenge.validate().is_ok() =>
             {

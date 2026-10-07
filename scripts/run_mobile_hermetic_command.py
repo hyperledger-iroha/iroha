@@ -49,6 +49,16 @@ ANDROID_CARGO_ENVIRONMENT = SERIALIZED_CARGO_ENVIRONMENT | {
     "ANDROID_NDK_HOME",
     "ANDROID_NDK_ROOT",
 }
+WALLET_RUNTIME_TRUST_INPUT = "MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX"
+
+
+def wallet_runtime_trust(value: str) -> str:
+    """Validate public build DATA; it grants no runtime or monetary authority."""
+    if re.fullmatch(r"[0-9a-f]{64}", value) is None or value == "0" * 64:
+        raise RuntimeError("native wallet runtime trust must be nonzero lowercase 32-byte hex")
+    return value
+
+
 GRADLE_JVM_ENVIRONMENT = frozenset(
     {
         "ANDROID_HOME",
@@ -105,6 +115,23 @@ PROFILES = {
         "IROHA_LOCALNET_TEST",
     },
 }
+
+
+for _profile in AUTHENTICATED_CARGO_PROFILES:
+    PROFILES[_profile] = PROFILES[_profile] | {WALLET_RUNTIME_TRUST_INPUT}
+
+
+def validate_profile_environment(profile: str, environment: dict[str, str]) -> None:
+    """Enforce an exact profile and mandatory immutable public Native signer root."""
+    expected = PROFILES[profile]
+    actual = set(environment)
+    if actual != expected:
+        raise RuntimeError(
+            f"{profile} environment inventory is not exact "
+            f"(missing={sorted(expected - actual)}, unexpected={sorted(actual - expected)})"
+        )
+    if profile in AUTHENTICATED_CARGO_PROFILES:
+        wallet_runtime_trust(environment[WALLET_RUNTIME_TRUST_INPUT])
 
 
 def parse_assignment(raw: str) -> tuple[str, str]:
@@ -469,20 +496,12 @@ def recheck_cargo_invocation_directory(
 
 def main() -> int:
     args = parse_args()
-    expected = PROFILES[args.profile]
     environment: dict[str, str] = {}
     for name, value in args.assignments:
         if name in environment:
             raise RuntimeError(f"duplicate environment assignment: {name}")
         environment[name] = value
-    actual = set(environment)
-    if actual != expected:
-        missing = sorted(expected - actual)
-        unexpected = sorted(actual - expected)
-        raise RuntimeError(
-            f"{args.profile} environment inventory is not exact "
-            f"(missing={missing}, unexpected={unexpected})"
-        )
+    validate_profile_environment(args.profile, environment)
     source_root = pathlib.Path.cwd()
     invocation_directory = source_root
     invocation_observation = None

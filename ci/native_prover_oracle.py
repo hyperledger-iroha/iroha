@@ -81,6 +81,22 @@ def complete_result(text: str, expected_count: int) -> bool:
     return results == [(str(expected_count), "0", "0")] and expected_count > 0
 
 
+def shipping_rejection(text: str, exit_code: int) -> bool:
+    """Require the actual shipping consumer's const guard, not an unrelated build failure."""
+    messages = [json.loads(line) for line in text.splitlines() if line.strip()]
+    finished = [m for m in messages if m.get("reason") == "build-finished"]
+    errors = [m for m in messages if m.get("reason") == "compiler-message"
+              and m.get("message", {}).get("level") == "error"]
+    return (exit_code == 101 and len(finished) == 1
+            and finished[0].get("success") is False and len(errors) == 1
+            and errors[0].get("target", {}).get("name") == "kaigi_zk"
+            and (errors[0]["message"].get("code") or {}).get("code") == "E0080"
+            and "iroha_plonk_oracle is test-only" in errors[0]["message"].get("message", "")
+            and any(span.get("is_primary") is True
+                    and Path(span.get("file_name", "")).parts[-4:] == ("crates", "kaigi_zk", "src", "lib.rs")
+                    for span in errors[0]["message"].get("spans", [])))
+
+
 def source_hashes(root: Path) -> dict[str, str]:
     """Pin tracked checkout bytes; verify them again after every harness ends."""
     paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).split(b"\0")
@@ -126,6 +142,21 @@ def main() -> int:
     if build.returncode:
         return build.returncode
     harnesses = compiler_harnesses((evidence / "compiler.jsonl").read_text(), target)
+    # The same oracle-enabled engine must be unusable by a production relation owner.
+    # A missing dependency, parse error or successful build cannot satisfy this gate.
+    rejection_command = ["cargo", "check", "--locked", "--release", "--target", args.target,
+                         "-p", "kaigi_zk", "--lib", "--message-format=json"]
+    with (evidence / "shipping-rejection.jsonl").open("w") as stdout, \
+         (evidence / "shipping-rejection.log").open("w") as stderr:
+        rejection = subprocess.run(rejection_command, cwd=root, env=environment, stdout=stdout, stderr=stderr)
+    record["shipping_rejection"] = {
+        "command": rejection_command, "natural_exit": rejection.returncode,
+        "expected_const_failure": shipping_rejection(
+            (evidence / "shipping-rejection.jsonl").read_text(), rejection.returncode),
+    }
+    (evidence / "result.json").write_text(json.dumps(record, indent=2))
+    if not record["shipping_rejection"]["expected_const_failure"]:
+        return 1
     for name in HARNESSES:
         source = harnesses[name]
         binary = output / name

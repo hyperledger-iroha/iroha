@@ -72,9 +72,9 @@ pub enum KagemushaWalletLedgerActionV1 {
     InstallVerifierPack {
         /// Registered asset whose consenting reserve authorizes this scheme install.
         asset: [u8; 32],
-        /// Exact independently selected signed ArtifactManifest identity.
+        /// Exact independently selected signed `ArtifactManifest` identity.
         manifest_digest: [u8; 32],
-        /// Canonical complete native VerifierPackV1 original bytes.
+        /// Canonical complete native `VerifierPackV1` original bytes.
         pack: Vec<u8>,
     },
     /// Complete canonical activation frame; native Bootstrap verification is mandatory.

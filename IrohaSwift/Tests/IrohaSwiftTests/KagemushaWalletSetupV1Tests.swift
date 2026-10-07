@@ -3,6 +3,23 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaWalletSetupV1Tests: XCTestCase {
+  func testFeeClaimTransportPreservesNativeBytesAndRejectsUnusedAuthority() throws {
+    let retained = try KagemushaWalletCallV1(status: 31, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: Data([0, 255, 7]))
+    let beneficiary = Data([3, 0, 255])
+    let input = try retained.feeClaimInput(beneficiary: beneficiary)
+    XCTAssertEqual(input.selector, 26); XCTAssertEqual(input.first, retained.bytes)
+    XCTAssertEqual(input.second, beneficiary); XCTAssertTrue(input.third.isEmpty)
+    XCTAssertThrowsError(try retained.feeClaimInput(beneficiary: Data()))
+    XCTAssertThrowsError(try retained.feeClaimInput(beneficiary: Data(repeating: 1, count: 16_385)))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 26, identity: Data(repeating: 1, count: 32), first: retained.bytes, second: beneficiary))
+    let bytes = Data(repeating: 255, count: 16_384)
+    let result = try KagemushaWalletCallV1(status: 36, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: bytes)
+    XCTAssertEqual(try result.feeClaimOriginal(), bytes)
+    XCTAssertThrowsError(try result.completion()); XCTAssertThrowsError(try result.original())
+    XCTAssertThrowsError(try KagemushaWalletCallV1(status: 36, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: Data(repeating: 1, count: 16_385)))
+    XCTAssertThrowsError(try KagemushaWalletCallV1(status: 36, sequenceLow: 1, sequenceHigh: 0, detail: 0, bytes: Data([1])))
+  }
+
   func testFeeAndLedgerBoundariesKeepOriginalsSeparateFromAcknowledgement() throws {
     let id = Data(repeating: 7, count: 32)
     XCTAssertNoThrow(try KagemushaWalletSetupInputV1(selector: 20, identity: id))

@@ -91,11 +91,15 @@ mod tests {
             assert_eq!(fixed.commitment(), ordinary.commitment());
             assert_eq!(
                 fixed.allocated_bytes(),
-                MerkleTree::<u64>::application_node_allocation_bytes(count as usize).unwrap()
+                MerkleTree::<u64>::application_node_allocation_bytes(
+                    usize::try_from(count).unwrap()
+                )
+                .unwrap()
             );
             for (index, leaf) in leaves.iter().enumerate() {
-                let proof = fixed.get_proof(index as u32).unwrap();
-                assert_eq!(Some(proof.clone()), ordinary.get_proof(index as u32));
+                let index = u32::try_from(index).unwrap();
+                let proof = fixed.get_proof(index).unwrap();
+                assert_eq!(Some(proof.clone()), ordinary.get_proof(index));
                 assert!(proof.verify(leaf, &fixed.commitment().unwrap()));
             }
         }

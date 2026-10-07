@@ -49,6 +49,20 @@ impl Wallet for TestWallet {
             }),
         })
     }
+    fn review(&mut self, input: review::Input) -> Result<Response> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let review::Input::Unload { amount, charge } = input else {
+            panic!("expected Unload review fixture")
+        };
+        assert_eq!(
+            state::OperationActionV1::Unload { amount, charge },
+            self.expected_request
+                .as_ref()
+                .expect("expected review originals")
+                .action,
+        );
+        Err(Failure::code(PROOF_REJECTED))
+    }
     fn execute(&mut self, request: state::OperationRequestV1) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(expected) = &self.expected_request {
@@ -650,7 +664,7 @@ fn c_typed_execute_preserves_intake_bounds_and_distinct_preparation_status() {
 }
 
 #[test]
-fn c_operation_request_layout_and_unsigned_amount_reach_the_exact_typed_owner() {
+fn c_operation_request_layout_and_reviewed_unsigned_amount_reach_the_exact_typed_owner() {
     use std::mem::{align_of, offset_of, size_of};
     // Derive the C field placement from primitive platform ABI alignment. In particular,
     // the amount is two u64 limbs, not compiler-specific u128 or an opaque byte codec.
@@ -729,9 +743,23 @@ fn c_operation_request_layout_and_unsigned_amount_reach_the_exact_typed_owner() 
         third_length: 0,
     };
     let mut result = WalletResult::default();
-    // The stand-in owner deliberately rejects proof admission after asserting every field.
+    // Unload must first pass review; direct execution never reaches the owner.
     assert_eq!(
         unsafe { connect_norito_kagemusha_wallet_execute_v1(handle, &request, &mut result) },
+        INVALID
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let review = WalletReviewRequest {
+        selector: request.selector,
+        amount: request.amount,
+        first: request.first,
+        first_length: request.first_length,
+        second: request.second,
+        second_length: request.second_length,
+    };
+    // The stand-in review owner asserts the exact unsigned amount and charge originals.
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_review_v1(handle, &review, &mut result) },
         PROOF_REJECTED
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);

@@ -1232,6 +1232,16 @@ def live_bound_ms(params: LiveBoundParams) -> float:
     return (f + 2 + level_cap) * b_view + sync
 
 
+def missing_requested_faults(requested: object, observed: Iterable[str]) -> list[str]:
+    """Missing kinds of an explicit fault contract; malformed contracts are refused."""
+    if not isinstance(requested, (list, tuple)) or any(
+        not isinstance(kind, str) or kind not in ("kill", "disk", "net")
+        for kind in requested
+    ) or len(set(requested)) != len(requested):
+        raise ValueError("faults must be a list of distinct kill, disk or net kinds")
+    return sorted(set(requested) - set(observed))
+
+
 def build_verdict(
     analysis: Analysis,
     timeline: Timeline,
@@ -1247,6 +1257,20 @@ def build_verdict(
     perf, perf_metrics = check_performance(analysis.commits, timeline, instance, thresholds, load)
     logs = analysis.nodes
     harness: list[Violation] = []
+    if run is not None:
+        observed = sorted({
+            window.kind for window in timeline.windows
+            if timeline.start_ms <= window.start_ms < window.end_ms <= timeline.end_ms
+        })
+        try:
+            missing_faults = missing_requested_faults(run.get("faults"), observed)
+        except ValueError as error:
+            harness.append(Violation("HARNESS", "invalid-requested-fault-kinds", {"reason": str(error)}))
+        else:
+            if missing_faults:
+                harness.append(Violation("HARNESS", "missing-requested-fault-kinds", {
+                    "requested": sorted(run["faults"]), "observed": observed, "missing": missing_faults,
+                }))
     parse_error_count = sum(log.parse_error_count for log in logs.values())
     if parse_error_count:
         harness.append(

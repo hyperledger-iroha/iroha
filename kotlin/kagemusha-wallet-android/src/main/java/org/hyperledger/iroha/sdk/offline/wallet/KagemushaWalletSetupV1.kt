@@ -39,6 +39,7 @@ internal class KagemushaWalletSetupInputV1(
             21, 22 -> intArrayOf(21_024, 0, 0)
             23 -> intArrayOf(36 * 1024 * 1024, 0, 0)
             25 -> intArrayOf(32 * 1024 * 1024, 1024, 0)
+            26 -> intArrayOf(21_024, 16_384, 0)
             2 -> intArrayOf(10_000, 1_024, 512)
             3, in 7..14, in 16..17 -> intArrayOf(10_000, 0, 0)
             5 -> intArrayOf(512, 512, 0)
@@ -56,7 +57,7 @@ internal class KagemushaWalletSetupInputV1(
         require(token >= 0 && ((selector == 5 || selector == 6) == (token != 0L))) { "native time token" }
         require(selector != 2 || (a.isNotEmpty() && b.isEmpty() == c.isEmpty())) { "Request originals" }
         require((selector != 3 && selector !in 7..14 && selector !in 16..17 && selector !in 21..23) || a.isNotEmpty()) { "Credited original" }
-        require(selector !in listOf(5, 25) || (a.isNotEmpty() && b.isNotEmpty())) { "time response originals" }
+        require(selector !in listOf(5, 25, 26) || (a.isNotEmpty() && b.isNotEmpty())) { "time response originals" }
     }
     fun identity(): ByteArray = id.copyOf()
     fun first(): ByteArray = a.copyOf()

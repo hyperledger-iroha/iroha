@@ -659,6 +659,20 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertEquals(null, KagemushaWalletAndroidKeyProfileV1.fromTag(0))
     }
 
+    @Test fun `signed TEE-only policy generates TEE despite StrongBox availability`() {
+        for (api in listOf(26, 30, 31, 35)) {
+            apiLevel(api)
+            environment.strongBox = true
+            val next = slot()
+            val outcome = if (api < 31) fresh(next, KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE)
+                else paymentKey.generate(next, challenge, KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE)
+            assertEquals(KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT,
+                assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(outcome).securityLevel)
+            assertFalse(keyStore.generated.last().strongBox)
+        }
+        assertEquals(KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE, KagemushaWalletAndroidKeyProfileV1.fromTag(3))
+    }
+
     @Test fun `signing hands the exact 32-byte message to SHA256withECDSA and returns the platform DER`() {
         // Owner answer A1: the payment key signs the 32-byte Poseidon message with standard
         // ECDSA-P256-SHA256, so KeyMint hashes it once; DIGEST_NONE is never used.
@@ -775,6 +789,19 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.attestationChain(slot))
         keyStore.getKeyFailure = IllegalStateException("keystore2 binder failure")
         assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.attestationChain(slot))
+    }
+
+    @Test fun `enrollment attestation read binds the exact Native public key without generation`() {
+        val slot = slot()
+        val entry = keyStore.seed(alias(slot))
+        val publicKey = assertIs<KagemushaWalletAndroidKeyProbeV1.Present>(paymentKey.probe(slot)).publicKeySec1()
+        val chain = assertIs<KagemushaWalletAndroidAttestationChainV1.Present>(paymentKey.enrollmentAttestationChain(slot, publicKey))
+        assertEquals(entry.chain!!.map { it.encoded.toList() }, chain.certificatesDer().map { it.toList() })
+        assertEquals(KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE,
+            assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.enrollmentAttestationChain(slot, publicKey.copyOf().also { it[1] = (it[1].toInt() xor 1).toByte() })).reason)
+        keyStore.getKeyFailure = IllegalStateException("unavailable")
+        assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.enrollmentAttestationChain(slot, publicKey))
+        assertTrue(keyStore.generated.isEmpty())
     }
 
     private fun KagemushaWalletAndroidKeyFactsV1.copy(

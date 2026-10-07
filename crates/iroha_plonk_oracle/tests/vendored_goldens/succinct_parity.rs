@@ -4,6 +4,9 @@
 //! framing. They do not assert byte equality with the distinct PIPA-AS-v1 fold.
 //! Every successful cheap verification is followed by both generator decisions.
 
+use core::fmt::Write as _;
+use norito::json::{Map, Value};
+
 use std::{
     io::Cursor,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -46,6 +49,8 @@ use crate::{
     kagemusha_vendored::KagemushaTranscript,
 };
 
+type Verifier<C> = PlonkSuccinctVerifier<IpaAs<C, Bgh19>>;
+
 /// Forward every snark-verifier transcript call and retain its challenges.
 struct Trace<C: CurveAffine, T> {
     inner: T,
@@ -84,9 +89,10 @@ impl<C: CurveAffine, T: TranscriptRead<C, NativeLoader>> TranscriptRead<C, Nativ
 struct Observation<B: CurveBridge> {
     accumulator: IpaAccumulator<B::Vendored, NativeLoader>,
     challenges: Vec<B::VScalar>,
+    consumed: usize,
 }
 
-/// Original snark-verifier protocol and BGH19 implementation, with exact input consumption.
+/// Original snark-verifier protocol and BGH19 implementation; consumption is observed, not repaired.
 fn succinct<B: CurveBridge>(
     source: &Setup<B>,
     instances: &[Vec<B::VScalar>],
@@ -95,7 +101,7 @@ fn succinct<B: CurveBridge>(
     let protocol = compile(
         &source.vendored_params,
         source.vendored_pk.get_vk(),
-        Config::ipa().with_num_instance(instances.iter().map(Vec::len).collect()),
+        Config::ipa().with_num_instance(source.vendored_instances().iter().map(Vec::len).collect()),
     );
     // Read H from the original ParamsIPA codec, not from a native derivation.
     let mut encoded = Vec::new();
@@ -116,14 +122,13 @@ fn succinct<B: CurveBridge>(
         inner: KagemushaTranscript::<B::Vendored, _>::new::<0>(&mut cursor),
         challenges: Vec::new(),
     };
-    type Verifier<C> = PlonkSuccinctVerifier<IpaAs<C, Bgh19>>;
     let parsed = Verifier::<B::Vendored>::read_proof(&svk, &protocol, instances, &mut transcript)
         .map_err(|e| format!("read: {e:?}"))?;
     let challenges = transcript.challenges;
     let mut accumulators = Verifier::<B::Vendored>::verify(&svk, &protocol, instances, &parsed)
         .map_err(|e| format!("succinct: {e:?}"))?;
-    if cursor.position() != proof.len() as u64 || accumulators.len() != 1 {
-        return Err("trailing bytes or unexpected obligations".into());
+    if accumulators.len() != 1 {
+        return Err("unexpected obligations".into());
     }
     let accumulator = accumulators.remove(0);
     IpaAs::<B::Vendored, Bgh19>::decide(
@@ -134,6 +139,7 @@ fn succinct<B: CurveBridge>(
     Ok(Observation {
         accumulator,
         challenges,
+        consumed: usize::try_from(cursor.position()).expect("cursor position"),
     })
 }
 
@@ -174,12 +180,13 @@ fn compare<B: CurveBridge>(family: Family, k: u32) {
         let proof = source.prove_vendored_kagemusha([seed; 32]);
         let observed = succinct::<B>(&source, &source.vendored_instances(), &proof)
             .expect("snark-verifier full decision");
+        assert_eq!(observed.consumed, proof.len());
         assert_eq!(
             observed.challenges,
             halo2_challenges(&source, &proof),
             "every succinct challenge"
         );
-        let native = accumulate_succinct_oracle(
+        let (native, native_challenges) = accumulate_succinct_oracle(
             &source.params,
             keys.pk.binding(),
             keys.pk.vk(),
@@ -189,6 +196,15 @@ fn compare<B: CurveBridge>(family: Family, k: u32) {
             source.transcript_repr,
         )
         .expect("native cheap verification");
+        assert_eq!(
+            native_challenges,
+            observed
+                .challenges
+                .iter()
+                .map(native_scalar::<B>)
+                .collect::<Vec<_>>(),
+            "every native squeeze"
+        );
         assert_eq!(
             native.g().to_bytes().as_ref(),
             observed.accumulator.u.to_bytes().as_ref()
@@ -213,13 +229,7 @@ fn compare<B: CurveBridge>(family: Family, k: u32) {
         for value in &observed.accumulator.xi {
             tape.extend_from_slice(value.to_repr().as_ref());
         }
-        println!(
-            "SNARK_SUCCINCT curve={} family={family:?} k={k} seed={seed} challenges={} proof_sha256={} tape_sha256={}",
-            B::NAME,
-            observed.challenges.len(),
-            digest_hex(&proof),
-            digest_hex(&tape)
-        );
+        let mut mutation_results = Vec::new();
 
         let mut wrong_instances = source.vendored_instances();
         wrong_instances[0][0] += B::VScalar::ONE;
@@ -244,11 +254,31 @@ fn compare<B: CurveBridge>(family: Family, k: u32) {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 succinct::<B>(&source, &instances, &bytes)
             }));
-            assert!(outcome.is_ok(), "{label}: original verifier panicked");
-            assert!(
-                outcome.unwrap().is_err(),
-                "{label}: original verifier accepted"
-            );
+            let original = match outcome {
+                Ok(Ok(value)) => {
+                    // DEV-05: the original reader ignores trailing bytes. Retain that
+                    // verdict rather than silently imposing native framing on it.
+                    assert_eq!(label, "trailing", "original verifier accepted {label}");
+                    assert_eq!(value.consumed, proof.len());
+                    "accepts_prefix"
+                }
+                Ok(Err(_)) => "error",
+                Err(payload) => {
+                    // NativeLoader deliberately panics on a false group equality.
+                    // Capture that historical behavior; native verification below
+                    // must return an error normally, without catch_unwind.
+                    let message = payload
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| payload.downcast_ref::<&str>().copied())
+                        .unwrap_or("");
+                    assert_eq!(
+                        message, "AssertionFailure(\"C_k == c[U] + v'[H']\")",
+                        "unexpected original panic"
+                    );
+                    "group_assertion_panic"
+                }
+            };
             let native_instances = instances
                 .iter()
                 .map(|column| column.iter().map(native_scalar::<B>).collect())
@@ -263,9 +293,105 @@ fn compare<B: CurveBridge>(family: Family, k: u32) {
                 source.transcript_repr,
             )
             .ok()
-            .is_some_and(|claim| claim.decide(&source.params, MemoryBudget::DEFAULT).is_ok());
+            .is_some_and(|(claim, _)| claim.decide(&source.params, MemoryBudget::DEFAULT).is_ok());
             assert!(!accepted, "{label}: native verifier accepted");
+            mutation_results.push(format!("{label}:{original}:native_error"));
         }
+        let hex = |bytes: &[u8]| {
+            let mut text = String::with_capacity(bytes.len() * 2);
+            for byte in bytes {
+                write!(text, "{byte:02x}").expect("String write");
+            }
+            text
+        };
+        let record = Value::Object(Map::from_iter([
+            ("curve".into(), Value::String(B::NAME.into())),
+            ("family".into(), Value::String(format!("{family:?}"))),
+            ("k".into(), Value::from(u64::from(k))),
+            ("seed_byte".into(), Value::from(u64::from(seed))),
+            ("proof".into(), Value::String(hex(&proof))),
+            (
+                "descriptor".into(),
+                Value::String(hex(keys.pk.binding().encoded())),
+            ),
+            (
+                "verifying_key".into(),
+                Value::String(hex(keys.pk.vk().to_bytes())),
+            ),
+            (
+                "transcript_repr".into(),
+                Value::String(hex(source.transcript_repr.to_repr().as_ref())),
+            ),
+            (
+                "instances".into(),
+                Value::Array(
+                    source
+                        .vendored_instances()
+                        .iter()
+                        .map(|column| {
+                            Value::Array(
+                                column
+                                    .iter()
+                                    .map(|x| Value::String(hex(x.to_repr().as_ref())))
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                ),
+            ),
+            ("proof_sha256".into(), Value::String(digest_hex(&proof))),
+            ("tape_sha256".into(), Value::String(digest_hex(&tape))),
+            (
+                "challenges".into(),
+                Value::Array(
+                    observed
+                        .challenges
+                        .iter()
+                        .map(|x| Value::String(hex(x.to_repr().as_ref())))
+                        .collect(),
+                ),
+            ),
+            (
+                "g".into(),
+                Value::String(hex(observed.accumulator.u.to_bytes().as_ref())),
+            ),
+            (
+                "u".into(),
+                Value::Array(
+                    observed
+                        .accumulator
+                        .xi
+                        .iter()
+                        .map(|x| Value::String(hex(x.to_repr().as_ref())))
+                        .collect(),
+                ),
+            ),
+            (
+                "mutations".into(),
+                Value::Array(mutation_results.into_iter().map(Value::String).collect()),
+            ),
+        ]));
+
+        let fixture: Value = norito::json::from_str(include_str!(
+            "../../../../fixtures/native_prover/succinct_v1.json"
+        ))
+        .expect("captured fixture");
+        let cases = fixture["cases"].as_array().expect("eight cases");
+        assert_eq!(cases.len(), 8);
+        let matching = cases
+            .iter()
+            .filter(|case| {
+                case["curve"] == record["curve"]
+                    && case["family"] == record["family"]
+                    && case["k"] == record["k"]
+                    && case["seed_byte"] == record["seed_byte"]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "one exact captured source identity");
+        assert_eq!(
+            matching[0], &record,
+            "captured original proof, key, challenges, accumulator and mutation outcomes"
+        );
     }
 }
 

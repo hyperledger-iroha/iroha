@@ -18,9 +18,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-#[cfg(unix)]
 mod custody_io;
-#[cfg(unix)]
 pub use custody_io::CustodyEntryKind;
 
 mod private_files;
@@ -165,7 +163,8 @@ enum NativeChildOutcome<T> {
 /// and [`Self::read_optional`] consume borrowed bytes before their original native owners
 /// and zeroized buffer drop.
 /// [`Self::read_admitted`] instead returns the caller's one original owned `Vec`, preserving
-/// its allocation and ownership semantics. The view cannot leave [`PrivateDirectory::read_scope`].
+/// its allocation and ownership semantics. The view cannot leave [`PrivateDirectory::read_scope`]
+/// or [`PrivateReadTreeScope::read_scope`].
 pub struct PrivateReadScope<'scope> {
     directory: &'scope platform::Directory,
     // An actual mutable lexical lease makes this view non-Copy without a heap owner.
@@ -217,9 +216,32 @@ impl PrivateReadScope<'_> {
             })
     }
 
-    // One canonical private comparison recipe for the standalone and borrowed-tree
-    // boundaries. Every current buffer and native leaf owner stays within read's consumer.
-    fn compare_files(&mut self, inputs: &[PrivateFileComparison<'_>]) -> io::Result<bool> {
+    /// List a bounded native inventory within this enclosing read scope.
+    ///
+    /// The sole native census retains its original name, count and metadata checks and sorting.
+    /// Directory custody is closed by the enclosing scope on every ordinary result, including
+    /// a census error or a caller's comparison refusal. No intermediate ancestry observation
+    /// is added by this method; the scope is not an atomic snapshot.
+    ///
+    /// # Errors
+    /// Refuses invalid native names, excessive entry counts, changed metadata and native I/O.
+    pub fn entries(&self, maximum: usize) -> io::Result<Vec<std::ffi::OsString>> {
+        self.directory.entries_native(maximum, |mut names| {
+            names.sort();
+            Ok(names)
+        })
+    }
+
+    /// Compare ordered original private bytes through the sole lazy comparison recipe.
+    ///
+    /// Every file retains the original bounded private leaf checks and one zeroized buffer
+    /// through its consumer. The first stable mismatch stops later reads; empty inputs do no
+    /// leaf I/O. The enclosing read scope closes native directory custody before returning
+    /// a match, mismatch or ordinary error. No plaintext or validation verdict is retained.
+    ///
+    /// # Errors
+    /// Refuses invalid names, unsafe or changed private leaves, excessive extents and native I/O.
+    pub fn compare_files(&mut self, inputs: &[PrivateFileComparison<'_>]) -> io::Result<bool> {
         for input in inputs {
             if !self.read(input.name, input.maximum, |current| {
                 current == input.expected
@@ -349,6 +371,38 @@ pub struct PrivateReadTreeDirectory<'scope> {
 }
 
 impl PrivateReadTreeScope<'_> {
+    /// Consume one directory's lazy records and inventory in a closed tree read transaction.
+    ///
+    /// The existing shared-prefix admission checks the directory at entry and on every
+    /// ordinary-result exit. Strict descendants omit only the complete identical native
+    /// prefix; the anchor and nonshared owners retain full checks. Each file and census uses
+    /// the original native producer. The borrowed reader cannot leave this callback.
+    ///
+    /// This synchronous callback is for read-only inspection, not writes, signing, publication
+    /// or network actions. Intermediate suffix observations from nested read/entries brackets
+    /// are consolidated: a change wholly restored within this bracket may be unseen. This is
+    /// not an atomic snapshot, unwind guarantee, cache or currentness capability.
+    ///
+    /// # Errors
+    /// Refuses unsafe native custody at entry or exit. Exit refusal takes precedence over
+    /// every ordinary callback result, including a typed body error or observed absence.
+    pub fn read_scope<T, E>(
+        &mut self,
+        directory: &PrivateDirectory,
+        read: impl for<'scope> FnOnce(&mut PrivateReadScope<'scope>) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<io::Error>,
+    {
+        self.with_directory(directory, |directory| {
+            let mut lease = ();
+            read(&mut PrivateReadScope {
+                directory: directory.directory,
+                _lease: &mut lease,
+            })
+        })
+    }
+
     /// Inspect one retained directory, closing its fresh suffix on every ordinary result.
     ///
     /// Every original ancestry link must be the same shared owner as the tree anchor before
@@ -1789,3 +1843,6 @@ mod optional_read_tests;
 
 #[cfg(test)]
 mod optional_child_tests;
+
+#[cfg(test)]
+mod tree_read_producer_tests;

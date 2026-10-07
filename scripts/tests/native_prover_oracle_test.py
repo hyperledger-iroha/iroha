@@ -23,6 +23,32 @@ def encoded(value):
 
 
 class OracleAdmissionTests(unittest.TestCase):
+    def test_shipping_rejection_requires_actual_const_failure(self):
+        compiler_error = {
+            "reason": "compiler-message", "target": {"name": "kaigi_zk"},
+            "message": {"level": "error", "code": {"code": "E0080"},
+                        "message": "evaluation panicked: iroha_plonk_oracle is test-only",
+                        "spans": [{"is_primary": True, "file_name": "crates/kaigi_zk/src/lib.rs"}]},
+        }
+        baseline = [compiler_error, {"reason": "build-finished", "success": False}]
+        self.assertTrue(ORACLE.shipping_rejection(encoded(baseline), 101))
+        self.assertFalse(ORACLE.shipping_rejection(encoded(baseline), 0))
+        for mutation in ("no_error", "other_crate", "other_error", "missing_code", "other_message",
+                         "foreign_file", "not_primary", "success", "unfinished", "duplicate_error"):
+            value = deepcopy(baseline)
+            if mutation == "no_error": value.pop(0)
+            elif mutation == "other_crate": value[0]["target"]["name"] = "iroha_plonk"
+            elif mutation == "other_error": value[0]["message"]["code"]["code"] = "E0463"
+            elif mutation == "missing_code": value[0]["message"]["code"] = None
+            elif mutation == "other_message": value[0]["message"]["message"] = "unrelated constant failure"
+            elif mutation == "foreign_file": value[0]["message"]["spans"][0]["file_name"] = "other.rs"
+            elif mutation == "not_primary": value[0]["message"]["spans"][0]["is_primary"] = False
+            elif mutation == "success": value[-1]["success"] = True
+            elif mutation == "unfinished": value.pop()
+            else: value.insert(0, deepcopy(compiler_error))
+            with self.subTest(mutation=mutation):
+                self.assertFalse(ORACLE.shipping_rejection(encoded(value), 101))
+
     def test_disabled_oracle_mode_or_missing_large_cases_fail(self):
         for name, required in ORACLE.REQUIRED_TESTS.items():
             listing = "\n".join(f"{test}: test" for test in required) + f"\n{ORACLE.TIMING_TEST}: test\ntiming::parser: test\n"

@@ -87,7 +87,6 @@ KAGEMUSHA_WALLET_C_EXPORTS = (
     "connect_norito_kagemusha_wallet_close_v1",
     "connect_norito_kagemusha_wallet_activity_v1",
     "connect_norito_kagemusha_wallet_setup_v1",
-    "connect_norito_kagemusha_wallet_enrollment_v1",
     "connect_norito_kagemusha_wallet_execute_v1",
     "connect_norito_kagemusha_wallet_load_original_validate_v1",
     "connect_norito_kagemusha_wallet_request_status_v1",
@@ -96,6 +95,11 @@ KAGEMUSHA_WALLET_C_EXPORTS = (
     "connect_norito_kagemusha_wallet_fold_v1",
     "connect_norito_kagemusha_wallet_credit_status_v1",
     "connect_norito_kagemusha_wallet_snapshot_v1",
+    "connect_norito_kagemusha_wallet_review_v1",
+    "connect_norito_kagemusha_wallet_execute_reviewed_v1",
+    "connect_norito_kagemusha_wallet_discard_review_v1",
+    "connect_norito_kagemusha_wallet_install_runtime_v1",
+    "connect_norito_kagemusha_wallet_enrollment_v1",
 )
 KAGEMUSHA_WALLET_JNI_EXPORTS = (
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_revision",
@@ -109,6 +113,10 @@ KAGEMUSHA_WALLET_JNI_EXPORTS = (
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_enrollment",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_execute",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_installRuntime",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_review",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_executeReviewed",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_discardReview",
 )
 KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS = (
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate",

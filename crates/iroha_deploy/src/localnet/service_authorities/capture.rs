@@ -107,10 +107,12 @@ impl CapturedDirectory {
         &self,
         tree: &mut PrivateReadTreeScope<'_>,
     ) -> crate::managed::Result<()> {
-        tree.with_directory(&self.directory, |directory| match &self.inventory {
+        // Keep the native census and complete-name comparison in one fresh suffix bracket.
+        // Its exit closes even empty inventories and overrides ordinary comparison errors.
+        tree.read_scope(&self.directory, |reader| match &self.inventory {
             Some(expected) => {
                 let expected = expected.iter().cloned().collect::<BTreeSet<_>>();
-                if directory
+                if reader
                     .entries(expected.len())?
                     .into_iter()
                     .collect::<BTreeSet<_>>()
@@ -120,9 +122,9 @@ impl CapturedDirectory {
                         "original service directory inventory differs".into(),
                     ));
                 }
-                directory.revalidate().map_err(Into::into)
+                Ok(())
             }
-            None => directory.revalidate().map_err(Into::into),
+            None => Ok(()),
         })
     }
 
@@ -131,7 +133,7 @@ impl CapturedDirectory {
         tree: &mut PrivateReadTreeScope<'_>,
     ) -> crate::managed::Result<()> {
         self.compare_inputs_with(|inputs| {
-            tree.with_directory(&self.directory, |directory| directory.compare_files(inputs))
+            tree.read_scope(&self.directory, |reader| reader.compare_files(inputs))
         })
     }
 

@@ -195,23 +195,43 @@ impl VerifierConfigurationV1 {
         self.digest
     }
 
-    /// Build a request under these exact selected policies and this configuration pin.
-    /// Time must come from the durable node journal; this grants no dispatch permission.
+    /// Observe the configured private worker's journal with a fresh exchange identity.
     /// # Errors
-    /// Refuses changed account-signed E5/policies, invalid evidence framing or challenge time.
+    /// Empty exchange identity or packet bounds; this establishes no runtime authority.
+    pub fn journal(&self, exchange: [u8; 32]) -> Result<VerifierExchangeV1, Error> {
+        VerifierExchangeV1::journal(self.digest, exchange)
+    }
+
+    /// Bind a pre-key preparation to this exact selected app, enrollment policy and configuration.
+    /// # Errors
+    /// Foreign selection, invalid challenge/account originals or challenge time.
+    pub fn preparation(
+        &self,
+        dispatch: &PreKeyDispatchV1,
+        challenge: KagemushaWalletEnrollmentChallengeV1,
+        created_at_ms: u64,
+    ) -> Result<VerifierPreparationV1, Error> {
+        if dispatch.app != self.app || dispatch.policy != self.policy {
+            return Err(Error("approved configuration binding"));
+        }
+        VerifierPreparationV1::from_selected(dispatch, challenge, created_at_ms, self.digest)
+    }
+
+    /// Bind account-signed E5 to a previously selected preparation under this exact configuration.
+    /// # Errors
+    /// Changed preparation/configuration/policies, invalid E5 or captured challenge time.
     pub fn request(
         &self,
         request: RequestV1,
-        created_at_ms: u64,
+        preparation: &VerifierPreparationV1,
         verification_time_ms: u64,
     ) -> Result<VerifierRequestV1, Error> {
-        VerifierRequestV1::from_retained(
-            request,
-            &self.app,
-            &self.policy,
-            created_at_ms,
-            verification_time_ms,
-            self.digest,
-        )
+        if preparation.configuration() != self.digest
+            || request.body.app != self.app
+            || request.body.policy != self.policy
+        {
+            return Err(Error("approved configuration binding"));
+        }
+        VerifierRequestV1::from_prepared(request, preparation, verification_time_ms)
     }
 }

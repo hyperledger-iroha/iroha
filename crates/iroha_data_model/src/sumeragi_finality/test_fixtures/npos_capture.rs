@@ -18,7 +18,7 @@ use crate::{
 
 impl NativeFinalityFixture {
     /// Certify H1 genesis, H2 preboundary, H3 retention and H4 successor.
-    /// The explicit short NPoS policy and exact quorum are valid for every
+    /// The explicit short `NPoS` policy and exact quorum are valid for every
     /// supported seat count; the beacon output is synthetic execution data.
     #[cfg(test)]
     pub(crate) fn short_npos_boundary_chain(seats: usize) -> (Self, Vec<SumeragiFinalityProof>) {
@@ -110,7 +110,7 @@ impl NativeFinalityFixture {
                     params,
                 },
             },
-            Some(pulse.clone()),
+            Some(&pulse),
         );
         chain.push(fixture.certify_result(block, &result));
 
@@ -157,7 +157,7 @@ impl NativeFinalityFixture {
 fn result_with_schedule(
     block: &SignedBlock,
     schedule: ScheduleOutcome,
-    beacon: Option<FinalizedGlobalThresholdBeaconPulseV1>,
+    beacon: Option<&FinalizedGlobalThresholdBeaconPulseV1>,
 ) -> ExecutionResultCommitment {
     let height = block.header().height().get();
     let (native_lanes, root) =
@@ -178,7 +178,7 @@ fn result_with_schedule(
             transaction_output_commitment: block.output_merkle_commitment(),
         },
         schedule,
-        beacon,
+        beacon.copied(),
         native_lanes,
     )
     .unwrap()

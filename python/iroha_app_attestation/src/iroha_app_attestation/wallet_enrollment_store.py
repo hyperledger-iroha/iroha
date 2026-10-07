@@ -11,7 +11,7 @@ from pathlib import Path
 import sqlite3
 import stat
 
-from .attestation import DurableAppleAssertionCounterStore, VerificationUnavailable
+from .attestation import DurableAppleAssertionCounterStore, VerificationUnavailable, require
 
 _DATABASE = "wallet-e1.sqlite3"
 _GENERATION = "wallet-e1.generation"
@@ -29,11 +29,20 @@ _SCHEMA = {
         key_id BLOB NOT NULL
     )""",
     "wallet_e1_attempts": """CREATE TABLE wallet_e1_attempts (
-        request_sha256 BLOB PRIMARY KEY NOT NULL,
-        key_binding BLOB UNIQUE NOT NULL,
+        operation_id BLOB PRIMARY KEY NOT NULL,
+        preparation BLOB NOT NULL,
         config_sha256 BLOB NOT NULL,
-        original BLOB NOT NULL,
-        result BLOB
+        request_sha256 BLOB UNIQUE,
+        key_binding BLOB UNIQUE,
+        original BLOB,
+        account_signature BLOB,
+        result BLOB,
+        CHECK ((request_sha256 IS NULL AND key_binding IS NULL AND original IS NULL
+                AND account_signature IS NULL AND result IS NULL)
+            OR (request_sha256 IS NOT NULL AND length(request_sha256) = 32
+                AND key_binding IS NOT NULL AND length(key_binding) = 32
+                AND original IS NOT NULL
+                AND account_signature IS NOT NULL AND length(account_signature) = 64))
     )""",
     "wallet_e1_store": """CREATE TABLE wallet_e1_store (
         singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
@@ -45,6 +54,7 @@ _INDEXES = {
     ("index", "sqlite_autoindex_apple_client_data_1", "apple_client_data", None),
     ("index", "sqlite_autoindex_wallet_e1_attempts_1", "wallet_e1_attempts", None),
     ("index", "sqlite_autoindex_wallet_e1_attempts_2", "wallet_e1_attempts", None),
+    ("index", "sqlite_autoindex_wallet_e1_attempts_3", "wallet_e1_attempts", None),
 }
 
 
@@ -146,6 +156,7 @@ class E1CounterStore(DurableAppleAssertionCounterStore):
                     and self.generation_original.startswith(_PREFIX)
                     and any(self.generation_original[len(_PREFIX):]),
                     "invalid private store generation")
+            self.incarnation = self.generation_original[len(_PREFIX):]
             self.database_fd = os.open(_DATABASE, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
             self.file_identity = self._private(os.fstat(self.database_fd))
             # Deliberately do not call the base initializer: it creates missing tables.
@@ -158,6 +169,13 @@ class E1CounterStore(DurableAppleAssertionCounterStore):
     def recheck_directory(self):
         require_custody(self._directory(self.directory, self.directory_fd) == self.directory_identity,
                 "private store directory changed")
+
+    def require_incarnation(self, connection, incarnation):
+        """Bind prepared operations to this explicitly initialized, retained generation."""
+        require(type(incarnation) is bytes and incarnation == self.incarnation,
+                "journal incarnation differs")
+        require_custody(connection.execute("SELECT singleton, generation FROM wallet_e1_store").fetchall()
+                == [(1, self.incarnation)], "private E1 journal generation differs")
 
     def database_identity(self):
         return self._private(os.stat(_DATABASE, dir_fd=self.directory_fd, follow_symlinks=False))

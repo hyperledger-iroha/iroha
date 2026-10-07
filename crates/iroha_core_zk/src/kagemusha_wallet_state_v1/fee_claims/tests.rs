@@ -5,6 +5,25 @@ use iroha_data_model::sumeragi_finality::{
     test_fixtures::NativeFinalityFixture, world_state_value_hash_v1,
 };
 
+fn retained_request_fixture() -> KagemushaWalletRequestV1 {
+    let vectors: norito::json::Value = norito::json::from_str(include_str!(
+        "../../../../../fixtures/kagemusha/wallet_v1_vectors.json"
+    ))
+    .unwrap();
+    let row = vectors["envelopes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"].as_str() == Some("Request"))
+        .unwrap();
+    let envelope: KagemushaWalletEnvelopeV1 =
+        archive::decode(&hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap()).unwrap();
+    let KagemushaWalletMessageV1::Request { request } = envelope.message else {
+        panic!("retained Request envelope");
+    };
+    request
+}
+
 fn snapshot(
     scheme: &KagemushaWalletSchemeV1,
     payout: &KagemushaWalletPayoutRecordV1,
@@ -227,8 +246,7 @@ fn aggregate_fee_original_encoding_bound_and_canonical_projection() {
     );
     let payment: KagemushaWalletPaymentV1 =
         super::super::tests::fixture("KagemushaWalletPaymentV1");
-    let request: KagemushaWalletRequestV1 =
-        super::super::tests::fixture("KagemushaWalletRequestV1");
+    let request = retained_request_fixture();
     let claim = RetainedFeeClaim {
         payment: payment.to_canonical_bytes().unwrap(),
         request: archive::encode(&request).unwrap(),
@@ -242,8 +260,137 @@ fn aggregate_fee_original_encoding_bound_and_canonical_projection() {
     assert!(RetainedFeeClaim::decode_canonical(&bytes, &[9; 32]).is_err());
     let mut trailing = bytes;
     trailing.push(0);
-    assert!(RetainedFeeClaim::decode_canonical(&trailing, &scheme).is_err());
+    assert!(matches!(
+        RetainedFeeClaim::decode_canonical(&trailing, &scheme),
+        Err(Error::Invalid(_))
+    ));
     let mut changed = claim;
     changed.request.push(0);
     assert!(changed.to_canonical_bytes(&scheme).is_err());
+}
+
+#[test]
+fn native_fee_transport_roundtrips_exact_pair_and_refuses_foreign_beneficiary_or_zero_fee() {
+    let claim: KagemushaWalletFeeClaimV1 =
+        super::super::tests::fixture("KagemushaWalletFeeClaimV1");
+    let request = retained_request_fixture();
+    let scheme = claim.payment.request.body.scheme_id;
+    let retained = RetainedFeeClaim {
+        payment: claim.payment.to_canonical_bytes().unwrap(),
+        request: archive::encode(&request).unwrap(),
+    };
+    let beneficiary = archive::encode(&claim.beneficiary).unwrap();
+    let bytes = retained.ledger_claim_bytes(&scheme, &beneficiary).unwrap();
+    assert_eq!(bytes, claim.to_canonical_bytes().unwrap());
+    assert_eq!(
+        retained.ledger_claim_bytes(&scheme, &beneficiary).unwrap(),
+        bytes
+    );
+    assert_eq!(
+        KagemushaWalletFeeClaimV1::decode_canonical(&bytes, &scheme).unwrap(),
+        claim
+    );
+    let foreign = iroha_data_model::account::AccountId::new(
+        iroha_crypto::KeyPair::from_seed(vec![189; 32], iroha_crypto::Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+    assert!(
+        retained
+            .ledger_claim_bytes(&scheme, &archive::encode(&foreign).unwrap())
+            .is_err()
+    );
+    assert!(retained.ledger_claim_bytes(&[9; 32], &beneficiary).is_err());
+    let mut trailing = beneficiary.clone();
+    trailing.push(0);
+    assert!(retained.ledger_claim_bytes(&scheme, &trailing).is_err());
+    assert!(
+        retained
+            .ledger_claim_bytes(
+                &scheme,
+                &vec![0; KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1 + 1]
+            )
+            .is_err()
+    );
+    assert!(
+        KagemushaWalletFeeClaimV1::decode_canonical(
+            &vec![0; KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1 + 1],
+            &scheme
+        )
+        .is_err()
+    );
+    let mut zero = claim.payment;
+    zero.request.body.fee = 0;
+    let zero = RetainedFeeClaim {
+        payment: archive::encode(&zero).unwrap(),
+        request: retained.request,
+    };
+    assert!(zero.ledger_claim_bytes(&scheme, &beneficiary).is_err());
+}
+
+#[test]
+fn fee_transport_encoding_fits_existing_cap_at_large_original_boundaries() {
+    use iroha_data_model::account::{AccountId, MultisigMember, MultisigPolicy};
+    let mut claim: KagemushaWalletFeeClaimV1 =
+        super::super::tests::fixture("KagemushaWalletFeeClaimV1");
+    // Encoding capacity only: opaque proof padding is not genuine proof evidence, and the
+    // enlarged account is not the fixture's authorized schedule beneficiary.
+    let mut low = 1;
+    let mut high = 10_001;
+    while high - low > 1 {
+        let next = (low + high) / 2;
+        claim.payment.send.step_proof.bytes.resize(next, 0);
+        if archive::encode(&claim.payment).unwrap().len() <= 10_000 {
+            low = next;
+        } else {
+            high = next;
+        }
+    }
+    claim.payment.send.step_proof.bytes.resize(low, 0);
+    let payment_bytes = archive::encode(&claim.payment).unwrap().len();
+    let mut members = Vec::new();
+    let mut last_fitting = claim.beneficiary.clone();
+    let mut overflowing = None;
+    for seed in 1..=128u8 {
+        members.push(
+            MultisigMember::new(
+                iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+                1,
+            )
+            .unwrap(),
+        );
+        claim.beneficiary =
+            AccountId::new_multisig(MultisigPolicy::new(1, members.clone()).unwrap());
+        let account_bytes = archive::encode(&claim.beneficiary).unwrap().len();
+        assert!(account_bytes <= KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1);
+        let bytes = archive::encode(&claim).unwrap();
+        if bytes.len() > KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1 {
+            overflowing = Some(bytes);
+            break;
+        }
+        assert!(bytes.len() <= payment_bytes + account_bytes + 128);
+        last_fitting = claim.beneficiary.clone();
+    }
+    let overflow =
+        overflowing.expect("large individually bounded originals exceed the aggregate cap");
+    assert!(
+        KagemushaWalletFeeClaimV1::decode_canonical(
+            &overflow,
+            &claim.payment.request.body.scheme_id
+        )
+        .is_err()
+    );
+    claim.beneficiary = last_fitting;
+    let account_bytes = archive::encode(&claim.beneficiary).unwrap().len();
+    assert!(payment_bytes > 9_900 && payment_bytes <= 10_000);
+    assert!(account_bytes > 4_096 && account_bytes < KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1);
+    let bytes = archive::encode(&claim).unwrap();
+    println!(
+        "fee transport encoding: payment={payment_bytes}, beneficiary={account_bytes}, claim={}",
+        bytes.len()
+    );
+    assert!(bytes.len() > KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1 - 128);
+    assert!(bytes.len() <= KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1);
 }

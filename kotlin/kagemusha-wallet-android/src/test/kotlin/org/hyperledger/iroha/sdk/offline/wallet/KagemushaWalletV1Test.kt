@@ -96,24 +96,24 @@ class KagemushaWalletV1Test {
     }
     @Test fun `native API contains only opaque state machine calls`() {
         val type = JvmApiInventory.read(KagemushaWalletNativeV1::class.java)
-        assertEquals(setOf("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "snapshot", "execute", "setup", "enrollment"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
+        assertEquals(setOf("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "snapshot", "execute", "setup", "enrollment", "review", "executeReviewed", "discardReview"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
         assertEquals(-4, KagemushaWalletExceptionV1.ARTIFACTS_UNAVAILABLE)
     }
     @Test fun `typed lifecycle inputs bound originals and preserve unsigned scalar bits`() {
         val id = ByteArray(32) { 1 }
-        for (selector in 0..9) {
+        for (selector in (0..10).filter { it != 1 && it != 8 }) {
             val limits = when (selector) {
                 0 -> intArrayOf(512, 16_384, 0)
-                1 -> intArrayOf(10_000, 0, 0)
                 2 -> intArrayOf(10_000, 1_024, 10_000)
                 5 -> intArrayOf(65_536 * 34 + 512, 10_000, 0)
                 6 -> intArrayOf(512, 10_000, 0)
                 7 -> intArrayOf(8_192, 10_000, 0)
                 9 -> intArrayOf(0, 0, 0)
+                10 -> intArrayOf(10_000, 10_000, 0)
                 else -> intArrayOf(1_024, 10_000, 0)
             }
             val original = limits.map { if (it == 0) byteArrayOf() else byteArrayOf(7) }
-            val amount = if (selector == 8) KagemushaWalletUInt128V1(-1, -1) else KagemushaWalletUInt128V1(0, 0)
+            val amount = KagemushaWalletUInt128V1(0, 0)
             val input = KagemushaWalletOperationInputV1(id, selector, amount, original[0], original[1], original[2])
             assertEquals(selector, input.selector)
             assertEquals(amount, input.amount)
@@ -136,10 +136,47 @@ class KagemushaWalletV1Test {
         }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletOperationInputV1(ByteArray(32), 9) }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletOperationInputV1(id, 10) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletOperationInputV1(id, 11) }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletOperationInputV1(id, 8) }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletOperationInputV1(id, 8, KagemushaWalletUInt128V1(1, 0), byteArrayOf(1)) }
-        assertEquals(8, KagemushaWalletOperationInputV1(id, 8, KagemushaWalletUInt128V1(1, 0)).selector)
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletOperationInputV1(id, 8, KagemushaWalletUInt128V1(1, 0)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletOperationInputV1(id, 1, first = byteArrayOf(1)) }
         assertEquals(listOf(3, 4, 5, 6, 7), KagemushaWalletRefreshKindV1.values().map { it.selector })
+    }
+
+    @Test fun `receive from Offer bounds both exact originals and never accepts foreign fields`() {
+        val id = ByteArray(32) { 1 }
+        val payment = ByteArray(10_000) { 7 }
+        val offer = ByteArray(10_000) { 9 }
+        val input = KagemushaWalletOperationInputV1(id, 10, first = payment, second = offer)
+        id[0] = 0; payment[0] = 0; offer[0] = 0
+        input.requestId()[1] = 0; input.first()[1] = 0; input.second()[1] = 0
+        assertEquals(10, input.selector)
+        assertContentEquals(ByteArray(32) { 1 }, input.requestId())
+        assertContentEquals(ByteArray(10_000) { 7 }, input.first())
+        assertContentEquals(ByteArray(10_000) { 9 }, input.second())
+        assertContentEquals(byteArrayOf(), input.third())
+        val one = byteArrayOf(1)
+        for (invalidId in listOf(ByteArray(31), ByteArray(32), ByteArray(33))) {
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaWalletOperationInputV1(invalidId, 10, first = one, second = one)
+            }
+        }
+        for ((a, b, c) in listOf(
+            Triple(byteArrayOf(), one, byteArrayOf()), Triple(one, byteArrayOf(), byteArrayOf()),
+            Triple(ByteArray(10_001), one, byteArrayOf()), Triple(one, ByteArray(10_001), byteArrayOf()),
+            Triple(one, one, one),
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaWalletOperationInputV1(ByteArray(32) { 1 }, 10, first = a, second = b, third = c)
+            }
+        }
+        for (amount in listOf(KagemushaWalletUInt128V1(1, 0), KagemushaWalletUInt128V1(0, 1), KagemushaWalletUInt128V1(-1, -1))) {
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaWalletOperationInputV1(ByteArray(32) { 1 }, 10, amount, one, one)
+            }
+        }
+        assertTrue(input.toString().contains("[REDACTED]"))
     }
 
     @Test fun `setup originals never become monetary completion or time authority`() {

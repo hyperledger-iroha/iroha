@@ -104,8 +104,8 @@
 //! The vendored `transcript_repr` injection, the `fe_to_fe` Poseidon point
 //! absorption and caller-seeded prover randomness exist only with
 //! `--cfg iroha_plonk_oracle` (passed through `RUSTFLAGS` into a separate
-//! target directory; today that run is manual, see
-//! `crates/iroha_plonk_oracle/README.md`; TODO: an oracle CI job) or in this
+//! target directory; see `ci/native_prover_oracle.py` and
+//! `crates/iroha_plonk_oracle/README.md`) or in this
 //! crate's unit tests; they are never a Cargo feature. [`ORACLE_BUILD`] says
 //! whether they were compiled in: every shipping root that links this crate
 //! must assert `!ORACLE_BUILD` at compile time (spec 6.4).

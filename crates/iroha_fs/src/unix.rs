@@ -20,11 +20,71 @@ mod apple_acl;
 #[path = "apple_inventory.rs"]
 mod apple_inventory;
 
+#[cfg(any(target_os = "android", test))]
+#[path = "unix/android_ancestry.rs"]
+mod android_ancestry;
+#[cfg(all(target_os = "android", test))]
+#[path = "unix/android_ancestry_syscall_tests.rs"]
+mod android_ancestry_syscall_tests;
+
+/// Ancestors need search permission on Android; the actual selected directory stays readable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectoryAccess {
+    Read,
+    #[cfg(target_os = "android")]
+    Search,
+}
+impl DirectoryAccess {
+    fn for_component(last: bool) -> Self {
+        #[cfg(target_os = "android")]
+        if !last {
+            return Self::Search;
+        }
+        #[cfg(not(target_os = "android"))]
+        let _ = last;
+        Self::Read
+    }
+    fn flags(self) -> OFlags {
+        let access = match self {
+            Self::Read => OFlags::RDONLY,
+            #[cfg(target_os = "android")]
+            Self::Search => OFlags::PATH,
+        };
+        access | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+    }
+}
+
 #[derive(Debug)]
 struct Link {
     path: PathBuf,
     file: File,
     private: bool,
+    // Preserve this access across native namespace revalidation, including shared ancestors.
+    access: DirectoryAccess,
+}
+impl Link {
+    fn sync(&self) -> io::Result<()> {
+        match self.access {
+            DirectoryAccess::Read => self.file.sync_all(),
+            #[cfg(target_os = "android")]
+            DirectoryAccess::Search => {
+                // O_PATH cannot fsync. Reopen this held directory itself, requiring actual
+                // kernel read permission, and retain the same native identity/policy.
+                let readable = File::from(rustix::fs::openat(
+                    &self.file,
+                    ".",
+                    DirectoryAccess::Read.flags(),
+                    Mode::empty(),
+                )?);
+                if validate_directory(&readable, self.private)?
+                    != validate_directory(&self.file, self.private)?
+                {
+                    return Err(changed());
+                }
+                readable.sync_all()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -122,10 +182,10 @@ pub(super) fn with_child_named_hook<T>(
     open()
 }
 
-fn open_directory(path: &Path) -> io::Result<File> {
+fn open_directory(path: &Path, access: DirectoryAccess) -> io::Result<File> {
     Ok(File::from(rustix::fs::open(
         path,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        access.flags(),
         Mode::empty(),
     )?))
 }
@@ -136,18 +196,29 @@ fn validate_directory(file: &File, private: bool) -> io::Result<FileIdentity> {
     if !metadata.is_dir() {
         return Err(denied("directory handle does not name a directory"));
     }
-    if private {
-        if metadata.uid() != uid || metadata.mode() & 0o7777 != 0o700 {
-            return Err(denied(
-                "private directory requires current ownership and mode 0700",
-            ));
-        }
-    } else if !matches!(metadata.uid(), 0) && metadata.uid() != uid {
-        return Err(denied("directory ancestor has foreign ownership"));
-    } else if metadata.mode() & 0o022 != 0
-        && !(metadata.uid() == 0 && metadata.mode() & 0o1000 != 0)
+    #[cfg(target_os = "android")]
+    android_ancestry::validate_permissions(
+        metadata.uid(),
+        metadata.gid(),
+        metadata.mode(),
+        uid,
+        private,
+    )?;
+    #[cfg(not(target_os = "android"))]
     {
-        return Err(denied("directory ancestor is writable by other users"));
+        if private {
+            if metadata.uid() != uid || metadata.mode() & 0o7777 != 0o700 {
+                return Err(denied(
+                    "private directory requires current ownership and mode 0700",
+                ));
+            }
+        } else if !matches!(metadata.uid(), 0) && metadata.uid() != uid {
+            return Err(denied("directory ancestor has foreign ownership"));
+        } else if metadata.mode() & 0o022 != 0
+            && !(metadata.uid() == 0 && metadata.mode() & 0o1000 != 0)
+        {
+            return Err(denied("directory ancestor is writable by other users"));
+        }
     }
     #[cfg(target_vendor = "apple")]
     apple_acl::validate(file, private)?;
@@ -298,12 +369,14 @@ impl Directory {
         if !matches!(parts.first(), Some(Component::RootDir)) {
             return Err(invalid("absolute native path required"));
         }
-        let root = open_directory(Path::new("/"))?;
+        let root_access = DirectoryAccess::for_component(parts.len() == 1);
+        let root = open_directory(Path::new("/"), root_access)?;
         validate_directory(&root, parts.len() == 1 && private)?;
         let mut links = vec![Arc::new(Link {
             path: PathBuf::from("/"),
             file: root,
             private: parts.len() == 1 && private,
+            access: root_access,
         })];
         for (index, component) in parts.iter().enumerate().skip(1) {
             let name = match component {
@@ -314,22 +387,16 @@ impl Directory {
             let parent = links.last().expect("root retained");
             let current = parent.path.join(name);
             let last = index + 1 == parts.len();
+            let access = DirectoryAccess::for_component(last);
             let mut created = false;
-            let open = || {
-                rustix::fs::openat(
-                    &parent.file,
-                    name,
-                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                    Mode::empty(),
-                )
-            };
+            let open = || rustix::fs::openat(&parent.file, name, access.flags(), Mode::empty());
             let descriptor = match open() {
                 Ok(file) => file,
                 Err(rustix::io::Errno::NOENT) if create => {
                     match rustix::fs::mkdirat(&parent.file, name, Mode::from_raw_mode(0o700)) {
                         Ok(()) => {
                             created = true;
-                            parent.file.sync_all()?;
+                            parent.sync()?;
                         }
                         Err(rustix::io::Errno::EXIST) => {}
                         Err(error) => return Err(error.into()),
@@ -340,6 +407,7 @@ impl Directory {
                     // Only immutable system-owned aliases (e.g. macOS /var -> /private/var)
                     // may redirect traversal. Restart and validate the complete resolved ancestry.
                     if allow_system_aliases
+                        && !cfg!(target_os = "android")
                         && let Ok(link) =
                             rustix::fs::statat(&parent.file, name, AtFlags::SYMLINK_NOFOLLOW)
                         && FileType::from_raw_mode(link.st_mode) == FileType::Symlink
@@ -369,6 +437,7 @@ impl Directory {
                 path: current,
                 file,
                 private: private_link,
+                access,
             }));
         }
         let result = Self { links };
@@ -408,12 +477,12 @@ impl Directory {
         for (index, link) in self.links.iter().enumerate().skip(first) {
             let held_identity = validate_directory(&link.file, link.private)?;
             let named = if index == 0 {
-                open_directory(&link.path)?
+                open_directory(&link.path, link.access)?
             } else {
                 File::from(rustix::fs::openat(
                     &self.links[index - 1].file,
                     link.path.file_name().ok_or_else(changed)?,
-                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    link.access.flags(),
                     Mode::empty(),
                 )?)
             };
@@ -442,6 +511,7 @@ impl Directory {
             path: self.path().join(name),
             file,
             private: false,
+            access: DirectoryAccess::Read,
         }));
         let result = Self { links };
         result.revalidate()?;
@@ -535,6 +605,7 @@ impl Directory {
             path: self.path().join(name),
             file,
             private,
+            access: DirectoryAccess::Read,
         }));
         let result = Self { links };
         #[cfg(test)]
@@ -900,7 +971,7 @@ impl Directory {
             current.path.file_name().ok_or_else(changed)?,
             AtFlags::REMOVEDIR,
         )?;
-        parent.file.sync_all()?;
+        parent.sync()?;
         self.revalidate()
     }
 
@@ -934,7 +1005,7 @@ impl Directory {
             .to_str()
             .ok_or_else(|| invalid("directory name must be UTF-8"))?;
         publish_new(&parent.file, source, name)?;
-        parent.file.sync_all()?;
+        parent.sync()?;
         current.path = parent.path.join(name);
         self.links.push(Arc::new(current));
         self.revalidate()?;
@@ -992,6 +1063,7 @@ impl Directory {
                     path: self.path().join(name),
                     file,
                     private: false,
+                    access: DirectoryAccess::Read,
                 }));
                 let child = Self { links };
                 child.clear(&[], remaining)?;

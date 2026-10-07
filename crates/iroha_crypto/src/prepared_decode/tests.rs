@@ -41,10 +41,7 @@ fn prepared_signature_decodes_and_seals_exact_original_backing_without_allocatio
             pool.set_limit_bytes(0);
             without_allocations(|| destination.decode_payload(&bytes)).unwrap();
             assert!(destination.belongs_to(&pool));
-            assert_eq!(
-                destination.decoded_payload(),
-                Some(value.payload().as_ref())
-            );
+            assert_eq!(destination.decoded_payload(), Some(value.payload()));
             let mut encoded = Vec::with_capacity(bytes.len());
             without_allocations(|| destination.serialize(&mut Encoder::for_buffer(&mut encoded)))
                 .unwrap();
@@ -55,7 +52,7 @@ fn prepared_signature_decodes_and_seals_exact_original_backing_without_allocatio
             assert_eq!(bound.get().payload().as_ptr(), pointer);
             assert!(bound.belongs_to(&pool));
             assert_eq!(pool.reserved_bytes(), len);
-            let (_, frees) = with_deallocation_observation(len, || drop(bound));
+            let ((), frees) = with_deallocation_observation(len, || drop(bound));
             assert_eq!(frees, 1);
             assert_eq!(pool.reserved_bytes(), 0);
         }
@@ -434,6 +431,327 @@ fn prepared_leaf_unwind_deallocates_backing_before_original_pool_notification() 
         })
     });
     assert!(unwind.is_err());
+    registration.cancel();
+    drop((wait, registration));
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn one_pass_public_key_admission_matches_canonical_work_and_exact_physical_backing() {
+    for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1] {
+        let pair = KeyPair::from_seed(vec![0x63; 32], algorithm);
+        let key = pair.public_key();
+        let exact = key.retained_allocation_layout();
+        for flags in [0, header_flags::COMPACT_LEN] {
+            let _flags = DecodeFlagsGuard::enter(flags);
+            let bytes = encode(key);
+            let original = (bytes.as_ptr(), bytes.len());
+            let limits = DecodeLimits::new(1024, 4096, 1024, 3 * exact.size(), 32);
+            let ordinary = norito::core::DecodeBudgetContext::new(limits);
+            let (decoded, used) = ordinary
+                .with(|| PublicKey::decode_from_slice(&bytes))
+                .unwrap();
+            assert_eq!(used, bytes.len());
+            let context = norito::core::DecodeBudgetContext::new(limits);
+            let pool = AllocationBudget::new(exact.size());
+            let (owner, requests) = context.with(|| {
+                allocations_during(|| PreparedPublicKeyDecode::try_decode_payload(&bytes, &pool))
+            });
+            let owner = owner.unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(
+                requests, 1,
+                "only the exact final compact backing is allocated"
+            );
+            assert_eq!(owner.get(), &decoded);
+            assert_eq!(owner.get(), key);
+            assert!(owner.belongs_to(&pool));
+            assert_eq!(owner.get().retained_allocation_layout(), exact);
+            assert_eq!(pool.reserved_bytes(), exact.size());
+            assert_eq!(
+                context.consumed_allocated_bytes(),
+                ordinary.consumed_allocated_bytes()
+            );
+            assert_eq!(
+                context.consumed_allocated_bytes(),
+                u64::try_from(3 * exact.size()).unwrap()
+            );
+            assert_eq!((bytes.as_ptr(), bytes.len()), original);
+            assert_eq!(encode(owner.get()), bytes);
+            pool.set_limit_bytes(0);
+            let ((), freed) = with_deallocation_observation(exact.size(), || drop(owner));
+            assert_eq!(freed, 1);
+            assert_eq!(pool.reserved_bytes(), 0);
+        }
+    }
+}
+
+#[test]
+fn one_pass_public_key_admission_preserves_failed_prefix_before_later_invalid_key() {
+    let pair = KeyPair::from_seed(vec![0x64; 32], Algorithm::Ed25519);
+    let key = pair.public_key();
+    let exact = key.retained_allocation_layout();
+    let unlimited = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 32);
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let valid = encode(key);
+        let mut compact = key.0.algorithm_and_payload.to_vec();
+        compact[0] = 0xff;
+        let mut invalid = Vec::new();
+        norito::core::write_element_sequence::<u8, _>(
+            &mut Encoder::for_buffer(&mut invalid),
+            compact.iter(),
+        )
+        .unwrap();
+        let original = (invalid.as_ptr(), invalid.len());
+        let oracle = norito::core::DecodeBudgetContext::new(unlimited);
+        let _oracle_first = oracle
+            .with(|| PublicKey::decode_from_slice(&valid))
+            .unwrap();
+        let first_work = oracle.consumed_allocated_bytes();
+        let rejected = oracle
+            .with(|| PublicKey::decode_from_slice(&invalid))
+            .unwrap_err();
+        assert!(!rejected.is_decode_resource_limit());
+        let prefix_work = oracle.consumed_allocated_bytes();
+        assert!(
+            prefix_work > first_work,
+            "failed later key retains successful prefix work"
+        );
+        let limit = usize::try_from(prefix_work - 1).unwrap();
+        let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, limit, 32);
+        let ordinary = norito::core::DecodeBudgetContext::new(limits);
+        let _ordinary_first = ordinary
+            .with(|| PublicKey::decode_from_slice(&valid))
+            .unwrap();
+        let expected = ordinary
+            .with(|| PublicKey::decode_from_slice(&invalid))
+            .unwrap_err();
+        assert!(
+            expected.is_decode_resource_limit(),
+            "earlier quota refusal precedes invalid tag"
+        );
+        let context = norito::core::DecodeBudgetContext::new(limits);
+        let shared = context.clone();
+        let pool = AllocationBudget::new(2 * exact.size());
+        let first = context
+            .with(|| PreparedPublicKeyDecode::try_decode_payload(&valid, &pool))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let failure = shared
+            .with(|| {
+                without_allocations(|| PreparedPublicKeyDecode::try_decode_payload(&invalid, &pool))
+            })
+            .err()
+            .expect("original cumulative quota must refuse");
+        let PublicKeyDecodeAdmissionError::Codec(actual) = failure else {
+            panic!("later invalid key must not bypass original quota")
+        };
+        assert_eq!(
+            actual.decode_resource_error(),
+            expected.decode_resource_error()
+        );
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            ordinary.consumed_allocated_bytes()
+        );
+        assert!(context.consumed_allocated_bytes() > first_work);
+        assert_eq!(pool.reserved_bytes(), exact.size());
+        assert!(first.belongs_to(&pool));
+        let expected_retry = ordinary
+            .with(|| PublicKey::decode_from_slice(&valid))
+            .unwrap_err();
+        let failure = shared
+            .with(|| {
+                without_allocations(|| PreparedPublicKeyDecode::try_decode_payload(&valid, &pool))
+            })
+            .err()
+            .expect("failed work cannot replenish retry credit");
+        let PublicKeyDecodeAdmissionError::Codec(actual_retry) = failure else {
+            panic!("retry must retain original logical refusal")
+        };
+        assert_eq!(
+            actual_retry.decode_resource_error(),
+            expected_retry.decode_resource_error()
+        );
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            ordinary.consumed_allocated_bytes()
+        );
+        assert_eq!((invalid.as_ptr(), invalid.len()), original);
+        drop(first);
+        assert_eq!(pool.reserved_bytes(), 0);
+
+        // Independent unlimited contexts show the deterministic failure also
+        // keeps prefix work, followed by a real successful cumulative retry.
+        let ordinary = norito::core::DecodeBudgetContext::new(unlimited);
+        let context = norito::core::DecodeBudgetContext::new(unlimited);
+        let _ordinary_first = ordinary
+            .with(|| PublicKey::decode_from_slice(&valid))
+            .unwrap();
+        let first = context
+            .with(|| PreparedPublicKeyDecode::try_decode_payload(&valid, &pool))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let expected = ordinary
+            .with(|| PublicKey::decode_from_slice(&invalid))
+            .unwrap_err();
+        let failure = context
+            .with(|| {
+                without_allocations(|| PreparedPublicKeyDecode::try_decode_payload(&invalid, &pool))
+            })
+            .err()
+            .expect("invalid tag must refuse");
+        let PublicKeyDecodeAdmissionError::Codec(actual) = failure else {
+            panic!("canonical deterministic cause must remain intact")
+        };
+        assert_eq!(actual.to_string(), expected.to_string());
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            ordinary.consumed_allocated_bytes()
+        );
+        let (expected_retry, _) = ordinary
+            .with(|| PublicKey::decode_from_slice(&valid))
+            .unwrap();
+        let retry = context
+            .with(|| PreparedPublicKeyDecode::try_decode_payload(&valid, &pool))
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(retry.get(), &expected_retry);
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            ordinary.consumed_allocated_bytes()
+        );
+        assert_eq!(pool.reserved_bytes(), 2 * exact.size());
+        drop((retry, first));
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn one_pass_public_key_capacity_and_allocator_refusals_preserve_cumulative_work() {
+    let _flags = DecodeFlagsGuard::enter(0);
+    let pair = KeyPair::from_seed(vec![0x65; 32], Algorithm::Ed25519);
+    let key = pair.public_key();
+    let bytes = encode(key);
+    let original = (bytes.as_ptr(), bytes.len());
+    let exact = key.retained_allocation_layout();
+    let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 32);
+    let context = norito::core::DecodeBudgetContext::new(limits);
+    let pool = AllocationBudget::new(exact.size());
+    let first = context
+        .with(|| PreparedPublicKeyDecode::try_decode_payload(&bytes, &pool))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let expected = pool.try_reserve(exact).unwrap_err();
+    let (failure, requests) = context
+        .with(|| allocations_during(|| PreparedPublicKeyDecode::try_decode_payload(&bytes, &pool)));
+    assert_eq!(
+        requests, 0,
+        "capacity is refused before the physical request"
+    );
+    let failure = failure
+        .err()
+        .expect("live original key must occupy the pool");
+    let PublicKeyDecodeAdmissionError::Allocation(ChargedBufferError::Admission(actual)) = failure
+    else {
+        panic!("capacity refusal must keep its exact original pool observation")
+    };
+    assert_eq!(actual, expected);
+    assert_eq!(pool.reserved_bytes(), exact.size());
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        u64::try_from(6 * exact.size()).unwrap()
+    );
+    drop(first);
+    assert_eq!(pool.reserved_bytes(), 0);
+    let (failure, requests) = with_allocation_failure(exact.size(), || {
+        context.with(|| {
+            allocations_during(|| PreparedPublicKeyDecode::try_decode_payload(&bytes, &pool))
+        })
+    });
+    let failure = failure
+        .err()
+        .expect("actual physical backing request must refuse");
+    assert_eq!(requests, 1);
+    assert!(matches!(failure,
+        PublicKeyDecodeAdmissionError::Allocation(ChargedBufferError::Allocator { requested_bytes })
+        if requested_bytes == exact.size()
+    ));
+    assert_eq!(
+        pool.reserved_bytes(),
+        0,
+        "unused physical charge is refunded"
+    );
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        u64::try_from(9 * exact.size()).unwrap()
+    );
+    let retry = context
+        .with(|| PreparedPublicKeyDecode::try_decode_payload(&bytes, &pool))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(retry.get(), key);
+    assert!(retry.belongs_to(&pool));
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        u64::try_from(12 * exact.size()).unwrap()
+    );
+    assert_eq!((bytes.as_ptr(), bytes.len()), original);
+    assert_eq!(pool.reserved_bytes(), exact.size());
+    drop(retry);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn one_pass_public_key_unwind_deallocates_before_original_pool_notification() {
+    use std::{
+        sync::Arc,
+        task::{Context, Poll, Wake, Waker},
+    };
+    struct Check {
+        pool: AllocationBudget,
+    }
+    impl Wake for Check {
+        fn wake(self: Arc<Self>) {
+            assert_eq!(
+                observed_deallocations(),
+                1,
+                "the original key is gone before refund wake"
+            );
+            assert_eq!(
+                self.pool.reserved_bytes(),
+                ReleaseRegistration::allocation_layout().size()
+            );
+        }
+    }
+    let _flags = DecodeFlagsGuard::enter(0);
+    let pair = KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519);
+    let key = pair.public_key();
+    let bytes = encode(key);
+    let exact = key.retained_allocation_layout();
+    let registration_layout = ReleaseRegistration::allocation_layout();
+    let pool = AllocationBudget::new(exact.size() + registration_layout.size());
+    let mut reservation = pool.try_reserve(registration_layout).unwrap();
+    let mut registration = ReleaseRegistration::from_reservation(&mut reservation).unwrap();
+    drop(reservation);
+    let owner = PreparedPublicKeyDecode::try_decode_payload(&bytes, &pool)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let refusal = pool.try_reserve(exact).unwrap_err();
+    let iroha_allocation::AllocationRefusal::Capacity { release: wait, .. } = refusal else {
+        panic!("the original key must block this exact layout")
+    };
+    let waker = Waker::from(Arc::new(Check { pool: pool.clone() }));
+    assert_eq!(
+        registration.poll_wait(&wait, &mut Context::from_waker(&waker)),
+        Poll::Pending
+    );
+    let (unwind, frees) = with_deallocation_observation(exact.size(), || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _owner = owner;
+            panic!("one-pass key owner interrupted")
+        }))
+    });
+    assert!(unwind.is_err());
+    assert_eq!(frees, 1);
+    assert_eq!(
+        registration.poll_wait(&wait, &mut Context::from_waker(&waker)),
+        Poll::Ready(())
+    );
     registration.cancel();
     drop((wait, registration));
     assert_eq!(pool.reserved_bytes(), 0);

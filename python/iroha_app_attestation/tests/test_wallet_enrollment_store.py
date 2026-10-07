@@ -32,8 +32,9 @@ class StoreTests(unittest.TestCase):
         path, fd = self.directory()
         owner = E1CounterStore.initialize(path, fd)
         with closing(owner._connect()) as connection:
-            connection.execute("INSERT INTO wallet_e1_attempts VALUES (?, ?, ?, ?, ?)",
-                               (b"request", b"binding", b"configuration", b"original", b"result"))
+            connection.execute("INSERT INTO wallet_e1_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                               (b"operation", b"preparation", b"configuration", b"r" * 32,
+                                b"b" * 32, b"original", b"s" * 64, b"result"))
         original = (path / "wallet-e1.generation").read_bytes()
         owner.close()
         owner.close()
@@ -47,6 +48,27 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(connection.execute("PRAGMA synchronous").fetchone(), (2,))
             self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone(), ("delete",))
         self.assertEqual((path / "wallet-e1.generation").read_bytes(), original)
+
+    def test_partial_claims_cannot_pass_nullable_sqlite_checks(self):
+        path, fd = self.directory()
+        owner = E1CounterStore.initialize(path, fd)
+        self.addCleanup(owner.close)
+        complete = [b"operation", b"preparation", b"configuration", b"r" * 32,
+                    b"b" * 32, b"original", b"s" * 64, None]
+        with closing(owner._connect()) as connection:
+            # SQLite CHECK accepts NULL. Each mandatory claim field needs an explicit
+            # non-NULL predicate so a partly written claim can never resemble preparation.
+            for index in (3, 4, 5, 6):
+                with self.subTest(missing=index):
+                    row = complete.copy()
+                    row[index] = None
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute("INSERT INTO wallet_e1_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?)", row)
+                    self.assertEqual(connection.execute("SELECT count(*) FROM wallet_e1_attempts").fetchone(), (0,))
+            connection.execute("INSERT INTO wallet_e1_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?)", complete)
+            connection.execute("INSERT INTO wallet_e1_attempts VALUES (?, ?, ?, NULL, NULL, NULL, NULL, NULL)",
+                               (b"other", b"prepared only", b"configuration"))
+            self.assertEqual(connection.execute("SELECT count(*) FROM wallet_e1_attempts").fetchone(), (2,))
 
     def test_lost_database_is_unavailable_and_generation_forbids_reinitialization(self):
         path, fd = self.directory()

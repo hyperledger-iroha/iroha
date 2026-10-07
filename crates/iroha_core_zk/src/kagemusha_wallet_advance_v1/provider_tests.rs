@@ -293,6 +293,10 @@ fn wallet_advance_v1_provider_open_after_a_lost_root_writeback_keeps_custody() {
             .test_begin_enrollment(
                 &super::super::test_support::enrollment_challenge(0x24),
                 super::super::test_support::PROFILE,
+                crate::kagemusha_wallet_advance_v1::KagemushaWalletEnrollmentDatesV1 {
+                    issued_at_ms: 1,
+                    expires_at_ms: 600_001,
+                },
             )
             .expect("enroll")
         {

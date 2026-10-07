@@ -11,6 +11,10 @@ pub(crate) enum Setup {
         request: bool,
         original: Vec<u8>,
     },
+    FeeClaimTransport {
+        original: Vec<u8>,
+        beneficiary: Vec<u8>,
+    },
     LedgerFinality(Vec<u8>),
     LedgerStatus,
     FeePayout {
@@ -62,6 +66,11 @@ pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
         0 | 1 | 4 | 6 | 15 | 18 | 19 | 20 | 24 => [0; 3],
         21 | 22 => [state::FEE_CLAIM_MAX_BYTES_V1, 0, 0],
         23 => [state::LEDGER_PROOF_MAX_BYTES_V1, 0, 0],
+        26 => [
+            state::FEE_CLAIM_MAX_BYTES_V1,
+            KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1,
+            0,
+        ],
         25 => [
             iroha_data_model::sumeragi_finality::MAX_WORLD_STATE_SNAPSHOT_BYTES_V1,
             state::PAYOUT_RECORD_MAX_BYTES_V1,
@@ -118,6 +127,10 @@ pub(crate) fn request(
         },
         23 if !first.is_empty() => Setup::LedgerFinality(first.to_vec()),
         24 => Setup::LedgerStatus,
+        26 if !first.is_empty() && !second.is_empty() => Setup::FeeClaimTransport {
+            original: first.to_vec(),
+            beneficiary: second.to_vec(),
+        },
         25 if !first.is_empty() && !second.is_empty() => Setup::FeePayout {
             credit: id,
             world: first.to_vec(),
@@ -220,6 +233,18 @@ where
                 } else {
                     claim.payment
                 }
+            }
+            Setup::FeeClaimTransport {
+                original,
+                beneficiary,
+            } => {
+                let scheme = self.wallet.snapshot()?.scheme_id;
+                let claim = state::RetainedFeeClaim::decode_canonical(&original, &scheme)?;
+                return Ok(Response {
+                    kind: 36,
+                    bytes: claim.ledger_claim_bytes(&scheme, &beneficiary)?,
+                    ..Response::default()
+                });
             }
             Setup::LedgerFinality(original) => {
                 return Ok(ledger_progress(Some(
@@ -355,7 +380,7 @@ mod tests {
             assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_ok());
             assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_err());
         }
-        assert!(bounds(26).is_err());
+        assert!(bounds(27).is_err());
     }
     #[test]
     fn ledger_and_fee_setup_enforce_bounds_identity_and_progress_shape() {
@@ -368,6 +393,12 @@ mod tests {
             assert!(request(&credit, selector, 0, 0, [&[1], &[], &[]]).is_err());
             assert!(request(&zero, selector, 0, 0, [&[]; 3]).is_err());
         }
+        assert_eq!(bounds(26).unwrap(), [21_024, 16_384, 0]);
+        assert!(request(&zero, 26, 0, 0, [&[1], &[2], &[]]).is_ok());
+        for originals in [[&[1][..], &[][..], &[][..]], [&[1][..], &[2][..], &[3][..]]] {
+            assert!(request(&zero, 26, 0, 0, originals).is_err());
+        }
+        assert!(request(&zero, 26, 0, 0, [&[1], &vec![0; 16_385], &[]]).is_err());
         assert_eq!(bounds(21).unwrap()[0], 21_024);
         assert_eq!(bounds(23).unwrap()[0], 36 * 1024 * 1024);
         assert_eq!(bounds(25).unwrap(), [32 * 1024 * 1024, 1024, 0]);

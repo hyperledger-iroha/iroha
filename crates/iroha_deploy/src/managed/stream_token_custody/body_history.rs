@@ -251,10 +251,7 @@ impl Snapshot {
                 };
                 // The base root and singleton external reference keep their full checks.
                 match (self.root.is_none(), tree.as_deref_mut()) {
-                    (true, Some(tree)) => tree
-                        .with_directory(&self.records[index].directory, |directory| {
-                            directory.read_scope(read)
-                        })?,
+                    (true, Some(tree)) => tree.read_scope(&self.records[index].directory, read)?,
                     _ => self.records[index].directory.read_scope(read)?,
                 }
             }
@@ -262,8 +259,8 @@ impl Snapshot {
         }
         for names in &self.names {
             match tree.as_deref_mut() {
-                Some(tree) => tree.with_directory(&names.directory, |directory| {
-                    if directory.entries(names.maximum)? != names.names {
+                Some(tree) => tree.read_scope(&names.directory, |reader| {
+                    if reader.entries(names.maximum)? != names.names {
                         return Err(invalid("retained enrollment namespace changed"));
                     }
                     Ok::<_, crate::managed::Error>(())

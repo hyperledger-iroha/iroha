@@ -15,75 +15,137 @@ class KagemushaWalletOpenOriginalsV1(credential: ByteArray, enrollmentCertificat
 }
 
 /** A handle returned by the embedding app's trusted native startup loader, never trust pins. */
-class KagemushaWalletRuntimeV1(nativeRuntimeHandle: Long) : Closeable {
+class KagemushaWalletRuntimeV1 internal constructor(nativeRuntimeHandle: Long) : Closeable, KagemushaWalletCleanupResourceV1 {
     private var owner = nativeRuntimeHandle
-    init {
-        require(owner > 0) { "native runtime handle" }
-        if (!PrivacyNativeBridge.isNativeAvailable()) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
-        try { if (KagemushaWalletNativeV1.revision() != 1) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE) }
-        catch (_: LinkageError) { throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE) }
+    private var closeFailure:Throwable?=null
+    private var retired=false
+    private val pending = KagemushaWalletAdmissionLifetimeV1<KagemushaWalletPendingOpenV1>()
+    init {require(owner>0){"native runtime handle"}}
+    private fun handle():Long {
+        if(retired)throw closeFailure?:KagemushaWalletExceptionV1(-2)
+        return owner.takeIf{it>0}?:throw KagemushaWalletExceptionV1(-2)
     }
-    private fun handle(): Long = owner.takeIf { it > 0 } ?: throw KagemushaWalletExceptionV1(-2)
     private fun reply(value: KagemushaWalletCallV1?): KagemushaWalletCallV1 {
         val result = value ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         if (result.status < 0) throw KagemushaWalletExceptionV1(result.status, result.reason, result.platformCode)
         return result
     }
-    /** Reconcile and sample a fresh challenge bound to these original issuer/account frames. */
+    /** Reconcile these originals, retaining the same challenge and pending owner on retry. */
     @Synchronized fun begin(originals: KagemushaWalletOpenOriginalsV1): KagemushaWalletPendingOpenV1 {
         val id = handle()
         val frames = originals.frames()
         val result = reply(KagemushaWalletNativeV1.openBegin(id, frames[0], frames[1], frames[2], frames[3]))
-        if (result.status != KagemushaWalletCallV1.ACCOUNT_CHALLENGE || result.sequenceLow != id) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
-        return KagemushaWalletPendingOpenV1(this, result.bytes())
+        if (result.status != KagemushaWalletCallV1.ACCOUNT_CHALLENGE || result.sequenceLow != id || result.sequenceHigh != 0L || result.detail != 0 || result.bytes().size != 32 || result.bytes().all { it==0.toByte() }) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        val challenge = result.bytes()
+        return pending.select(challenge) { KagemushaWalletPendingOpenV1(this, challenge) }
     }
-    /** Begin strict account admission using exact native-retained E5/E6 originals after enrollment handoff. */
+    /** Begin admission using exact native-retained E5/E6 originals after enrollment handoff. */
     @Synchronized fun beginEnrolled(): KagemushaWalletPendingOpenV1 {
         val id = handle()
-        val result = reply(KagemushaWalletNativeV1.enrollment(id,8,byteArrayOf(),byteArrayOf(),byteArrayOf(),emptyArray()))
-        if (result.status != KagemushaWalletCallV1.ACCOUNT_CHALLENGE || result.sequenceLow != id) throw KagemushaWalletExceptionV1(-100)
-        return KagemushaWalletPendingOpenV1(this,result.bytes())
+        val result = reply(KagemushaWalletNativeV1.enrollment(id, 8, byteArrayOf(), byteArrayOf(), byteArrayOf(), emptyArray()))
+        if (result.status != KagemushaWalletCallV1.ACCOUNT_CHALLENGE || result.sequenceLow != id || result.sequenceHigh != 0L || result.detail != 0 || result.bytes().size != 32 || result.bytes().all { it == 0.toByte() }) {
+            throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        }
+        val challenge = result.bytes()
+        return pending.select(challenge) { KagemushaWalletPendingOpenV1(this, challenge) }
     }
-    @Synchronized internal fun finish(signature: ByteArray): KagemushaWalletV1 {
+    private fun finishNative(signature: ByteArray): KagemushaWalletV1 {
         val id = handle()
         val result = reply(KagemushaWalletNativeV1.openFinish(id, signature.copyOf()))
-        if (result.status != KagemushaWalletCallV1.OPENED || result.sequenceLow != id) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        if (result.status != KagemushaWalletCallV1.OPENED || result.sequenceLow != id || result.sequenceHigh != 0L || result.detail != 0 || result.bytes().isNotEmpty()) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         val wallet = KagemushaWalletV1(id)
         owner = 0
         return wallet
     }
-    /** Discard a pending challenge after interrupted begin delivery, retaining native custody. */
-    @Synchronized fun cancelPendingOpen() {
+    @Synchronized internal fun finish(selected: KagemushaWalletPendingOpenV1, signature: ByteArray): KagemushaWalletV1 =
+        pending.finish(selected) { finishNative(signature) }
+    @Synchronized internal fun cancel(selected: KagemushaWalletPendingOpenV1) {
+        pending.abandon(selected) { cancelNative() }
+    }
+    private fun cancelNative() {
         val status = KagemushaWalletNativeV1.openCancel(handle())
         if (status != 0) throw KagemushaWalletExceptionV1(status)
     }
-    /** Recover a finish after interrupted output/registration; rejected authorization needs a fresh begin. */
-    fun retryOpenCompletion(accountSignature: ByteArray): KagemushaWalletV1 = finish(accountSignature)
+    /** Discard a pending challenge after interrupted begin delivery, retaining native custody. */
+    @Synchronized fun cancelPendingOpen() {
+        pending.complete { cancelNative() }
+    }
+    /** Retry the retained challenge or recover interrupted finish delivery/registration. */
+    @Synchronized fun retryOpenCompletion(accountSignature: ByteArray): KagemushaWalletV1 =
+        pending.complete { finishNative(accountSignature) }
     /** Successful finish transfers ownership to the wallet; closing this runtime then does nothing. */
-    @Synchronized override fun close() {
-        val id = owner; owner = 0
-        if (id != 0L) {
-            val status = KagemushaWalletNativeV1.close(id)
-            if (status != 0) throw KagemushaWalletExceptionV1(status)
+    @Synchronized override fun close() { closeFailure?.let{throw it}; closeAttempt() }
+    /** Explicit cleanup retry on the same Native ID; operations remain permanently retired. */
+    @Synchronized override fun retryCleanup() { closeAttempt() }
+    @Synchronized override fun cleanupReleased():Boolean = owner==0L
+    private fun closeAttempt() {
+        retired=true
+        val id=owner
+        if(id!=0L) {
+            try {
+                val status=KagemushaWalletNativeV1.close(id)
+                if(status!=0)throw KagemushaWalletExceptionV1(status)
+                owner=0;pending.clear();closeFailure=null
+            }catch(failure:Throwable){
+                closeFailure=failure
+                KagemushaWalletInstalledRuntimeV1.retainFailure(this,failure)
+                throw failure
+            }
         }
     }
 }
 
-/** One-use exact 32-byte account challenge; no decoder or authority constructor exists. */
-class KagemushaWalletPendingOpenV1 internal constructor(runtime: KagemushaWalletRuntimeV1, challenge: ByteArray) : Closeable {
-    private var runtime: KagemushaWalletRuntimeV1? = runtime
+/** Exact retained 32-byte account challenge; no decoder or authority constructor exists. */
+class KagemushaWalletPendingOpenV1 internal constructor(private val runtime: KagemushaWalletRuntimeV1, challenge: ByteArray) : Closeable {
     private val original = challenge.copyOf()
     /** The existing Ed25519 account signs these exact native bytes. */
     fun challenge(): ByteArray = original.copyOf()
-    /** Failure consumes the challenge; retained runtime custody can begin afresh. */
-    @Synchronized fun finish(accountSignature: ByteArray): KagemushaWalletV1 {
-        val selected = runtime ?: throw KagemushaWalletExceptionV1(-2)
-        runtime = null
-        return selected.finish(accountSignature)
-    }
+    /** Ordinary refusal retains this pending owner for retry; success transfers ownership. */
+    @Synchronized fun finish(accountSignature: ByteArray): KagemushaWalletV1 =
+        runtime.finish(this, accountSignature)
     /** Abandon this challenge without admitting ownership or releasing native custody. */
     @Synchronized override fun close() {
-        val selected = runtime; runtime = null
-        selected?.cancelPendingOpen()
+        runtime.cancel(this)
+    }
+}
+
+/** Managed lifetime only, serialized by the runtime lock. Callbacks retain all Native authority. */
+internal class KagemushaWalletAdmissionLifetimeV1<P : Any> {
+    private var current: P? = null
+    private var challenge: ByteArray? = null
+
+    fun select(original: ByteArray, create: () -> P): P {
+        current?.let {
+            if (!checkNotNull(challenge).contentEquals(original)) {
+                throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+            }
+            return it
+        }
+        val selected = create()
+        challenge = original.copyOf()
+        current = selected
+        return selected
+    }
+
+    fun <T> finish(selected: P, action: () -> T): T {
+        if (current !== selected) throw KagemushaWalletExceptionV1(-2)
+        return complete(action)
+    }
+
+    fun abandon(selected: P, action: () -> Unit) {
+        // Closing a completed or explicitly cancelled wrapper is idempotent. In particular,
+        // it must never cancel a subsequent challenge owned by this same runtime.
+        if (current === selected) complete(action)
+    }
+
+    fun <T> complete(action: () -> T): T {
+        val result = action()
+        clear()
+        return result
+    }
+
+    fun clear() {
+        current = null
+        challenge = null
     }
 }

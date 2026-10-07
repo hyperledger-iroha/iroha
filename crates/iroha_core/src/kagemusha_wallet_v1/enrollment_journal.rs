@@ -118,9 +118,11 @@ struct Record {
     phase: EnrollmentJournalPhaseV1,
     verification_time_ms: u64,
     worker_configuration: [u8; 32],
+    worker_preparation: Option<preparation::WorkerPreparationSelection>,
     request: Vec<u8>,
     worker_request: Vec<u8>,
     worker_result: Vec<u8>,
+    worker_result_time_ms: u64,
     credential_body: Vec<u8>,
     issued: Vec<u8>,
 }
@@ -145,6 +147,10 @@ impl Record {
         let selected = self.phase == Selected;
         let verified = matches!(self.phase, Evidence | Rejected | Signing | Issued);
         let signing = matches!(self.phase, Signing | Issued);
+        let evidence = matches!(self.phase, Evidence | Signing | Issued);
+        if let Some(prepared) = &self.worker_preparation {
+            prepared.validate()?;
+        }
         if selected != self.request.is_empty()
             || selected != self.worker_request.is_empty()
             || verified == self.worker_result.is_empty()
@@ -152,6 +158,14 @@ impl Record {
             || (self.phase == Issued) == self.issued.is_empty()
             || (selected && self.verification_time_ms != 0)
             || selected != (self.worker_configuration == [0; 32])
+            || (!evidence && self.worker_result_time_ms != 0)
+            || (evidence
+                && (self.worker_result_time_ms < self.verification_time_ms
+                    || self.worker_result_time_ms >= self.selection.expires_at_ms))
+            || (!selected
+                && self.worker_preparation.as_ref().is_none_or(|prepared| {
+                    prepared.ready.is_none() || prepared.configuration != self.worker_configuration
+                }))
             || (!selected
                 && (self.verification_time_ms < self.selection.created_at_ms
                     || self.verification_time_ms >= self.selection.expires_at_ms))
@@ -172,7 +186,7 @@ impl EnrollmentAttemptV1 {
     pub fn selection(&self) -> &EnrollmentSelectionV1 {
         &self.record.selection
     }
-    /// Durable phase; an observed `Verifying` never permits a new verification.
+    /// Durable phase; an observed `Verifying` permits only recovery of its original E5.
     pub fn phase(&self) -> EnrollmentJournalPhaseV1 {
         self.record.phase
     }
@@ -184,7 +198,7 @@ impl EnrollmentAttemptV1 {
             self.record.verification_time_ms,
         ))
     }
-    /// Exact authenticated worker configuration selected with the original Verify request.
+    /// Exact authenticated worker configuration selected with the original Complete request.
     /// Recovery cannot replace this pin with a newer or differently configured worker.
     pub fn worker_configuration(&self) -> Option<[u8; 32]> {
         (self.record.phase != EnrollmentJournalPhaseV1::Selected)
@@ -375,9 +389,11 @@ impl EnrollmentJournalV1 {
             phase: EnrollmentJournalPhaseV1::Selected,
             verification_time_ms: 0,
             worker_configuration: [0; 32],
+            worker_preparation: None,
             request: Vec::new(),
             worker_request: Vec::new(),
             worker_result: Vec::new(),
+            worker_result_time_ms: 0,
             credential_body: Vec::new(),
             issued: Vec::new(),
         };
@@ -433,7 +449,7 @@ impl EnrollmentJournalV1 {
         Ok(())
     }
     /// Validate exact account-signed E5 and build its private worker original from the retained
-    /// issuer creation time, before the sole new Verify dispatch. A reread attempt in any later
+    /// issuer creation time, before the sole new Complete dispatch. A reread attempt in any later
     /// phase cannot call this successfully, even with identical bytes. The service independently
     /// authenticates the worker configuration pin and rechecks current account eligibility.
     /// # Errors
@@ -447,6 +463,9 @@ impl EnrollmentJournalV1 {
         verification_time_ms: u64,
     ) -> Result<EnrollmentVerificationDispatchV1> {
         use iroha_core_zk::kagemusha_wallet_enrollment_v1::issuer_worker::VerifierRequestV1;
+        if configuration == [0; 32] {
+            return Err(Invalid);
+        }
         if request.body.challenge != attempt.selection().challenge
             || attempt
                 .selection()
@@ -457,17 +476,9 @@ impl EnrollmentJournalV1 {
             return Err(Conflict);
         }
         let original = request.encode().map_err(|_| Invalid)?;
-        let app = request.body.app.clone();
-        let policy = request.body.policy;
-        let worker = VerifierRequestV1::from_retained(
-            request,
-            &app,
-            &policy,
-            attempt.selection().created_at_ms,
-            verification_time_ms,
-            configuration,
-        )
-        .map_err(|_| Invalid)?;
+        let preparation = self.require_worker_prepared(attempt, configuration)?;
+        let worker = VerifierRequestV1::from_prepared(request, &preparation, verification_time_ms)
+            .map_err(|_| Invalid)?;
         self.select_verification_bound(
             attempt,
             original,
@@ -507,12 +518,15 @@ impl EnrollmentJournalV1 {
         attempt: &mut EnrollmentAttemptV1,
         original: Vec<u8>,
         rejected: bool,
+        evidence_time_ms: u64,
     ) -> Result<()> {
         use EnrollmentJournalPhaseV1::*;
         let phase = if rejected { Rejected } else { Evidence };
         if attempt.phase() == phase || (!rejected && matches!(attempt.phase(), Signing | Issued)) {
             self.require_current(attempt)?;
-            return if attempt.record.worker_result == original {
+            return if attempt.record.worker_result == original
+                && attempt.record.worker_result_time_ms == evidence_time_ms
+            {
                 Ok(())
             } else {
                 Err(Conflict)
@@ -524,6 +538,7 @@ impl EnrollmentJournalV1 {
         let mut record = attempt.record.clone();
         record.phase = phase;
         record.worker_result = original;
+        record.worker_result_time_ms = evidence_time_ms;
         self.advance(attempt, record)
     }
     /// Retain an independently checked actual signed E6 before returning any bytes to a client.
@@ -555,6 +570,7 @@ impl EnrollmentJournalV1 {
 }
 
 mod permits;
+mod preparation;
 mod worker;
 
 #[cfg(test)]

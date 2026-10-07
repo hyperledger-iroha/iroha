@@ -14,6 +14,13 @@ fn public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
 pub(super) fn fixture(
     journal: &mut EnrollmentJournalV1,
 ) -> (PreKeyDispatchV1, EnrollmentAttemptV1, SigningKey) {
+    let (dispatch, mut attempt, signer) = unprepared_fixture(journal);
+    preparation::tests::prepare(journal, &mut attempt, &dispatch);
+    (dispatch, attempt, signer)
+}
+pub(super) fn unprepared_fixture(
+    journal: &mut EnrollmentJournalV1,
+) -> (PreKeyDispatchV1, EnrollmentAttemptV1, SigningKey) {
     let root = SigningKey::from_slice(&[1; 32]).unwrap();
     let signer = SigningKey::from_slice(&[2; 32]).unwrap();
     let scheme = KagemushaWalletSchemeV1 {
@@ -328,8 +335,8 @@ fn verification_dispatch_derives_private_original_from_exact_account_signed_requ
     assert_eq!(private, packet);
     assert_eq!(time, 2_000);
     assert_eq!(attempt.worker_configuration(), Some([31; 32]));
-    let expected = iroha_core_zk::kagemusha_wallet_enrollment_v1::issuer_worker::VerifierRequestV1::from_retained(
-        request.clone(), &dispatch.app, &dispatch.policy, 1_000, 2_000, [31; 32],
+    let expected = iroha_core_zk::kagemusha_wallet_enrollment_v1::issuer_worker::VerifierRequestV1::from_prepared(
+        request.clone(), &journal.worker_preparation(&attempt, [31; 32]).unwrap(), 2_000,
     ).unwrap();
     assert_eq!(packet, expected.original());
     assert!(matches!(

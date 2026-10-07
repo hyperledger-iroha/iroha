@@ -762,71 +762,88 @@ async fn ram_lfe_program_policies_list_registered_hkdf_program() {
 }
 #[cfg(feature = "app_api")]
 #[test]
-fn encrypted_only_request_dtos_reject_plaintext_fields() {
-    let ram_lfe_err = norito::json::from_json::<routing::RamLfeExecuteRequestDto>(
-        r#"{"encrypted_input":"00","input_hex":"00"}"#,
-    )
-    .expect_err("RAM-LFE execute request must not accept plaintext input_hex");
+fn current_owner_request_dtos_reject_retired_encrypted_fields() {
+    for input in [
+        r#"{"encrypted_input":"00"}"#,
+        r#"{"normalized_input":"a","input_nonce":"a","encrypted_input":"00"}"#,
+    ] {
+        assert!(norito::json::from_str::<routing::RamLfeExecuteRequestDto>(input).is_err());
+    }
     assert!(
-        ram_lfe_err
-            .to_string()
-            .contains("unknown field `input_hex`"),
-        "unexpected RAM-LFE request error: {ram_lfe_err}"
-    );
-    let output_opening = String::from_utf8(
-        norito::json::to_vec(&dummy_output_opening_for_access_test())
-            .expect("encode dummy opening"),
-    )
-    .expect("opening json is utf-8");
-    let identifier_body = format!(
-        r#"{{"policy_id":"phone#retail","encrypted_input":"00","output_opening":{output_opening},"input":"+15551234567"}}"#
-    );
-    let identifier_err =
-        norito::json::from_json::<routing::IdentifierResolveRequestDto>(&identifier_body)
-            .expect_err("identifier request must not accept plaintext input");
-    assert!(
-        identifier_err.to_string().contains("unknown field `input`"),
-        "unexpected identifier request error: {identifier_err}"
+        norito::json::from_str::<routing::IdentifierResolveRequestDto>(
+            r#"{"policy_id":"phone#retail","encrypted_input":"00","output_opening":{}}"#
+        )
+        .is_err()
     );
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn ram_lfe_execute_rejects_unsupported_encrypted_backend() {
-    let (app, _, _, _, program) = registered_hkdf_identifier_app(0xb2);
+async fn ram_lfe_execute_requires_exact_signed_owner_before_evaluation() {
+    let (app, owner, _, _, program) = registered_hkdf_identifier_app(0xb2);
+    let owner_key = checked_torii_test_ed25519_keypair(0xb2, "actual owner fixture key");
+    let uri: axum::http::Uri = format!("/v1/ram-lfe/programs/{}/execute", program.program_id)
+        .parse()
+        .unwrap();
+    let body = br#"{"normalized_input":"alice","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#.to_vec();
     let error = handler_ram_lfe_execute(
-        State(app),
+        State(app.clone()),
+        axum::http::Method::POST,
+        uri.clone(),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(program.program_id.to_string()),
-        NoritoJson(routing::RamLfeExecuteRequestDto {
-            encrypted_input: synthetic_ciphertext_hex(),
-        }),
+        body.clone().into(),
     )
     .await
-    .expect_err("HKDF is not an encrypted execution backend");
-    let response = error.into_response();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("ram_lfe_backend_unavailable"),
+    .expect_err("unsigned request refused");
+    assert!(matches!(error, Error::AppUnauthorized { .. }));
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &owner,
+        &owner_key,
+        &axum::http::Method::POST,
+        &uri,
+        &body,
     );
-    let body = http_body_util::BodyExt::collect(response.into_body())
+    let mut changed = body.clone();
+    changed.push(b' ');
+    assert!(
+        handler_ram_lfe_execute(
+            State(app.clone()),
+            axum::http::Method::POST,
+            uri.clone(),
+            headers,
+            crate::loopback_connect_info(),
+            AxPath(program.program_id.to_string()),
+            changed.into()
+        )
         .await
-        .unwrap()
-        .to_bytes();
-    let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
-    assert_eq!(envelope.code, "ram_lfe_backend_unavailable");
-    assert_eq!(
-        envelope.message,
-        "This backend does not support encrypted execution."
+        .is_err()
     );
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &owner,
+        &owner_key,
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    );
+    let response = handler_ram_lfe_execute(
+        State(app),
+        axum::http::Method::POST,
+        uri,
+        headers,
+        crate::loopback_connect_info(),
+        AxPath(program.program_id.to_string()),
+        body.into(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }
 #[cfg(feature = "app_api")]
 #[test]
-fn ram_lfe_execute_dto_contains_ciphertext_without_a_fabricated_opening() {
+fn ram_lfe_execute_dto_contains_opaque_output_without_a_fabricated_opening() {
     let owner = checked_torii_test_account_id(0xb2, "DTO owner");
     let signer = checked_torii_test_ed25519_keypair(0xb3, "DTO signer");
     let (_, program) = sample_identifier_policy(&owner, &signer, &"string#retail".parse().unwrap());
@@ -851,7 +868,13 @@ fn ram_lfe_execute_dto_contains_ciphertext_without_a_fabricated_opening() {
     };
     let dto = ram_lfe_execute_response(&receipt, &draft);
     assert_eq!(dto.program_id, program.program_id.to_string());
-    assert_eq!(dto.output_ciphertext, hex::encode_upper(&draft.output));
+    let native_program_frame = norito::encode_canonical(&program.program_id).unwrap();
+    assert!(!native_program_frame.is_empty() && native_program_frame.len() <= 4096);
+    assert_eq!(
+        dto.program_id_canonical,
+        hex::encode_upper(&native_program_frame)
+    );
+    assert_eq!(dto.opaque_output, hex::encode_upper(&draft.output));
     assert_eq!(dto.output_hash, p.output_hash.to_string());
     assert_eq!(dto.receipt.payload.output_hash, dto.output_hash);
     assert_eq!(
@@ -1026,29 +1049,24 @@ async fn identifier_policies_enforce_token_policy() {
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn identifier_resolve_rejects_unsupported_encryption() {
+async fn identifier_resolve_requires_signed_policy_owner() {
     let (app, _, _, policy, _) = registered_hkdf_identifier_app(0x14);
+    let body = norito::json::to_vec(&norito::json::json!({"phase":"claim","policy_id":policy.id.to_string(),"normalized_input":"alice","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})).unwrap();
     let error = handler_identifier_resolve(
         State(app),
+        axum::http::Method::POST,
+        "/v1/identifiers/resolve".parse().unwrap(),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        NoritoJson(routing::IdentifierResolveRequestDto {
-            policy_id: policy.id.to_string(),
-            encrypted_input: synthetic_ciphertext_hex(),
-            output_opening: dummy_output_opening_for_access_test(),
-            phone_retail_canonicality: None,
-        }),
+        body.into(),
     )
     .await
-    .expect_err("HKDF policy cannot resolve encrypted identifiers");
-    assert!(
-        identifier_fixture_error_message(&error).contains("requires a BFV-backed RAM-LFE program"),
-        "{error}"
-    );
+    .expect_err("unsigned current request refused");
+    assert!(matches!(error, Error::AppUnauthorized { .. }));
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn identifier_draft_preflight_rejects_bfv_before_ciphertext_or_runtime_work() {
+async fn identifier_draft_preflight_rejects_bfv_before_input_or_runtime_work() {
     let (app, _, _, policy, base) = registered_hkdf_identifier_app(0x16);
     let resolver = identifier_resolution::IdentifierResolutionService::new();
     for backend in [RamLfeBackend::BfvAffineV1, RamLfeBackend::BfvProgrammedV1] {
@@ -1071,8 +1089,10 @@ async fn identifier_draft_preflight_rejects_bfv_before_ciphertext_or_runtime_wor
                     &program,
                     &routing::IdentifierResolveRequestDto {
                         policy_id: policy.id.to_string(),
-                        encrypted_input: "not-hex".to_owned(),
-                        output_opening: dummy_output_opening_for_access_test(),
+                        phase: "claim".to_owned(),
+                        normalized_input: "alice".to_owned(),
+                        input_nonce: "not-hex".to_owned(),
+                        output_opening: Some(dummy_output_opening_for_access_test()),
                         phone_retail_canonicality: None,
                     },
                     &app.signed_query_admission.network_id(),
@@ -1087,8 +1107,10 @@ async fn identifier_draft_preflight_rejects_bfv_before_ciphertext_or_runtime_wor
                     &resolver,
                     &program,
                     &routing::RamLfeExecuteRequestDto {
-                        encrypted_input: "not-hex".to_owned(),
+                        normalized_input: "alice".to_owned(),
+                        input_nonce: "not-hex".to_owned(),
                     },
+                    app.state.network_id_ref(),
                 )
                 .expect_err("unavailable before parse");
                 assert!(
@@ -1141,7 +1163,7 @@ async fn identifier_execution_unsupported_backend_has_typed_availability_error()
     assert_eq!(envelope.code, "ram_lfe_backend_unavailable");
     assert_eq!(
         envelope.message,
-        "This backend does not support encrypted execution."
+        "This backend does not support authenticated owner PRF execution."
     );
 }
 #[cfg(feature = "app_api")]
@@ -1184,6 +1206,11 @@ async fn identifier_receipt_dto_preserves_typed_bindings_without_execution_claim
         .unwrap()
         .into();
     let payload = iroha_data_model::identifier::IdentifierResolutionReceiptPayload {
+        network_id: iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                b"identifier-component-network",
+            )),
+        ),
         policy_id: policy.id.clone(),
         execution,
         opening,
@@ -1213,44 +1240,83 @@ async fn identifier_receipt_dto_preserves_typed_bindings_without_execution_claim
         dto.payload.account_id,
         receipt.payload.account_id.to_string()
     );
-    assert_eq!(dto.payload.opening, receipt.payload.opening);
+    assert_eq!(
+        dto.payload.network_id,
+        hex::encode(receipt.payload.network_id.as_bytes())
+    );
+    assert_eq!(
+        dto.payload.opening.payload.program_id,
+        receipt.payload.opening.payload.program_id.to_string()
+    );
+    assert_eq!(
+        dto.payload.opening.payload.opened_output_hash,
+        receipt
+            .payload
+            .opening
+            .payload
+            .opened_output_hash
+            .to_string()
+    );
+    assert_eq!(
+        dto.payload.opening.signature,
+        hex::encode(receipt.payload.opening.signature.payload())
+    );
     assert_eq!(dto.attestation.kind, "signed");
     assert!(!dto.attestation.signature.as_deref().unwrap().is_empty());
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn identifier_resolve_rejects_malformed_ciphertext_without_panicking() {
-    let (app, _, _, policy, _) = registered_hkdf_identifier_app(0x1a);
-    let mut malformed = hex::decode(synthetic_ciphertext_hex()).unwrap();
-    let payload_start = norito::core::Header::SIZE;
-    let mut payload = malformed[payload_start..].to_vec();
-    assert!(!payload.is_empty());
-    payload.pop();
-    malformed.truncate(payload_start);
-    malformed[23..31].copy_from_slice(&(payload.len() as u64).to_le_bytes());
-    malformed[31..39].copy_from_slice(&norito::hardware_crc64(&payload).to_le_bytes());
-    malformed.extend_from_slice(&payload);
-    for (wire, expected) in [
-        ("zz".to_owned(), "not valid hex"),
-        ("00".to_owned(), "not valid Norito BFV data"),
-        (hex::encode(malformed), "not valid Norito BFV data"),
+async fn identifier_owner_nonce_is_exact_lowerhex_nonzero_and_bounded() {
+    for nonce in [
+        "".to_owned(),
+        "a".repeat(63),
+        "a".repeat(65),
+        "A".repeat(64),
+        "0".repeat(64),
+        format!("0x{}", "a".repeat(64)),
+        "z".repeat(64),
     ] {
-        let error = handler_identifier_resolve(
-            State(app.clone()),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            NoritoJson(routing::IdentifierResolveRequestDto {
-                policy_id: policy.id.to_string(),
-                encrypted_input: wire,
-                output_opening: dummy_output_opening_for_access_test(),
-                phone_retail_canonicality: None,
-            }),
+        assert!(parse_identifier_input_nonce(&nonce).is_err(), "{nonce}");
+    }
+    assert_eq!(
+        parse_identifier_input_nonce(&"a".repeat(64)).unwrap(),
+        [0xaa; 32]
+    );
+    let (app, owner, _, _, program) = registered_hkdf_identifier_app(0x1a);
+    assert!(require_identifier_program_owner(&owner, &program).is_ok());
+    assert!(
+        require_identifier_program_owner(
+            &checked_torii_test_account_id(0x1b, "wrong policy owner"),
+            &program
         )
-        .await
-        .expect_err("malformed ciphertext is rejected");
+        .is_err()
+    );
+    for (method, uri, body) in [
+        (
+            axum::http::Method::GET,
+            "/v1/identifiers/resolve",
+            vec![b'a'],
+        ),
+        (
+            axum::http::Method::POST,
+            "/v1/identifiers/resolve?q=1",
+            vec![b'a'],
+        ),
+        (
+            axum::http::Method::POST,
+            "/v1/identifiers/resolve",
+            vec![b'a'; 16_385],
+        ),
+    ] {
         assert!(
-            identifier_fixture_error_message(&error).contains(expected),
-            "{error}"
+            authenticate_identifier_owner_request(
+                &app,
+                &HeaderMap::new(),
+                &method,
+                &uri.parse().unwrap(),
+                &body
+            )
+            .is_err()
         );
     }
 }
@@ -1266,14 +1332,11 @@ async fn identifier_resolve_enforces_token_policy() {
     }
     let missing = handler_identifier_resolve(
         State(app),
+        axum::http::Method::POST,
+        "/v1/identifiers/resolve".parse().unwrap(),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        NoritoJson(routing::IdentifierResolveRequestDto {
-            policy_id: "phone#retail".to_owned(),
-            encrypted_input: String::new(),
-            output_opening: dummy_output_opening_for_access_test(),
-            phone_retail_canonicality: None,
-        }),
+        axum::body::Bytes::from_static(br#"{"phase":"claim","policy_id":"phone#retail","normalized_input":"+6771234567","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#),
     )
     .await;
     assert!(matches!(
@@ -1283,25 +1346,143 @@ async fn identifier_resolve_enforces_token_policy() {
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn identifier_claim_receipt_rejects_unsupported_encryption() {
+async fn identifier_claim_receipt_requires_signed_policy_owner() {
     let (app, owner, _, policy, _) = registered_hkdf_identifier_app(0x1c);
+    let body = norito::json::to_vec(&norito::json::json!({"phase":"prepare","policy_id":policy.id.to_string(),"normalized_input":"alice","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})).unwrap();
+    let uri = format!("/v1/accounts/{owner}/identifiers/claim-receipt")
+        .parse()
+        .unwrap();
     let error = handler_identifier_claim_receipt(
         State(app),
+        axum::http::Method::POST,
+        uri,
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath(owner.to_string()),
-        NoritoJson(routing::IdentifierResolveRequestDto {
-            policy_id: policy.id.to_string(),
-            encrypted_input: synthetic_ciphertext_hex(),
-            output_opening: dummy_output_opening_for_access_test(),
-            phone_retail_canonicality: None,
-        }),
+        body.into(),
     )
     .await
-    .expect_err("unsupported encryption cannot produce a claim receipt");
-    assert!(
-        identifier_fixture_error_message(&error).contains("requires a BFV-backed RAM-LFE program"),
-        "{error}"
+    .expect_err("unsigned prepare refused");
+    assert!(matches!(error, Error::AppUnauthorized { .. }));
+}
+#[cfg(feature = "app_api")]
+#[test]
+fn identifier_claim_expiry_uses_actual_delivery_time_not_original_opening_time() {
+    // Pure record geometry cannot grant an admitted claim or sign a receipt.
+    let claim = iroha_data_model::identifier::IdentifierClaimRecord {
+        policy_id: "string#retail".parse().unwrap(),
+        opaque_id: iroha_data_model::account::OpaqueAccountId::from_hash(Hash::new(
+            b"record geometry",
+        )),
+        receipt_hash: Hash::new(b"receipt geometry"),
+        phone_retail_nullifier: None,
+        uaid: UniversalAccountId::from_hash(Hash::new(b"uaid geometry")),
+        account_id: checked_torii_test_account_id(0x43, "record geometry owner"),
+        verified_at_ms: 100,
+        expires_at_ms: Some(200),
+    };
+    assert!(identifier_claim_is_live_at(&claim, 150)); // Original opening was at 150.
+    assert!(identifier_claim_is_live_at(&claim, 199));
+    assert!(!identifier_claim_is_live_at(&claim, 200));
+    assert!(!identifier_claim_is_live_at(&claim, 250)); // Expired after the original opening.
+    assert!(!identifier_claim_is_live_at(&claim, 99));
+    assert!(!identifier_claim_is_live_at(&claim, 0));
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn signed_owner_prepare_and_claim_retain_exact_native_opening() {
+    let (app, owner, signer, policy, program) = registered_hkdf_identifier_app(0x42);
+    let owner_key = checked_torii_test_ed25519_keypair(0x42, "current owner request test key");
+    let uri: axum::http::Uri = format!("/v1/accounts/{owner}/identifiers/claim-receipt")
+        .parse()
+        .unwrap();
+    let prepare = routing::IdentifierResolveRequestDto {
+        phase: "prepare".to_owned(),
+        policy_id: policy.id.to_string(),
+        normalized_input: "alice".to_owned(),
+        input_nonce: "a".repeat(64),
+        output_opening: None,
+        phone_retail_canonicality: None,
+    };
+    let body = norito::json::to_vec(&prepare).unwrap();
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &owner,
+        &owner_key,
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    );
+    let response = handler_identifier_claim_receipt(
+        State(app.clone()),
+        axum::http::Method::POST,
+        uri.clone(),
+        headers,
+        crate::loopback_connect_info(),
+        AxPath(owner.to_string()),
+        body.into(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let prepared: routing::IdentifierPrfPrepareResponseDto =
+        norito::json::from_slice(&bytes).unwrap();
+    prepared
+        .output_opening
+        .verify_signature(signer.public_key())
+        .unwrap();
+    assert_eq!(prepared.account_id, owner.to_string());
+    assert!(prepared.phone_retail_canonicality_payload.is_none());
+    let claim = routing::IdentifierResolveRequestDto {
+        phase: "claim".to_owned(),
+        policy_id: prepare.policy_id.clone(),
+        normalized_input: prepare.normalized_input.clone(),
+        input_nonce: prepare.input_nonce.clone(),
+        output_opening: Some(prepared.output_opening.clone()),
+        phone_retail_canonicality: None,
+    };
+    let body = norito::json::to_vec(&claim).unwrap();
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &owner,
+        &owner_key,
+        &axum::http::Method::POST,
+        &uri,
+        &body,
+    );
+    let response = handler_identifier_claim_receipt(
+        State(app),
+        axum::http::Method::POST,
+        uri,
+        headers,
+        crate::loopback_connect_info(),
+        AxPath(owner.to_string()),
+        body.into(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let receipt: routing::IdentifierResolveResponseDto = norito::json::from_slice(&bytes).unwrap();
+    assert_eq!(receipt.payload.opening, prepared.output_opening);
+    assert_eq!(
+        receipt.payload.execution.program_id,
+        program.program_id.to_string()
+    );
+    assert_eq!(
+        receipt.payload.execution.executed_at_ms,
+        prepared.output_opening.payload.opened_at_ms
+    );
+    assert_eq!(
+        receipt.payload.execution.expires_at_ms,
+        prepared.output_opening.payload.expires_at_ms
     );
 }
 #[cfg(feature = "app_api")]
@@ -1350,15 +1531,12 @@ async fn identifier_claim_receipt_enforces_token_policy() {
     }
     let missing = handler_identifier_claim_receipt(
         State(app),
+        axum::http::Method::POST,
+        "/v1/accounts/ed0120deadbeef/identifiers/claim-receipt".parse().unwrap(),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         AxPath("ed0120deadbeef".to_owned()),
-        NoritoJson(routing::IdentifierResolveRequestDto {
-            policy_id: "phone#retail".to_owned(),
-            encrypted_input: String::new(),
-            output_opening: dummy_output_opening_for_access_test(),
-            phone_retail_canonicality: None,
-        }),
+        axum::body::Bytes::from_static(br#"{"phase":"claim","policy_id":"phone#retail","normalized_input":"+6771234567","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#),
     )
     .await;
     assert!(matches!(

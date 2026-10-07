@@ -11,7 +11,8 @@ public struct KagemushaWalletCallV1: Sendable {
   /// Unknown0, complete1, pending2, not performed3, archived4, delivery loss5,
   /// idle6, caught up7, checkpoint8, folded9, CreditStatus10, preparing11, setup12,
   /// timeChallenge13, timeRetained14, accountChallenge15, opened16, activation17;
-  /// background status29, closure transport30; enrollment statuses18...28 are projected by the separate enrollment owner.
+  /// background29, closure30, retainedFee31, noFee32, ledgerTip33, noTip34, payoutRecorded35,
+  /// feeClaimTransport36; enrollment18...28 is projected by the separate enrollment owner.
   public let status: Int32
   public let sequenceLow: UInt64
   public let sequenceHigh: UInt64
@@ -22,9 +23,9 @@ public struct KagemushaWalletCallV1: Sendable {
   public let bytes: Data
   init(status: Int32, sequenceLow: UInt64, sequenceHigh: UInt64, detail: UInt32, bytes: Data) throws
   {
-    guard (0...35).contains(status), bytes.count <= kagemushaWalletOutputBoundV1(status),
-      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
-      ![12, 14, 17, 30, 31, 32, 34, 35].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
+    guard (0...36).contains(status), bytes.count <= kagemushaWalletOutputBoundV1(status),
+      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
+      ![12, 14, 17, 30, 31, 32, 34, 35, 36].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
       !([13, 15, 16].contains(status) || (18...28).contains(status))
         || (sequenceLow > 0 && sequenceLow <= UInt64(Int64.max) && sequenceHigh == 0 && detail == 0),
       ![13, 15, 18, 23].contains(status) || bytes.count == 32,
@@ -45,30 +46,19 @@ import NoritoBridge
 /// Exclusive native owner. Use worker threads for proving. Activity/payment calls can preempt
 /// folding because no Swift lock is held across native calls. Closing preserves committed bytes.
 /// Created only after original account admission through a native-provisioned runtime.
-public final class KagemushaWalletV1: @unchecked Sendable {
-  private let lock = NSLock()
-  private var owner: UInt64
+public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @unchecked Sendable {
+  private let lease: KagemushaWalletNativeLeaseV1
   private let driver: KagemushaWalletNativeDriverV1
   private let setupOrigin = KagemushaWalletSetupOriginV1()
-  init(handle: UInt64, driver: KagemushaWalletNativeDriverV1) {
-    self.owner = handle
-    self.driver = driver
+  init(lease: KagemushaWalletNativeLeaseV1, driver: KagemushaWalletNativeDriverV1) {
+    self.lease = lease; self.driver = driver
   }
-  private func handle() throws -> UInt64 {
-    lock.lock()
-    defer { lock.unlock() }
-    guard owner != 0 else { throw KagemushaWalletErrorV1.closed }
-    return owner
-  }
+  var cleanupLease: KagemushaWalletNativeLeaseV1? { lease }
+  private func handle() throws -> UInt64 { try lease.handle() }
   /// Join cooperative work and release custody, without deleting keys, markers or Payments.
-  public func close() throws {
-    lock.lock()
-    let value = owner
-    owner = 0
-    lock.unlock()
-    if value != 0 { try KagemushaWalletNativeDriverV1.check(driver.close(value)) }
-  }
-  deinit { try? close() }
+  /// Once close starts, operations stay blocked; another close can retry the same Native ID.
+  public func close() throws { try lease.close() }
+  deinit { try? lease.close() }
   /// Enable folding while foreground or charging; leaving both requests cooperative cancellation.
   public func setActivity(foreground: Bool, charging: Bool) throws {
     try KagemushaWalletNativeDriverV1.check(
@@ -108,6 +98,13 @@ public final class KagemushaWalletV1: @unchecked Sendable {
     let payment = try setup(.init(selector: 21, first: result.bytes)).original()
     let request = try setup(.init(selector: 22, first: result.bytes)).original()
     return .init(payment: payment, request: request)
+  }
+  /// Canonical fee claim for ledger relay, bound by Native to the retained fee schedule.
+  /// Beneficiary is an original canonical AccountId; nil means no pending retained claim.
+  public func feeClaimTransport(creditId: Data, beneficiary: Data) throws -> Data? {
+    let retained = try setup(.init(selector: 20, identity: creditId))
+    if retained.status == 32 { return nil }
+    return try setup(retained.feeClaimInput(beneficiary: beneficiary)).feeClaimOriginal()
   }
   /// Verify one bounded next Sumeragi finality original; native persists its selected prefix.
   public func ingestLedgerFinality(_ original: Data) throws -> KagemushaWalletLedgerProgressV1 {
@@ -182,22 +179,92 @@ public final class KagemushaWalletV1: @unchecked Sendable {
   public func load(requestId: Data, receipt: Data, finality: Data) throws -> KagemushaWalletCallV1 {
     try execute(KagemushaWalletOperationInputV1(requestId: requestId, selector: 0, first: receipt, second: finality))
   }
-  /// Irreversible Send to the exact receiver-signed Request; Native authenticates every field.
-  public func send(requestId: Data, request: Data) throws -> KagemushaWalletCallV1 {
-    try execute(KagemushaWalletOperationInputV1(requestId: requestId, selector: 1, first: request))
+  /// Authenticate the fully folded Send source before fresh hardware UI confirmation.
+  public func reviewSend(request: Data, destinationAccountOriginal: Data) throws -> KagemushaWalletReviewV1 {
+    guard !request.isEmpty, request.count <= 10_000,
+      !destinationAccountOriginal.isEmpty, destinationAccountOriginal.count <= 4_096
+    else { throw KagemushaWalletErrorV1.invalidInput }
+    return try review(selector: 1, amount: .init(low: 0, high: 0), first: request,
+      second: destinationAccountOriginal, expected: .send)
   }
   /// Native selects the durably issued Request using the Payment's canonical digest.
   public func receive(requestId: Data, payment: Data, payerCredential: Data, certificates: Data) throws -> KagemushaWalletCallV1 {
     try execute(KagemushaWalletOperationInputV1(requestId: requestId, selector: 2, first: payment, second: payerCredential, third: certificates))
   }
+  /// Forward the exact signed session Offer. Native extracts its payer originals and performs
+  /// ordinary Receive authentication; the Offer supplies no monetary authority.
+  public func receiveFromOffer(requestId: Data, payment: Data, offer: Data) throws -> KagemushaWalletCallV1 {
+    try execute(KagemushaWalletOperationInputV1(requestId: requestId, selector: 10, first: payment, second: offer))
+  }
   /// Apply signed policy originals; Native derives effective values and local map changes.
   public func refresh(requestId: Data, kind: KagemushaWalletRefreshKindV1, update: Data, certificates: Data) throws -> KagemushaWalletCallV1 {
     try execute(KagemushaWalletOperationInputV1(requestId: requestId, selector: kind.rawValue, first: update, second: certificates))
   }
-  /// Unload gross value to the credential account; a quote requires its certificate set.
-  public func unload(requestId: Data, amount: KagemushaWalletUInt128V1, quote: Data? = nil, certificates: Data? = nil) throws -> KagemushaWalletCallV1 {
-    guard (quote == nil) == (certificates == nil) else { throw KagemushaWalletErrorV1.invalidInput }
-    return try execute(KagemushaWalletOperationInputV1(requestId: requestId, selector: 8, amount: amount, first: quote ?? Data(), second: certificates ?? Data()))
+  /// Authenticate exact Unload gross debit and optional signed charge before fresh confirmation.
+  public func reviewUnload(amount: KagemushaWalletUInt128V1, quote: Data? = nil, certificates: Data? = nil) throws -> KagemushaWalletReviewV1 {
+    guard amount.low != 0 || amount.high != 0, (quote == nil) == (certificates == nil),
+      quote.map({ !$0.isEmpty && $0.count <= 1_024 }) ?? true,
+      certificates.map({ !$0.isEmpty && $0.count <= 10_000 }) ?? true else { throw KagemushaWalletErrorV1.invalidInput }
+    return try review(selector: 8, amount: amount, first: quote ?? Data(), second: certificates ?? Data(), expected: .unload)
+  }
+  private func review(selector: UInt32, amount: KagemushaWalletUInt128V1, first: Data, second: Data,
+    expected: KagemushaWalletReviewProjectionV1.Kind) throws -> KagemushaWalletReviewV1 {
+    let handle = try handle()
+    var token: UInt64 = 0
+    do {
+      let reply = try driver.reviewResult { out in
+        first.withUnsafeBytes { a in second.withUnsafeBytes { b in
+          var request = connect_norito_kagemusha_wallet_review_request_v1()
+          request.selector = selector; request.amount = .init(low: amount.low, high: amount.high)
+          request.first = a.bindMemory(to: UInt8.self).baseAddress; request.first_length = a.count
+          request.second = b.bindMemory(to: UInt8.self).baseAddress; request.second_length = b.count
+          let status = driver.review(handle, &request, out)
+          token = out.pointee.sequence_low
+          return status
+        }}
+      }
+      return try reply.review(origin: self, expected: expected)
+    } catch KagemushaWalletErrorV1.invalidNativeOutput {
+      let primary = KagemushaWalletErrorV1.invalidNativeOutput
+      do {
+        if token == 0 { try close() }
+        else { try KagemushaWalletNativeDriverV1.check(driver.discardReview(handle, token)) }
+      } catch {
+        // A token delivery error cannot orphan the actual Native capability. Close the owner;
+        // a failed retirement is sticky and retains its actual callbacks/custody resource.
+        do { try close() } catch { throw error }
+      }
+      throw primary
+    }
+  }
+  /// Consume the exact reviewed Native action after fresh hardware confirmation. Native rechecks its whole source.
+  public func executeReviewed(_ review: KagemushaWalletReviewV1, requestId: Data) throws -> KagemushaWalletCallV1 {
+    guard requestId.count == 32, requestId.contains(where: { $0 != 0 }) else { throw KagemushaWalletErrorV1.invalidInput }
+    let handle = try handle(), token = try review.consume(origin: self)
+    do {
+      return try driver.result { out in requestId.withUnsafeBytes {
+        driver.executeReviewed(handle, token, $0.bindMemory(to: UInt8.self).baseAddress, out)
+      }}.completion()
+    } catch {
+      let primary=error
+      // Consumed Native tokens return closed. This acknowledges no unused review,
+      // never release of the owner or permission to repeat a debit.
+      let status=driver.discardReview(handle,token)
+      if status != 0 && status != -2 {
+        do { try close() } catch { throw error }
+      }
+      throw primary
+    }
+  }
+  /// Worker-only discard; it creates no intent, signature, proof or debit.
+  public func discardReview(_ review: KagemushaWalletReviewV1) throws {
+    let handle = try handle(), token = try review.consume(origin: self)
+    try KagemushaWalletNativeDriverV1.check(driver.discardReview(handle, token))
+  }
+  /// Current integration uses the same exact owner-local discard.
+  public func cancelReview(_ review:KagemushaWalletReviewV1)throws{try discardReview(review)}
+  public func reviewSend(_ request:Data, destinationAccountOriginal:Data)throws->KagemushaWalletReviewV1{
+    try reviewSend(request:request, destinationAccountOriginal:destinationAccountOriginal)
   }
   /// Enter Retiring under native folded-state checks.
   public func retire(requestId: Data) throws -> KagemushaWalletCallV1 {
@@ -279,23 +346,22 @@ struct KagemushaWalletOperationInputV1 {
     let limits: [Int]
     switch selector {
     case 0: limits = [512, 16_384, 0]
-    case 1: limits = [10_000, 0, 0]
     case 2: limits = [10_000, 1_024, 10_000]
-    case 3, 4, 8: limits = [1_024, 10_000, 0]
+    case 3, 4: limits = [1_024, 10_000, 0]
     case 5: limits = [65_536 * 34 + 512, 10_000, 0]
     case 6: limits = [512, 10_000, 0]
     case 7: limits = [8_192, 10_000, 0]
     case 9: limits = [0, 0, 0]
+    case 10: limits = [10_000, 10_000, 0]
     default: throw KagemushaWalletErrorV1.invalidInput
     }
     let nonzero = amount.low != 0 || amount.high != 0
     guard requestId.count == 32, requestId.contains(where: { $0 != 0 }),
-      selector == 8 ? nonzero : !nonzero else { throw KagemushaWalletErrorV1.invalidInput }
+      !nonzero else { throw KagemushaWalletErrorV1.invalidInput }
     for (bytes, limit) in zip([first, second, third], limits) {
-      guard bytes.count <= limit, !(selector < 8 && limit != 0 && bytes.isEmpty)
+      guard bytes.count <= limit, !((selector < 8 || selector == 10) && limit != 0 && bytes.isEmpty)
       else { throw KagemushaWalletErrorV1.invalidInput }
     }
-    guard selector != 8 || first.isEmpty == second.isEmpty else { throw KagemushaWalletErrorV1.invalidInput }
     self.requestId = requestId; self.selector = selector; self.amount = amount
     self.first = first; self.second = second; self.third = third
   }
@@ -324,6 +390,9 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
   typealias Execute =
     @convention(c) (UInt64, UnsafePointer<connect_norito_kagemusha_wallet_operation_request_v1>?, UnsafeMutablePointer<Output>?) -> Int32
   typealias Enrollment = @convention(c) (UInt64, UnsafePointer<connect_norito_kagemusha_wallet_enrollment_request_v1>?, UnsafeMutablePointer<Output>?) -> Int32
+  typealias Review = @convention(c) (UInt64, UnsafePointer<connect_norito_kagemusha_wallet_review_request_v1>?, UnsafeMutablePointer<Output>?) -> Int32
+  typealias ExecuteReviewed = @convention(c) (UInt64, UInt64, UnsafePointer<UInt8>?, UnsafeMutablePointer<Output>?) -> Int32
+  typealias DiscardReview = @convention(c) (UInt64, UInt64) -> Int32
   typealias Setup = @convention(c) (UInt64, UnsafePointer<connect_norito_kagemusha_wallet_setup_request_v1>?, UnsafeMutablePointer<Output>?) -> Int32
   typealias Retry =
     @convention(c) (UInt64, UnsafePointer<UInt8>?, UnsafeMutablePointer<Output>?) -> Int32
@@ -342,6 +411,9 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
   let execute: Execute
   let setup: Setup
   let enrollment: Enrollment
+  let review: Review
+  let executeReviewed: ExecuteReviewed
+  let discardReview: DiscardReview
   let requestStatus: Retry
   let retry: Retry
   let resume: Simple
@@ -368,6 +440,9 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
     enrollment = try symbol("connect_norito_kagemusha_wallet_enrollment_v1", Enrollment.self)
     execute = try symbol("connect_norito_kagemusha_wallet_execute_v1", Execute.self)
     setup = try symbol("connect_norito_kagemusha_wallet_setup_v1", Setup.self)
+    review = try symbol("connect_norito_kagemusha_wallet_review_v1", Review.self)
+    executeReviewed = try symbol("connect_norito_kagemusha_wallet_execute_reviewed_v1", ExecuteReviewed.self)
+    discardReview = try symbol("connect_norito_kagemusha_wallet_discard_review_v1", DiscardReview.self)
     requestStatus = try symbol("connect_norito_kagemusha_wallet_request_status_v1", Retry.self)
     retry = try symbol("connect_norito_kagemusha_wallet_retry_v1", Retry.self)
     resume = try symbol("connect_norito_kagemusha_wallet_resume_v1", Simple.self)
@@ -385,6 +460,18 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
     if status == -2 { throw KagemushaWalletErrorV1.closed }
     if status == -4 { throw KagemushaWalletErrorV1.artifactsUnavailable }
     throw KagemushaWalletErrorV1.native(status: status, reason: reason, platformCode: platform)
+  }
+  func reviewResult(_ action: (UnsafeMutablePointer<Output>) -> Int32) throws -> KagemushaWalletReviewReplyV1 {
+    var value = Output()
+    let status = action(&value)
+    defer { if let bytes = value.bytes { free(bytes) } }
+    try Self.check(status, reason: value.reason, platform: value.platform_code)
+    guard value.status == 18,
+      value.length >= KagemushaWalletReviewProjectionV1.fixedByteCount,
+      value.length <= KagemushaWalletReviewProjectionV1.maximumByteCount,
+      let bytes = value.bytes else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return .init(status: value.status, reason: value.reason, platformCode: value.platform_code,
+      sequenceLow: value.sequence_low, sequenceHigh: value.sequence_high, detail: value.detail, bytes: Data(bytes: bytes, count: value.length))
   }
   func result(_ action: (UnsafeMutablePointer<Output>) -> Int32) throws -> KagemushaWalletCallV1 {
     var value = Output()
@@ -528,5 +615,5 @@ func kagemushaWalletCallbacksV1(_ platform: KagemushaWalletApplePlatformV1)
 }
 
 func kagemushaWalletOutputBoundV1(_ status: Int32) -> Int {
-  switch status { case 17, 27, 30: return 16_384; case 24: return 131_072; case 25: return 262_144; case 28: return 1024; case 31: return 21_024; case 33: return 32; default: return 10_000 }
+  switch status { case 17, 27, 30, 36: return 16_384; case 24: return 131_072; case 25: return 262_144; case 28: return 1024; case 31: return 21_024; case 33: return 32; default: return 10_000 }
 }

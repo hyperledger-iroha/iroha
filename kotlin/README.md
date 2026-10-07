@@ -594,6 +594,14 @@ monetary authority. Public wire size and verification work are independent of
 balance history; no hop, input, origin, ancestry, fan-in, or proof-depth limit is
 encoded.
 
+`KagemushaWalletAccountOriginalV1` encodes and renders the bounded complete
+canonical Norito `AccountId` frame used by `KagemushaWalletV1.reviewSend`.
+Supply both the receiver's original Request and destination account frame;
+Native authenticates their binding before returning a review. Display the
+reviewed account under the application's independently selected network and
+bind local confirmation to the whole returned review, including its account
+tail. Encoding or rendering account DATA does not authorize a payment.
+
 ### KAGEMUSHA online Load receipt recovery
 
 `HttpClientTransport.getKagemushaWalletLoadIssuanceOriginalV1(selection, canonicalAuth,

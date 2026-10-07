@@ -3,7 +3,7 @@ use super::*;
 
 const ROOT: &[u8] = b"Unadmitted configuration vector root DATA";
 
-fn selected(apple: bool) -> RequestV1 {
+pub(super) fn selected(apple: bool) -> RequestV1 {
     let mut request = fixture(apple).request;
     let pin = Sha256::digest(ROOT).into();
     match &mut request.body.policy.platform {
@@ -55,7 +55,7 @@ fn runtime() -> VerifierRuntimeSelectionV1<'static> {
     }
 }
 
-fn configuration(request: &RequestV1) -> VerifierConfigurationV1 {
+pub(super) fn configuration(request: &RequestV1) -> VerifierConfigurationV1 {
     let original = google();
     let decoder = matches!(
         request.body.app.identity,
@@ -79,7 +79,8 @@ fn vectors() -> Value {
     Value::Array([false, true].into_iter().map(|apple| {
         let request = selected(apple);
         let config = configuration(&request);
-        let worker = config.request(request.clone(), 1_000, 601_000).unwrap();
+        let preparation = config.preparation(&dispatch(&request), request.body.challenge, 1_000).unwrap();
+        let worker = config.request(request.clone(), &preparation, 601_000).unwrap();
         norito::json!({
             "platform": (if apple { "apple" } else { "android" }),
             "configuration_base64": (STANDARD.encode(config.original())),
@@ -112,14 +113,23 @@ fn selected_configuration_binds_exact_originals_policy_and_request() {
             value["enrollment_policy_hex"].as_str().unwrap(),
             hex::encode(request.body.policy.policy_digest().unwrap())
         );
-        let worker = config.request(request.clone(), 1_000, 601_000).unwrap();
+        let preparation = config
+            .preparation(&dispatch(&request), request.body.challenge, 1_000)
+            .unwrap();
+        let worker = config
+            .request(request.clone(), &preparation, 601_000)
+            .unwrap();
         assert_eq!(worker.configuration, config.digest());
-        assert!(config.request(request.clone(), 1_000, 601_001).is_err());
+        assert!(
+            config
+                .request(request.clone(), &preparation, 601_001)
+                .is_err()
+        );
         let foreign = selected(!apple);
-        assert!(config.request(foreign, 1_000, 601_000).is_err());
+        assert!(config.request(foreign, &preparation, 601_000).is_err());
         let mut changed = request.clone();
         changed.body.policy.challenge_lifetime_ms += 1;
-        assert!(config.request(changed, 1_000, 601_000).is_err());
+        assert!(config.request(changed, &preparation, 601_000).is_err());
         assert_eq!(config.original(), configuration(&request).original());
     }
 }
@@ -217,10 +227,9 @@ fn configuration_refuses_substituted_roots_decoder_and_runtime() {
 
 #[test]
 fn private_configuration_shared_data_vectors_match_native_projection() {
-    let retained: Value = json::from_str(include_str!(
-        "../../../../fixtures/kagemusha/wallet_enrollment_worker_configuration_v1.json"
-    ))
-    .unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/kagemusha/wallet_enrollment_worker_configuration_v1.json");
+    let retained: Value = json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     assert_eq!(retained, vectors());
 }
 

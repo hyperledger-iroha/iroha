@@ -401,7 +401,7 @@ fn kagemusha_wallet_v1_ordinary_load_receipt_shape_binding_and_effect() {
     );
     let state = KagemushaWalletStateV1::bootstrap(f.credential(), field_value(0x5d)).unwrap();
     receipt.require_next_for(&state).unwrap();
-    let mut later = state.clone();
+    let mut later = state;
     later.core.next_load = 1;
     assert_invalid(receipt.require_next_for(&later), "load_receipt.ordinal");
     let charged = f.receipt(25, quote.charge_quote_digest());
@@ -446,17 +446,17 @@ fn kagemusha_wallet_v1_ordinary_load_receipt_shape_binding_and_effect() {
         ),
     ];
     for (mutate, field) in mutations {
-        let mut bad = receipt.clone();
+        let mut bad = receipt;
         mutate(&mut bad);
         assert_invalid(bad.validate(), field);
     }
-    let mut overflow = charged.clone();
+    let mut overflow = charged;
     overflow.amount = u128::MAX;
     assert!(matches!(
         overflow.validate(),
         Err(KagemushaWalletValidationErrorV1::ArithmeticOverflow { .. })
     ));
-    overflow = receipt.clone();
+    overflow = receipt;
     overflow.ordinal = u128::MAX;
     assert!(matches!(
         overflow.validate(),

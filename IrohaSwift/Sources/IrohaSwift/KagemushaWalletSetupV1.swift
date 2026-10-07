@@ -29,6 +29,14 @@ public final class KagemushaWalletTimeExchangeV1: @unchecked Sendable, CustomStr
 }
 
 extension KagemushaWalletCallV1 {
+  func feeClaimInput(beneficiary: Data) throws -> KagemushaWalletSetupInputV1 {
+    guard status == 31 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return try .init(selector: 26, first: bytes, second: beneficiary)
+  }
+  func feeClaimOriginal() throws -> Data {
+    guard status == 36 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return bytes
+  }
   func creditedInput() throws -> KagemushaWalletSetupInputV1 {
     guard status == 1 || status == 10 else { throw KagemushaWalletErrorV1.invalidInput }
     return try .init(selector: status == 10 ? 17 : 16, first: bytes)
@@ -69,6 +77,7 @@ struct KagemushaWalletSetupInputV1 {
     case 21, 22: limits = [21_024, 0, 0]
     case 23: limits = [36 * 1024 * 1024, 0, 0]
     case 25: limits = [32 * 1024 * 1024, 1024, 0]
+    case 26: limits = [21_024, 16_384, 0]
     case 2: limits = [10_000, 1_024, 512]
     case 3, 7...14, 16...17: limits = [10_000, 0, 0]
     case 5: limits = [512, 512, 0]
@@ -78,7 +87,7 @@ struct KagemushaWalletSetupInputV1 {
       (selector == 1) == (amount.low != 0 || amount.high != 0), ([5, 6].contains(selector)) == (token != 0),
       token <= UInt64(Int64.max), zip([first, second, third], limits).allSatisfy({ $0.count <= $1 }),
       selector != 2 || (!first.isEmpty && second.isEmpty == third.isEmpty),
-      (selector != 3 && !(7...14).contains(selector) && !(16...17).contains(selector) && !(21...23).contains(selector)) || !first.isEmpty, ![5, 25].contains(selector) || (!first.isEmpty && !second.isEmpty)
+      (selector != 3 && !(7...14).contains(selector) && !(16...17).contains(selector) && !(21...23).contains(selector)) || !first.isEmpty, ![5, 25, 26].contains(selector) || (!first.isEmpty && !second.isEmpty)
     else { throw KagemushaWalletErrorV1.invalidInput }
     self.selector = selector; self.identity = kagemushaWalletSetupCopyV1(identity)
     self.amount = amount; self.token = token

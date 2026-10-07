@@ -1,6 +1,6 @@
 //! Model-owned, test-only mutation selection for Sumeragi spec §13.4.
 //!
-//! This selector affects only the DataModel unit-test compilation, never Core or another
+//! This selector affects only the `DataModel` unit-test compilation, never Core or another
 //! dependency. The library guard rejects the feature in every non-test build. The environment
 //! supplies one registered source switch; inherited compiler cfg injection is always refused.
 

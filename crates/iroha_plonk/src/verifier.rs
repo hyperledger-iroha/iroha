@@ -264,6 +264,8 @@ struct Mode<C: PastaCurve> {
 struct ReadProof<C: PastaCurve> {
     pending: PendingOpening<C>,
     suffix: Option<C::AffineExt>,
+    #[cfg(any(test, iroha_plonk_oracle))]
+    challenges: Vec<C::ScalarExt>,
 }
 
 /// Checks the instance shape against the descriptor (S4).
@@ -527,6 +529,10 @@ where
         DescriptorHash::<C>::production(descriptor.transcript)
     };
     let mut transcript = TranscriptReader::<C, _>::new(hash, proof);
+    #[cfg(any(test, iroha_plonk_oracle))]
+    if mode.oracle {
+        transcript.record_challenges();
+    }
     if mode.oracle {
         transcript.common_scalar(
             mode.transcript_repr
@@ -761,8 +767,15 @@ where
     } else {
         None
     };
+    #[cfg(any(test, iroha_plonk_oracle))]
+    let challenges = transcript.take_challenges();
     transcript.finish()?;
-    Ok(ReadProof { pending, suffix })
+    Ok(ReadProof {
+        pending,
+        suffix,
+        #[cfg(any(test, iroha_plonk_oracle))]
+        challenges,
+    })
 }
 
 /// The oracle-mode hash of the descriptor's transcript.
@@ -1002,6 +1015,7 @@ where
 /// This exposes the same unchecked generator obligation as
 /// [`accumulate_succinct`] solely for independent oracle comparisons. A returned
 /// claim must still be decided; it is never a proof acceptance.
+/// The second tuple element records every actual native transcript squeeze.
 ///
 /// # Errors
 /// As [`accumulate_succinct`], using the supplied vendored transcript scalar.
@@ -1015,7 +1029,7 @@ pub fn accumulate_succinct_oracle<C: PastaCurve>(
     proof: &[u8],
     budget: MemoryBudget,
     vendored_transcript_repr: C::ScalarExt,
-) -> Result<PendingAccumulator<C>, VerifyError>
+) -> Result<(PendingAccumulator<C>, Vec<C::ScalarExt>), VerifyError>
 where
     C::ScalarExt: PoseidonField,
     C::Base: PoseidonField,
@@ -1031,9 +1045,10 @@ where
         params, binding, vk, instances, proof, mode, budget, &AllTerms, None,
     )?;
     let folded = read.suffix.ok_or(VerifyError::SuffixRequired)?;
-    Ok(read
+    let pending = read
         .pending
-        .accumulate(params, &folded, &vendored_transcript_repr, budget)?)
+        .accumulate(params, &folded, &vendored_transcript_repr, budget)?;
+    Ok((pending, read.challenges))
 }
 
 /// [`verify_full`] with a constraint filter (malicious-prover tests only):
@@ -1210,6 +1225,8 @@ where
     }
 }
 
+#[cfg(test)]
+mod captured_succinct_tests;
 #[cfg(test)]
 mod tests;
 

@@ -1387,7 +1387,7 @@ impl KagemushaWalletQuotaUsageArrayV1 {
         Ok(used)
     }
 
-    /// Rebuild the array for a newly installed quota share (§3.3 RefreshPolicy; owner answers
+    /// Rebuild the array for a newly installed quota share (§3.3 `RefreshPolicy`; owner answers
     /// B4, B5 and B8), checking only the 64 slots of this (the predecessor's) array and the
     /// windows of the new share:
     ///
@@ -1760,6 +1760,10 @@ impl KagemushaWalletCreditDigestLeafV1 {
 /// low leaf (absent, insert). The credit-digest tree stays insert-only and `burned` is fixed at
 /// the first insertion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Both variants retain fixed inline Copy proof witnesses; boxing would introduce heap custody and change the record API"
+)]
 pub enum KagemushaWalletCreditDigestRecordV1 {
     /// `credit_id` is already recorded: its existing leaf and opening.
     Present {

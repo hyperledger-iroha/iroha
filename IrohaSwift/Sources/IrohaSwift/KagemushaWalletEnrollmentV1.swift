@@ -57,16 +57,21 @@ struct KagemushaWalletEnrollmentInputV1 {
 }
 /// Opaque enrollment custody created only by trusted native deployment initialization.
 /// This owner transfers to original wallet open only after complete source qualification.
-public final class KagemushaWalletEnrollmentV1: @unchecked Sendable {
+public final class KagemushaWalletEnrollmentV1: KagemushaWalletCleanupResourceV1, @unchecked Sendable {
   private let lock = NSLock()
-  private var owner: UInt64
+  private var lease: KagemushaWalletNativeLeaseV1?
   private let driver: KagemushaWalletNativeDriverV1
-  public init(nativeEnrollmentHandle: UInt64) throws {
+  public init(nativeEnrollmentHandle: UInt64, platform: KagemushaWalletApplePlatformV1) throws {
     guard nativeEnrollmentHandle > 0 && nativeEnrollmentHandle <= UInt64(Int64.max) else { throw KagemushaWalletErrorV1.invalidInput }
-    owner = nativeEnrollmentHandle; driver = try KagemushaWalletNativeDriverV1()
+    driver = try KagemushaWalletNativeDriverV1()
+    lease = .init(owner: nativeEnrollmentHandle, driver: driver, platformOwner: platform)
+  }
+  var cleanupLease: KagemushaWalletNativeLeaseV1? {
+    lock.lock(); defer { lock.unlock() }; return lease
   }
   private func call(_ input: KagemushaWalletEnrollmentInputV1) throws -> KagemushaWalletCallV1 {
-    guard owner != 0 else { throw KagemushaWalletErrorV1.closed }
+    guard let lease else { throw KagemushaWalletErrorV1.closed }
+    let owner = try lease.handle()
     let reply = try driver.result { out in input.withRequest { driver.enrollment(owner, $0, out) } }
     guard (18...28).contains(reply.status) && reply.sequenceLow == owner else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return reply
@@ -125,8 +130,9 @@ public final class KagemushaWalletEnrollmentV1: @unchecked Sendable {
   public func loadRuntime() throws -> KagemushaWalletRuntimeV1 {
     lock.lock(); defer { lock.unlock() }
     _ = try exact(KagemushaWalletEnrollmentInputV1(7),26)
-    let runtime = try KagemushaWalletRuntimeV1(nativeRuntimeHandle: owner)
-    owner = 0
+    guard let lease else { throw KagemushaWalletErrorV1.closed }
+    let runtime = KagemushaWalletRuntimeV1(lease: lease, driver: driver)
+    self.lease = nil
     return runtime
   }
   /// Permanently abandon the unused enrollment and return exact retained signed ledger bytes.
@@ -137,8 +143,7 @@ public final class KagemushaWalletEnrollmentV1: @unchecked Sendable {
   }
   public func close() throws {
     lock.lock(); defer { lock.unlock() }
-    let value = owner; owner = 0
-    if value != 0 { try KagemushaWalletNativeDriverV1.check(driver.close(value)) }
+    try lease?.close()
   }
   deinit { try? close() }
 }

@@ -6,6 +6,25 @@ import kotlin.test.assertFailsWith
 import org.junit.jupiter.api.Test
 
 class KagemushaWalletSetupV1Test {
+    @Test fun `fee transport preserves native bytes and rejects authority fields`() {
+        val retained = KagemushaWalletCallV1(31, -1, 0, 0, 0, 0, byteArrayOf(0, -1, 7))
+        val beneficiary = byteArrayOf(3, 0, -1)
+        val input = retained.feeClaimInput(beneficiary)
+        assertEquals(26, input.selector); assertContentEquals(retained.bytes(), input.first())
+        assertContentEquals(beneficiary, input.second()); beneficiary[0] = 8
+        assertEquals(3, input.second()[0].toInt())
+        assertFailsWith<IllegalArgumentException> { retained.feeClaimInput(byteArrayOf()) }
+        assertFailsWith<IllegalArgumentException> { retained.feeClaimInput(ByteArray(16_385)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(26, identity = ByteArray(32) { 1 }, first = retained.bytes(), second = beneficiary) }
+        val bytes = ByteArray(16_384) { -1 }
+        val result = KagemushaWalletCallV1(36, -1, 0, 0, 0, 0, bytes)
+        assertContentEquals(bytes, result.feeClaimOriginal())
+        assertFailsWith<KagemushaWalletExceptionV1> { result.completion() }
+        assertFailsWith<KagemushaWalletExceptionV1> { result.original() }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(36, -1, 0, 0, 0, 0, ByteArray(16_385)) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(36, -1, 0, 1, 0, 0, byteArrayOf(1)) }
+    }
+
     @Test fun `fee and ledger originals are bounded separate from payout acknowledgement`() {
         val id = ByteArray(32) { 7 }
         KagemushaWalletSetupInputV1(20, identity = id)

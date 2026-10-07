@@ -4,6 +4,7 @@ use super::*;
 use crate::kagemusha_wallet_advance_v1::{
     KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1, kagemusha_wallet_archive_checkpoint_digest_v1,
 };
+use crate::kagemusha_wallet_intake_v1::{self as intake, ACCOUNT_ORIGINAL_MAX_BYTES_V1};
 use crate::kagemusha_wallet_preparation_v1::{SendControlsV1, UnloadChargeOriginalsV1};
 
 /// Authenticated financial projection for fresh hardware UI approval.
@@ -24,6 +25,9 @@ pub struct NativeOperationReviewV1 {
     pub receiver_wallet_id: Option<[u8; 32]>,
     /// Bound receiver account for Send; current enrolled account for Unload.
     pub destination_account_digest: [u8; 32],
+    /// Exact canonical AccountId original bound to the authenticated Send destination.
+    /// Absent for Unload. Copying this display DATA grants no operation authority.
+    pub destination_account_original: Option<Vec<u8>>,
     /// Genuine signed Request digest for Send; zero for Unload.
     pub request_digest: [u8; 32],
     /// Genuine signed charge-quote digest for Unload; zero for Send/default zero charge.
@@ -53,6 +57,17 @@ struct ReviewSourceV1 {
     archive_checkpoint: [u8; 32],
     artifact_manifest: [u8; 32],
     selected_generation: u128,
+}
+
+// Call only after review_send_terms has authenticated the complete signed Request,
+// its receiver credential/certificates and the current payer's ordinary Send controls.
+fn send_destination_original(
+    original: &[u8],
+    request: &KagemushaWalletRequestV1,
+) -> Result<Vec<u8>, Error> {
+    intake::account(original, &request.body.receiver_account_digest)
+        .map_err(|_| Error::Invalid("review destination account original"))?;
+    Ok(original.to_vec())
 }
 
 /// Opaque one-use review owned by the single admitted Native coordinator.
@@ -180,15 +195,24 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         })
     }
 
-    fn review_action(&mut self, action: OperationActionV1) -> Result<ReviewedOperationV1, Error> {
+    fn review_action(
+        &mut self,
+        action: OperationActionV1,
+        destination_original: Option<&[u8]>,
+    ) -> Result<ReviewedOperationV1, Error> {
         let kind = match &action {
             OperationActionV1::Send { request }
                 if !request.is_empty()
-                    && request.len() <= KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 =>
+                    && request.len() <= KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1
+                    && destination_original.is_some_and(|original| {
+                        !original.is_empty() && original.len() <= ACCOUNT_ORIGINAL_MAX_BYTES_V1
+                    }) =>
             {
                 KagemushaWalletOperationKindV1::Send
             }
-            OperationActionV1::Unload { .. } => KagemushaWalletOperationKindV1::Unload,
+            OperationActionV1::Unload { .. } if destination_original.is_none() => {
+                KagemushaWalletOperationKindV1::Unload
+            }
             _ => return Err(Error::Invalid("review operation")),
         };
         let (selected, manifest) = self.sync_manifest()?;
@@ -220,6 +244,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         let predecessor =
             proof(preparation.folded_state(&owner, &released, &fold, self.proofs.budget))?;
         let before = predecessor.source_state();
+        let mut destination_account_original = None;
         let (
             amount,
             fee,
@@ -274,6 +299,12 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                         quota_usage: &usage,
                     },
                 ))?;
+                // The companion is DATA: only this whole authenticated Request supplies
+                // the destination digest. No caller digest, literal or verifier verdict.
+                destination_account_original = Some(send_destination_original(
+                    destination_original.ok_or(Error::Invalid("review destination original"))?,
+                    &request,
+                )?);
                 let body = &request.body;
                 (
                     body.amount,
@@ -319,6 +350,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             net_destination_amount,
             receiver_wallet_id,
             destination_account_digest,
+            destination_account_original,
             request_digest,
             charge_quote_digest,
             scheme_id: self.scheme_id,
@@ -350,16 +382,25 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// No nonce, map insertion, proof, hardware signature or Advance is produced.
     /// # Errors
     /// Invalid/foreign Request, missing or changed source/fold/originals, failed controls or unavailable storage/observations.
-    pub fn review_send(&mut self, request_original: &[u8]) -> Result<ReviewedOperationV1, Error> {
+    pub fn review_send(
+        &mut self,
+        request_original: &[u8],
+        destination_account_original: &[u8],
+    ) -> Result<ReviewedOperationV1, Error> {
         let _payment = self.scheduler.payment();
         if request_original.is_empty()
             || request_original.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1
+            || destination_account_original.is_empty()
+            || destination_account_original.len() > ACCOUNT_ORIGINAL_MAX_BYTES_V1
         {
             return Err(Error::Invalid("review Request bound"));
         }
-        self.review_action(OperationActionV1::Send {
-            request: request_original.to_vec(),
-        })
+        self.review_action(
+            OperationActionV1::Send {
+                request: request_original.to_vec(),
+            },
+            Some(destination_account_original),
+        )
     }
 
     /// Authenticate current folded Unload amount/destination and optional signed charge.
@@ -373,7 +414,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         charge: Option<ChargeOriginalsV1>,
     ) -> Result<ReviewedOperationV1, Error> {
         let _payment = self.scheduler.payment();
-        self.review_action(OperationActionV1::Unload { amount, charge })
+        self.review_action(OperationActionV1::Unload { amount, charge }, None)
     }
 
     /// Consume one actual review after fresh hardware UI approval and recheck its exact source.
@@ -390,7 +431,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         if request_id == [0; 32] {
             return Err(Error::Invalid("review request identity"));
         }
-        let fresh = self.review_action(review.action.clone())?;
+        // The exact companion remains privately retained with this actual one-use review.
+        // Reauthenticate its canonical bytes/digest against the fresh whole signed Request;
+        // projection copies and caller presentation settings cannot supply a replacement.
+        let fresh = self.review_action(
+            review.action.clone(),
+            review.projection.destination_account_original.as_deref(),
+        )?;
         review.require_recheck(&fresh)?;
         self.execute(review.into_request(request_id)?)
     }
