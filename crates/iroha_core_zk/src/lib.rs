@@ -93,6 +93,8 @@ pub mod kagemusha_wallet_artifacts_v1;
 pub mod kagemusha_wallet_finality_v1;
 /// Actual enrolled custody, issuer/account originals and fresh existing-account admission.
 pub mod kagemusha_wallet_intake_v1;
+/// Genuine keyed A/W stage work under the complete source-qualified producer grant.
+pub(crate) mod kagemusha_wallet_native_v1;
 /// Canonical G1 preparation and typed real native sigma/A/W inputs.
 pub mod kagemusha_wallet_preparation_v1;
 /// Authenticated native wallet proof artifacts and full sigma/Omega verification.

@@ -635,7 +635,7 @@ impl NativeProofs for TestProofs {
     fn fold_schedule(
         &self,
         _witness: &ReleasedStep,
-        _predecessor: Option<&KagemushaWalletFoldRecordV1>,
+        _sources: &mut NativeSourcesV1<'_>,
     ) -> Result<Vec<CheckpointLayout>, Error> {
         Ok((0..self.checkpoint_stages.max(1))
             .map(|stage| CheckpointLayout {
@@ -652,13 +652,12 @@ impl NativeProofs for TestProofs {
     fn verify_transition(
         &self,
         next: &FrozenTransition,
-        previous: Option<&FrozenTransition>,
-        _folded: Option<&KagemushaWalletFoldRecordV1>,
+        sources: &mut NativeSourcesV1<'_>,
     ) -> Result<(), Error> {
         if self.reject {
             return Err(Error::Proof("test rejection"));
         }
-        if let Some(previous) = previous {
+        if let Some(previous) = sources.predecessor().map(|step| &step.frozen) {
             assert_eq!(
                 next.capsule.statement.predecessor,
                 previous.capsule.statement.successor
@@ -676,10 +675,11 @@ impl NativeProofs for TestProofs {
     fn fold_next(
         &self,
         witness: &ReleasedStep,
-        predecessor: Option<&KagemushaWalletFoldRecordV1>,
+        sources: &mut NativeSourcesV1<'_>,
         checkpoints: &[Vec<u8>],
         cancellation: &Cancellation,
     ) -> Result<FoldProgress, Error> {
+        let predecessor = sources.folded();
         cancellation.check()?;
         self.folds.fetch_add(1, Ordering::SeqCst);
         let original = |stage: usize| {
@@ -764,6 +764,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         folds: IndexRoot::default(),
         claims: IndexRoot::default(),
         preparations: IndexRoot::default(),
+        blacklists: IndexRoot::default(),
         folded: None,
         checkpoint_count: 0,
         checkpoint_digest: [0; 32],
@@ -2124,4 +2125,33 @@ fn snapshot_source_manifest_cannot_name_a_future_fold_as_an_ancestor() {
         w.snapshot(),
         Err(Error::WitnessLost("archive manifest binding"))
     ));
+}
+
+#[test]
+fn operation_source_reads_exact_enrollment_then_retained_released_head_without_signing() {
+    let mut wallet = wallet();
+    let (status, step, fold) = wallet.operation_source().unwrap();
+    assert!(matches!(status, SlotStatus::Enrollment(_)));
+    assert!(step.is_none() && fold.is_none());
+    let frozen = bootstrap();
+    wallet.commit(frozen.clone()).unwrap();
+    let signatures = wallet.custody.signatures;
+    let (status, step, fold) = wallet.operation_source().unwrap();
+    assert!(matches!(status, SlotStatus::Released(_)));
+    let step = step.unwrap();
+    assert_eq!(step.frozen.capsule, frozen.capsule);
+    assert_eq!(
+        wallet.retry(&frozen.capsule.operation_id).unwrap(),
+        Some(Completion::Complete(step.retained.record.output.clone()))
+    );
+    assert!(fold.is_none());
+    assert_eq!(wallet.custody.signatures, signatures);
+    snapshot_test_fold(&mut wallet);
+    let (_, current, fold) = wallet.operation_source().unwrap();
+    assert_eq!(current.unwrap().retained.frame, step.retained.frame);
+    assert_eq!(
+        fold.unwrap().capsule_digest,
+        frozen.capsule.capsule_digest().unwrap()
+    );
+    assert_eq!(wallet.custody.signatures, signatures);
 }

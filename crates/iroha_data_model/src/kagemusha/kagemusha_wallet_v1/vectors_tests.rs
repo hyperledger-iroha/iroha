@@ -3113,6 +3113,7 @@ fn enum_tag_table(w: &VectorWorld) -> Vec<EnumTags> {
                 "Credential",
                 "LoadFinality",
                 "QuotaRefreshWitness",
+                "MonetaryWitness",
             ],
             KagemushaWalletRetainedInputRoleV1::tag,
         ),

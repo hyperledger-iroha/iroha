@@ -15,6 +15,10 @@ use iroha_plonk::ProverRandomness;
 
 use super::*;
 
+#[path = "monetary/retained.rs"]
+mod retained;
+pub(crate) use retained::{MonetaryRestoreV1, MonetaryRetentionV1, ReceiveHistory};
+
 #[cfg(test)]
 #[path = "monetary/tests.rs"]
 mod tests;
@@ -89,7 +93,11 @@ impl MonetaryStepV1 {
         self.manifest_digest
     }
 
-    pub(super) fn capsule_inputs(&self) -> Result<Vec<KagemushaWalletRetainedInputV1>, Error> {
+    pub(super) fn capsule_inputs(
+        &self,
+        retention: &MonetaryRetentionV1,
+    ) -> Result<Vec<KagemushaWalletRetainedInputV1>, Error> {
+        retention.bind(self)?;
         use KagemushaWalletRetainedInputRoleV1 as R;
         let mut inputs = vec![KagemushaWalletRetainedInputV1 {
             role: R::Request,
@@ -124,6 +132,10 @@ impl MonetaryStepV1 {
         {
             return Err(Error::Authority);
         }
+        inputs.push(KagemushaWalletRetainedInputV1 {
+            role: R::MonetaryWitness,
+            bytes: retention.original().to_vec(),
+        });
         Ok(inputs)
     }
 

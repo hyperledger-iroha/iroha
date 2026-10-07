@@ -132,10 +132,11 @@ impl PreparationV1<'_> {
     ///
     /// # Errors
     /// Foreign installation/owner/fold, invalid proof, altered source, or invalid capsule.
-    pub fn freeze_monetary(
+    pub(crate) fn freeze_monetary(
         &self,
         owner: &AuthenticatedCredentialV1,
         step: &MonetaryStepV1,
+        retention: &MonetaryRetentionV1,
         predecessor: Option<&FoldedStateV1>,
         proof: KagemushaWalletStepProofV1,
         budget: MemoryBudget,
@@ -159,7 +160,7 @@ impl PreparationV1<'_> {
                 predecessor,
                 payment,
                 openings: map_openings(step.map_witnesses()),
-                retained: step.capsule_inputs()?,
+                retained: step.capsule_inputs(retention)?,
             },
             proof,
             budget,

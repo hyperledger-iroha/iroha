@@ -15,6 +15,10 @@ use iroha_plonk_recursion::obligation::ledger::Variant;
 
 use super::*;
 
+#[path = "producer_inventory/directory.rs"]
+mod directory;
+pub use directory::DirectoryOriginalsV1;
+
 #[path = "producer_inventory/recipe.rs"]
 mod recipe;
 pub use recipe::{ReceiptSourceRecipeV1, SourceScopeV1};

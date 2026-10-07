@@ -66,6 +66,7 @@ pub trait NativePreparation: NativeProofs {
         &self,
         request: &OperationRequestV1,
         source: &PreparationSourceV1<'_>,
+        objects: &mut dyn ObjectStore,
     ) -> Result<Vec<u8>, Error>;
 
     /// Decode and validate a bounded canonical plan against this exact request/source.
@@ -79,6 +80,7 @@ pub trait NativePreparation: NativeProofs {
         request: &OperationRequestV1,
         source: &PreparationSourceV1<'_>,
         plan: &[u8],
+        objects: &mut dyn ObjectStore,
     ) -> Result<(), Error>;
 
     /// Produce the exact sigma and frozen transition from an already durable native plan.
@@ -93,5 +95,6 @@ pub trait NativePreparation: NativeProofs {
         request: &OperationRequestV1,
         source: &PreparationSourceV1<'_>,
         plan: &[u8],
+        objects: &mut dyn ObjectStore,
     ) -> Result<FrozenTransition, Error>;
 }

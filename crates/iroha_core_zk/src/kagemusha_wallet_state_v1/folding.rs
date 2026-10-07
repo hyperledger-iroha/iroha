@@ -208,8 +208,11 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             seq.checked_add(1)
                 .ok_or(Error::Invalid("sequence overflow"))
         })?;
-        let predecessor = if let Some(previous) = manifest.folded {
-            let step = self.indexed_step(&manifest, previous)?;
+        let predecessor_step = manifest
+            .folded
+            .map(|previous| self.indexed_step(&manifest, previous))
+            .transpose()?;
+        let predecessor = if let Some(step) = predecessor_step.as_ref() {
             let fold = self
                 .read_fold(&step)?
                 .ok_or(Error::WitnessLost("fold predecessor"))?;
@@ -224,7 +227,28 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Ok(FoldStatus::CaughtUp);
         }
         let step = self.indexed_step(&manifest, sequence)?;
-        let schedule = self.proofs.fold_schedule(&step, predecessor.as_ref())?;
+        let held_send = self.archive_source(&manifest, &step.frozen)?;
+        let receive_credit = if let KagemushaWalletEffectV1::Receive { credit_id, .. } =
+            step.frozen.capsule.statement.effect
+        {
+            Some(
+                manifest
+                    .credit_tree
+                    .fold_witness(&mut self.archive, &credit_id)?,
+            )
+        } else {
+            None
+        };
+        let schedule = self.proofs.fold_schedule(
+            &step,
+            &mut NativeSourcesV1::new(
+                predecessor_step.as_ref(),
+                predecessor.as_ref(),
+                held_send.as_ref(),
+                receive_credit.as_ref(),
+                &mut self.archive,
+            ),
+        )?;
         for layout in &schedule {
             layout.record_limit()?;
         }
@@ -256,8 +280,18 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             let candidate: Checkpoint = archive::decode(bytes)?;
             FoldProgress::Checkpoint(candidate.proof)
         } else {
-            self.proofs
-                .fold_next(&step, predecessor.as_ref(), &checkpoints, &guard.token)?
+            self.proofs.fold_next(
+                &step,
+                &mut NativeSourcesV1::new(
+                    predecessor_step.as_ref(),
+                    predecessor.as_ref(),
+                    held_send.as_ref(),
+                    receive_credit.as_ref(),
+                    &mut self.archive,
+                ),
+                &checkpoints,
+                &guard.token,
+            )?
         };
         guard.token.check()?;
         match result {

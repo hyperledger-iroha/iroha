@@ -751,11 +751,15 @@ def kagemusha_named_files(root, directories):
 
 
 def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
-    """Pin the wire, P-256 codec, Android platform, Native client and typed snapshot files."""
+    """Pin the ledger instruction, wire, P-256 codec and Android/Native wallet owners."""
     kotlin = ROOT / "kotlin"
     offline = KOTLIN_OFFLINE_PACKAGE
     wallet = "kagemusha-wallet-android/src"
     kept = {
+        "core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/"
+        "KagemushaWalletIssueLoadInstructionV1.kt",
+        "core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/"
+        "KagemushaWalletIssueLoadInstructionV1Test.kt",
         f"core-jvm/src/main/java/{offline}/KagemushaP256Codec.kt",
         f"core-jvm/src/main/java/{offline}/KagemushaWalletWireV1.kt",
         f"core-jvm/src/test/kotlin/{offline}/KagemushaWalletVectorsV1Test.kt",

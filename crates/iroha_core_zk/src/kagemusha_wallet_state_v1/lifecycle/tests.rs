@@ -7,6 +7,7 @@ impl NativePreparation for TestProofs {
         &self,
         request: &OperationRequestV1,
         source: &PreparationSourceV1<'_>,
+        _objects: &mut dyn ObjectStore,
     ) -> Result<Vec<u8>, Error> {
         self.preparations.fetch_add(1, Ordering::SeqCst);
         if request.action != OperationActionV1::Retire {
@@ -40,6 +41,7 @@ impl NativePreparation for TestProofs {
         request: &OperationRequestV1,
         source: &PreparationSourceV1<'_>,
         plan: &[u8],
+        _objects: &mut dyn ObjectStore,
     ) -> Result<(), Error> {
         let prepared: FrozenTransition = archive::decode(plan)?;
         prepared.validate()?;
@@ -57,6 +59,7 @@ impl NativePreparation for TestProofs {
         _: &OperationRequestV1,
         _: &PreparationSourceV1<'_>,
         plan: &[u8],
+        _objects: &mut dyn ObjectStore,
     ) -> Result<FrozenTransition, Error> {
         self.preparation_proofs.fetch_add(1, Ordering::SeqCst);
         if self.fail_preparation_proof {
@@ -283,7 +286,10 @@ fn source_rotation_does_not_rebase_a_durable_plan_or_repeat_proving() {
         released: &previous,
         folded: Some(&fold),
     };
-    let plan = wallet.proofs.plan_preparation(&request(), &source).unwrap();
+    let plan = wallet
+        .proofs
+        .plan_preparation(&request(), &source, &mut wallet.archive)
+        .unwrap();
     let mut other: FrozenTransition = archive::decode(&plan).unwrap();
     other.capsule.successor_state.core.state_nonce = field(91);
     rebind_frozen_successor(&mut other);

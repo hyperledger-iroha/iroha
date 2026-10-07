@@ -143,3 +143,51 @@ fn impossible_installed_lengths_refuse_before_counting_allocation() {
         }
     }
 }
+
+#[test]
+fn terminal_data_carrier_binds_exact_source_key_salt_and_original_length() {
+    let layout = CheckpointLayout::new(CheckpointKind::Terminal, [1; 32], [2; 32], 64).unwrap();
+    let context = [3; 32];
+    let make = || TerminalPayload {
+        version: 1,
+        descriptor_digest: [1; 32],
+        verifying_key_digest: [2; 32],
+        source_context: context,
+        fold_salt: super::super::Fp::from(7).to_repr(),
+        proof: vec![4; 64],
+    };
+    let original = make().encode(&layout, context).unwrap();
+    assert_eq!(original.len(), layout.payload_bytes());
+    assert_eq!(
+        TerminalPayload::decode(&original, &layout, context)
+            .unwrap()
+            .encode(&layout, context)
+            .unwrap(),
+        original
+    );
+    for mutation in 0..7 {
+        let mut payload = make();
+        match mutation {
+            0 => payload.version = 2,
+            1 => payload.descriptor_digest[0] ^= 1,
+            2 => payload.verifying_key_digest[0] ^= 1,
+            3 => payload.source_context[0] ^= 1,
+            4 => payload.fold_salt = [255; 32],
+            5 => {
+                payload.proof.pop();
+            }
+            _ => payload.proof.push(0),
+        };
+        let bytes = norito::encode_canonical(&payload).unwrap();
+        assert!(
+            TerminalPayload::decode(&bytes, &layout, context).is_err(),
+            "mutation{mutation}"
+        );
+    }
+    let mut extra = original.clone();
+    extra.push(0);
+    for bad in [&[][..], &original[..original.len() - 1], &extra[..]] {
+        assert!(TerminalPayload::decode(bad, &layout, context).is_err());
+    }
+    assert!(Payload::decode(&original, &layout, context).is_err());
+}

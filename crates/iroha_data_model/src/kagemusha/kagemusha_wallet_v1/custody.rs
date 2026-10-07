@@ -568,7 +568,10 @@ pub enum KagemushaWalletRetainedInputRoleV1 {
     /// Canonical charge quote consumed by Load or Unload.
     #[codec(index = 5)]
     ChargeQuote,
-    /// Canonical signed update consumed by `RefreshPolicy`.
+    /// Exact update custody consumed by `RefreshPolicy`: Blacklist carries the
+    /// bounded native complete-original archive reference; other fixed kinds
+    /// carry the complete inline signed update. Native restores and authenticates
+    /// the full blacklist before using it; the reference is not an issuer verdict.
     #[codec(index = 6)]
     PolicyUpdate,
     /// Canonical certificate set the operation needed.
@@ -583,11 +586,14 @@ pub enum KagemushaWalletRetainedInputRoleV1 {
     /// Canonical typed predecessor quota-usage array consumed by a quota refresh.
     #[codec(index = 10)]
     QuotaRefreshWitness,
+    /// Exact typed Native Send/Receive control and history restart sources.
+    #[codec(index = 11)]
+    MonetaryWitness,
 }
 
 impl KagemushaWalletRetainedInputRoleV1 {
     /// Every role, in tag order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Request,
         Self::Payment,
         Self::Credited,
@@ -598,6 +604,7 @@ impl KagemushaWalletRetainedInputRoleV1 {
         Self::Credential,
         Self::LoadFinality,
         Self::QuotaRefreshWitness,
+        Self::MonetaryWitness,
     ];
 
     /// Tag; equal to the Norito wire tag.
@@ -614,6 +621,7 @@ impl KagemushaWalletRetainedInputRoleV1 {
             Self::Credential => 8,
             Self::LoadFinality => 9,
             Self::QuotaRefreshWitness => 10,
+            Self::MonetaryWitness => 11,
         }
     }
 }

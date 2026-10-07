@@ -58,6 +58,29 @@ fn original(
     inputs.next().is_some_and(|input| input.bytes == bytes) && inputs.next().is_none()
 }
 
+fn policy_original(
+    frozen: &FrozenTransition,
+    kind: KagemushaWalletPolicyUpdateKindV1,
+    complete: &[u8],
+) -> bool {
+    let mut inputs = frozen
+        .capsule
+        .retained_inputs
+        .iter()
+        .filter(|input| input.role == KagemushaWalletRetainedInputRoleV1::PolicyUpdate);
+    let Some(input) = inputs.next() else {
+        return false;
+    };
+    inputs.next().is_none()
+        && super::super::verify_policy_update_original(
+            kind,
+            &frozen.capsule.scheme_id,
+            &input.bytes,
+            complete,
+        )
+        .is_ok()
+}
+
 fn require_frozen(
     request: &OperationRequestV1,
     source: &[u8; 32],
@@ -88,7 +111,7 @@ fn require_frozen(
             update,
             certificates,
         } => {
-            original(frozen, R::PolicyUpdate, update)
+            policy_original(frozen, *kind, update)
                 && original(frozen, R::CertificateSet, certificates)
                 && matches!(capsule.statement.effect, KagemushaWalletEffectV1::RefreshPolicy { update_kind: actual, .. } if actual == *kind)
         }
@@ -283,7 +306,9 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         let plan = if let Some(plan) = held_plan {
             plan
         } else {
-            let native = self.proofs.plan_preparation(&request, &source)?;
+            let native = self
+                .proofs
+                .plan_preparation(&request, &source, &mut self.archive)?;
             let plan = Plan {
                 version: 1,
                 scheme: self.scheme_id,
@@ -296,7 +321,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             };
             plan.require(&self.scheme_id, &self.wallet_id, &request, &bytes)?;
             self.proofs
-                .validate_preparation(&request, &source, &plan.native)?;
+                .validate_preparation(&request, &source, &plan.native, &mut self.archive)?;
             let original = archive::encode(&plan)?;
             entry.plan = Some(self.archive.write_object(&original, PLAN_BOUND)?);
             self.publish_preparation(&mut selected, &mut manifest, request.request_id, &entry)?;
@@ -307,13 +332,16 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             return Ok(Completion::NotPerformed(NotPerformed::StaleHead));
         }
         self.proofs
-            .validate_preparation(&request, &source, &plan.native)?;
+            .validate_preparation(&request, &source, &plan.native, &mut self.archive)?;
         let frozen = if let Some(capsule) = entry.capsule {
             self.frozen(capsule)?
         } else {
-            let frozen = self
-                .proofs
-                .prove_preparation(&request, &source, &plan.native)?;
+            let frozen = self.proofs.prove_preparation(
+                &request,
+                &source,
+                &plan.native,
+                &mut self.archive,
+            )?;
             require_frozen(&request, &source_digest, &frozen)?;
             let original = archive::encode(&frozen)?;
             if original.len() > FROZEN_BOUND {

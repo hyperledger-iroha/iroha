@@ -212,3 +212,242 @@ fn malformed_source_or_refresh_selector_is_rejected_before_map_access() {
     state.core.consumed_credit_root = field(1);
     assert!(PreparationMapsV1::new(&mut store, &maps, &state, K::Receive, None).is_err());
 }
+
+#[derive(Clone, Copy)]
+enum ReadFault {
+    None,
+    Missing,
+    Corrupt,
+    Unavailable,
+    Protected,
+}
+
+struct StorageProbe {
+    inner: MemoryArchive,
+    read_fault: ReadFault,
+    writes_before_failure: Option<usize>,
+    reads: usize,
+    writes: usize,
+}
+
+impl StorageProbe {
+    fn new() -> Self {
+        Self {
+            inner: MemoryArchive::new(),
+            read_fault: ReadFault::None,
+            writes_before_failure: None,
+            reads: 0,
+            writes: 0,
+        }
+    }
+}
+
+impl ArchiveStore for StorageProbe {
+    fn binding(&self) -> ([u8; 32], [u8; 32]) {
+        self.inner.binding()
+    }
+
+    fn get(&mut self, key: ArchiveKey, maximum: usize) -> Result<Option<Vec<u8>>, Error> {
+        self.reads += 1;
+        match self.read_fault {
+            ReadFault::None => self.inner.get(key, maximum),
+            ReadFault::Missing => Ok(None),
+            ReadFault::Corrupt => {
+                let mut bytes = self.inner.get(key, maximum)?.unwrap();
+                let last = bytes.len() - 1;
+                bytes[last] ^= 1;
+                Ok(Some(bytes))
+            }
+            ReadFault::Unavailable => Err(Error::Storage(std::io::Error::from(
+                std::io::ErrorKind::WouldBlock,
+            ))),
+            ReadFault::Protected => Err(Error::Provider(
+                crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderErrorV1::Unavailable(
+                    crate::kagemusha_wallet_advance_v1::KagemushaWalletUnavailableV1::Locked,
+                ),
+            )),
+        }
+    }
+
+    fn put(&mut self, key: ArchiveKey, original: &[u8]) -> Result<(), Error> {
+        self.writes += 1;
+        if let Some(remaining) = &mut self.writes_before_failure {
+            if *remaining == 0 {
+                return Err(Error::Storage(std::io::Error::from(
+                    std::io::ErrorKind::WouldBlock,
+                )));
+            }
+            *remaining -= 1;
+        }
+        self.inner.put(key, original)
+    }
+
+    fn remove(&mut self, _: ArchiveKey) -> Result<(), Error> {
+        panic!("unpublished preparation does not authorize archive collection")
+    }
+}
+
+fn nonempty_sources(store: &mut StorageProbe) -> (SourceMapsV1, KagemushaWalletStateV1) {
+    let maps = SourceMapsV1::default();
+    let initial = state();
+    let mut draft = PreparationMapsV1::new(store, &maps, &initial, K::Send, None).unwrap();
+    let insertion = draft
+        .insert(PreparationMapV1::Pending, field(3), field(4))
+        .unwrap();
+    let mut selected = initial;
+    selected.core.pending_outgoing_root = insertion
+        .verify(&initial.core.pending_outgoing_root, &field(3), &field(4))
+        .unwrap();
+    (draft.finish(&selected).unwrap(), selected)
+}
+
+#[test]
+fn invalid_state_with_identical_map_and_quota_roots_is_refused_before_storage_access() {
+    let maps = SourceMapsV1::default();
+    for changed in [
+        KagemushaWalletStateV1 {
+            version: 2,
+            ..state()
+        },
+        {
+            let mut changed = state();
+            changed.core.state_nonce = [0; 32];
+            changed
+        },
+        {
+            let mut changed = state();
+            changed.core.enabled_controls = 8;
+            changed
+        },
+    ] {
+        assert!(changed.validate().is_err());
+        let mut store = StorageProbe::new();
+        assert!(matches!(
+            PreparationMapsV1::new(&mut store, &maps, &changed, K::Send, None),
+            Err(Error::WitnessLost("source map state"))
+        ));
+        assert_eq!(store.reads, 0);
+        assert_eq!(store.writes, 0);
+    }
+}
+
+#[test]
+fn selected_missing_or_corrupt_objects_never_produce_absence_openings() {
+    let mut store = StorageProbe::new();
+    let (maps, selected) = nonempty_sources(&mut store);
+    let original = archive::encode(&maps).unwrap();
+    for fault in [ReadFault::Missing, ReadFault::Corrupt] {
+        store.read_fault = fault;
+        let mut view = PreparationMapsV1::new(&mut store, &maps, &selected, K::Send, None).unwrap();
+        assert!(matches!(
+            view.non_membership(PreparationMapV1::Pending, &field(9)),
+            Err(Error::WitnessLost(_))
+        ));
+        assert!(matches!(
+            view.membership(PreparationMapV1::Pending, &field(3)),
+            Err(Error::WitnessLost(_))
+        ));
+        assert!(
+            view.insert(PreparationMapV1::Pending, field(9), field(10))
+                .is_err()
+        );
+        drop(view);
+        assert_eq!(archive::encode(&maps).unwrap(), original);
+    }
+    store.read_fault = ReadFault::None;
+    let mut restored = PreparationMapsV1::new(&mut store, &maps, &selected, K::Send, None).unwrap();
+    assert_eq!(
+        restored
+            .membership(PreparationMapV1::Pending, &field(3))
+            .unwrap()
+            .0
+            .value,
+        field(4)
+    );
+    restored
+        .non_membership(PreparationMapV1::Pending, &field(9))
+        .unwrap();
+}
+
+#[test]
+fn unavailable_or_locked_selected_storage_remains_retryable_without_any_write() {
+    let mut store = StorageProbe::new();
+    let (maps, selected) = nonempty_sources(&mut store);
+    let writes = store.writes;
+    store.read_fault = ReadFault::Unavailable;
+    let mut view = PreparationMapsV1::new(&mut store, &maps, &selected, K::Send, None).unwrap();
+    match view.non_membership(PreparationMapV1::Pending, &field(9)) {
+        Err(Error::Storage(error)) => assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock),
+        other => panic!("temporary storage failure cannot mean nonmembership: {other:?}"),
+    }
+    drop(view);
+    store.read_fault = ReadFault::Protected;
+    let mut view = PreparationMapsV1::new(&mut store, &maps, &selected, K::Send, None).unwrap();
+    assert!(matches!(
+        view.membership(PreparationMapV1::Pending, &field(3)),
+        Err(Error::Provider(
+            crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderErrorV1::Unavailable(
+                crate::kagemusha_wallet_advance_v1::KagemushaWalletUnavailableV1::Locked,
+            )
+        ))
+    ));
+    drop(view);
+    assert_eq!(store.writes, writes);
+    store.read_fault = ReadFault::None;
+    let mut view = PreparationMapsV1::new(&mut store, &maps, &selected, K::Send, None).unwrap();
+    view.membership(PreparationMapV1::Pending, &field(3))
+        .unwrap();
+}
+
+#[test]
+fn partial_insert_or_remove_publication_keeps_the_exact_selected_source() {
+    let mut store = StorageProbe::new();
+    let (maps, selected) = nonempty_sources(&mut store);
+    let original = archive::encode(&maps).unwrap();
+    let mut control = StorageProbe {
+        inner: store.inner.clone(),
+        ..StorageProbe::new()
+    };
+    let mut expected =
+        PreparationMapsV1::new(&mut control, &maps, &selected, K::Send, None).unwrap();
+    let insertion = expected
+        .insert(PreparationMapV1::Pending, field(9), field(10))
+        .unwrap();
+    drop(expected);
+    store.writes_before_failure = Some(7);
+    let mut view = PreparationMapsV1::new(&mut store, &maps, &selected, K::Send, None).unwrap();
+    assert!(matches!(
+        view.insert(PreparationMapV1::Pending, field(9), field(10)),
+        Err(Error::Storage(_))
+    ));
+    view.finish(&selected).unwrap();
+    assert_eq!(archive::encode(&maps).unwrap(), original);
+    store.writes_before_failure = None;
+    let mut retry = PreparationMapsV1::new(&mut store, &maps, &selected, K::Send, None).unwrap();
+    assert_eq!(
+        retry
+            .insert(PreparationMapV1::Pending, field(9), field(10))
+            .unwrap(),
+        insertion
+    );
+    drop(retry);
+    store.writes_before_failure = Some(7);
+    let mut view =
+        PreparationMapsV1::new(&mut store, &maps, &selected, K::ArchiveSent, None).unwrap();
+    assert!(matches!(
+        view.remove(PreparationMapV1::Pending, &field(3)),
+        Err(Error::Storage(_))
+    ));
+    view.finish(&selected).unwrap();
+    store.writes_before_failure = None;
+    let mut retry =
+        PreparationMapsV1::new(&mut store, &maps, &selected, K::ArchiveSent, None).unwrap();
+    let removal = retry.remove(PreparationMapV1::Pending, &field(3)).unwrap();
+    assert_eq!(
+        removal
+            .verify(&selected.core.pending_outgoing_root, &field(3))
+            .unwrap(),
+        kagemusha_wallet_empty_map_root_v1()
+    );
+    assert_eq!(archive::encode(&maps).unwrap(), original);
+}

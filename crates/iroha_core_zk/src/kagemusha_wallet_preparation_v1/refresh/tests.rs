@@ -76,9 +76,22 @@ struct Source {
     capsule: KagemushaWalletRecoveryCapsuleV1,
     certificate: KagemushaWalletSignerCertificateV1,
     signing: SigningKey,
+    complete_blacklist: Option<Vec<u8>>,
 }
 
 impl Source {
+    fn complete_original(&self) -> &[u8] {
+        if let Some(original) = &self.complete_blacklist {
+            original
+        } else {
+            self.capsule
+                .retained_inputs
+                .iter()
+                .find(|input| input.role == KagemushaWalletRetainedInputRoleV1::PolicyUpdate)
+                .map_or(&[], |input| input.bytes.as_slice())
+        }
+    }
+
     fn originals(&self) -> RefreshOriginalsV1<'_> {
         let KagemushaWalletEffectV1::RefreshPolicy { update_kind, .. } =
             self.capsule.statement.effect
@@ -87,11 +100,7 @@ impl Source {
         };
         RefreshOriginalsV1 {
             kind: update_kind,
-            update: retained_original(
-                &self.capsule.retained_inputs,
-                KagemushaWalletRetainedInputRoleV1::PolicyUpdate,
-            )
-            .unwrap(),
+            update: self.complete_original(),
             certificates: retained_original(
                 &self.capsule.retained_inputs,
                 KagemushaWalletRetainedInputRoleV1::CertificateSet,
@@ -155,6 +164,7 @@ impl Source {
             capsule,
             certificate,
             signing,
+            complete_blacklist: None,
         }
     }
 
@@ -164,11 +174,25 @@ impl Source {
             update: digest,
             accepted_time_floor_ms: self.state.core.accepted_time_floor_ms.max(signed_time),
         };
+        let retained = if kind == Kind::Blacklist {
+            let reference =
+                crate::kagemusha_wallet_state_v1::BlacklistOriginalReferenceV1::for_original(
+                    &self.scheme.scheme_id(),
+                    &original,
+                )
+                .unwrap()
+                .to_canonical_bytes()
+                .unwrap();
+            self.complete_blacklist = Some(original);
+            reference
+        } else {
+            original
+        };
         self.capsule
             .retained_inputs
             .push(KagemushaWalletRetainedInputV1 {
                 role: KagemushaWalletRetainedInputRoleV1::PolicyUpdate,
-                bytes: original,
+                bytes: retained,
             });
     }
 
@@ -357,6 +381,7 @@ impl Source {
             &self.successor,
             &self.state,
             &self.capsule,
+            self.complete_original(),
         )
     }
 
@@ -430,7 +455,8 @@ fn renewal_rejects_replaced_source_owner_replay_and_resigned_identity_changes() 
             &source.successor,
             &source.successor,
             &source.state,
-            &source.capsule
+            &source.capsule,
+            source.complete_original(),
         )
         .is_err()
     );
@@ -440,7 +466,8 @@ fn renewal_rejects_replaced_source_owner_replay_and_resigned_identity_changes() 
             &source.current,
             &source.current,
             &source.state,
-            &source.capsule
+            &source.capsule,
+            source.complete_original(),
         )
         .is_err()
     );
@@ -485,7 +512,12 @@ fn renewal_rejects_replaced_source_owner_replay_and_resigned_identity_changes() 
                 &source.current,
                 &update,
                 &source.state,
-                &capsule
+                &capsule,
+                retained_original(
+                    &capsule.retained_inputs,
+                    KagemushaWalletRetainedInputRoleV1::PolicyUpdate
+                )
+                .unwrap(),
             )
             .is_err()
         );
@@ -709,7 +741,8 @@ fn quota_custody_root_originals_and_typed_role_substitutions_fail() {
                 &source.current,
                 &source.successor,
                 &source.state,
-                &capsule
+                &capsule,
+                source.complete_original(),
             )
             .is_err()
         );
@@ -875,3 +908,23 @@ fn pre_advance_refresh_rejects_extra_missing_or_changed_custody() {
 
 #[path = "installed_tests.rs"]
 mod installed_tests;
+
+#[test]
+fn blacklist_reference_binds_full_original_and_rejects_inline_or_changed_complete_update() {
+    let mut source = Source::blacklist();
+    source.decode().unwrap();
+    let complete = source.complete_original().to_vec();
+    let retained = source.original().clone();
+    assert_ne!(retained, complete);
+    assert!(retained.len() <= 512);
+    *source.original() = complete.clone();
+    assert!(source.decode().is_err(), "no old inline Blacklist fallback");
+    *source.original() = retained;
+    source.complete_blacklist.as_mut().unwrap().push(0);
+    assert!(
+        source.decode().is_err(),
+        "complete original remains exact despite a valid reference frame"
+    );
+    source.complete_blacklist = Some(complete);
+    source.decode().unwrap();
+}

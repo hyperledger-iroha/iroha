@@ -48,6 +48,8 @@ mod lifecycle;
 mod manifest;
 mod map_custody;
 mod map_tree;
+mod native_sources;
+mod policy_custody;
 mod scheduling;
 mod snapshot;
 
@@ -63,6 +65,11 @@ pub use lifecycle::{
     PREPARATION_MAX_BYTES, PreparationSourceV1, REQUEST_MAX_BYTES, RequestStatusV1,
 };
 pub use map_custody::{PreparationMapV1, PreparationMapsV1};
+pub use native_sources::NativeSourcesV1;
+pub(crate) use policy_custody::{
+    BlacklistOriginalReferenceV1, publish_blacklist_original, read_blacklist_original,
+    restore_policy_update, verify_policy_update_original,
+};
 pub use scheduling::{Cancellation, PaymentGuard, Scheduler};
 pub use snapshot::{Snapshot, SnapshotFold};
 
@@ -202,18 +209,17 @@ pub trait NativeProofs {
     fn fold_schedule(
         &self,
         witness: &ReleasedStep,
-        predecessor: Option<&KagemushaWalletFoldRecordV1>,
+        sources: &mut NativeSourcesV1<'_>,
     ) -> Result<Vec<CheckpointLayout>, Error>;
     /// Verify the transition, inputs and σ against the actual selected predecessor state.
-    /// `folded` is the exact Ω already verified and recorded for that predecessor.
+    /// `sources` holds exact indexed originals and the verified retained predecessor fold.
     ///
     /// # Errors
     /// Reject invalid/missing proofs, credentials, historical controls, amounts or map roots.
     fn verify_transition(
         &self,
         next: &FrozenTransition,
-        predecessor: Option<&FrozenTransition>,
-        folded: Option<&KagemushaWalletFoldRecordV1>,
+        sources: &mut NativeSourcesV1<'_>,
     ) -> Result<(), Error>;
 
     /// Verify Ω in full, including its deferred values and both curve accumulator decides.
@@ -233,7 +239,7 @@ pub trait NativeProofs {
     fn fold_next(
         &self,
         witness: &ReleasedStep,
-        predecessor: Option<&KagemushaWalletFoldRecordV1>,
+        sources: &mut NativeSourcesV1<'_>,
         checkpoints: &[Vec<u8>],
         cancellation: &Cancellation,
     ) -> Result<FoldProgress, Error>;
@@ -433,6 +439,80 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         Ok(frozen)
     }
 
+    /// Read only the genuine indexed current source and its actual verified fold.
+    /// Enrollment carries no released step or synthetic fold. Initial and final provider
+    /// marker-file identity must agree across reconciliation and retained source reads.
+    pub(crate) fn operation_source(
+        &mut self,
+    ) -> Result<
+        (
+            SlotStatus,
+            Option<ReleasedStep>,
+            Option<KagemushaWalletFoldRecordV1>,
+        ),
+        Error,
+    > {
+        let initial = self.status()?;
+        if matches!(initial, SlotStatus::Pending(_)) {
+            return Err(Error::Pending);
+        }
+        let identity = initial.marker().map(|record| *record.marker_file_digest());
+        let (_, manifest) = self.sync_manifest()?;
+        let step = manifest
+            .indexed
+            .map(|sequence| self.indexed_step(&manifest, sequence))
+            .transpose()?;
+        let folded = match step.as_ref() {
+            Some(source) => self.read_fold(source)?.map(|fold| fold.record),
+            None => None,
+        };
+        let current = self.status()?;
+        if matches!(current, SlotStatus::Pending(_)) {
+            return Err(Error::Pending);
+        }
+        if current.marker().map(|record| *record.marker_file_digest()) != identity {
+            return Err(Error::Invalid("operation source changed"));
+        }
+        match &current {
+            SlotStatus::Enrollment(_) if step.is_none() && folded.is_none() => {}
+            SlotStatus::Released(marker) => {
+                let source = step
+                    .as_ref()
+                    .ok_or(Error::WitnessLost("selected operation source"))?;
+                let KagemushaWalletMarkerStateV1::Head {
+                    sequence,
+                    operation_id,
+                    head,
+                    capsule_digest,
+                    predecessor_capsule_digest,
+                } = marker.marker().state
+                else {
+                    return Err(Error::NoHead);
+                };
+                let c = &source.frozen.capsule;
+                let credential = &source.frozen.credential;
+                if c.statement.sequence != sequence
+                    || c.statement.successor != head
+                    || c.operation_id != operation_id
+                    || c.predecessor_capsule_digest != predecessor_capsule_digest
+                    || valid(c.capsule_digest())? != capsule_digest
+                    || source.retained.operation_id != operation_id
+                    || source.retained.capsule_digest != capsule_digest
+                    || marker.selected_generation() != Some(source.retained.selected_generation)
+                    || marker.completion_digest() != Some(source.retained.completion_digest)
+                    || marker.marker().scheme_id != credential.body.scheme_id
+                    || marker.marker().wallet_id != credential.body.wallet_id
+                    || marker.marker().asset_digest != credential.body.asset_digest
+                    || marker.payment_key() != &credential.body.payment_key
+                {
+                    return Err(Error::WitnessLost("operation source head binding"));
+                }
+            }
+            _ => return Err(Error::NoHead),
+        }
+        Ok((current, step, folded))
+    }
+
     /// Explicit diagnostic export of the released chain, never inferred from filenames.
     /// This opt-in export allocates the full history; no normal coordinator operation uses it.
     ///
@@ -495,6 +575,63 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             Lookup::DeliveryDataLoss => Some(Completion::DeliveryDataLoss),
             Lookup::Unknown => None,
         })
+    }
+
+    pub(super) fn archive_source(
+        &mut self,
+        manifest: &manifest::Manifest,
+        frozen: &FrozenTransition,
+    ) -> Result<Option<ReleasedStep>, Error> {
+        if frozen.capsule.kind != KagemushaWalletOperationKindV1::ArchiveSent {
+            return Ok(None);
+        }
+        let inputs = &frozen.capsule.retained_inputs;
+        let exact = |role| -> Result<&[u8], Error> {
+            let mut matches = inputs.iter().filter(|input| input.role == role);
+            let first = matches
+                .next()
+                .ok_or(Error::WitnessLost("Archive retained original"))?;
+            if matches.next().is_some() {
+                return Err(Error::WitnessLost("Archive duplicate original"));
+            }
+            Ok(first.bytes.as_slice())
+        };
+        let original = exact(KagemushaWalletRetainedInputRoleV1::Payment)?;
+        let payment = KagemushaWalletPaymentV1::decode_canonical(original, &self.scheme_id)
+            .map_err(|_| Error::WitnessLost("Archive exact Payment"))?;
+        let source = self.indexed_step(manifest, payment.send.statement.sequence)?;
+        if source.frozen.capsule.kind != KagemushaWalletOperationKindV1::Send
+            || source.frozen.capsule.wallet_id != self.wallet_id
+            || source.frozen.capsule.scheme_id != self.scheme_id
+            || source.frozen.capsule.statement != payment.send.statement
+            || source.frozen.capsule.step_proof != payment.send.step_proof
+            || source.retained.record.receipt != payment.send.receipt
+            || source.frozen.credential.credential_digest() != payment.payer_credential_digest
+            || source.frozen.credential.body.payment_key != payment.payer_payment_key
+            || source.retained.record.output.as_slice() != original
+        {
+            return Err(Error::WitnessLost("Archive indexed Send identity"));
+        }
+        let mut requests = source
+            .frozen
+            .capsule
+            .retained_inputs
+            .iter()
+            .filter(|i| i.role == KagemushaWalletRetainedInputRoleV1::Request);
+        let held = requests
+            .next()
+            .ok_or(Error::WitnessLost("Archive held Send Request"))?;
+        if requests.next().is_some()
+            || held.bytes.as_slice() != exact(KagemushaWalletRetainedInputRoleV1::Request)?
+        {
+            return Err(Error::WitnessLost("Archive held Request identity"));
+        }
+        if payment.send.lineage != source.frozen.capsule.predecessor_lineage {
+            return Err(Error::WitnessLost(
+                "Archive retained Send original predecessor Omega",
+            ));
+        }
+        Ok(Some(source))
     }
 
     /// Validate and durably freeze a transition before dispatching it to Advance.
@@ -576,11 +713,15 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 return Err(Error::Invalid("recorded predecessor Ω"));
             }
         }
-        self.proofs.verify_transition(
-            &frozen,
-            predecessor.as_ref().map(|s| &s.frozen),
+        let held_send = self.archive_source(&manifest, &frozen)?;
+        let mut sources = NativeSourcesV1::new(
+            predecessor.as_ref(),
             folded.as_ref(),
-        )?;
+            held_send.as_ref(),
+            None,
+            &mut self.archive,
+        );
+        self.proofs.verify_transition(&frozen, &mut sources)?;
         let digest = valid(c.capsule_digest())?;
         self.archive
             .put(ArchiveKey::Capsule(digest), &archive::encode(&frozen)?)?;

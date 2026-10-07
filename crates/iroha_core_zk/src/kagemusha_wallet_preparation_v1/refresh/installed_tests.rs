@@ -187,8 +187,7 @@ fn rebase_update(
     source.state = state;
     source.certificate = certificate(&scheme, &source.signing, source.certificate.body.role);
     let cert = &source.certificate;
-    let original =
-        retained_original(&source.capsule.retained_inputs, InputRole::PolicyUpdate).unwrap();
+    let original = source.complete_original();
     let bytes = match kind {
         Kind::Credential => {
             let previous: KagemushaWalletCredentialV1 = norito::decode_canonical(original).unwrap();
@@ -269,7 +268,19 @@ fn rebase_update(
             .unwrap()
         }
     };
-    *source.original() = bytes;
+    if kind == Kind::Blacklist {
+        *source.original() =
+            crate::kagemusha_wallet_state_v1::BlacklistOriginalReferenceV1::for_original(
+                &source.scheme.scheme_id(),
+                &bytes,
+            )
+            .unwrap()
+            .to_canonical_bytes()
+            .unwrap();
+        source.complete_blacklist = Some(bytes);
+    } else {
+        *source.original() = bytes;
+    }
     source
         .capsule
         .retained_inputs

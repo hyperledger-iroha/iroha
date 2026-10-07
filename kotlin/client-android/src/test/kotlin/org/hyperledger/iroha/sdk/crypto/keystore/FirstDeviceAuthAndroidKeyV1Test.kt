@@ -30,6 +30,7 @@ import org.hyperledger.iroha.sdk.auth.RegistrationBridgeFixtureV1 as BridgeFixtu
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AttestationResult.SecurityLevel
 import org.hyperledger.iroha.sdk.json.Json
 import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 
 /** Host metadata/probe/signature tests. No fake Android production classes or hardware claims. */
@@ -217,6 +218,7 @@ class FirstDeviceAuthAndroidKeyV1Test {
         assertEquals(0, access.signatures)
     }
 
+    @Tag("host-native")
     @Test fun typedRegistrationSignerUsesWholeFrameAndActualOriginalKey() {
         // Synthetic host KeyInfo/attestation DATA and genuine JCA; no hardware/Core admission.
         val c = BridgeFixture.challenge(); val access = OriginalAccess(31, c)
@@ -236,6 +238,7 @@ class FirstDeviceAuthAndroidKeyV1Test {
         assertEquals(2, access.signatures)
     }
 
+    @Tag("host-native")
     @Test fun differentOriginalKeyAndRetiredRegistrationGuardRefuseBeforeBridgeSigning() {
         val c = BridgeFixture.challenge(); val access = OriginalAccess(31, c)
         val key = (FirstDeviceAuthAndroidKeyV1.openExistingWithAccess(ByteArray(32) { 14 }, c, {}, access)
@@ -249,6 +252,7 @@ class FirstDeviceAuthAndroidKeyV1Test {
         assertEquals(0, access.signatures)
     }
 
+    @Tag("host-native")
     @Test fun changedRegistrationOwnerDuringKeySigningCannotPublishBridgeSignature() {
         val c = BridgeFixture.challenge(); val access = OriginalAccess(31, c)
         val key = (FirstDeviceAuthAndroidKeyV1.openExistingWithAccess(ByteArray(32) { 15 }, c, {}, access)

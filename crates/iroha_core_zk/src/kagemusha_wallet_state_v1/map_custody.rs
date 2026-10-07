@@ -66,6 +66,9 @@ impl Default for SourceMapsV1 {
 }
 impl SourceMapsV1 {
     pub(super) fn require(&self, state: &KagemushaWalletStateV1) -> Result<(), Error> {
+        state
+            .validate()
+            .map_err(|_| Error::WitnessLost("source map state"))?;
         if self.version != 1 {
             return Err(Error::WitnessLost("source map version"));
         }

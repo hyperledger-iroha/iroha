@@ -27,6 +27,7 @@ use crate::{
 
 #[path = "kagemusha_wallet_preparation_v1/monetary.rs"]
 mod monetary;
+pub(crate) use monetary::{MonetaryRestoreV1, MonetaryRetentionV1};
 pub use monetary::{MonetaryStepV1, ReceiveFoldMapsV1, ReceiveMapsV1, SendControlsV1, SendMapsV1};
 
 #[path = "kagemusha_wallet_preparation_v1/native_inputs.rs"]
