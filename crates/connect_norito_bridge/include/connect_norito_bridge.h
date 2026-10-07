@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define CONNECT_NORITO_BRIDGE_ABI_VERSION 26
+#define CONNECT_NORITO_BRIDGE_ABI_VERSION 27
 
 #define CONNECT_NORITO_ERR_ACCOUNT_ADDRESS -200
 #define CONNECT_NORITO_ERR_UNSUPPORTED_ALGORITHM -21
@@ -2087,11 +2087,13 @@ typedef struct {
     const uint8_t* producer_inventory; size_t producer_inventory_length;
     const uint8_t* signed_genesis; size_t signed_genesis_length;
     const uint8_t* originals_root; size_t originals_root_length;
+    /* Generic signed application release requires canonical registration source DATA (8192 max). */
+    const uint8_t* registration_source; size_t registration_source_length;
 } connect_norito_kagemusha_wallet_runtime_originals_v1;
 // Uses the existing platform custody_root callback and retains the actual provider and
 // authenticated originals together before registry admission. No reservation or permission.
 /* Move-only opaque actual Runtime+authenticated BoundOriginals; no registry ID or reservation.
- * Native alone constructs it after all seven originals and full financial graph qualification.
+ * Native alone constructs it after the exact eight-role originals and full financial graph qualification.
  * Caller owns exact pointer once; serialize registration/close, never copy/dereference/forge.
  * Zero begin creates the owner; failure clears output. Ordinary register refusal preserves it.
  * Register zero transfers once to existing runtime ID and clears pointer. Close zero alone
@@ -2106,6 +2108,12 @@ int32_t connect_norito_kagemusha_wallet_installation_register_v1(
     connect_norito_kagemusha_wallet_installation_attempt_v1** attempt, uint64_t* out_runtime);
 int32_t connect_norito_kagemusha_wallet_installation_close_v1(
     connect_norito_kagemusha_wallet_installation_attempt_v1** attempt);
+/* Rebind only the registration locator's DATA path after copying originals into private storage.
+ * source<=8192 and UTF-8 root<=4096; status12 canonical DATA, never proof/admission/copy success.
+ * Native validates private no-follow root custody; installation still verifies all originals. */
+int32_t connect_norito_kagemusha_wallet_registration_source_relocate_v1(
+    const uint8_t* source, size_t source_length, const uint8_t* root, size_t root_length,
+    connect_norito_kagemusha_wallet_result_v1* out);
 
 #ifdef __cplusplus
 } // extern "C"

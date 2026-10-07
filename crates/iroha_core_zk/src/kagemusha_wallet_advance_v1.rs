@@ -97,10 +97,10 @@
 //! faults during recovery and platform faults); run them with
 //! `cargo test -p iroha_core_zk --lib kagemusha_wallet_advance_v1`. Shared wallet state,
 //! authenticated archive indexes and descriptor-relative filesystem custody are implemented.
-//! Mobile callback adapters live in `connect_norito_bridge`; foreign open remains gated on
-//! the unfinished authenticated operation/Λ/Ω loader. Nothing here is phone qualification.
-// TODO(G3/G4): authenticated native proof-artifact loading and E8 activation integration.
-// TODO(G2-S): acknowledgement-driven retained witness collection.
+//! Mobile callback adapters live in `connect_norito_bridge`. The native state owner connects
+//! authenticated operation/Λ/Ω source admission, retained activation and covered-witness
+//! collection. Foreign open requires an actual complete source grant; these implementations
+//! alone establish neither artifact qualification nor phone qualification.
 // TODO(G2-iOS): device tests of keychain power-loss durability and residual anchor window.
 
 mod advance;

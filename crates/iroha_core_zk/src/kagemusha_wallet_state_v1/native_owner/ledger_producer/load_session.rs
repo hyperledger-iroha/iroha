@@ -1,7 +1,8 @@
 //! Receipt-bound recursive cursor, independent of later ordinary ledger activity.
 use super::*;
 use iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint;
-const SESSION_MAX: usize = MAX_FINALITY_CHECKPOINT_BYTES + PREFIX_MAX + 32 * 1024;
+const SESSION_MAX: usize =
+    MAX_FINALITY_CHECKPOINT_BYTES + HISTORY_ORIGINAL_MAX_BYTES_V1 + 32 * 1024;
 
 /// Receipt DATA target and actual durably verified height of its own recursive cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,7 +18,7 @@ struct Session {
     receipt: KagemushaWalletLoadReceiptV1,
     // Enclosed in this request-bound object, never aliased with a global checkpoint's address.
     checkpoint: Option<Vec<u8>>,
-    prefix: Option<PrefixOriginal>,
+    prefix: Option<HistoryOriginalV1>,
     finality: Option<Vec<u8>>,
 }
 impl Session {
@@ -38,7 +39,7 @@ impl Session {
                 (Some(bytes), Some(prefix)) => {
                     let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(bytes)
                         .map_err(|_| Error::WitnessLost("Load cursor checkpoint"))?;
-                    if checkpoint.height().checked_add(1) != Some(prefix.next_height) {
+                    if checkpoint.height().checked_add(1) != Some(prefix.next_height()) {
                         return Err(Error::WitnessLost("Load cursor height binding"));
                     }
                     checkpoint.height()
@@ -197,10 +198,11 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             .prefix
             .clone()
             .ok_or(Error::WitnessLost("Load prefix missing"))?
-            .restore(
+            .restore_producer(
                 self.proofs.sources.finality_producer().installed(),
                 self.proofs.budget,
-            )?;
+            )
+            .map_err(history_error)?;
         if checkpoint.height().checked_add(1) != Some(prefix.state().next_height) {
             return Err(Error::WitnessLost("Load original prefix height"));
         }
@@ -265,7 +267,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 .and_then(|checkpoint| checkpoint.encode_canonical())
                 .map_err(|_| Error::Proof("Load verified checkpoint"))?,
         );
-        session.prefix = Some(PrefixOriginal::from_prefix(&next));
+        session.prefix = Some(HistoryOriginalV1::from_prefix(&next));
         let progress = session.progress()?;
         self.publish_load_session(root, manifest, &session)?;
         Ok(progress)

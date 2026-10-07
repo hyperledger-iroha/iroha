@@ -54,6 +54,25 @@ Space Directory and ZK JSON inputs use Norito's shared JSON nesting limit
 Local contract durable-state fixtures require exact NFC path spelling and
 reject duplicate decoded JSON keys.
 
+`iroha offline registration-package` verifies and packages a successful Global
+KAGEMUSHA token registration without submitting or signing a transaction. Supply
+an owner-private `--input-dir` containing sealed `scheme.norito`,
+`committed.norito` and consecutive `proof-00000000000000000001.norito` files
+through the registered block. `--proof-count`, `--instruction-index`,
+`--asset-digest` and `--chain-id` select the exact history and registration.
+`--genesis-sha256` pins the entire first canonical finality proof and
+`--scheme-sha256` pins the scheme; obtain these independently from the deployment
+owner. `--output-parent` must already be a canonical private directory;
+`--output-name` creates a fresh child. Inputs remain read-only, failed partial
+packages are retained, and existing outputs are never overwritten. The command
+emits the verified registration identity and `registration-source.norito` path.
+After copying the package's immutable originals to an owner-private directory on
+the device, Swift and Kotlin expose `KagemushaWalletInstalledRuntimeV1.relocateRegistrationSource`
+to replace only the locator's local directory. This helper supports cross-platform
+paths and preserves the exact inventory; it neither copies nor verifies proofs.
+The wallet re-verifies imported data against its installed trust roots; this
+package cannot replace its genesis, application policy or enrollment authority.
+
 Binding-only IVM proof helpers are removed. Core rejects `IvmProved` until the
 complete native STARK execution relation and State-owned finalized anchor are
 available. Generic proof and verifying-key registry commands remain available.

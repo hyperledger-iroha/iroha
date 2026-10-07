@@ -2,13 +2,38 @@ import Foundation
 import NoritoBridge
 
 /// Whole bounded DATA. Only Native compiled trust authenticates the installation.
+/// Registration source is bounded DATA, required by generic release and empty for fixed adapters.
+/// Native authenticates successful Global registration before any platform owner is acquired.
 /// Four signed base originals are mandatory; financial originals are wholly present or absent.
 /// Native authenticates an absent financial selection before reporting artifacts unavailable.
 public struct KagemushaWalletRuntimeOriginalsV1: Sendable, CustomStringConvertible {
   public var description: String { "KagemushaWalletRuntimeOriginalsV1(originals=[REDACTED])" }
   let originals: [Data]
+  /// After copying the exact package originals into private device storage, rebind only its
+  /// platform-specific locator path. This copies no files and reports no proof or admission.
+  public static func relocateRegistrationSource(_ original: Data, to root: String) throws -> Data {
+    let path = Data(root.utf8)
+    guard !original.isEmpty, original.count <= 8192, !path.isEmpty, path.count <= 4096,
+      root.hasPrefix("/"), !path.contains(0) else { throw KagemushaWalletErrorV1.invalidInput }
+    typealias Relocate = @convention(c) (UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int,
+      UnsafeMutablePointer<connect_norito_kagemusha_wallet_result_v1>?) -> Int32
+    let driver = try KagemushaWalletNativeDriverV1()
+    guard let relocate = NoritoNativeBridge.shared.resolveNativeSymbol(
+      "connect_norito_kagemusha_wallet_registration_source_relocate_v1", as: Relocate.self)
+    else { throw KagemushaWalletErrorV1.bridgeUnavailable }
+    let result = try driver.result { output in
+      original.withUnsafeBytes { source in path.withUnsafeBytes { destination in
+        relocate(source.bindMemory(to: UInt8.self).baseAddress, original.count,
+          destination.bindMemory(to: UInt8.self).baseAddress, path.count, output)
+      } }
+    }
+    guard result.status == 12, result.sequenceLow == 0, result.sequenceHigh == 0,
+      result.detail == 0, !result.bytes.isEmpty, result.bytes.count <= 8192
+    else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return result.bytes
+  }
   public init(appManifest: Data, envelope: Data, walletRuntime: Data, verifierPack: Data,
-    producerInventory: Data, signedGenesis: Data, originalsRoot: String) throws {
+    producerInventory: Data, signedGenesis: Data, originalsRoot: String, registrationSource: Data) throws {
     let inputs = [appManifest, envelope, walletRuntime, verifierPack, producerInventory, signedGenesis]
     let caps = [8_388_608, 2048, 131_072, 16_842_752, 16_777_216, 67_108_864]
     for (index, value) in inputs.enumerated() {
@@ -21,7 +46,8 @@ public struct KagemushaWalletRuntimeOriginalsV1: Sendable, CustomStringConvertib
     else { throw KagemushaWalletErrorV1.invalidInput }
     guard (originalsRoot.isEmpty || originalsRoot.hasPrefix("/")), !originalsRoot.utf8.contains(0),
       originalsRoot.utf8.count <= 4096 else { throw KagemushaWalletErrorV1.invalidInput }
-    originals = inputs.map { Data($0) } + [Data(originalsRoot.utf8)]
+    guard registrationSource.count <= 8192 else { throw KagemushaWalletErrorV1.invalidInput }
+    originals = inputs.map { Data($0) } + [Data(originalsRoot.utf8), Data(registrationSource)]
   }
 }
 

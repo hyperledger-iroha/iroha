@@ -19,6 +19,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     producer_inventory: JByteArray<'_>,
     signed_genesis: JByteArray<'_>,
     originals_root: JByteArray<'_>,
+    registration_source: JByteArray<'_>,
 ) -> jlong {
     let result = run(|| {
         let arrays = [
@@ -29,6 +30,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
             &producer_inventory,
             &signed_genesis,
             &originals_root,
+            &registration_source,
         ];
         // Check every original extent before copying any Java array or invoking platform.
         for (index, (array, bound)) in arrays.into_iter().zip(RUNTIME_BOUNDS).enumerate() {
@@ -57,6 +59,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
             producer_inventory: &originals[4],
             signed_genesis: &originals[5],
             originals_root: &originals[6],
+            registration_source: &originals[7],
         })?;
         let platform = AndroidPlatform::new(&mut env, &platform)?;
         let root = platform

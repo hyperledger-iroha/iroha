@@ -681,7 +681,16 @@ fn one_template_binds_two_registered_assets_and_retains_each_attempt_configurati
     assert_eq!(owner.runtime.config.providers.len(), 1);
     let mut first = authenticate(&mut owner, &a);
     let permit_a = owner.pre_key_permit(&mut first).unwrap();
-    let config_a = first.attempt.worker_configuration().unwrap();
+    let config_a = owner
+        .runtime
+        .worker_configuration(&provider, &first.dispatch.asset)
+        .unwrap()
+        .digest();
+    assert_eq!(first.attempt.worker_configuration(), None);
+    owner
+        .journal
+        .worker_preparation(&first.attempt, config_a)
+        .unwrap();
     let request_a = permit_tests::account_request(&a, &first.attempt)
         .encode()
         .unwrap();
@@ -697,11 +706,29 @@ fn one_template_binds_two_registered_assets_and_retains_each_attempt_configurati
     assert_eq!(first.attempt.worker_configuration().unwrap(), config_a);
     owner.runtime.fail_worker = false;
     let permit_b = owner.pre_key_permit(&mut second).unwrap();
-    let config_b = second.attempt.worker_configuration().unwrap();
+    let config_b = owner
+        .runtime
+        .worker_configuration(&provider, &second.dispatch.asset)
+        .unwrap()
+        .digest();
+    assert_eq!(second.attempt.worker_configuration(), None);
+    owner
+        .journal
+        .worker_preparation(&second.attempt, config_b)
+        .unwrap();
     assert_ne!(config_a, config_b);
     assert_ne!(permit_a, permit_b);
     assert!(owner.verify_evidence(&mut second, &request_a).is_err());
     assert_eq!(second.attempt.phase(), Phase::Selected);
+    let request_b = permit_tests::account_request(&b, &second.attempt)
+        .encode()
+        .unwrap();
+    assert!(matches!(
+        owner.verify_evidence(&mut second, &request_b),
+        Err(Pending)
+    ));
+    assert_eq!(second.attempt.phase(), Phase::Verifying);
+    assert_eq!(second.attempt.worker_configuration(), Some(config_b));
     assert!(matches!(
         owner.verify_evidence(&mut first, &request_a),
         Err(Pending)

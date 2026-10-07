@@ -135,6 +135,7 @@ impl BpngFixture {
                 producer_inventory: if offered & 2 != 0 { TEST_CATALOG } else { b"" },
                 signed_genesis: &self.0.genesis,
                 originals_root: if offered & 4 != 0 { TEST_ROOT } else { b"" },
+                registration_source: b"",
             },
         )
     }
@@ -686,6 +687,7 @@ fn bpng_null_financial_selection_authenticates_base_then_returns_unavailable_wit
                 producer_inventory: b"",
                 signed_genesis: &fixture.0.genesis,
                 originals_root: b"",
+                registration_source: b"",
             },
             selected
         ),
@@ -723,6 +725,7 @@ fn bpng_financial_pin_and_original_tuple_refuse_downgrade_and_partial_offers() {
                 producer_inventory: b"",
                 signed_genesis: &fixture.0.genesis,
                 originals_root: b"",
+                registration_source: b"",
             },
             selected
         ),
@@ -759,6 +762,7 @@ fn bpng_initial_absence_still_authenticates_each_base_original() {
                     producer_inventory: b"",
                     signed_genesis: &genesis,
                     originals_root: b"",
+                    registration_source: b"",
                 }
             )
             .is_err()

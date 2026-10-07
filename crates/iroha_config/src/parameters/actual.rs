@@ -80,7 +80,10 @@ use std::{
 #[path = "actual_soranet_handshake_debug.rs"]
 mod actual_soranet_handshake_debug;
 mod kagemusha_enrollment;
-pub use kagemusha_enrollment::{KagemushaEnrollmentGoogle, KagemushaEnrollmentProvider, KagemushaEnrollmentIssuer, KagemushaEnrollmentWorker};
+pub use kagemusha_enrollment::{
+    KagemushaEnrollmentGoogle, KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider,
+    KagemushaEnrollmentWorker,
+};
 mod sccp;
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;

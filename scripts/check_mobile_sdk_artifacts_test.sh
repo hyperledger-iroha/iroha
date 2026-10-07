@@ -76,12 +76,13 @@ wallet_symbols=(
   connect_norito_kagemusha_wallet_installation_begin_v1
   connect_norito_kagemusha_wallet_installation_register_v1
   connect_norito_kagemusha_wallet_installation_close_v1
+  connect_norito_kagemusha_wallet_registration_source_relocate_v1
 )
 wallet_jni_symbols=()
 for method in revision openBegin openFinish openCancel close activity call setup enrollment execute snapshot review executeReviewed discardReview; do
   wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_${method}")
 done
-for method in beginInstallation registerInstallation closeInstallation; do
+for method in beginInstallation registerInstallation closeInstallation relocateRegistrationSource; do
   wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_${method}")
 done
 load_original_jni_symbols=(

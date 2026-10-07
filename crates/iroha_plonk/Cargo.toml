@@ -43,3 +43,7 @@ rayon = { workspace = true }
 sha2 = "0.10.9"
 # Wipe canonical integer lookup scratch on success and every early return.
 zeroize = { workspace = true }
+
+[dev-dependencies]
+# Fallible OS probes for isolated evaluator diagnostics, never protocol code.
+iroha_measurement = { workspace = true }

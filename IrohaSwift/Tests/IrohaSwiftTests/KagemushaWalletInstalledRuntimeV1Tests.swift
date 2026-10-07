@@ -4,8 +4,29 @@ import XCTest
 
 /// Exact owned DATA only; no Native owner, artifact trust or financial verdict is simulated.
 final class KagemushaWalletInstalledRuntimeV1Tests: XCTestCase {
-  private func runtime(_ inputs: [Data] = Array(repeating: Data([7]), count: 6), root: String = "/selected/originals") throws -> KagemushaWalletRuntimeOriginalsV1 {
-    try .init(appManifest: inputs[0], envelope: inputs[1], walletRuntime: inputs[2], verifierPack: inputs[3], producerInventory: inputs[4], signedGenesis: inputs[5], originalsRoot: root)
+  func testRelocationCallsActualNativeAndRefusesMalformedOriginalData() throws {
+    XCTAssertThrowsError(try KagemushaWalletRuntimeOriginalsV1.relocateRegistrationSource(Data([1]), to: "/private")) { error in
+      XCTAssertEqual(error as? KagemushaWalletErrorV1, .native(status: -1, reason: -1, platformCode: 0))
+    }
+  }
+  func testRelocationBoundsRejectBeforeNativeLoading() {
+    for source in [Data(), Data(repeating: 0, count: 8193)] {
+      XCTAssertThrowsError(try KagemushaWalletRuntimeOriginalsV1.relocateRegistrationSource(source, to: "/private"))
+    }
+    for root in ["", "relative", "/nul\0root", "/" + String(repeating: "x", count: 4096)] {
+      XCTAssertThrowsError(try KagemushaWalletRuntimeOriginalsV1.relocateRegistrationSource(Data([1]), to: root))
+    }
+  }
+  private func runtime(_ inputs: [Data] = Array(repeating: Data([7]), count: 6), root: String = "/selected/originals", registration: Data = Data()) throws -> KagemushaWalletRuntimeOriginalsV1 {
+    try .init(appManifest: inputs[0], envelope: inputs[1], walletRuntime: inputs[2], verifierPack: inputs[3], producerInventory: inputs[4], signedGenesis: inputs[5], originalsRoot: root, registrationSource: registration)
+  }
+  func testRegistrationSourceIsBoundedOwnedDataWithNoAdmissionVerdict() throws {
+    var source = Data(repeating: 7, count: 8192)
+    let original = try runtime(registration: source)
+    source[0] = 0
+    XCTAssertEqual(original.originals[7], Data(repeating: 7, count: 8192))
+    XCTAssertThrowsError(try runtime(registration: Data(repeating: 1, count: 8193)))
+    XCTAssertEqual(try runtime().originals[7], Data())
   }
   func testOriginalsOwnTheirBytesAcrossSourceAndAccessorMutation() throws {
     var bytes = Data([7, 8])

@@ -14,7 +14,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. The daemon can host an independent signed dataspace root with its own State, Kura, allocation pool and native context archive. Lifecycle/restart have component and node coverage. | Production AMX bootstrap, complete outbound proof custody, durable validator relaying and current-source network isolation, scale and restart. |
 | Storage and execution | `lanes::LaneRunner` and `SumeragiLaneMerge` are the production path. Kura owns a shared fail-stop gate and authenticated native tips/journals. | Original funded execution custody through acquisition, certification, publication, replay and retained-generation reclamation. |
 | Configuration and DPN | Private dataspace definitions are separate from validator settings. `iroha dataspace plan/apply/status` derives artifacts and retains once-only transactions under one budget. Kagami has an isolated BPNG catalog/paid-namespace genesis preset. | Profile-based generator closure, four-daemon paid deployment/readback and physical isolation. BPNG local contracts, fee authority and application provisioning remain incomplete. Owner-node provisioning is outside this path. |
-| Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Installed-runtime fixtures cover config-free startup, all three deployment inputs, restart recovery and four-parent/four-private attachment. Optional native reads distinguish initial absence from later custody failures; attachment lookup and atomic publication retain the original private store directory. | The bounded 64-history regression passes on its matching macOS build with the original deadline and descriptor limit. Parent bootstrap now completes all three provider histories but aborts with a stack overflow before the full recovery test completes; parent recovery remains unqualified. Focused filesystem, profile, attempt and snapshot custody controls pass against their matching macOS builds. Concurrent source changes are recorded separately from compiled-candidate diagnostics and remain outside current-branch qualification. Matching normal-package and installed-runtime validation, combined paid provisioning, anchoring, payload isolation, provider renewal, and publication handoff remain required. Cold registry publication, the approved committed Taira installation profile and recurring signed checkpoint publication, native desktop interaction, signed native OS matrices and reference-host latency remain open. Release bundling refuses without that approved public profile. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
+| Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Installed-runtime fixtures cover config-free startup, all three deployment inputs, restart recovery and four-parent/four-private attachment. Optional native reads distinguish initial absence from later custody failures; attachment lookup and atomic publication retain the original private store directory. | The current macOS candidate reaches the 64-history deadline before completion. Parent bootstrap completes all three provider histories, but offline recovery exhausts file descriptors while inspecting retained funding approval; parent recovery remains unqualified. Focused filesystem, profile, attempt and snapshot custody controls pass against their matching macOS builds. Concurrent source changes are recorded separately from compiled-candidate diagnostics and remain outside current-branch qualification. Matching normal-package and installed-runtime validation, combined paid provisioning, anchoring, payload isolation, provider renewal, and publication handoff remain required. Cold registry publication, the approved committed Taira installation profile and recurring signed checkpoint publication, native desktop interaction, signed native OS matrices and reference-host latency remain open. Release bundling refuses without that approved public profile. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
 | Rust client | Immutable account contexts, owned async transport, explicit blocking capabilities and typed fee quoting are implemented. | Remaining capability/consumer migration, unified errors and network cancellation/finality/authorization coverage. |
 | Kotlin/JVM | Kotlin owns the SDK, HTTP/SSE/WebSocket, attestation tools and JNI API; Java consumers exercise that API. Host coverage includes native/confidential operations. Android Keystore alias existence is decided only by keystore2 `getKey` (API 31+); a Keystore error is never read as absence. | Remaining Java/publication retirement, signed packages, CUDA hardware and Android/device qualification. |
 | Other SDKs | Shared prepared-operation, signing, account and native checkpoint contracts are being migrated across Swift, JavaScript, Python and C#. | Same-source native artifacts, complete fixtures/consumers and release OS/architecture matrices. |
@@ -394,26 +394,28 @@ passes.
   is 9,979 bytes, pending acceptance under the complete authenticated producer
   catalog. Signed pre-key permits, native enrollment custody and the private verifier codec
   are implemented. The node journal now retains worker configuration and exact
-  requests/results and freezes credential bodies before signing; current runtime
-  qualification remains open. The configured HTTPS provider, Enrollment signer,
-  private worker and Torii route compile; concrete serving runtime and Linux
-  worker launch still require qualification. Enrollment admits configured bank or asset/scheme-authorized
+  requests/results and freezes credential bodies before signing. Captured issuer,
+  journal, private-worker protocol and universal-template Torii tests pass. A disposable
+  Linux guest passes206 Python cases (eight macOS-only skips) and six actual
+  process/clock cases; compiled Linux Torii launch and deployment remain unqualified. Enrollment admits
+  configured bank or asset/scheme-authorized
   operator providers. Every universal-dataspace token is eligible: no Parliament
   approval, named-token allowlist or legal asset-class gate. Exact asset authorization,
   reserve backing and applicable controls remain required.
-  Installed CBSI/BPNG profiles still select one fixed asset; authenticated universal
-  asset selection through the installed SDK remains to be implemented and qualified.
-  Bank-required policies retain bank KYC/freeze checks and never fall back after
-  a bank failure. The generic provider wire/SDK migration passes Rust and JVM
-  component checks; current configuration and route-catalog tests pass. Serving
-  adapters still require matching runtime validation. The refreshed copied Core
-  executable passes 13 issuer and 38 journal cases; its broad source-drift record
-  remains outside whole-candidate qualification.
+  Asset-independent enrollment templates and finality-backed universal asset
+  selection are implemented. Actual Core registration execution, native registration
+  intake, CLI package publication and shared ledger recovery pass their component
+  tests. CBSI/BPNG remain deployment authentication adapters. Bank-required policies
+  retain bank KYC/freeze checks and never fall back after a bank failure. The rebuilt
+  ABI27 host passes Swift, Kotlin/JNI and C# consumer suites. Captured source-drift
+  records remain explicit; these results do not qualify the whole checkout or phones.
+  CoreZk and bridge strict lint pass; broader Core/CLI lint and workspace formatting
+  still have recorded failures.
   A canonical executed ledger setup is now
   exported for the native monetary integration, with the full matching proof
   catalog and funded A receipt still pending.
   Real-proof A → B → C → unload, the two-second durable-completion target,
-  current bridge artifacts and physical-device recovery remain unqualified.
+  the complete native release matrix and physical-device recovery remain unqualified.
   The [checklist](specs/kagemusha_evidence_gate.md) records verification without
   an approval gate; software markers claim no protection against OS takeover.
 

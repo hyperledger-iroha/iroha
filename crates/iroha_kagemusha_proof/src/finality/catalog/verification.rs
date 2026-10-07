@@ -38,6 +38,7 @@ pub struct VerifierLimits {
 pub struct ReceiptVerifier {
     anchor: HistoryAnchor,
     source: SourceVerifier,
+    history: SourceVerifier,
     vesta: iroha_plonk::pcs::ipa::PinnedParams<Eq>,
 }
 impl ReceiptVerifier {
@@ -49,6 +50,29 @@ impl ReceiptVerifier {
     /// Qualified compiled receipt source, including every graph dependency.
     pub const fn source(&self) -> &SourceVerifier {
         &self.source
+    }
+
+    /// Restore the opaque terminal history capability under this qualified fixed graph.
+    /// The state authenticates only its terminal result, never an arbitrary earlier block.
+    /// No proving key is opened and no caller checkpoint or acceptance verdict is trusted.
+    /// # Errors
+    /// Changed anchor/key/endpoints, malformed state/proof, failed curve claims or cancellation.
+    pub fn restore_history(
+        &self,
+        state: &crate::finality::history::HistoryState,
+        evidence: crate::finality::continuity::SourceNodeEvidence,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<crate::finality::native::HistoryPrefix, Error> {
+        crate::finality::native::HistoryPrefix::restore(
+            &self.anchor,
+            &self.history,
+            &self.vesta,
+            state,
+            evidence,
+            budget,
+            cancellation,
+        )
     }
 
     /// Verify the complete singleton receipt statement under this exact source,
@@ -79,6 +103,7 @@ struct Qualification<'a> {
     params: Parameters,
     limits: VerifierLimits,
     cache: BTreeMap<NodeId, SourceVerifier>,
+    history: Option<SourceVerifier>,
 }
 impl<'a> Qualification<'a> {
     fn new(
@@ -126,6 +151,7 @@ impl<'a> Qualification<'a> {
             params,
             limits,
             cache: BTreeMap::new(),
+            history: None,
         })
     }
 
@@ -238,6 +264,9 @@ impl builder::Assembler for Qualification<'_> {
         }
         self.check(&ArtifactId::HistoryWrapper, &binding, &key)
             .map_err(|error| failure(None, "history wrapper VK original", error))?;
+        if self.history.replace(source.clone()).is_some() {
+            return Err(Error::Artifact.into());
+        }
         Ok(source)
     }
 }
@@ -265,6 +294,7 @@ pub fn qualify_receipt(
     Ok(ReceiptVerifier {
         anchor,
         source,
+        history: qualifier.history.ok_or(Error::Artifact)?,
         vesta: qualifier.params.vesta.clone(),
     })
 }

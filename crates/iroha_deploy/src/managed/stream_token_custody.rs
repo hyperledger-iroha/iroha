@@ -457,7 +457,7 @@ impl ManagedStreamTokenCustody {
             |attempt| {
                 original
                     .request(attempt.terms(), attempt.observation()?, deadline)?
-                    .inspect(&account, &attempt.wallet_path())
+                    .inspect_in_parent(&account, attempt.directory())
             },
             |attempt| {
                 original
@@ -854,13 +854,13 @@ impl ManagedStreamTokenCustody {
             original.verify_wallets(|intent, attempt| {
                 intent
                     .request(attempt.terms(), attempt.observation()?, deadline)?
-                    .inspect(&account, &attempt.wallet_path())
+                    .inspect_in_parent(&account, attempt.directory())
             })
         };
         verify_custody()?;
         let preparation = original
             .request(deadline)?
-            .inspect(&account, &journal_path)?;
+            .inspect_in_parent(&account, directory)?;
         let unprepared_expired = preparation.unprepared_status() == Some(OperationStatus::Expired);
         let retained_transaction = match preparation.phase() {
             iroha_wallet::operations::NativePreparationPhase::Missing
@@ -1112,7 +1112,7 @@ impl ManagedStreamTokenCustody {
         original.verify_wallets(|intent, attempt| {
             intent
                 .request(attempt.terms(), attempt.observation()?, deadline)?
-                .inspect(&account, &attempt.wallet_path())
+                .inspect_in_parent(&account, attempt.directory())
         })?;
         let path = directory.path().join("transaction");
         match original.request(deadline)? {

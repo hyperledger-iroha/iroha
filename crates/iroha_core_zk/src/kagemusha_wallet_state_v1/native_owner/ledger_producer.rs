@@ -4,7 +4,6 @@ mod load_session;
 mod unload_session;
 use crate::kagemusha_wallet_artifacts_v1::producer_inventory::FinalityProducerErrorV1;
 use crate::kagemusha_wallet_finality_v1::{block_witness, load_witness, retain_load_finality};
-use ff::PrimeField;
 use iroha_crypto::MerkleProof;
 use iroha_data_model::isi::kagemusha_wallet::load_finality::KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1;
 use iroha_data_model::{
@@ -14,21 +13,30 @@ use iroha_data_model::{
     },
     sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
 };
-use iroha_kagemusha_proof::finality::{
-    continuity::SourceNodeEvidence,
-    history::{HistorySlot, HistoryState},
-    native::HistoryPrefix,
-};
-use iroha_pasta::{Ep, Eq, Fp};
-use iroha_plonk_recursion::AccumulatorT;
+use iroha_kagemusha_proof::finality::native::HistoryPrefix;
 pub use load_session::LoadProofProgressV1;
 
 /// Complete counted Load event path, including canonical Norito framing.
 pub const LOAD_EVENT_PROOF_MAX_BYTES_V1: usize = 8192;
 /// One complete current ledger instruction, including its original signed transport.
 pub const LEDGER_INSTRUCTION_MAX_BYTES_V1: usize = 64 * 1024;
-pub(super) const PREFIX_MAX: usize = 64 * 1024;
+use crate::kagemusha_wallet_finality_v1::{HISTORY_ORIGINAL_MAX_BYTES_V1, HistoryOriginalV1};
 
+pub(super) fn history_error(
+    error: crate::kagemusha_wallet_finality_v1::HistoryOriginalErrorV1,
+) -> Error {
+    match error {
+        crate::kagemusha_wallet_finality_v1::HistoryOriginalErrorV1::Encoding => {
+            Error::WitnessLost("recursive prefix original")
+        }
+        crate::kagemusha_wallet_finality_v1::HistoryOriginalErrorV1::Proof(error)
+            if error.is_cancelled() =>
+        {
+            Error::Cancelled
+        }
+        _ => Error::Proof("selected recursive prefix"),
+    }
+}
 fn producer<T>(result: Result<T, FinalityProducerErrorV1>) -> Result<T, Error> {
     result.map_err(|error| match error {
         FinalityProducerErrorV1::Original(
@@ -40,105 +48,6 @@ fn producer<T>(result: Result<T, FinalityProducerErrorV1>) -> Result<T, Error> {
         FinalityProducerErrorV1::Source(error) if error.is_cancelled() => Error::Cancelled,
         _ => Error::Proof("complete recursive finality producer"),
     })
-}
-#[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::FinalitySlotOriginalV1")]
-struct SlotOriginal {
-    pending: bool,
-    epoch: u64,
-    context: [u8; 32],
-    boundary_height: u64,
-    predecessor: [u8; 32],
-    parameters: [u64; 6],
-}
-impl From<HistorySlot> for SlotOriginal {
-    fn from(value: HistorySlot) -> Self {
-        Self {
-            pending: value.pending,
-            epoch: value.epoch,
-            context: value.context,
-            boundary_height: value.boundary_height,
-            predecessor: value.predecessor,
-            parameters: value.parameters,
-        }
-    }
-}
-impl From<SlotOriginal> for HistorySlot {
-    fn from(value: SlotOriginal) -> Self {
-        Self {
-            pending: value.pending,
-            epoch: value.epoch,
-            context: value.context,
-            boundary_height: value.boundary_height,
-            predecessor: value.predecessor,
-            parameters: value.parameters,
-        }
-    }
-}
-#[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::FinalityPrefixOriginalV1")]
-pub(super) struct PrefixOriginal {
-    next_height: u64,
-    current: SlotOriginal,
-    following: SlotOriginal,
-    result: [u8; 32],
-    tape_root: [u8; 32],
-    frame_len: u32,
-    endpoints: [[u8; 32]; 6],
-    proof: Vec<u8>,
-    pallas: Vec<u8>,
-    vesta: Vec<u8>,
-}
-impl PrefixOriginal {
-    pub(super) fn from_prefix(prefix: &HistoryPrefix) -> Self {
-        let state = prefix.state();
-        let evidence = prefix.evidence();
-        Self {
-            next_height: state.next_height,
-            current: state.current.into(),
-            following: state.following.into(),
-            result: state.result,
-            tape_root: state.tape_root.to_repr(),
-            frame_len: state.frame_len,
-            endpoints: evidence.endpoints.map(|word| word.to_repr()),
-            proof: evidence.proof.clone(),
-            pallas: evidence.pallas.to_bytes().to_vec(),
-            vesta: evidence.vesta.to_bytes().to_vec(),
-        }
-    }
-    pub(super) fn restore(
-        self,
-        graph: &iroha_kagemusha_proof::finality::native::InstalledFinality,
-        budget: MemoryBudget,
-    ) -> Result<HistoryPrefix, Error> {
-        let field = |bytes| {
-            Option::<Fp>::from(Fp::from_repr(bytes))
-                .ok_or(Error::WitnessLost("recursive prefix scalar"))
-        };
-        let mut endpoints = [Fp::from(0); 6];
-        for (index, value) in self.endpoints.into_iter().enumerate() {
-            endpoints[index] = field(value)?;
-        }
-        let state = HistoryState {
-            next_height: self.next_height,
-            current: self.current.into(),
-            following: self.following.into(),
-            result: self.result,
-            tape_root: field(self.tape_root)?,
-            frame_len: self.frame_len,
-        };
-        let evidence = SourceNodeEvidence {
-            endpoints,
-            proof: self.proof,
-            pallas: AccumulatorT::<Ep>::from_bytes(&self.pallas)
-                .map_err(|_| Error::WitnessLost("recursive Pallas claim"))?,
-            vesta: AccumulatorT::<Eq>::from_bytes(&self.vesta)
-                .map_err(|_| Error::WitnessLost("recursive Vesta claim"))?,
-        };
-        graph
-            .restore_history(&state, evidence, budget)
-            .map_err(|_| Error::Proof("selected recursive prefix"))
-    }
 }
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::LedgerLoadPlanV1")]
@@ -269,96 +178,37 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         if manifest.recursive_retired == Some(address) || manifest.ledger_checkpoint.is_none() {
             return Err(Error::WitnessLost("recursive ledger selection"));
         }
-        let bytes = self.archive.read_object(&address, PREFIX_MAX)?;
-        let original: PrefixOriginal = archive::decode(&bytes)?;
+        let bytes = self
+            .archive
+            .read_object(&address, HISTORY_ORIGINAL_MAX_BYTES_V1)?;
+        let original = HistoryOriginalV1::decode_canonical(&bytes)
+            .map_err(|_| Error::WitnessLost("recursive prefix original"))?;
         original
-            .restore(
+            .restore_producer(
                 self.proofs.sources.finality_producer().installed(),
                 self.proofs.budget,
             )
             .map(Some)
-    }
-    fn clean_recursive_retired(&mut self) -> Result<(), Error> {
-        let (root, mut manifest) = self.sync_manifest()?;
-        if let Some(address) = manifest.recursive_retired {
-            if manifest.recursive_checkpoint == Some(address) {
-                return Err(Error::WitnessLost("recursive cleanup selected prefix"));
-            }
-            self.archive.remove(ArchiveKey::Object(address))?;
-            manifest.recursive_retired = None;
-            self.publish_manifest(root, &manifest)?;
-        }
-        self.clean_retired_ledger()
+            .map_err(history_error)
     }
     pub(super) fn ingest_recursive_ledger(
         &mut self,
         bytes: &[u8],
     ) -> Result<LedgerProgressV1, Error> {
-        if !matches!(self.status()?, SlotStatus::Released(_)) {
-            return Err(Error::NoHead);
-        }
-        let candidate = ledger::proof_original(bytes)?;
-        self.clean_recursive_retired()?;
-        let (root, mut manifest) = self.sync_manifest()?;
         let genesis = Arc::clone(&self.proofs.genesis);
-        let (mut verifier, previous) = self.selected_ledger(&manifest, &genesis)?;
-        let prefix = self.recursive_prefix(&manifest)?;
-        if let Some(previous) = previous.as_ref() {
-            let prefix = prefix
-                .as_ref()
-                .ok_or(Error::WitnessLost("recursive selected prefix"))?;
-            if prefix.state().next_height
-                != previous
-                    .height()
-                    .checked_add(1)
-                    .ok_or(Error::Invalid("ledger height overflow"))?
-            {
-                return Err(Error::WitnessLost("recursive native height binding"));
-            }
-            if candidate.height() == previous.height() {
-                verifier
-                    .verify_retained_decision(&candidate)
-                    .map_err(|_| Error::Proof("recursive ledger retry decision"))?;
-                return Ok(ledger::progress(previous));
-            }
-            if candidate.height() != prefix.state().next_height {
-                return Err(Error::Invalid("recursive ledger requires next height"));
-            }
-        }
-        let block = if previous.is_none() {
-            if candidate.height() != 1 {
-                return Err(Error::Invalid("recursive ledger starts at genesis"));
-            }
-            verifier
-                .verify_retained_decision(&candidate)
-                .or_else(|_| verifier.verify(&candidate))
-                .map_err(|_| Error::Proof("recursive ledger genesis"))?
-        } else {
-            verifier
-                .verify(&candidate)
-                .map_err(|_| Error::Proof("recursive ledger continuity"))?
-        };
-        let prefix = self.prove_recursive_successor(prefix, &block)?;
-        let checkpoint = verifier
-            .export_checkpoint(&candidate)
-            .map_err(|_| Error::Proof("recursive native checkpoint"))?;
-        let checkpoint_bytes = checkpoint
-            .encode_canonical()
-            .map_err(|_| Error::Proof("recursive native checkpoint encoding"))?;
-        let checkpoint_address = self
-            .archive
-            .write_object(&checkpoint_bytes, MAX_FINALITY_CHECKPOINT_BYTES)?;
-        let prefix_address = self.archive.write_object(
-            &archive::encode(&PrefixOriginal::from_prefix(&prefix))?,
-            PREFIX_MAX,
-        )?;
-        manifest.ledger_retired = manifest.ledger_checkpoint;
-        manifest.ledger_checkpoint = Some(checkpoint_address);
-        manifest.recursive_retired = manifest.recursive_checkpoint;
-        manifest.recursive_checkpoint = Some(prefix_address);
-        self.publish_manifest(root, &manifest)?;
-        self.clean_recursive_retired()?;
-        Ok(ledger::progress(&checkpoint))
+        self.ingest_ledger_transition(
+            &genesis,
+            bytes,
+            |this, manifest| this.recursive_prefix(manifest),
+            |prefix| prefix.state().next_height,
+            |this, prefix, block| {
+                let prefix = this.prove_recursive_successor(prefix, block)?;
+                Ok((
+                    prefix.state().next_height,
+                    archive::encode(&HistoryOriginalV1::from_prefix(&prefix))?,
+                ))
+            },
+        )
     }
 
     /// Produce actual compact finality for an original Load and counted event path at the selected tip.

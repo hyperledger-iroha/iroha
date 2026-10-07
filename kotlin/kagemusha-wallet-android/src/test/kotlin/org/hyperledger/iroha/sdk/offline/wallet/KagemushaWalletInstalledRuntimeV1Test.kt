@@ -16,11 +16,19 @@ import org.junit.jupiter.api.Test
 
 /** Managed installation transport only; does not qualify Native signatures, sources or phones. */
 class KagemushaWalletInstalledRuntimeV1Test {
+    @Test fun `relocation bounds reject before native loading`() {
+        for (source in listOf(byteArrayOf(), ByteArray(8193))) {
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletInstallationOriginalsV1.relocateRegistrationSource(source, "/private") }
+        }
+        for (root in listOf("", "relative", "/nul\u0000root", "/" + "x".repeat(4096))) {
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletInstallationOriginalsV1.relocateRegistrationSource(byteArrayOf(1), root) }
+        }
+    }
     private fun originals(values: List<ByteArray>) = KagemushaWalletInstallationOriginalsV1(
-        values[0], values[1], values[2], values[3], values[4], values[5], values[6])
+        values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7])
 
-    @Test fun `all seven exact originals retain native role order and defensive copies`() {
-        val values = List(7) { byteArrayOf(it.toByte(), 0, -1) }
+    @Test fun `all eight exact originals retain native role order and defensive copies`() {
+        val values = List(8) { byteArrayOf(it.toByte(), 0, -1) }
         val retained = originals(values)
         values.forEach { it.fill(19) }
         val firstRead = retained.frames()
@@ -36,12 +44,12 @@ class KagemushaWalletInstalledRuntimeV1Test {
 
     @Test fun `four signed base originals are mandatory and financial trio is all present or all absent`() {
         for (role in 0..6) {
-            val values = MutableList(7) { byteArrayOf(1) }
+            val values = MutableList(8) { byteArrayOf(1) }
             values[role] = byteArrayOf()
             assertFailsWith<IllegalArgumentException> { originals(values) }
         }
         for (presence in 0..7) {
-            val values = MutableList(7) { byteArrayOf(1) }
+            val values = MutableList(8) { byteArrayOf(1) }
             listOf(3, 4, 6).forEachIndexed { bit, role ->
                 if (presence and (1 shl bit) == 0) values[role] = byteArrayOf()
             }
@@ -97,9 +105,9 @@ class KagemushaWalletInstalledRuntimeV1Test {
 
     @Test fun `each role is bounded before originals are retained`() {
         val bounds = intArrayOf(8 * 1024 * 1024, 2048, 128 * 1024,
-            16 * 1024 * 1024 + 65536, 16 * 1024 * 1024, 64 * 1024 * 1024, 4096)
+            16 * 1024 * 1024 + 65536, 16 * 1024 * 1024, 64 * 1024 * 1024, 4096, 8192)
         bounds.forEachIndexed { role, bound ->
-            val values = MutableList(7) { byteArrayOf(1) }
+            val values = MutableList(8) { byteArrayOf(1) }
             values[role] = ByteArray(bound + 1)
             assertFailsWith<IllegalArgumentException> { originals(values) }
         }
@@ -123,7 +131,8 @@ class KagemushaWalletInstalledRuntimeV1Test {
         val methods = JvmApiInventory.read(KagemushaWalletInstalledRuntimeNativeV1::class.java)
             .methods.filter { it.isNative }
         val expected = mapOf(
-            "beginInstallation" to "(Lorg/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletAndroidPlatformV1;[B[B[B[B[B[B[B)J",
+            "relocateRegistrationSource" to "([B[B)Lorg/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletCallV1;",
+            "beginInstallation" to "(Lorg/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletAndroidPlatformV1;[B[B[B[B[B[B[B[B)J",
             "registerInstallation" to "(J)J",
             "closeInstallation" to "(J)I",
         )

@@ -189,6 +189,23 @@ Every output is a pure function of its inputs and the prover's random stream;
 results do not depend on the Rayon pool size, and no behaviour comes from
 environment variables.
 
+The ignored `actual_descriptor_node_major_tile_experiment` unit test compares
+row-wise evaluation with node-major tiles on exact M3 workload descriptors.
+The `iroha_plonk_gadgets` M3 test's
+`actual_m3_source_descriptors_for_dag_experiment` exporter supplies those frames
+without generating keys. Pin the exported bytes and both executable/source
+identities before running the experiment on either field with one or four workers.
+It compares every node and row, checks cancellation and a fresh retry, and bounds
+additional DAG scratch at 16 MiB. Its deterministic dense inputs are not satisfying
+witnesses; kernel timings and lifetime RSS cannot qualify proofs or M3 gates.
+The experiment itself provides no complete-proof qualification. The production
+candidate uses four-row tiles with a strided row view, preserving node arithmetic,
+root order and constraint folding. Scratch expansion beyond the scalar buffer is
+reserved before spawning work, with a shared 16 MiB sublimit inside the existing
+process-wide 64 MiB scratch ceiling. Contention or oversized public shapes select
+the scalar evaluator immediately. Zeroizing worker buffers drop before reservation
+release; no task waits while retaining scratch.
+
 Validate:
 
 ```sh

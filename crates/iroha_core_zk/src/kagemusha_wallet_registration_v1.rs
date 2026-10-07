@@ -5,14 +5,14 @@ use crate::kagemusha_wallet_artifacts_v1::producer_inventory::BlobV1;
 use iroha_data_model::{
     block::consensus::SumeragiRootScope,
     isi::kagemusha_wallet::registration_finality::{
-        FinalizedKagemushaWalletRegistrationV1, KagemushaWalletRegistrationFinalityErrorV1,
-        verify_finalized_kagemusha_wallet_registration_v1,
+        KagemushaWalletRegistrationDataV1, KagemushaWalletRegistrationErrorV1,
+        project_kagemusha_wallet_registration_v1,
     },
     kagemusha::KagemushaWalletSchemeV1,
     query::CommittedTransaction,
     sumeragi_finality::{
-        FinalityError, MAX_FINALITY_BLOCK_BYTES, SumeragiFinalityCheckpoint, SumeragiFinalityProof,
-        SumeragiFinalityVerifier,
+        FinalityError, FinalityReadError, MAX_FINALITY_BLOCK_BYTES, SumeragiFinalityCheckpoint,
+        SumeragiFinalityProof, SumeragiFinalityVerifier,
     },
 };
 use iroha_fs::PrivateDirectory;
@@ -23,6 +23,17 @@ use std::{
 
 mod builder;
 pub use builder::{RegistrationSelectionV1, publish_registration_source_v1};
+mod compact;
+pub use compact::{
+    COMPACT_REGISTRATION_MAX_BYTES_V1, CompactRegistrationOriginalV1,
+    verify_compact_registration_v1,
+};
+mod finalized;
+pub use finalized::{
+    FinalizedKagemushaWalletRegistrationV1, verify_finalized_kagemusha_wallet_registration_v1,
+};
+#[cfg(test)]
+mod native_tests;
 
 /// Whole canonical locator and fixed-size inventory; contains no caller-selected checkpoint.
 pub const REGISTRATION_SOURCE_MAX_BYTES_V1: usize = 8192;
@@ -95,14 +106,24 @@ pub enum RegistrationErrorV1 {
     /// Existing native finality verification failed.
     #[error(transparent)]
     Finality(#[from] FinalityError),
+    /// A locally derived checkpoint failed the existing native reader.
+    #[error(transparent)]
+    Checkpoint(#[from] FinalityReadError),
     /// Actual successful instruction extraction failed.
     #[error(transparent)]
-    Registration(#[from] KagemushaWalletRegistrationFinalityErrorV1),
+    Registration(#[from] KagemushaWalletRegistrationErrorV1),
     /// Caller cancellation stopped bounded progress without producing an asset capability.
     #[error("registration source read cancelled")]
     Cancelled,
 }
 fn storage(error: io::Error) -> RegistrationErrorV1 {
+    #[cfg(unix)]
+    if error.raw_os_error().is_some_and(|code| {
+        code == rustix::io::Errno::LOOP.raw_os_error()
+            || code == rustix::io::Errno::NOTDIR.raw_os_error()
+    }) {
+        return RegistrationErrorV1::Custody("private source object kind changed");
+    }
     if matches!(
         error.kind(),
         io::ErrorKind::NotFound

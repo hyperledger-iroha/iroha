@@ -343,7 +343,12 @@ fn outer_transport_retains_exact_provider_selection_before_any_request() {
         assert!(matches!(owner.revalidate(&changed), Err(Error::Selection)));
         // Changed selection must reject before canonical decoding or any HTTPS dispatch.
         assert!(matches!(
-            owner.observe(&changed, b"malformed", Duration::from_secs(1)),
+            owner.observe(
+                &changed,
+                &super::super::test_fixture::asset(5, 2),
+                b"malformed",
+                Duration::from_secs(1)
+            ),
             Err(Error::Selection)
         ));
     }

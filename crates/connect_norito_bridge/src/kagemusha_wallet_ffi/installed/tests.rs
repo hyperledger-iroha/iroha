@@ -9,6 +9,7 @@ fn base() -> RuntimeOriginals<'static> {
         producer_inventory: b"catalog",
         signed_genesis: b"genesis",
         originals_root: b"root",
+        registration_source: b"",
     }
 }
 #[test]
@@ -66,7 +67,8 @@ fn original_extents_are_refused_before_decode_or_platform_acquisition() {
             3 => input.verifier_pack = &oversized,
             4 => input.producer_inventory = &oversized,
             5 => input.signed_genesis = &oversized,
-            _ => input.originals_root = &oversized,
+            6 => input.originals_root = &oversized,
+            _ => input.registration_source = &oversized,
         }
         assert_eq!(input.validate_bounds(), Err(Failure::code(INVALID)));
     }
@@ -107,5 +109,28 @@ fn complete_metadata_extent_is_separate_from_process_scratch_and_original_limits
     assert_eq!(
         iroha_pasta::msm::SharedMemoryBudget::process_default().limit_bytes(),
         64 << 20
+    );
+}
+
+#[test]
+fn registration_original_extends_exact_c_layout_without_role_aliases() {
+    use std::mem::{offset_of, size_of};
+    let word = size_of::<usize>();
+    assert_eq!(size_of::<WalletRuntimeOriginals>(), 16 * word);
+    assert_eq!(
+        offset_of!(WalletRuntimeOriginals, originals_root),
+        12 * word
+    );
+    assert_eq!(
+        offset_of!(WalletRuntimeOriginals, originals_root_length),
+        13 * word
+    );
+    assert_eq!(
+        offset_of!(WalletRuntimeOriginals, registration_source),
+        14 * word
+    );
+    assert_eq!(
+        offset_of!(WalletRuntimeOriginals, registration_source_length),
+        15 * word
     );
 }

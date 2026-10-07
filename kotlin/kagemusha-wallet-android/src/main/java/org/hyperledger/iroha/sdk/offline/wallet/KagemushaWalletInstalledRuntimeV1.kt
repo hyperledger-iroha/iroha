@@ -17,6 +17,10 @@ import java.util.concurrent.Executors
  * finality-originals/. Native opens the original files without following links and verifies the
  * complete authenticated catalog. This constructor neither reads nor creates that directory.
  *
+ * [registrationSource] is canonical asset registration transport DATA. Generic app release
+ * requires it; fixed deployment adapters require empty bytes. Native authenticates its whole
+ * prefix and successful Global Register before creating any platform owner.
+ *
  * The four signed base originals are mandatory. The financial trio is all present or all absent.
  * Complete absence still enters Native base authentication, then ArtifactsUnavailable (-4)
  * with no installed owner. Partial financial offers are invalid.
@@ -29,14 +33,33 @@ class KagemushaWalletInstallationOriginalsV1(
     producerInventory: ByteArray,
     signedGenesis: ByteArray,
     originalsRoot: ByteArray,
+    registrationSource: ByteArray,
 ) {
     private val originals: List<ByteArray>
+    companion object {
+        /** Rebind locator DATA after copying exact originals into private device storage.
+         * This copies no file and grants no proof, registration or wallet admission. */
+        @JvmStatic fun relocateRegistrationSource(original: ByteArray, root: String): ByteArray {
+            val path = root.toByteArray(Charsets.UTF_8)
+            require(original.isNotEmpty() && original.size <= 8192 && path.isNotEmpty() && path.size <= 4096 &&
+                root.startsWith("/") && !path.contains(0.toByte())) { "bounded source and private absolute root required" }
+            if (!org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge.isNativeAvailable())
+                throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
+            val result = try { KagemushaWalletInstalledRuntimeNativeV1.relocateRegistrationSource(original.copyOf(), path) }
+                catch (_: LinkageError) { throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE) }
+                ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+            if (result.status < 0) throw KagemushaWalletExceptionV1(result.status, result.reason, result.platformCode)
+            val bytes = result.original()
+            if (bytes.size > 8192) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+            return bytes
+        }
+    }
 
     init {
         val values = listOf(appManifest, signatureEnvelope, walletRuntime, verifierPack,
-            producerInventory, signedGenesis, originalsRoot)
+            producerInventory, signedGenesis, originalsRoot, registrationSource)
         val bounds = intArrayOf(8 * 1024 * 1024, 2048, 128 * 1024,
-            16 * 1024 * 1024 + 65536, 16 * 1024 * 1024, 64 * 1024 * 1024, 4096)
+            16 * 1024 * 1024 + 65536, 16 * 1024 * 1024, 64 * 1024 * 1024, 4096, 8192)
         require(values.indices.all { values[it].size <= bounds[it] }) {
             "installation original exceeds its native input bound"
         }
@@ -255,8 +278,9 @@ internal fun installationRuntimeHandle(result: Long): Long {
 }
 
 internal object KagemushaWalletInstalledRuntimeNativeV1 {
+    @JvmStatic external fun relocateRegistrationSource(source: ByteArray, root: ByteArray): KagemushaWalletCallV1?
     @JvmStatic external fun beginInstallation(platform: KagemushaWalletAndroidPlatformV1,appManifest: ByteArray,envelope: ByteArray,
-        walletRuntime: ByteArray,verifierPack: ByteArray,producerInventory: ByteArray,signedGenesis: ByteArray,originalsRoot: ByteArray): Long
+        walletRuntime: ByteArray,verifierPack: ByteArray,producerInventory: ByteArray,signedGenesis: ByteArray,originalsRoot: ByteArray,registrationSource: ByteArray): Long
     @JvmStatic external fun registerInstallation(attempt: Long): Long
     @JvmStatic external fun closeInstallation(attempt: Long): Int
 }

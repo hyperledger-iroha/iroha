@@ -457,6 +457,19 @@ opt-level = 1
 debug-assertions = true
 overflow-checks = true
 
+# Cold native checkpoint recovery retains large orchestration temporaries in
+# unoptimized local Deploy builds. Optimize this package's code generation while
+# preserving assertion and overflow checks; keep dev and test policy identical.
+[profile.dev.package.iroha_deploy]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
+
+[profile.test.package.iroha_deploy]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
+
 # Fresh finality profiling found unoptimized Ed25519 field arithmetic beneath
 # optimized iroha_crypto. Match the existing arithmetic dependency policy while
 # retaining every public-key, subgroup and signature check in local profiles.

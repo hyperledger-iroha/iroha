@@ -1,12 +1,14 @@
 //! Activation-bound recursive history: later global ledger activity cannot skip Activate.
-use super::super::super::ledger_producer::{PREFIX_MAX, PrefixOriginal};
+use super::super::super::ledger_producer::history_error;
 use super::*;
+use crate::kagemusha_wallet_finality_v1::{HISTORY_ORIGINAL_MAX_BYTES_V1, HistoryOriginalV1};
 use iroha_data_model::sumeragi_finality::{
     MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint,
 };
 use iroha_kagemusha_proof::finality::native::HistoryPrefix;
 
-const CURSOR_MAX: usize = TRANSACTION_MAX + MAX_FINALITY_CHECKPOINT_BYTES + PREFIX_MAX + 4096;
+const CURSOR_MAX: usize =
+    TRANSACTION_MAX + MAX_FINALITY_CHECKPOINT_BYTES + HISTORY_ORIGINAL_MAX_BYTES_V1 + 4096;
 
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::ActivationFinalityCursorV1")]
@@ -15,7 +17,7 @@ pub(super) struct Cursor {
     signed_transaction: Vec<u8>,
     // Owned complete originals, never aliases to a global checkpoint which cleanup can retire.
     checkpoint: Vec<u8>,
-    prefix: PrefixOriginal,
+    prefix: HistoryOriginalV1,
 }
 impl Cursor {
     fn require(&self, plan: &Plan, signed_wire: &[u8]) -> Result<(), Error> {
@@ -152,10 +154,14 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         {
             return Err(Error::WitnessLost("activation cursor genesis binding"));
         }
-        let prefix = cursor.prefix.clone().restore(
-            self.proofs.sources.finality_producer().installed(),
-            self.proofs.budget,
-        )?;
+        let prefix = cursor
+            .prefix
+            .clone()
+            .restore_producer(
+                self.proofs.sources.finality_producer().installed(),
+                self.proofs.budget,
+            )
+            .map_err(history_error)?;
         if checkpoint.height().checked_add(1) != Some(prefix.state().next_height) {
             return Err(Error::WitnessLost("activation cursor recursive height"));
         }
@@ -308,7 +314,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             checkpoint: checkpoint
                 .encode_canonical()
                 .map_err(|_| Error::Proof("activation cursor checkpoint encoding"))?,
-            prefix: PrefixOriginal::from_prefix(&prefix),
+            prefix: HistoryOriginalV1::from_prefix(&prefix),
         };
         self.publish_activation_cursor(root, manifest, &plan, &cursor)?;
         Ok(ActivationFinalityProgressV1::Verifying(ledger::progress(

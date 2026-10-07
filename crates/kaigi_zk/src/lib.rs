@@ -8,7 +8,10 @@
 #![deny(missing_docs)]
 
 // Oracle-only transcript and randomness hooks must never enter a shipping consumer.
-const _: () = assert!(!iroha_plonk::ORACLE_BUILD, "iroha_plonk_oracle is test-only");
+const _: () = assert!(
+    !iroha_plonk::ORACLE_BUILD,
+    "iroha_plonk_oracle is test-only"
+);
 
 pub mod authorization_v1;
 pub mod native;

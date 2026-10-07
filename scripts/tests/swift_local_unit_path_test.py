@@ -30,19 +30,20 @@ def workspace():
         yield Path(directory)
 
 
-def evaluate(workspace, selected, **overrides):
+def evaluate(workspace, selected, *, repository=ROOT, local_unit=True, **overrides):
     """Evaluate the original manifest without resolving or building dependencies."""
     environment = os.environ.copy()
     for name in ("MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR", "MOBILE_SDK_APPLE_ARTIFACT_DIR",
                  "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT"):
         environment.pop(name, None)
-    environment.update({"MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR": str(selected),
+    selector = "MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR" if local_unit else "MOBILE_SDK_APPLE_ARTIFACT_DIR"
+    environment.update({selector: str(selected),
                         "TMPDIR": str(workspace), **overrides})
-    arguments = ["swift", "package", "--package-path", str(ROOT / "IrohaSwift")]
+    arguments = ["swift", "package", "--package-path", str(repository / "IrohaSwift")]
     for role in ("scratch", "cache", "config", "security"):
         arguments.extend([f"--{role}-path", str(workspace / role)])
     result = subprocess.run([*arguments, "dump-package"], env=environment,
-                            cwd=ROOT, text=True, capture_output=True, check=False)
+                            cwd=repository, text=True, capture_output=True, check=False)
     assert result.returncode != 0, "empty directories must never become admitted frameworks"
     return result.stdout + result.stderr
 
@@ -73,3 +74,26 @@ def test_public_child_and_symbolic_ancestor_are_rejected(workspace):
 def test_local_unit_cannot_enter_release_admission(workspace):
     output = evaluate(workspace, workspace, MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT="1")
     assert "local-unit artifacts cannot enter an external/release artifact corridor" in output
+
+
+def test_physical_private_tmp_root_preserves_canonical_path_guards():
+    """Use the actual manifest where Foundation standardization aliases /private/tmp.
+
+    The copied manifest is unchanged source, and every artifact directory is empty;
+    passing the path guard must still fail the mandatory artifact check.
+    """
+    with tempfile.TemporaryDirectory(prefix="swift-manifest-root-", dir="/private/tmp") as temporary:
+        repository = Path(temporary).resolve(strict=True)
+        package = repository / "IrohaSwift"
+        package.mkdir()
+        shutil.copyfile(ROOT / "IrohaSwift/Package.swift", package / "Package.swift")
+        artifact = repository / "target/qualification/owned"
+        artifact.mkdir(parents=True, mode=0o700)
+        assert "NoritoBridge.xcframework is required at" in evaluate(
+            repository, artifact, repository=repository)
+        alias = Path("/tmp") / repository.name / "target/qualification/owned"
+        assert alias.resolve(strict=True) == artifact
+        assert "does not traverse a symbolic link" in evaluate(
+            repository, alias, repository=repository)
+        assert "must be outside the reviewed Iroha source tree" in evaluate(
+            repository, artifact, repository=repository, local_unit=False)

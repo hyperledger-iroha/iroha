@@ -110,11 +110,37 @@ enum ToriiIdentifierOwnerContract {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(value)
     }
+    /// Translate validation failures only at a Decodable boundary, retaining the source error.
+    static func decodedValue<Value>(at codingPath: [CodingKey], _ validate: () throws -> Value) throws -> Value {
+        do {
+            return try validate()
+        } catch let error as DecodingError {
+            throw error
+        } catch {
+            let reason: String
+            if case let ToriiClientError.invalidPayload(message) = error {
+                reason = message
+            } else {
+                reason = String(describing: error)
+            }
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: codingPath, debugDescription: reason, underlyingError: error))
+        }
+    }
+    static func decodeString<Key: CodingKey, Value>(
+        from container: KeyedDecodingContainer<Key>, forKey key: Key,
+        validating validate: (String) throws -> Value
+    ) throws -> Value {
+        let raw = try container.decode(String.self, forKey: key)
+        return try decodedValue(at: container.codingPath + [key]) { try validate(raw) }
+    }
     static func fields(_ decoder: Decoder, required: Set<String>, optional: Set<String> = []) throws {
         let values = try decoder.container(keyedBy: IdentifierOwnerJSONKey.self)
         let keys = Set(values.allKeys.map(\.stringValue))
         guard required.isSubset(of: keys), keys.isSubset(of: required.union(optional)) else {
-            throw ToriiClientError.invalidPayload("Identifier JSON requires its exact current fields.")
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Identifier JSON requires its exact current fields."))
         }
     }
 }

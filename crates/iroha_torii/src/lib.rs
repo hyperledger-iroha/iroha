@@ -68,9 +68,9 @@ mod history_producer;
 mod identifier_resolution;
 mod iso_profile;
 #[cfg(feature = "app_api")]
-mod kagemusha_wallet;
-#[cfg(feature = "app_api")]
 mod kagemusha_enrollment;
+#[cfg(feature = "app_api")]
+mod kagemusha_wallet;
 mod ledger_state_finality;
 mod multisig_execution_evidence;
 mod native_projection_response;
@@ -40156,7 +40156,9 @@ impl Torii {
             .clone()
             .map(|selected| kagemusha_enrollment::EnrollmentService::open(state.clone(), selected))
             .transpose()
-            .map_err(|error| ToriiBuildError::component_initialization("kagemusha_enrollment", error))?
+            .map_err(|error| {
+                ToriiBuildError::component_initialization("kagemusha_enrollment", error)
+            })?
             .map(Arc::new);
         let torii = Self {
             build_identity,
@@ -41623,8 +41625,12 @@ impl Torii {
         sorafs::stream_token_cleanup::register_worker(app_state.as_ref(), &mut workers)
             .expect("prepared test stream-token cleanup must retain its worker handle");
         #[cfg(feature = "app_api")]
-        kagemusha_enrollment::register_worker(app_state.as_ref(), shutdown_signal.clone(), &mut workers)
-            .expect("prepared test enrollment service must retain its worker handle");
+        kagemusha_enrollment::register_worker(
+            app_state.as_ref(),
+            shutdown_signal.clone(),
+            &mut workers,
+        )
+        .expect("prepared test enrollment service must retain its worker handle");
         Ok(TestApiRouterRuntime {
             router,
             shutdown_signal,
@@ -41751,7 +41757,8 @@ impl Torii {
                 &shutdown_signal,
                 critical_workers,
                 failure,
-            ).await);
+            )
+            .await);
         }
         if !emergency_fast && let Some(runtime) = self.iso_bridge.clone() {
             let task = match start_iso_bridge_projection_worker(

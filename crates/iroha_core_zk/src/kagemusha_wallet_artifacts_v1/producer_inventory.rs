@@ -25,12 +25,14 @@ pub use recipe::{ReceiptSourceRecipeV1, SourceScopeV1};
 
 #[path = "producer_inventory/compiler.rs"]
 mod compiler;
-#[cfg(test)]
-pub(crate) use compiler::open_pinned_engineering_wallet_sources;
 pub use compiler::{
     CompilationErrorV1, CompilationPhaseV1, CompiledKeyV1, CompiledOmegaV1, CompiledOperationV1,
     CompiledQV1, CompiledSigmasV1, OfflineCompilerV1, OriginalSinkV1, QClassesV1,
     WalletArtifactDraftV1, WalletArtifactOriginalsV1, q_classes,
+};
+#[cfg(test)]
+pub(crate) use compiler::{
+    open_pinned_engineering_finality_sources, open_pinned_engineering_wallet_sources,
 };
 
 #[path = "producer_inventory/finality.rs"]

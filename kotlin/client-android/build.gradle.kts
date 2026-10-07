@@ -1827,7 +1827,7 @@ abstract class StripNativeBridgeTask @Inject constructor(
         val cargoFeatures = listOf("privacy-production-enabled")
         val manifest = linkedMapOf<String, Any?>(
             "schema" to "iroha.android-native-build-provenance.v1",
-            "native_bridge_abi_version" to 26,
+            "native_bridge_abi_version" to 27,
             "build_profile" to "release",
             "cargo_locked" to true,
             "privacy_production_enabled" to true,

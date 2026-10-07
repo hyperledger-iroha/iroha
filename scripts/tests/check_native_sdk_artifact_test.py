@@ -80,7 +80,7 @@ def test_native_c_contracts_exclude_retired_kagemusha_exports() -> None:
 def test_current_wallet_export_contract_matches_every_apple_inventory() -> None:
     """Keep the independently reviewed publication and admission inventories exact."""
     expected = MODULE.KAGEMUSHA_WALLET_C_EXPORTS
-    assert len(expected) == len(set(expected)) == 22
+    assert len(expected) == len(set(expected)) == 23
     for relative, start, end in (
         ("scripts/build_norito_xcframework.sh", '"required_symbols": [', '"forbidden_symbols": ['),
         ("scripts/validate_norito_bridge_xcframework.py", "EXPECTED_REQUIRED_SYMBOLS = [", "EXPECTED_FORBIDDEN_SYMBOLS = ["),
@@ -101,7 +101,7 @@ def test_current_wallet_exports_are_accepted_and_unknown_names_are_rejected() ->
         + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS
         + MODULE.KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS
     )
-    assert len(current) == len(set(current)) == 40
+    assert len(current) == len(set(current)) == 42
     for sdk in ("c-jni", "csharp"):
         MODULE.validate_retired_protocol_symbols(current, sdk=sdk)
         for symbol in (*current, "connect_norito_free"):
@@ -139,12 +139,13 @@ def test_current_wallet_exports_are_accepted_and_unknown_names_are_rejected() ->
 
 def test_current_new_wallet_exports_are_each_mandatory_and_optional_aliases_are_rejected() -> None:
     new_c = tuple("connect_norito_kagemusha_wallet_" + suffix + "_v1"
-                  for suffix in ("review", "execute_reviewed", "discard_review", "installation_begin", "installation_register", "installation_close", "enrollment"))
+                  for suffix in ("review", "execute_reviewed", "discard_review", "installation_begin", "installation_register", "installation_close", "registration_source_relocate", "enrollment"))
     new_jni = tuple("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
                     for method in ("review", "executeReviewed", "discardReview", "enrollment")) + (
         "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_beginInstallation",
         "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_registerInstallation",
         "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_closeInstallation",
+        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_relocateRegistrationSource",
     )
     for sdk, added in (("csharp", new_c), ("c-jni", new_c + new_jni)):
         required = MODULE.REQUIRED_SYMBOLS[sdk]
@@ -423,12 +424,12 @@ def test_python_probe_disables_bytecode_in_its_actual_isolated_child(tmp_path: P
         "assert sys.flags.isolated == 1\n"
         "assert sys.dont_write_bytecode\n"
         "def connect_norito_bridge_abi_version():\n"
-        "    return 26\n",
+        "    return 27\n",
         encoding="utf-8",
     )
     assert MODULE.probe_python_abi(
         artifact, ("connect_norito_bridge_abi_version",)
-    ) == 26
+    ) == 27
     assert not (tmp_path / "__pycache__").exists()
 
 
@@ -443,6 +444,22 @@ def test_retired_abi23_privacy_export_marker_is_rejected() -> None:
         assert "stale privacy/bridge ABI marker" in str(error)
     else:
         raise AssertionError("retired ABI-23 privacy export marker was accepted")
+
+
+def test_retired_abi26_privacy_export_markers_are_rejected() -> None:
+    for marker in (
+        "iroha_privacy_abi26_compiled_profile_catalog_v1",
+        "iroha_privacy_compiled_profile_catalog_v26",
+    ):
+        assert MODULE.STALE_PRIVACY_ABI_MARKER_RE.search(marker)
+        try:
+            MODULE.validate_privacy_c_exports(
+                [marker, *MODULE.APPROVED_PRIVACY_C_EXPORTS], require_exact=False
+            )
+        except MODULE.ArtifactContractError as error:
+            assert "stale privacy/bridge ABI marker" in str(error)
+        else:
+            raise AssertionError("retired ABI-26 privacy export marker was accepted")
 
 
 def test_retired_abi23_manifest_and_schema_are_rejected() -> None:
@@ -462,9 +479,11 @@ def test_retired_abi23_manifest_and_schema_are_rejected() -> None:
     }
     MODULE.validate_manifest(manifest)
     for field, retired, expected in (
-        ("bridge_abi_version", 23, "must be exactly 26"),
-        ("bridge_abi_version", 24, "must be exactly 26"),
-        ("bridge_abi_version", 25, "must be exactly 26"),
+        ("bridge_abi_version", 23, "must be exactly 27"),
+        ("bridge_abi_version", 24, "must be exactly 27"),
+        ("bridge_abi_version", 25, "must be exactly 27"),
+        ("bridge_abi_version", 26, "must be exactly 27"),
+        ("schema", "iroha.native-sdk-abi26-artifact.v1", "schema is unsupported"),
         ("schema", "iroha.native-sdk-abi25-artifact.v1", "schema is unsupported"),
         ("schema", "iroha.native-sdk-abi24-artifact.v1", "schema is unsupported"),
         ("schema", "iroha.native-sdk-abi23-artifact.v1", "schema is unsupported"),
@@ -751,7 +770,7 @@ def test_current_wallet_jni_inventory_matches_shipping_consumer_and_definitions(
     defined_exports = []
     for filename, owner, methods, relative in (
         ("KagemushaWalletV1.kt", "KagemushaWalletNativeV1", {"revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "enrollment", "execute", "review", "executeReviewed", "discardReview", "snapshot"}, "platform_jni/kagemusha_wallet_advance.rs"),
-        ("KagemushaWalletInstalledRuntimeV1.kt", "KagemushaWalletInstalledRuntimeNativeV1", {"beginInstallation", "registerInstallation", "closeInstallation"}, "kagemusha_wallet_ffi/installed/jni.rs"),
+        ("KagemushaWalletInstalledRuntimeV1.kt", "KagemushaWalletInstalledRuntimeNativeV1", {"beginInstallation", "registerInstallation", "closeInstallation", "relocateRegistrationSource"}, "kagemusha_wallet_ffi/installed/jni.rs"),
     ):
         consumer = (REPO_ROOT / "kotlin/kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet" / filename).read_text()
         declared = re.findall(r"@JvmStatic\s+external\s+fun\s+(\w+)\s*\(", consumer)
@@ -763,7 +782,7 @@ def test_current_wallet_jni_inventory_matches_shipping_consumer_and_definitions(
     source = (REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/kagemusha_wallet_review.rs").read_text()
     defined_exports.extend(re.findall(r'pub\s+(?:unsafe\s+)?extern\s+"system"\s+fn\s+(Java_\w+)\s*\(', source))
     expected = MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS
-    assert len(expected) == len(set(expected)) == len(declared_exports) == 17
+    assert len(expected) == len(set(expected)) == len(declared_exports) == 18
     assert set(expected) == declared_exports
     assert len(defined_exports) == len(set(defined_exports)) == len(expected)
     assert set(defined_exports) == set(expected)
