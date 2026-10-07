@@ -28,14 +28,12 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 
 ## Immediate blockers
 
-The Nexus proposal/status repairs, publisher-custody fixture and original invocation
-binding have fresh native functional coverage: the rebuilt daemon and harness passed
-ten fresh sixteen-validator paid settlements and the original serial all-seat
-restart/readback diagnostic. The
-independent disjoint-lane control also passed stopped-committee progress, recovery
-without resubmission and all-process restart. Subsequent AMX custody and harness
-repairs require fresh affected checks. Full fault/leakage campaigns and the
-complete original funded execution graph remain open.
+The Nexus proposal/status repairs and original invocation binding are preserved.
+The merged ordinary-Load cutover requires fresh daemon and Nexus harness qualification;
+the retired publisher-custody fixture cannot supply current admission evidence.
+Paid settlement, serial all-seat restart/readback and disjoint-lane isolation must
+run on the same rebuilt candidate. Full fault/leakage campaigns and the complete
+original funded execution graph remain open.
 
 Native ceremony handoff preserves overlapping descriptors and read-only phase pipes.
 The rebuilt paid committee attempt authenticated seven-seat activation at height 129

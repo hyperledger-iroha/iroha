@@ -6298,7 +6298,7 @@ fn typed_sora_profile_requirements(merged: &Table) -> Result<bool> {
     Ok(services || nexus.uses_multilane_catalogs() || nexus.has_lane_overrides())
 }
 fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
-    // Inspect the same typed Nexus geometry without admitting a runtime publisher.
+    // Inspect the same typed Nexus geometry without requiring unrelated runtime services.
     let merged = merged_sora_profile_detection_config(config_layers);
     let raw_sorafs_storage = read_bool(&merged, &["torii", "sorafs", "storage", "enabled"])
         .unwrap_or(false)
@@ -6343,6 +6343,7 @@ fn sora_profile_runtime_config_fixture(
     };
     let peer = NetworkPeer::builder().build(&environment);
     let mut merged = sora_profile_detection_defaults();
+    // Preserve the original detection identities and PoP roster for full-runtime parsing.
     for layer in config_layers {
         merge_tables(&mut merged, layer);
     }
@@ -11746,6 +11747,56 @@ mod tests {
         }
     }
     #[test]
+    fn ordinary_load_peers_keep_exact_signed_genesis_identity_without_publisher_custody()
+    -> Result<()> {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        let genesis = network.genesis();
+        let original_hash = genesis.0.hash();
+        let original_network = NetworkId::from_genesis_hash(original_hash);
+        let mut signatures = genesis.0.signatures();
+        let signature = signatures.next().expect("canonical genesis signature");
+        assert!(signatures.next().is_none());
+        assert!(
+            signature
+                .signature()
+                .verify_hash(network.genesis_key_pair.public_key(), original_hash,)
+                .is_ok()
+        );
+        assert_eq!(network.network_id(), original_network);
+        assert_eq!(network.validators().len(), 4);
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        for peer in network.all_peers() {
+            assert!(
+                peer.base_config_table()
+                    .get("kagemusha_load_authorizer")
+                    .is_none()
+            );
+            assert!(!peer.dir.join("kagemusha-load-authorizer").exists());
+            let actual = resolve_actual_config_result(peer, &layers)?;
+            assert_eq!(actual.genesis.expected_hash, original_hash);
+            assert_eq!(actual.common.chain, network.chain_id());
+            assert_eq!(
+                peer.client_config.get().unwrap().network_id,
+                original_network
+            );
+            assert_eq!(*peer.client().client().network_id(), original_network);
+            let cloned = peer.clone();
+            assert!(Arc::ptr_eq(&cloned.client_config, &peer.client_config));
+            assert_eq!(
+                resolve_actual_config_result(&cloned, &layers)?
+                    .genesis
+                    .expected_hash,
+                original_hash,
+            );
+        }
+        assert_eq!(network.genesis().0.hash(), original_hash);
+        Ok(())
+    }
+
+    #[test]
     fn generated_peer_base_config_parses_without_retired_load_publisher() -> Result<()> {
         let dir = tempdir()?;
         let environment = Environment {
@@ -11771,13 +11822,19 @@ mod tests {
     }
 
     #[test]
-    fn removed_load_publisher_override_is_rejected_by_generated_peer_config() -> Result<()> {
+    fn ordinary_load_peer_configuration_rejects_retired_publisher_overrides() -> Result<()> {
         let dir = tempdir()?;
         let environment = Environment {
             dir: dir.path().to_path_buf(),
         };
         let peer = NetworkPeer::builder().build(&environment);
-        resolve_actual_config_result(&peer, &[config::base_iroha_config()])?;
+        let base = config::base_iroha_config();
+        resolve_actual_config_result(&peer, std::slice::from_ref(&base))?;
+        assert!(
+            peer.base_config_table()
+                .get("kagemusha_load_authorizer")
+                .is_none()
+        );
         let missing = dir.path().join("missing-caller-keyring.nrt");
         for publisher in [
             Value::Boolean(false),
@@ -11790,10 +11847,11 @@ mod tests {
                 ("submitter_key_file".into(), "missing-submitter.key".into()),
             ])),
         ] {
-            let mut layer = config::base_iroha_config();
+            let mut layer = base.clone();
             layer.insert("kagemusha_load_authorizer".into(), publisher);
-            let error = resolve_actual_config_result(&peer, &[layer])
-                .expect_err("retired publisher configuration must not select or synthesize custody");
+            let error = resolve_actual_config_result(&peer, &[layer]).expect_err(
+                "retired publisher configuration must not select or synthesize custody",
+            );
             assert!(
                 format!("{error:#}").contains("kagemusha_load_authorizer"),
                 "unexpected error: {error:?}"
@@ -11801,6 +11859,7 @@ mod tests {
             assert!(!missing.exists());
             assert!(!peer.dir.join("kagemusha-load-authorizer").exists());
         }
+        resolve_actual_config_result(&peer, &[base])?;
         Ok(())
     }
 
