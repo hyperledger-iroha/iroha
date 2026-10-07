@@ -507,7 +507,7 @@ impl History {
         &self,
         tree: &mut iroha_fs::PrivateReadTreeScope<'_>,
     ) -> Result<()> {
-        tree.with_directory(&self.operation, |_| Ok::<_, crate::managed::Error>(()))?;
+        tree.revalidate_directory(&self.operation)?;
         self.revalidate_descendant_handles_in_tree(tree)
     }
 
@@ -516,10 +516,10 @@ impl History {
         tree: &mut iroha_fs::PrivateReadTreeScope<'_>,
     ) -> Result<()> {
         if let Some(root) = &self.root {
-            tree.with_directory(root, |_| Ok::<_, crate::managed::Error>(()))?;
+            tree.revalidate_directory(root)?;
         }
         for attempt in &self.attempts {
-            tree.with_directory(&attempt.directory, |_| Ok::<_, crate::managed::Error>(()))?;
+            tree.revalidate_directory(&attempt.directory)?;
         }
         Ok(())
     }

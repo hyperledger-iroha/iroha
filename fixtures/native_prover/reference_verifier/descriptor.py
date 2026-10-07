@@ -11,6 +11,7 @@ import hashlib
 from . import require
 from .codec import Cursor, descriptor_frame, MAX_COUNT
 from .curve import Curve
+from .transcript import KATS
 
 
 def uint(width):
@@ -183,6 +184,9 @@ class Descriptor:
         require(1 <= v['k'] <= 10, 'reference domain exponent')
         require(int.from_bytes(v['base_modulus'], 'little') == curve.base and
                 int.from_bytes(v['scalar_modulus'], 'little') == curve.scalar, 'curve moduli')
+        pinned = [entry for entry in KATS['params_ipa'][curve.name] if entry['k'] == v['k']]
+        require(len(pinned) == 1 and v['params_digest'].hex() == pinned[0]['sha256'],
+                'descriptor parameter identity')
         d = v['degree']
         require(3 <= d <= 9 and v['permutation_chunk_len'] == d - 2 and
                 v['quotient_pieces'] == d - 1, 'degree pieces')
@@ -245,10 +249,12 @@ class Descriptor:
 
     def check_instances(self, instances):
         """Exact shape, canonical scalars and V2 type bounds."""
+        require(isinstance(instances, (list, tuple)), 'instance matrix')
         require(len(instances) == len(self['instance_lengths']), 'instance columns')
         for i, (column, length) in enumerate(zip(instances, self['instance_lengths'])):
+            require(isinstance(column, (list, tuple)), 'instance column')
             require(len(column) == length, 'instance length')
-            require(all(isinstance(value, int) and 0 <= value < self.curve.scalar for value in column),
+            require(all(type(value) is int and 0 <= value < self.curve.scalar for value in column),
                     'instance scalar')
             if self['instance_types'] is not None:
                 tag, bits = self['instance_types'][i]

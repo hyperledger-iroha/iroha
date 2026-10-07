@@ -28,20 +28,18 @@ fn tree_records_keep_native_inventory_bounds_lazy_errors_and_original_retry() {
         .read_tree_scope(|tree| {
             let mut total = 0;
             for row in [&first, &second] {
-                total += tree.with_directory(row, |directory| {
-                    let before = directory.entries(1)?;
+                total += tree.read_scope(row, |reader| {
+                    let before = reader.entries(1)?;
                     assert_eq!(before, vec![std::ffi::OsString::from("record")]);
-                    let length = directory.read_scope(|reader| {
-                        reader.read("record", 8, |bytes| {
-                            assert_eq!(bytes, b"original");
-                            visits.set(visits.get() + 1);
-                            bytes.len()
-                        })
+                    let length = reader.read("record", 8, |bytes| {
+                        assert_eq!(bytes, b"original");
+                        visits.set(visits.get() + 1);
+                        bytes.len()
                     })?;
-                    assert_eq!(directory.entries(1)?, before);
-                    directory.revalidate()?;
+                    assert_eq!(reader.entries(1)?, before);
                     Ok::<_, io::Error>(length)
                 })?;
+                tree.revalidate_directory(row)?;
             }
             Ok::<_, io::Error>(total)
         })
@@ -52,10 +50,8 @@ fn tree_records_keep_native_inventory_bounds_lazy_errors_and_original_retry() {
         let expected = first.read(name, maximum).unwrap_err();
         let actual = root
             .read_tree_scope(|tree| {
-                tree.with_directory(&first, |directory| {
-                    directory.read_scope(|reader| {
-                        reader.read(name, maximum, |_| visits.set(visits.get() + 1))
-                    })
+                tree.read_scope(&first, |reader| {
+                    reader.read(name, maximum, |_| visits.set(visits.get() + 1))
                 })
             })
             .unwrap_err();
@@ -64,20 +60,18 @@ fn tree_records_keep_native_inventory_bounds_lazy_errors_and_original_retry() {
     }
     let refusal = root
         .read_tree_scope(|tree| {
-            tree.with_directory(&first, |directory| {
-                directory.read_scope(|reader| {
-                    let nested = reader.read("record", 8, |_| {
-                        Err::<(), _>(io::Error::new(
-                            io::ErrorKind::NotFound,
-                            "typed semantic source refusal",
-                        ))
-                    })?;
-                    nested?;
-                    let _ = reader.read("later", 8, |_| visits.set(visits.get() + 1))?;
-                    Ok::<_, io::Error>(())
-                })
+            tree.read_scope(&first, |reader| {
+                let nested = reader.read("record", 8, |_| {
+                    Err::<(), _>(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "typed semantic source refusal",
+                    ))
+                })?;
+                nested?;
+                let _ = reader.read("later", 8, |_| visits.set(visits.get() + 1))?;
+                Ok::<_, io::Error>(())
             })?;
-            tree.with_directory(&second, |_| {
+            tree.read_scope(&second, |_| {
                 visits.set(visits.get() + 1);
                 Ok::<_, io::Error>(())
             })
@@ -88,7 +82,7 @@ fn tree_records_keep_native_inventory_bounds_lazy_errors_and_original_retry() {
     assert_eq!(visits.get(), 2);
     assert_eq!(root.read_tree_scope(|_| Ok::<_, io::Error>(7)).unwrap(), 7);
     let inventory_error = root
-        .read_tree_scope(|tree| tree.with_directory(&first, |directory| directory.entries(0)))
+        .read_tree_scope(|tree| tree.read_scope(&first, |reader| reader.entries(0)))
         .unwrap_err();
     assert_eq!(inventory_error.kind(), first.entries(0).unwrap_err().kind());
     assert_eq!(first.read("record", 8).unwrap().as_slice(), b"original");
@@ -112,18 +106,14 @@ fn tree_shared_native_prefix_is_required_and_restored_changes_have_explicit_temp
             first.revalidate().unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
         );
-        let anchor_view = tree.with_directory(&root, |directory| directory.entries(2));
+        let anchor_view = tree.read_scope(&root, |reader| reader.entries(2));
         assert_eq!(
             anchor_view.unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
         );
         for row in [&first, &retained, &second] {
             assert_eq!(
-                tree.with_directory(row, |directory| directory.read_scope(|reader| reader.read(
-                    "record",
-                    8,
-                    |bytes| bytes.len()
-                )))?,
+                tree.read_scope(row, |reader| reader.read("record", 8, |bytes| bytes.len()))?,
                 8
             );
         }
@@ -131,10 +121,8 @@ fn tree_shared_native_prefix_is_required_and_restored_changes_have_explicit_temp
         // public policy: 0755 is safe there, despite the shared anchor's private policy.
         reopened.revalidate().unwrap();
         assert_eq!(reopened.read("record", 8).unwrap().as_slice(), b"original");
-        tree.with_directory(&reopened, |directory| {
-            directory.read_scope(|reader| {
-                reader.read("record", 8, |bytes| assert_eq!(bytes, b"original"))
-            })
+        tree.read_scope(&reopened, |reader| {
+            reader.read("record", 8, |bytes| assert_eq!(bytes, b"original"))
         })?;
         // Use an actually unsafe ancestor to prove that a nonshared owner falls back
         // to the same complete native ancestry checks, before visiting the consumer.
@@ -142,8 +130,8 @@ fn tree_shared_native_prefix_is_required_and_restored_changes_have_explicit_temp
         let ordinary = reopened.revalidate().unwrap_err();
         assert_eq!(ordinary.kind(), io::ErrorKind::PermissionDenied);
         let visited = Cell::new(false);
-        let fallback = tree.with_directory(&reopened, |directory| {
-            directory.read_scope(|reader| reader.read("record", 8, |_| visited.set(true)))
+        let fallback = tree.read_scope(&reopened, |reader| {
+            reader.read("record", 8, |_| visited.set(true))
         });
         let scoped = fallback.unwrap_err();
         assert_eq!(scoped.kind(), ordinary.kind());
@@ -152,9 +140,7 @@ fn tree_shared_native_prefix_is_required_and_restored_changes_have_explicit_temp
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::set_permissions(foreign_root.path(), std::fs::Permissions::from_mode(0o755))
             .unwrap();
-        let fallback = tree.with_directory(&foreign, |directory| {
-            directory.read_scope(|reader| reader.read("record", 7, |_| ()))
-        });
+        let fallback = tree.read_scope(&foreign, |reader| reader.read("record", 7, |_| ()));
         assert_eq!(
             fallback.unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
@@ -186,23 +172,22 @@ fn tree_persistent_ancestor_result_and_suffix_leaf_refusals_restore_exact_origin
             let displaced = temporary.path().join("displaced");
             let refused = root
                 .read_tree_scope(|tree| {
-                    let body = tree.with_directory(&first, |directory| {
-                        directory.read_scope(|reader| match outcome {
-                            "some" => reader.read("record", 8, |bytes| Some(bytes.len())),
-                            "none" => match reader.read("missing", 8, |_| Some(0)) {
-                                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-                                other => other,
-                            },
-                            "native_error" => reader.read("record", 7, |_| Some(0)),
-                            "semantic_error" => {
-                                reader.read("record", 8, |bytes| assert_eq!(bytes, b"original"))?;
+                    let body = tree.read_scope(&first, |reader| match outcome {
+                        "some" => reader.read("record", 8, |bytes| Some(bytes.len())),
+                        "none" => match reader.read("missing", 8, |_| Some(0)) {
+                            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                            other => other,
+                        },
+                        "native_error" => reader.read("record", 7, |_| Some(0)),
+                        "semantic_error" => reader
+                            .read("record", 8, |bytes| assert_eq!(bytes, b"original"))
+                            .and_then(|()| {
                                 Err(io::Error::new(
                                     io::ErrorKind::InvalidData,
                                     "real typed body refusal",
                                 ))
-                            }
-                            _ => unreachable!(),
-                        })
+                            }),
+                        _ => unreachable!(),
                     });
                     match outcome {
                         "some" => assert_eq!(*body.as_ref().unwrap(), Some(8)),
@@ -261,28 +246,29 @@ fn tree_persistent_ancestor_result_and_suffix_leaf_refusals_restore_exact_origin
             assert_eq!(first.read("record", 8).unwrap().as_slice(), b"original");
         }
     }
-    // Closing each row also overrides a real typed error after its leaf scope has closed.
+    // Closing each row overrides every real typed leaf result observed inside its callback.
     for outcome in ["some", "none", "native_error", "semantic_error"] {
         let (_temporary, root, first, _second) = store();
         let refused = root
             .read_tree_scope(|tree| {
-                tree.with_directory(&first, |directory| {
-                    let body = directory.read_scope(|reader| match outcome {
+                tree.read_scope(&first, |reader| {
+                    let body = match outcome {
                         "some" => reader.read("record", 8, |bytes| Some(bytes.len())),
                         "none" => match reader.read("missing", 8, |_| Some(0)) {
                             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
                             other => other,
                         },
                         "native_error" => reader.read("record", 7, |_| Some(0)),
-                        "semantic_error" => {
-                            reader.read("record", 8, |bytes| assert_eq!(bytes, b"original"))?;
-                            Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "row semantic refusal",
-                            ))
-                        }
+                        "semantic_error" => reader
+                            .read("record", 8, |bytes| assert_eq!(bytes, b"original"))
+                            .and_then(|()| {
+                                Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "row semantic refusal",
+                                ))
+                            }),
                         _ => unreachable!(),
-                    });
+                    };
                     match outcome {
                         "some" => assert_eq!(*body.as_ref().unwrap(), Some(8)),
                         "none" => assert_eq!(*body.as_ref().unwrap(), None),
@@ -330,8 +316,8 @@ fn tree_persistent_ancestor_result_and_suffix_leaf_refusals_restore_exact_origin
                     }
                     _ => unreachable!(),
                 }
-                tree.with_directory(&first, |directory| {
-                    directory.read_scope(|reader| reader.read("record", 8, |_| visited.set(true)))
+                tree.read_scope(&first, |reader| {
+                    reader.read("record", 8, |_| visited.set(true))
                 })
             })
             .unwrap_err();
@@ -353,9 +339,12 @@ fn tree_persistent_ancestor_result_and_suffix_leaf_refusals_restore_exact_origin
             _ => unreachable!(),
         }
         assert_eq!(
-            root.read_tree_scope(|tree| tree.with_directory(&first, |directory| directory
-                .read_scope(|reader| reader.read("record", 8, |bytes| bytes.len()))))
-                .unwrap(),
+            root.read_tree_scope(|tree| tree.read_scope(&first, |reader| reader.read(
+                "record",
+                8,
+                |bytes| bytes.len()
+            )))
+            .unwrap(),
             8
         );
     }
@@ -368,18 +357,16 @@ fn tree_leaf_consumer_keeps_native_deny_write_and_delete_ownership() {
     let record = first.path().join("record");
     let moved = first.path().join("moved");
     root.read_tree_scope(|tree| {
-        tree.with_directory(&first, |directory| {
-            directory.read_scope(|reader| {
-                reader.read("record", 8, |bytes| {
-                    assert_eq!(bytes, b"original");
-                    assert!(
-                        std::fs::OpenOptions::new()
-                            .write(true)
-                            .open(&record)
-                            .is_err()
-                    );
-                    assert!(std::fs::rename(&record, &moved).is_err());
-                })
+        tree.read_scope(&first, |reader| {
+            reader.read("record", 8, |bytes| {
+                assert_eq!(bytes, b"original");
+                assert!(
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&record)
+                        .is_err()
+                );
+                assert!(std::fs::rename(&record, &moved).is_err());
             })
         })
     })
@@ -416,9 +403,7 @@ fn tree_comparison_reuses_standalone_lazy_names_bounds_empty_and_original_retry(
     assert!(!first.compare_files(&lazy).unwrap());
     assert!(
         !root
-            .read_tree_scope(
-                |tree| tree.with_directory(&first, |directory| directory.compare_files(&lazy))
-            )
+            .read_tree_scope(|tree| tree.read_scope(&first, |reader| reader.compare_files(&lazy)))
             .unwrap()
     );
     for inputs in [
@@ -440,24 +425,20 @@ fn tree_comparison_reuses_standalone_lazy_names_bounds_empty_and_original_retry(
     ] {
         let standalone = first.compare_files(&inputs).unwrap_err();
         let scoped = root
-            .read_tree_scope(|tree| {
-                tree.with_directory(&first, |directory| directory.compare_files(&inputs))
-            })
+            .read_tree_scope(|tree| tree.read_scope(&first, |reader| reader.compare_files(&inputs)))
             .unwrap_err();
         assert_eq!(standalone.kind(), scoped.kind());
         assert_eq!(standalone.to_string(), scoped.to_string());
     }
     assert!(first.compare_files(&[]).unwrap());
     assert!(
-        root.read_tree_scope(
-            |tree| tree.with_directory(&first, |directory| directory.compare_files(&[]))
-        )
-        .unwrap()
+        root.read_tree_scope(|tree| tree.read_scope(&first, |reader| reader.compare_files(&[])))
+            .unwrap()
     );
     assert!(first.compare_files(&original).unwrap());
     assert!(
         root.read_tree_scope(
-            |tree| tree.with_directory(&first, |directory| directory.compare_files(&original))
+            |tree| tree.read_scope(&first, |reader| reader.compare_files(&original))
         )
         .unwrap()
     );
@@ -489,8 +470,7 @@ fn tree_comparison_closes_actual_boolean_error_and_empty_outcomes_before_anchor_
         };
         let refused = root
             .read_tree_scope(|tree| {
-                let body =
-                    tree.with_directory(&first, |directory| directory.compare_files(&inputs));
+                let body = tree.read_scope(&first, |reader| reader.compare_files(&inputs));
                 match outcome {
                     "equal" | "empty" => assert!(*body.as_ref().unwrap()),
                     "different" => assert!(!*body.as_ref().unwrap()),
@@ -511,7 +491,7 @@ fn tree_comparison_closes_actual_boolean_error_and_empty_outcomes_before_anchor_
         assert!(first.compare_files(&restored).unwrap());
         assert!(
             root.read_tree_scope(
-                |tree| tree.with_directory(&first, |directory| directory.compare_files(&restored))
+                |tree| tree.read_scope(&first, |reader| reader.compare_files(&restored))
             )
             .unwrap()
         );

@@ -318,4 +318,5 @@ def verify(descriptor: bytes, version: int, key: bytes, parameter_bytes: bytes,
 def verify_captured_oracle(descriptor: bytes, key: bytes, parameter_bytes: bytes,
                            instances, proof: bytes, transcript_repr: int) -> Verified:
     """Historical test-only framing, explicit and separate from production admission."""
+    require(type(transcript_repr) is int, 'explicit canonical oracle binding')
     return _verify(descriptor, 1, key, parameter_bytes, instances, proof, transcript_repr)

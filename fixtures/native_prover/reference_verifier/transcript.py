@@ -29,7 +29,7 @@ class Sponge:
 
     def absorb(self, value: int):
         """Append a native canonical field element to the current duplex buffer."""
-        require(0 <= value < self.modulus, 'sponge element')
+        require(type(value) is int and 0 <= value < self.modulus, 'sponge element')
         self.buffer.append(value)
 
     def permute(self):
@@ -60,7 +60,8 @@ class Transcript:
     """One explicit transcript profile, canonical proof reader and challenge tape."""
 
     def __init__(self, curve: Curve, profile: int, proof: bytes, *, oracle: bool = False):
-        require(profile in (0, 1, 2), 'transcript profile')
+        require(type(profile) is int and profile in (0, 1, 2), 'transcript profile')
+        require(isinstance(proof, bytes), 'encoded proof required')
         require(not oracle or profile != 2, 'no base-field oracle fallback')
         self.curve, self.profile, self.proof, self.oracle = curve, profile, proof, oracle
         self.position = 0
@@ -74,7 +75,7 @@ class Transcript:
 
     def common_scalar(self, value: int):
         """Absorb a proof scalar without ever accepting a noncanonical value."""
-        require(0 <= value < self.curve.scalar, 'transcript scalar')
+        require(type(value) is int and 0 <= value < self.curve.scalar, 'transcript scalar')
         if self.profile == 0:
             self.hash.update(b'\x02' + value.to_bytes(32, 'little'))
         elif self.profile == 1 or self.curve.tag == 1:

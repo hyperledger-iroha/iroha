@@ -214,3 +214,7 @@ mod verdict_parity;
 #[cfg(iroha_plonk_oracle)]
 #[path = "vendored_goldens/succinct_parity.rs"]
 mod succinct_parity;
+
+#[cfg(iroha_plonk_oracle)]
+#[path = "vendored_goldens/reference_fixture.rs"]
+mod reference_fixture;

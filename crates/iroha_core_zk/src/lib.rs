@@ -12,7 +12,7 @@
 //!   [`ProofRelation`] it needs and returns actionable verification errors.
 //! - Stable proof/verifying-key hash helpers (`hash_proof`, `hash_vk`).
 //! - Batch-local de-duplication cache (`DedupCache`) and a light pre-verifier.
-//! - Closed dispatch for supported Halo2 IPA and STARK relations. A backend
+//! - Closed dispatch for supported native PIPA-R and STARK relations. A backend
 //!   label is not a privacy or execution-correctness guarantee. Incomplete IVM
 //!   execution relations are not admitted through generic verification.
 //! - A unified ZK envelope (`ZK1 | TLV*`) reader/writer helpers for tests and

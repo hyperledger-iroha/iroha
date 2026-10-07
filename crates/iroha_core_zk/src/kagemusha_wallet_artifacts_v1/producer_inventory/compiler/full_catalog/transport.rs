@@ -78,6 +78,72 @@ pub(super) fn copy(
     )
 }
 
+fn membership(wallet: &[OriginalV1], finality: &[ArtifactRecord]) -> Result<Vec<u8>, Error> {
+    let wallet = identities(wallet, &[])?;
+    let verifier = identities(&[], finality)?;
+    let mut all = wallet.clone();
+    for (&hash, &blob) in &verifier {
+        if all.insert(hash, blob).is_some_and(|old| old != blob) {
+            return Err(Error::Inventory);
+        }
+    }
+    let mut server = BTreeMap::new();
+    for record in finality {
+        let blob = BlobV1 {
+            bytes: record.lengths[2],
+            sha256: record.sha256[2],
+        };
+        if blob.bytes == 0 || blob.sha256 == [0; 32] {
+            return Err(Error::Inventory);
+        }
+        if all.get(&blob.sha256).is_some_and(|old| *old != blob)
+            || server
+                .insert(blob.sha256, blob)
+                .is_some_and(|old| old != blob)
+        {
+            return Err(Error::Inventory);
+        }
+    }
+    // A byte-identical shared original is required by the wallet, regardless of
+    // the additional server role. Only genuinely excluded identities go here.
+    server.retain(|hash, _| !all.contains_key(hash));
+    let rows = |blobs: &BTreeMap<[u8; 32], BlobV1>| {
+        blobs
+            .values()
+            .map(|blob| {
+                norito::json!({
+                    "sha256": (hex::encode(blob.sha256)),
+                    "bytes": (blob.bytes),
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let total = |blobs: &BTreeMap<[u8; 32], BlobV1>| {
+        blobs.values().try_fold(0_u64, |sum, blob| {
+            sum.checked_add(blob.bytes).ok_or(Error::Inventory)
+        })
+    };
+    norito::json::to_vec(&norito::json!({
+        "schema": "iroha.kagemusha.engineering-qualified-source-membership.v1",
+        "scope": "Exact signed inventory membership after complete source qualification; no phone storage, memory, performance or deployment authority",
+        "wallet_originals": (rows(&wallet)),
+        "wallet_unique_bytes": (total(&wallet)?),
+        "finality_verifier_originals": (rows(&verifier)),
+        "finality_verifier_unique_bytes": (total(&verifier)?),
+        "combined_unique_bytes": (total(&all)?),
+        "server_only_proving_key_references": (rows(&server)),
+        "server_only_committed_bytes": (total(&server)?),
+        "server_proving_key_bytes_read": 0,
+        "server_proving_key_scope": "Signed source-inventory lengths and hashes only; excluded server proving bytes were not loaded or rehashed",
+    }))
+    .map_err(|_| Error::Inventory)
+}
+
+pub(super) fn qualified_membership(qualified: &QualifiedWalletSourcesV1) -> Result<Vec<u8>, Error> {
+    let inventory = qualified.inventory();
+    membership(&inventory.originals, &inventory.finality.originals)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +232,51 @@ mod tests {
             copy_blobs(&selected, &mut Missing, &mut destination)
                 .is_err_and(|error| error == Error::Unavailable)
         );
+    }
+
+    #[test]
+    fn membership_counts_unique_required_bytes_and_only_excluded_server_references() {
+        // Metadata DATA only: this does not construct a qualified source owner.
+        let shared = BlobV1::of(b"shared verifier");
+        let wallet = OriginalV1 {
+            descriptor: BlobV1::of(b"wallet descriptor"),
+            verifying_key: shared,
+            proving_key: BlobV1::of(b"wallet proving key"),
+        };
+        let descriptor = BlobV1::of(b"server descriptor");
+        let excluded = BlobV1::of(b"server-only proving key");
+        let mut record = ArtifactRecord {
+            name: Vec::new(),
+            lengths: [descriptor.bytes, shared.bytes, excluded.bytes],
+            sha256: [descriptor.sha256, shared.sha256, excluded.sha256],
+        };
+        let read = |record| -> norito::json::Value {
+            norito::json::from_slice(&membership(&[wallet, wallet], &[record]).unwrap()).unwrap()
+        };
+        let value = read(record.clone());
+        let wallet_bytes = wallet.descriptor.bytes + shared.bytes + wallet.proving_key.bytes;
+        assert_eq!(value["wallet_originals"].as_array().unwrap().len(), 3);
+        assert_eq!(value["wallet_unique_bytes"].as_u64(), Some(wallet_bytes));
+        assert_eq!(
+            value["combined_unique_bytes"].as_u64(),
+            Some(wallet_bytes + descriptor.bytes)
+        );
+        assert_eq!(
+            value["server_only_committed_bytes"].as_u64(),
+            Some(excluded.bytes)
+        );
+        assert_eq!(value["server_proving_key_bytes_read"].as_u64(), Some(0));
+        record.lengths[2] = wallet.proving_key.bytes;
+        record.sha256[2] = wallet.proving_key.sha256;
+        let value = read(record.clone());
+        assert!(
+            value["server_only_proving_key_references"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(value["server_only_committed_bytes"].as_u64(), Some(0));
+        record.lengths[2] += 1;
+        assert!(membership(&[wallet], &[record]).is_err());
     }
 }

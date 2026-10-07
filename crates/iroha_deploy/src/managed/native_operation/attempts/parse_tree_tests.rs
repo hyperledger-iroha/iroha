@@ -315,15 +315,13 @@ fn fresh_parse_tree_anchor_exit_closes_real_row_results_and_restores_original_so
                 .unwrap();
         }
         let refused: Result<Option<Authorization>> = root.read_tree_scope(|tree| {
-            let result: Result<Option<Authorization>> = tree.with_directory(&attempt.directory, |directory| {
-                directory.read_scope(|reader| {
+            let result: Result<Option<Authorization>> = tree.read_scope(&attempt.directory, |reader| {
                     if kind == "native_not_found" {
                         return reader.read("missing.nrt", MAX_RECORD_BYTES, decode_record::<Authorization>)
                             .map_err(Error::from).and_then(|value| value.map(Some));
                     }
                     read_record_in_scope::<Authorization>(reader, if kind == "absence" { "missing.nrt" } else { "authorization.nrt" })
-                })
-            });
+                });
             match kind {
                 "present" => assert!(result.as_ref().unwrap().as_ref() == Some(&attempt.authorization)),
                 "absence" => assert!(result.as_ref().unwrap().is_none()),
@@ -348,10 +346,8 @@ fn fresh_parse_tree_anchor_exit_closes_real_row_results_and_restores_original_so
         assert_eq!(fixture.history().unwrap().reserved_attempt_count(), 1);
     }
     let suffix_refused: Result<Option<Authorization>> = root.read_tree_scope(|tree| {
-        tree.with_directory(&attempt.directory, |directory| {
-            let result = directory.read_scope(|reader| {
-                read_record_in_scope::<Authorization>(reader, "authorization.nrt")
-            });
+        tree.read_scope(&attempt.directory, |reader| {
+            let result = read_record_in_scope::<Authorization>(reader, "authorization.nrt");
             assert!(result.as_ref().unwrap().as_ref() == Some(&attempt.authorization));
             fs::set_permissions(attempt.directory.path(), fs::Permissions::from_mode(0o755))
                 .unwrap();
@@ -364,10 +360,8 @@ fn fresh_parse_tree_anchor_exit_closes_real_row_results_and_restores_original_so
     fs::set_permissions(attempt.directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let restored: Option<Authorization> = root
         .read_tree_scope(|tree| {
-            let result = tree.with_directory(&attempt.directory, |directory| {
-                directory.read_scope(|reader| {
-                    read_record_in_scope::<Authorization>(reader, "authorization.nrt")
-                })
+            let result = tree.read_scope(&attempt.directory, |reader| {
+                read_record_in_scope::<Authorization>(reader, "authorization.nrt")
             })?;
             fs::set_permissions(fixture.operation.path(), fs::Permissions::from_mode(0o755))
                 .unwrap();

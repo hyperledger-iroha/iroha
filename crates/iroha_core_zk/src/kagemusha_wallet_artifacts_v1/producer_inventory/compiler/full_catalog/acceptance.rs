@@ -292,6 +292,11 @@ fn qualify_authenticated(
     let (sigma_imports, q_imports) = active_imports(&qualified, &mut originals, config);
     let inventory = qualified.inventory();
     publish(
+        &output.join("qualified-source-membership.json"),
+        &super::transport::qualified_membership(&qualified).unwrap(),
+    )
+    .unwrap();
+    publish(
         &output.join("engineering-source-acceptance.norito"),
         &norito::to_bytes(&(
             b"complete generated engineering source qualification; no deployment authority"

@@ -81,6 +81,21 @@ def complete_result(text: str, expected_count: int) -> bool:
     return results == [(str(expected_count), "0", "0")] and expected_count > 0
 
 
+def shipping_guard_span(span: dict) -> bool:
+    """Follow a primary const-panic span to the actual consumer's assert invocation."""
+    if span.get("is_primary") is not True:
+        return False
+    guard = 'const _: () = assert!(!iroha_plonk::ORACLE_BUILD, "iroha_plonk_oracle is test-only");'
+    for _ in range(8):
+        if (Path(span.get("file_name", "")).parts[-4:] == ("crates", "kaigi_zk", "src", "lib.rs")
+                and any(line.get("text", "").strip() == guard for line in span.get("text", []))):
+            return True
+        span = (span.get("expansion") or {}).get("span")
+        if not isinstance(span, dict):
+            return False
+    return False
+
+
 def shipping_rejection(text: str, exit_code: int) -> bool:
     """Require the actual shipping consumer's const guard, not an unrelated build failure."""
     messages = [json.loads(line) for line in text.splitlines() if line.strip()]
@@ -92,9 +107,7 @@ def shipping_rejection(text: str, exit_code: int) -> bool:
             and errors[0].get("target", {}).get("name") == "kaigi_zk"
             and (errors[0]["message"].get("code") or {}).get("code") == "E0080"
             and "iroha_plonk_oracle is test-only" in errors[0]["message"].get("message", "")
-            and any(span.get("is_primary") is True
-                    and Path(span.get("file_name", "")).parts[-4:] == ("crates", "kaigi_zk", "src", "lib.rs")
-                    for span in errors[0]["message"].get("spans", [])))
+            and any(shipping_guard_span(span) for span in errors[0]["message"].get("spans", [])))
 
 
 def source_hashes(root: Path) -> dict[str, str]:
