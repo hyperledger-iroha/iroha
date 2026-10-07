@@ -16,11 +16,11 @@
 //! rows, the fixed columns and the zero-padded instance columns.
 
 use ff::{Field, PrimeField};
-use iroha_pasta::{PastaCurve, field::batch_invert, msm::MemoryBudget};
+use iroha_pasta::{PastaCurve, msm::MemoryBudget};
 use rand_core_06::RngCore;
 use rayon::prelude::*;
 
-use super::{ProverError, random_values, write_point};
+use super::{ProverError, batch::invert_column, random_values, write_point};
 use crate::{
     cs::descriptor::ColumnKindV1,
     keys::ProvingKey,
@@ -120,7 +120,7 @@ where
                     }
                 }
             });
-        batch_invert(&mut modified);
+        invert_column(&mut modified);
         // Numerators prod_j (v_j + beta DELTA^j omega^i + gamma).
         let set_delta = delta_power;
         modified

@@ -58,6 +58,16 @@ impl Read for StableOriginal {
 }
 
 impl DirectoryOriginalsV1 {
+    /// Exact retained canonical root for transporting a closed catalog's original list.
+    /// Revalidates real private ancestry; the path grants no catalog or wallet authority.
+    ///
+    /// # Errors
+    /// Replaced or no longer owner-private original directory/ancestor.
+    pub fn root(&self) -> io::Result<&Path> {
+        self.directory.revalidate()?;
+        Ok(self.directory.path())
+    }
+
     /// Retain an existing exact, owner-private directory with a finite original ceiling.
     /// The authenticated inventory separately applies descriptor, VK and PK role limits.
     ///
@@ -71,6 +81,14 @@ impl DirectoryOriginalsV1 {
             directory: PrivateDirectory::open_exact(path)?,
             maximum_bytes,
         })
+    }
+
+    /// Reauthenticate one whole exact original using a bounded 64 KiB stream.
+    ///
+    /// # Errors
+    /// Changed extent, content address, immutable mode, original file or ancestry.
+    pub fn verify_original(&self, identity: BlobV1) -> io::Result<()> {
+        self.require(identity)
     }
 
     fn reader(&self, digest: [u8; 32]) -> io::Result<StableOriginal> {
@@ -163,7 +181,7 @@ impl DirectoryOriginalsV1 {
 impl OriginalSourceV1 for DirectoryOriginalsV1 {
     fn open(&mut self, sha256: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
         self.reader(sha256)
-            .map(|reader| Box::new(reader) as Box<dyn Read>)
+            .map(|reader| -> Box<dyn Read> { Box::new(reader) })
             .map_err(|_| Error::Inventory)
     }
 }

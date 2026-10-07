@@ -7,7 +7,9 @@ use super::*;
 #[derive(Debug)]
 pub struct WalletResult {
     /// 0 unknown, 1 complete, 2 pending, 3 not performed, 4 archived, 5 delivery loss,
-    /// 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 CreditStatus, 11 preparing; negative is failure.
+    /// 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 CreditStatus, 11 preparing;
+    /// setup only: 12 original, 13 owned time challenge, 14 time exchange retained.
+    /// Negative is failure.
     pub status: i32,
     /// Failure platform reason or -1. Never conflate `UNAVAILABLE` with unknown/absent.
     pub reason: i32,
@@ -206,6 +208,346 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_execute_v1(
             )?;
             execute(handle, value)
         })
+    }
+}
+/// Typed setup input for the same exclusive Native wallet owner.
+/// Selectors: Bootstrap0, Offer1, Request2, Credited3, BeginTime4, FinishTime5.
+/// Unused fields must be zero/empty. No field supplies a clock, nonce or signature body.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WalletSetupRequest {
+    /// Exactly 32 readable bytes; nonzero local retry identity only for Offer/Request.
+    pub request_id: *const u8,
+    /// One fixed setup selector documented above.
+    pub selector: u32,
+    /// Positive Offer amount only; zero for every other selector.
+    pub amount: WalletU128,
+    /// Native-owned one-use time token for FinishTime only; zero otherwise.
+    pub token: u64,
+    /// Complete Offer, Credited or TimeAnchor original according to selector.
+    pub first: *const u8,
+    /// Exact first-original length.
+    pub first_length: usize,
+    /// Optional Request fee schedule or required FinishTime signer certificate.
+    pub second: *const u8,
+    /// Exact second-original length.
+    pub second_length: usize,
+    /// Optional Request fee signer certificate; empty for other selectors.
+    pub third: *const u8,
+    /// Exact third-original length.
+    pub third_length: usize,
+}
+/// Execute source-bound setup through the existing exclusive Native wallet owner.
+/// Bootstrap/Credited return existing completion statuses. Offer/Request return original12;
+/// BeginTime returns challenge13 with its opaque token in sequence; FinishTime returns retained14.
+/// # Safety
+/// Request and its input pointers are initialized for their stated lengths; out is writable
+/// with no previously allocated result. request_id always points to exactly 32 readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_setup_v1(
+    handle: u64,
+    request: *const WalletSetupRequest,
+    out: *mut WalletResult,
+) -> i32 {
+    unsafe {
+        output(out, || {
+            if request.is_null() {
+                return Err(Failure::code(INVALID));
+            }
+            let request = &*request;
+            let bounds = setup::bounds(request.selector)?;
+            // Check all original lengths before creating any input slice.
+            if [
+                request.first_length,
+                request.second_length,
+                request.third_length,
+            ]
+            .into_iter()
+            .zip(bounds)
+            .any(|(length, bound)| length > bound)
+            {
+                return Err(Failure::code(INVALID));
+            }
+            let value = setup::request(
+                input(request.request_id, 32, 32)?,
+                request.selector,
+                u128::from(request.amount.low) | (u128::from(request.amount.high) << 64),
+                request.token,
+                [
+                    input(request.first, request.first_length, bounds[0])?,
+                    input(request.second, request.second_length, bounds[1])?,
+                    input(request.third, request.third_length, bounds[2])?,
+                ],
+            )?;
+            setup(handle, value)
+        })
+    }
+}
+#[cfg(test)]
+mod setup_boundary_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct SetupWallet {
+        calls: Arc<AtomicUsize>,
+        panic: bool,
+    }
+    impl Wallet for SetupWallet {
+        fn setup(&mut self, input: setup::Setup) -> Result<Response> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            assert!(!self.panic, "contained setup boundary panic");
+            let (kind, sequence, bytes) = match input {
+                setup::Setup::Bootstrap => (1, 0, vec![0, 255, 1]),
+                setup::Setup::Offer { id, amount } => {
+                    assert_eq!(id, [7; 32]);
+                    assert_eq!(amount, u128::MAX);
+                    (12, 0, vec![0, 255, 2])
+                }
+                setup::Setup::Request { id, offer, fee } => {
+                    assert_eq!(id, [7; 32]);
+                    assert_eq!(offer, [0, 255, 7]);
+                    assert!(fee.is_none());
+                    (12, 0, vec![0, 255, 3])
+                }
+                setup::Setup::Credited(bytes) => {
+                    assert_eq!(bytes, [0, 255, 7]);
+                    (4, 0, vec![])
+                }
+                setup::Setup::BeginTime => (13, 19, vec![0, 255, 4]),
+                setup::Setup::FinishTime { .. } => panic!("unexpected unsigned time fixture"),
+            };
+            Ok(Response {
+                kind,
+                sequence,
+                bytes,
+                ..Response::default()
+            })
+        }
+        fn snapshot(&mut self) -> Result<state::Snapshot> {
+            panic!("not setup")
+        }
+        fn execute(&mut self, _: state::OperationRequestV1) -> Result<Response> {
+            panic!("not setup")
+        }
+        fn request_status(&mut self, _: &[u8; 32]) -> Result<Response> {
+            panic!("not setup")
+        }
+        fn retry(&mut self, _: &[u8; 32]) -> Result<Response> {
+            panic!("not setup")
+        }
+        fn resume(&mut self) -> Result<Response> {
+            panic!("not setup")
+        }
+        fn fold(&mut self) -> Result<Response> {
+            panic!("not setup")
+        }
+        fn credit(&mut self, _: &[u8; 32], _: &[u8; 32]) -> Result<Response> {
+            panic!("not setup")
+        }
+    }
+    fn installed(panic: bool) -> (u64, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handle = install(
+            Box::new(SetupWallet {
+                calls: calls.clone(),
+                panic,
+            }),
+            state::Scheduler::new(),
+        )
+        .unwrap();
+        (handle, calls)
+    }
+    fn request(id: &[u8; 32], selector: u32) -> WalletSetupRequest {
+        WalletSetupRequest {
+            request_id: id.as_ptr(),
+            selector,
+            amount: WalletU128::default(),
+            token: 0,
+            first: std::ptr::null(),
+            first_length: 0,
+            second: std::ptr::null(),
+            second_length: 0,
+            third: std::ptr::null(),
+            third_length: 0,
+        }
+    }
+    fn assert_failure(handle: u64, request: &WalletSetupRequest, expected: i32) {
+        let mut out = WalletResult {
+            status: 14,
+            reason: 99,
+            platform_code: 99,
+            sequence_low: 99,
+            sequence_high: 99,
+            detail: 99,
+            bytes: std::ptr::null_mut(),
+            length: 99,
+        };
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, request, &mut out) },
+            expected
+        );
+        assert_eq!(
+            (out.status, out.reason, out.platform_code),
+            (expected, -1, 0)
+        );
+        assert_eq!(
+            (out.sequence_low, out.sequence_high, out.detail, out.length),
+            (0, 0, 0, 0)
+        );
+        assert!(out.bytes.is_null());
+    }
+    #[test]
+    fn setup_c_preserves_typed_owner_input_and_distinct_exact_original_results() {
+        let (handle, calls) = installed(false);
+        let zero = [0; 32];
+        let id = [7; 32];
+        let original = [0, 255, 7];
+        for (selector, expected, sequence, bytes) in [
+            (0, 1, 0, vec![0, 255, 1]),
+            (1, 12, 0, vec![0, 255, 2]),
+            (2, 12, 0, vec![0, 255, 3]),
+            (3, 4, 0, vec![]),
+            (4, 13, 19, vec![0, 255, 4]),
+        ] {
+            let mut request = request(
+                if (1..=2).contains(&selector) {
+                    &id
+                } else {
+                    &zero
+                },
+                selector,
+            );
+            if selector == 1 {
+                request.amount = WalletU128 {
+                    low: u64::MAX,
+                    high: u64::MAX,
+                };
+            }
+            if selector == 2 || selector == 3 {
+                request.first = original.as_ptr();
+                request.first_length = original.len();
+            }
+            let mut out = WalletResult::default();
+            assert_eq!(
+                unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &request, &mut out) },
+                0
+            );
+            assert_eq!(
+                (out.status, out.sequence_low, out.sequence_high),
+                (expected, sequence, 0)
+            );
+            assert_eq!(out.length, bytes.len());
+            if bytes.is_empty() {
+                assert!(out.bytes.is_null());
+            } else {
+                assert_eq!(
+                    unsafe { std::slice::from_raw_parts(out.bytes, out.length) },
+                    bytes
+                );
+                crate::connect_norito_free(out.bytes);
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
+        close(handle).unwrap();
+        assert_failure(handle, &request(&zero, 0), CLOSED);
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
+    }
+    #[test]
+    fn setup_c_checks_all_bounds_and_unused_fields_before_owner_or_pointer_reads() {
+        let (handle, calls) = installed(false);
+        let zero = [0; 32];
+        let id = [7; 32];
+        let invalid_pointer = std::ptr::dangling::<u8>();
+        let mut value = request(&id, 2);
+        // Even first is unreadable: the oversized last original must reject first.
+        value.first = invalid_pointer;
+        value.first_length = 1;
+        value.third = invalid_pointer;
+        value.third_length = KAGEMUSHA_WALLET_CERTIFICATE_MAX_BYTES_V1 + 1;
+        assert_failure(handle, &value, INVALID);
+        value = request(&zero, 6);
+        value.first = invalid_pointer;
+        value.first_length = usize::MAX;
+        assert_failure(handle, &value, INVALID);
+        value = request(&zero, 4);
+        value.token = 1;
+        assert_failure(handle, &value, INVALID);
+        value = request(&id, 0);
+        assert_failure(handle, &value, INVALID);
+        value = request(&zero, 0);
+        value.amount.low = 1;
+        assert_failure(handle, &value, INVALID);
+        value = request(&id, 2);
+        let original = [7];
+        value.first = original.as_ptr();
+        value.first_length = 1;
+        value.second = original.as_ptr();
+        value.second_length = 1;
+        assert_failure(handle, &value, INVALID);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        close(handle).unwrap();
+    }
+    #[test]
+    fn setup_c_null_outputs_and_panics_never_fabricate_completion() {
+        let (handle, calls) = installed(false);
+        let zero = [0; 32];
+        let value = request(&zero, 0);
+        assert_eq!(
+            unsafe {
+                connect_norito_kagemusha_wallet_setup_v1(handle, &value, std::ptr::null_mut())
+            },
+            INVALID
+        );
+        let mut out = WalletResult::default();
+        assert_eq!(
+            unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, std::ptr::null(), &mut out) },
+            INVALID
+        );
+        assert_eq!(out.status, INVALID);
+        assert!(out.bytes.is_null());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        close(handle).unwrap();
+        let (handle, calls) = installed(true);
+        assert_failure(handle, &value, INTERNAL);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // The panic poisons this test-only owner; close still removes its handle.
+        assert!(close(handle).is_err());
+        assert_eq!(owner(handle).err().unwrap().status, CLOSED);
+    }
+    #[test]
+    fn setup_c_layout_tracks_native_pointer_and_u128_alignment() {
+        use std::mem::{align_of, offset_of, size_of};
+        fn align(value: usize, alignment: usize) -> usize {
+            value.div_ceil(alignment) * alignment
+        }
+        let pointer = size_of::<*const u8>();
+        let selector = pointer;
+        let amount = align(selector + size_of::<u32>(), align_of::<WalletU128>());
+        let token = align(amount + size_of::<WalletU128>(), align_of::<u64>());
+        let first = align(token + size_of::<u64>(), align_of::<*const u8>());
+        assert_eq!(offset_of!(WalletSetupRequest, request_id), 0);
+        assert_eq!(offset_of!(WalletSetupRequest, selector), selector);
+        assert_eq!(offset_of!(WalletSetupRequest, amount), amount);
+        assert_eq!(offset_of!(WalletSetupRequest, token), token);
+        assert_eq!(offset_of!(WalletSetupRequest, first), first);
+        assert_eq!(
+            offset_of!(WalletSetupRequest, first_length),
+            first + pointer
+        );
+        assert_eq!(offset_of!(WalletSetupRequest, second), first + 2 * pointer);
+        assert_eq!(
+            offset_of!(WalletSetupRequest, second_length),
+            first + 3 * pointer
+        );
+        assert_eq!(offset_of!(WalletSetupRequest, third), first + 4 * pointer);
+        assert_eq!(
+            offset_of!(WalletSetupRequest, third_length),
+            first + 5 * pointer
+        );
+        assert_eq!(
+            size_of::<WalletSetupRequest>(),
+            align(first + 6 * pointer, align_of::<WalletSetupRequest>())
+        );
     }
 }
 /// Resolve exact request custody; preparing11 is not irreversible pending2 or completion1.

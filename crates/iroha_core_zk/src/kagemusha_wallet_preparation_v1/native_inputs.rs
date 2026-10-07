@@ -125,6 +125,71 @@ fn load_recovery(
     super::monetary::insertion(&insertion)
 }
 
+/// Verified original field projection; Q proofs remain mandatory independent inputs.
+pub(crate) struct BootstrapFoldFieldsV1 {
+    pub(crate) state: BootstrapWitness,
+    pub(crate) sigma: Vec<u8>,
+    pub(crate) objects: [Vec<u8>; 3],
+}
+impl BootstrapFoldFieldsV1 {
+    pub(crate) fn with_q(self, q: [bootstrap::QInput; 2]) -> bootstrap::Inputs {
+        bootstrap::Inputs {
+            state: self.state,
+            sigma: self.sigma,
+            objects: self.objects,
+            q,
+        }
+    }
+}
+
+/// Verified original field projection; Q proofs remain mandatory independent inputs.
+pub(crate) struct LoadFoldFieldsV1 {
+    pub(crate) state: LoadWitness,
+    pub(crate) sigma: Vec<u8>,
+    pub(crate) receipt: [u8; 282],
+    pub(crate) objects: [Vec<u8>; 3],
+    pub(crate) finality: iroha_kagemusha_proof::finality::continuity::SourceNodeEvidence,
+    pub(crate) insertion: IndexedInsert<Fp>,
+    pub(crate) predecessor: load::PredecessorInput,
+}
+impl LoadFoldFieldsV1 {
+    pub(crate) fn with_q(self, q: [load::QInput; 3]) -> load::Inputs {
+        load::Inputs {
+            state: self.state,
+            sigma: self.sigma,
+            receipt: self.receipt,
+            objects: self.objects,
+            finality: self.finality,
+            insertion: self.insertion,
+            predecessor: self.predecessor,
+            q,
+        }
+    }
+}
+
+/// Verified original field projection; Q proofs remain mandatory independent inputs.
+pub(crate) struct ConsumingFoldFieldsV1 {
+    pub(crate) state: ConsumingWitness,
+    pub(crate) sigma: Vec<u8>,
+    pub(crate) omega: Vec<u8>,
+    pub(crate) objects: [Vec<u8>; 3],
+    pub(crate) recovery: Option<IndexedInsert<Fp>>,
+    pub(crate) predecessor: consuming::PredecessorInput,
+}
+impl ConsumingFoldFieldsV1 {
+    pub(crate) fn with_q(self, q: [consuming::QInput; 2]) -> consuming::Inputs {
+        consuming::Inputs {
+            state: self.state,
+            sigma: self.sigma,
+            omega: self.omega,
+            objects: self.objects,
+            recovery: self.recovery,
+            predecessor: self.predecessor,
+            q,
+        }
+    }
+}
+
 impl PreparationV1<'_> {
     /// Build complete native Load input from the retained ordinary receipt/finality
     /// and the capsule's authenticated low-leaf/empty-slot insertion. Original Qs
@@ -146,6 +211,21 @@ impl PreparationV1<'_> {
         q: [load::QInput; 3],
         budget: MemoryBudget,
     ) -> Result<load::Inputs, Error> {
+        self.load_fold_fields(owner, step, predecessor, public, plan, budget)
+            .map(|fields| fields.with_q(q))
+    }
+
+    /// Reconstruct the exact native source before its independent Q proofs exist.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn load_fold_fields(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        step: &ReleasedStep,
+        predecessor: &FoldedStateV1,
+        public: &KagemushaWalletLineagePublicV1,
+        plan: &load::Plan,
+        budget: MemoryBudget,
+    ) -> Result<LoadFoldFieldsV1, Error> {
         let capsule = &step.frozen.capsule;
         let fields = self.load_fields(owner, step, predecessor, public, plan, budget)?;
         let insertion = load_recovery(
@@ -154,14 +234,13 @@ impl PreparationV1<'_> {
             &predecessor.source_state.core.load_redeem_recovery_root,
             &capsule.successor_state.core.load_redeem_recovery_root,
         )?;
-        Ok(load::Inputs {
+        Ok(LoadFoldFieldsV1 {
             state: fields.state,
             sigma: fields.sigma,
             receipt: fields.receipt,
             objects: fields.objects,
             finality: fields.finality,
             insertion,
-            q,
             predecessor: load::PredecessorInput {
                 proof: predecessor.proof.clone(),
                 pallas: predecessor.pallas,
@@ -186,13 +265,25 @@ impl PreparationV1<'_> {
         q: [bootstrap::QInput; 2],
         budget: MemoryBudget,
     ) -> Result<bootstrap::Inputs, Error> {
+        self.bootstrap_fold_fields(owner, step, public, budget)
+            .map(|fields| fields.with_q(q))
+    }
+
+    /// Reconstruct the exact native source before its independent Q proofs exist.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn bootstrap_fold_fields(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        step: &ReleasedStep,
+        public: &KagemushaWalletLineagePublicV1,
+        budget: MemoryBudget,
+    ) -> Result<BootstrapFoldFieldsV1, Error> {
         no_map_openings(&step.frozen.capsule.map_openings)?;
         let fields = self.bootstrap_fields(owner, step, public, budget)?;
-        Ok(bootstrap::Inputs {
+        Ok(BootstrapFoldFieldsV1 {
             state: fields.state,
             sigma: fields.sigma,
             objects: fields.objects,
-            q,
         })
     }
 
@@ -214,6 +305,20 @@ impl PreparationV1<'_> {
         q: [consuming::QInput; 2],
         budget: MemoryBudget,
     ) -> Result<consuming::Inputs, Error> {
+        self.consuming_fold_fields(owner, step, predecessor, public, budget)
+            .map(|fields| fields.with_q(q))
+    }
+
+    /// Reconstruct the exact native source before its independent Q proofs exist.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn consuming_fold_fields(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        step: &ReleasedStep,
+        predecessor: &FoldedStateV1,
+        public: &KagemushaWalletLineagePublicV1,
+        budget: MemoryBudget,
+    ) -> Result<ConsumingFoldFieldsV1, Error> {
         let capsule = &step.frozen.capsule;
         let fields =
             self.consuming_fields(capsule.kind, owner, step, predecessor, public, budget)?;
@@ -223,13 +328,12 @@ impl PreparationV1<'_> {
             &predecessor.source_state.core.load_redeem_recovery_root,
             &capsule.successor_state.core.load_redeem_recovery_root,
         )?;
-        Ok(consuming::Inputs {
+        Ok(ConsumingFoldFieldsV1 {
             state: fields.state,
             sigma: fields.sigma,
             omega: predecessor.lineage.bytes(),
             objects: fields.objects,
             recovery,
-            q,
             predecessor: consuming::PredecessorInput {
                 proof: predecessor.proof.clone(),
                 pallas: predecessor.pallas,

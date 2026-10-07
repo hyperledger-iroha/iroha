@@ -12,6 +12,9 @@ mod request;
 pub use request::{ChargeOriginalsV1, OperationActionV1, OperationRequestV1, REQUEST_MAX_BYTES};
 
 mod dispatch;
+mod intent;
+pub(crate) use intent::ArchiveIntentV1;
+pub use intent::NativeIntentV1;
 
 /// Upper bound for a persisted native preparation plan, including exact local originals.
 pub const PREPARATION_MAX_BYTES: usize = REQUEST_MAX_BYTES + KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1;
@@ -64,9 +67,9 @@ pub trait NativePreparation: NativeProofs {
     /// Refuse unavailable source custody, invalid original inputs, missing fold or artifacts.
     fn plan_preparation(
         &self,
-        request: &OperationRequestV1,
+        request: &NativeIntentV1,
         source: &PreparationSourceV1<'_>,
-        objects: &mut dyn ObjectStore,
+        custody: &mut PreparationCustodyV1<'_>,
     ) -> Result<Vec<u8>, Error>;
 
     /// Decode and validate a bounded canonical plan against this exact request/source.
@@ -77,10 +80,10 @@ pub trait NativePreparation: NativeProofs {
     /// Reject noncanonical, foreign, incomplete or changed local choices and source bindings.
     fn validate_preparation(
         &self,
-        request: &OperationRequestV1,
+        request: &NativeIntentV1,
         source: &PreparationSourceV1<'_>,
+        custody: &mut PreparationCustodyV1<'_>,
         plan: &[u8],
-        objects: &mut dyn ObjectStore,
     ) -> Result<(), Error>;
 
     /// Produce the exact sigma and frozen transition from an already durable native plan.
@@ -92,9 +95,9 @@ pub trait NativePreparation: NativeProofs {
     /// Refuse missing original proving artifacts, invalid witnesses or proof failures.
     fn prove_preparation(
         &self,
-        request: &OperationRequestV1,
+        request: &NativeIntentV1,
         source: &PreparationSourceV1<'_>,
+        custody: &mut PreparationCustodyV1<'_>,
         plan: &[u8],
-        objects: &mut dyn ObjectStore,
     ) -> Result<FrozenTransition, Error>;
 }

@@ -25,21 +25,31 @@ use crate::{
     kagemusha_wallet_state_v1::ReleasedStep,
 };
 
+#[path = "kagemusha_wallet_preparation_v1/incoming_statement.rs"]
+mod incoming_statement;
+
 #[path = "kagemusha_wallet_preparation_v1/monetary.rs"]
 mod monetary;
-pub(crate) use monetary::{MonetaryRestoreV1, MonetaryRetentionV1};
 pub use monetary::{MonetaryStepV1, ReceiveFoldMapsV1, ReceiveMapsV1, SendControlsV1, SendMapsV1};
+pub(crate) use monetary::{ReceiveFoldFieldsV1, SendFoldFieldsV1};
 
 #[path = "kagemusha_wallet_preparation_v1/native_inputs.rs"]
 mod native_inputs;
+pub(crate) use native_inputs::{BootstrapFoldFieldsV1, ConsumingFoldFieldsV1, LoadFoldFieldsV1};
 
 #[path = "kagemusha_wallet_preparation_v1/refresh.rs"]
 mod refresh;
+pub(crate) use refresh::RefreshFoldFieldsV1;
 pub use refresh::{RefreshOriginalsV1, RefreshOwnersV1, RefreshStepV1};
 
 #[path = "kagemusha_wallet_preparation_v1/archive.rs"]
 mod archive;
+pub(crate) use archive::{ArchiveFoldFieldsV1, ArchiveStepV1};
 pub use archive::{ArchiveFoldWitnessV1, ArchiveIncomingWitnessV1};
+
+#[path = "kagemusha_wallet_preparation_v1/bootstrap.rs"]
+mod bootstrap;
+pub(crate) use bootstrap::BootstrapStepV1;
 
 #[path = "kagemusha_wallet_preparation_v1/load.rs"]
 mod load;
@@ -57,6 +67,15 @@ mod admin_proving;
 
 #[path = "kagemusha_wallet_preparation_v1/freeze.rs"]
 mod freeze;
+
+#[path = "kagemusha_wallet_preparation_v1/dispatch.rs"]
+mod dispatch;
+pub use dispatch::NativeAdvanceCheckV1;
+pub(crate) use dispatch::PreparedOperationV1;
+
+#[path = "kagemusha_wallet_preparation_v1/choices.rs"]
+mod choices;
+pub(crate) use choices::NativeChoicesV1;
 
 #[cfg(test)]
 #[path = "kagemusha_wallet_preparation_v1/tests.rs"]
@@ -231,37 +250,37 @@ impl FoldedStateV1 {
 
 /// Typed post-Advance Bootstrap inputs for the existing sigma/Q/A/W producer chain.
 /// Q proofs and all installed proving material remain separate mandatory inputs.
-struct BootstrapFieldsV1 {
+pub(crate) struct BootstrapFieldsV1 {
     /// Original state/public/statement fields in the compiled sigma's exact order.
-    state: BootstrapWitness,
+    pub(crate) state: BootstrapWitness,
     /// Actual original sigma bytes from the selected capsule.
-    sigma: Vec<u8>,
+    pub(crate) sigma: Vec<u8>,
     /// Enrollment certificate, current credential, own retained receipt.
-    objects: [Vec<u8>; 3],
+    pub(crate) objects: [Vec<u8>; 3],
 }
 
 /// Typed post-Advance Load fields; map insertion/Q ownership remain in the native relation.
-struct LoadFieldsV1 {
+pub(crate) struct LoadFieldsV1 {
     /// Exact compiled Load witness.
-    pub state: LoadWitness,
+    pub(crate) state: LoadWitness,
     /// Actual original sigma bytes from the selected capsule.
-    pub sigma: Vec<u8>,
+    pub(crate) sigma: Vec<u8>,
     /// Exact canonical ordinary receipt transcript committed by ledger execution.
-    pub receipt: [u8; 282],
+    pub(crate) receipt: [u8; 282],
     /// Own Advance receipt, Enrollment certificate and current credential.
-    pub objects: [Vec<u8>; 3],
+    pub(crate) objects: [Vec<u8>; 3],
     /// Original retained finality wrapper and both claims; native Plan re-verifies all three.
-    pub finality: iroha_kagemusha_proof::finality::continuity::SourceNodeEvidence,
+    pub(crate) finality: iroha_kagemusha_proof::finality::continuity::SourceNodeEvidence,
 }
 
 /// Typed post-Advance Unload/Retiring fields for their actual consuming sigma relation.
-struct ConsumingFieldsV1 {
+pub(crate) struct ConsumingFieldsV1 {
     /// Exact compiled consuming witness; its operation is fixed by the calling producer.
-    state: ConsumingWitness,
+    pub(crate) state: ConsumingWitness,
     /// Actual original sigma bytes from the selected capsule.
-    sigma: Vec<u8>,
+    pub(crate) sigma: Vec<u8>,
     /// Current credential, Enrollment certificate, own retained receipt.
-    objects: [Vec<u8>; 3],
+    pub(crate) objects: [Vec<u8>; 3],
 }
 
 impl<'a> PreparationV1<'a> {
@@ -594,7 +613,7 @@ impl<'a> PreparationV1<'a> {
     /// Prepare actual Bootstrap fields/tapes from its retained post-Advance source.
     /// # Errors
     /// Not Bootstrap, another enrollment/credential/state or invalid retained proof/receipt.
-    fn bootstrap_fields(
+    pub(crate) fn bootstrap_fields(
         &self,
         owner: &AuthenticatedCredentialV1,
         step: &ReleasedStep,
@@ -630,7 +649,7 @@ impl<'a> PreparationV1<'a> {
     /// # Errors
     /// Another operation, missing/ambiguous original, noncanonical fields, changed
     /// installed anchor, receipt terms, source digest or transported claims.
-    fn load_fields(
+    pub(crate) fn load_fields(
         &self,
         owner: &AuthenticatedCredentialV1,
         step: &ReleasedStep,
@@ -690,7 +709,7 @@ impl<'a> PreparationV1<'a> {
     /// Convert exact Unload or Retiring inputs, preserving the same hard carried Omega.
     /// # Errors
     /// Wrong fixed operation, source/credential/lineage changes or invalid retained evidence.
-    fn consuming_fields(
+    pub(crate) fn consuming_fields(
         &self,
         kind: KagemushaWalletOperationKindV1,
         owner: &AuthenticatedCredentialV1,

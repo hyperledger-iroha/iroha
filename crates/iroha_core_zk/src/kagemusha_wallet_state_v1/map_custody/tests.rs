@@ -201,6 +201,37 @@ fn quota_is_exactly_sixty_four_slots_and_only_send_or_share_refresh_can_change_i
 }
 
 #[test]
+fn source_snapshot_preserves_all_quota_slots_and_binds_the_complete_root() {
+    let slots = core::array::from_fn(|i| {
+        Some(KagemushaWalletQuotaUsageLeafV1 {
+            window_kind: KagemushaWalletQuotaWindowKindV1::Daily,
+            window_start_ms: i as u64 * 100,
+            window_end_ms: i as u64 * 100 + 99,
+            used: i as u128 * 19,
+        })
+    });
+    let usage = KagemushaWalletQuotaUsageArrayV1::from_slots(slots).unwrap();
+    let mut store = MemoryArchive::new();
+    let original = SourceMapsV1::default();
+    let before = state();
+    let mut draft = PreparationMapsV1::new(&mut store, &original, &before, K::Send, None).unwrap();
+    draft.set_quota_usage(&usage).unwrap();
+    let mut after = before;
+    after.core.quota_usage_root = usage.root();
+    let selected = draft.finish(&after).unwrap();
+    let encoded = archive::encode(&selected).unwrap();
+    let restored: SourceMapsV1 = archive::decode(&encoded).unwrap();
+    restored.require(&after).unwrap();
+    assert_eq!(restored.quota_usage().unwrap(), usage);
+    assert_eq!(restored.quota_slots, slots);
+    assert_eq!(archive::encode(&restored).unwrap(), encoded);
+    let mut changed = restored;
+    changed.quota_slots[63].as_mut().unwrap().used += 1;
+    assert_ne!(changed.quota_usage().unwrap().root(), usage.root());
+    assert!(changed.require(&after).is_err());
+}
+
+#[test]
 fn malformed_source_or_refresh_selector_is_rejected_before_map_access() {
     let mut store = MemoryArchive::new();
     let maps = SourceMapsV1::default();
@@ -450,4 +481,35 @@ fn partial_insert_or_remove_publication_keeps_the_exact_selected_source() {
         kagemusha_wallet_empty_map_root_v1()
     );
     assert_eq!(archive::encode(&maps).unwrap(), original);
+}
+
+#[test]
+fn invalid_state_cannot_construct_or_finish_a_matching_map_draft() {
+    let source = state();
+    let maps = SourceMapsV1::default();
+    for fault in 0..6 {
+        let mut invalid = source;
+        match fault {
+            0 => invalid.version = 2,
+            1 => invalid.core.wallet_id = [0; 32],
+            2 => invalid.core.state_nonce = [0; 32],
+            3 => invalid.core.state_nonce = [255; 32],
+            4 => invalid.rest.scheme_policy = field(2),
+            _ => invalid.core.blacklist_version = 1,
+        }
+        assert!(invalid.validate().is_err());
+        // Every role/array root is unchanged: equality alone cannot admit this source.
+        for role in PreparationMapV1::ALL {
+            assert_eq!(role.state_root(&invalid), role.state_root(&source));
+        }
+        assert!(matches!(
+            maps.require(&invalid),
+            Err(Error::WitnessLost("source map state"))
+        ));
+        let mut store = MemoryArchive::new();
+        assert!(PreparationMapsV1::new(&mut store, &maps, &invalid, K::Send, None).is_err());
+        let draft = PreparationMapsV1::new(&mut store, &maps, &source, K::Send, None).unwrap();
+        assert!(draft.finish(&invalid).is_err());
+        maps.require(&source).unwrap();
+    }
 }

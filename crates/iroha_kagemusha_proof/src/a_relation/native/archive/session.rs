@@ -36,6 +36,14 @@ pub struct Prover {
     wrappers: [WKey; A_STAGE_COUNT - 1],
 }
 impl Prover {
+    /// Propose Evidence and Signatures from the exact same fixed native predicates.
+    /// This grants no proof acceptance; every actual Q/A owner remains mandatory.
+    /// # Errors
+    /// Wrong originals, hard bindings, variant or bounded predicate assignment.
+    pub fn propose_nonproof(&self, input: PredicateInputs) -> Result<[bool; 2], Error> {
+        self.plan.propose_nonproof(input)
+    }
+
     /// Install exact fixed-profile verifier metadata without retaining any PK.
     /// There is no runtime key generation or profile selection.
     /// # Errors

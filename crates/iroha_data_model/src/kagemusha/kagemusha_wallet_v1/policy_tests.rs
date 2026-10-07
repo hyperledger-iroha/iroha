@@ -2387,3 +2387,57 @@ fn kagemusha_wallet_v1_charge_quotes() {
         Err(KagemushaWalletValidationErrorV1::ArithmeticOverflow { .. })
     ));
 }
+
+#[test]
+fn kagemusha_wallet_v1_speculative_send_recheck_keeps_charge_only_inside_same_windows() {
+    let f = policy_fixture();
+    let anchor = f.time_anchor(T0_MS);
+    let list = f.blacklist(1, T0_MS, vec![entry(0x10)]);
+    let share = f.quota_share(1, sample_windows());
+    let state = f.controlled_state(Some(&list), Some(&share), Some(&anchor));
+    let usage = KagemushaWalletQuotaUsageArrayV1::zero_for(&share.windows).unwrap();
+    let original = state
+        .check_send_quota(Some(&share), &usage, &interval(T0_MS + 10, T0_MS + 20), 10)
+        .unwrap();
+    let later = state
+        .check_send_quota(Some(&share), &usage, &interval(T0_MS + 30, T0_MS + 40), 10)
+        .unwrap();
+    assert_eq!(
+        original, later,
+        "elapsed time alone must not invalidate the retained charge"
+    );
+    let crossed = state
+        .check_send_quota(
+            Some(&share),
+            &usage,
+            &interval(T0_MS + DAY_MS + 10, T0_MS + DAY_MS + 20),
+            10,
+        )
+        .unwrap();
+    assert_ne!(
+        original.0, crossed.0,
+        "the original sigma cannot authorize different touched slots"
+    );
+    assert_ne!(original.1, crossed.1);
+    assert!(is_invalid(
+        state.check_send_quota(
+            Some(&share),
+            &usage,
+            &interval(share.body.expires_at_ms - 1, share.body.expires_at_ms),
+            10
+        ),
+        "quota_share.expired"
+    ));
+    assert!(is_invalid(
+        state.check_lease(&interval(LEASE_MS - 1, LEASE_MS)),
+        "state.lease_expired"
+    ));
+    assert!(is_invalid(
+        state.check_send_blacklist(
+            Some(&list),
+            &[0x15; 32],
+            &interval(T0_MS + DAY_MS, T0_MS + DAY_MS + 1)
+        ),
+        "blacklist.age"
+    ));
+}

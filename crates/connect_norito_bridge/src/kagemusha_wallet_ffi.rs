@@ -7,6 +7,7 @@
 // TODO(G3/G4): connect the authenticated artifact loader to foreign open. Do not replace it
 // with structural verification, a caller-provided verdict, or a software payment key.
 
+use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::OriginalSourceV1;
 use iroha_core_zk::{kagemusha_wallet_advance_v1 as advance, kagemusha_wallet_state_v1 as state};
 use iroha_data_model::kagemusha::*;
 use std::{
@@ -22,6 +23,7 @@ mod android;
 pub use android::AndroidPlatform;
 mod exports;
 pub(crate) mod requests;
+pub(crate) mod setup;
 pub use exports::*;
 #[cfg(test)]
 mod tests;
@@ -126,6 +128,7 @@ impl From<state::Error> for Failure {
             E::Pending => Self::code(UNCERTAIN),
             E::NoHead => Self::code(INVALID),
             E::Cancelled => Self::code(CANCELLED),
+            E::ArtifactsUnavailable(_) => Self::code(ARTIFACTS_UNAVAILABLE),
             E::Proof(_) => Self::code(PROOF_REJECTED),
         }
     }
@@ -135,7 +138,8 @@ pub(crate) type Result<T> = std::result::Result<T, Failure>;
 #[derive(Debug, Default)]
 pub(crate) struct Response {
     // 0 unknown, 1 complete, 2 pending, 3 not performed, 4 archived, 5 delivery loss;
-    // 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 canonical CreditStatus, 11 uncommitted preparation.
+    // 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 CreditStatus, 11 preparing,
+    // 12 exact setup original, 13 time challenge (sequence=token, bytes=nonce32), 14 time retained.
     pub(crate) kind: i32,
     pub(crate) sequence: u128,
     pub(crate) detail: u32,
@@ -181,6 +185,7 @@ fn completion(value: Option<state::Completion>) -> Response {
 }
 trait Wallet: Send {
     fn snapshot(&mut self) -> Result<state::Snapshot>;
+    fn setup(&mut self, input: setup::Setup) -> Result<Response>;
     fn execute(&mut self, request: state::OperationRequestV1) -> Result<Response>;
     fn request_status(&mut self, request: &[u8; 32]) -> Result<Response>;
     fn retry(&mut self, operation: &[u8; 32]) -> Result<Response>;
@@ -188,24 +193,29 @@ trait Wallet: Send {
     fn fold(&mut self) -> Result<Response>;
     fn credit(&mut self, credit: &[u8; 32], payment: &[u8; 32]) -> Result<Response>;
 }
-impl<P, N> Wallet
-    for state::Coordinator<
+struct NativeWallet<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
+    wallet: state::Coordinator<
         state::AdvanceHandle<advance::KagemushaWalletStdFsV1, P>,
         state::ProviderArchive<advance::KagemushaWalletStdFsV1, P>,
-        N,
-    >
-where
-    P: advance::KagemushaWalletPlatformV1,
-    N: state::NativePreparation + Send,
+        state::NativeWalletProofsV1<advance::KagemushaWalletStdFsV1, P, S>,
+    >,
+    times: BTreeMap<u64, state::DirectTimeExchangeV1>,
+    next_time: u64,
+}
+impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
+    for NativeWallet<P, S>
 {
+    fn setup(&mut self, input: setup::Setup) -> Result<Response> {
+        self.setup_inner(input)
+    }
     fn snapshot(&mut self) -> Result<state::Snapshot> {
-        Ok(state::Coordinator::snapshot(self)?)
+        Ok(self.wallet.snapshot()?)
     }
     fn execute(&mut self, request: state::OperationRequestV1) -> Result<Response> {
-        Ok(completion(Some(self.execute(request)?)))
+        Ok(completion(Some(self.wallet.execute(request)?)))
     }
     fn request_status(&mut self, request: &[u8; 32]) -> Result<Response> {
-        Ok(match self.retry_request(request)? {
+        Ok(match self.wallet.retry_request(request)? {
             state::RequestStatusV1::Unknown => Response::default(),
             state::RequestStatusV1::Preparing => Response {
                 kind: 11,
@@ -215,14 +225,14 @@ where
         })
     }
     fn retry(&mut self, operation: &[u8; 32]) -> Result<Response> {
-        Ok(completion(self.retry(operation)?))
+        Ok(completion(self.wallet.retry(operation)?))
     }
     fn resume(&mut self) -> Result<Response> {
-        Ok(completion(self.resume()?))
+        Ok(completion(self.wallet.resume()?))
     }
     fn fold(&mut self) -> Result<Response> {
         use state::FoldStatus as F;
-        Ok(match self.fold_once()? {
+        Ok(match self.wallet.fold_once()? {
             F::Idle => Response {
                 kind: 6,
                 ..Response::default()
@@ -245,7 +255,7 @@ where
         })
     }
     fn credit(&mut self, credit: &[u8; 32], payment: &[u8; 32]) -> Result<Response> {
-        let value = self.credit_status(credit, payment)?;
+        let value = self.wallet.credit_status(credit, payment)?;
         let bytes = norito::encode_canonical(&value).map_err(|_| Failure::code(INTERNAL))?;
         Ok(Response {
             kind: 10,
@@ -297,19 +307,26 @@ fn install(wallet: Box<dyn Wallet>, scheduler: state::Scheduler) -> Result<u64> 
 ///
 /// # Errors
 /// Returns `RESOURCE` for exhausted handles/capacity or `INTERNAL` for a poisoned registry.
-pub fn retain_native_owner<P, N>(
+pub fn retain_native_owner<P, S>(
     wallet: state::Coordinator<
         state::AdvanceHandle<advance::KagemushaWalletStdFsV1, P>,
         state::ProviderArchive<advance::KagemushaWalletStdFsV1, P>,
-        N,
+        state::NativeWalletProofsV1<advance::KagemushaWalletStdFsV1, P, S>,
     >,
 ) -> Result<u64>
 where
     P: advance::KagemushaWalletPlatformV1 + 'static,
-    N: state::NativePreparation + Send + 'static,
+    S: OriginalSourceV1 + Send + 'static,
 {
     let scheduler = wallet.scheduler();
-    install(Box::new(wallet), scheduler)
+    install(
+        Box::new(NativeWallet {
+            wallet,
+            times: BTreeMap::new(),
+            next_time: 0,
+        }),
+        scheduler,
+    )
 }
 fn owner(id: u64) -> Result<Arc<Owner>> {
     registry()
@@ -357,6 +374,9 @@ fn with_wallet<T>(
 pub(crate) fn snapshot(id: u64) -> Result<state::Snapshot> {
     // A view does not cancel a useful background fold. Call off the UI thread.
     with_wallet(id, false, |wallet| wallet.snapshot())
+}
+pub(crate) fn setup(id: u64, input: setup::Setup) -> Result<Response> {
+    with_wallet(id, true, |wallet| wallet.setup(input))
 }
 pub(crate) fn execute(id: u64, request: state::OperationRequestV1) -> Result<Response> {
     with_wallet(id, true, |wallet| wallet.execute(request))

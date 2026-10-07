@@ -75,7 +75,7 @@ class KagemushaWalletV1Test {
     }
     @Test fun `native API contains only opaque state machine calls`() {
         val type = JvmApiInventory.read(KagemushaWalletNativeV1::class.java)
-        assertEquals(setOf("revision", "open", "close", "activity", "call", "snapshot", "execute"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
+        assertEquals(setOf("revision", "open", "close", "activity", "call", "snapshot", "execute", "setup"), type.methods.filter { it.flags and 0x0100 != 0 }.map { it.name }.toSet())
         assertEquals(-4, KagemushaWalletExceptionV1.ARTIFACTS_UNAVAILABLE)
     }
     @Test fun `typed lifecycle inputs bound originals and preserve unsigned scalar bits`() {
@@ -121,4 +121,61 @@ class KagemushaWalletV1Test {
         assertEquals(listOf(3, 4, 5, 6, 7), KagemushaWalletRefreshKindV1.values().map { it.selector })
     }
 
+    @Test fun `setup originals never become monetary completion or time authority`() {
+        val bytes = byteArrayOf(1, 2, 3)
+        val setup = KagemushaWalletSetupReplyV1(12, -1, 0, 0, 0, 0, bytes)
+        bytes[0] = 9
+        val first = setup.original(); first[1] = 9
+        assertContentEquals(byteArrayOf(1, 2, 3), setup.original())
+        assertFailsWith<KagemushaWalletExceptionV1> { setup.completion() }
+        assertFailsWith<KagemushaWalletExceptionV1> { setup.exchange(Any()) }
+        assertFailsWith<KagemushaWalletExceptionV1> { setup.timeRetained() }
+        assertTrue(setup.toString().contains("[REDACTED]"))
+    }
+    @Test fun `time challenge is exact one use and bound to its originating wallet`() {
+        val owner = Any(); val another = Any(); val nonce = ByteArray(32) { 7 }
+        val exchange = KagemushaWalletSetupReplyV1(13, -1, 0, 19, 0, 0, nonce).exchange(owner)
+        nonce[0] = 0; exchange.nonce()[1] = 0
+        assertContentEquals(ByteArray(32) { 7 }, exchange.nonce())
+        assertFailsWith<IllegalArgumentException> { exchange.consume(another) }
+        assertEquals(19L, exchange.tokenFor(owner))
+        exchange.consume(owner)
+        assertFailsWith<IllegalArgumentException> { exchange.consume(owner) }
+        assertFailsWith<IllegalArgumentException> { exchange.tokenFor(owner) }
+        assertTrue(exchange.toString().contains("[REDACTED]"))
+    }
+    @Test fun `malformed setup status payload and token cannot publish`() {
+        for (reply in listOf(
+            KagemushaWalletSetupReplyV1(12, -1, 0, 0, 0, 0, byteArrayOf()),
+            KagemushaWalletSetupReplyV1(12, -1, 0, 1, 0, 0, byteArrayOf(1)),
+            KagemushaWalletSetupReplyV1(1, -1, 0, 0, 0, 0, byteArrayOf(1)),
+        )) assertFailsWith<KagemushaWalletExceptionV1> { reply.original() }
+        for (reply in listOf(
+            KagemushaWalletSetupReplyV1(13, -1, 0, 0, 0, 0, ByteArray(32) { 1 }),
+            KagemushaWalletSetupReplyV1(13, -1, 0, 1, 1, 0, ByteArray(32) { 1 }),
+            KagemushaWalletSetupReplyV1(13, -1, 0, 1, 0, 0, ByteArray(32)),
+            KagemushaWalletSetupReplyV1(13, -1, 0, 1, 0, 0, ByteArray(31) { 1 }),
+        )) assertFailsWith<KagemushaWalletExceptionV1> { reply.exchange(Any()) }
+        assertFailsWith<KagemushaWalletExceptionV1> {
+            KagemushaWalletSetupReplyV1(14, -1, 0, 0, 0, 0, byteArrayOf(1)).timeRetained()
+        }
+        KagemushaWalletSetupReplyV1(14, -1, 0, 0, 0, 0, byteArrayOf()).timeRetained()
+    }
+    @Test fun `setup inputs reject foreign fields and oversized originals before JNI`() {
+        val id = ByteArray(32) { 1 }; val one = KagemushaWalletUInt128V1(1, 0)
+        val offer = byteArrayOf(7); val input = KagemushaWalletSetupInputV1(2, id, first = offer)
+        id[0] = 0; offer[0] = 0; input.first()[0] = 0
+        assertContentEquals(byteArrayOf(7), input.first()); assertEquals(1, input.requestId()[0].toInt())
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(0, ByteArray(32) { 1 }) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(1, ByteArray(32) { 1 }) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(2, ByteArray(32) { 1 }, one, first = byteArrayOf(7)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(2, ByteArray(32) { 1 }, first = byteArrayOf(7), second = byteArrayOf(7)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(2, ByteArray(32) { 1 }, first = ByteArray(10_001)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(2, ByteArray(32) { 1 }, first = byteArrayOf(7), second = byteArrayOf(7), third = ByteArray(513)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(3) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(4, token = 1) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(5, token = -1, first = byteArrayOf(7), second = byteArrayOf(7)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(5, token = 1, first = byteArrayOf(7), second = byteArrayOf(7), third = byteArrayOf(7)) }
+        assertEquals(-1L, KagemushaWalletSetupInputV1(1, ByteArray(32) { 1 }, KagemushaWalletUInt128V1(-1, -1)).amount.low)
+    }
 }

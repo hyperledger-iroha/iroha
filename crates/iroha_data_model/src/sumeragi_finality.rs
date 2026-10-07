@@ -841,6 +841,12 @@ impl SumeragiFinalityVerifier {
             decisions: BTreeMap::new(),
         })
     }
+    /// Exact chain label selected with this owner's authenticated signed genesis.
+    /// This immutable value participates in the consensus instance binding.
+    #[must_use]
+    pub fn chain_id(&self) -> &str {
+        &self.chain_id
+    }
     /// The selected current consensus instance.
     #[must_use]
     pub fn instance(&self) -> Hash32 {

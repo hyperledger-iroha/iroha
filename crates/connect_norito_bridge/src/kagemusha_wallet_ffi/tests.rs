@@ -18,6 +18,14 @@ impl Drop for TestWallet {
     }
 }
 impl Wallet for TestWallet {
+    fn setup(&mut self, _: setup::Setup) -> Result<Response> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(Response {
+            kind: 12,
+            bytes: vec![0, 255, 7],
+            ..Response::default()
+        })
+    }
     fn snapshot(&mut self) -> Result<state::Snapshot> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(state::Snapshot {
@@ -197,6 +205,10 @@ fn failure_mapping_never_turns_uncertain_or_missing_custody_into_absence() {
     assert_eq!(
         Failure::from(state::Error::WitnessLost("Ω")).status,
         CUSTODY_LOST
+    );
+    assert_eq!(
+        Failure::from(state::Error::ArtifactsUnavailable("original sigma PK")).status,
+        ARTIFACTS_UNAVAILABLE
     );
     assert_eq!(
         run::<()>(|| panic!("test contained panic"))

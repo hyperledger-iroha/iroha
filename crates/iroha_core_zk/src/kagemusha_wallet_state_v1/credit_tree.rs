@@ -28,35 +28,20 @@ impl CreditTree {
         self.map.root()
     }
 
-    /// Derive paths from the actual selected map only after verifying its predecessor root.
-    /// No future burn value, future fold root or fabricated payment identity is retained.
-    pub(super) fn fold_witness(
-        &self,
-        store: &mut impl ObjectStore,
-        credit_id: &[u8; 32],
-    ) -> Result<KagemushaWalletCreditDigestRecordV1, Error> {
-        if self.identities.get(store, credit_id)?.is_some() {
-            let (_, leaf, opening) = self.opening(store, credit_id)?;
-            return Ok(KagemushaWalletCreditDigestRecordV1::Present { leaf, opening });
-        }
-        Ok(KagemushaWalletCreditDigestRecordV1::Inserted {
-            witness: self.map.insertion_witness(store, *credit_id)?,
-        })
-    }
-
     pub fn record(
         &mut self,
         store: &mut impl ObjectStore,
         credit: &KagemushaWalletCreditDigestLeafV1,
-    ) -> Result<(), Error> {
+    ) -> Result<KagemushaWalletCreditDigestRecordV1, Error> {
         valid(credit.field_items())?;
         if self.identities.get(store, &credit.credit_id)?.is_some() {
             // The first identity wins, but a missing/corrupt map cannot become a replay.
-            self.opening(store, &credit.credit_id)?;
-            return Ok(());
+            let (_, leaf, opening) = self.opening(store, &credit.credit_id)?;
+            return Ok(KagemushaWalletCreditDigestRecordV1::Present { leaf, opening });
         }
         let mut next = self.clone();
-        next.map
+        let witness = next
+            .map
             .insert(store, credit.credit_id, valid(credit.leaf_value())?)?;
         next.identities = next.identities.set(
             store,
@@ -67,7 +52,7 @@ impl CreditTree {
             })?,
         )?;
         *self = next;
-        Ok(())
+        Ok(KagemushaWalletCreditDigestRecordV1::Inserted { witness })
     }
 
     pub fn opening(
@@ -140,7 +125,7 @@ mod tests {
         }
     }
     #[test]
-    fn deferred_paths_match_real_tree_for_both_burn_values_without_selecting_future_state() {
+    fn draft_records_match_real_tree_for_both_burn_values_without_changing_selected_state() {
         let mut store = super::super::tests::MemoryArchive::new();
         let mut tree = CreditTree::default();
         let mut native = KagemushaWalletIndexedTreeV1::new();
@@ -150,8 +135,6 @@ mod tests {
             let mut payment = [0; 32];
             payment[0] = number + 42;
             let original = archive::encode(&tree).unwrap();
-            let paths = tree.fold_witness(&mut store, &id).unwrap();
-            assert_eq!(archive::encode(&tree).unwrap(), original);
             for burned in [false, true] {
                 let credit = KagemushaWalletCreditDigestLeafV1 {
                     credit_id: id,
@@ -160,10 +143,14 @@ mod tests {
                 };
                 let mut expected = native.clone();
                 credit.record(&mut expected).unwrap();
+                let mut draft = tree.clone();
+                let paths = draft.record(&mut store, &credit).unwrap();
                 assert_eq!(
                     paths.verify(&tree.root(), &credit).unwrap(),
                     expected.root()
                 );
+                assert_eq!(draft.root(), expected.root());
+                assert_eq!(archive::encode(&tree).unwrap(), original);
             }
             let credit = KagemushaWalletCreditDigestLeafV1 {
                 credit_id: id,
@@ -172,7 +159,7 @@ mod tests {
             };
             tree.record(&mut store, &credit).unwrap();
             credit.record(&mut native).unwrap();
-            let present = tree.fold_witness(&mut store, &id).unwrap();
+            let present = tree.record(&mut store, &credit).unwrap();
             let (leaf, opening) = native.membership(&id).unwrap();
             assert_eq!(
                 present,
@@ -188,30 +175,45 @@ mod tests {
                 native.root()
             );
         }
-        let restored: CreditTree = archive::decode(&archive::encode(&tree).unwrap()).unwrap();
+        let mut restored: CreditTree = archive::decode(&archive::encode(&tree).unwrap()).unwrap();
         assert_eq!(restored.root(), tree.root());
         let mut new_id = [0; 32];
         new_id[0] = 23;
+        let credit = KagemushaWalletCreditDigestLeafV1 {
+            credit_id: new_id,
+            payment_digest: [1; 32],
+            burned: false,
+        };
         assert_eq!(
-            restored.fold_witness(&mut store, &new_id).unwrap(),
-            tree.fold_witness(&mut store, &new_id).unwrap()
+            restored.record(&mut store, &credit).unwrap(),
+            tree.record(&mut store, &credit).unwrap()
+        );
+        assert_eq!(
+            archive::encode(&restored).unwrap(),
+            archive::encode(&tree).unwrap()
         );
     }
     #[test]
-    fn deferred_credit_paths_refuse_storage_failure_and_keep_selected_descriptor() {
+    fn failed_draft_credit_record_preserves_selected_descriptor_and_can_retry() {
         let tree = CreditTree::default();
         let original = archive::encode(&tree).unwrap();
+        let mut draft = tree.clone();
         let mut store = FaultStore::new();
         store.fail = Some(0);
-        let mut id = [0; 32];
-        id[0] = 7;
+        let credit = sample_credit();
         assert!(matches!(
-            tree.fold_witness(&mut store, &id),
+            draft.record(&mut store, &credit),
             Err(Error::Storage(_))
         ));
+        assert_eq!(archive::encode(&draft).unwrap(), original);
         assert_eq!(archive::encode(&tree).unwrap(), original);
         store.fail = None;
-        assert!(tree.fold_witness(&mut store, &id).is_ok());
+        let witness = draft.record(&mut store, &credit).unwrap();
+        assert_eq!(witness.verify(&tree.root(), &credit).unwrap(), draft.root());
+        assert_eq!(
+            draft.opening(&mut store, &credit.credit_id).unwrap().0,
+            credit
+        );
         assert_eq!(archive::encode(&tree).unwrap(), original);
     }
     struct FaultStore {

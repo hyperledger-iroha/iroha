@@ -24,7 +24,7 @@ fn receipt(
         operation_id: original.operation_id,
         predecessor: statement.predecessor,
         successor: statement.successor,
-        statement_digest: authority(statement.statement_digest())?,
+        statement_digest: incoming_statement::digest(statement)?,
         proof_digest: proof,
         capsule_digest: original.capsule_digest,
         payment_digest: original.payment_digest,
@@ -37,8 +37,15 @@ fn receipt(
     Ok((signed_tape(body.transcript(), &original.signature), object))
 }
 
-fn credited_tape(tag: u8, credit: [u8; 32], payment: [u8; 32], evidence: [u8; 32]) -> Vec<u8> {
-    let mut tape = vec![1, 0, tag];
+fn credited_tape(
+    version: u16,
+    tag: u8,
+    credit: [u8; 32],
+    payment: [u8; 32],
+    evidence: [u8; 32],
+) -> Vec<u8> {
+    let mut tape = version.to_le_bytes().to_vec();
+    tape.push(tag);
     for word in [credit, payment, evidence] {
         tape.extend_from_slice(&word);
     }
@@ -59,22 +66,41 @@ fn opening_tape(original: &KagemushaWalletCreditOpeningV1) -> Result<Vec<u8>, Er
     Ok(tape)
 }
 
-pub(super) fn original(
+enum Original {
+    Receive {
+        statement: [Fp; 26],
+        receipt: Vec<u8>,
+        sigma: Vec<u8>,
+        credited: Vec<u8>,
+    },
+    Status {
+        statement: [Fp; 26],
+        receipt: Vec<u8>,
+        omega: Vec<u8>,
+        credited: Vec<u8>,
+        status: Vec<u8>,
+        credit_opening: Vec<u8>,
+    },
+}
+impl Original {
+    fn credited(&self) -> &[u8] {
+        match self {
+            Self::Receive { credited, .. } | Self::Status { credited, .. } => credited,
+        }
+    }
+}
+
+fn decode_original(
     bytes: &[u8],
     request: &KagemushaWalletRequestV1,
     payment_digest: &[u8; 32],
-    expected_digest: &[u8; 32],
-    proposal: ArchiveIncomingWitnessV1,
-) -> Result<native::Evidence, Error> {
+) -> Result<Original, Error> {
     let credited: KagemushaWalletCreditedV1 = decode(bytes)?;
-    if credited.version != 1 || credited.scheme_id != credited.evidence.statement().scheme_id {
+    if credited.scheme_id != credited.evidence.statement().scheme_id {
         return Err(Error::Authority);
     }
-    let evidence = match (credited.evidence, proposal) {
-        (
-            KagemushaWalletCreditedEvidenceV1::Receive { package },
-            ArchiveIncomingWitnessV1::Receive(mode),
-        ) => {
+    Ok(match credited.evidence {
+        KagemushaWalletCreditedEvidenceV1::Receive { package } => {
             if package.version != 1
                 || package.lineage != KagemushaWalletLineageSlotV1::None
                 || package.statement.effect.kind() != KagemushaWalletOperationKindV1::Receive
@@ -93,27 +119,24 @@ pub(super) fn original(
             let (receipt, receipt_digest) =
                 receipt(&signer, &package.statement, proof, &package.receipt)?;
             let package_digest = authority(kagemusha_wallet_package_digest_v1(
-                &authority(package.statement.statement_digest())?,
+                &incoming_statement::digest(&package.statement)?,
                 &proof,
                 &receipt_digest,
             ))?;
-            native::Evidence::Receive {
-                statement: fields(authority(package.statement.field_items())?)?,
+            Original::Receive {
+                statement: incoming_statement::fields(&package.statement)?,
                 receipt,
                 sigma: package.step_proof.bytes,
                 credited: credited_tape(
+                    credited.version,
                     1,
                     request.body.credit_id(),
                     *payment_digest,
                     package_digest,
                 ),
-                mode: *mode,
             }
         }
-        (
-            KagemushaWalletCreditedEvidenceV1::Status { status },
-            ArchiveIncomingWitnessV1::Status(witness),
-        ) => {
+        KagemushaWalletCreditedEvidenceV1::Status { status } => {
             let signer = KagemushaWalletReceiptSignerV1 {
                 scheme_id: status.lineage.public.scheme_id,
                 wallet_id: status.lineage.public.wallet_id,
@@ -129,7 +152,7 @@ pub(super) fn original(
             let opening = opening_tape(&status.opening)?;
             let mut tape = status.version.to_le_bytes().to_vec();
             for word in [
-                authority(status.statement.statement_digest())?,
+                incoming_statement::digest(&status.statement)?,
                 status.proof_digest,
                 receipt_digest,
                 status.lineage.lineage_digest(),
@@ -137,11 +160,12 @@ pub(super) fn original(
             ] {
                 tape.extend_from_slice(&word);
             }
-            native::Evidence::Status {
-                statement: fields(authority(status.statement.field_items())?)?,
+            Original::Status {
+                statement: incoming_statement::fields(&status.statement)?,
                 receipt,
                 omega: status.lineage.bytes(),
                 credited: credited_tape(
+                    credited.version,
                     2,
                     request.body.credit_id(),
                     *payment_digest,
@@ -149,18 +173,69 @@ pub(super) fn original(
                 ),
                 status: tape,
                 credit_opening: opening,
-                witness,
             }
         }
-        _ => return Err(Error::Authority),
-    };
-    let tape = match &evidence {
-        native::Evidence::Receive { credited, .. } | native::Evidence::Status { credited, .. } => {
-            credited
-        }
-    };
-    if digest(b"kgwcrdd1", tape) != *expected_digest {
+    })
+}
+
+// Bind exact incoming bytes without granting any incoming signature/proof/membership verdict.
+pub(super) fn credited_digest(
+    bytes: &[u8],
+    request: &KagemushaWalletRequestV1,
+    payment_digest: &[u8; 32],
+) -> Result<[u8; 32], Error> {
+    Ok(digest(
+        b"kgwcrdd1",
+        decode_original(bytes, request, payment_digest)?.credited(),
+    ))
+}
+
+pub(super) fn original(
+    bytes: &[u8],
+    request: &KagemushaWalletRequestV1,
+    payment_digest: &[u8; 32],
+    expected_digest: &[u8; 32],
+    proposal: ArchiveIncomingWitnessV1,
+) -> Result<native::Evidence, Error> {
+    let original = decode_original(bytes, request, payment_digest)?;
+    if digest(b"kgwcrdd1", original.credited()) != *expected_digest {
         return Err(Error::Authority);
     }
-    Ok(evidence)
+    match (original, proposal) {
+        (
+            Original::Receive {
+                statement,
+                receipt,
+                sigma,
+                credited,
+            },
+            ArchiveIncomingWitnessV1::Receive(mode),
+        ) => Ok(native::Evidence::Receive {
+            statement,
+            receipt,
+            sigma,
+            credited,
+            mode: *mode,
+        }),
+        (
+            Original::Status {
+                statement,
+                receipt,
+                omega,
+                credited,
+                status,
+                credit_opening,
+            },
+            ArchiveIncomingWitnessV1::Status(witness),
+        ) => Ok(native::Evidence::Status {
+            statement,
+            receipt,
+            omega,
+            credited,
+            status,
+            credit_opening,
+            witness,
+        }),
+        _ => Err(Error::Authority),
+    }
 }

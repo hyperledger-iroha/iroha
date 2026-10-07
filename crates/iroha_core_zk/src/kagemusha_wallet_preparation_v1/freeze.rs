@@ -126,6 +126,30 @@ impl PreparationV1<'_> {
         Ok(frozen)
     }
 
+    pub(crate) fn freeze_bootstrap(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        step: &BootstrapStepV1,
+        proof: KagemushaWalletStepProofV1,
+        budget: MemoryBudget,
+    ) -> Result<FrozenTransition, Error> {
+        self.freeze(
+            owner,
+            CapsuleFields {
+                manifest: step.manifest,
+                source: [0; 32],
+                state: &step.state,
+                statement: &step.statement,
+                predecessor: None,
+                payment: [0; 32],
+                openings: Vec::new(),
+                retained: Vec::new(),
+            },
+            proof,
+            budget,
+        )
+    }
+
     /// Freeze a prepared Send or Receive with its actual installed sigma proof.
     /// Supply the exact opaque predecessor fold for Send and no fold for Receive.
     /// The recorded Request selects Receive's blacklist verifier, including after renewal.
@@ -136,20 +160,11 @@ impl PreparationV1<'_> {
         &self,
         owner: &AuthenticatedCredentialV1,
         step: &MonetaryStepV1,
-        retention: &MonetaryRetentionV1,
         predecessor: Option<&FoldedStateV1>,
         proof: KagemushaWalletStepProofV1,
         budget: MemoryBudget,
     ) -> Result<FrozenTransition, Error> {
-        let payment = match step.originals().1 {
-            None => [0; 32],
-            Some(bytes) => authority(KagemushaWalletPaymentV1::decode_canonical(
-                bytes,
-                &self.installed.verifier().scheme().scheme_id(),
-            ))?
-            .payment_digest()
-            .map_err(|_| Error::Authority)?,
-        };
+        let payment = step.retained_payment_digest()?;
         self.freeze(
             owner,
             CapsuleFields {
@@ -160,7 +175,7 @@ impl PreparationV1<'_> {
                 predecessor,
                 payment,
                 openings: map_openings(step.map_witnesses()),
-                retained: step.capsule_inputs(retention)?,
+                retained: step.capsule_inputs()?,
             },
             proof,
             budget,
@@ -176,6 +191,31 @@ impl PreparationV1<'_> {
         &self,
         owner: &AuthenticatedCredentialV1,
         step: &LoadStepV1,
+        proof: KagemushaWalletStepProofV1,
+        budget: MemoryBudget,
+    ) -> Result<FrozenTransition, Error> {
+        let (retained, openings) = step.originals();
+        self.freeze(
+            owner,
+            CapsuleFields {
+                manifest: step.manifest_digest(),
+                source: step.source_capsule_digest(),
+                state: step.state(),
+                statement: step.statement(),
+                predecessor: None,
+                payment: [0; 32],
+                openings: openings.to_vec(),
+                retained: retained.to_vec(),
+            },
+            proof,
+            budget,
+        )
+    }
+
+    pub(crate) fn freeze_archive(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        step: &ArchiveStepV1,
         proof: KagemushaWalletStepProofV1,
         budget: MemoryBudget,
     ) -> Result<FrozenTransition, Error> {

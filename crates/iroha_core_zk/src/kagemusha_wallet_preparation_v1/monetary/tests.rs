@@ -381,3 +381,51 @@ fn quota_segments_use_complete_signed_windows_and_running_actual_usage_paths() {
         Err(Error::Authority)
     );
 }
+
+#[test]
+fn receive_result_proposals_bind_exact_burn_and_overflow() {
+    assert_eq!(proposed_receive_burn(9, 11, &[true; 5], false).unwrap(), 9);
+    assert_eq!(proposed_receive_burn(9, 11, &[true; 5], true).unwrap(), 20);
+    assert!(proposed_receive_burn(u128::MAX, 1, &[true; 5], true).is_err());
+    for owner in 0..5 {
+        let mut results = [true; 5];
+        results[owner] = false;
+        assert_eq!(proposed_receive_burn(9, 11, &results, false).unwrap(), 20);
+        assert!(proposed_receive_burn(u128::MAX, 1, &results, false).is_err());
+    }
+    assert_eq!(
+        proposed_receive_burn(u128::MAX, 1, &[true; 5], false).unwrap(),
+        u128::MAX
+    );
+}
+
+#[test]
+fn receive_credit_route_preserves_first_and_binds_inserted_burn() {
+    for burned in [false, true] {
+        let mut tree = KagemushaWalletIndexedTreeV1::default();
+        let old = tree.root();
+        let entry = KagemushaWalletCreditDigestLeafV1 {
+            credit_id: Fp::from(7).to_repr(),
+            payment_digest: Fp::from(9).to_repr(),
+            burned,
+        };
+        let record = entry.record(&mut tree).unwrap();
+        receive_credit_route(record, &old, &tree.root(), &entry).unwrap();
+        let changed = KagemushaWalletCreditDigestLeafV1 {
+            burned: !burned,
+            ..entry
+        };
+        assert!(receive_credit_route(record, &old, &tree.root(), &changed).is_err());
+        let changed = KagemushaWalletCreditDigestLeafV1 {
+            payment_digest: Fp::from(10).to_repr(),
+            ..changed
+        };
+        let present = changed.record(&mut tree).unwrap();
+        assert!(matches!(
+            present,
+            KagemushaWalletCreditDigestRecordV1::Present { .. }
+        ));
+        receive_credit_route(present, &tree.root(), &tree.root(), &changed).unwrap();
+        assert!(receive_credit_route(present, &tree.root(), &old, &changed).is_err());
+    }
+}

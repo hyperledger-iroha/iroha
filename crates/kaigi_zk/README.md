@@ -31,6 +31,10 @@ Let `I` be rows 0–22 and `b` the private blinding. The fixed payloads are
 Join and Leave within one participation; N is independent of the blinding.
 Every public context row is absorbed inside the relation.
 
+RP56 round constants and the MDS matrix come from `iroha_pasta::poseidon::grain`;
+all 201 field elements are checked against the dev-only independent generator.
+The parameter bytes and circuit identities are unchanged.
+
 Each sponge uses width three, rate two, x⁵ S-box, eight full rounds and 56
 partial rounds with the crate's pinned Poseidon parameter generator. The initial
 state is `[0, 0, domain]`, with domains `0x4b41494749563143` (C),

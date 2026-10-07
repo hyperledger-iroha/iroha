@@ -7,6 +7,9 @@
 //! constant, and both the native oracle verifier and the vendored verifier
 //! must accept them. On a mismatch the vendored proof is recomputed and the
 //! first differing 32-byte message is reported.
+//!
+//! The k13 cases additionally recompute the independent vendored proof to
+//! exercise native parallel polynomial arithmetic above its size thresholds.
 
 use iroha_pasta::msm::MemoryBudget;
 use iroha_plonk::{
@@ -114,4 +117,63 @@ fn wide_eq_native_proofs_are_golden() {
 #[test]
 fn wide_ep_native_proofs_are_golden() {
     native_goldens::<Pallas>(Family::Wide, &[8, 10]);
+}
+
+/// Check a full proof above all parallel polynomial thresholds, using
+/// independently recomputed vendored bytes and both complete verifiers.
+fn parallel_arithmetic_matches_vendored<B: CurveBridge>() {
+    let serial = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let parallel = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    let setup = parallel.install(|| setup::<B>(Family::Wide, 13));
+    let seed = [0xa7; 32];
+    let vendored = serial.install(|| setup.prove_vendored(seed));
+    for pool in [&serial, &parallel] {
+        let native = pool.install(|| prove_native(&setup, seed));
+        assert_eq!(
+            native,
+            vendored,
+            "{} k13 polynomial arithmetic changed proof bytes with {} workers",
+            B::NAME,
+            pool.current_num_threads()
+        );
+        pool.install(|| {
+            verify_full_oracle(
+                &setup.params,
+                setup.pk.binding(),
+                setup.pk.vk(),
+                &setup.native_instances(),
+                &native,
+                MemoryBudget::DEFAULT,
+                setup.transcript_repr,
+            )
+            .expect("native complete verifier");
+            setup
+                .verify_vendored(&setup.vendored_instances(), &native)
+                .expect("vendored complete verifier");
+        });
+    }
+    println!(
+        "PARALLEL_ARITHMETIC curve={} k=13 bytes={} sha256={} pools=1,4",
+        B::NAME,
+        vendored.len(),
+        digest_hex(&vendored)
+    );
+}
+
+#[test]
+#[ignore = "k13 parallel arithmetic proof parity; run in release"]
+fn wide_eq_k13_parallel_arithmetic_matches_vendored() {
+    parallel_arithmetic_matches_vendored::<Vesta>();
+}
+
+#[test]
+#[ignore = "k13 parallel arithmetic proof parity; run in release"]
+fn wide_ep_k13_parallel_arithmetic_matches_vendored() {
+    parallel_arithmetic_matches_vendored::<Pallas>();
 }

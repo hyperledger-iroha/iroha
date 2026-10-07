@@ -92,7 +92,16 @@ pub(crate) fn derive_nonmembership(
     if input.own_statement.variant() != plan.operation().frame().variant() {
         return Err(Error::Synthesis);
     }
-    let transition = transition(input)?;
+    nonmembership_predicate(chip, region, &transition(input)?, opening)
+}
+
+// Shared Q-free predicate; the staged wrapper retains exact task/context bindings.
+pub(crate) fn nonmembership_predicate(
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    transition: &MapTransition<'_>,
+    opening: &OpeningCells<Fp>,
+) -> Result<Bit<Fp>, Error> {
     let lanes = chip.operation_lanes()?;
     transition.statement.bind_states(
         &mut UintChip::new(lanes.glue, lanes.range),
@@ -101,15 +110,25 @@ pub(crate) fn derive_nonmembership(
         transition.successor.state,
         transition.successor.lineage,
     )?;
-    let valid = MapEffectsChip::new(lanes.glue, lanes.range, lanes.hash).receive_nonmembership(
-        region,
-        &transition,
-        opening,
-    )?;
+    let valid = MapEffectsChip::new(lanes.glue, lanes.range, lanes.hash)
+        .receive_nonmembership(region, transition, opening)?;
     Ok(valid)
 }
 
 impl ReceiveSignedObjects {
+    // Native source query has no Q0 frame. Both paths call the exact shared kernel.
+    pub(crate) fn blacklist_predicate(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        state: &crate::operation_relation::state::StateCells,
+        lineage: &crate::a_relation::LineagePublicCells,
+        opening: &OpeningCells<Fp>,
+    ) -> Result<(Bit<Fp>, Word<Fp>), Error> {
+        state.bind_lineage(&mut chip.uint(), region, lineage)?;
+        blacklist_result(chip, region, &self.objects[0], state, opening)
+    }
+
     /// Derive the Request-recorded history predicate and own Receive selector.
     ///
     /// The original version selects index10 or11, independently of validity.
@@ -170,7 +189,7 @@ impl ReceiveSignedObjects {
     }
 }
 
-fn blacklist_result(
+pub(crate) fn blacklist_result(
     chip: &mut VerifierChip<Ep>,
     region: &mut Region<'_, Fp>,
     request: &crate::operation_relation::objects::SignedObjectCells,

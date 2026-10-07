@@ -73,11 +73,6 @@ impl BlacklistOriginalReferenceV1 {
         Ok(original)
     }
 
-    /// Exact content object identity for an actual source-selected custody index.
-    pub(crate) const fn object_digest(&self) -> [u8; 32] {
-        self.original_digest
-    }
-
     /// Independently bind every full-original byte, length, scheme, entry order and root.
     /// The existing PreparationV1 still verifies the actual issuer and signature afterward.
     pub(crate) fn verify_original(
@@ -142,40 +137,6 @@ pub(crate) fn verify_policy_update_original(
         Err(Error::WitnessLost("policy source exact inline original"))
     } else {
         Ok(())
-    }
-}
-
-/// Resolve exact PolicyUpdate custody from a source already authenticated by the coordinator.
-/// Fixed Blacklist dispatch accepts the reference codec only; the other four classes retain
-/// their exact inline originals. No shape/size heuristic, old-layout fallback or issuer verdict.
-pub(crate) fn restore_policy_update(
-    objects: &mut dyn ObjectStore,
-    capsule: &KagemushaWalletRecoveryCapsuleV1,
-) -> Result<Vec<u8>, Error> {
-    let KagemushaWalletEffectV1::RefreshPolicy { update_kind, .. } = capsule.statement.effect
-    else {
-        return Err(Error::WitnessLost("policy original operation"));
-    };
-    if capsule.kind != KagemushaWalletOperationKindV1::RefreshPolicy {
-        return Err(Error::WitnessLost("policy original operation"));
-    }
-    let mut selected = capsule
-        .retained_inputs
-        .iter()
-        .filter(|input| input.role == KagemushaWalletRetainedInputRoleV1::PolicyUpdate);
-    let original = &selected
-        .next()
-        .ok_or(Error::WitnessLost("policy original absent"))?
-        .bytes;
-    if original.is_empty() || selected.next().is_some() {
-        return Err(Error::WitnessLost("policy original inventory"));
-    }
-    if update_kind == KagemushaWalletPolicyUpdateKindV1::Blacklist {
-        let reference =
-            BlacklistOriginalReferenceV1::decode_canonical(original, &capsule.scheme_id)?;
-        read_blacklist_original(objects, &reference, &capsule.scheme_id)
-    } else {
-        Ok(original.clone())
     }
 }
 

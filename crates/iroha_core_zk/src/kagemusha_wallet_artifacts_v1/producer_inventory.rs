@@ -27,7 +27,8 @@ pub use recipe::{ReceiptSourceRecipeV1, SourceScopeV1};
 mod compiler;
 pub use compiler::{
     CompilationErrorV1, CompilationPhaseV1, CompiledKeyV1, CompiledOmegaV1, CompiledOperationV1,
-    CompiledQV1, CompiledSigmasV1, OfflineCompilerV1, OriginalSinkV1, QClassesV1, q_classes,
+    CompiledQV1, CompiledSigmasV1, OfflineCompilerV1, OriginalSinkV1, QClassesV1,
+    WalletArtifactDraftV1, WalletArtifactOriginalsV1, q_classes,
 };
 
 #[path = "producer_inventory/finality.rs"]
@@ -376,7 +377,8 @@ impl ProducerInventoryV1 {
 pub trait OriginalSourceV1 {
     /// Open one selected original by its authenticated SHA-256 content address.
     /// # Errors
-    /// Unavailable content or storage failure; neither permits replacement material.
+    /// Return `Error::Unavailable` for absent content or storage failure. Invalid
+    /// selections remain `Error::Inventory`; neither permits replacement material.
     fn open(&mut self, sha256: [u8; 32]) -> Result<Box<dyn Read + '_>, Error>;
 }
 
@@ -447,7 +449,7 @@ fn read(source: &mut dyn OriginalSourceV1, blob: BlobV1, cap: usize) -> Result<V
         .open(blob.sha256)?
         .take(maximum)
         .read_to_end(&mut bytes)
-        .map_err(|_| Error::Inventory)?;
+        .map_err(|_| Error::Unavailable)?;
     if bytes.len() != length || BlobV1::of(&bytes) != blob {
         return Err(Error::Inventory);
     }

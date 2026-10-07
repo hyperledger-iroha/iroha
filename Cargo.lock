@@ -6080,7 +6080,6 @@ dependencies = [
  "nix 0.30.1",
  "nonzero_ext",
  "norito",
- "p256",
  "petname",
  "rand 0.9.4",
  "tempfile",

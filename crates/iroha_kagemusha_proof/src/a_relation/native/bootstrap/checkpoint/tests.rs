@@ -17,7 +17,7 @@ fn data(kind: CheckpointKind) -> (CheckpointLayout, Payload, [u8; 32]) {
         verifying_key_digest: [2; 32],
         source_context: context,
         proof: vec![4; layout.proof_bytes],
-        vesta: matches!(kind, CheckpointKind::Wrapper).then_some([5; ACCUMULATOR_BYTES]),
+        vesta: (kind == CheckpointKind::Wrapper).then_some([5; ACCUMULATOR_BYTES]),
     };
     (layout, payload, context)
 }
@@ -134,7 +134,11 @@ fn bounded_data_frames_refuse_empty_truncated_trailing_and_noncanonical_input() 
 
 #[test]
 fn impossible_installed_lengths_refuse_before_counting_allocation() {
-    for kind in [CheckpointKind::First, CheckpointKind::Wrapper] {
+    for kind in [
+        CheckpointKind::First,
+        CheckpointKind::Wrapper,
+        CheckpointKind::Terminal,
+    ] {
         for bytes in [0, usize::MAX] {
             assert!(matches!(
                 CheckpointLayout::new(kind, [1; 32], [2; 32], bytes),
@@ -189,5 +193,13 @@ fn terminal_data_carrier_binds_exact_source_key_salt_and_original_length() {
     for bad in [&[][..], &original[..original.len() - 1], &extra[..]] {
         assert!(TerminalPayload::decode(bad, &layout, context).is_err());
     }
+    let mut bad_header = original.clone();
+    bad_header[0] ^= 1;
+    assert!(TerminalPayload::decode(&bad_header, &layout, context).is_err());
     assert!(Payload::decode(&original, &layout, context).is_err());
+    for kind in [CheckpointKind::First, CheckpointKind::Wrapper] {
+        let (other_layout, other_payload, _) = data(kind);
+        assert!(make().check(&other_layout, context).is_err());
+        assert!(other_payload.check(&layout, context).is_err());
+    }
 }

@@ -34,6 +34,14 @@ pub struct Prover {
     wrappers: [WKey; A_STAGE_COUNT - 1],
 }
 impl Prover {
+    /// Derive the four nonproof Receive predicates using the same bounded circuit
+    /// owners. Actual Q/A/W/Omega and complete decisions remain mandatory.
+    /// # Errors
+    /// Invalid source binding, authenticated route or predicate assignment.
+    pub fn propose_nonproof(&self, input: super::PredicateInputs) -> Result<[bool; 4], Error> {
+        self.plan.propose_nonproof(input)
+    }
+
     /// Install exact fixed-profile verifier metadata without retaining any PK.
     /// There is no runtime key generation or profile selection.
     /// # Errors

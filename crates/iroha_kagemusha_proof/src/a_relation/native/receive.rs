@@ -7,6 +7,7 @@
 //! selected deciding claims; it never replaces a soft failure with acceptance.
 
 mod circuit;
+pub use circuit::PredicateInputs;
 mod session;
 
 #[cfg(test)]

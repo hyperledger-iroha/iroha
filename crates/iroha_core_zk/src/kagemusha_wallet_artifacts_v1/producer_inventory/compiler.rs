@@ -4,6 +4,10 @@
 //! resident in this owner; source synthesis and key generation still need separate
 //! process-memory qualification. Partial originals remain useful after a failure.
 
+#[path = "compiler/pack.rs"]
+mod pack;
+pub use pack::{WalletArtifactDraftV1, WalletArtifactOriginalsV1};
+
 use std::collections::BTreeMap;
 
 use iroha_kagemusha_proof::{
@@ -698,3 +702,7 @@ mod complete;
 #[cfg(test)]
 #[path = "compiler/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compiler/full_catalog.rs"]
+mod full_catalog;

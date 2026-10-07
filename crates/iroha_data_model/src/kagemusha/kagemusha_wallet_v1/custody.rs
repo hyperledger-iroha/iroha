@@ -11,7 +11,7 @@
 //! typed Norito enum whose wire tag equals the listed value, so an undefined value fails
 //! canonical decoding instead of reaching validation; the `output` transcript carries the
 //! one-byte tag. Their frames therefore carry Norito's four-byte enum tag, which the marker
-//! and capsule digests cover. The retained-input role table (tags 1 to 9) is fixed here; the
+//! and capsule digests cover. The retained-input role table (tags 1 to 10) is fixed here; the
 //! vectors file pins every tag.
 
 use iroha_schema::IntoSchema;
@@ -586,14 +586,11 @@ pub enum KagemushaWalletRetainedInputRoleV1 {
     /// Canonical typed predecessor quota-usage array consumed by a quota refresh.
     #[codec(index = 10)]
     QuotaRefreshWitness,
-    /// Exact typed Native Send/Receive control and history restart sources.
-    #[codec(index = 11)]
-    MonetaryWitness,
 }
 
 impl KagemushaWalletRetainedInputRoleV1 {
     /// Every role, in tag order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 10] = [
         Self::Request,
         Self::Payment,
         Self::Credited,
@@ -604,7 +601,6 @@ impl KagemushaWalletRetainedInputRoleV1 {
         Self::Credential,
         Self::LoadFinality,
         Self::QuotaRefreshWitness,
-        Self::MonetaryWitness,
     ];
 
     /// Tag; equal to the Norito wire tag.
@@ -621,7 +617,6 @@ impl KagemushaWalletRetainedInputRoleV1 {
             Self::Credential => 8,
             Self::LoadFinality => 9,
             Self::QuotaRefreshWitness => 10,
-            Self::MonetaryWitness => 11,
         }
     }
 }

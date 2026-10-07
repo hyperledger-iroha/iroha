@@ -13,6 +13,9 @@ use iroha_kagemusha_proof::finality::{
 /// Failure to bind or reconstruct the exact independently installed receipt source.
 #[derive(Debug, thiserror::Error)]
 pub enum FinalityQualificationErrorV1 {
+    /// Reinstallable verifier originals could not be read from storage.
+    #[error(transparent)]
+    Original(#[from] Error),
     /// The native original signed root cannot supply the global history policy.
     #[error(transparent)]
     Anchor(#[from] HistoryAnchorError),
@@ -63,10 +66,37 @@ impl QualifiedReceiptSourceV1 {
     }
 }
 
-struct Reader<'a>(&'a mut dyn OriginalSourceV1);
+struct Reader<'a> {
+    source: &'a mut dyn OriginalSourceV1,
+    unavailable: std::cell::Cell<bool>,
+}
+struct TrackedRead<'a> {
+    reader: Box<dyn Read + 'a>,
+    unavailable: &'a std::cell::Cell<bool>,
+}
+impl Read for TrackedRead<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.reader.read(buffer).inspect_err(|error| {
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                self.unavailable.set(true);
+            }
+        })
+    }
+}
 impl VerifierBlobSource for Reader<'_> {
     fn open(&mut self, hash: &[u8; 32]) -> Result<Box<dyn Read + '_>, SourceError> {
-        self.0.open(*hash).map_err(|_| SourceError::Artifact)
+        match self.source.open(*hash) {
+            Ok(reader) => Ok(Box::new(TrackedRead {
+                reader,
+                unavailable: &self.unavailable,
+            })),
+            Err(error) => {
+                if error == Error::Unavailable {
+                    self.unavailable.set(true);
+                }
+                Err(SourceError::Artifact)
+            }
+        }
     }
 }
 
@@ -109,13 +139,21 @@ impl AuthenticatedProducerInventoryV1 {
         limits: VerifierLimits,
     ) -> Result<QualifiedReceiptSourceV1, FinalityQualificationErrorV1> {
         let anchor = self.inventory.finality.require_anchor(verifier)?;
+        let mut reader = Reader {
+            source: originals,
+            unavailable: std::cell::Cell::new(false),
+        };
         let receipt = qualify_receipt(
             anchor,
             &self.inventory.finality.originals,
-            &mut Reader(originals),
+            &mut reader,
             params,
             limits,
-        )?;
+        );
+        if reader.unavailable.get() {
+            return Err(Error::Unavailable.into());
+        }
+        let receipt = receipt?;
         Ok(QualifiedReceiptSourceV1 {
             receipt,
             scheme_id: self.scheme_id,
@@ -128,6 +166,53 @@ impl AuthenticatedProducerInventoryV1 {
 mod tests {
     use super::*;
     use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+
+    #[test]
+    fn metadata_io_failure_stays_unavailable_without_relabeling_bad_source() {
+        struct Broken(bool);
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                if self.0 {
+                    self.0 = false;
+                    Err(std::io::ErrorKind::Interrupted.into())
+                } else {
+                    Err(std::io::ErrorKind::PermissionDenied.into())
+                }
+            }
+        }
+        let unavailable = std::cell::Cell::new(false);
+        let mut reader = TrackedRead {
+            reader: Box::new(Broken(true)),
+            unavailable: &unavailable,
+        };
+        let mut buffer = [0];
+        assert_eq!(
+            reader.read(&mut buffer).unwrap_err().kind(),
+            std::io::ErrorKind::Interrupted
+        );
+        assert!(!unavailable.get());
+        assert_eq!(
+            reader.read(&mut buffer).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(unavailable.get());
+
+        struct Absent(Error);
+        impl OriginalSourceV1 for Absent {
+            fn open(&mut self, _: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
+                Err(self.0)
+            }
+        }
+        for error in [Error::Unavailable, Error::Inventory, Error::Profile] {
+            let mut source = Absent(error);
+            let mut reader = Reader {
+                source: &mut source,
+                unavailable: std::cell::Cell::new(false),
+            };
+            assert!(reader.open(&[1; 32]).is_err());
+            assert_eq!(reader.unavailable.get(), error == Error::Unavailable);
+        }
+    }
 
     #[test]
     fn signed_metadata_cannot_replace_any_native_genesis_anchor_field() {

@@ -125,8 +125,8 @@ The PR Sumeragi job and every nightly Sumeragi owner install the repository-pinn
 Rust toolchain before cache restoration and native execution. A container image
 tag does not identify the compiler used by a validation run. PR formatting uses
 that same pinned toolchain and checks the complete workspace. Optional nextest
-diagnostics select the current native proof, wallet, AMX and publisher-custody
-owners; removed module paths and omitted current controls fail the source guard.
+diagnostics select the current native proof, wallet, AMX and ordinary committed-Load/
+finality owners; removed module paths and omitted current controls fail the source guard.
 Ordinary Clippy and documentation checks derive their explicit feature selection
 from current manifests, including implicit optional-dependency features. They keep
 all supported diagnostic features and exclude only the four owned mutation selectors;

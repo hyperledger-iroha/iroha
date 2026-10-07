@@ -97,6 +97,17 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
             field: "provider handle poisoned",
         })
     }
+    pub(crate) fn sign_setup(
+        &self,
+        source: [u8; 32],
+        key: &KagemushaDevicePublicKeyV1,
+        domain: KagemushaWalletSigningDomainV1,
+        body: &[u8],
+    ) -> Result<KagemushaDeviceSignatureV1, ProviderError> {
+        self.lock()?
+            .sign_setup(&self.slot, source, key, domain, body)
+    }
+
     /// Share only native observations with the concrete proof/preparation owner.
     pub(crate) fn observations(&self) -> NativeObservationsV1<F, P> {
         NativeObservationsV1 {
@@ -234,7 +245,7 @@ impl TransitionOwner {
                 field: "state_owner.request",
             })?
             .bytes;
-        if requests.next().is_some() || bytes.len() > KAGEMUSHA_WALLET_SESSION_MAX_BYTES_V1 {
+        if requests.next().is_some() || bytes.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
             return Err(ProviderError::Invalid {
                 field: "state_owner.request",
             });

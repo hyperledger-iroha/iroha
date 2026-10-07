@@ -14,10 +14,8 @@ use iroha_pasta::Eq;
 use iroha_plonk::ProverRandomness;
 
 use super::*;
-
-#[path = "monetary/retained.rs"]
-mod retained;
-pub(crate) use retained::{MonetaryRestoreV1, MonetaryRetentionV1, ReceiveHistory};
+#[path = "monetary/incoming_original.rs"]
+mod incoming_original;
 
 #[cfg(test)]
 #[path = "monetary/tests.rs"]
@@ -82,8 +80,22 @@ pub struct MonetaryStepV1 {
     payment_original: Option<Vec<u8>>,
     maps: Vec<IndexedInsert<Fp>>,
     send_check: Option<KagemushaWalletSendCheckV1>,
-    payer: Option<AuthenticatedCredentialV1>,
+    payer: Option<PayerOriginalV1>,
     payer_certificate_set_original: Option<Vec<u8>>,
+}
+
+// Exact incoming signed bytes, deliberately not an authenticated credential capability.
+struct PayerOriginalV1 {
+    credential_original: Vec<u8>,
+    credential_tape: Vec<u8>,
+}
+impl From<AuthenticatedCredentialV1> for PayerOriginalV1 {
+    fn from(owner: AuthenticatedCredentialV1) -> Self {
+        Self {
+            credential_original: owner.credential_original,
+            credential_tape: owner.credential_tape,
+        }
+    }
 }
 
 impl MonetaryStepV1 {
@@ -93,11 +105,7 @@ impl MonetaryStepV1 {
         self.manifest_digest
     }
 
-    pub(super) fn capsule_inputs(
-        &self,
-        retention: &MonetaryRetentionV1,
-    ) -> Result<Vec<KagemushaWalletRetainedInputV1>, Error> {
-        retention.bind(self)?;
+    pub(super) fn capsule_inputs(&self) -> Result<Vec<KagemushaWalletRetainedInputV1>, Error> {
         use KagemushaWalletRetainedInputRoleV1 as R;
         let mut inputs = vec![KagemushaWalletRetainedInputV1 {
             role: R::Request,
@@ -132,11 +140,14 @@ impl MonetaryStepV1 {
         {
             return Err(Error::Authority);
         }
-        inputs.push(KagemushaWalletRetainedInputV1 {
-            role: R::MonetaryWitness,
-            bytes: retention.original().to_vec(),
-        });
         Ok(inputs)
+    }
+
+    pub(super) fn retained_payment_digest(&self) -> Result<[u8; 32], Error> {
+        match self.payment_original.as_deref() {
+            None => Ok([0; 32]),
+            Some(bytes) => Ok(incoming_original::payment(bytes)?.payment_digest),
+        }
     }
 
     /// Exact witness of the installed selector; not a separate monetary relation.
@@ -486,6 +497,66 @@ fn derive(
     Ok((state, statement))
 }
 
+/// Verified original field projection; Q proofs remain mandatory independent inputs.
+pub(crate) struct SendFoldFieldsV1 {
+    pub(crate) state: native_send::SendState,
+    pub(crate) sigma: Vec<u8>,
+    pub(crate) omega: Vec<u8>,
+    pub(crate) objects: [Vec<u8>; 5],
+    pub(crate) pending: IndexedInsert<Fp>,
+    pub(crate) fee: IndexedInsert<Fp>,
+    pub(crate) predecessor: native_send::PredecessorInput,
+}
+impl SendFoldFieldsV1 {
+    pub(crate) fn with_q(self, q: [native_send::QInput; 2]) -> native_send::Inputs {
+        native_send::Inputs {
+            state: self.state,
+            sigma: self.sigma,
+            omega: self.omega,
+            objects: self.objects,
+            pending: self.pending,
+            fee: self.fee,
+            predecessor: self.predecessor,
+            q,
+        }
+    }
+}
+
+/// Exact Receive originals before any burn or permanent credit-record proposal.
+pub(crate) struct ReceiveSourceFieldsV1 {
+    pub(crate) before: StateWitness,
+    pub(crate) after: StateWitness,
+    pub(crate) statement: [Fp; 26],
+    pub(crate) consumed: IndexedInsert<Fp>,
+    pub(crate) incoming_statement: [Fp; 26],
+    pub(crate) sigma: Vec<u8>,
+    pub(crate) objects: [Vec<u8>; 11],
+    pub(crate) predecessor: native_receive::PredecessorInput,
+}
+
+/// Verified original field projection; Q proofs remain mandatory independent inputs.
+pub(crate) struct ReceiveFoldFieldsV1 {
+    pub(crate) transition: native_receive::Transition,
+    pub(crate) incoming_statement: [Fp; 26],
+    pub(crate) sigma: Vec<u8>,
+    pub(crate) objects: [Vec<u8>; 11],
+    pub(crate) incoming: native_receive::IncomingWitness,
+    pub(crate) predecessor: native_receive::PredecessorInput,
+}
+impl ReceiveFoldFieldsV1 {
+    pub(crate) fn with_q(self, q: [native_receive::QInput; 3]) -> native_receive::Inputs {
+        native_receive::Inputs {
+            transition: self.transition,
+            incoming_statement: self.incoming_statement,
+            sigma: self.sigma,
+            objects: self.objects,
+            incoming: self.incoming,
+            predecessor: self.predecessor,
+            q,
+        }
+    }
+}
+
 impl PreparationV1<'_> {
     /// Derive a Send sigma witness from the authenticated folded source, exact signed Request,
     /// actual local controls and actual map insertions. The existing G1/native engines derive
@@ -670,12 +741,107 @@ impl PreparationV1<'_> {
         self.installed
             .verifier()
             .verify_package_proofs(&payment.send, None, budget)?;
+        self.derive_receive(
+            owner,
+            source,
+            request,
+            request_original,
+            payment_original,
+            payer_owner.into(),
+            payer_certificate_set_original,
+            recorded_blacklist,
+            maps,
+            successor_nonce,
+            check.effect,
+        )
+    }
+
+    /// Restore only a selected Receive's own sigma witness. Incoming acceptance belongs
+    /// to the total fold predicates; this private path never authorizes Advance or signing.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn restore_receive(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        source: &ReleasedStep,
+        request_original: &[u8],
+        payment_original: &[u8],
+        payer_original: &[u8],
+        payer_certificates: &[u8],
+        recorded_blacklist: Option<&KagemushaWalletRecordedBlacklistProofV1>,
+        maps: ReceiveMapsV1,
+        nonce: [u8; 32],
+        budget: MemoryBudget,
+    ) -> Result<MonetaryStepV1, Error> {
+        self.receipt_tape(owner, source, budget)?;
+        let request = request(request_original, self.installed.verifier().scheme())?;
+        if request.body.receiver_wallet_id != owner.credential.body.wallet_id
+            || request.receiver_credential.body.payment_key != owner.credential.body.payment_key
+            || request.body.receiver_account_digest != owner.credential.body.account_digest
+        {
+            return Err(Error::Authority);
+        }
+        if payer_original.is_empty()
+            || payer_original.len() > KAGEMUSHA_WALLET_CREDENTIAL_MAX_BYTES_V1
+        {
+            return Err(Error::Authority);
+        }
+        let credential: KagemushaWalletCredentialV1 = norito::decode_canonical_with_limits(
+            payer_original,
+            norito::canonical_decode_limits(payer_original.len()),
+        )
+        .map_err(|_| Error::Authority)?;
+        incoming_original::payment(payment_original)?;
+        let payer = PayerOriginalV1 {
+            credential_original: payer_original.to_vec(),
+            credential_tape: signed_tape(credential.body.transcript(), &credential.signature),
+        };
+        let effect = KagemushaWalletEffectV1::Receive {
+            credit_id: request.credit_id(),
+            payer_wallet_id: request.body.payer_wallet_id,
+            amount: request.body.amount,
+        };
+        self.derive_receive(
+            owner,
+            source,
+            request,
+            request_original,
+            payment_original,
+            payer,
+            payer_certificates,
+            recorded_blacklist,
+            maps,
+            nonce,
+            effect,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn derive_receive(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        source: &ReleasedStep,
+        request: KagemushaWalletRequestV1,
+        request_original: &[u8],
+        payment_original: &[u8],
+        payer: PayerOriginalV1,
+        payer_certificate_set_original: &[u8],
+        recorded_blacklist: Option<&KagemushaWalletRecordedBlacklistProofV1>,
+        maps: ReceiveMapsV1,
+        successor_nonce: [u8; 32],
+        effect: KagemushaWalletEffectV1,
+    ) -> Result<MonetaryStepV1, Error> {
+        let scheme = self.installed.verifier().scheme();
+        let source_state = &source.frozen.capsule.successor_state;
         let sequence = source_state
             .core
             .sequence
             .checked_add(1)
             .ok_or(Error::Authority)?;
-        let consumed = authority(payment.consumed_credit_leaf(sequence))?;
+        let consumed = KagemushaWalletConsumedCreditLeafV1 {
+            credit_id: request.credit_id(),
+            amount: request.body.amount,
+            receive_sequence: sequence,
+        };
         let consumed_root = authority(maps.consumed.verify(
             &source_state.core.consumed_credit_root,
             &consumed.key(),
@@ -709,7 +875,7 @@ impl PreparationV1<'_> {
         if witness.request_body() != body {
             return Err(Error::Authority);
         }
-        let (state, statement) = derive(source_state, relation, &witness, check.effect)?;
+        let (state, statement) = derive(source_state, relation, &witness, effect)?;
         authority(statement.validate_for_scheme(scheme))?;
         authority(statement.validate_for_credential(&owner.credential))?;
         authority(statement.validate_successor_of(&source.frozen.capsule.statement))?;
@@ -725,7 +891,7 @@ impl PreparationV1<'_> {
             payment_original: Some(payment_original.to_vec()),
             maps: vec![insertion(&maps.consumed)?],
             send_check: None,
-            payer: Some(payer_owner),
+            payer: Some(payer),
             payer_certificate_set_original: Some(payer_certificate_set_original.to_vec()),
         })
     }
@@ -822,6 +988,21 @@ impl PreparationV1<'_> {
         q: [native_send::QInput; 2],
         budget: MemoryBudget,
     ) -> Result<native_send::Inputs, Error> {
+        self.send_fold_fields(owner, step, predecessor, prepared, public, budget)
+            .map(|fields| fields.with_q(q))
+    }
+
+    /// Reconstruct the exact native source before its independent Q proofs exist.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn send_fold_fields(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        step: &ReleasedStep,
+        predecessor: &FoldedStateV1,
+        prepared: &MonetaryStepV1,
+        public: &KagemushaWalletLineagePublicV1,
+        budget: MemoryBudget,
+    ) -> Result<SendFoldFieldsV1, Error> {
         if prepared.statement.effect.kind() != KagemushaWalletOperationKindV1::Send
             || prepared.payment_original.is_some()
         {
@@ -839,7 +1020,7 @@ impl PreparationV1<'_> {
         } else {
             unused_insert()
         };
-        Ok(native_send::Inputs {
+        Ok(SendFoldFieldsV1 {
             state: native_send::SendState {
                 before: predecessor.witness,
                 after,
@@ -859,7 +1040,6 @@ impl PreparationV1<'_> {
             ],
             pending,
             fee: fee_map,
-            q,
             predecessor: native_send::PredecessorInput {
                 proof: predecessor.proof.clone(),
                 pallas: predecessor.pallas,
@@ -888,6 +1068,30 @@ impl PreparationV1<'_> {
         incoming_witness: native_receive::IncomingWitness,
         budget: MemoryBudget,
     ) -> Result<native_receive::Inputs, Error> {
+        self.receive_fold_fields(
+            owner,
+            step,
+            predecessor,
+            prepared,
+            public,
+            maps,
+            incoming_witness,
+            budget,
+        )
+        .map(|fields| fields.with_q(q))
+    }
+
+    /// Decode and authenticate original Receive source without selecting a credit burn branch.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn receive_source_fields(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        step: &ReleasedStep,
+        predecessor: &FoldedStateV1,
+        prepared: &MonetaryStepV1,
+        public: &KagemushaWalletLineagePublicV1,
+        budget: MemoryBudget,
+    ) -> Result<ReceiveSourceFieldsV1, Error> {
         if prepared.statement.effect.kind() != KagemushaWalletOperationKindV1::Receive {
             return Err(Error::Authority);
         }
@@ -918,69 +1122,106 @@ impl PreparationV1<'_> {
         {
             return Err(Error::Authority);
         }
-        let scheme = self.installed.verifier().scheme();
-        let payment = authority(KagemushaWalletPaymentV1::decode_canonical(
-            original,
-            &scheme.scheme_id(),
-        ))?;
         let payer = prepared.payer.as_ref().ok_or(Error::Authority)?;
-        self.credential_owner(payer)?;
+        let incoming = incoming_original::payment(original)?;
+        if incoming.payment_digest != capsule.payment_digest {
+            return Err(Error::Authority);
+        }
         let (after, statement, receipt) =
             self.retained_monetary(owner, step, predecessor, prepared, public, budget)?;
-        let incoming = &payment.send;
-        let incoming_lineage = incoming.lineage.lineage().ok_or(Error::Authority)?;
-        let receipt_signer = authority(KagemushaWalletReceiptSignerV1::from_credential(
-            &payer.credential,
-        ))?;
-        let incoming_receipt = authority(incoming.receipt.body(
-            &receipt_signer,
-            &incoming.statement,
-            &authority(incoming.proof_digest())?,
-        ))?;
         let quoted = &prepared.request.receiver_credential;
         let quoted_certificate = authority(prepared.request.certificates.certificate(
             &quoted.body.issuer_certificate,
             KagemushaWalletSignerRoleV1::Enrollment,
         ))?;
-        let digests = authority(payment.digests())?;
-        let compact = kagemusha_wallet_payment_transcript_v1(
-            &digests.request,
-            &payment.payer_payment_key,
-            &payment.payer_credential_digest,
-            &digests.package.package,
-        );
         let consumed = *prepared.maps.first().ok_or(Error::Authority)?;
-        let credit_entry = KagemushaWalletCreditDigestLeafV1 {
-            credit_id: digests.credit_id,
-            payment_digest: digests.payment,
-            burned: false,
+        Ok(ReceiveSourceFieldsV1 {
+            before: predecessor.witness,
+            after,
+            statement,
+            consumed,
+            incoming_statement: incoming.incoming_statement,
+            sigma: capsule.step_proof.bytes.clone(),
+            objects: [
+                signed_tape(
+                    prepared.request.body.transcript(),
+                    &prepared.request.signature,
+                ),
+                payer.credential_tape.clone(),
+                incoming.receipt,
+                incoming.compact,
+                incoming.omega,
+                incoming.payment.send.step_proof.bytes.clone(),
+                owner.credential_tape.clone(),
+                owner.certificate_tape.clone(),
+                receipt,
+                signed_tape(quoted.body.transcript(), &quoted.signature),
+                signed_tape(
+                    quoted_certificate.body.transcript(),
+                    &quoted_certificate.signature,
+                ),
+            ],
+            predecessor: native_receive::PredecessorInput {
+                proof: predecessor.proof.clone(),
+                pallas: predecessor.pallas,
+                vesta: predecessor.vesta,
+            },
+        })
+    }
+
+    /// Reconstruct the exact native source before its independent Q proofs exist.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn receive_fold_fields(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        step: &ReleasedStep,
+        predecessor: &FoldedStateV1,
+        prepared: &MonetaryStepV1,
+        public: &KagemushaWalletLineagePublicV1,
+        maps: ReceiveFoldMapsV1,
+        incoming_witness: native_receive::IncomingWitness,
+        budget: MemoryBudget,
+    ) -> Result<ReceiveFoldFieldsV1, Error> {
+        let source =
+            self.receive_source_fields(owner, step, predecessor, prepared, public, budget)?;
+        // These are witness proposals only. Each of the five fixed native owners
+        // independently derives its result, and the terminal relation enforces their
+        // conjunction and the absence of corrected claims. Bind this proposal to both adjusted burn and the first record.
+        let corrected = incoming_witness
+            .modes
+            .iter()
+            .any(|mode| *mode == iroha_kagemusha_proof::q_sigma::native::IncomingMode::Corrected);
+        let burned = corrected || !incoming_witness.results.iter().all(|result| *result);
+        let amount = match prepared.statement.effect {
+            KagemushaWalletEffectV1::Receive { amount, .. } => amount,
+            _ => return Err(Error::Authority),
         };
-        let credit_root = authority(maps.credit.verify(
-            &predecessor.lineage.public.credit_digest_root,
-            &credit_entry,
-        ))?;
-        if credit_root != public.credit_digest_root {
+        let expected_burn = proposed_receive_burn(
+            predecessor.lineage.public.burned_total,
+            amount,
+            &incoming_witness.results,
+            corrected,
+        )?;
+        if public.burned_total != expected_burn {
             return Err(Error::Authority);
         }
-        let credit = match maps.credit {
-            KagemushaWalletCreditDigestRecordV1::Inserted { witness } => insertion(&witness)?,
-            KagemushaWalletCreditDigestRecordV1::Present { leaf, opening } => IndexedInsert {
-                leaf: IndexedLeaf {
-                    key: word(leaf.key)?,
-                    value: word(leaf.value)?,
-                    next_key: word(leaf.next_key)?,
-                },
-                leaf_slot: opening.slot,
-                leaf_siblings: fields(opening.siblings.to_vec())?,
-                ..unused_insert()
-            },
+        let credit_entry = KagemushaWalletCreditDigestLeafV1 {
+            credit_id: prepared.request.credit_id(),
+            payment_digest: step.frozen.capsule.payment_digest,
+            burned,
         };
-        Ok(native_receive::Inputs {
+        let credit = receive_credit_route(
+            maps.credit,
+            &predecessor.lineage.public.credit_digest_root,
+            &public.credit_digest_root,
+            &credit_entry,
+        )?;
+        Ok(ReceiveFoldFieldsV1 {
             transition: native_receive::Transition {
-                before: predecessor.witness,
-                after,
-                statement,
-                consumed,
+                before: source.before,
+                after: source.after,
+                statement: source.statement,
+                consumed: source.consumed,
                 credit,
                 blacklist: IndexedInsert {
                     leaf: IndexedLeaf {
@@ -992,37 +1233,55 @@ impl PreparationV1<'_> {
                     leaf_siblings: fields(maps.history_opening.siblings.to_vec())?,
                     ..unused_insert()
                 },
+                // This is the committed consumed-root insertion, not the permanent
+                // credit record's preserve-first branch. Honest preparation always inserts.
                 insert: true,
             },
-            incoming_statement: fields(authority(incoming.statement.field_items())?)?,
-            sigma: capsule.step_proof.bytes.clone(),
-            objects: [
-                signed_tape(
-                    prepared.request.body.transcript(),
-                    &prepared.request.signature,
-                ),
-                payer.credential_tape.clone(),
-                signed_tape(incoming_receipt.transcript(), &incoming.receipt.signature),
-                compact,
-                incoming_lineage.bytes(),
-                incoming.step_proof.bytes.clone(),
-                owner.credential_tape.clone(),
-                owner.certificate_tape.clone(),
-                receipt,
-                signed_tape(quoted.body.transcript(), &quoted.signature),
-                signed_tape(
-                    quoted_certificate.body.transcript(),
-                    &quoted_certificate.signature,
-                ),
-            ],
+            incoming_statement: source.incoming_statement,
+            sigma: source.sigma,
+            objects: source.objects,
             incoming: incoming_witness,
-            q,
-            predecessor: native_receive::PredecessorInput {
-                proof: predecessor.proof.clone(),
-                pallas: predecessor.pallas,
-                vesta: predecessor.vesta,
-            },
+            predecessor: source.predecessor,
         })
+    }
+}
+
+fn proposed_receive_burn(
+    previous: u128,
+    amount: u128,
+    results: &[bool; 5],
+    corrected: bool,
+) -> Result<u128, Error> {
+    previous
+        .checked_add(if !corrected && results.iter().all(|result| *result) {
+            0
+        } else {
+            amount
+        })
+        .ok_or(Error::Authority)
+}
+
+fn receive_credit_route(
+    record: KagemushaWalletCreditDigestRecordV1,
+    old_root: &[u8; 32],
+    new_root: &[u8; 32],
+    entry: &KagemushaWalletCreditDigestLeafV1,
+) -> Result<IndexedInsert<Fp>, Error> {
+    if authority(record.verify(old_root, entry))? != *new_root {
+        return Err(Error::Authority);
+    }
+    match record {
+        KagemushaWalletCreditDigestRecordV1::Inserted { witness } => insertion(&witness),
+        KagemushaWalletCreditDigestRecordV1::Present { leaf, opening } => Ok(IndexedInsert {
+            leaf: IndexedLeaf {
+                key: word(leaf.key)?,
+                value: word(leaf.value)?,
+                next_key: word(leaf.next_key)?,
+            },
+            leaf_slot: opening.slot,
+            leaf_siblings: fields(opening.siblings.to_vec())?,
+            ..unused_insert()
+        }),
     }
 }
 

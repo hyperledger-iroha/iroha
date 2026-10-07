@@ -25,7 +25,7 @@ use crate::{
             request::RequestCells,
         },
     },
-    q_signature::SignatureKey,
+    q_signature::{QSignaturePlan, SignatureKey},
 };
 
 #[cfg(test)]
@@ -103,6 +103,22 @@ impl ReceiveSignatureQProjection {
             )?,
         })
     }
+    // Native source evaluation projects only the real signature schema. It has no
+    // sigma/Q0 frame or pending proof opening and cannot enter an accumulation ledger.
+    pub(crate) fn from_original_instances(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        operation: &crate::a_relation::AProofPlan,
+        schema: &QSignaturePlan,
+        instances: &[Vec<iroha_plonk_recursion::codec::ScalarCells<Ep>>],
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            projection: crate::a_relation::signature::project_signature_q(
+                chip, region, operation, 2, schema, instances,
+            )?,
+        })
+    }
+
     /// Original raw message, key/signature and exact soft verdict exports.
     pub fn slots(&self) -> &[crate::a_relation::SignatureProofCells] {
         self.projection.slots()
@@ -433,7 +449,32 @@ impl ReceiveAuthorizationObjects {
         self.bind_context(region, plan, input)?;
         proof.objects.bind_context(region, plan, input)?;
         proof.incoming.bind_context(region, plan, stage, input)?;
-        let slots = proof.incoming.slots();
+        self.signature_predicate(
+            chip,
+            region,
+            proof.policy,
+            input.own_statement,
+            MapState {
+                state: input.predecessor.ok_or(Error::Synthesis)?.state,
+                lineage: input.predecessor.ok_or(Error::Synthesis)?.public,
+            },
+            proof.objects,
+            proof.incoming.slots(),
+        )
+    }
+
+    // Shared exact raw predicate: staged ownership/context bindings remain above.
+    // Native pre-Q evaluation supplies original signature exports, never Q0 columns.
+    pub(crate) fn signature_predicate(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        policy: OwnPolicy,
+        own_statement: &crate::operation_relation::statement::StatementCells,
+        predecessor: MapState<'_>,
+        objects: &ReceiveSignedObjects,
+        slots: &[crate::a_relation::SignatureProofCells],
+    ) -> Result<Bit<Fp>, Error> {
         let renewed = self.variant == Variant::ReceiveRenewed;
         if slots.len() != if renewed { 4 } else { 2 }
             || slots.iter().any(|slot| slot.mode() != VerifyMode::Soft)
@@ -443,34 +484,28 @@ impl ReceiveAuthorizationObjects {
         {
             return Err(Error::Synthesis);
         }
-        let predecessor = input.predecessor.ok_or(Error::Synthesis)?;
-        let scope = proof.policy.scope(chip, region, predecessor.state)?;
+        let scope = policy.scope(chip, region, predecessor.state)?;
         let lanes = chip.operation_lanes()?;
         let mut uint = UintChip::new(lanes.glue, lanes.range);
         let receiver = CredentialCells::check(&mut uint, region, &self.objects[3])?;
-        let payer = CredentialCells::check(&mut uint, region, &proof.objects.objects[1])?;
-        let request =
-            RequestCells::check(&mut uint, lanes.hash, region, &proof.objects.objects[0])?;
+        let payer = CredentialCells::check(&mut uint, region, &objects.objects[1])?;
+        let request = RequestCells::check(&mut uint, lanes.hash, region, &objects.objects[0])?;
         self.bind_quoted_sources(&mut uint, region, &request)?;
         let mut checks = vec![
-            proof.objects.objects[2].structural_valid().clone(),
-            proof.objects.objects[2].bind_signature(
-                region,
-                &proof.incoming.slots()[0],
-                payer.payment_key()?,
-            )?,
+            objects.objects[2].structural_valid().clone(),
+            objects.objects[2].bind_signature(region, &slots[0], payer.payment_key()?)?,
             request.bind_receive(
                 &mut uint,
                 region,
-                input.own_statement,
+                own_statement,
                 &receiver,
-                predecessor.public,
-                &proof.incoming.slots()[1],
+                predecessor.lineage,
+                &slots[1],
             )?,
         ];
         if renewed {
             if slots[2].key_policy() != SignatureKey::Variable
-                || slots[3].key_policy() != SignatureKey::Fixed(proof.policy.root)
+                || slots[3].key_policy() != SignatureKey::Fixed(policy.root)
             {
                 return Err(Error::Synthesis);
             }

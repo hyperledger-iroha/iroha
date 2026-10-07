@@ -19,7 +19,7 @@ use crate::{
     operation_relation::objects::{
         ObjectKind, SignedObjectCells, credential::CredentialCells, request::RequestCells,
     },
-    q_signature::SignatureKey,
+    q_signature::{QSignaturePlan, SignatureKey},
 };
 
 const SLOTS: [usize; 3] = [3, 6, 12];
@@ -143,9 +143,20 @@ impl ArchiveIncomingObjects {
         plan: &ContextPlan,
         input: &ContextInputs<'_>,
     ) -> Result<(), Error> {
+        self.bind_original_context(region, plan, input.own_statement, input.objects)
+    }
+
+    // Original-only source binding shared with pre-Q witness evaluation.
+    pub(crate) fn bind_original_context(
+        &self,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        statement: &crate::operation_relation::statement::StatementCells,
+        objects: &[ContextObjectCells],
+    ) -> Result<(), Error> {
         super::require_variant(plan.operation().frame().variant())?;
-        if input.own_statement.variant() != plan.operation().frame().variant()
-            || input.objects.len() != plan.object_specs().len()
+        if statement.variant() != plan.operation().frame().variant()
+            || objects.len() != plan.object_specs().len()
         {
             return Err(Error::Synthesis);
         }
@@ -153,7 +164,7 @@ impl ArchiveIncomingObjects {
             if plan.object_specs().get(index) != Some(&spec) {
                 return Err(Error::Synthesis);
             }
-            let expected = input.objects.get(index).ok_or(Error::Synthesis)?;
+            let expected = objects.get(index).ok_or(Error::Synthesis)?;
             for (a, b) in actual
                 .commitment_words()
                 .iter()
@@ -207,18 +218,58 @@ impl ArchiveIncomingObjects {
         bundle: &SignatureQCells,
     ) -> Result<Bit<Fp>, Error> {
         self.bind_context(region, plan, input)?;
-        let [slot] = bundle.slots() else {
-            return Err(Error::Synthesis);
-        };
-        if slot.mode() != VerifyMode::Soft || slot.key_policy() != SignatureKey::Variable {
-            return Err(Error::Synthesis);
-        }
         bundle.bind_context(
             region,
             plan.operation(),
             2,
             input.q_instances.get(2).ok_or(Error::Synthesis)?,
         )?;
+        self.bind_signature_slot(region, bundle.slots())
+    }
+
+    // Purpose-limited witness proposal: the exact production slot-binding below
+    // is reused, but this projection cannot enter a proof accumulation ledger.
+    pub(crate) fn derive_signature_projection(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        input: &ContextInputs<'_>,
+        schema: &QSignaturePlan,
+    ) -> Result<Bit<Fp>, Error> {
+        self.bind_context(region, plan, input)?;
+        let instances = input.q_instances.get(2).ok_or(Error::Synthesis)?;
+        self.signature_projection(chip, region, plan.operation(), schema, instances)
+    }
+
+    // Q-free projection of genuine native signature exports, with no sigma frame.
+    // The staged adapter above still binds every original object and Q2 context.
+    pub(crate) fn signature_projection(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        operation: &crate::a_relation::AProofPlan,
+        schema: &QSignaturePlan,
+        instances: &[Vec<iroha_plonk_recursion::codec::ScalarCells<Ep>>],
+    ) -> Result<Bit<Fp>, Error> {
+        let projection = crate::a_relation::signature::project_signature_q(
+            chip, region, operation, 2, schema, instances,
+        )?;
+        projection.bind_context(region, operation, 2, instances)?;
+        self.bind_signature_slot(region, projection.slots())
+    }
+
+    fn bind_signature_slot(
+        &self,
+        region: &mut Region<'_, Fp>,
+        slots: &[crate::a_relation::signature::SignatureProofCells],
+    ) -> Result<Bit<Fp>, Error> {
+        let [slot] = slots else {
+            return Err(Error::Synthesis);
+        };
+        if slot.mode() != VerifyMode::Soft || slot.key_policy() != SignatureKey::Variable {
+            return Err(Error::Synthesis);
+        }
         self.receipt
             .bind_signature(region, slot, self.receiver.payment_key()?)
     }

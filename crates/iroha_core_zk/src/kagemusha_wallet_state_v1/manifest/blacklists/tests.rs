@@ -150,7 +150,7 @@ fn bounded_selected_index_restores_exact_full_and_certificate_originals_after_ca
     assert_eq!(entry.certificates_bytes as usize, certificates.len());
     assert_ne!(
         state.rest.blacklist,
-        reference.object_digest(),
+        object_digest(&full),
         "signed policy digest and archive content hash are distinct selectors"
     );
     let capsule: KagemushaWalletRecoveryCapsuleV1 = fixture("KagemushaWalletRecoveryCapsuleV1");
@@ -207,7 +207,7 @@ fn selected_list_certificates_and_index_loss_corruption_unavailability_never_mea
     )
     .unwrap();
     for digest in [
-        reference.object_digest(),
+        object_digest(&full),
         object_digest(&certificates),
         selected.0,
     ] {

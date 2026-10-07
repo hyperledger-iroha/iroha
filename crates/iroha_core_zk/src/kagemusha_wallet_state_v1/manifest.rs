@@ -15,10 +15,17 @@ pub(super) struct Manifest {
     pub capsule: [u8; 32],
     pub steps: IndexRoot,
     pub credits: IndexRoot,
+    pub outgoing: IndexRoot,
     pub folds: IndexRoot,
     pub claims: IndexRoot,
     pub preparations: IndexRoot,
     pub blacklists: IndexRoot,
+    pub capsule_plans: IndexRoot,
+    pub capsule_sources: IndexRoot,
+    pub issued_requests: IndexRoot,
+    pub sessions: IndexRoot,
+    pub direct_anchors: IndexRoot,
+    pub fold_pending: IndexRoot,
     pub folded: Option<u128>,
     pub checkpoint_count: u32,
     pub checkpoint_digest: [u8; 32],
@@ -45,10 +52,17 @@ impl Manifest {
             capsule: [0; 32],
             steps: IndexRoot::default(),
             credits: IndexRoot::default(),
+            outgoing: IndexRoot::default(),
             folds: IndexRoot::default(),
             claims: IndexRoot::default(),
             preparations: IndexRoot::default(),
             blacklists: IndexRoot::default(),
+            capsule_plans: IndexRoot::default(),
+            capsule_sources: IndexRoot::default(),
+            issued_requests: IndexRoot::default(),
+            sessions: IndexRoot::default(),
+            direct_anchors: IndexRoot::default(),
+            fold_pending: IndexRoot::default(),
             folded: None,
             checkpoint_count: 0,
             checkpoint_digest: [0; 32],
@@ -207,11 +221,25 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 checkpoints: 0,
                 collected: false,
             };
+            self.index_source_custody(&mut manifest, digest, c.kind)?;
             manifest.steps = manifest.steps.set(
                 &mut self.archive,
                 sequence_key(current),
                 &archive::encode(&entry)?,
             )?;
+            if let KagemushaWalletEffectV1::Send { credit_id, .. } = c.statement.effect {
+                if manifest
+                    .outgoing
+                    .get(&mut self.archive, &credit_id)?
+                    .is_some()
+                {
+                    return Err(Error::WitnessLost("duplicate committed Send"));
+                }
+                manifest.outgoing =
+                    manifest
+                        .outgoing
+                        .set(&mut self.archive, credit_id, &sequence_key(current))?;
+            }
             if let KagemushaWalletEffectV1::Receive {
                 credit_id, amount, ..
             } = c.statement.effect

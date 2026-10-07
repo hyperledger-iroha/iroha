@@ -115,6 +115,7 @@ mod platform;
 mod provider;
 mod reconcile;
 mod retained;
+mod setup;
 mod store;
 mod terminal;
 

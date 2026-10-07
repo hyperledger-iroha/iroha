@@ -58,6 +58,8 @@ use iroha_plonk_recursion::{
 use std::sync::Arc;
 
 use super::Source;
+mod proposal;
+pub use proposal::PredicateInputs;
 
 struct OmegaKeySource {
     representation: Value<Fp>,

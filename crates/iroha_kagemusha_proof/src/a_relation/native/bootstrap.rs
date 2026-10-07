@@ -599,6 +599,58 @@ impl Session<'_> {
         self.prepared
             .resume_wrapper(&self.prover.w, checkpoint, budget)
     }
+    /// Restore terminal A2 from its original proof, retained fold salt and exact
+    /// verified W0 predecessor. The Pallas fold, public fields and every forwarded
+    /// obligation are rederived from this session's original inputs.
+    /// # Errors
+    /// Changed source/salt, wrong installed proof or failed fold/decide.
+    pub fn restore_terminal(
+        &self,
+        wrapper: &WrapperCheckpoint,
+        proof: Vec<u8>,
+        salt: Fp,
+        budget: MemoryBudget,
+    ) -> Result<Terminal, Error> {
+        let fold = FoldConfig {
+            kernel_budget: budget,
+            ..FoldConfig::default()
+        };
+        let (_, public, pallas) =
+            self.prepared
+                .terminal_circuit(wrapper, &self.prover.w, salt, &fold)?;
+        let source = &self.prover.terminal;
+        verify_full(
+            &self.prepared.plan.vesta,
+            source.binding(),
+            source.key(),
+            std::slice::from_ref(&public),
+            &proof,
+            budget,
+        )
+        .map_err(|_| Error::Proof)?;
+        let claim = accumulate_generator(
+            &self.prepared.plan.vesta,
+            source.binding(),
+            source.key(),
+            std::slice::from_ref(&public),
+            &proof,
+            budget,
+        )
+        .map_err(|_| Error::Proof)?;
+        let opening =
+            FoldInput::from_opening(*claim.g(), claim.challenges()).map_err(|_| Error::Proof)?;
+        opening
+            .decide(&self.prepared.plan.vesta, budget)
+            .map_err(|_| Error::Proof)?;
+        Ok(Terminal {
+            proof,
+            instances: public,
+            pallas,
+            vesta: wrapper.vesta.clone(),
+            opening,
+        })
+    }
+
     /// Compute the actual terminal A2 result using its installed key.
     /// # Errors
     /// A wrong W, source/profile mismatch or failed proof/fold/decide.
