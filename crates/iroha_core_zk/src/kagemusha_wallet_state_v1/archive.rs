@@ -30,6 +30,9 @@ pub(super) const METADATA_BOUND: usize = 1024;
 pub enum ArchiveKey {
     /// Exact frozen pre-signing inputs, keyed by the G1 capsule digest.
     Capsule([u8; 32]),
+    /// Exact local witness snapshot retained before the associated capsule is selected.
+    /// Its descriptor becomes authoritative only through the selected capsule/manifest.
+    SourceCustody([u8; 32]),
     /// Content-addressed persistent index node or bounded auxiliary object.
     Object([u8; 32]),
     /// A sequential sub-proof for one released sequence.
@@ -49,6 +52,7 @@ impl ArchiveKey {
     fn name(self) -> String {
         match self {
             Self::Capsule(digest) => format!("c-{}.arc", hex::encode(digest)),
+            Self::SourceCustody(digest) => format!("s-{}.arc", hex::encode(digest)),
             Self::Object(digest) => format!("o-{}.arc", hex::encode(digest)),
             Self::Checkpoint { sequence, ordinal } => {
                 format!("p-{sequence:032x}-{ordinal:08x}.arc")
@@ -270,6 +274,8 @@ impl<F: Fs> ArchiveStore for FsArchive<F> {
 fn parse_key(name: &str) -> Option<ArchiveKey> {
     let key = if let Some(raw) = name.strip_prefix("c-").and_then(|s| s.strip_suffix(".arc")) {
         ArchiveKey::Capsule(hex::decode(raw).ok()?.try_into().ok()?)
+    } else if let Some(raw) = name.strip_prefix("s-").and_then(|s| s.strip_suffix(".arc")) {
+        ArchiveKey::SourceCustody(hex::decode(raw).ok()?.try_into().ok()?)
     } else if let Some(raw) = name.strip_prefix("o-").and_then(|s| s.strip_suffix(".arc")) {
         ArchiveKey::Object(hex::decode(raw).ok()?.try_into().ok()?)
     } else if let Some(raw) = name.strip_prefix("q-").and_then(|s| s.strip_suffix(".arc")) {

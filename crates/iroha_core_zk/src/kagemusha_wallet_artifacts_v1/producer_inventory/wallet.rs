@@ -35,6 +35,25 @@ pub enum WalletSourcesErrorV1 {
     Omega(#[from] OmegaQualificationErrorV1),
 }
 
+impl WalletSourcesErrorV1 {
+    /// Whether the failure is missing or unreadable reinstallable source material.
+    /// Cryptographic, length, hash, installation and source mismatches remain false.
+    pub const fn is_unavailable(&self) -> bool {
+        matches!(
+            self,
+            Self::Original(Error::Unavailable)
+                | Self::Sigma(SigmaQualificationErrorV1::Original(Error::Unavailable))
+                | Self::Finality(FinalityQualificationErrorV1::Original(Error::Unavailable))
+                | Self::Q(QQualificationErrorV1::Original(Error::Unavailable))
+                | Self::Operation(OperationQualificationErrorV1::Original(Error::Unavailable))
+                | Self::Operation(OperationQualificationErrorV1::Bootstrap(
+                    BootstrapQualificationErrorV1::Original(Error::Unavailable)
+                ))
+                | Self::Omega(OmegaQualificationErrorV1::Original(Error::Unavailable))
+        )
+    }
+}
+
 /// Complete source-qualified wallet graph under one authenticated installation.
 /// This owns every exact sigma, receipt, Q, logical operation and final Omega
 /// source. No original PK or proving polynomial is retained between imports.
@@ -295,6 +314,32 @@ impl QualifiedWalletSourcesV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_typed_original_outages_are_reinstallable() {
+        for error in [
+            Error::Unavailable,
+            Error::Inventory,
+            Error::Profile,
+            Error::Authority,
+            Error::Proof,
+        ] {
+            let expected = error == Error::Unavailable;
+            for nested in [
+                WalletSourcesErrorV1::Original(error),
+                WalletSourcesErrorV1::Sigma(SigmaQualificationErrorV1::Original(error)),
+                WalletSourcesErrorV1::Finality(FinalityQualificationErrorV1::Original(error)),
+                WalletSourcesErrorV1::Q(QQualificationErrorV1::Original(error)),
+                WalletSourcesErrorV1::Operation(OperationQualificationErrorV1::Original(error)),
+                WalletSourcesErrorV1::Operation(OperationQualificationErrorV1::Bootstrap(
+                    BootstrapQualificationErrorV1::Original(error),
+                )),
+                WalletSourcesErrorV1::Omega(OmegaQualificationErrorV1::Original(error)),
+            ] {
+                assert_eq!(nested.is_unavailable(), expected);
+            }
+        }
+    }
 
     #[test]
     fn dispatch_uses_all_three_fields_and_rejects_every_uncompiled_combination() {

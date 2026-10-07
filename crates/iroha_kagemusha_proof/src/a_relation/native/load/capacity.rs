@@ -258,6 +258,7 @@ fn five_a_four_w_original_sources_qualify_at_k16() {
     )
     .unwrap();
     assert_eq!(imported.descriptors().len(), 9);
+    assert_eq!(imported.plan().context().schema(), plan.context().schema());
     for stage in 0..A_STAGE_COUNT {
         let key = imported.import_a(stage, &a[stage].p, config).unwrap();
         assert_eq!(key.vk().to_bytes(), a[stage].v);

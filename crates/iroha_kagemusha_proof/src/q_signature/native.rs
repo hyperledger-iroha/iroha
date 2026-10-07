@@ -202,11 +202,8 @@ impl QSignatureProver {
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<QSignatureProof, QSignatureError> {
-        let verdicts = signature_verdicts(&self.plan, witnesses)?;
+        let instances = self.plan.native_instances(witnesses)?;
         let circuit = QSignatureCircuit::new(self.plan.clone(), witnesses.to_vec())
-            .map_err(QSignatureError::Layout)?;
-        let instances = circuit
-            .instances(&verdicts)
             .map_err(QSignatureError::Layout)?;
         let witness = Witness::from_circuit(&self.key, &circuit, &instances)
             .map_err(QSignatureError::Prover)?;
@@ -222,6 +219,25 @@ impl QSignatureProver {
         )
         .map_err(QSignatureError::Verify)?;
         Ok(QSignatureProof { bytes, instances })
+    }
+}
+
+impl QSignaturePlan {
+    /// Derive exact Q public values from raw signed objects under this fixed policy.
+    /// Native low-S verification derives every soft verdict and rejects failed hard
+    /// slots. This supplies restoration inputs, never a proof or acceptance grant.
+    /// # Errors
+    /// Wrong slot count, substituted fixed key, invalid hard signature or field encoding.
+    pub fn native_instances(
+        &self,
+        witnesses: &[SignatureWitness],
+    ) -> Result<[Vec<Fq>; 1], QSignatureError> {
+        let verdicts = signature_verdicts(self, witnesses)?;
+        let circuit = QSignatureCircuit::new(self.clone(), witnesses.to_vec())
+            .map_err(QSignatureError::Layout)?;
+        circuit
+            .instances(&verdicts)
+            .map_err(QSignatureError::Layout)
     }
 }
 
@@ -298,6 +314,14 @@ mod tests {
             Err(QSignatureError::Signature)
         ));
         assert_eq!(signature_verdicts(&soft, &[invalid]).unwrap(), [false]);
+        assert!(matches!(
+            hard.native_instances(&[invalid]),
+            Err(QSignatureError::Signature)
+        ));
+        let public = soft.native_instances(&[invalid]).unwrap();
+        assert_eq!(public[0].last(), Some(&Fq::ZERO));
+        assert!(soft.native_instances(&[]).is_err());
+
         assert!(matches!(
             signature_verdicts(&soft, &[]),
             Err(QSignatureError::Layout(_))

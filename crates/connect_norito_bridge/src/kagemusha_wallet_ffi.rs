@@ -126,6 +126,7 @@ impl From<state::Error> for Failure {
             E::Pending => Self::code(UNCERTAIN),
             E::NoHead => Self::code(INVALID),
             E::Cancelled => Self::code(CANCELLED),
+            E::ArtifactsUnavailable(_) => Self::code(ARTIFACTS_UNAVAILABLE),
             E::Proof(_) => Self::code(PROOF_REJECTED),
         }
     }

@@ -208,3 +208,6 @@ fn retained_row_tree_preserves_late_active_allocation_refusal_and_exact_original
     assert!(!attempt.wallet_path().join("preparation.json").exists());
     assert!(!attempt.wallet_path().join("payload.json").exists());
 }
+
+#[path = "handle_tree_tests.rs"]
+mod handle_tree_tests;

@@ -5,11 +5,13 @@ use super::*;
 impl NativePreparation for TestProofs {
     fn plan_preparation(
         &self,
-        request: &OperationRequestV1,
+        request: &NativeIntentV1,
         source: &PreparationSourceV1<'_>,
+        _: &mut PreparationCustodyV1<'_>,
     ) -> Result<Vec<u8>, Error> {
         self.preparations.fetch_add(1, Ordering::SeqCst);
-        if request.action != OperationActionV1::Retire {
+        if request.user_request().map(|request| &request.action) != Some(&OperationActionV1::Retire)
+        {
             return Err(Error::Invalid("test action"));
         }
         let fold = source.folded().ok_or(Error::FoldRequired)?;
@@ -37,13 +39,14 @@ impl NativePreparation for TestProofs {
 
     fn validate_preparation(
         &self,
-        request: &OperationRequestV1,
+        request: &NativeIntentV1,
         source: &PreparationSourceV1<'_>,
+        _: &mut PreparationCustodyV1<'_>,
         plan: &[u8],
     ) -> Result<(), Error> {
         let prepared: FrozenTransition = archive::decode(plan)?;
         prepared.validate()?;
-        if request.action != OperationActionV1::Retire
+        if request.user_request().map(|request| &request.action) != Some(&OperationActionV1::Retire)
             || prepared.capsule.predecessor_capsule_digest
                 != source.released().frozen.capsule.capsule_digest().unwrap()
         {
@@ -54,8 +57,9 @@ impl NativePreparation for TestProofs {
 
     fn prove_preparation(
         &self,
-        _: &OperationRequestV1,
+        _: &NativeIntentV1,
         _: &PreparationSourceV1<'_>,
+        _: &mut PreparationCustodyV1<'_>,
         plan: &[u8],
     ) -> Result<FrozenTransition, Error> {
         self.preparation_proofs.fetch_add(1, Ordering::SeqCst);
@@ -283,7 +287,24 @@ fn source_rotation_does_not_rebase_a_durable_plan_or_repeat_proving() {
         released: &previous,
         folded: Some(&fold),
     };
-    let plan = wallet.proofs.plan_preparation(&request(), &source).unwrap();
+    let (_, manifest) = wallet.manifest().unwrap();
+    let (snapshot, map_state) = wallet
+        .preparation_source_custody(&manifest, &previous, request().kind(), Some(&fold))
+        .unwrap();
+    let mut custody = PreparationCustodyV1::new(
+        &mut wallet.archive,
+        &snapshot,
+        &map_state,
+        request().kind(),
+        None,
+        manifest.issued_requests,
+        manifest.direct_anchors,
+    )
+    .unwrap();
+    let plan = wallet
+        .proofs
+        .plan_preparation(&NativeIntentV1::user(request()), &source, &mut custody)
+        .unwrap();
     let mut other: FrozenTransition = archive::decode(&plan).unwrap();
     other.capsule.successor_state.core.state_nonce = field(91);
     rebind_frozen_successor(&mut other);
@@ -297,4 +318,82 @@ fn source_rotation_does_not_rebase_a_durable_plan_or_repeat_proving() {
     assert_eq!(wallet.proofs.preparations.load(Ordering::SeqCst), count);
     assert_eq!(wallet.proofs.preparation_proofs.load(Ordering::SeqCst), 1);
     assert_eq!(wallet.custody.signatures, 2);
+}
+
+#[test]
+fn freshness_after_durable_writes_rejects_without_advance_and_keeps_exact_preparation() {
+    let mut wallet = prepared_wallet();
+    wallet.proofs.capsule_writes = Some(Arc::clone(&wallet.archive.capsule_writes));
+    wallet.proofs.expire_during_publication = true;
+    assert!(matches!(
+        wallet.execute(request()),
+        Err(Error::Invalid("test controls expired during publication"))
+    ));
+    assert_eq!(wallet.custody.signatures, 1);
+    assert_eq!(
+        wallet.retry_request(&request().request_id).unwrap(),
+        RequestStatusV1::Preparing
+    );
+    let proofs = wallet.proofs.preparation_proofs.load(Ordering::SeqCst);
+    let mut wallet = restart(wallet);
+    wallet.proofs.expire_during_publication = false;
+    wallet.custody.pause = true;
+    assert_eq!(wallet.execute(request()).unwrap(), Completion::Pending);
+    assert_eq!(
+        wallet.proofs.preparation_proofs.load(Ordering::SeqCst),
+        proofs
+    );
+    let checks = wallet.proofs.advance_checks.load(Ordering::SeqCst);
+    wallet.proofs.expire_during_publication = true;
+    assert_eq!(wallet.execute(request()).unwrap(), Completion::Pending);
+    assert_eq!(wallet.proofs.advance_checks.load(Ordering::SeqCst), checks);
+    assert_eq!(wallet.custody.signatures, 1);
+}
+
+#[test]
+fn prepared_capsule_keeps_exact_durable_plan_after_completion_and_restart() {
+    let mut wallet = prepared_wallet();
+    wallet.execute(request()).unwrap();
+    let mut wallet = restart(wallet);
+    let (_, manifest) = wallet.manifest().unwrap();
+    let released = wallet
+        .indexed_step(&manifest, manifest.indexed.unwrap())
+        .unwrap();
+    let plan = wallet
+        .transition_preparation(&manifest, &released.frozen)
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan.request, NativeIntentV1::user(request()));
+    assert_eq!(
+        plan.source,
+        released.frozen.capsule.predecessor_capsule_digest
+    );
+    let capsule = released.frozen.capsule.capsule_digest().unwrap();
+    let bad = manifest
+        .capsule_plans
+        .set(&mut wallet.archive, capsule, &[7; 31])
+        .unwrap();
+    let mut changed = manifest;
+    changed.capsule_plans = bad;
+    assert!(matches!(
+        wallet.transition_preparation(&changed, &released.frozen),
+        Err(Error::WitnessLost("capsule plan address"))
+    ));
+}
+
+#[test]
+fn native_intent_is_canonical_and_does_not_decode_the_foreign_request_layout() {
+    let scheme = wallet().proofs.ledger_scope().unwrap().0;
+    let request = request();
+    let intent = NativeIntentV1::user(request.clone());
+    assert_eq!(intent.kind(), request.kind());
+    assert_eq!(intent.request_id(), request.request_id);
+    assert_eq!(intent.user_request(), Some(&request));
+    assert!(intent.archive_request().is_none());
+    assert!(intent.refresh().is_none());
+    let bytes = archive::encode(&intent).unwrap();
+    assert_eq!(NativeIntentV1::decode(&bytes, &scheme).unwrap(), intent);
+    assert!(NativeIntentV1::decode(&archive::encode(&request).unwrap(), &scheme).is_err());
+    assert!(NativeIntentV1::decode(&[bytes, vec![0]].concat(), &scheme).is_err());
+    assert!(NativeIntentV1::decode(&vec![0; REQUEST_MAX_BYTES + 1], &scheme).is_err());
 }

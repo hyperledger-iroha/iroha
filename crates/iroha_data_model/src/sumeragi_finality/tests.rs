@@ -1223,3 +1223,15 @@ fn authenticated_successor_requires_exact_global_network_and_bounded_chain() {
             .is_err()
     );
 }
+
+#[test]
+fn verifier_chain_label_is_exactly_the_selected_genesis_scope() {
+    let fixture = super::test_fixtures::NativeFinalityFixture::start_with_explicit_parameters(
+        "native-chain-label-regression",
+    );
+    assert_eq!(
+        fixture.verifier().chain_id(),
+        "native-chain-label-regression"
+    );
+    assert_eq!(fixture.verifier().clone().chain_id(), fixture.chain_id());
+}

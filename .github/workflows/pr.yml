@@ -314,6 +314,7 @@ jobs:
           python3 scripts/check_cargo_feature_hygiene.py
           python3 -I -S scripts/check_panic_recovery_boundaries.py
           python3 -I -S scripts/check_release_feature_graph.py
+          python3 -I -S scripts/check_no_vendored_halo2.py
           python3 scripts/check_workspace_target_inventory.py
           python3 scripts/check_compile_time_table_assets.py
           python3 -I -S scripts/check_jni_sdk_android_pairs.py
@@ -326,6 +327,7 @@ jobs:
             scripts.tests.connect_gating_fixture_compaction_source_test \
             scripts.tests.developer_executable_retirement_source_test \
             scripts.tests.native_prover_retirement_source_test \
+            scripts.tests.check_no_vendored_halo2_test \
             scripts.tests.integration_target_consolidation_source_test \
             scripts.tests.isi_instruction_box_macro_source_test \
             scripts.tests.ivm_vector_metal_compaction_source_test \

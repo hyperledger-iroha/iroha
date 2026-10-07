@@ -17,19 +17,23 @@ fn data(kind: CheckpointKind) -> (CheckpointLayout, Payload, [u8; 32]) {
         verifying_key_digest: [2; 32],
         source_context: context,
         proof: vec![4; layout.proof_bytes],
-        vesta: matches!(kind, CheckpointKind::Wrapper).then_some([5; ACCUMULATOR_BYTES]),
+        accumulator: (!matches!(kind, CheckpointKind::First)).then_some([5; ACCUMULATOR_BYTES]),
     };
     (layout, payload, context)
 }
 
 #[test]
 fn unadmitted_bounded_data_round_trips_exact_bytes_under_the_counted_layout() {
-    for kind in [CheckpointKind::First, CheckpointKind::Wrapper] {
+    for kind in [
+        CheckpointKind::First,
+        CheckpointKind::Wrapper,
+        CheckpointKind::Terminal,
+    ] {
         // This checks only the carrier grammar. These nonzero DATA bytes are
         // never passed to Session restore, a proof verifier or accumulator decide.
         let (layout, payload, context) = data(kind);
         let expected_proof = payload.proof.clone();
-        let expected_vesta = payload.vesta;
+        let expected_accumulator = payload.accumulator;
         assert_eq!(
             norito::canonical_frame_len(&payload).unwrap(),
             layout.payload_bytes()
@@ -46,14 +50,18 @@ fn unadmitted_bounded_data_round_trips_exact_bytes_under_the_counted_layout() {
         );
         assert_eq!(restored.source_context, context);
         assert_eq!(restored.proof, expected_proof);
-        assert_eq!(restored.vesta, expected_vesta);
+        assert_eq!(restored.accumulator, expected_accumulator);
         assert_eq!(restored.encode(&layout, context).unwrap(), bytes);
     }
 }
 
 #[test]
 fn unadmitted_data_cannot_substitute_kind_source_or_installed_key_identity() {
-    for kind in [CheckpointKind::First, CheckpointKind::Wrapper] {
+    for kind in [
+        CheckpointKind::First,
+        CheckpointKind::Wrapper,
+        CheckpointKind::Terminal,
+    ] {
         for mutation in 0..6 {
             let (layout, mut payload, context) = data(kind);
             match mutation {
@@ -77,7 +85,11 @@ fn unadmitted_data_cannot_substitute_kind_source_or_installed_key_identity() {
 
 #[test]
 fn unadmitted_data_cannot_add_drop_or_relabel_a_native_claim_or_proof_byte() {
-    for kind in [CheckpointKind::First, CheckpointKind::Wrapper] {
+    for kind in [
+        CheckpointKind::First,
+        CheckpointKind::Wrapper,
+        CheckpointKind::Terminal,
+    ] {
         for mutation in 0..4 {
             let (layout, mut payload, context) = data(kind);
             match mutation {
@@ -86,7 +98,7 @@ fn unadmitted_data_cannot_add_drop_or_relabel_a_native_claim_or_proof_byte() {
                 }
                 1 => payload.proof.push(0),
                 2 => {
-                    payload.vesta = if payload.vesta.is_some() {
+                    payload.accumulator = if payload.accumulator.is_some() {
                         None
                     } else {
                         Some([0; ACCUMULATOR_BYTES])
@@ -94,7 +106,7 @@ fn unadmitted_data_cannot_add_drop_or_relabel_a_native_claim_or_proof_byte() {
                 }
                 _ => {
                     payload.kind ^= 1;
-                    payload.vesta = if payload.vesta.is_some() {
+                    payload.accumulator = if payload.accumulator.is_some() {
                         None
                     } else {
                         Some([0; ACCUMULATOR_BYTES])
@@ -112,7 +124,11 @@ fn unadmitted_data_cannot_add_drop_or_relabel_a_native_claim_or_proof_byte() {
 
 #[test]
 fn bounded_data_frames_refuse_empty_truncated_trailing_and_noncanonical_input() {
-    for kind in [CheckpointKind::First, CheckpointKind::Wrapper] {
+    for kind in [
+        CheckpointKind::First,
+        CheckpointKind::Wrapper,
+        CheckpointKind::Terminal,
+    ] {
         let (layout, payload, context) = data(kind);
         let bytes = norito::encode_canonical(&payload).unwrap();
         let mut extra = bytes.clone();
@@ -134,7 +150,11 @@ fn bounded_data_frames_refuse_empty_truncated_trailing_and_noncanonical_input() 
 
 #[test]
 fn impossible_installed_lengths_refuse_before_counting_allocation() {
-    for kind in [CheckpointKind::First, CheckpointKind::Wrapper] {
+    for kind in [
+        CheckpointKind::First,
+        CheckpointKind::Wrapper,
+        CheckpointKind::Terminal,
+    ] {
         for bytes in [0, usize::MAX] {
             assert!(matches!(
                 CheckpointLayout::new(kind, [1; 32], [2; 32], bytes),

@@ -1531,6 +1531,11 @@ pub struct Prover {
     wrappers: [WKey; A_STAGE_COUNT - 1],
 }
 impl Prover {
+    /// Exact installed source plan, including its authenticated receipt anchor.
+    pub const fn plan(&self) -> &Plan {
+        &self.plan
+    }
+
     /// Install all fixed A/W verifier identities without retaining any PK.
     ///
     /// The native owner authenticates the complete scheme/provider/root, predecessor,

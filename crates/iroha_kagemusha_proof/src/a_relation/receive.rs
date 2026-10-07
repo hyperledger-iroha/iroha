@@ -290,6 +290,12 @@ impl ReceiveObjects {
         })
     }
 
+    // Native witness evaluation reads the same derived predicate. It cannot
+    // create a result proof or bypass the actual fixed owner's context binding.
+    pub(crate) const fn native_predicate(&self) -> &Bit<Fp> {
+        &self.valid
+    }
+
     /// The exact six context objects that must prefix every stage's context.
     pub const fn context(&self) -> &[ContextObjectCells; 6] {
         &self.context

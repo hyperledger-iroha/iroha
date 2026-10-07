@@ -9,6 +9,7 @@
 use ff::Field;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget, params::ParamsIpa};
 use rand_core_06::{CryptoRng, RngCore};
+use rayon::prelude::*;
 
 use super::{MultiopenError, OpeningPlan, ShapeItem};
 use crate::{
@@ -31,6 +32,17 @@ pub struct SlotPolynomial<'a, F> {
 
 /// `acc <- acc * challenge + addend`, coefficient-wise.
 fn fold_into<F: Field>(acc: &mut [F], challenge: F, addend: &[F]) {
+    if acc.len().min(addend.len()) >= 4096 && rayon::current_num_threads() > 1 {
+        acc.par_chunks_mut(1024)
+            .zip(addend.par_chunks(1024))
+            .for_each(|(acc, addend)| fold_serial(acc, challenge, addend));
+    } else {
+        fold_serial(acc, challenge, addend);
+    }
+}
+
+/// One sequential coefficient block; each coefficient keeps its Horner order.
+fn fold_serial<F: Field>(acc: &mut [F], challenge: F, addend: &[F]) {
     for (value, add) in acc.iter_mut().zip(addend) {
         *value = *value * challenge + add;
     }
@@ -64,13 +76,32 @@ fn reconstruct<F: Field>(
     n: usize,
 ) -> (Vec<F>, F) {
     let mut q = vec![F::ZERO; n];
-    let mut blind = F::ZERO;
-    for (slot, poly) in plan.slots().iter().zip(polys) {
-        if slot.set == set {
-            fold_into(&mut q, x_1, poly.coeffs);
-            blind = blind * x_1 + poly.blind;
+    let matching = || {
+        plan.slots()
+            .iter()
+            .zip(polys)
+            .filter(|(slot, _)| slot.set == set)
+            .map(|(_, poly)| poly)
+    };
+    if n >= 4096 && rayon::current_num_threads() > 1 {
+        // One parallel launch per set, not per slot. Each task walks the
+        // original slot order over its disjoint coefficient block. The
+        // three reconstruction passes still retain only one set polynomial.
+        q.par_chunks_mut(1024)
+            .enumerate()
+            .for_each(|(chunk, values)| {
+                let start = chunk * 1024;
+                let end = start + values.len();
+                for poly in matching() {
+                    fold_serial(values, x_1, &poly.coeffs[start..end]);
+                }
+            });
+    } else {
+        for poly in matching() {
+            fold_serial(&mut q, x_1, poly.coeffs);
         }
     }
+    let blind = matching().fold(F::ZERO, |blind, poly| blind * x_1 + poly.blind);
     (q, blind)
 }
 
@@ -167,7 +198,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use iroha_pasta::Fq;
+    use iroha_pasta::{Fp, Fq};
 
     use super::*;
 
@@ -190,5 +221,80 @@ mod tests {
         let mut acc = vec![Fq::from(1), Fq::from(2)];
         fold_into(&mut acc, Fq::from(10), &[Fq::from(3), Fq::from(4)]);
         assert_eq!(acc, vec![Fq::from(13), Fq::from(24)]);
+    }
+
+    fn check_blocked_folding<F: Field + From<u64>>() {
+        use super::super::{OpeningQuery, Slot, SlotKind};
+
+        let slot = |index| Slot::new(SlotKind::Advice, index);
+        let query = |index, rotation| OpeningQuery::new(slot(index), rotation);
+        let plan = OpeningPlan::new(&[
+            query(0, 0),
+            query(1, 0),
+            query(2, 1),
+            query(3, 0),
+            query(0, 1),
+            query(3, 1),
+        ])
+        .unwrap();
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            for n in [0, 1, 4095, 4096, 65_537] {
+                let columns: Vec<Vec<F>> = (0..4_u64)
+                    .map(|column| {
+                        (0..n)
+                            .map(|row| F::from((column + 1) * (row as u64 + 3)).square())
+                            .collect()
+                    })
+                    .collect();
+                let polys: Vec<_> = columns
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, coeffs)| SlotPolynomial {
+                        coeffs,
+                        blind: F::from(slot as u64 + 9),
+                    })
+                    .collect();
+                for challenge in [F::ZERO, F::ONE, -F::ONE, F::from(123)] {
+                    for set in 0..=plan.sets().len() {
+                        let mut expected = vec![F::ZERO; n];
+                        let mut blind = F::ZERO;
+                        for (slot, poly) in plan.slots().iter().zip(&polys) {
+                            if slot.set == set {
+                                for (out, value) in expected.iter_mut().zip(poly.coeffs) {
+                                    *out = *out * challenge + value;
+                                }
+                                blind = blind * challenge + poly.blind;
+                            }
+                        }
+                        assert_eq!(
+                            pool.install(|| reconstruct(&plan, &polys, set, challenge, n)),
+                            (expected, blind)
+                        );
+                    }
+                    // The primitive retains zip semantics even for a short
+                    // addend; trailing accumulator entries stay untouched.
+                    for addend_len in [n, n.saturating_sub(7)] {
+                        let mut actual = columns[0].clone();
+                        let mut expected = actual.clone();
+                        let addend = &columns[1][..addend_len];
+                        for (out, value) in expected.iter_mut().zip(addend) {
+                            *out = *out * challenge + value;
+                        }
+                        pool.install(|| fold_into(&mut actual, challenge, addend));
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn blocked_folding_preserves_slot_order_and_blinds_on_both_fields() {
+        check_blocked_folding::<Fp>();
+        check_blocked_folding::<Fq>();
     }
 }

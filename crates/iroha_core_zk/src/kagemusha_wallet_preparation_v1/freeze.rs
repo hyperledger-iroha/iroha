@@ -196,6 +196,31 @@ impl PreparationV1<'_> {
         )
     }
 
+    pub(crate) fn freeze_archive(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        step: &ArchiveStepV1,
+        proof: KagemushaWalletStepProofV1,
+        budget: MemoryBudget,
+    ) -> Result<FrozenTransition, Error> {
+        let (retained, openings) = step.originals();
+        self.freeze(
+            owner,
+            CapsuleFields {
+                manifest: step.manifest_digest(),
+                source: step.source_capsule_digest(),
+                state: step.state(),
+                statement: step.statement(),
+                predecessor: None,
+                payment: [0; 32],
+                openings: openings.to_vec(),
+                retained: retained.to_vec(),
+            },
+            proof,
+            budget,
+        )
+    }
+
     /// Freeze a signed Refresh, retaining its exact update, certificates and quota/map witness.
     /// Credential renewal uses the authenticated successor credential passed as owner.
     ///

@@ -599,6 +599,63 @@ impl Session<'_> {
         self.prepared
             .resume_wrapper(&self.prover.w, checkpoint, budget)
     }
+    /// Restore terminal A2 from its original proof, full Pallas claim and exact
+    /// verified W0 predecessor. Public fields and every forwarded obligation are
+    /// rederived from this session; no stored public frame is trusted.
+    /// # Errors
+    /// Changed source, malformed claim, wrong installed proof or failed decide.
+    pub fn restore_terminal(
+        &self,
+        wrapper: &WrapperCheckpoint,
+        proof: Vec<u8>,
+        pallas: &[u8],
+        budget: MemoryBudget,
+    ) -> Result<Terminal, Error> {
+        let wrapper = self
+            .prepared
+            .resume_wrapper(&self.prover.w, wrapper.clone(), budget)?;
+        let pallas = AccumulatorT::<Ep>::from_bytes(pallas).map_err(|_| Error::Input)?;
+        pallas
+            .decide(&self.prepared.plan.pallas, budget)
+            .map_err(|_| Error::Proof)?;
+        let public = frame(
+            &self.prepared.original.state.lineage,
+            &pallas.as_input(),
+            &wrapper.vesta.as_input(),
+        )?;
+        let source = &self.prover.terminal;
+        verify_full(
+            &self.prepared.plan.vesta,
+            source.binding(),
+            source.key(),
+            std::slice::from_ref(&public),
+            &proof,
+            budget,
+        )
+        .map_err(|_| Error::Proof)?;
+        let claim = accumulate_generator(
+            &self.prepared.plan.vesta,
+            source.binding(),
+            source.key(),
+            std::slice::from_ref(&public),
+            &proof,
+            budget,
+        )
+        .map_err(|_| Error::Proof)?;
+        let opening =
+            FoldInput::from_opening(*claim.g(), claim.challenges()).map_err(|_| Error::Proof)?;
+        opening
+            .decide(&self.prepared.plan.vesta, budget)
+            .map_err(|_| Error::Proof)?;
+        Ok(Terminal {
+            proof,
+            instances: public,
+            pallas,
+            vesta: wrapper.vesta,
+            opening,
+        })
+    }
+
     /// Compute the actual terminal A2 result using its installed key.
     /// # Errors
     /// A wrong W, source/profile mismatch or failed proof/fold/decide.

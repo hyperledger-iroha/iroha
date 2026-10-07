@@ -2250,6 +2250,101 @@ fn authenticated_bootstrap_for_schemes(
                 );
             }
         }
+        assert_eq!(layouts[2].kind(), CheckpointKind::Terminal);
+        assert_eq!(layouts[2].proof_bytes(), output.proof.len());
+        assert_eq!(
+            layouts[2].descriptor_digest(),
+            prover.descriptors()[2].digest()
+        );
+        let terminal = session
+            .restore_terminal(
+                &restored_wrapper,
+                output.proof.clone(),
+                &output.pallas.to_bytes(),
+                MemoryBudget::DEFAULT,
+            )
+            .unwrap();
+        assert_eq!(terminal.instances, output.instances);
+        assert_eq!(terminal.vesta, output.vesta_part);
+        let terminal_payload = session
+            .encode_terminal_checkpoint(&restored_wrapper, &terminal, MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(terminal_payload.len(), layouts[2].payload_bytes());
+        let restored_terminal = session
+            .restore_terminal_checkpoint(
+                &restored_wrapper,
+                &terminal_payload,
+                MemoryBudget::DEFAULT,
+            )
+            .unwrap();
+        assert_eq!(restored_terminal.proof, output.proof);
+        assert_eq!(restored_terminal.instances, output.instances);
+        assert_eq!(restored_terminal.pallas, output.pallas);
+        assert_eq!(
+            session
+                .encode_terminal_checkpoint(
+                    &restored_wrapper,
+                    &restored_terminal,
+                    MemoryBudget::DEFAULT
+                )
+                .unwrap(),
+            terminal_payload
+        );
+        for wrong_kind in [&first_payload, &wrapper_payload] {
+            assert!(
+                session
+                    .restore_terminal_checkpoint(
+                        &restored_wrapper,
+                        wrong_kind,
+                        MemoryBudget::DEFAULT
+                    )
+                    .is_err()
+            );
+        }
+        let mut trailing = terminal_payload.clone();
+        trailing.push(0);
+        for original in [
+            &[][..],
+            &terminal_payload[..terminal_payload.len() - 1],
+            &trailing,
+        ] {
+            assert!(
+                session
+                    .restore_terminal_checkpoint(&restored_wrapper, original, MemoryBudget::DEFAULT)
+                    .is_err()
+            );
+        }
+        let mut changed = terminal.clone();
+        changed.instances[0] += Fp::ONE;
+        assert!(
+            session
+                .encode_terminal_checkpoint(&restored_wrapper, &changed, MemoryBudget::DEFAULT)
+                .is_err()
+        );
+        let mut wrong_claim = output.pallas.to_bytes();
+        wrong_claim[32..64].fill(0);
+        assert!(
+            session
+                .restore_terminal(
+                    &restored_wrapper,
+                    output.proof.clone(),
+                    &wrong_claim,
+                    MemoryBudget::DEFAULT
+                )
+                .is_err()
+        );
+        let mut wrong_proof = output.proof.clone();
+        wrong_proof[96] ^= 1;
+        assert!(
+            session
+                .restore_terminal(
+                    &restored_wrapper,
+                    wrong_proof,
+                    &output.pallas.to_bytes(),
+                    MemoryBudget::DEFAULT
+                )
+                .is_err()
+        );
         let mut wrong = a1.proof;
         wrong[96] ^= 1;
         assert!(session.restore_first(wrong, MemoryBudget::DEFAULT).is_err());

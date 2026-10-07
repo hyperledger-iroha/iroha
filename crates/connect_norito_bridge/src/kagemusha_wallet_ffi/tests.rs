@@ -199,6 +199,10 @@ fn failure_mapping_never_turns_uncertain_or_missing_custody_into_absence() {
         CUSTODY_LOST
     );
     assert_eq!(
+        Failure::from(state::Error::ArtifactsUnavailable("original sigma PK")).status,
+        ARTIFACTS_UNAVAILABLE
+    );
+    assert_eq!(
         run::<()>(|| panic!("test contained panic"))
             .unwrap_err()
             .status,

@@ -326,6 +326,34 @@ fn installed_public_refresh_proves_all_five_updates_and_rejects_resigned_bad_sig
             &enrollment.to_canonical_bytes().unwrap(),
         )
         .unwrap();
+    let enrollment_set = KagemushaWalletCertificateSetV1::new(vec![enrollment.clone()]).unwrap();
+    let enrollment_set_bytes = norito::to_bytes(&enrollment_set).unwrap();
+    let set_owner = preparation
+        .authenticate_credential_set(
+            &credential.to_canonical_bytes().unwrap(),
+            &enrollment_set_bytes,
+        )
+        .unwrap();
+    assert_eq!(set_owner.credential(), owner.credential());
+    assert!(
+        preparation
+            .authenticate_credential_set(
+                &credential.to_canonical_bytes().unwrap(),
+                &enrollment.to_canonical_bytes().unwrap(),
+            )
+            .is_err()
+    );
+    let foreign_set =
+        KagemushaWalletCertificateSetV1::new(vec![certificate(&scheme, &issuer, Role::TimeAnchor)])
+            .unwrap();
+    assert!(
+        preparation
+            .authenticate_credential_set(
+                &credential.to_canonical_bytes().unwrap(),
+                &norito::to_bytes(&foreign_set).unwrap(),
+            )
+            .is_err()
+    );
     let state = KagemushaWalletStateV1::bootstrap(&credential, Fp::from(101).to_repr()).unwrap();
     let statement = KagemushaWalletStatementV1 {
         version: 1,

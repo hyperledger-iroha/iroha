@@ -177,6 +177,28 @@ impl PersistentMapV1 {
         Ok(entry)
     }
     /// Exact current-root member, without collecting the map or wallet history.
+    pub(crate) fn member_or_low(
+        &self,
+        store: &mut impl ObjectStore,
+        key: &[u8; 32],
+    ) -> Result<
+        (
+            KagemushaWalletIndexedLeafV1,
+            KagemushaWalletIndexedOpeningV1,
+        ),
+        Error,
+    > {
+        key_valid(key)?;
+        let entry = if let Some(entry) = self.entry(store, key)? {
+            entry
+        } else {
+            self.low(store, key)?
+        };
+        let opening = self.require_opening(store, &entry)?;
+        Ok((entry.leaf(), opening))
+    }
+
+    /// Exact current-root member, without collecting the map or wallet history.
     pub(crate) fn membership(
         &self,
         store: &mut impl ObjectStore,

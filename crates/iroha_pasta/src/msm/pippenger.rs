@@ -29,9 +29,9 @@
 //! queued bucket indices, points and signs, addition kinds and the batch
 //! inversion scratch, including spare capacity) are zeroised when they are
 //! dropped, also during unwinding. Bucket indices, zero-digit skipping,
-//! conflict handling, leading-empty-bucket trimming and the equal/opposite-point checks depend on the
-//! scalar digits, which is the posture of the vendored `halo2curves` MSM it
-//! replaces: it is not a constant-time MSM.
+//! conflict handling, leading-empty-bucket trimming and equal/opposite-point
+//! checks depend on the scalar digits, which is the posture of the vendored
+//! `halo2curves` MSM it replaces: it is not a constant-time MSM.
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
@@ -43,6 +43,10 @@ use zeroize::Zeroize;
 
 use crate::curve::{PastaAffine, PastaCurve};
 use crate::field::PastaField;
+
+#[cfg(test)]
+#[path = "reduction_tests.rs"]
+mod reduction_tests;
 
 /// Largest supported window: digits must fit `i16` with magnitude `2^(c-1)`.
 pub(crate) const MAX_WINDOW: usize = 15;
@@ -331,7 +335,8 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
         // Occupancy is digit-dependent, as are the existing bucket accesses
         // and conflict handling; this stays within the variable-time MSM
         // posture documented above. Secret window planning is unchanged.
-        let Some(last) = (start..start + len).rfind(|&j| self.has[j] || self.overflow_used[j]) else {
+        let Some(last) = (start..start + len).rfind(|&j| self.has[j] || self.overflow_used[j])
+        else {
             return acc;
         };
         for j in (start..=last).rev() {

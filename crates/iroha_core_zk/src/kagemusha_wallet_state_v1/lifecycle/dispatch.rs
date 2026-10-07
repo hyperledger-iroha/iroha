@@ -2,11 +2,13 @@
 
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_provider_digest_v1 as digest;
 
+use super::super::preparation_custody::{SOURCE_CUSTODY_MAX_BYTES, SourceCustodyV1};
+use super::super::transition_custody::PreparedTransitionV1;
 use super::*;
 
 const FROZEN_BOUND: usize =
     KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1 + KAGEMUSHA_WALLET_CREDENTIAL_MAX_BYTES_V1 + 1024;
-const PLAN_BOUND: usize = PREPARATION_MAX_BYTES + 1024;
+const PLAN_BOUND: usize = PREPARATION_MAX_BYTES + SOURCE_CUSTODY_MAX_BYTES + 1024;
 
 #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::PreparationPlanV1")]
@@ -19,6 +21,8 @@ struct Plan {
     request: [u8; 32],
     source: [u8; 32],
     native: Vec<u8>,
+    request_object: [u8; 32],
+    draft: SourceCustodyV1,
 }
 
 impl Plan {
@@ -26,16 +30,17 @@ impl Plan {
         &self,
         scheme: &[u8; 32],
         wallet: &[u8; 32],
-        request: &OperationRequestV1,
+        request: &NativeIntentV1,
         original: &[u8],
     ) -> Result<(), Error> {
         if self.version != 1
             || self.scheme != *scheme
             || self.wallet != *wallet
-            || self.request_id != request.request_id
+            || self.request_id != request.request_id()
             || self.kind != request.kind()
             || self.request != digest("wallet-preparation-request", original)
             || self.source == [0; 32]
+            || self.request_object == [0; 32]
             || self.native.is_empty()
             || self.native.len() > PREPARATION_MAX_BYTES
         {
@@ -59,7 +64,7 @@ fn original(
 }
 
 fn require_frozen(
-    request: &OperationRequestV1,
+    request: &NativeIntentV1,
     source: &[u8; 32],
     frozen: &FrozenTransition,
 ) -> Result<(), Error> {
@@ -69,45 +74,60 @@ fn require_frozen(
     if capsule.kind != request.kind() || capsule.predecessor_capsule_digest != *source {
         return Err(Error::Invalid("prepared capsule identity"));
     }
-    let matches = match &request.action {
-        OperationActionV1::Load { receipt, finality } => {
-            original(frozen, R::LoadReceipt, receipt) && original(frozen, R::LoadFinality, finality)
-        }
-        OperationActionV1::Send { request } => original(frozen, R::Request, request),
-        OperationActionV1::Receive {
-            payment,
-            payer_credential,
-            certificates,
-        } => {
-            original(frozen, R::Payment, payment)
-                && original(frozen, R::Credential, payer_credential)
-                && original(frozen, R::CertificateSet, certificates)
-        }
-        OperationActionV1::Refresh {
-            kind,
-            update,
-            certificates,
-        } => {
-            original(frozen, R::PolicyUpdate, update)
-                && original(frozen, R::CertificateSet, certificates)
-                && matches!(capsule.statement.effect, KagemushaWalletEffectV1::RefreshPolicy { update_kind: actual, .. } if actual == *kind)
-        }
-        OperationActionV1::Unload { amount, charge } => {
-            let quote = charge
-                .as_ref()
-                .map(|charge| {
-                    KagemushaWalletChargeQuoteV1::decode_canonical(
-                        &charge.quote,
-                        &capsule.scheme_id,
-                    )
-                    .map(|quote| quote.charge_quote_digest())
-                })
-                .transpose()
-                .map_err(|_| Error::Invalid("prepared charge quote"))?;
-            matches!(capsule.statement.effect, KagemushaWalletEffectV1::Unload { amount: actual, charge_quote, .. }
+    let matches = if let Some(archive) = request.archive_request() {
+        original(frozen, R::Request, &archive.request)
+            && original(frozen, R::Payment, &archive.payment)
+            && original(frozen, R::Credential, &archive.credential)
+            && original(frozen, R::CertificateSet, &archive.certificates)
+            && original(frozen, R::Credited, &archive.credited)
+    } else {
+        match &request
+            .user_request()
+            .ok_or(Error::Invalid("native intent kind"))?
+            .action
+        {
+            OperationActionV1::Load { receipt, finality } => {
+                original(frozen, R::LoadReceipt, receipt)
+                    && original(frozen, R::LoadFinality, finality)
+            }
+            OperationActionV1::Send { request } => original(frozen, R::Request, request),
+            OperationActionV1::Receive {
+                payment,
+                payer_credential,
+                certificates,
+            } => {
+                original(frozen, R::Payment, payment)
+                    && original(frozen, R::Credential, payer_credential)
+                    && original(frozen, R::CertificateSet, certificates)
+            }
+            OperationActionV1::Refresh {
+                kind,
+                update,
+                certificates,
+            } => {
+                original(frozen, R::PolicyUpdate, update)
+                    && original(frozen, R::CertificateSet, certificates)
+                    && matches!(capsule.statement.effect, KagemushaWalletEffectV1::RefreshPolicy { update_kind: actual, .. } if actual == *kind)
+            }
+            OperationActionV1::Unload { amount, charge } => {
+                let quote = charge
+                    .as_ref()
+                    .map(|charge| {
+                        KagemushaWalletChargeQuoteV1::decode_canonical(
+                            &charge.quote,
+                            &capsule.scheme_id,
+                        )
+                        .map(|quote| quote.charge_quote_digest())
+                    })
+                    .transpose()
+                    .map_err(|_| Error::Invalid("prepared charge quote"))?;
+                matches!(capsule.statement.effect, KagemushaWalletEffectV1::Unload { amount: actual, charge_quote, .. }
                 if actual == *amount && charge_quote == quote.unwrap_or([0; 32]))
+            }
+            OperationActionV1::Retire => {
+                capsule.statement.effect == KagemushaWalletEffectV1::Retiring
+            }
         }
-        OperationActionV1::Retire => capsule.statement.effect == KagemushaWalletEffectV1::Retiring,
     };
     if !matches {
         return Err(Error::Invalid("prepared request originals"));
@@ -152,6 +172,44 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         Ok(())
     }
 
+    pub(in crate::kagemusha_wallet_state_v1) fn transition_preparation(
+        &mut self,
+        manifest: &manifest::Manifest,
+        frozen: &FrozenTransition,
+    ) -> Result<Option<PreparedTransitionV1>, Error> {
+        let capsule = valid(frozen.capsule.capsule_digest())?;
+        let Some(address) = manifest.capsule_plans.get(&mut self.archive, &capsule)? else {
+            return Ok(None);
+        };
+        let address: [u8; 32] = address
+            .try_into()
+            .map_err(|_| Error::WitnessLost("capsule plan address"))?;
+        let plan: Plan = archive::decode(&self.archive.read_object(&address, PLAN_BOUND)?)?;
+        let original = self
+            .archive
+            .read_object(&plan.request_object, REQUEST_MAX_BYTES)?;
+        let (scheme, _) = self.proofs.ledger_scope()?;
+        let request = NativeIntentV1::decode(&original, &scheme)?;
+        plan.require(&self.scheme_id, &self.wallet_id, &request, &original)?;
+        require_frozen(&request, &plan.source, frozen)?;
+        let entry = self
+            .preparation_entry(manifest, &request.request_id())?
+            .ok_or(Error::WitnessLost("capsule request mapping"))?;
+        if entry.request != plan.request_object
+            || entry.plan != Some(address)
+            || entry.capsule != Some(capsule)
+            || entry.operation != Some(frozen.capsule.operation_id)
+        {
+            return Err(Error::WitnessLost("capsule plan mapping"));
+        }
+        Ok(Some(PreparedTransitionV1 {
+            request,
+            native: plan.native,
+            source: plan.source,
+            draft: plan.draft,
+        }))
+    }
+
     /// Resolve a local request identity through its source-selected actual operation mapping.
     /// An uncommitted preparation has no completion, even when its native plan is durable.
     ///
@@ -171,8 +229,8 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             .archive
             .read_object(&entry.request, REQUEST_MAX_BYTES)?;
         let (scheme, _) = self.proofs.ledger_scope()?;
-        let request = OperationRequestV1::decode(&original, &scheme)?;
-        if request.request_id != *request_id {
+        let request = NativeIntentV1::decode(&original, &scheme)?;
+        if request.request_id() != *request_id {
             return Err(Error::WitnessLost("lifecycle request key"));
         }
         if entry.capsule.is_some() != entry.operation.is_some() {
@@ -200,6 +258,22 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
     /// Conflicting request, missing native custody, unavailable storage/artifacts, invalid proof
     /// or uncertain Advance. A stale prepared source returns NotPerformed without rebasing.
     pub fn execute(&mut self, request: OperationRequestV1) -> Result<Completion, Error> {
+        self.execute_intent(NativeIntentV1::user(request))
+    }
+
+    pub(crate) fn archive_credited(
+        &mut self,
+        credit: &[u8; 32],
+        credited: Vec<u8>,
+    ) -> Result<Completion, Error> {
+        if credited.is_empty() || credited.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
+            return Err(Error::Invalid("Archive evidence size"));
+        }
+        let (send, certificates) = self.archive_send_source(credit)?;
+        self.execute_intent(NativeIntentV1::archive(&send, certificates, credited)?)
+    }
+
+    fn execute_intent(&mut self, request: NativeIntentV1) -> Result<Completion, Error> {
         let _payment = self.scheduler.payment();
         let (scheme, _) = self.proofs.ledger_scope()?;
         request.validate(&scheme)?;
@@ -210,7 +284,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         // Resolve the source-selected request before requiring a Released head: Advance may
         // already have irreversibly selected this operation and still owe its receipt.
         let (_, selected_manifest) = self.manifest()?;
-        if let Some(entry) = self.preparation_entry(&selected_manifest, &request.request_id)? {
+        if let Some(entry) = self.preparation_entry(&selected_manifest, &request.request_id())? {
             if self
                 .archive
                 .read_object(&entry.request, REQUEST_MAX_BYTES)?
@@ -231,25 +305,26 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         // This dispatcher starts from an enrolled/released wallet. Enrollment is a separate
         // pre-wallet owner; no preparation may manufacture a Bootstrap source.
         let sequence = manifest.indexed.ok_or(Error::NoHead)?;
-        let mut entry =
-            if let Some(entry) = self.preparation_entry(&manifest, &request.request_id)? {
-                let original = self
-                    .archive
-                    .read_object(&entry.request, REQUEST_MAX_BYTES)?;
-                if original != bytes {
-                    return Err(Error::OperationConflict);
-                }
-                entry
-            } else {
-                let entry = Entry {
-                    request: self.archive.write_object(&bytes, REQUEST_MAX_BYTES)?,
-                    plan: None,
-                    capsule: None,
-                    operation: None,
-                };
-                self.publish_preparation(&mut selected, &mut manifest, request.request_id, &entry)?;
-                entry
+        let mut entry = if let Some(entry) =
+            self.preparation_entry(&manifest, &request.request_id())?
+        {
+            let original = self
+                .archive
+                .read_object(&entry.request, REQUEST_MAX_BYTES)?;
+            if original != bytes {
+                return Err(Error::OperationConflict);
+            }
+            entry
+        } else {
+            let entry = Entry {
+                request: self.archive.write_object(&bytes, REQUEST_MAX_BYTES)?,
+                plan: None,
+                capsule: None,
+                operation: None,
             };
+            self.publish_preparation(&mut selected, &mut manifest, request.request_id(), &entry)?;
+            entry
+        };
         // Completion lookup precedes source selection/proof work. A mapping's absence from
         // authenticated storage is a custody failure, never permission for a second debit.
         if entry.capsule.is_some() != entry.operation.is_some() {
@@ -280,40 +355,86 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             released: &released,
             folded: folded.as_ref(),
         };
+        let (snapshot, map_state) =
+            self.preparation_source_custody(&manifest, &released, request.kind(), folded.as_ref())?;
+        let refresh = request.refresh();
         let plan = if let Some(plan) = held_plan {
             plan
         } else {
-            let native = self.proofs.plan_preparation(&request, &source)?;
+            let mut custody = PreparationCustodyV1::new(
+                &mut self.archive,
+                &snapshot,
+                &map_state,
+                request.kind(),
+                refresh,
+                manifest.issued_requests,
+                manifest.direct_anchors,
+            )?;
+            let native = self
+                .proofs
+                .plan_preparation(&request, &source, &mut custody)?;
+            let draft = custody.snapshot();
             let plan = Plan {
                 version: 1,
                 scheme: self.scheme_id,
                 wallet: self.wallet_id,
-                request_id: request.request_id,
+                request_id: request.request_id(),
                 kind: request.kind(),
                 request: digest("wallet-preparation-request", &bytes),
                 source: source_digest,
                 native,
+                request_object: entry.request,
+                draft,
             };
             plan.require(&self.scheme_id, &self.wallet_id, &request, &bytes)?;
-            self.proofs
-                .validate_preparation(&request, &source, &plan.native)?;
             let original = archive::encode(&plan)?;
             entry.plan = Some(self.archive.write_object(&original, PLAN_BOUND)?);
-            self.publish_preparation(&mut selected, &mut manifest, request.request_id, &entry)?;
+            self.publish_preparation(&mut selected, &mut manifest, request.request_id(), &entry)?;
             plan
         };
         plan.require(&self.scheme_id, &self.wallet_id, &request, &bytes)?;
+        if plan.request_object != entry.request {
+            return Err(Error::WitnessLost("preparation request original"));
+        }
         if plan.source != source_digest {
             return Ok(Completion::NotPerformed(NotPerformed::StaleHead));
         }
-        self.proofs
-            .validate_preparation(&request, &source, &plan.native)?;
+        {
+            // Every derivation gets a fresh source draft; replay must never insert twice.
+            let mut custody = PreparationCustodyV1::new(
+                &mut self.archive,
+                &snapshot,
+                &map_state,
+                request.kind(),
+                refresh,
+                manifest.issued_requests,
+                manifest.direct_anchors,
+            )?;
+            self.proofs
+                .validate_preparation(&request, &source, &mut custody, &plan.native)?;
+            if archive::encode(&custody.snapshot())? != archive::encode(&plan.draft)? {
+                return Err(Error::WitnessLost("preparation changed custody draft"));
+            }
+        }
         let frozen = if let Some(capsule) = entry.capsule {
             self.frozen(capsule)?
         } else {
-            let frozen = self
-                .proofs
-                .prove_preparation(&request, &source, &plan.native)?;
+            let mut custody = PreparationCustodyV1::new(
+                &mut self.archive,
+                &snapshot,
+                &map_state,
+                request.kind(),
+                refresh,
+                manifest.issued_requests,
+                manifest.direct_anchors,
+            )?;
+            let frozen =
+                self.proofs
+                    .prove_preparation(&request, &source, &mut custody, &plan.native)?;
+            if archive::encode(&custody.snapshot())? != archive::encode(&plan.draft)? {
+                return Err(Error::WitnessLost("prover changed custody draft"));
+            }
+            custody.finish(&frozen.capsule.successor_state)?;
             require_frozen(&request, &source_digest, &frozen)?;
             let original = archive::encode(&frozen)?;
             if original.len() > FROZEN_BOUND {
@@ -323,7 +444,19 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             self.archive.put(ArchiveKey::Capsule(capsule), &original)?;
             entry.capsule = Some(capsule);
             entry.operation = Some(frozen.capsule.operation_id);
-            self.publish_preparation(&mut selected, &mut manifest, request.request_id, &entry)?;
+            let address = entry
+                .plan
+                .ok_or(Error::WitnessLost("prepared capsule plan"))?;
+            if let Some(previous) = manifest.capsule_plans.get(&mut self.archive, &capsule)? {
+                if previous != address {
+                    return Err(Error::WitnessLost("conflicting capsule plan"));
+                }
+            }
+            manifest.capsule_plans =
+                manifest
+                    .capsule_plans
+                    .set(&mut self.archive, capsule, &address)?;
+            self.publish_preparation(&mut selected, &mut manifest, request.request_id(), &entry)?;
             frozen
         };
         require_frozen(&request, &source_digest, &frozen)?;

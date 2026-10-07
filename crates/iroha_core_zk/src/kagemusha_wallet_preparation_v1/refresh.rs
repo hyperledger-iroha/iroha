@@ -430,6 +430,29 @@ fn exact_successor(
     Ok(())
 }
 
+/// Verified original field projection; Q proofs remain mandatory independent inputs.
+pub(crate) struct RefreshFoldFieldsV1 {
+    pub(crate) state: RefreshWitness,
+    pub(crate) sigma: Vec<u8>,
+    pub(crate) objects: [Vec<u8>; 5],
+    pub(crate) blacklist: Option<IndexedInsert<Fp>>,
+    pub(crate) quota: Option<native::QuotaInput>,
+    pub(crate) predecessor: native::PredecessorInput,
+}
+impl RefreshFoldFieldsV1 {
+    pub(crate) fn with_q(self, q: [native::QInput; 3]) -> native::Inputs {
+        native::Inputs {
+            state: self.state,
+            sigma: self.sigma,
+            objects: self.objects,
+            blacklist: self.blacklist,
+            quota: self.quota,
+            predecessor: self.predecessor,
+            q,
+        }
+    }
+}
+
 impl PreparationV1<'_> {
     /// Prepare every Refresh kind from its exact retained original custody.
     /// Credential renewal uses distinct owners; the other kinds require identical
@@ -449,6 +472,20 @@ impl PreparationV1<'_> {
         q: [native::QInput; 3],
         budget: MemoryBudget,
     ) -> Result<native::Inputs, Error> {
+        self.refresh_fold_fields(owners, step, predecessor, public, budget)
+            .map(|fields| fields.with_q(q))
+    }
+
+    /// Reconstruct the exact native source before its independent Q proofs exist.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn refresh_fold_fields(
+        &self,
+        owners: RefreshOwnersV1<'_>,
+        step: &ReleasedStep,
+        predecessor: &FoldedStateV1,
+        public: &KagemushaWalletLineagePublicV1,
+        budget: MemoryBudget,
+    ) -> Result<RefreshFoldFieldsV1, Error> {
         self.credential_owner(owners.current)?;
         self.credential_owner(owners.successor)?;
         let capsule = &step.frozen.capsule;
@@ -485,7 +522,7 @@ impl PreparationV1<'_> {
             public,
         )?;
         let [certificate, update] = decoded.objects;
-        Ok(native::Inputs {
+        Ok(RefreshFoldFieldsV1 {
             state: RefreshWitness {
                 predecessor: predecessor.witness,
                 successor,
@@ -502,7 +539,6 @@ impl PreparationV1<'_> {
             ],
             blacklist: decoded.blacklist,
             quota: decoded.quota,
-            q,
             predecessor: native::PredecessorInput {
                 proof: predecessor.proof.clone(),
                 pallas: predecessor.pallas,

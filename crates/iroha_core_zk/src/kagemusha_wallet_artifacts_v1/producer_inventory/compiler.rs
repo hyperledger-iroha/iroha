@@ -698,3 +698,7 @@ mod complete;
 #[cfg(test)]
 #[path = "compiler/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compiler/full_catalog.rs"]
+mod full_catalog;

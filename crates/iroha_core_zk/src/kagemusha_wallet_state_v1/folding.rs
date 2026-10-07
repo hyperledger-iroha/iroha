@@ -1,7 +1,31 @@
 //! Ordered persisted sub-proofs, recorded Ω identities and native CreditStatus construction.
 
+use super::fold_custody::FoldSourcesV1;
 use super::*;
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_provider_digest_v1 as digest;
+
+struct FoldSeed {
+    sources: FoldSourcesV1,
+    credits: credit_tree::CreditTree,
+    pending: map_tree::PersistentMapV1,
+}
+impl FoldSeed {
+    fn view<'a>(
+        &self,
+        store: &'a mut dyn ObjectStore,
+        before: Option<&'a ReleasedStep>,
+        after: &'a ReleasedStep,
+    ) -> Result<FoldCustodyV1<'a>, Error> {
+        FoldCustodyV1::new(
+            store,
+            before,
+            after,
+            self.sources.clone(),
+            self.credits.clone(),
+            self.pending.clone(),
+        )
+    }
+}
 
 /// Result of one cooperative background scheduling turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +74,67 @@ impl LineageCache {
 }
 
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
+    fn fold_seed(
+        &mut self,
+        manifest: &manifest::Manifest,
+        before: Option<&ReleasedStep>,
+        predecessor: Option<&KagemushaWalletFoldRecordV1>,
+        after: &ReleasedStep,
+    ) -> Result<Option<FoldSeed>, Error> {
+        let capsule = valid(after.frozen.capsule.capsule_digest())?;
+        if manifest
+            .capsule_sources
+            .get(&mut self.archive, &capsule)?
+            .is_none()
+        {
+            if after.frozen.capsule.kind == KagemushaWalletOperationKindV1::Bootstrap
+                || manifest
+                    .capsule_plans
+                    .get(&mut self.archive, &capsule)?
+                    .is_some()
+            {
+                return Err(Error::WitnessLost("fold preparation snapshot"));
+            }
+            return Ok(None);
+        }
+        let after_source = self.source_custody(manifest, after)?;
+        let before_source = before
+            .map(|step| self.source_custody(manifest, step))
+            .transpose()?;
+        let mut pending = before_source
+            .as_ref()
+            .map(|source| source.maps.pending().clone())
+            .unwrap_or_default();
+        if let Some(predecessor) = predecessor {
+            if let Some(address) = manifest.fold_pending.get(
+                &mut self.archive,
+                &manifest::sequence_key(predecessor.sequence),
+            )? {
+                let address: [u8; 32] = address
+                    .try_into()
+                    .map_err(|_| Error::WitnessLost("fold pending address"))?;
+                pending = archive::decode(&self.archive.read_object(&address, 2048)?)?;
+            }
+            pending.validate()?;
+            if pending.root() != predecessor.lineage.public.pending_outgoing_root
+                || manifest.credit_tree.root() != predecessor.lineage.public.credit_digest_root
+            {
+                return Err(Error::WitnessLost("fold predecessor map roots"));
+            }
+        }
+        let preparation = self.transition_preparation(manifest, &after.frozen)?;
+        Ok(Some(FoldSeed {
+            sources: FoldSourcesV1 {
+                before: before_source,
+                after: after_source,
+                preparation,
+                issued: manifest.issued_requests,
+                anchors: manifest.direct_anchors,
+            },
+            credits: manifest.credit_tree.clone(),
+            pending,
+        }))
+    }
     fn verify_fold_bytes(
         &mut self,
         step: &ReleasedStep,
@@ -208,10 +293,13 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             seq.checked_add(1)
                 .ok_or(Error::Invalid("sequence overflow"))
         })?;
-        let predecessor = if let Some(previous) = manifest.folded {
-            let step = self.indexed_step(&manifest, previous)?;
+        let predecessor_step = manifest
+            .folded
+            .map(|previous| self.indexed_step(&manifest, previous))
+            .transpose()?;
+        let predecessor = if let Some(step) = predecessor_step.as_ref() {
             let fold = self
-                .read_fold(&step)?
+                .read_fold(step)?
                 .ok_or(Error::WitnessLost("fold predecessor"))?;
             if fold.record.lineage.public.credit_digest_root != manifest.credit_tree.root() {
                 return Err(Error::WitnessLost("credit tree root"));
@@ -224,7 +312,20 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Ok(FoldStatus::CaughtUp);
         }
         let step = self.indexed_step(&manifest, sequence)?;
-        let schedule = self.proofs.fold_schedule(&step, predecessor.as_ref())?;
+        let seed = self.fold_seed(
+            &manifest,
+            predecessor_step.as_ref(),
+            predecessor.as_ref(),
+            &step,
+        )?;
+        let schedule = {
+            let mut view = seed
+                .as_ref()
+                .map(|seed| seed.view(&mut self.archive, predecessor_step.as_ref(), &step))
+                .transpose()?;
+            self.proofs
+                .fold_schedule(&step, predecessor.as_ref(), view.as_mut())?
+        };
         for layout in &schedule {
             layout.record_limit()?;
         }
@@ -256,8 +357,17 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             let candidate: Checkpoint = archive::decode(bytes)?;
             FoldProgress::Checkpoint(candidate.proof)
         } else {
-            self.proofs
-                .fold_next(&step, predecessor.as_ref(), &checkpoints, &guard.token)?
+            let mut view = seed
+                .as_ref()
+                .map(|seed| seed.view(&mut self.archive, predecessor_step.as_ref(), &step))
+                .transpose()?;
+            self.proofs.fold_next(
+                &step,
+                predecessor.as_ref(),
+                &checkpoints,
+                view.as_mut(),
+                &guard.token,
+            )?
         };
         guard.token.check()?;
         match result {
@@ -304,7 +414,40 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     return Err(Error::Proof("premature final Ω"));
                 }
                 self.proofs.verify_lineage(&lineage)?;
-                Self::record_credit(&mut manifest.credit_tree, &mut self.archive, &step, burned)?;
+                if let Some(seed) = &seed {
+                    let mut view =
+                        seed.view(&mut self.archive, predecessor_step.as_ref(), &step)?;
+                    match step.frozen.capsule.kind {
+                        KagemushaWalletOperationKindV1::Receive => {
+                            view.credit_record(burned)?;
+                        }
+                        KagemushaWalletOperationKindV1::Send => {
+                            view.pending_insert()?;
+                        }
+                        KagemushaWalletOperationKindV1::ArchiveSent => {
+                            view.pending_remove()?;
+                        }
+                        _ if burned => return Err(Error::Invalid("non-Receive burn flag")),
+                        _ => {}
+                    }
+                    let (credits, pending) = view.finish(&lineage.public)?;
+                    manifest.credit_tree = credits;
+                    let address = self
+                        .archive
+                        .write_object(&archive::encode(&pending)?, 2048)?;
+                    manifest.fold_pending = manifest.fold_pending.set(
+                        &mut self.archive,
+                        manifest::sequence_key(sequence),
+                        &address,
+                    )?;
+                } else {
+                    Self::record_credit(
+                        &mut manifest.credit_tree,
+                        &mut self.archive,
+                        &step,
+                        burned,
+                    )?;
+                }
                 if lineage.public.credit_digest_root != manifest.credit_tree.root() {
                     return Err(Error::Proof("credit-digest root"));
                 }

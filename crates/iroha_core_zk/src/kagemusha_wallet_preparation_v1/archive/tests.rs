@@ -153,6 +153,10 @@ fn both_credited_transcripts_match_native_model_without_admitting_proposals() {
             .unwrap()
             .0;
         let raw = norito::to_bytes(&credited).unwrap();
+        assert_eq!(
+            evidence::credited_digest(&raw, &source.request, &source.payment_digest).unwrap(),
+            expected
+        );
         let proposal = match &credited.evidence {
             KagemushaWalletCreditedEvidenceV1::Receive { .. } => {
                 ArchiveIncomingWitnessV1::Receive(Box::new(IncomingMode::Corrected))
@@ -345,6 +349,10 @@ fn invalid_receive_signature_and_proof_are_retained_for_the_soft_owners() {
     }
     let expected = kagemusha_wallet_poseidon_bytes_v1(u64::from_le_bytes(*b"kgwcrdd1"), &tape);
     let raw = norito::to_bytes(&credited).unwrap();
+    assert_eq!(
+        evidence::credited_digest(&raw, &source.request, &source.payment_digest).unwrap(),
+        expected
+    );
     let evidence = evidence::original(
         &raw,
         &source.request,
@@ -474,4 +482,84 @@ fn invalid_status_membership_and_receipt_identity_are_not_silently_repaired() {
     assert_eq!(credit_opening, opening);
     assert_eq!(status, tape);
     assert_eq!(&receipt[..body.transcript().len()], body.transcript());
+}
+
+#[test]
+fn private_archive_derivation_removes_only_bound_pending_and_preserves_value() {
+    let (scheme, payer, inputs) = originals();
+    let held = retained::originals(&scheme, &payer, &inputs).unwrap();
+    let mut before = KagemushaWalletStateV1::bootstrap(&payer, Fp::from(17).to_repr()).unwrap();
+    let mut tree = KagemushaWalletIndexedTreeV1::new();
+    tree.insert(held.pending.credit_id, held.pending.leaf_value().unwrap())
+        .unwrap();
+    before.core.pending_outgoing_root = tree.root();
+    let removal = tree.remove(&held.pending.credit_id).unwrap();
+    let nonce = Fp::from(19).to_repr();
+    let credited = Fp::from(23).to_repr();
+    let (after, statement) = prepare::derive(
+        &payer,
+        &before,
+        &held.pending,
+        credited,
+        &removal,
+        nonce,
+        scheme.relation_id,
+    )
+    .unwrap();
+    assert_eq!(after.core.pending_outgoing_root, tree.root());
+    assert_eq!(statement.predecessor, before.commitment().unwrap());
+    assert_eq!(statement.successor, after.commitment().unwrap());
+    assert_eq!(
+        statement.effect,
+        KagemushaWalletEffectV1::ArchiveSent {
+            credit_id: held.pending.credit_id,
+            credited
+        }
+    );
+    let mut restored = after;
+    restored.core.sequence = before.core.sequence;
+    restored.core.pending_outgoing_root = before.core.pending_outgoing_root;
+    restored.core.state_nonce = before.core.state_nonce;
+    assert_eq!(restored, before);
+    for wrong_nonce in [[0; 32], before.core.state_nonce, [255; 32]] {
+        assert!(
+            prepare::derive(
+                &payer,
+                &before,
+                &held.pending,
+                credited,
+                &removal,
+                wrong_nonce,
+                scheme.relation_id
+            )
+            .is_err()
+        );
+    }
+    let mut wrong = removal;
+    wrong.leaf.value = Fp::from(29).to_repr();
+    assert!(
+        prepare::derive(
+            &payer,
+            &before,
+            &held.pending,
+            credited,
+            &wrong,
+            nonce,
+            scheme.relation_id
+        )
+        .is_err()
+    );
+    before.core.sequence = u128::MAX;
+    assert!(
+        prepare::derive(
+            &payer,
+            &before,
+            &held.pending,
+            credited,
+            &removal,
+            nonce,
+            scheme.relation_id
+        )
+        .is_err()
+    );
 }
