@@ -12,6 +12,10 @@
 //! The terminal A4 is an input to the final Omega producer, not a final lineage
 //! or a ledger payout. Generic oversized Omega descriptors are rejected.
 
+#[path = "unload/checkpoint.rs"]
+mod checkpoint;
+pub use checkpoint::{CheckpointKind, CheckpointLayout};
+
 use core::fmt;
 use std::sync::Arc;
 
@@ -76,10 +80,13 @@ mod tests;
 
 /// Fixed native source profile; private inputs cannot choose another range-bus count.
 pub const SOURCE_RANGE_BUSES: usize = 4;
-const DESCRIPTOR_MAX_BYTES: usize = 1 << 20;
-const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
 /// Exact source schedule has four A stages and three W continuations.
 pub const A_STAGE_COUNT: usize = 4;
+/// Exact internal continuation count; terminal A is never followed by W.
+pub const W_STAGE_COUNT: usize = A_STAGE_COUNT - 1;
+
+const DESCRIPTOR_MAX_BYTES: usize = 1 << 20;
+const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
 /// Uniform installed Omega transport bound after the largest accepted Send sigma.
 /// The exact public lineage prefix is separate from this proof plus two-claim bound.
 pub const OMEGA_TRANSPORT_CAP: usize = 10_000 - 1_723 - 3_456;
@@ -528,7 +535,8 @@ struct First {
     fold: Vec<u8>,
     known: bool,
 }
-// Circuit-only views contain no verified native claim or Prepared authority.
+// Circuit-only witness views. Optional claims become unknown circuit cells;
+// none of these types can create Prepared or a verified checkpoint.
 #[derive(Clone)]
 struct CircuitPredecessor {
     key: VerifyingKey<Ep>,
@@ -586,6 +594,7 @@ impl FirstCircuit {
         let operation = plan.context.operation();
         let class = operation.sigma.class(0).ok_or(Error::Artifact)?;
         let predecessor = operation.omega().ok_or(Error::Artifact)?;
+        check_omega_transport_length(predecessor.proof_length()).map_err(|_| Error::Artifact)?;
         let state = StateWitness {
             core: [Fp::ZERO; 33],
             rest: [Fp::ZERO; 8],
@@ -606,17 +615,6 @@ impl FirstCircuit {
             );
             q_proofs.push(vec![0; q.verifier().proof_length()]);
         }
-        let objects = object_kinds().map(|kind| SignedTape {
-            kind,
-            bytes: vec![0; kind.body_len() + 64],
-        });
-        let insertion = IndexedInsert {
-            leaf: crate::tree::IndexedLeaf::default(),
-            leaf_slot: 0,
-            leaf_siblings: [Fp::ZERO; 32],
-            slot: 1,
-            slot_siblings: [Fp::ZERO; 32],
-        };
         let source = CircuitSources {
             maps: Maps {
                 witness: ConsumingWitness {
@@ -624,15 +622,24 @@ impl FirstCircuit {
                     successor: state,
                     statement: [Fp::ZERO; 26],
                 },
-                insertion,
-                objects,
+                insertion: IndexedInsert {
+                    leaf: crate::tree::IndexedLeaf::default(),
+                    leaf_slot: 0,
+                    leaf_siblings: [Fp::ZERO; 32],
+                    slot: 1,
+                    slot_siblings: [Fp::ZERO; 32],
+                },
+                objects: object_kinds().map(|kind| SignedTape {
+                    kind,
+                    bytes: vec![0; kind.body_len() + 64],
+                }),
                 known: false,
             },
             omega: vec![
                 0;
                 predecessor
                     .proof_length()
-                    .checked_add(320 + 2 * 544)
+                    .checked_add(320 + 2 * iroha_plonk_recursion::ACCUMULATOR_BYTES)
                     .ok_or(Error::Artifact)?
             ],
             sigma: vec![0; class.verifier().proof_length()],
@@ -656,6 +663,7 @@ impl FirstCircuit {
         })
     }
 }
+
 #[derive(Clone, Debug)]
 /// Fixed source-stage columns and range buses; all fields are native metadata.
 pub struct StageConfig {
@@ -1436,8 +1444,11 @@ fn artifact_binding(
     Ok(binding)
 }
 
-/// Already installed A1/A2/A3/A4 and W0/W1/W2 proving artifacts for this fixed profile.
-/// Authentication and genuine PK import remain the native package owner's responsibility.
+/// Original A1/A2/A3/A4 and W0/W1/W2 keys mounted against the fixed Unload plan.
+/// Installation authenticates the plan and verifier identities independently;
+/// source/key continuity here grants no scheme/catalog or wallet-open authority.
+/// TODO(G3/G4): connect the complete authenticated producer catalog and original
+/// G1 preparation before enabling the Native wallet owner.
 pub struct Prover {
     plan: Plan,
     a: [Arc<ProvingKey<Eq>>; 4],
@@ -1445,7 +1456,7 @@ pub struct Prover {
     wrappers: [WKey; 3],
 }
 impl Prover {
-    /// Import the fixed source A/W stages using only installed metadata.
+    /// Import the fixed seven-stage source using only installed metadata.
     ///
     /// The native owner authenticates scheme/provider/root, predecessor and Q
     /// keys, hard signature slots, stage schedule and each descriptor/VK before
@@ -1461,7 +1472,7 @@ impl Prover {
     /// wrong source/stage/previous key, or source/copy/commitment mismatch.
     pub fn from_original_artifacts(
         plan: Plan,
-        a: [OriginalArtifact<'_>; 3],
+        a: [OriginalArtifact<'_>; 4],
         w: [OriginalArtifact<'_>; 3],
         config: ReadConfig,
     ) -> Result<Self, Error> {
@@ -1564,48 +1575,6 @@ impl Prover {
             a: a_keys.try_into().map_err(|_| Error::Artifact)?,
             w: w_keys.try_into().map_err(|_| Error::Artifact)?,
             wrappers: wrappers.try_into().map_err(|_| Error::Artifact)?,
-        })
-    }
-
-    /// Import the complete fixed typed artifact set, never generating keys from a witness.
-    /// # Errors
-    /// Nonuniform A descriptors, wrong k/public schema, or wrong W stage/context identity.
-    pub fn from_artifacts(
-        plan: Plan,
-        a: [Arc<ProvingKey<Eq>>; 4],
-        w: [Arc<ProvingKey<Ep>>; 3],
-    ) -> Result<Self, Error> {
-        for key in &a {
-            let d = key.binding().descriptor();
-            if d.k != 16
-                || d.instance_lengths != [69]
-                || d.instance_types.as_deref() != Some(&[InstanceType::Bounded])
-                || key.binding() != a[0].binding()
-            {
-                return Err(Error::Artifact);
-            }
-            VerifierPlan::new(key.binding().clone(), plan.vesta.clone())
-                .map_err(|_| Error::Artifact)?;
-        }
-        let wrappers = (0..3)
-            .map(|stage| {
-                WKey::from_artifact(
-                    &plan.context,
-                    stage,
-                    w[stage].binding().clone(),
-                    plan.pallas.clone(),
-                    w[stage].vk().clone(),
-                )
-                .map_err(|_| Error::Artifact)
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .try_into()
-            .map_err(|_| Error::Artifact)?;
-        Ok(Self {
-            plan,
-            a,
-            w,
-            wrappers,
         })
     }
     /// Check all original proofs/tapes and create a session using only installed artifacts.

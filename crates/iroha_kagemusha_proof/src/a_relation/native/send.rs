@@ -10,6 +10,10 @@
 //! TODO: mount complete native G1 preparation and qualify all eight control masks,
 //! producer catalog and final Omega before foreign wallet open.
 
+#[path = "send/checkpoint.rs"]
+mod checkpoint;
+pub use checkpoint::{CheckpointKind, CheckpointLayout};
+
 use core::fmt;
 use std::sync::Arc;
 
@@ -83,6 +87,8 @@ mod tests;
 pub const SOURCE_RANGE_BUSES: usize = 4;
 /// Exact genuine source schedule has five A stages and four W continuations.
 pub const A_STAGE_COUNT: usize = 5;
+/// Exact internal continuation count; terminal A is never followed by W.
+pub const W_STAGE_COUNT: usize = A_STAGE_COUNT - 1;
 const DESCRIPTOR_MAX_BYTES: usize = 1 << 20;
 const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
 

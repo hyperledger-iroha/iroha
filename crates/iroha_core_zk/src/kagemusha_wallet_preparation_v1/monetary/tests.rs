@@ -150,59 +150,63 @@ fn request_projection_preserves_both_account_limbs_nonce_and_historical_selector
 
 #[test]
 fn genuine_receive_evaluator_preserves_quoted_credential_and_current_controls() {
-    let mut source = state();
-    source.core.balance = 100;
-    let mut original = body();
-    original.scheme_id = source.core.scheme_id;
-    original.asset_digest = source.core.asset_digest;
-    original.payer_wallet_id = [4; 32];
-    original.receiver_wallet_id = source.core.wallet_id;
-    original.receiver_credential_digest = Fp::from(211).to_repr();
-    original.receiver_blacklist_version = 0;
-    original.receiver_blacklist_root = [0; 32];
-    let request = request_fields(&original).unwrap();
-    let witness = StepWitness {
-        relation_id: [5; 32],
-        predecessor: state_fields(&source).unwrap(),
-        successor_nonce: Fp::from(223),
-        inputs: StepInputs::Receive(Box::new(ReceiveInputs {
-            payer_wallet: request.payer_wallet,
-            payer_account_digest: request.payer_account,
-            receiver_account_digest: request.receiver_account,
-            send_ordinal: request.send_ordinal,
-            receiver_credential_digest: request.receiver_credential_digest,
-            request: request.terms,
-            successor_consumed_credit: Fp::from(227),
-            blacklist: BlacklistGap::unused(),
-        })),
-    };
-    assert_ne!(
-        request.receiver_credential_digest,
-        source.core.credential_digest
-    );
-    assert_eq!(witness.request_body(), request);
-    let effect = KagemushaWalletEffectV1::Receive {
-        credit_id: original.credit_id(),
-        payer_wallet_id: original.payer_wallet_id,
-        amount: original.amount,
-    };
-    let (next, statement) = derive(&source, SigmaRelation::RECEIVE, &witness, effect).unwrap();
-    assert_eq!(next.core.enabled_controls, 7);
-    assert_eq!(statement.enabled_controls, 0);
-    assert_eq!(next.core.balance, 111);
-    assert_eq!(next.core.next_send, source.core.next_send);
-    assert_eq!(next.core.burned_total, source.core.burned_total);
-    assert_eq!(next.rest, source.rest);
-    assert_eq!(next.core.state_nonce, Fp::from(223).to_repr());
-    let wrong = KagemushaWalletEffectV1::Receive {
-        credit_id: original.credit_id(),
-        payer_wallet_id: original.payer_wallet_id,
-        amount: original.amount + 1,
-    };
-    assert_eq!(
-        derive(&source, SigmaRelation::RECEIVE, &witness, wrong),
-        Err(Error::Authority)
-    );
+    for enabled_controls in 0..=7 {
+        let mut source = state();
+        source.core.balance = 100;
+        source.core.enabled_controls = enabled_controls;
+        let mut original = body();
+        original.scheme_id = source.core.scheme_id;
+        original.asset_digest = source.core.asset_digest;
+        original.payer_wallet_id = [4; 32];
+        original.receiver_wallet_id = source.core.wallet_id;
+        original.receiver_credential_digest = Fp::from(211).to_repr();
+        original.receiver_blacklist_version = 0;
+        original.receiver_blacklist_root = [0; 32];
+        let request = request_fields(&original).unwrap();
+        let witness = StepWitness {
+            relation_id: [5; 32],
+            predecessor: state_fields(&source).unwrap(),
+            successor_nonce: Fp::from(223),
+            inputs: StepInputs::Receive(Box::new(ReceiveInputs {
+                payer_wallet: request.payer_wallet,
+                payer_account_digest: request.payer_account,
+                receiver_account_digest: request.receiver_account,
+                send_ordinal: request.send_ordinal,
+                receiver_credential_digest: request.receiver_credential_digest,
+                request: request.terms,
+                successor_consumed_credit: Fp::from(227),
+                blacklist: BlacklistGap::unused(),
+            })),
+        };
+        assert_ne!(
+            request.receiver_credential_digest,
+            source.core.credential_digest
+        );
+        assert_eq!(witness.request_body(), request);
+        let effect = KagemushaWalletEffectV1::Receive {
+            credit_id: original.credit_id(),
+            payer_wallet_id: original.payer_wallet_id,
+            amount: original.amount,
+        };
+        let (next, statement) = derive(&source, SigmaRelation::RECEIVE, &witness, effect).unwrap();
+        assert_eq!(next.core.enabled_controls, enabled_controls);
+        assert_eq!(statement.enabled_controls, enabled_controls);
+        assert_eq!(SigmaRelation::RECEIVE.enabled_controls(), 0);
+        assert_eq!(next.core.balance, 111);
+        assert_eq!(next.core.next_send, source.core.next_send);
+        assert_eq!(next.core.burned_total, source.core.burned_total);
+        assert_eq!(next.rest, source.rest);
+        assert_eq!(next.core.state_nonce, Fp::from(223).to_repr());
+        let wrong = KagemushaWalletEffectV1::Receive {
+            credit_id: original.credit_id(),
+            payer_wallet_id: original.payer_wallet_id,
+            amount: original.amount + 1,
+        };
+        assert_eq!(
+            derive(&source, SigmaRelation::RECEIVE, &witness, wrong),
+            Err(Error::Authority)
+        );
+    }
 }
 
 #[test]

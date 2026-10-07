@@ -167,6 +167,24 @@ masks, held-policy predecessors, final Omega and device execution still require
 qualification. Native G1 pre-Advance Request/recipient-credential checks remain
 mandatory and separate from Send A's owned obligations.
 
+`a_relation::native::send::Prover::from_original_artifacts` imports the fixed
+A1/W0/A2/W1/A3/W2/A4/W3/A5 chain against independently installed metadata. Private
+source-only circuit views preserve the four-bus layout, predecessor Omega tape,
+own objects, two Q programs and stage history without constructing a prepared
+operation or accepted claim. Every W binds its admitted preceding A key and each
+continued A binds that W key. Existing PIPAPK01 source/commitment checks and exact
+installed-VK equality establish key admissibility; no new PK signature format is
+introduced. Original preparation, source identity, restoration and all eight
+required control masks remain enforced by the Plan and Catalog. Five focused
+host unit tests passed with 1,748 stable inputs. The genuine mask0 test also
+passed: nine original imports, twenty intake refusals, all five A/four W stages
+and the existing proof/restoration assertions. Its broad input guard recorded
+seventeen foreign changed or added paths (1,748 to 1,755 inputs); the audited
+deltas leave the three Send sources and exercised Send semantics unchanged, so
+this is a scoped component pass, not a stable final full-crate result. Mask0 does
+not qualify the remaining seven required masks, full producer catalog, NativeProofs,
+wallet open, ARM execution or any physical Android device.
+
 The Send terminal key has not yet been added and rebound into that catalog;
 all eight control masks, the final uniform catalog and production Omega
 size/row qualification remain open. Task metadata alone never proves execution.
@@ -252,6 +270,26 @@ tasks. Its fixed schema rejects missing, duplicated and misplaced owners.
 TODO: execute and qualify the complete genuine Q → A → Ω chains, rebind their
 terminal keys into the common catalog, and connect the installed wallet provider.
 The leaf and task checks alone do not authorize an unload or retirement.
+
+`a_relation::native::unload::Prover::from_original_artifacts` mounts the fixed
+A1/W0/A2/W1/A3/W2/A4 source from independently installed plan/descriptor/VK
+metadata and bounded original PK bytes. Private circuit views contain unknown
+witnesses and optional claims; installation creates no accepted preparation or
+checkpoint. Every A import binds the actual compiled source, and each W import
+binds the just-imported A key before the following A source is built. The fixed
+four-bus k16 profile, compact hard predecessor cap, two Q sources and three
+signed-object roles remain mandatory. Actual preparation, monetary/map checks,
+full decisions and source-bound checkpoint restoration retain their owners.
+
+The private unit fixture reuses the genuine compact Bootstrap/Load payer chain
+and reconstructs the exact signed Load recovery entry before inserting Unload.
+Seven focused unit tests and the genuine consuming case pass, covering
+original-import refusals, all seven actual stages, source-layout parity,
+exact-original restoration and complete final A4 obligations. This run does not
+exercise the separate checkpoint codec APIs or qualify a common final Omega
+catalog, Native wallet open or a phone.
+The existing oversized predecessor rejection is retained separately. Retiring's
+original-only native importer and genuine consuming chain remain open.
 
 ## Controls
 
@@ -447,9 +485,9 @@ predecessor descriptor. Its terminal A4 and distinct accumulated Pallas, current
 Vesta, predecessor Vesta and own-opening obligations are inputs to the final
 Omega producer. They do not complete a ledger payout or grant a monetary head.
 
-TODO: execute the complete genuine four-stage proof/restoration regression with
-an authenticated compact folded predecessor containing loaded funds; current
-generic predecessor rejection and genuine sigma/signature-Q tests supply no
-accepted Unload, producer-catalog or physical-device qualification. Authenticate
-and mount the complete producer inventory and canonical G1 conversion before
-integrating the native wallet operation facade.
+The genuine compact-funded predecessor regression proves and restores all four
+A stages and three W continuations and verifies the complete final A4 obligations.
+TODO: prove final Unload Omega, authenticate and mount the complete producer
+inventory and canonical G1 conversion before integrating the native wallet
+operation facade. The component result supplies no producer-catalog or
+physical-device qualification.

@@ -317,3 +317,85 @@ fn fixed_union_projection_rejects_wrong_kind_each_field_and_original_signature()
         );
     }
 }
+
+#[test]
+fn original_artifact_envelope_rejects_missing_oversized_and_noncanonical_metadata() {
+    let config = ReadConfig {
+        maximum_bytes: 16,
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    let oversized_descriptor = vec![0; DESCRIPTOR_MAX_BYTES + 1];
+    let oversized_vk = vec![0; VERIFYING_KEY_MAX_BYTES + 1];
+    let oversized_pk = vec![0; config.maximum_bytes + 1];
+    for (descriptor, verifying_key, proving_key) in [
+        (&[][..], &[1][..], &[1][..]),
+        (&[1][..], &[][..], &[1][..]),
+        (&[1][..], &[1][..], &[][..]),
+        (oversized_descriptor.as_slice(), &[1][..], &[1][..]),
+        (&[1][..], oversized_vk.as_slice(), &[1][..]),
+        (&[1][..], &[1][..], oversized_pk.as_slice()),
+        (&[1][..], &[1][..], &[1][..]),
+    ] {
+        assert_eq!(
+            artifact_binding(
+                OriginalArtifact {
+                    descriptor,
+                    verifying_key,
+                    proving_key
+                },
+                CurveV1::Vesta,
+                &[69],
+                &[InstanceType::Bounded],
+                config,
+            ),
+            Err(Error::Artifact)
+        );
+    }
+}
+
+#[test]
+fn typed_refresh_context_schema_rejects_foreign_operations_and_cross_kind_updates() {
+    for variant in [
+        Variant::RefreshCredential,
+        Variant::RefreshSchemePolicy,
+        Variant::RefreshBlacklist,
+        Variant::RefreshQuotaShare,
+        Variant::RefreshTimeAnchor,
+    ] {
+        let schema = RefreshObjects::context_specs(variant).unwrap();
+        assert_eq!(schema.map(|spec| spec.tag), [1, 2, 3, 4, 5]);
+        let lengths = object_kinds(variant)
+            .unwrap()
+            .map(|kind| (kind.body_len() + 64) as u32);
+        assert_eq!(schema.map(|spec| spec.capacity), lengths);
+    }
+    let renewal = RefreshObjects::context_specs(Variant::RefreshCredential).unwrap();
+    for variant in [
+        Variant::RefreshSchemePolicy,
+        Variant::RefreshBlacklist,
+        Variant::RefreshQuotaShare,
+        Variant::RefreshTimeAnchor,
+    ] {
+        assert_ne!(
+            RefreshObjects::context_specs(variant).unwrap()[3],
+            renewal[3]
+        );
+    }
+    for variant in [
+        Variant::Bootstrap,
+        Variant::Load,
+        Variant::Send,
+        Variant::Receive,
+        Variant::ArchiveReceive,
+        Variant::ArchiveStatus,
+        Variant::Unload,
+        Variant::Retiring,
+    ] {
+        assert_eq!(
+            RefreshObjects::context_specs(variant),
+            Err(LayoutError::Synthesis)
+        );
+    }
+}

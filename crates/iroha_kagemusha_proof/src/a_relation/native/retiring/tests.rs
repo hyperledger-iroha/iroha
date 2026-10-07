@@ -1,4 +1,4 @@
-//! Pure exact-original and homogeneous-frame rejection tests, never an admitted Retiring.
+//! Exact-original/frame refusals and an explicitly ignored genuine Retiring component test.
 
 use super::*;
 
@@ -304,3 +304,6 @@ fn original_artifact_envelope_rejects_missing_oversized_and_noncanonical_metadat
         );
     }
 }
+
+#[path = "../../../../tests/common/retiring_native.rs"]
+mod genuine;

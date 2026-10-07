@@ -149,3 +149,80 @@ fn incoming_full_claim_codec_rejects_high_limbs_and_dropped_opening() {
         assert!(incoming_from_fields(&vec![Fp::ZERO; n]).is_err());
     }
 }
+
+#[test]
+fn original_artifact_envelope_rejects_missing_oversized_and_noncanonical_metadata() {
+    let config = ReadConfig {
+        maximum_bytes: 16,
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    let oversized_descriptor = vec![0; DESCRIPTOR_MAX_BYTES + 1];
+    let oversized_vk = vec![0; VERIFYING_KEY_MAX_BYTES + 1];
+    let oversized_pk = vec![0; config.maximum_bytes + 1];
+    for (descriptor, verifying_key, proving_key) in [
+        (&[][..], &[1][..], &[1][..]),
+        (&[1][..], &[][..], &[1][..]),
+        (&[1][..], &[1][..], &[][..]),
+        (oversized_descriptor.as_slice(), &[1][..], &[1][..]),
+        (&[1][..], oversized_vk.as_slice(), &[1][..]),
+        (&[1][..], &[1][..], oversized_pk.as_slice()),
+        (&[1][..], &[1][..], &[1][..]),
+    ] {
+        assert_eq!(
+            artifact_binding(
+                OriginalArtifact {
+                    descriptor,
+                    verifying_key,
+                    proving_key
+                },
+                CurveV1::Vesta,
+                &[69],
+                &[InstanceType::Bounded],
+                config,
+            ),
+            Err(Error::Artifact)
+        );
+    }
+}
+
+#[test]
+fn terminal_binding_rejects_substitution_of_the_installed_omega_root_and_claim() {
+    // Binding specimen only; no proof, installed package or monetary head is admitted.
+    let p = iroha_plonk::transcript::decode_point::<Ep>(
+        &iroha_plonk_recursion::PALLAS_TRIVIAL_GENERATOR,
+    )
+    .unwrap();
+    let v = iroha_plonk::transcript::decode_point::<Eq>(
+        &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
+    )
+    .unwrap();
+    let claim = FoldInput::from_normalized(p, 16, [Fq::ONE; K]).unwrap();
+    let public = core::array::from_fn(|i| Fp::from(i as u64 + 1));
+    let digest = terminal_digest(&public, &claim).unwrap();
+    let vesta = AccumulatorT::new(v, [Fp::ONE; K]).unwrap();
+    let instances = omega_instances(digest, &vesta).unwrap();
+    for column in [5, 8, 17] {
+        let mut substituted = public;
+        substituted[column] += Fp::ONE;
+        let changed = terminal_digest(&substituted, &claim).unwrap();
+        assert_ne!(changed, digest, "head/credential/Omega root column{column}");
+        assert_ne!(omega_instances(changed, &vesta).unwrap(), instances);
+    }
+    let mut challenges = [Fq::ONE; K];
+    challenges[15] = Fq::from(2).pow_vartime([200]);
+    assert_ne!(
+        terminal_digest(
+            &public,
+            &FoldInput::from_normalized(p, 16, challenges).unwrap()
+        )
+        .unwrap(),
+        digest
+    );
+    let altered_vesta = AccumulatorT::new(v, [Fp::from(2); K]).unwrap();
+    let changed = omega_instances(digest, &altered_vesta).unwrap();
+    assert_eq!(changed[0], instances[0]);
+    assert_eq!(changed[1], instances[1]);
+    assert_ne!(changed[2], instances[2]);
+}

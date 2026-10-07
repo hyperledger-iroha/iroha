@@ -410,7 +410,7 @@ fn derive(
         lifecycle: state.core.lifecycle,
         sequence: state.core.sequence,
         next_load: state.core.next_load,
-        enabled_controls: relation.enabled_controls(),
+        enabled_controls: state.core.enabled_controls,
         lineage_burned_total: lineage.0,
         lineage_pending_outgoing_root: lineage.1,
         predecessor: authority(source.commitment())?,
@@ -768,7 +768,7 @@ impl PreparationV1<'_> {
         }
         let (after, statement, receipt) =
             self.retained_monetary(owner, step, predecessor, prepared, public, budget)?;
-        let fee = prepared.request.fee_schedule.as_ref().map_or_else(
+        let fee = prepared.request.fee_schedule.schedule().map_or_else(
             || vec![0; KAGEMUSHA_WALLET_FEE_SCHEDULE_BODY_TRANSCRIPT_BYTES_V1 + 64],
             |fee| signed_tape(fee.body.transcript(), &fee.signature),
         );

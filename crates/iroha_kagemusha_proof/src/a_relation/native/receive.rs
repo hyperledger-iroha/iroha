@@ -859,6 +859,68 @@ impl Cells {
         }
     }
 }
+// The installed key is a native authority, but its points are circuit witnesses.
+// Embedding them as fixed constants would create an A <-> final Omega VK cycle.
+// Every actual verifier still computes the complete key digest and constrains it
+// to the authenticated public18 root; no native or circuit root binding is removed.
+struct OmegaKeySource {
+    representation: Value<Fp>,
+    fixed: Vec<Value<Ep>>,
+    permutation: Vec<Value<Ep>>,
+}
+fn omega_key_source(
+    plan: &VerifierPlan<Ep>,
+    key: &VerifyingKey<Ep>,
+    known: bool,
+) -> Result<OmegaKeySource, LayoutError> {
+    if key.descriptor_digest() != plan.binding().digest() {
+        return Err(LayoutError::Synthesis);
+    }
+    let iroha_plonk::transcript::TranscriptRepr::Base(representation) = *key.transcript_repr()
+    else {
+        return Err(LayoutError::Synthesis);
+    };
+    let value = |v| {
+        if known {
+            Value::known(v)
+        } else {
+            Value::unknown()
+        }
+    };
+    let points =
+        |values: &[iroha_pasta::EpAffine]| values.iter().map(|p| value(Ep::from(*p))).collect();
+    Ok(OmegaKeySource {
+        representation: if known {
+            Value::known(representation)
+        } else {
+            Value::unknown()
+        },
+        fixed: points(key.fixed_commitments()),
+        permutation: points(key.permutation_commitments()),
+    })
+}
+impl FirstCircuit {
+    fn omega_key(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+    ) -> Result<iroha_plonk_recursion::verifier::VerifierKeyCells<Ep>, LayoutError> {
+        let fixed = self
+            .plan
+            .context
+            .operation()
+            .omega()
+            .ok_or(LayoutError::Synthesis)?;
+        let source = omega_key_source(fixed, &self.plan.predecessor_key, self.known)?;
+        chip.witness_key(
+            region,
+            source.representation,
+            &source.fixed,
+            &source.permutation,
+        )
+    }
+}
+
 impl FirstCircuit {
     fn state(
         &self,
@@ -1228,13 +1290,7 @@ impl FirstCircuit {
             None
         };
         let omega_key = if tasks.contains(&OperationTask::ReceiveProofs) {
-            let fixed = self
-                .plan
-                .context
-                .operation()
-                .omega()
-                .ok_or(LayoutError::Synthesis)?;
-            Some(chip.constant_key(region, fixed, &self.plan.predecessor_key)?)
+            Some(self.omega_key(chip, region)?)
         } else {
             None
         };
@@ -1325,13 +1381,7 @@ impl Circuit<Fp> for FirstCircuit {
             || "Receive own hard predecessor",
             |mut region| {
                 let c = self.setup(&mut chip, &mut bytes, &mut region)?;
-                let fixed = self
-                    .plan
-                    .context
-                    .operation()
-                    .omega()
-                    .ok_or(LayoutError::Synthesis)?;
-                let key = chip.constant_key(&mut region, fixed, &self.plan.predecessor_key)?;
+                let key = self.omega_key(&mut chip, &mut region)?;
                 let proof = self.carrier(
                     &mut chip,
                     &mut bytes,
@@ -1531,13 +1581,7 @@ impl Circuit<Fp> for ContinuationCircuit {
                     verified.push(q);
                 }
                 let incoming = if self.plan.is_terminal() {
-                    let fixed = f
-                        .plan
-                        .context
-                        .operation()
-                        .omega()
-                        .ok_or(LayoutError::Synthesis)?;
-                    let key = chip.constant_key(&mut region, fixed, &f.plan.predecessor_key)?;
+                    let key = f.omega_key(&mut chip, &mut region)?;
                     Some(c.transport.verify(
                         &mut chip,
                         &mut region,
@@ -2859,14 +2903,7 @@ impl Circuit<Fp> for Evaluation {
                         .owner(tag);
                     let valid = match tag {
                         ReceiveResultTag::Proofs => {
-                            let fixed = f
-                                .plan
-                                .context
-                                .operation()
-                                .omega()
-                                .ok_or(LayoutError::Synthesis)?;
-                            let key =
-                                chip.constant_key(&mut region, fixed, &f.plan.predecessor_key)?;
+                            let key = f.omega_key(&mut chip, &mut region)?;
                             let (valid, omega) = c.proofs.derive_proofs(
                                 &mut chip,
                                 &mut region,

@@ -298,6 +298,67 @@ where
         self.reconcile_slot(slot, Some(owner))
     }
 
+    /// Read the actual payment key inside protected-storage brackets, without generation.
+    /// Positive lookup remains useful even when the platform cannot prove absence.
+    /// # Errors
+    /// Locked or unavailable storage. An unknown key result remains `Unavailable`.
+    pub fn probe_payment_key(
+        &self,
+        slot: &KagemushaWalletSlotIdV1,
+    ) -> Result<
+        super::KagemushaWalletProbeV1<iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1>,
+        KagemushaWalletProviderErrorV1,
+    > {
+        self.probe_key(slot)
+    }
+
+    /// Read the exact capsule selected by the reconciled current source marker.
+    /// This read capability creates no Selected marker or monetary proof verdict.
+    /// # Errors
+    /// Reconciliation, custody loss or unknown protected-storage/read state; never absence.
+    pub fn current_capsule(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+    ) -> Result<Option<C>, KagemushaWalletProviderErrorV1> {
+        let status = self.status(slot)?;
+        let record = match status {
+            KagemushaWalletSlotStatusV1::Enrollment(_) => return Ok(None),
+            KagemushaWalletSlotStatusV1::Pending(record)
+            | KagemushaWalletSlotStatusV1::Released(record) => record,
+            KagemushaWalletSlotStatusV1::Terminal(_) => {
+                return Err(KagemushaWalletProviderErrorV1::Terminal);
+            }
+            _ => {
+                return Err(KagemushaWalletProviderErrorV1::Invalid {
+                    field: "current source",
+                });
+            }
+        };
+        self.require_storage()?;
+        let answer = (|| {
+            let selected = record.selected_generation().ok_or(
+                KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                    object: "selected generation",
+                },
+            )?;
+            let (_, _, digest) =
+                record
+                    .head()
+                    .ok_or(KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                        object: "selected capsule",
+                    })?;
+            let capsule = super::capsule::kagemusha_wallet_load_capsule_v1::<F, C>(
+                &self.store,
+                slot,
+                selected,
+                &digest,
+                &C::marker_binding(record.marker()),
+            )?;
+            Ok(Some(capsule.into_value()))
+        })();
+        self.require_storage().and(answer)
+    }
+
     /// Current boot identity.
     pub(super) fn boot(&self) -> Result<[u8; 32], KagemushaWalletUnavailableV1> {
         self.platform.boot_id()

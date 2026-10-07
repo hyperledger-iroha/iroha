@@ -45,6 +45,7 @@ mod fee_claims;
 mod folding;
 mod index;
 mod manifest;
+mod map_tree;
 mod scheduling;
 mod snapshot;
 

@@ -50,7 +50,7 @@ use iroha_plonk_recursion::{
     codec::ScalarCells,
     create_fold,
     obligation::ledger::Variant,
-    verifier::{VerifierChip, VerifierConfig, VerifierPlan},
+    verifier::{VerifierChip, VerifierConfig},
 };
 
 use super::super::{
@@ -1385,7 +1385,8 @@ fn artifact_binding(
 }
 
 /// Already installed A1/A2/A3/A4 and W0/W1/W2 proving artifacts for this fixed profile.
-/// Authentication and genuine PK import remain the native package owner's responsibility.
+/// The installation owner authenticates the Plan and verifier identities; this owner
+/// imports original PKs against the fixed source and those exact identities.
 pub struct Prover {
     plan: Plan,
     a: [Arc<ProvingKey<Eq>>; 4],
@@ -1409,8 +1410,8 @@ impl Prover {
     /// wrong source/stage/previous key, or source/copy/commitment mismatch.
     pub fn from_original_artifacts(
         plan: Plan,
-        a: [OriginalArtifact<'_>; 3],
-        w: [OriginalArtifact<'_>; 3],
+        a: [OriginalArtifact<'_>; A_STAGE_COUNT],
+        w: [OriginalArtifact<'_>; W_STAGE_COUNT],
         config: ReadConfig,
     ) -> Result<Self, Error> {
         let a_bindings = a
@@ -1515,47 +1516,6 @@ impl Prover {
         })
     }
 
-    /// Import the complete fixed typed artifact set, never generating keys from a witness.
-    /// # Errors
-    /// Nonuniform A descriptors, wrong k/public schema, or wrong W stage/context identity.
-    pub fn from_artifacts(
-        plan: Plan,
-        a: [Arc<ProvingKey<Eq>>; 4],
-        w: [Arc<ProvingKey<Ep>>; 3],
-    ) -> Result<Self, Error> {
-        for key in &a {
-            let d = key.binding().descriptor();
-            if d.k != 16
-                || d.instance_lengths != [69]
-                || d.instance_types.as_deref() != Some(&[InstanceType::Bounded])
-                || key.binding() != a[0].binding()
-            {
-                return Err(Error::Artifact);
-            }
-            VerifierPlan::new(key.binding().clone(), plan.vesta.clone())
-                .map_err(|_| Error::Artifact)?;
-        }
-        let wrappers = (0..3)
-            .map(|stage| {
-                WKey::from_artifact(
-                    &plan.context,
-                    stage,
-                    w[stage].binding().clone(),
-                    plan.pallas.clone(),
-                    w[stage].vk().clone(),
-                )
-                .map_err(|_| Error::Artifact)
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .try_into()
-            .map_err(|_| Error::Artifact)?;
-        Ok(Self {
-            plan,
-            a,
-            w,
-            wrappers,
-        })
-    }
     /// Check all original proofs/tapes and create a session using only installed artifacts.
     /// # Errors
     /// Any predecessor/Q proof, transported decide or same-tape mismatch.

@@ -85,6 +85,11 @@
 //! proof byte (`tests/real_proofs.rs` checks 1, 2, 4 and 7 threads).
 #![forbid(unsafe_code)]
 
+// Unit fixtures reuse the genuine integration proof builders without exporting
+// a production key-generation or synthetic preparation API.
+#[cfg(test)]
+extern crate self as iroha_kagemusha_proof;
+
 pub mod a_relation;
 pub mod admin_sigma;
 pub mod circuit;

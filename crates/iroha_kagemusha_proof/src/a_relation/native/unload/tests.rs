@@ -1,4 +1,4 @@
-//! Pure exact-original and homogeneous-frame rejection tests, never an admitted Unload.
+//! Exact-original rejection tests and the separately ignored genuine consuming fixture.
 
 use super::*;
 
@@ -311,3 +311,6 @@ fn original_artifact_envelope_rejects_missing_oversized_and_noncanonical_metadat
         );
     }
 }
+
+#[path = "../../../../tests/common/unload_native.rs"]
+mod genuine;
