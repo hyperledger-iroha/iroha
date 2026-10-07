@@ -5,6 +5,7 @@ use crate::kagemusha_wallet_intake_v1::{
     self as intake, PendingWalletOpenV1, WalletOpenBeginFailureV1,
 };
 mod enrollment;
+pub use enrollment::NativeEnrollmentOperationV1;
 
 /// Authenticated installation and sole original store retained across account retries.
 /// Only native provisioning can construct its installed-source capabilities.

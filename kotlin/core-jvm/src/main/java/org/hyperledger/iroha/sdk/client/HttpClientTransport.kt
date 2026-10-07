@@ -806,18 +806,13 @@ class HttpClientTransport private constructor(
     fun resolveIdentifier(
         requestBody: IdentifierResolveRequest,
         canonicalAuth: ToriiCanonicalRequestAuth,
-    ): CompletableFuture<Optional<IdentifierResolutionReceipt>> {
-        val body = encodeJsonBody(buildIdentifierResolvePayload(requestBody.policyId, requestBody.encryptedInputHex, requestBody.outputOpening))
-        return fetchJsonAllowingNotFound(buildVpnRequest("POST", "/v1/identifiers/resolve", body, canonicalAuth), IdentifierJsonParser::parseResolutionReceipt, "identifier resolve")
+    ): CompletableFuture<IdentifierResolutionReceipt?> {
+        require(requestBody.phase == "claim") { "resolve requires the exact original claim request" }
+        requireIdentifierPhoneRequestScope(requestBody)
+        val body = encodeJsonBody(requestBody.toJsonMap())
+        return fetchJsonAllowingNotFound(buildVpnRequest("POST", "/v1/identifiers/resolve", body, canonicalAuth, 65_536L), IdentifierJsonParser::parseResolutionReceipt, "identifier resolve")
+            .thenApply { response -> response.orElse(null)?.also { requireIdentifierReceiptScope(it, requestBody, null) } }
     }
-
-    fun resolveIdentifier(
-        policyId: String,
-        encryptedInputHex: String,
-        outputOpening: RamLfeOutputOpening,
-        canonicalAuth: ToriiCanonicalRequestAuth,
-    ): CompletableFuture<Optional<IdentifierResolutionReceipt>> =
-        resolveIdentifier(IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening), canonicalAuth)
 
     override fun resolveAccountAlias(alias: String): CompletableFuture<Optional<AccountAliasResolution>> {
         val normalizedAlias = AccountAliasName.parse(alias).canonicalText()
@@ -1244,36 +1239,61 @@ class HttpClientTransport private constructor(
         ) { "account aliases response contains entries outside the requested scope" }
     }
 
-    fun issueIdentifierClaimReceipt(
+    fun prepareIdentifierClaim(
         accountId: String,
         requestBody: IdentifierResolveRequest,
         canonicalAuth: ToriiCanonicalRequestAuth,
-    ): CompletableFuture<Optional<IdentifierResolutionReceipt>> {
-        val normalizedAccountId = org.hyperledger.iroha.sdk.address.requireCanonicalI105Address(accountId, "accountId")
-        require(normalizedAccountId == canonicalAuth.accountId) {
-            "canonicalAuth.accountId must equal the claim-receipt path accountId"
-        }
-        val body = encodeJsonBody(buildIdentifierResolvePayload(requestBody.policyId, requestBody.encryptedInputHex, requestBody.outputOpening))
-        return fetchJsonAllowingNotFound(buildVpnRequest("POST", "/v1/accounts/${encodePathSegment(normalizedAccountId)}/identifiers/claim-receipt", body, canonicalAuth), IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt")
+    ): CompletableFuture<IdentifierPrfPrepareResponse?> {
+        require(requestBody.phase == "prepare") { "prepare requires a prepare request with no opening or phone proof" }
+        val beneficiary = org.hyperledger.iroha.sdk.address.requireCanonicalI105Address(accountId, "accountId")
+        val body = encodeJsonBody(requestBody.toJsonMap())
+        return fetchJsonAllowingNotFound(buildVpnRequest("POST", "/v1/accounts/${encodePathSegment(beneficiary)}/identifiers/claim-receipt", body, canonicalAuth, 65_536L), IdentifierJsonParser::parsePrepareResponse, "identifier prepare")
+            .thenApply { response -> response.orElse(null)?.also {
+                require(it.networkId == config.requireLocalSigningContext().networkId() && it.policyId == requestBody.policyId && it.accountId == beneficiary) { "prepare response differs from the selected network, policy or beneficiary" }
+                val phone = it.phoneRetailCanonicalityPayload
+                if (requestBody.policyId == "phone#retail") {
+                    requireNotNull(phone) { "phone prepare requires its unsigned independent-attestor projection" }
+                    require(phone.networkId == it.networkId && phone.policyId == it.policyId && phone.accountId == beneficiary && phone.uaid == it.uaid) { "phone projection scope differs from prepare" }
+                    PhoneRetailCanonicalityAttestationV1.requireOpeningFields(phone, it.outputOpening)
+                } else require(phone == null) { "nonphone prepare contains phone projection" }
+            } }
     }
 
     fun issueIdentifierClaimReceipt(
         accountId: String,
-        policyId: String,
-        encryptedInputHex: String,
-        outputOpening: RamLfeOutputOpening,
+        requestBody: IdentifierResolveRequest,
         canonicalAuth: ToriiCanonicalRequestAuth,
-    ): CompletableFuture<Optional<IdentifierResolutionReceipt>> =
-        issueIdentifierClaimReceipt(accountId, IdentifierResolveRequest.encrypted(policyId, encryptedInputHex, outputOpening), canonicalAuth)
+    ): CompletableFuture<IdentifierResolutionReceipt?> {
+        require(requestBody.phase == "claim") { "claim receipt requires its original claim request" }
+        val beneficiary = org.hyperledger.iroha.sdk.address.requireCanonicalI105Address(accountId, "accountId")
+        requireIdentifierPhoneRequestScope(requestBody)
+        requestBody.phoneRetailCanonicality?.let { require(it.payload.accountId == beneficiary) { "phone statement beneficiary differs from selected account" } }
+        val body = encodeJsonBody(requestBody.toJsonMap())
+        return fetchJsonAllowingNotFound(buildVpnRequest("POST", "/v1/accounts/${encodePathSegment(beneficiary)}/identifiers/claim-receipt", body, canonicalAuth, 65_536L), IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt")
+            .thenApply { response -> response.orElse(null)?.also { requireIdentifierReceiptScope(it, requestBody, beneficiary) } }
+    }
+
+    private fun requireIdentifierPhoneRequestScope(request: IdentifierResolveRequest) {
+        request.phoneRetailCanonicality?.let { require(it.payload.networkId == config.requireLocalSigningContext().networkId()) { "phone statement differs from selected network" } }
+    }
+
+    /** Structural scope/refusal only; server admission authenticates the retained signatures. */
+    private fun requireIdentifierReceiptScope(receipt: IdentifierResolutionReceipt, request: IdentifierResolveRequest, beneficiary: String?) {
+        require(receipt.payload.networkId == config.requireLocalSigningContext().networkId() && receipt.policyId == request.policyId) { "receipt differs from selected network or policy" }
+        if (beneficiary != null) require(receipt.accountId == beneficiary) { "receipt beneficiary differs from selected account" }
+        require(receipt.payload.opening.toJsonMap() == requireNotNull(request.outputOpening).toJsonMap()) { "receipt replaced its exact original opening" }
+        require(receipt.phoneRetailCanonicality?.toJsonMap() == request.phoneRetailCanonicality?.toJsonMap()) { "receipt replaced its original phone statement/signature" }
+    }
 
     fun executeRamLfeProgram(
         programId: String,
         requestBody: RamLfeExecuteRequest,
         canonicalAuth: ToriiCanonicalRequestAuth,
-    ): CompletableFuture<Optional<RamLfeExecuteResponse>> {
-        val normalizedProgramId = normalizeNonBlank(programId, "programId")
-        val body = encodeJsonBody(buildRamLfeExecutePayload(requestBody.encryptedInputHex))
-        return fetchJsonAllowingNotFound(buildVpnRequest("POST", "/v1/ram-lfe/programs/${encodePathSegment(normalizedProgramId)}/execute", body, canonicalAuth), RamLfeJsonParser::parseExecuteResponse, "ram-lfe execute")
+    ): CompletableFuture<RamLfeExecuteResponse?> {
+        val program = IdentifierOwnerInputV1.exactText(programId, "programId")
+        val body = encodeJsonBody(requestBody.toJsonMap())
+        return fetchJsonAllowingNotFound(buildVpnRequest("POST", "/v1/ram-lfe/programs/${encodePathSegment(program)}/execute", body, canonicalAuth, 65_536L), RamLfeJsonParser::parseExecuteResponse, "ram-lfe execute")
+            .thenApply { response -> response.orElse(null)?.also { require(it.programId == program) { "execution program differs from selected program" } } }
     }
 
     fun verifyRamLfeReceipt(
@@ -2955,44 +2975,6 @@ class HttpClientTransport private constructor(
         private fun encodePathSegment(segment: String): String = urlEncode(segment).replace("+", "%20")
         private fun urlEncode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.name())
         private fun encodeJsonBody(payload: Map<String, Any>): ByteArray = JsonEncoder.encode(payload).toByteArray(StandardCharsets.UTF_8)
-
-        @JvmStatic internal fun buildIdentifierResolveRequest(
-            policyId: String,
-            encryptedInputHex: String,
-            outputOpening: RamLfeOutputOpening,
-        ): IdentifierResolveRequest {
-            val normalizedPolicyId = normalizeNonBlank(policyId, "policyId")
-            val normalizedEncryptedInput = normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex")
-            return IdentifierResolveRequest.encrypted(normalizedPolicyId, normalizedEncryptedInput, outputOpening)
-        }
-
-        @JvmStatic internal fun buildRamLfeExecuteRequest(encryptedInputHex: String): RamLfeExecuteRequest {
-            val normalizedEncryptedInput = normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex")
-            return RamLfeExecuteRequest.encrypted(normalizedEncryptedInput)
-        }
-
-        @JvmStatic internal fun buildIdentifierResolvePayload(
-            policyId: String,
-            encryptedInputHex: String,
-            outputOpening: RamLfeOutputOpening,
-        ): Map<String, Any> {
-            val normalizedPolicyId = normalizeNonBlank(policyId, "policyId")
-            require(normalizedPolicyId != "phone#retail") {
-                "phone#retail requires canonicality attestation support"
-            }
-            val normalizedEncryptedInput = normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex")
-            val payload = LinkedHashMap<String, Any>(); payload["policy_id"] = normalizedPolicyId
-            payload["encrypted_input"] = normalizedEncryptedInput
-            payload["output_opening"] = outputOpening.toJsonMap()
-            return payload
-        }
-
-        @JvmStatic internal fun buildRamLfeExecutePayload(encryptedInputHex: String): Map<String, Any> {
-            val normalizedEncryptedInput = normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex")
-            val payload = LinkedHashMap<String, Any>()
-            payload["encrypted_input"] = normalizedEncryptedInput
-            return payload
-        }
 
         @JvmStatic internal fun buildRamLfeReceiptVerifyPayload(receipt: Map<String, Any>, outputHex: String?): Map<String, Any> {
             val payload = LinkedHashMap<String, Any>(); payload["receipt"] = LinkedHashMap(receipt)

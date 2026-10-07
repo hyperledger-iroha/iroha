@@ -683,6 +683,7 @@ final class ToriiClientTests: XCTestCase {
                                                     openingSignatureHex: String = String(repeating: "ff", count: 64))
                                                     -> ToriiIdentifierResolutionPayload {
         ToriiIdentifierResolutionPayload(
+            networkId: TestNetworkIds.canonical,
             policyId: policyId,
             opaqueId: opaqueId,
             receiptHash: receiptHash,
@@ -711,7 +712,7 @@ final class ToriiClientTests: XCTestCase {
                 openedOutputHash: outputHashHex,
                 openedAtMs: resolvedAtMs,
                 expiresAtMs: expiresAtMs,
-                signatureHex: openingSignatureHex
+                signatureHex: openingSignatureHex.lowercased()
             )
         )
     }
@@ -911,7 +912,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         var canonicalPayload = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
-        let openingFieldRange = try noritoFieldRange(in: canonicalPayload, fieldIndex: 2)
+        let openingFieldRange = try noritoFieldRange(in: canonicalPayload, fieldIndex: 3)
         let openingField = Data(canonicalPayload[openingFieldRange])
         var openingPayload = try noritoFieldPayload(openingField)
         let signatureFieldRange = try noritoFieldRange(in: openingPayload, fieldIndex: 1)
@@ -925,7 +926,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     private func openingSignaturePayload(in encodedPayload: Data) throws -> Data {
-        let openingFieldRange = try noritoFieldRange(in: encodedPayload, fieldIndex: 2)
+        let openingFieldRange = try noritoFieldRange(in: encodedPayload, fieldIndex: 3)
         let openingField = Data(encodedPayload[openingFieldRange])
         let openingPayload = try noritoFieldPayload(openingField)
         let signatureFieldRange = try noritoFieldRange(in: openingPayload, fieldIndex: 1)
@@ -2001,22 +2002,24 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertNotNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
             let payload = self.bodyJSON(from: request)
             XCTAssertNil(payload["input_hex"])
-            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
+            XCTAssertNil(payload["encrypted_input"])
+            XCTAssertEqual(payload["normalized_input"] as? String, "private@example.org")
+            XCTAssertEqual(payload["input_nonce"] as? String, String(repeating: "12", count: 32))
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            return (response, ramLfeExecuteResponseJSON())
+            return (response, try ramLfeExecuteResponseJSON())
         }
 
         let response = try await makeClient().executeRamLfeProgram(
             programId: "identifier_lookup_retail",
-            encryptedInputHex: "0xABCD",
+            requestBody: try .ownerInput(normalizedInput: "private@example.org", inputNonceHex: String(repeating: "12", count: 32)),
             canonicalAuth: canonicalReadAuth
         )
         XCTAssertEqual(response?.programId, "identifier_lookup_retail")
-        XCTAssertEqual(response?.outputCiphertext, "C0FFEE")
-        XCTAssertEqual(response?.outputHash, String(repeating: "44", count: 32))
+        XCTAssertEqual(response?.opaqueOutputHex, try currentOwnerExecuteResponseField("opaque_output"))
+        XCTAssertEqual(response?.outputHash, try currentOwnerExecuteResponseField("output_hash"))
         XCTAssertEqual(response?.verificationMode, "signed")
         if case let .object(receipt)? = response?.receipt["payload"] {
             XCTAssertNotNil(receipt["program_id"])
@@ -2030,7 +2033,9 @@ final class ToriiClientTests: XCTestCase {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/ram-lfe/programs/identifier_lookup_retail/execute")
             let payload = self.bodyJSON(from: request)
-            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
+            XCTAssertNil(payload["encrypted_input"])
+            XCTAssertEqual(payload["normalized_input"] as? String, "private@example.org")
+            XCTAssertEqual(payload["input_nonce"] as? String, String(repeating: "12", count: 32))
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 404,
                                            httpVersion: nil,
@@ -2040,7 +2045,7 @@ final class ToriiClientTests: XCTestCase {
 
         let response = try await makeClient().executeRamLfeProgram(
             programId: "identifier_lookup_retail",
-            encryptedInputHex: "ABCD",
+            requestBody: try .ownerInput(normalizedInput: "private@example.org", inputNonceHex: String(repeating: "12", count: 32)),
             canonicalAuth: canonicalReadAuth
         )
         XCTAssertNil(response)
@@ -2130,9 +2135,8 @@ final class ToriiClientTests: XCTestCase {
         func object(_ data: Data) throws -> [String: Any] {
             try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         }
-        let execute = try object(ramLfeExecuteResponseJSON())
-        // Identifier execution has four ciphertext/key binding hashes beyond
-        // the generic RAM-LFE receipt payload. Use its actual typed fixture.
+        let execute = try object(try ramLfeExecuteResponseJSON())
+        // Generic and identifier receipts use the same program-only execution payload.
         let identifierPayload = makeSignedIdentifierReceiptPayload(
             accountId: try canonicalOwnerLiteral(),
             opaqueId: String(repeating: "11", count: 32),
@@ -2178,7 +2182,11 @@ final class ToriiClientTests: XCTestCase {
             for backend in ["hkdf-sha3-512-prf-v1", "bfv-affine-v1", "bfv-programmed-v1"] {
                 for mode in ["signed", "proof"] {
                     let body = setting(["backend": backend, "verification_mode": mode], in: surface.body)
-                    XCTAssertNoThrow(try surface.decode(JSONSerialization.data(withJSONObject: body)), surface.name)
+                    if surface.name == "ram-lfe execute response", backend != "hkdf-sha3-512-prf-v1" || mode != "signed" {
+                        XCTAssertThrowsError(try surface.decode(JSONSerialization.data(withJSONObject: body)), surface.name)
+                    } else {
+                        XCTAssertNoThrow(try surface.decode(JSONSerialization.data(withJSONObject: body)), surface.name)
+                    }
                 }
             }
             for (field, value) in [
@@ -2200,7 +2208,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     func testRamLfeExecuteResponseRejectsRetiredOutputOpening() throws {
-        let valid = ramLfeExecuteResponseJSON()
+        let valid = try ramLfeExecuteResponseJSON()
         _ = try JSONDecoder().decode(ToriiRamLfeExecuteResponse.self, from: valid)
         for retiredValue in [NSNull(), ["payload": [:], "signature": "ab"]] as [Any] {
             var object = try XCTUnwrap(JSONSerialization.jsonObject(with: valid) as? [String: Any])
@@ -2215,14 +2223,14 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testRamLfeResponseParsersRejectNonExactFieldsAsync() async throws {
         let executeCases: [(field: String, body: Data)] = [
-            ("program_id", ramLfeExecuteResponseJSON(programId: " identifier_lookup_retail")),
-            ("opaque_hash", ramLfeExecuteResponseJSON(opaqueHash: "\(String(repeating: "11", count: 32)) ")),
-            ("receipt_hash", ramLfeExecuteResponseJSON(receiptHash: " \(String(repeating: "22", count: 32))")),
-            ("output_ciphertext", ramLfeExecuteResponseJSON(outputCiphertext: " C0FFEE")),
-            ("output_hash", ramLfeExecuteResponseJSON(outputHash: "\(String(repeating: "44", count: 32)) ")),
-            ("associated_data_hash", ramLfeExecuteResponseJSON(associatedDataHash: " \(String(repeating: "55", count: 32))")),
-            ("backend", ramLfeExecuteResponseJSON(backend: "BFV-programmed-sha3-256-v1")),
-            ("verification_mode", ramLfeExecuteResponseJSON(verificationMode: " signed"))
+            ("program_id", try ramLfeExecuteResponseJSON(programId: " identifier_lookup_retail")),
+            ("opaque_hash", try ramLfeExecuteResponseJSON(opaqueHash: "\(String(repeating: "11", count: 32)) ")),
+            ("receipt_hash", try ramLfeExecuteResponseJSON(receiptHash: " \(String(repeating: "22", count: 32))")),
+            ("opaque_output", try ramLfeExecuteResponseJSON(opaqueOutputHex: " C0FFEE")),
+            ("output_hash", try ramLfeExecuteResponseJSON(outputHash: "\(String(repeating: "44", count: 32)) ")),
+            ("associated_data_hash", try ramLfeExecuteResponseJSON(associatedDataHash: " \(String(repeating: "55", count: 32))")),
+            ("backend", try ramLfeExecuteResponseJSON(backend: "BFV-programmed-sha3-256-v1")),
+            ("verification_mode", try ramLfeExecuteResponseJSON(verificationMode: " signed"))
         ]
         for testCase in executeCases {
             XCTAssertThrowsError(
@@ -2264,11 +2272,12 @@ final class ToriiClientTests: XCTestCase {
         let receiptHash = String(repeating: "22", count: 31) + "23"
         let uaid = "uaid:\(String(repeating: "33", count: 31))35"
         let signedPayload = makeSignedIdentifierReceiptPayload(
+            policyId: "email#retail",
             accountId: accountId,
             opaqueId: opaqueId,
             receiptHash: receiptHash,
             uaid: uaid,
-            backend: "bfv-affine-v1"
+            backend: "hkdf-sha3-512-prf-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: signedPayload)
         StubURLProtocol.handler = { request in
@@ -2281,9 +2290,10 @@ final class ToriiClientTests: XCTestCase {
                 try AccountAddress.parseEncoded(self.authority).canonicalHex()
             )
             let payload = self.bodyJSON(from: request)
-            XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
-            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
-            XCTAssertNotNil(payload["output_opening"])
+            XCTAssertEqual(payload["policy_id"] as? String, "email#retail")
+            XCTAssertNil(payload["encrypted_input"])
+            XCTAssertEqual(payload["normalized_input"] as? String, "private@example.org")
+            XCTAssertEqual(payload["input_nonce"] as? String, String(repeating: "12", count: 32))
             XCTAssertNotNil(payload["output_opening"])
             XCTAssertNil(payload["input"])
             let response = HTTPURLResponse(url: request.url!,
@@ -2298,28 +2308,26 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let receipt = try await makeClient().resolveIdentifier(
-            policyId: " phone#retail ",
-            encryptedInputHex: "0xABCD",
-            outputOpening: signedPayload.opening,
+            try .claim(policyId: "email#retail", normalizedInput: "private@example.org", inputNonceHex: String(repeating: "12", count: 32), outputOpening: signedPayload.opening),
             canonicalAuth: canonicalReadAuth
         )
-        XCTAssertEqual(receipt?.policyId, "phone#retail")
+        XCTAssertEqual(receipt?.policyId, "email#retail")
         XCTAssertEqual(receipt?.opaqueId, opaqueId)
         XCTAssertEqual(receipt?.receiptHash, receiptHash)
         XCTAssertEqual(receipt?.uaid, uaid)
         XCTAssertEqual(receipt?.accountId, accountId)
         XCTAssertEqual(receipt?.resolvedAtMs, 42)
         XCTAssertEqual(receipt?.expiresAtMs, 142)
-        XCTAssertEqual(receipt?.backend, "bfv-affine-v1")
+        XCTAssertEqual(receipt?.backend, "hkdf-sha3-512-prf-v1")
         let policy = ToriiIdentifierPolicySummary(
-            policyId: "phone#retail",
+            policyId: "email#retail",
             programId: "identifier_lookup_retail",
             owner: accountId,
             active: true,
             normalization: .phoneE164,
             resolverPublicKey: signed.resolverPublicKey,
             outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
-            backend: "bfv-affine-v1",
+            backend: "hkdf-sha3-512-prf-v1",
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: nil,
@@ -2327,7 +2335,7 @@ final class ToriiClientTests: XCTestCase {
             proofVerifier: nil,
             note: nil
         )
-        XCTAssertEqual(try receipt?.verifyAttestation(using: policy), true)
+        XCTAssertEqual(try receipt?.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), true)
     }
 
     func testIdentifierReceiptDecodeRejectsPaddedAccountIdBeforeSignatureVerification() throws {
@@ -2399,7 +2407,7 @@ final class ToriiClientTests: XCTestCase {
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
             backend: "bfv-affine-v1",
-            openingSignatureHex: "FAFBFC"
+            openingSignatureHex: "fafbfc"
         )
 
         let encoded = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
@@ -2421,7 +2429,7 @@ final class ToriiClientTests: XCTestCase {
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
             backend: "bfv-affine-v1",
-            openingSignatureHex: longSignature.hexUppercased()
+            openingSignatureHex: longSignature.hexUppercased().lowercased()
         )
 
         let signaturePayload = try openingSignaturePayload(
@@ -2464,7 +2472,7 @@ final class ToriiClientTests: XCTestCase {
             receiptHash: String(repeating: "22", count: 31) + "23",
             uaid: "uaid:\(String(repeating: "33", count: 31))35",
             backend: "bfv-affine-v1",
-            openingSignatureHex: "FAFBFC"
+            openingSignatureHex: "fafbfc"
         )
         let currentSigned = try signedIdentifierReceiptFixture(payload: payload)
         let legacySigned = try signedIdentifierReceiptFixture(
@@ -2502,8 +2510,8 @@ final class ToriiClientTests: XCTestCase {
             ).utf8)
         )
 
-        XCTAssertEqual(try currentReceipt.verifyAttestation(using: policy), true)
-        XCTAssertEqual(try legacyReceipt.verifyAttestation(using: policy), false)
+        XCTAssertEqual(try currentReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), true)
+        XCTAssertEqual(try legacyReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false)
     }
 
     func testIdentifierReceiptRejectsOpeningSignatureMutationAfterSigning() throws {
@@ -2556,8 +2564,8 @@ final class ToriiClientTests: XCTestCase {
             ).utf8)
         )
 
-        XCTAssertEqual(try originalReceipt.verifyAttestation(using: policy), true)
-        XCTAssertEqual(try mutatedReceipt.verifyAttestation(using: policy), false)
+        XCTAssertEqual(try originalReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), true)
+        XCTAssertEqual(try mutatedReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false)
     }
 
     func testIdentifierReceiptRejectsReceiptHashMutationAfterSigning() throws {
@@ -2590,8 +2598,8 @@ final class ToriiClientTests: XCTestCase {
             signatureHex: signed.signatureHex
         )
 
-        XCTAssertEqual(try originalReceipt.verifyAttestation(using: policy), true)
-        XCTAssertEqual(try mutatedReceipt.verifyAttestation(using: policy), false)
+        XCTAssertEqual(try originalReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), true)
+        XCTAssertEqual(try mutatedReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false)
     }
 
     func testIdentifierReceiptRejectsMalformedMlDsaAttestationLengthsBeforeBridge() throws {
@@ -2625,8 +2633,8 @@ final class ToriiClientTests: XCTestCase {
                 owner: accountId,
                 resolverPublicKey: "\(prefix):\(publicKeyMultihash)"
             )
-            XCTAssertEqual(try shortReceipt.verifyAttestation(using: policy), false, prefix)
-            XCTAssertEqual(try overlongReceipt.verifyAttestation(using: policy), false, prefix)
+            XCTAssertEqual(try shortReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false, prefix)
+            XCTAssertEqual(try overlongReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false, prefix)
 
             for suite in [MlDsaSuite.mlDsa44, .mlDsa87] {
                 let signature = Data(
@@ -2638,7 +2646,7 @@ final class ToriiClientTests: XCTestCase {
                     signatureHex: signature.hexUppercased()
                 )
                 XCTAssertEqual(
-                    try receipt.verifyAttestation(using: policy),
+                    try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical),
                     false,
                     "protocol ML-DSA verification must reject the \(suite) signature width for \(prefix)"
                 )
@@ -2681,7 +2689,7 @@ final class ToriiClientTests: XCTestCase {
                     resolverPublicKey: resolverPublicKey
                 )
                 XCTAssertEqual(
-                    try receipt.verifyAttestation(using: policy),
+                    try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical),
                     suite == .mlDsa65,
                     "protocol verification must accept only ML-DSA-65 for \(resolverPublicKey)"
                 )
@@ -2707,7 +2715,7 @@ final class ToriiClientTests: XCTestCase {
             payload: payload,
             signatureHex: signed.signatureHex
         )
-        XCTAssertEqual(try validReceipt.verifyAttestation(using: policy), true)
+        XCTAssertEqual(try validReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), true)
 
         let smallOrderR = Data([
             0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -2733,7 +2741,7 @@ final class ToriiClientTests: XCTestCase {
                 signatureHex: signature.hexUppercased()
             )
 
-            XCTAssertEqual(try receipt.verifyAttestation(using: policy), false, label)
+            XCTAssertEqual(try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false, label)
         }
     }
 
@@ -2767,8 +2775,8 @@ final class ToriiClientTests: XCTestCase {
             signatureHex: signed.signatureHex
         )
 
-        XCTAssertEqual(try originalReceipt.verifyAttestation(using: policy), true)
-        XCTAssertEqual(try mutatedReceipt.verifyAttestation(using: policy), false)
+        XCTAssertEqual(try originalReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), true)
+        XCTAssertEqual(try mutatedReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false)
     }
 
     func testIdentifierReceiptRejectsMismatchedPolicySummaryBeforeSignatureVerification() throws {
@@ -2788,7 +2796,7 @@ final class ToriiClientTests: XCTestCase {
             resolverPublicKey: signed.resolverPublicKey
         )
 
-        XCTAssertThrowsError(try receipt.verifyAttestation(using: policy)) { error in
+        XCTAssertThrowsError(try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical)) { error in
             guard case let ToriiClientError.invalidPayload(reason) = error else {
                 XCTFail("expected invalid payload error, got \(error)")
                 return
@@ -2819,8 +2827,8 @@ final class ToriiClientTests: XCTestCase {
         )
 
         XCTAssertNotEqual(signed.resolverPublicKey, otherSigned.resolverPublicKey)
-        XCTAssertEqual(try receipt.verifyAttestation(using: validPolicy), true)
-        XCTAssertEqual(try receipt.verifyAttestation(using: wrongKeyPolicy), false)
+        XCTAssertEqual(try receipt.verifyResolverAttestation(using: validPolicy, intendedNetworkId: TestNetworkIds.canonical), true)
+        XCTAssertEqual(try receipt.verifyResolverAttestation(using: wrongKeyPolicy, intendedNetworkId: TestNetworkIds.canonical), false)
     }
 
     func testIdentifierReceiptRejectsMalformedResolverPublicKey() throws {
@@ -2843,8 +2851,8 @@ final class ToriiClientTests: XCTestCase {
             resolverPublicKey: "ed25519:not-hex"
         )
 
-        XCTAssertEqual(try receipt.verifyAttestation(using: validPolicy), true)
-        XCTAssertThrowsError(try receipt.verifyAttestation(using: malformedPolicy)) { error in
+        XCTAssertEqual(try receipt.verifyResolverAttestation(using: validPolicy, intendedNetworkId: TestNetworkIds.canonical), true)
+        XCTAssertThrowsError(try receipt.verifyResolverAttestation(using: malformedPolicy, intendedNetworkId: TestNetworkIds.canonical)) { error in
             guard case let ToriiClientError.invalidPayload(reason) = error else {
                 XCTFail("expected invalid payload error, got \(error)")
                 return
@@ -2879,7 +2887,7 @@ final class ToriiClientTests: XCTestCase {
                 owner: accountId,
                 resolverPublicKey: "\(prefix):\(multihash)"
             )
-            XCTAssertThrowsError(try receipt.verifyAttestation(using: policy), prefix) { error in
+            XCTAssertThrowsError(try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), prefix) { error in
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     return XCTFail("unexpected error for \(prefix): \(error)")
                 }
@@ -2903,7 +2911,7 @@ final class ToriiClientTests: XCTestCase {
             owner: accountId,
             resolverPublicKey: signed.resolverPublicKey
         )
-        XCTAssertEqual(try receipt.verifyAttestation(using: validPolicy), true)
+        XCTAssertEqual(try receipt.verifyResolverAttestation(using: validPolicy, intendedNetworkId: TestNetworkIds.canonical), true)
 
         let smallOrderKey = Data([
             0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -2931,7 +2939,7 @@ final class ToriiClientTests: XCTestCase {
                 owner: accountId,
                 resolverPublicKey: "ed25519:\(multihash)"
             )
-            XCTAssertThrowsError(try receipt.verifyAttestation(using: malformedPolicy), label) { error in
+            XCTAssertThrowsError(try receipt.verifyResolverAttestation(using: malformedPolicy, intendedNetworkId: TestNetworkIds.canonical), label) { error in
                 guard case let ToriiClientError.invalidPayload(reason) = error else {
                     XCTFail("expected invalid payload error, got \(error)")
                     return
@@ -2962,8 +2970,8 @@ final class ToriiClientTests: XCTestCase {
             resolverPublicKey: "secp256k1:\(multihash)"
         )
 
-        XCTAssertEqual(try receipt.verifyAttestation(using: validPolicy), true)
-        XCTAssertThrowsError(try receipt.verifyAttestation(using: mismatchedPrefixPolicy)) { error in
+        XCTAssertEqual(try receipt.verifyResolverAttestation(using: validPolicy, intendedNetworkId: TestNetworkIds.canonical), true)
+        XCTAssertThrowsError(try receipt.verifyResolverAttestation(using: mismatchedPrefixPolicy, intendedNetworkId: TestNetworkIds.canonical)) { error in
             guard case let ToriiClientError.invalidPayload(reason) = error else {
                 XCTFail("expected invalid payload error, got \(error)")
                 return
@@ -3448,7 +3456,7 @@ final class ToriiClientTests: XCTestCase {
             resolverPublicKey: signed.resolverPublicKey
         )
 
-        XCTAssertThrowsError(try receipt.verifyAttestation(using: policy)) { error in
+        XCTAssertThrowsError(try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical)) { error in
             guard case let ToriiClientError.invalidPayload(reason) = error else {
                 XCTFail("expected invalid payload error, got \(error)")
                 return
@@ -3666,6 +3674,7 @@ final class ToriiClientTests: XCTestCase {
             JSONSerialization.jsonObject(with: fixtureData) as? [String: Any]
         )
         XCTAssertEqual(try string(fixture, "vector_set"), "identifier-receipt-attestation-v1")
+        let intendedNetworkId = try ToriiIdentifierOwnerContract.network("5e60c5da42509f0077c6adf39b7dd708611eb4d6a9f1cbb71769092c26d20bf1")
         let receiptObject = try object(fixture, "receipt")
         let policyObject = try object(fixture, "policy")
         let receipt = try identifierReceipt(fromFixture: receiptObject)
@@ -3673,7 +3682,7 @@ final class ToriiClientTests: XCTestCase {
 
         let payloadBytes = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload)
         XCTAssertEqual(sha256Hex(payloadBytes), try string(fixture, "canonical_payload_sha256"))
-        XCTAssertEqual(try receipt.verifyAttestation(using: policy), true)
+        XCTAssertEqual(try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: intendedNetworkId), true)
 
         for vector in try objectArray(fixture, "attestation_vectors") {
             let name = try string(vector, "name")
@@ -3695,7 +3704,7 @@ final class ToriiClientTests: XCTestCase {
                 proofReceiptObject["attestation"] = attestationObject
                 let proofReceipt = try identifierReceipt(fromFixture: proofReceiptObject)
                 XCTAssertThrowsError(
-                    try proofReceipt.verifyAttestation(using: policy),
+                    try proofReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: intendedNetworkId),
                     "\(name) proof verifier gate"
                 ) { error in
                     guard case let ToriiClientError.invalidPayload(reason) = error else {
@@ -3712,7 +3721,12 @@ final class ToriiClientTests: XCTestCase {
             let mutation = try string(negative, "mutation")
             var mutatedReceiptObject = receiptObject
             var mutatedPolicyObject = policyObject
+            let independentlySelectedNetwork = mutation == "receipt.payload.network_id" ? try ToriiIdentifierOwnerContract.network(string(negative, "value")) : intendedNetworkId
             switch mutation {
+            case "receipt.payload.network_id":
+                var payload = try object(mutatedReceiptObject, "payload")
+                payload["network_id"] = try string(negative, "value")
+                mutatedReceiptObject["payload"] = payload
             case "receipt.payload.execution.output_ciphertext_hash":
                 var payload = try object(mutatedReceiptObject, "payload")
                 var execution = try object(payload, "execution")
@@ -3739,7 +3753,7 @@ final class ToriiClientTests: XCTestCase {
                     let mutatedReceipt = try identifierReceipt(fromFixture: mutatedReceiptObject)
                     let mutatedPolicy = try identifierReceiptPolicy(fromFixture: mutatedPolicyObject)
                     XCTAssertThrowsError(
-                        try mutatedReceipt.verifyAttestation(using: mutatedPolicy),
+                        try mutatedReceipt.verifyResolverAttestation(using: mutatedPolicy, intendedNetworkId: independentlySelectedNetwork),
                         negativeName
                     )
                 } catch let DecodingError.dataCorrupted(context) {
@@ -3752,7 +3766,7 @@ final class ToriiClientTests: XCTestCase {
                 let mutatedReceipt = try identifierReceipt(fromFixture: mutatedReceiptObject)
                 let mutatedPolicy = try identifierReceiptPolicy(fromFixture: mutatedPolicyObject)
                 XCTAssertEqual(
-                    try mutatedReceipt.verifyAttestation(using: mutatedPolicy),
+                    try mutatedReceipt.verifyResolverAttestation(using: mutatedPolicy, intendedNetworkId: independentlySelectedNetwork),
                     try bool(negative, "expected_result"),
                     negativeName
                 )
@@ -4013,7 +4027,7 @@ final class ToriiClientTests: XCTestCase {
             proofVerifier: nil,
             note: nil
         )
-        XCTAssertEqual(try receipt.verifyAttestation(using: policy), false)
+        XCTAssertEqual(try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -4023,11 +4037,12 @@ final class ToriiClientTests: XCTestCase {
         let receiptHash = String(repeating: "51", count: 32)
         let uaid = "uaid:\(String(repeating: "61", count: 31))63"
         let signedPayload = makeSignedIdentifierReceiptPayload(
+            policyId: "email#retail",
             accountId: accountId,
             opaqueId: opaqueId,
             receiptHash: receiptHash,
             uaid: uaid,
-            backend: "bfv-affine-v1"
+            backend: "hkdf-sha3-512-prf-v1"
         )
         let signed = try signedIdentifierReceiptFixture(payload: signedPayload)
 
@@ -4039,14 +4054,14 @@ final class ToriiClientTests: XCTestCase {
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-              "policy_id":"phone#retail",
+              "policy_id":"email#retail",
               "opaque_id":"\(opaqueId)",
               "receipt_hash":"\(receiptHash)",
               "uaid":"\(uaid)",
               "account_id":"\(accountId)",
               "resolved_at_ms":42,
               "expires_at_ms":142,
-              "backend":"bfv-affine-v1",
+              "backend":"hkdf-sha3-512-prf-v1",
               "signature":"\(signed.signatureHex)",
               "signature_payload_hex":"01020304A0"
             }
@@ -4056,10 +4071,8 @@ final class ToriiClientTests: XCTestCase {
 
         do {
             _ = try await makeClient().resolveIdentifier(
-                policyId: "phone#retail",
-                encryptedInputHex: "ABCD",
-                outputOpening: signedPayload.opening,
-                canonicalAuth: canonicalReadAuth
+            try .claim(policyId: "email#retail", normalizedInput: "private@example.org", inputNonceHex: String(repeating: "12", count: 32), outputOpening: signedPayload.opening),
+            canonicalAuth: canonicalReadAuth
             )
             XCTFail("Expected invalidPayload error")
         } catch let ToriiClientError.invalidPayload(reason) {
@@ -4078,8 +4091,10 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/identifiers/resolve")
             XCTAssertEqual(request.httpMethod, "POST")
             let payload = self.bodyJSON(from: request)
-            XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
-            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
+            XCTAssertEqual(payload["policy_id"] as? String, "email#retail")
+            XCTAssertNil(payload["encrypted_input"])
+            XCTAssertEqual(payload["normalized_input"] as? String, "private@example.org")
+            XCTAssertEqual(payload["input_nonce"] as? String, String(repeating: "12", count: 32))
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 404,
                                            httpVersion: nil,
@@ -4088,9 +4103,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let receipt = try await makeClient().resolveIdentifier(
-            policyId: "phone#retail",
-            encryptedInputHex: "0xABCD",
-            outputOpening: sampleOpening(),
+            try .claim(policyId: "email#retail", normalizedInput: "private@example.org", inputNonceHex: String(repeating: "12", count: 32), outputOpening: sampleOpening()),
             canonicalAuth: canonicalReadAuth
         )
         XCTAssertNil(receipt)
@@ -4104,11 +4117,12 @@ final class ToriiClientTests: XCTestCase {
         let outputHash = String(repeating: "22", count: 31) + "23"
         let uaid = "uaid:\(String(repeating: "99", count: 31))9b"
         let signedPayload = makeSignedIdentifierReceiptPayload(
+            policyId: "email#retail",
             accountId: accountId,
             opaqueId: opaqueId,
             receiptHash: receiptHash,
             uaid: uaid,
-            backend: "bfv-programmed-v1",
+            backend: "hkdf-sha3-512-prf-v1",
             outputHashHex: outputHash,
             resolvedAtMs: 42,
             expiresAtMs: 142
@@ -4129,14 +4143,12 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let receipt = try await makeClient().resolveIdentifier(
-            policyId: "phone#retail",
-            encryptedInputHex: "ABCD",
-            outputOpening: signedPayload.opening,
+            try .claim(policyId: "email#retail", normalizedInput: "private@example.org", inputNonceHex: String(repeating: "12", count: 32), outputOpening: signedPayload.opening),
             canonicalAuth: canonicalReadAuth
         )
         XCTAssertEqual(receipt?.resolvedAtMs, 42)
         XCTAssertEqual(receipt?.expiresAtMs, 142)
-        XCTAssertEqual(receipt?.payload.policyId, "phone#retail")
+        XCTAssertEqual(receipt?.payload.policyId, "email#retail")
         XCTAssertEqual(receipt?.payload.opaqueId, opaqueId)
         XCTAssertEqual(receipt?.payload.receiptHash, receiptHash)
         XCTAssertEqual(receipt?.payload.uaid, uaid)
@@ -4160,13 +4172,14 @@ final class ToriiClientTests: XCTestCase {
         let receiptHash = String(repeating: "55", count: 32)
         let uaid = "uaid:\(String(repeating: "66", count: 31))67"
         let signedPayload = makeSignedIdentifierReceiptPayload(
+            policyId: "email#retail",
             accountId: accountId,
             opaqueId: opaqueId,
             receiptHash: receiptHash,
             uaid: uaid,
-            backend: "bfv-affine-v1",
+            backend: "hkdf-sha3-512-prf-v1",
             resolvedAtMs: 7,
-            expiresAtMs: nil
+            expiresAtMs: 77
         )
         let signed = try signedIdentifierReceiptFixture(payload: signedPayload)
         StubURLProtocol.handler = { request in
@@ -4176,8 +4189,10 @@ final class ToriiClientTests: XCTestCase {
             )
             XCTAssertEqual(request.httpMethod, "POST")
             let payload = self.bodyJSON(from: request)
-            XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
-            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
+            XCTAssertEqual(payload["policy_id"] as? String, "email#retail")
+            XCTAssertNil(payload["encrypted_input"])
+            XCTAssertEqual(payload["normalized_input"] as? String, "private@example.org")
+            XCTAssertEqual(payload["input_nonce"] as? String, String(repeating: "12", count: 32))
             XCTAssertNotNil(payload["output_opening"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -4192,9 +4207,7 @@ final class ToriiClientTests: XCTestCase {
 
         let receipt = try await makeClient().issueIdentifierClaimReceipt(
             accountId: accountId,
-            policyId: "phone#retail",
-            encryptedInputHex: "ABCD",
-            outputOpening: signedPayload.opening,
+            requestBody: try .claim(policyId: "email#retail", normalizedInput: "private@example.org", inputNonceHex: String(repeating: "12", count: 32), outputOpening: signedPayload.opening),
             canonicalAuth: canonicalReadAuth(accountId: accountId, privateKeyByte: 1)
         )
         XCTAssertEqual(receipt?.opaqueId, opaqueId)
@@ -4213,11 +4226,12 @@ final class ToriiClientTests: XCTestCase {
         let associatedDataHash = String(repeating: "34", count: 31) + "35"
         let uaid = "uaid:\(String(repeating: "cc", count: 31))cd"
         let signedPayload = makeSignedIdentifierReceiptPayload(
+            policyId: "email#retail",
             accountId: accountId,
             opaqueId: opaqueId,
             receiptHash: receiptHash,
             uaid: uaid,
-            backend: "bfv-programmed-v1",
+            backend: "hkdf-sha3-512-prf-v1",
             programDigestHex: programDigest,
             outputHashHex: outputHash,
             associatedDataHashHex: associatedDataHash,
@@ -4244,14 +4258,12 @@ final class ToriiClientTests: XCTestCase {
 
         let receipt = try await makeClient().issueIdentifierClaimReceipt(
             accountId: accountId,
-            policyId: "phone#retail",
-            encryptedInputHex: "ABCD",
-            outputOpening: signedPayload.opening,
+            requestBody: try .claim(policyId: "email#retail", normalizedInput: "private@example.org", inputNonceHex: String(repeating: "12", count: 32), outputOpening: signedPayload.opening),
             canonicalAuth: canonicalReadAuth(accountId: accountId, privateKeyByte: 1)
         )
         XCTAssertEqual(receipt?.resolvedAtMs, 7)
         XCTAssertEqual(receipt?.expiresAtMs, 77)
-        XCTAssertEqual(receipt?.payload.policyId, "phone#retail")
+        XCTAssertEqual(receipt?.payload.policyId, "email#retail")
         XCTAssertEqual(receipt?.payload.opaqueId, opaqueId)
         XCTAssertEqual(receipt?.payload.receiptHash, receiptHash)
         XCTAssertEqual(receipt?.payload.uaid, uaid)
@@ -4265,22 +4277,18 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testIssueIdentifierClaimReceiptRejectsPathAccountSubstitutionBeforeDispatch() async throws {
-        let accountId = try canonicalOwnerLiteral()
-        StubURLProtocol.handler = { _ in
-            XCTFail("path/account substitution must fail before dispatch")
-            throw URLError(.badURL)
+    func testIssueIdentifierClaimReceiptAllowsIndependentBeneficiary() async throws {
+        let beneficiary = try canonicalOwnerLiteral()
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/accounts/\(beneficiary)/identifiers/claim-receipt")
+            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount), try AccountAddress.parseEncoded(self.authority).canonicalHex())
+            let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: [:])!
+            return (response, Data())
         }
-
-        await assertToriiInvalidPayload(contains: "claim-receipt path accountId") {
-            _ = try await makeClient().issueIdentifierClaimReceipt(
-                accountId: accountId,
-                policyId: "phone#retail",
-                encryptedInputHex: "ABCD",
-                outputOpening: sampleOpening(),
-                canonicalAuth: canonicalReadAuth
-            )
-        }
+        let request = try ToriiIdentifierLookupRequest.claim(policyId: "email#retail", normalizedInput: "private@example.org", inputNonceHex: String(repeating: "12", count: 32), outputOpening: sampleOpening())
+        XCTAssertNotEqual(beneficiary, canonicalReadAuth.accountId)
+        let receipt = try await makeClient().issueIdentifierClaimReceipt(accountId: beneficiary, requestBody: request, canonicalAuth: canonicalReadAuth)
+        XCTAssertNil(receipt)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -4299,7 +4307,7 @@ final class ToriiClientTests: XCTestCase {
             let body = """
             {
               "policy_id":"phone#retail",
-              "opaque_id":"opaque:\(String(repeating: "44", count: 32))",
+              "opaque_id":"opaque:\(String(repeating: "44", count: 31))45",
               "receipt_hash":"\(String(repeating: "55", count: 32))",
               "uaid":"uaid:\(String(repeating: "66", count: 31))67",
               "account_id":"\(accountId)",
@@ -4319,7 +4327,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetIdentifierClaimByReceiptHashRejectsNonExactClaimFieldsAsync() async throws {
         let accountId = try canonicalOwnerLiteral()
         let receiptHash = String(repeating: "55", count: 32)
-        let opaqueId = "opaque:\(String(repeating: "44", count: 32))"
+        let opaqueId = "opaque:\(String(repeating: "44", count: 31))45"
         let uaid = "uaid:\(String(repeating: "66", count: 31))67"
 
         func claimRecordJSON(policyId: String = "phone#retail",
@@ -4422,15 +4430,11 @@ final class ToriiClientTests: XCTestCase {
             "4e52543000001042e5b988077612440e4cd45673596b00b004000000000000dd479e32bf99dbd000a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002dac6c00000000000800000000000000440e92000000000008000000000000005b2600000000000008000000000000004a681100000000000800000000000000bc3d2300000000000800000000000000413e85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ee894300000000000800000000000000dd22b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006a969b00000000000800000000000000ddd4410000000000080000000000000051076600000000000800000000000000ef14ae00000000002001000000000000880000000000000008000000000000000800000000000000d86c690000000000080000000000000093070e0000000000080000000000000033067500000000000800000000000000ddc5190000000000080000000000000062ea230000000000080000000000000056f00a00000000000800000000000000ab51d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f2204400000000000800000000000000c9ecd2000000000008000000000000001dfc5b00000000000800000000000000d16d660000000000080000000000000016ec0e000000000008000000000000003def83000000000008000000000000006e7ff900000000000800000000000000c1fabb00000000002001000000000000880000000000000008000000000000000800000000000000c8c6eb00000000000800000000000000c9c14800000000000800000000000000f01f8700000000000800000000000000aed22c000000000008000000000000006122990000000000080000000000000036ad8c00000000000800000000000000d1429300000000000800000000000000891f6d0000000000880000000000000008000000000000000800000000000000417eed00000000000800000000000000d79c34000000000008000000000000009f322c0000000000080000000000000091fe5700000000000800000000000000533ce8000000000008000000000000005db8df00000000000800000000000000a8c313000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005d884400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006d1d1a000000000008000000000000007050c200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000cbfa290000000000080000000000000057477300000000000800000000000000608f9200000000000800000000000000f5f5dd00000000000800000000000000445b3b00000000000800000000000000999e690000000000"
 
         XCTAssertEqual(try DiagnosticIdentifierBfvEnvelopeBuilder.encrypt(policy: policy, input: "ab", seedHex: seedHex), expected)
-        let request = try policy.encryptedRequest(
-            encryptedInputHex: expected,
-            outputOpening: sampleOpening()
-        )
-        XCTAssertEqual(request.policyId, "string#retail")
-        XCTAssertEqual(request.encryptedInputHex, expected)
+        XCTAssertThrowsError(try policy.prepareRequest(normalizedInput: "ab", inputNonceHex: String(repeating: "12", count: 32)))
+
     }
 
-    func testPublicIdentifierEncryptionIsUnavailableBeforeInputHandling() throws {
+    func testCurrentOwnerFactoriesRejectRetiredBfvPolicy() throws {
         let policy = ToriiIdentifierPolicySummary(
             policyId: "malformed",
             programId: "identifier_lookup_retail",
@@ -4447,18 +4451,8 @@ final class ToriiClientTests: XCTestCase {
             proofVerifier: nil,
             note: nil
         )
-        for call in [
-            { _ = try policy.encryptInput("invalid\0plaintext") },
-            { _ = try policy.encryptedRequest(input: "invalid\0plaintext", outputOpening: self.sampleOpening()) },
-            { _ = try ToriiIdentifierLookupRequest.encrypted(policy: policy, input: "invalid\0plaintext", outputOpening: self.sampleOpening()) },
-        ] {
-            XCTAssertThrowsError(try call()) { error in
-                guard case ToriiClientError.ramLfeEncryptionUnavailable = error else {
-                    return XCTFail("expected typed unavailable error before input handling, got \(error)")
-                }
-                XCTAssertTrue(error.localizedDescription.contains("ram_lfe_encryption_unavailable"))
-            }
-        }
+        XCTAssertThrowsError(try policy.prepareRequest(normalizedInput: "invalid\0plaintext", inputNonceHex: String(repeating: "12", count: 32)))
+        XCTAssertThrowsError(try policy.claimRequest(normalizedInput: "invalid\0plaintext", inputNonceHex: String(repeating: "12", count: 32), outputOpening: sampleOpening()))
     }
 
     func testIdentifierBfvEnvelopeBuilderRejectsOverwideInputProfile() throws {

@@ -53,8 +53,9 @@ mod native_owner;
 mod native_worker;
 mod policy_custody;
 pub use native_owner::{
-    NativeInstallationConfigV1, NativeOpenErrorV1, NativeOpenFailureV1, NativeOperationReviewV1,
-    NativeStartupFailureV1, NativeWalletCoordinatorV1, NativeWalletProofsV1, NativeWalletRuntimeV1,
+    NativeEnrollmentOperationV1, NativeInstallationConfigV1, NativeOpenErrorV1,
+    NativeOpenFailureV1, NativeOperationReviewV1, NativeStartupFailureV1,
+    NativeWalletCoordinatorV1, NativeWalletProofsV1, NativeWalletRuntimeV1,
     PendingNativeWalletOpenV1, ReviewedOperationV1,
 };
 mod preparation_custody;

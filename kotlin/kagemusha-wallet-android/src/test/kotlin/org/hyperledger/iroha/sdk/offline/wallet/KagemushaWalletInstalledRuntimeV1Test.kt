@@ -2,9 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 package org.hyperledger.iroha.sdk.offline.wallet
 
+import java.util.concurrent.CancellationException
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.testing.JvmApiInventory
 import org.junit.jupiter.api.Test
@@ -29,7 +34,7 @@ class KagemushaWalletInstalledRuntimeV1Test {
         assertTrue(retained.toString().contains("[REDACTED]"))
     }
 
-    @Test fun `every original is mandatory and financial absence is refused`() {
+    @Test fun `all seven originals are mandatory including the complete financial trio`() {
         for (role in 0..6) {
             val values = MutableList(7) { byteArrayOf(1) }
             values[role] = byteArrayOf()
@@ -46,6 +51,60 @@ class KagemushaWalletInstalledRuntimeV1Test {
                 values.forEachIndexed { role, bytes -> assertContentEquals(bytes, retained[role]) }
             } else assertFailsWith<IllegalArgumentException> { originals(values) }
         }
+    }
+
+    @Test fun `installed enrollment failures retain the same pre-admission sequence`() {
+        val failure = IllegalStateException("native unavailable")
+        val admission = KagemushaWalletInstalledAdmissionV1 { }
+        var calls = 0
+        assertEquals(failure, assertFailsWith<IllegalStateException> {
+            admission.enrollment { calls++; throw failure }
+        })
+        assertEquals("retained original", admission.enrollment { calls++; "retained original" })
+        assertEquals(2, calls)
+        admission.start(List(4) { byteArrayOf(1) })
+        assertFailsWith<IllegalStateException> { admission.enrollment { calls++ } }
+        assertEquals(2, calls)
+    }
+
+    @Test fun `admission attempt permanently closes installed enrollment access`() {
+        val admission = KagemushaWalletInstalledAdmissionV1 { }
+        admission.start(List(4) { byteArrayOf(1) })
+        assertFailsWith<IllegalStateException> { admission.start(List(4) { byteArrayOf(1) }) }
+        var reachedNative = false
+        assertFailsWith<IllegalStateException> { admission.enrollment { reachedNative = true } }
+        assertEquals(false, reachedNative)
+    }
+
+    @Test fun `ordinary refusal retries exact original frames without reopening enrollment`() {
+        val admission = KagemushaWalletInstalledAdmissionV1 { }
+        val original = List(4) { byteArrayOf(it.toByte(), 7) }
+        admission.start(original)
+        original.forEach { it.fill(99) }
+        admission.failed()
+        val same = List(4) { byteArrayOf(it.toByte(), 7) }
+        assertFailsWith<IllegalStateException> { admission.start(List(4) { byteArrayOf(2) }) }
+        var reachedNative = false
+        assertFailsWith<IllegalStateException> { admission.enrollment { reachedNative = true } }
+        assertEquals(false, reachedNative)
+        admission.start(same)
+        assertFailsWith<IllegalStateException> { admission.start(same) }
+        admission.failed()
+        admission.start(same)
+        admission.completed()
+        assertFailsWith<IllegalStateException> { admission.start(same) }
+        assertFailsWith<IllegalStateException> { admission.failed() }
+    }
+
+    @Test fun `retired installed owner cannot enroll or start admission`() {
+        var retired = false
+        val admission = KagemushaWalletInstalledAdmissionV1 { check(!retired) { "retired" } }
+        assertEquals(7, admission.enrollment { 7 })
+        retired = true
+        var reachedNative = false
+        assertFailsWith<IllegalStateException> { admission.enrollment { reachedNative = true } }
+        assertFailsWith<IllegalStateException> { admission.start(List(4) { byteArrayOf(1) }) }
+        assertEquals(false, reachedNative)
     }
 
     @Test fun `each role is bounded before originals are retained`() {
@@ -81,5 +140,73 @@ class KagemushaWalletInstalledRuntimeV1Test {
         assertTrue(entry.isStatic)
         assertEquals("(Lorg/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletAndroidPlatformV1;[B[B[B[B[B[B[B)J",
             entry.descriptor)
+    }
+
+    @Test fun `bare exceptional cancellation really activates a cancellation observer`() {
+        val result = CompletableFuture<String>()
+        var observations = 0
+        result.whenComplete { _, _ -> if (result.isCancelled) observations++ }
+        assertTrue(result.completeExceptionally(CancellationException("ordinary producer refusal")))
+        assertTrue(result.isCancelled)
+        assertEquals(1, observations)
+    }
+
+    @Test fun `ordinary cancellation preserves exact failure and permits the same admission sequence`() {
+        val frames = List(4) { byteArrayOf(it.toByte(), 7) }
+        val admission = KagemushaWalletInstalledAdmissionV1 { }
+        admission.start(frames)
+        val original = CancellationException("ordinary producer refusal")
+        val evidence = IllegalStateException("original diagnostic")
+        original.addSuppressed(evidence)
+        val result = CompletableFuture<String>()
+        var observations = 0
+        result.whenComplete { _, _ -> if (result.isCancelled) observations++ }
+        admission.failed()
+        assertTrue(completeInstalledOpenFailureV1(result, original))
+        assertFalse(result.isCancelled)
+        assertTrue(result.isCompletedExceptionally)
+        assertEquals(0, observations)
+        assertSame(original, assertFailsWith<CompletionException> { result.join() }.cause)
+        assertSame(evidence, original.suppressed.single())
+        admission.start(frames)
+        admission.completed()
+        assertFailsWith<IllegalStateException> { admission.start(frames) }
+    }
+
+    @Test fun `cancelled producer future does not cancel the returned admission future`() {
+        val producer = CompletableFuture<ByteArray>()
+        assertTrue(producer.cancel(false))
+        val ordinary = assertFailsWith<CancellationException> { producer.join() }
+        val result = CompletableFuture<String>()
+        var observations = 0
+        result.whenComplete { _, _ -> if (result.isCancelled) observations++ }
+        assertTrue(completeInstalledOpenFailureV1(result, ordinary))
+        assertFalse(result.isCancelled)
+        assertEquals(0, observations)
+        assertSame(ordinary, assertFailsWith<CompletionException> { result.join() }.cause)
+    }
+
+    @Test fun `explicit returned future cancellation still wins over queued ordinary refusal`() {
+        val result = CompletableFuture<String>()
+        var observations = 0
+        result.whenComplete { _, _ -> if (result.isCancelled) observations++ }
+        assertTrue(result.cancel(false))
+        assertTrue(result.isCancelled)
+        assertEquals(1, observations)
+        assertFalse(completeInstalledOpenFailureV1(result, CancellationException("late producer refusal")))
+        assertTrue(result.isCancelled)
+        assertEquals(1, observations)
+        assertFailsWith<CancellationException> { result.join() }
+    }
+
+    @Test fun `completed ordinary refusal cannot later become explicit cancellation`() {
+        val result = CompletableFuture<String>()
+        assertTrue(completeInstalledOpenFailureV1(result, CancellationException("ordinary guard refusal")))
+        assertFalse(result.cancel(false))
+        assertFalse(result.isCancelled)
+        val other = IllegalStateException("ordinary Native refusal")
+        val failed = CompletableFuture<String>()
+        assertTrue(completeInstalledOpenFailureV1(failed, other))
+        assertSame(other, assertFailsWith<CompletionException> { failed.join() }.cause)
     }
 }

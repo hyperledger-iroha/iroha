@@ -57,7 +57,7 @@ def configure(plan):
     """Bind deployment-owned public paths once, before any guest observation."""
     global BOUND, BASE, OLD, CANDIDATE_COMMIT, CONFIG_RELEASE, PREVIOUS_DAEMON, DAEMON, CLI, KAGAMI
     global ATTEMPT, NETWORK, ROLES, UNITS, REPLAY_BARRIER, PUBLIC_ORIGIN
-    global STATE_ROOT, CONFIG_ROOT, GENESIS_MANIFEST, PORTS, PREDECESSOR
+    global STATE_ROOT, CONFIG_ROOT, GENESIS_MANIFEST, PORTS, PREDECESSOR, CONFIG_FILENAME, INITIAL_DAEMONS, KURA_HASH_JOURNAL
     need(not BOUND, 'one deployment per guest process')
     reject_retired_worker_plan(plan)
     deployment = plan['deployment']
@@ -66,11 +66,17 @@ def configure(plan):
     CONFIG_ROOT = Path(deployment['config_root'])
     GENESIS_MANIFEST = Path(deployment['genesis_manifest'])
     CONFIG_RELEASE = deployment['config_release']
+    CONFIG_FILENAME = deployment.get('config_filename', 'config.toml')
+    KURA_HASH_JOURNAL = deployment.get('kura_hash_journal', 'storage/kura/blocks/canonical/blocks.hashes')
+    need(KURA_HASH_JOURNAL in ('storage/blocks/canonical/blocks.hashes',
+                              'storage/kura/blocks/canonical/blocks.hashes'),
+         'explicit canonical Kura hash journal required')
     PREDECESSOR = deployment['current']
     installed = plan.get('failed_start', {}).get('installed', PREDECESSOR)
     OLD = installed['commit']
     CANDIDATE_COMMIT = plan['commit']
-    PREVIOUS_DAEMON = Path(installed['daemon'])
+    INITIAL_DAEMONS = installed.get('daemons', {})
+    PREVIOUS_DAEMON = Path(installed['daemon']) if not INITIAL_DAEMONS else None
     DAEMON = BASE / ('release-' + plan['commit'] + '-' + plan['operation']) / 'bin/iroha3d_taira'
     CLI = DAEMON.with_name('iroha')
     KAGAMI = DAEMON.with_name('kagami')
@@ -101,11 +107,15 @@ def validate_update_plan_shape(plan):
     optional = {'failed_start', 'build_result_path', 'build_result_sha256'}
     need(isinstance(plan, dict) and required <= set(plan) <= required | optional,
          'update plan fields differ from the canonical contract')
-    need(plan['schema'] == 'taira.daemon-update.plan.v1'
+    need(plan['schema'] in ('taira.daemon-update.plan.v1', 'taira.daemon-update.plan.v2')
          and ('build_result_path' in plan) == ('build_result_sha256' in plan)
          and all(plan[field] is False for field in
                  ('secret_contents_read', 'transaction_submission', 'python_transaction_submission')),
          'update plan schema or read-only custody claims differ')
+    need((plan['schema'].endswith('.v2')) == (plan['deployment']['schema'] == 'taira.runtime-deployment.v2'),
+         'update and deployment versions differ')
+    need(not (plan['schema'].endswith('.v2') and 'failed_start' in plan),
+         'v2 failed starts require explicit reconciliation; v1 lineage is not reused')
 
 
 def load_capacity(plan, capacity_source):
@@ -489,9 +499,19 @@ def unit_command(raw):
     return values[0]
 
 
+def previous_daemon(role, *, resolved=False):
+    if INITIAL_DAEMONS:
+        return Path(INITIAL_DAEMONS[role]['resolved' if resolved else 'command'])
+    return PREVIOUS_DAEMON
+
+
+def retained_config(role):
+    return CONFIG_ROOT / role / 'releases' / CONFIG_RELEASE / 'config' / CONFIG_FILENAME
+
+
 def replace_daemon(raw, role):
-    old = str(PREVIOUS_DAEMON)
-    cmd = [old, '--config', str(CONFIG_ROOT / role / 'current/config/config.toml'), '--sora']
+    old = str(previous_daemon(role))
+    cmd = [old, '--config', str(CONFIG_ROOT / role / 'current/config' / CONFIG_FILENAME), '--sora']
     need(unit_command(raw) == cmd and raw.count(old.encode()) == 1, 'old unit command differs')
     changed = raw.replace(old.encode(), str(DAEMON).encode(), 1)
     need(unit_command(changed) == [str(DAEMON), *cmd[1:]], 'new unit command differs')
@@ -591,8 +611,8 @@ def retained_identity(row, *, after=False):
     release = CONFIG_ROOT / role / 'releases' / CONFIG_RELEASE
     selector = CONFIG_ROOT / role / 'current'
     need(os.readlink(selector) == str(release), 'current selector changed: ' + role)
-    expected_exe = str(DAEMON if after else PREVIOUS_DAEMON)
-    config = release / 'config/config.toml'
+    expected_exe = str(DAEMON if after else previous_daemon(role, resolved=True))
+    config = retained_config(role)
     need(Path(cmd[2]).resolve() == config, 'config resolution changed: ' + role)
     return {'role': role, 'unit_stamp': stamp(fragment),
             'config_stamp': stamp(config),
@@ -683,7 +703,9 @@ def snapshot_events(role, invocation):
                'Failed to create a snapshot of state|Deferring snapshot until commit evidence is complete|'
                'Successfully loaded the state from a snapshot|Validated snapshot block hashes against Kura|'
                'Failed to load state snapshot|creating an empty state|Snapshot restore is disabled|'
-               'emergency Fast|Replaying authenticated complete Kura prefix')
+               'emergency Fast|Replaying authenticated complete Kura prefix|'
+               'Kura retains the configured-primary replay floor; rebuilding state from blocks|'
+               'Sumeragi rebuilt the state from genesis and Kura')
     query = subprocess.run(['/usr/bin/journalctl', '--no-pager', '-o', 'json', '-n', '64',
                             '-u', f'iroha3d-{role}.service', '_SYSTEMD_INVOCATION_ID=' + invocation,
                             '--grep=' + pattern], stdin=subprocess.DEVNULL,
@@ -709,7 +731,7 @@ def snapshot_events(role, invocation):
 def native_kura_tip(role):
     # Exact observed chain-scoped hash journal; native tail/od project only the
     # final public 32-byte block hash. No ledger/state payload enters Python.
-    path = STATE_ROOT / role / 'storage/kura/blocks/canonical/blocks.hashes'
+    path = STATE_ROOT / role / KURA_HASH_JOURNAL
     before = stamp(path)
     need(before[6] >= 32 and before[6] % 32 == 0, 'canonical Kura hash journal size differs')
     tail = subprocess.Popen(['/usr/bin/tail', '-c', '32', str(path)],
@@ -734,7 +756,7 @@ def native_kura_tip(role):
 def native_kura_hash(role, height):
     """Project one retained public hash; native tools alone read the journal."""
     need(role in ROLES and type(height) is int and height > 0, 'invalid retained Kura height')
-    path = STATE_ROOT / role / 'storage/kura/blocks/canonical/blocks.hashes'
+    path = STATE_ROOT / role / KURA_HASH_JOURNAL
     before = stamp(path)
     need(before[6] >= height * 32, 'retained Kura height is missing')
     reader = subprocess.Popen(['/usr/bin/dd', 'if=' + str(path), 'bs=32',
@@ -829,9 +851,40 @@ def checkpoint_barrier(observation, *, stopped=False, prior=None):
             'standalone_native_manifest_verification': False}
 
 
-def verify_restored_checkpoint(observation, checkpoint):
+def authenticated_kura_replay_height(events):
+    """Recognize only the native policy-required, completed certified replay path.
+
+    irohad admits this fallback only outside emergency Fast, after the complete
+    configured-primary prefix preflight. Sumeragi node::prepare then executes
+    stored signed genesis and every block against its commit QC and World roots
+    before emitting the completion event or installing Ready runtime services.
+    """
+    failed = [e for e in events if 'Failed to load state snapshot' in e['message']]
+    begun = [e for e in events if 'Kura retains the configured-primary replay floor; rebuilding state from blocks' in e['message']]
+    completed = [e for e in events if 'Sumeragi rebuilt the state from genesis and Kura' in e['message']]
+    need(len(failed) == len(begun) == len(completed) == 1
+         and re.search(r'\berror=NativeExecutionReplayRequired\s*$', failed[0]['message'])
+         and all(type(e.get('time_us')) is int and e['time_us'] > 0 for e in (failed[0], begun[0], completed[0]))
+         and failed[0]['time_us'] <= begun[0]['time_us'] <= completed[0]['time_us'],
+         'native authenticated Kura replay sequence is missing or differs')
+    forbidden = ('creating an empty state', 'Snapshot restore is disabled', 'emergency Fast',
+                 'Successfully loaded the state from a snapshot', 'Validated snapshot block hashes against Kura')
+    need(not any(any(text in e['message'] for text in forbidden) for e in events),
+         'native replay has a foreign or mixed startup mode')
+    heights = [word.removeprefix('height=') for word in completed[0]['message'].split()
+               if word.startswith('height=')]
+    need(len(heights) == 1 and heights[0] and all('0' <= digit <= '9' for digit in heights[0])
+         and int(heights[0]) > 0, 'native replay completion height is absent or malformed')
+    return int(heights[0])
+
+
+def verify_restored_checkpoint(observation, checkpoint, *, allow_authenticated_replay=False):
     events = snapshot_events(observation['role'], observation['systemd']['InvocationID'])
-    height, _loaded = strict_snapshot_height(events)
+    replay = allow_authenticated_replay and any('error=NativeExecutionReplayRequired' in e['message'] for e in events)
+    if replay:
+        height = authenticated_kura_replay_height(events)
+    else:
+        height, _loaded = strict_snapshot_height(events)
     need(height >= max(REPLAY_BARRIER, checkpoint['checkpoint_height']),
          'new runtime snapshot restoration height is below the retained barrier')
     need(observation['public']['height'] >= checkpoint['kura_tip']['height'],
@@ -842,8 +895,58 @@ def verify_restored_checkpoint(observation, checkpoint):
             start = re.search(r'\bstart_height=(\d+)\b', event['message'])
             need(start and int(start[1]) > height,
                  'historical replay crosses the authenticated retained checkpoint')
-    return {'role': observation['role'], 'restored_height': height,
-            'native_strict_checkpoint_verified': True, 'events': events}
+    result = {'role': observation['role'], 'restored_height': height,
+              'native_strict_checkpoint_verified': not replay, 'events': events}
+    if replay:
+        need(height >= checkpoint['kura_tip']['height']
+             and height <= observation['public']['height']
+             and observation['public']['network_id'] == NETWORK
+             and observation['cohort_observation']['ready'] is True
+             and observation['cohort_observation']['public_fresh'] is True,
+             'native replay does not join the exact Ready retained runtime')
+        result.update(proof_kind='native_authenticated_kura_replay',
+                      native_authenticated_kura_replay_verified=True,
+                      retained_kura_tip=checkpoint['kura_tip'],
+                      source_commit=observation['public']['commit'], network_id=NETWORK)
+    return result
+
+
+def require_retained_restore_proof(restored, stopped, *, source, network, allow_authenticated_replay=False):
+    if restored.get('native_strict_checkpoint_verified') is True:
+        need(not {'proof_kind', 'native_authenticated_kura_replay_verified', 'retained_kura_tip',
+                  'source_commit', 'network_id'}.intersection(restored),
+             'Strict restore receipt cannot claim native replay')
+        return True
+    need(allow_authenticated_replay
+         and restored.get('native_strict_checkpoint_verified') is False
+         and restored.get('native_authenticated_kura_replay_verified') is True
+         and restored.get('proof_kind') == 'native_authenticated_kura_replay'
+         and restored.get('source_commit') == source and restored.get('network_id') == network
+         and restored.get('role') == stopped['role']
+         and restored.get('retained_kura_tip') == stopped['kura_tip'],
+         'predecessor Strict restoration is not verified and no exact native replay proof exists')
+    height = authenticated_kura_replay_height(restored.get('events', []))
+    need(type(restored.get('restored_height')) is int and restored['restored_height'] == height
+         and height >= max(stopped['checkpoint_height'], stopped['kura_tip']['height']),
+         'retained native replay height differs')
+    return False
+
+
+def require_completed_restore_modes(completed, strict_modes, *, modern):
+    need(len(strict_modes) == 4 and all(type(mode) is bool for mode in strict_modes),
+         'completed restore cohort is not exact')
+    all_strict = all(strict_modes)
+    need(completed.get('retained_native_snapshot_verified') is all_strict,
+         'completed snapshot verification contradicts native proofs')
+    if modern:
+        expected = ['native_strict_restore' if strict else 'native_authenticated_kura_replay'
+                    for strict in strict_modes]
+        need(completed.get('retained_native_state_verified') is True
+             and completed.get('native_recovery_modes') == expected
+             and completed.get('historical_genesis_replay_supported') is (not all_strict),
+             'completed native state or recovery modes contradict native proofs')
+    else:
+        need(all_strict, 'legacy predecessor requires Strict restore')
 
 
 def install_unit(path, raw, expected, mode):
@@ -1176,9 +1279,110 @@ def retained_public_record(directory, name, digest=None, budget=None):
     return json.loads(raw)
 
 
+def validate_installation_observation(value, deployment):
+    """A first observation has no previous upgrade or checkpoint claim."""
+    need(set(value) == {'schema', 'commit', 'network_id', 'renderer_sha256', 'units',
+                       'observations', 'secret_contents_read', 'runtime_mutated'}
+         and value['schema'] == 'taira.installed-cohort-observation.v1'
+         and value['commit'] == deployment['current']['commit']
+         and value['network_id'] == deployment['network_id']
+         and value['renderer_sha256'] == deployment['renderer_sha256']
+         and value['secret_contents_read'] is False and value['runtime_mutated'] is False,
+         'first-adoption observation contract differs')
+    roles = deployment['roles']
+    need([row['role'] for row in value['units']] == roles
+         and [row['role'] for row in value['observations']] == roles,
+         'first-adoption observation lacks exact cohort')
+    for row, observed in zip(value['units'], value['observations'], strict=True):
+        need(set(row) == {'role', 'installed', 'installed_sha256'}, 'observed unit fields differ')
+        raw = base64.b64decode(row['installed'], validate=True)
+        need(len(raw) <= 128 * 1024 and hashlib.sha256(raw).hexdigest() == row['installed_sha256'],
+             'observed unit digest differs')
+        expected = deployment['current']['daemons'][row['role']]
+        need(unit_command(raw) == [expected['command'], '--config',
+             str(Path(deployment['config_root']) / row['role'] / 'current/config' / deployment['config_filename']),
+             '--sora'], 'observed unit command differs')
+        need(set(observed) == {'role', 'unit_stamp', 'config_stamp', 'state_root_identity',
+                              'current_target', 'executable', 'systemd', 'public', 'daemon_stamp'}
+             and observed['executable'] == expected['resolved']
+             and observed['public']['commit'] == value['commit']
+             and observed['public']['network_id'] == value['network_id']
+             and type(observed['public']['height']) is int
+             and observed['public']['height'] >= deployment['replay_floor']
+             and len(observed['config_stamp']) == len(observed['daemon_stamp']) == 9,
+             'observed process, public identity or custody differs')
+
+
+def verify_initial_daemon(role):
+    expected = INITIAL_DAEMONS[role]
+    path = Path(expected['resolved'])
+    need(Path(expected['command']).resolve() == path, 'observed daemon selector changed')
+    identity = stamp(path)
+    need(identity[6] == expected['size'] and native_digest(path) == expected['sha256']
+         and stamp(path) == identity, 'observed installed daemon identity differs')
+    return identity
+
+
+def capture_installation(request):
+    """Read public units/native status and private metadata under the lifecycle lock."""
+    deployment = request['deployment']
+    need(deployment['schema'] == 'taira.runtime-deployment.v2'
+         and deployment['current']['kind'] == 'observed-installation',
+         'capture requires the explicit initial deployment schema')
+    with deployment_locks(request):
+        configure(request)
+        rows, observations = [], []
+        for role in ROLES:
+            fragment = Path('/etc/systemd/system') / f'iroha3d-{role}.service'
+            before = stamp(fragment)
+            need(before[6] <= 128 * 1024, 'public unit exceeds bound')
+            raw = fragment.read_bytes()
+            need(stamp(fragment) == before, 'public unit changed during capture')
+            replace_daemon(raw, role)  # Validate the exact existing command, without writing.
+            encoded = base64.b64encode(raw).decode()
+            row = {'role':role, 'before':encoded}
+            observed = observe(row, expected_commit=OLD, minimum_height=REPLAY_BARRIER)
+            observed['daemon_stamp'] = verify_initial_daemon(role)
+            need(observed['unit_stamp'] == before, 'public unit changed during observation')
+            rows.append({'role':role, 'installed':encoded, 'installed_sha256':hashlib.sha256(raw).hexdigest()})
+            observations.append(observed)
+        result = {'schema':'taira.installed-cohort-observation.v1', 'commit':OLD,
+                  'network_id':NETWORK, 'renderer_sha256':deployment['renderer_sha256'],
+                  'units':rows, 'observations':observations,
+                  'secret_contents_read':False, 'runtime_mutated':False}
+        validate_installation_observation(result, deployment)
+        print(json.dumps(result), flush=True)
+
+
 def retained_attempt(plan):
     """Verify completion separately from an explicitly authenticated failed installation."""
     prior = plan['retained_predecessor']
+    if PREDECESSOR.get('kind') == 'observed-installation':
+        need(plan['schema'] == 'taira.daemon-update.plan.v2' and 'failed_start' not in plan
+             and set(prior) == {'schema', 'observation', 'observation_sha256'}
+             and prior['schema'] == 'taira.observed-installation-predecessor.v1',
+             'first adoption requires its explicit observed predecessor')
+        observation = prior['observation']
+        need(hashlib.sha256(json.dumps(observation, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+             == prior['observation_sha256'], 'installed observation digest differs')
+        validate_installation_observation(observation, plan['deployment'])
+        before, checkpoints = [], []
+        for original, row, captured in zip(observation['units'], plan['units'], observation['observations'], strict=True):
+            need(original['installed'] == row['before'] and original['installed_sha256'] == row['before_sha256'],
+                 'adoption changed the observed unit')
+            fresh = observe(row, expected_commit=OLD, minimum_height=captured['public']['height'])
+            compare_retained_identity(captured, fresh)
+            need(captured['unit_stamp'] == fresh['unit_stamp']
+                 and captured['systemd']['InvocationID'] == fresh['systemd']['InvocationID']
+                 and captured['systemd']['MainPID'] == fresh['systemd']['MainPID'],
+                 'observed validator process or unit changed before adoption')
+            need(verify_initial_daemon(row['role']) == captured['daemon_stamp'],
+                 'observed daemon custody changed before adoption')
+            before.append(fresh)
+            # This is genuine current native evidence, never a claimed previous
+            # update checkpoint. The stopped barrier is captured again below.
+            checkpoints.append(checkpoint_barrier(fresh))
+        return before, checkpoints
     need(prior['attempt_name'] == PREDECESSOR['attempt_name'], 'installed predecessor required')
     directory = BASE / prior['attempt_name']
     stamp(directory, True)
@@ -1204,13 +1408,14 @@ def retained_attempt(plan):
     need(all(row['public']['commit'] == PREDECESSOR['commit']
              and row['public']['network_id'] == NETWORK for row in before),
          'installed predecessor runtime differs')
-    need(all(row.get('native_strict_checkpoint_verified') is True for row in restored),
-         'predecessor Strict restoration is not verified')
+    strict_modes = [require_retained_restore_proof(recovered, checkpoint, source=PREDECESSOR['commit'],
+        network=NETWORK, allow_authenticated_replay=plan['schema'].endswith('.v2'))
+        for recovered, checkpoint in zip(restored, checkpoints, strict=True)]
     completed = public_record('result.json')
+    require_completed_restore_modes(completed, strict_modes, modern=plan['schema'].endswith('.v2'))
     need(completed.get('schema') == PREDECESSOR['result_schema']
          and completed.get('runtime_update_complete') is True
          and completed.get('state_preserved') is True
-         and completed.get('retained_native_snapshot_verified') is True
          and completed.get('commit') == PREDECESSOR['commit'] and completed.get('network_id') == NETWORK,
          'installed predecessor completion receipt differs')
     installed_plan = intent
@@ -1307,7 +1512,7 @@ def apply(plan, capacity_source):
         before.append(snapshot)
         write_new(ATTEMPT / (row['role'] + '.before.service'), raw)
         write_new(ATTEMPT / (f'iroha3d-{row["role"]}.service'), after, snapshot['unit_stamp'][2] & 0o7777)
-        config = CONFIG_ROOT / row['role'] / 'releases' / CONFIG_RELEASE / 'config/config.toml'
+        config = retained_config(row['role'])
         native_private_command([DAEMON, '--config', config, '--genesis-manifest-json',
                  GENESIS_MANIFEST, '--sora', '--check-config'],
                 timeout=90, name=f'check-config-{index+1}')
@@ -1368,7 +1573,8 @@ def apply(plan, capacity_source):
                                 minimum_heights=minimum_heights, sample_receipts=initial_samples)
         record('after.json', after)
         record('cohort-initial-quorum.json', {'samples': initial_samples})
-        restored = [verify_restored_checkpoint(row, checkpoint)
+        restored = [verify_restored_checkpoint(row, checkpoint,
+                    **({'allow_authenticated_replay': True} if plan['schema'].endswith('.v2') else {}))
                     for row, checkpoint in zip(after, checkpoints, strict=True)]
         record('checkpoint-restored.json', restored)
         # Public doctor is an independently invoked diagnostic. Deployment
@@ -1378,16 +1584,21 @@ def apply(plan, capacity_source):
                                 retained_tip=retained_tip, startup_processes=startup_processes,
                                 verified=after, minimum_heights=minimum_heights,
                                 sample_receipts=final_samples)
+        if any(row.get('native_authenticated_kura_replay_verified') is True for row in restored):
+            need(all(row['cohort_observation']['ready'] is True
+                     and row['cohort_observation']['public_fresh'] is True for row in final),
+                 'all four replayed runtime peers must remain freshly Ready')
         for observed, checkpoint in zip(final, checkpoints, strict=True):
             require_retained_tip(observed['role'], checkpoint['kura_tip'])
         record('cohort-ready.json', {'retained_tip': retained_tip, 'observations': final,
                                      'quorum_confirmations': final_samples,
                                      'startup_processes_unchanged': True})
         verify_cohort_processes(final, startup_processes)
-        result = {'schema': 'taira.daemon-update.result.v1', 'runtime_update_complete': True,
+        result = {'schema': ('taira.daemon-update.result.v2' if plan['schema'].endswith('.v2')
+                             else 'taira.daemon-update.result.v1'), 'runtime_update_complete': True,
                   'commit': plan['commit'], 'network_id': NETWORK, 'state_preserved': True,
                   'canary_applied_verified': False, 'application_ready': False,
-                  'retained_native_snapshot_verified': True,
+                  'retained_native_snapshot_verified': all(row['native_strict_checkpoint_verified'] for row in restored),
                   'cohort_retained_tip_verified': retained_tip,
                   'cohort_quorum': final_samples[-1],
                   'cohort_fresh_quorum_confirmations': len(final_samples),
@@ -1396,6 +1607,12 @@ def apply(plan, capacity_source):
                   'historical_genesis_replay_supported': False,
                   'historical_replay_limitation': 'Preserve the authenticated current snapshot at or after the deployment replay floor. No historical blocks were rewritten.',
                   'next_action': 'prove a fresh signed transaction Applied under the new runtime'}
+        if plan['schema'].endswith('.v2'):
+            result['retained_native_state_verified'] = True
+            result['native_recovery_modes'] = [row.get('proof_kind', 'native_strict_restore') for row in restored]
+            if not result['retained_native_snapshot_verified']:
+                result['historical_genesis_replay_supported'] = True
+                result['historical_replay_limitation'] = ('Native policy required reexecution of original signed genesis and every certified Kura block; the retained canonical prefix is unchanged. Snapshot cache bytes were not used as executed World authority.')
         record('result.json', result)
         print(json.dumps(result), flush=True)
     except BaseException as error:

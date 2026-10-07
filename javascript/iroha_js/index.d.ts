@@ -1385,13 +1385,7 @@ export interface IdentifierPolicyListResponse {
   items: ReadonlyArray<IdentifierPolicySummary>;
 }
 
-export type IdentifierPolicyClientSummary = Omit<
-  IdentifierPolicySummary,
-  "program_id" | "output_opening_public_key"
-> &
-  Partial<
-    Pick<IdentifierPolicySummary, "program_id" | "output_opening_public_key">
-  >;
+export type IdentifierPolicyClientSummary = IdentifierPolicySummary;
 
 export interface RamLfeOutputOpeningPayload {
   program_id: string;
@@ -1434,7 +1428,9 @@ export interface RamLfeExecutionReceipt {
 }
 
 export interface RamLfeExecuteOptions {
-  encryptedInput: string;
+  normalizedInput: string;
+  /** Exact nonzero lowercase raw32 nonce retained privately for the exchange. */
+  inputNonce: string;
   signal?: AbortSignal;
   canonicalAuth: CanonicalRequestAuth;
 }
@@ -1443,22 +1439,70 @@ export interface RamLfeExecuteResponse {
   program_id: string;
   opaque_hash: string;
   receipt_hash: string;
-  output_ciphertext: string;
+  /** Original full native ProgramId frame, uppercase hex, at most 4096 bytes. DATA only. */
+  program_id_canonical: string;
+  /** Current opaque32 owner output, exact uppercase hex. */
+  opaque_output: string;
   output_hash: string;
   associated_data_hash: string;
   executed_at_ms: number;
-  expires_at_ms: number | null;
-  backend: RamLfeBackend;
-  verification_mode: RamLfeVerificationMode;
+  expires_at_ms: number;
+  backend: "hkdf-sha3-512-prf-v1";
+  verification_mode: "signed";
   receipt: RamLfeExecutionReceipt;
 }
 
-export interface IdentifierResolutionRequestOptions {
+/** Exact original Model carrier from prepare. Public receipts use flat RamLfeOutputOpening. */
+export interface IdentifierOriginalOutputOpening {
+  payload: {
+    program_id: { name: string };
+    input_ciphertext_hash: string;
+    output_ciphertext_hash: string;
+    parameter_digest: string;
+    evaluation_key_digest: string;
+    opened_output_hash: string;
+    opened_at_ms: number;
+    expires_at_ms: number;
+  };
+  /** Exact uppercase Model signature bytes. */
+  signature: string;
+}
+export interface PhoneRetailCanonicalityPayloadV1 {
+  network_id: string;
+  policy_id: { kind: "phone"; business_rule: "retail" };
+  program_id: { name: "phone_retail" };
+  input_ciphertext_hash: string;
+  output_ciphertext_hash: string;
+  opened_output_hash: string;
+  canonical_phone_nullifier: string;
+  uaid: readonly [string];
+  account_id: string;
+  issued_at_ms: number;
+  expires_at_ms: number;
+}
+export interface PhoneRetailCanonicalityAttestationV1 {
+  payload: PhoneRetailCanonicalityPayloadV1;
+  signature: string;
+}
+export interface IdentifierPrepareRequestOptions {
   policyId: string;
-  encryptedInput: string;
-  outputOpening: RamLfeOutputOpening;
+  normalizedInput: string;
+  inputNonce: string;
   signal?: AbortSignal;
   canonicalAuth: CanonicalRequestAuth;
+}
+export interface IdentifierPrepareResponse {
+  network_id: string;
+  policy_id: string;
+  account_id: string;
+  uaid: string;
+  output_opening: IdentifierOriginalOutputOpening;
+  /** Unsigned input for the independent pinned phone attestor. */
+  phone_retail_canonicality_payload?: PhoneRetailCanonicalityPayloadV1;
+}
+export interface IdentifierResolutionRequestOptions extends IdentifierPrepareRequestOptions {
+  outputOpening: IdentifierOriginalOutputOpening;
+  phoneRetailCanonicality?: PhoneRetailCanonicalityAttestationV1;
 }
 
 export interface IdentifierResolutionReceiptPayload {
@@ -1476,6 +1520,7 @@ export interface IdentifierResolutionReceiptPayload {
 export interface IdentifierResolutionReceipt {
   payload: IdentifierResolutionReceiptPayload;
   attestation: RamLfeReceiptAttestation;
+  phone_retail_canonicality?: PhoneRetailCanonicalityAttestationV1;
 }
 
 export interface IdentifierClaimLookupResponse {
@@ -3159,14 +3204,18 @@ export class ToriiDataModelMismatchError extends Error {
 }
 
 export interface IdentifierRequestForPolicyOptions {
-  encryptedInput: string;
-  outputOpening: RamLfeOutputOpening;
+  normalizedInput: string;
+  inputNonce: string;
+  outputOpening: IdentifierOriginalOutputOpening;
+  phoneRetailCanonicality?: PhoneRetailCanonicalityAttestationV1;
+  networkId: NetworkId;
 }
-
 export interface IdentifierRequestForPolicy {
   policyId: string;
-  encryptedInput: string;
-  outputOpening: RamLfeOutputOpening;
+  normalizedInput: string;
+  inputNonce: string;
+  outputOpening: IdentifierOriginalOutputOpening;
+  phoneRetailCanonicality?: PhoneRetailCanonicalityAttestationV1;
 }
 
 export function encodeIdentifierResolutionReceiptPayload(payload: unknown): Buffer;
@@ -3191,9 +3240,11 @@ export function buildIdentifierRequestForPolicy(
   policySummary: IdentifierPolicyClientSummary,
   options: IdentifierRequestForPolicyOptions,
 ): IdentifierRequestForPolicy;
+/** Verify the resolver signature for an independently selected network. Core admission also checks policy, opener and independent phone authority. */
 export function verifyIdentifierResolutionReceipt(
   receipt: IdentifierResolutionReceipt,
   policySummary: IdentifierPolicyClientSummary,
+  intendedNetwork: NetworkId,
 ): boolean;
 
 type IrohaJsPublicApi = typeof import("./index.js");
@@ -10353,6 +10404,10 @@ export declare class ToriiClient {
     receiptHash: string,
     options?: { signal?: AbortSignal },
   ): Promise<IdentifierClaimLookupResponse | null>;
+  prepareIdentifierClaimReceipt(
+    accountId: string,
+    options: IdentifierPrepareRequestOptions,
+  ): Promise<IdentifierPrepareResponse | null>;
   issueIdentifierClaimReceipt(
     accountId: string,
     options: IdentifierResolutionRequestOptions,

@@ -15,9 +15,19 @@ use std::{
 
 mod platform;
 pub use platform::{CallbackPlatform, PlatformCallbacks, PlatformReply};
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 mod android;
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 pub use android::AndroidPlatform;
 mod closing;
 mod enrollment;
@@ -29,7 +39,9 @@ pub use enrollment::{
 pub use installed::WalletRuntimeOriginals;
 pub use installed::connect_norito_kagemusha_wallet_install_runtime_v1;
 pub(crate) mod open;
-pub use open::{NativeStartupFailure, retain_native_runtime, start_native_wallet};
+pub use open::{
+    NativeRegistrationRetry, NativeStartupFailure, retain_native_runtime, start_native_wallet,
+};
 pub(crate) mod requests;
 pub(crate) mod setup;
 mod transport;

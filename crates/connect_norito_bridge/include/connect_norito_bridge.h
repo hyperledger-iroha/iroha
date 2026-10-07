@@ -1908,7 +1908,8 @@ int32_t connect_norito_kagemusha_wallet_activity_v1(uint64_t handle, uint8_t for
 // Native lifecycle intent; no caller state, roots, proof, time or nonce. Selector meanings:
 // Load0(receipt,finality), Send1(Request), Receive2(Payment,credential,certificates),
 // Credential3/SchemePolicy4/Blacklist5/TimeAnchor6/QuotaShare7(update,certificates),
-// Unload8(optional quote+certificates, positive amount), Retire9(no originals).
+// Unload8(optional quote+certificates, positive amount), Retire9(no originals),
+// ReceiveFromOffer10(Payment,signed Offer). Native extracts the Offer payer originals.
 // Unused slots/amount are zero. request_id is a nonzero local retry identity.
 // Original bounds are selector-specific; Payment remains <=10,000 bytes.
 typedef struct {
@@ -1956,7 +1957,12 @@ int32_t connect_norito_kagemusha_wallet_resume_v1(uint64_t handle, connect_norit
 int32_t connect_norito_kagemusha_wallet_fold_v1(uint64_t handle, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_wallet_credit_status_v1(uint64_t handle, const uint8_t* credit32, const uint8_t* payment32, connect_norito_kagemusha_wallet_result_v1* out);
 
-/** Fixed Send/Unload Native intake: selector1/8; no foreign source identifiers. */
+/** Fixed Send/Unload Native intake: selector1/8; no foreign source identifiers.
+ * Send: amount0, first signed Request1..10000, second canonical AccountId1..4096.
+ * Native authenticates the complete Request, then canonical-decodes the singleEd25519
+ * account original and binds its Role::Account digest to that signed destination.
+ * Unload: nonzero amount, first optional quote1..1024 and second certificate1..10000;
+ * both Unload originals must be present or both absent. */
 typedef struct connect_norito_kagemusha_wallet_review_request_v1 {
   uint32_t selector;
   connect_norito_kagemusha_wallet_u128_v1 amount;
@@ -1966,11 +1972,14 @@ typedef struct connect_norito_kagemusha_wallet_review_request_v1 {
   size_t second_length;
 } connect_norito_kagemusha_wallet_review_request_v1;
 /** Authenticate only: separate result18, positive owner-local one-use token in sequence_low,
- * sequence_high/detail zero; exact491 DATA bytes KWORV1\0\0, operation1/8,
+ * sequence_high/detail zero; KWORV1\0\0, operation1/8,
  * four LE UInt128 amount/fee/grossDebit/netDestination; receiverPresence byte+receiver32;
  * destinationAccount/request/charge/scheme/wallet/currentHead/sourceState/sourceCapsule/
- * credential/artifactManifest32 each, then canonical SEC1 paymentKey65. Copyable DATA
- * cannot reconstruct the actual retained Native review. Free with connect_norito_free. */
+ * credential/artifactManifest32 each, then canonical SEC1 paymentKey65 (491-byte prefix),
+ * mandatory LE UInt32 destinationAccountOriginalLength, then those exact AccountId bytes.
+ * Send length1..4096, Unload length0; exact total495+length. No491-byte fallback.
+ * The original is authenticated display DATA, not an I105 literal or chain discriminator.
+ * Copyable DATA cannot reconstruct the actual retained Native review. Free with connect_norito_free. */
 int32_t connect_norito_kagemusha_wallet_review_v1(uint64_t handle,
     const connect_norito_kagemusha_wallet_review_request_v1 *request,
     connect_norito_kagemusha_wallet_result_v1 *out);
@@ -2002,27 +2011,28 @@ int32_t connect_norito_kagemusha_wallet_install_runtime_v1(
     const connect_norito_kagemusha_platform_v1* platform,
     uint64_t* out_runtime);
 
-// Enrollment DATA in the existing installed runtime; no supplied freshness/profile flag.
+// Enrollment DATA in the existing installed runtime; no slot/profile/freshness selector.
+// Canonical E1/policy/account originals and original dates are retained before generation.
 typedef struct connect_norito_kagemusha_wallet_enrollment_request_v1 {
-    uint32_t selector; // 0 begin/retry E1; 1 resume slot; 2 retain request; 3 store credential.
-    const uint8_t* slot; size_t slot_length;
-    const uint8_t* challenge; size_t challenge_length;
-    const uint8_t* policy; size_t policy_length;
-    const uint8_t* account; size_t account_length;
-    const uint8_t* original; size_t original_length;
-    const uint8_t* certificates; size_t certificates_length;
+    uint32_t selector; // 0 original begin/retry;1 existing-intent resume;2 whole request;3 credential.
+    const uint8_t* challenge; size_t challenge_length; // Canonical Norito E1,1..1024.
+    const uint8_t* policy; size_t policy_length; // Canonical signed-selection preimage,1..1024.
+    const uint8_t* account; size_t account_length; // Existing canonical AccountId,1..4096.
+    const uint8_t* original; size_t original_length; // Complete JSON <=524288 (2),credential<=1024 (3).
+    const uint8_t* certificates; size_t certificates_length; // Rooted CertificateSet<=10000 (3).
+    uint64_t issued_at_ms; // Exact original Core date,never renewed on retry.
+    uint64_t expires_at_ms; // issued < expires <= issued+600000.
 } connect_norito_kagemusha_wallet_enrollment_request_v1;
 typedef struct connect_norito_kagemusha_wallet_enrollment_result_v1 {
-    // 0 Enrolled; 1 Pending; 2 SlotAbandoned; 3 RequestRetained; 4 CredentialStored.
-    // Negative values preserve the ordinary Native failure status, reason and OS code.
-    int32_t status;
-    int32_t reason;
-    int32_t platform_code;
-    uint8_t slot[32];
-    uint8_t payment_key[65];
-    size_t payment_key_length; // 65 only for Enrolled, zero otherwise.
-    uint8_t* bytes; // Exact marker/request/credential for 0/3/4; connect_norito_free owns free.
-    size_t length;
+    // 0 Enrolled;1 Pending;2 Abandoned;3 RequestRetained;4 CredentialStored;negative failure.
+    // These statuses confer no account admission or monetary authority.
+    int32_t status; int32_t reason; int32_t platform_code;
+    uint8_t payment_key[65]; size_t payment_key_length; // 65 only for0,otherwise0.
+    uint8_t account_frame[385]; size_t account_frame_length; // Exact existing Ed25519 original,0 only.
+    uint8_t binding[32]; size_t binding_length; // Exact enrollment-key-binding digest,0 only.
+    uint8_t* chain; size_t chain_length; // Canonical Norito Vec<Vec<u8>> leaf-first DER DATA (Android0).
+    uint8_t* bytes; size_t length; // Exact marker/request/credential for0/3/4.
+    // Free each nonnull chain/bytes separately with connect_norito_free.
 } connect_norito_kagemusha_wallet_enrollment_result_v1;
 int32_t connect_norito_kagemusha_wallet_enrollment_v1(uint64_t runtime,
     const connect_norito_kagemusha_wallet_enrollment_request_v1* request,

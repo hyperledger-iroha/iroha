@@ -6,7 +6,7 @@ use jni::{
     objects::{JByteArray, JClass},
     sys::{jint, jlong, jobject},
 };
-/// Only Send1/Unload8; retained token and exact491 projection arrive as separate result18.
+/// Only Send1/Unload8; retained token and bounded original-bearing DATA arrive as result18.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_review(
     mut env: JNIEnv<'_>,

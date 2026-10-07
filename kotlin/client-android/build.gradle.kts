@@ -61,8 +61,8 @@ private object NativeBridgeBuildContract {
     const val buildEnvironmentSchema = "iroha.mobile-native-build-environment.v1"
     const val hermeticRunnerSchema = "iroha.mobile-hermetic-command.v1"
     const val walletRuntimeTrustInput = "MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX"
-    fun validateWalletRuntimeTrust(value: String?): String? {
-        require(value == null || (Regex("^[0-9a-f]{64}$").matches(value) && value.any { it != '0' })) {
+    fun validateWalletRuntimeTrust(value: String?): String {
+        require(value != null && Regex("^[0-9a-f]{64}$").matches(value) && value.any { it != '0' }) {
             "$walletRuntimeTrustInput must be one nonzero lowercase 32-byte Ed25519 public key"
         }
         return value
@@ -114,7 +114,7 @@ private object NativeBridgeBuildContract {
         val cargoHome: java.nio.file.Path,
         val cargoInvocationDirectory: java.nio.file.Path,
         val diagnosticConfiguration: ByteArray?,
-        val walletRuntimeTrustPublicKeyHex: String?,
+        val walletRuntimeTrustPublicKeyHex: String,
         val cargoRelease: String,
         val cargoCommitHash: String,
         val rustcRelease: String,
@@ -843,8 +843,7 @@ private object NativeBridgeBuildContract {
         "hermetic_runner_sha256" to sha256Hex(tools.hermeticRunner),
         "environment_profile" to if (tools.diagnosticConfiguration == null) "android-cargo"
             else "android-armv7-diagnostic-cargo",
-        "environment_allowlist" to (androidCargoEnvironmentAllowlist +
-            if (tools.walletRuntimeTrustPublicKeyHex == null) emptyList() else listOf(walletRuntimeTrustInput)).sorted(),
+        "environment_allowlist" to (androidCargoEnvironmentAllowlist + walletRuntimeTrustInput).sorted(),
         "wallet_runtime_trust_ed25519_hex" to tools.walletRuntimeTrustPublicKeyHex,
         "cargo_build_jobs" to 1,
         "rust_toolchain_channel" to pinnedRustToolchain,
@@ -1070,7 +1069,6 @@ abstract class CompileNativeBridgeTask @Inject constructor(
     private val fileSystemOperations: FileSystemOperations,
 ) : DefaultTask() {
     @get:Input
-    @get:Optional
     abstract val walletRuntimeTrustPublicKeyHex: Property<String>
 
     @get:Input
@@ -1263,9 +1261,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                         "RUSTUP_HOME=${tools.home.resolve(".rustup")}",
                         "--set",
                         "TMPDIR=${tools.temporaryDirectory.absolutePath}",
-                    ) + (tools.walletRuntimeTrustPublicKeyHex?.let {
-                        listOf("--set", "${NativeBridgeBuildContract.walletRuntimeTrustInput}=$it")
-                    } ?: emptyList()) + listOf(
+                    ) + listOf("--set", "${NativeBridgeBuildContract.walletRuntimeTrustInput}=${tools.walletRuntimeTrustPublicKeyHex}") + listOf(
                         "--",
                         tools.cargo.toString(),
                         "ndk",
@@ -1414,7 +1410,6 @@ abstract class InspectArmv7DiagnosticTask @Inject constructor(
     private val execOperations: ExecOperations,
 ) : DefaultTask() {
     @get:Input
-    @get:Optional
     abstract val walletRuntimeTrustPublicKeyHex: Property<String>
 
     @get:Input abstract val localIntegration: Property<Boolean>
@@ -1551,7 +1546,6 @@ abstract class StripNativeBridgeTask @Inject constructor(
     private val fileSystemOperations: FileSystemOperations,
 ) : DefaultTask() {
     @get:Input
-    @get:Optional
     abstract val walletRuntimeTrustPublicKeyHex: Property<String>
 
     @get:Input
@@ -2038,7 +2032,7 @@ val walletRuntimeTrustPublicKeyInput =
     providers.environmentVariable(NativeBridgeBuildContract.walletRuntimeTrustInput)
 // Selection is public build DATA. Release admission independently joins the
 // emitted original to the committed app runtime signer; this grants no Ready.
-NativeBridgeBuildContract.validateWalletRuntimeTrust(walletRuntimeTrustPublicKeyInput.orNull)
+walletRuntimeTrustPublicKeyInput.orNull?.let { NativeBridgeBuildContract.validateWalletRuntimeTrust(it) }
 // Native app and instrumentation packages always include the sealed bridge.
 // The ordinary JVM unit-test task graph does not execute these packaging owners.
 require(!providers.gradleProperty("irohaDebugNativeBridge").isPresent) {

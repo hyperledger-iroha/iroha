@@ -69,7 +69,9 @@ fn require_installation(
     Ok(())
 }
 
-fn account(original: &[u8], expected_digest: &[u8; 32]) -> Result<AccountId, Error> {
+// Shared original decoder for intake and an already authenticated Send destination.
+// The caller must obtain expected_digest from authenticated Native originals.
+pub(crate) fn account(original: &[u8], expected_digest: &[u8; 32]) -> Result<AccountId, Error> {
     if original.is_empty() || original.len() > ACCOUNT_ORIGINAL_MAX_BYTES_V1 {
         return Err(Error::Authority("account frame bound"));
     }

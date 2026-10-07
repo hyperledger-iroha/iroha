@@ -1,4 +1,4 @@
-//! Unix descriptor-relative primitives for callers with an explicit multi-step journal.
+//! Native retained-custody steps for callers with an explicit multi-step journal.
 
 use super::*;
 
@@ -60,7 +60,7 @@ impl PrivateDirectory {
     pub fn custody_entry_kind(&self, name: impl AsRef<OsStr>) -> io::Result<CustodyEntryKind> {
         self.inner.custody_entry_kind(checked_name(name.as_ref())?)
     }
-    /// Available bytes on the filesystem of this retained directory descriptor.
+    /// Available bytes on the filesystem held by this retained directory.
     ///
     /// # Errors
     /// Changed custody, native filesystem-query error, or arithmetic overflow.
@@ -85,7 +85,7 @@ impl PrivateDirectory {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(unix, test))]
 mod tests {
     use super::*;
     use std::io::Write as _;
@@ -149,5 +149,49 @@ mod tests {
             root.rename_custody_file("link", "other", identity, PublishMode::CreateNew)
                 .is_err()
         );
+    }
+}
+
+impl PrivateDirectory {
+    /// Sync one existing private journal through its original native file owner.
+    /// This never creates a missing name; native access and private custody are required.
+    /// # Errors
+    /// Refuses missing, shared or changed originals, insufficient native sync rights and failures.
+    pub fn sync_custody_file(&self, name: impl AsRef<OsStr>) -> io::Result<()> {
+        self.inner.sync_custody_file(checked_name(name.as_ref())?)
+    }
+    /// Consume this original empty journal directory, without the caller's parent sync.
+    /// # Errors
+    /// Refuses live descendants, nonempty or replaced originals and native deletion errors.
+    #[cfg(windows)]
+    pub fn remove_custody_empty(self) -> io::Result<()> {
+        self.inner.remove_custody_empty()
+    }
+}
+impl RetainedFile {
+    /// Publish this live exclusively created journal writer under one same-parent name.
+    /// The original descriptor stays live and its name advances at the native transition.
+    /// No second publication or published-target discard authority remains after rename.
+    /// # Errors
+    /// Refuses changed names, unsafe destination, duplicate publication and native errors.
+    /// An error after native rename is indeterminate and requires reconciliation.
+    pub fn rename_custody_file(
+        &mut self,
+        from: impl AsRef<OsStr>,
+        to: impl AsRef<OsStr>,
+        mode: PublishMode,
+    ) -> io::Result<()> {
+        self.inner.rename_custody_file(
+            checked_name(from.as_ref())?,
+            checked_name(to.as_ref())?,
+            mode,
+        )
+    }
+    /// Consume an unpublished original writer to remove its exact selected staged name.
+    /// The native handle closes before success; this never discards a published destination.
+    /// # Errors
+    /// Refuses another name, published/sealed/read-only originals and native removal failure.
+    pub fn remove_custody_file(self, name: impl AsRef<OsStr>) -> io::Result<()> {
+        self.inner.remove_custody_file(checked_name(name.as_ref())?)
     }
 }

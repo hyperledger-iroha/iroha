@@ -17,7 +17,12 @@ use iroha_plonk::{
 };
 
 mod exports;
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 mod jni;
 mod originals;
 mod selection;
@@ -118,7 +123,14 @@ impl BoundOriginals {
         } else {
             self.selected.apple_enrollment_policy
         };
-        if challenge.scheme_id != self.selected.scheme.scheme_id()
+        let retained_policy = if self.android {
+            &self.selected.android_enrollment_original
+        } else {
+            &self.selected.apple_enrollment_original
+        };
+        if input.expires_at_ms.checked_sub(input.issued_at_ms) != Some(policy.challenge_lifetime_ms)
+            || challenge.scheme_id != self.selected.scheme.scheme_id()
+            || input.policy != retained_policy
             || challenge.asset_digest != self.selected.asset.asset_digest()
             || challenge.app_policy != app
             || challenge.enrollment_policy != enrollment
@@ -150,22 +162,23 @@ impl BoundOriginals {
                     ..
                 },
             ) => Profile::SecureElementOrTee,
-            // The maintained platform has no TEE-only generation profile; never reinterpret
-            // a signed TEE-only policy as permission to generate a StrongBox key.
             (
                 true,
                 KagemushaWalletEnrollmentPlatformV1::Android {
                     hardware: KagemushaWalletAndroidHardwareV1::Tee,
                     ..
                 },
-            ) => return Err(Failure::code(ARTIFACTS_UNAVAILABLE)),
+            ) => Profile::TeeOnly,
             (false, KagemushaWalletEnrollmentPlatformV1::Apple { .. }) => Profile::SecureElement,
             _ => return Err(invalid()),
         };
         Ok(super::enrollment::Scope {
             challenge,
             profile,
-            regulatory: policy.regulatory_policy,
+            policy,
+            network: self.selected.scheme.network_id,
+            account_key: account.try_signatory().ok_or_else(invalid)?.clone(),
+            android: self.android,
         })
     }
 
@@ -221,6 +234,7 @@ impl PreparedInstallation {
                 .map_err(|_| Failure::code(INVALID))?
             || installed.originals().signer_certificate != selected.artifact_certificate
             || installed.originals().manifest != selected.artifact_manifest
+            || installed.originals().producer_catalog_digest != selected.producer_catalog_digest
         {
             return Err(Failure::code(INVALID));
         }

@@ -130,7 +130,7 @@ impl WalletArtifactOriginalsV1 {
     /// Invalid/nonascending identity, excessive row count or JSON byte ceiling.
     pub fn transport_json(&self) -> io::Result<Vec<u8>> {
         let mut output = String::from(
-            "{\"schema\":\"bpng.current-wallet-artifact-original-transport.v1\",\"walletOriginals\":",
+            "{\"schema\":\"iroha.kagemusha.wallet-artifact-original-transport.v1\",\"walletOriginals\":",
         );
         rows(&mut output, &self.wallet_originals, WALLET_MAX_ROWS)?;
         output.push_str(",\"finalityOriginals\":");
@@ -182,17 +182,13 @@ impl WalletArtifactOriginalsV1 {
             finality.verify_original(*blob)?;
         }
         directory.revalidate()?;
+        publish_metadata(&directory, "verifier-pack.norito", &self.verifier_pack)?;
         publish_metadata(
             &directory,
-            "wallet-verifier-pack.norito",
-            &self.verifier_pack,
-        )?;
-        publish_metadata(
-            &directory,
-            "wallet-producer-inventory.norito",
+            "producer-inventory.norito",
             &self.producer_inventory,
         )?;
-        publish_metadata(&directory, "wallet-artifact-transport.json", &transport)?;
+        publish_metadata(&directory, "transport.json", &transport)?;
         wallet.root()?;
         finality.root()?;
         directory.sync()?;
@@ -248,7 +244,7 @@ mod tests {
             .unwrap();
         let directory = PrivateDirectory::open_exact(&root).unwrap();
         let before = directory
-            .open_retained_read_only("wallet-verifier-pack.norito", PACK_MAX_BYTES)
+            .open_retained_read_only("verifier-pack.norito", PACK_MAX_BYTES)
             .unwrap()
             .identity()
             .unwrap();
@@ -256,17 +252,17 @@ mod tests {
             .write_bundle_metadata(&root, &wallet, &finality)
             .unwrap();
         let after = directory
-            .open_retained_read_only("wallet-verifier-pack.norito", PACK_MAX_BYTES)
+            .open_retained_read_only("verifier-pack.norito", PACK_MAX_BYTES)
             .unwrap()
             .identity()
             .unwrap();
         assert_eq!(before, after);
         assert_eq!(
-            std::fs::read(root.join("wallet-verifier-pack.norito")).unwrap(),
+            std::fs::read(root.join("verifier-pack.norito")).unwrap(),
             originals.verifier_pack
         );
         assert_eq!(
-            std::fs::read(root.join("wallet-artifact-transport.json")).unwrap(),
+            std::fs::read(root.join("transport.json")).unwrap(),
             originals.transport_json().unwrap()
         );
     }
@@ -280,8 +276,8 @@ mod tests {
                 .write_bundle_metadata(&root, &wallet, &finality)
                 .is_err()
         );
-        assert!(!root.join("wallet-verifier-pack.norito").exists());
-        assert!(!root.join("wallet-artifact-transport.json").exists());
+        assert!(!root.join("verifier-pack.norito").exists());
+        assert!(!root.join("transport.json").exists());
     }
 
     #[test]
@@ -312,7 +308,7 @@ mod tests {
         let (_temp, root, wallet, finality, originals) = fixture();
         let directory = PrivateDirectory::open_exact(&root).unwrap();
         let mut writer = directory
-            .create_retained_private("wallet-producer-inventory.norito", 8)
+            .create_retained_private("producer-inventory.norito", 8)
             .unwrap();
         writer.write_all(b"conflict").unwrap();
         let sealed = writer.seal_read_only().unwrap();
@@ -322,14 +318,14 @@ mod tests {
                 .write_bundle_metadata(&root, &wallet, &finality)
                 .is_err()
         );
-        assert!(root.join("wallet-verifier-pack.norito").exists());
-        assert!(!root.join("wallet-artifact-transport.json").exists());
+        assert!(root.join("verifier-pack.norito").exists());
+        assert!(!root.join("transport.json").exists());
         let existing = directory
-            .open_retained_read_only("wallet-producer-inventory.norito", 8)
+            .open_retained_read_only("producer-inventory.norito", 8)
             .unwrap();
         assert_eq!(before, existing.identity().unwrap());
         assert_eq!(
-            std::fs::read(root.join("wallet-producer-inventory.norito")).unwrap(),
+            std::fs::read(root.join("producer-inventory.norito")).unwrap(),
             b"conflict"
         );
     }

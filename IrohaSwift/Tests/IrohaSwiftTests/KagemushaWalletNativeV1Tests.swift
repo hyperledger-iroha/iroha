@@ -45,13 +45,13 @@ final class KagemushaWalletNativeV1Tests: XCTestCase {
   }
   func testTypedLifecycleInputsHaveExactOriginalBoundsAndScalarProjection() throws {
     let identity = Data(repeating: 1, count: 32)
-    for selector in UInt32(0)...9 {
-      let limits: [Int] = selector == 0 ? [512, 16_384, 0] : selector == 1 ? [10_000, 0, 0]
+    for selector in [UInt32(0), 2, 3, 4, 5, 6, 7, 9, 10] {
+      let limits: [Int] = selector == 0 ? [512, 16_384, 0]
         : selector == 2 ? [10_000, 1_024, 10_000] : selector == 5 ? [65_536 * 34 + 512, 10_000, 0]
         : selector == 6 ? [512, 10_000, 0] : selector == 7 ? [8_192, 10_000, 0]
-        : selector == 9 ? [0, 0, 0] : [1_024, 10_000, 0]
+        : selector == 9 ? [0, 0, 0] : selector == 10 ? [10_000, 10_000, 0] : [1_024, 10_000, 0]
       let originals = limits.map { Data(repeating: 7, count: $0 == 0 ? 0 : 1) }
-      let amount = KagemushaWalletUInt128V1(low: selector == 8 ? UInt64.max : 0, high: selector == 8 ? UInt64.max : 0)
+      let amount = KagemushaWalletUInt128V1(low: 0, high: 0)
       let input = try KagemushaWalletOperationInputV1(requestId: identity, selector: selector, amount: amount, first: originals[0], second: originals[1], third: originals[2])
       input.withRequest { value in
         XCTAssertEqual(value.pointee.selector, selector)
@@ -72,7 +72,39 @@ final class KagemushaWalletNativeV1Tests: XCTestCase {
     XCTAssertThrowsError(try KagemushaWalletOperationInputV1(requestId: identity, selector: 10))
     XCTAssertThrowsError(try KagemushaWalletOperationInputV1(requestId: identity, selector: 8))
     XCTAssertThrowsError(try KagemushaWalletOperationInputV1(requestId: identity, selector: 8, amount: .init(low: 1, high: 0), first: Data([1])))
-    XCTAssertNoThrow(try KagemushaWalletOperationInputV1(requestId: identity, selector: 8, amount: .init(low: 1, high: 0)))
+    XCTAssertThrowsError(try KagemushaWalletOperationInputV1(requestId: identity, selector: 8, amount: .init(low: 1, high: 0)))
+    XCTAssertThrowsError(try KagemushaWalletOperationInputV1(requestId: identity, selector: 1, first: Data([1])))
+  }
+
+  func testReceiveFromOfferRetainsBothBoundedOriginalsAndRejectsForeignFields() throws {
+    var identity = Data(repeating: 1, count: 32)
+    var payment = Data(repeating: 7, count: 10_000)
+    var offer = Data(repeating: 9, count: 10_000)
+    let input = try KagemushaWalletOperationInputV1(requestId: identity, selector: 10, first: payment, second: offer)
+    identity[0] = 0; payment[0] = 0; offer[0] = 0
+    input.withRequest { value in
+      XCTAssertEqual(value.pointee.selector, 10)
+      XCTAssertEqual(value.pointee.amount.low, 0)
+      XCTAssertEqual(value.pointee.amount.high, 0)
+      XCTAssertEqual(Data(bytes: value.pointee.request_id!, count: 32), Data(repeating: 1, count: 32))
+      XCTAssertEqual(Data(bytes: value.pointee.first!, count: value.pointee.first_length), Data(repeating: 7, count: 10_000))
+      XCTAssertEqual(Data(bytes: value.pointee.second!, count: value.pointee.second_length), Data(repeating: 9, count: 10_000))
+      XCTAssertEqual(value.pointee.third_length, 0)
+    }
+    let id = Data(repeating: 1, count: 32), one = Data([1])
+    for invalid in [Data(repeating: 1, count: 31), Data(repeating: 0, count: 32), Data(repeating: 1, count: 33)] {
+      XCTAssertThrowsError(try KagemushaWalletOperationInputV1(requestId: invalid, selector: 10, first: one, second: one))
+    }
+    for (first, second, third) in [
+      (Data(), one, Data()), (one, Data(), Data()),
+      (Data(repeating: 1, count: 10_001), one, Data()),
+      (one, Data(repeating: 1, count: 10_001), Data()), (one, one, one),
+    ] {
+      XCTAssertThrowsError(try KagemushaWalletOperationInputV1(requestId: id, selector: 10, first: first, second: second, third: third))
+    }
+    for amount in [KagemushaWalletUInt128V1(low: 1, high: 0), .init(low: 0, high: 1), .init(low: .max, high: .max)] {
+      XCTAssertThrowsError(try KagemushaWalletOperationInputV1(requestId: id, selector: 10, amount: amount, first: one, second: one))
+    }
   }
 
   func testSetupOriginalsCannotBecomeMonetaryCompletionOrTimeAuthority() throws {
