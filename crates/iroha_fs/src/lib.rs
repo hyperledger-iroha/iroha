@@ -18,9 +18,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-#[cfg(unix)]
 mod custody_io;
-#[cfg(unix)]
 pub use custody_io::CustodyEntryKind;
 
 mod private_files;

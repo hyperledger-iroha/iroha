@@ -14,39 +14,43 @@ fn canonical(value: &Value) -> Vec<u8> {
     bytes.push(b'\n');
     bytes
 }
+fn object_mut(value: &mut Value) -> &mut Map {
+    let Value::Object(map) = value else {
+        panic!("fixture object")
+    };
+    map
+}
+fn native_installation_mut(value: &mut Value) -> &mut Map {
+    let artifacts = object_mut(value).get_mut("artifacts").unwrap();
+    let mobile = object_mut(artifacts).get_mut("kagemusha_mobile").unwrap();
+    object_mut(object_mut(mobile).get_mut("native_installation").unwrap())
+}
+fn mobile_mut(value: &mut Value) -> &mut Map {
+    let artifacts = object_mut(value).get_mut("artifacts").unwrap();
+    object_mut(object_mut(artifacts).get_mut("kagemusha_mobile").unwrap())
+}
 fn mutate(value: &mut Value, key: &str, replacement: Value) {
+    if value.as_object().is_some_and(|map| {
+        map.get("schema").and_then(Value::as_str) == Some("cbsi.iroha-application-release.v1")
+    }) && matches!(
+        key,
+        "ledger" | "consensus" | "asset" | "firstDeviceAuthentication"
+    ) {
+        native_installation_mut(value).insert(key.into(), replacement);
+        return;
+    }
     let Value::Object(map) = value else {
         panic!("fixture object")
     };
     map.insert(key.into(), replacement);
 }
 fn application() -> Value {
-    let mut app: Map = APP_FIELDS
-        .iter()
-        .map(|name| ((*name).into(), Value::Null))
-        .collect();
-    app.insert(
-        "schema".into(),
-        Value::String("bpng.taira-app-runtime-manifest.v6".into()),
-    );
-    app.insert("environment".into(), Value::String("taira-testnet".into()));
-    app.insert(
-        "firstDeviceAuthentication".into(),
-        first_device_authentication_selection(),
-    );
-    Value::Object(app)
+    // Signed public metadata DATA. These values never qualify a Native graph or device.
+    norito::json!({"schema":("cbsi.iroha-application-release.v1"),"source":{"commit":("77".repeat(20)),"tree":("78".repeat(20)),"cargo_lock_sha256":("79".repeat(32)),"cargo_lock_size_bytes":(1),"javascript_tree":("7a".repeat(20)),"iroha_js_tree":("7b".repeat(20)),"iroha_js_host_tree":("7c".repeat(20)),"android_source_fingerprint_sha256":("7d".repeat(32)),"apple_source_fingerprint_sha256":("7e".repeat(32))},"protocol":{"kagemusha_wallet_version":(1),"kagemusha_text_prefix":("kgm1:"),"kagemusha_wallet_types":{"scheme":("KagemushaWalletSchemeV1"),"signer_certificate":("KagemushaWalletSignerCertificateV1"),"artifact_manifest":("KagemushaWalletArtifactManifestV1"),"verifier_pack":("VerifierPackV1"),"producer_inventory":("ProducerInventoryV1")},"native_bridge_abi_version":(crate::CONNECT_NORITO_BRIDGE_ABI_VERSION),"native_prebuilt_provenance_schemas":{"android":("iroha.android-native-build-provenance.v1"),"apple":("cbsi.iroha-apple-xcframework-release.v1")}},"toolchain_closure":null,"artifacts":{"javascript_browser":null,"android_sdk":null,"apple_xcframework":null,"kagemusha_mobile":{"mode":("enabled"),"service_release_scope":("10".repeat(32)),"scheme_id":("11".repeat(32)),"artifact_manifest_digest":("12".repeat(32)),"producer_catalog_digest":("13".repeat(32)),"trust_assets":[],"native_installation":{"schema":("cbsi.kagemusha.native-installation.v1"),"ledger":null,"consensus":null,"asset":null,"firstDeviceAuthentication":(first_device_authentication_selection())}}}})
 }
 fn first_device_authentication_selection() -> Value {
     // Public metadata fixtures confer no authenticated-original or wallet authority.
-    norito::json::json!({
-        "schema":"bpng.first-device-auth-runtime-selection.v1",
-        "googleOAuthClientId":"fixture-client.apps.googleusercontent.com",
-        "googleOAuthIssuer":"https://accounts.google.com",
-        "integrityCloudProjectNumber":123456789,
-        "originalAuthPolicySha256":"11".repeat(32),
-        "verifierConfigurationSha256":"22".repeat(32),
-        "googlePolicySha256":"33".repeat(32)
-    })
+    norito::json!({"schema":("cbsi.first-device-auth-runtime-selection.v1"),"googleOAuthClientId":("fixture-client.apps.googleusercontent.com"),"googleOAuthIssuer":("https://accounts.google.com"),"integrityCloudProjectNumber":(123456789),"originalAuthPolicySha256":("11".repeat(32)),"verifierConfigurationSha256":("22".repeat(32)),"googlePolicySha256":("33".repeat(32))})
 }
 fn sign(key: &KeyPair, app: &[u8]) -> Vec<u8> {
     let mut message = DOMAIN.to_vec();
@@ -54,9 +58,7 @@ fn sign(key: &KeyPair, app: &[u8]) -> Vec<u8> {
     let signature = Signature::try_new(key.private_key(), &message).unwrap();
     let (_, public) = key.public_key().to_bytes();
     canonical(
-        &norito::json::json!({"schema":"bpng.taira-app-runtime-manifest-signature.v6","algorithm":"ed25519",
-        "domain":"bpng:taira-app-runtime-manifest:v6","keyId":format!("sha256:{}",hex::encode(BlobV1::of(public).sha256)),
-        "manifestSha256":hex::encode(BlobV1::of(app).sha256),"signatureBase64Url":URL_SAFE_NO_PAD.encode(signature.payload())}),
+        &norito::json!({"schema":("cbsi.iroha-application-release-signature.v1"),"algorithm":("ed25519"),"domain":("cbsi.iroha-application-release.v1"),"keyId":(format!("sha256:{}",hex::encode(BlobV1::of(public).sha256))),"manifestSha256":(hex::encode(BlobV1::of(app).sha256)),"signatureBase64":(STANDARD.encode(signature.payload()))}),
     )
 }
 #[test]
@@ -138,7 +140,7 @@ fn signed_authentication_selection_requires_exact_current_fields_and_types() {
         assert!(!accepts_signed_authentication_selection(invalid));
     }
     for invalid in [
-        Value::String("bpng.first-device-auth-runtime-selection.v2".into()),
+        Value::String("cbsi.first-device-auth-runtime-selection.v2".into()),
         Value::from(1_u64),
         Value::Null,
     ] {
@@ -147,11 +149,9 @@ fn signed_authentication_selection_requires_exact_current_fields_and_types() {
         assert!(!accepts_signed_authentication_selection(changed));
     }
     let key = KeyPair::from_seed(vec![15; 32], Algorithm::Ed25519);
-    let Value::Object(mut missing) = application() else {
-        panic!("fixture object")
-    };
-    missing.remove("firstDeviceAuthentication");
-    let bytes = canonical(&Value::Object(missing));
+    let mut missing = application();
+    native_installation_mut(&mut missing).remove("firstDeviceAuthentication");
+    let bytes = canonical(&missing);
     assert!(
         signed_app(
             &RuntimeTrust::test(key.public_key().clone()),
@@ -271,12 +271,12 @@ fn lexical_boundaries_reject_duplicates_fractions_unsafe_integers_and_depth_befo
 }
 #[test]
 fn byte_originals_have_canonical_base64_and_nonzero_lowercase_digest_forms() {
-    let map = exact(&norito::json::json!({"bytes":"AQI="}), &["bytes"])
+    let map = exact(&norito::json!({"bytes":("AQI=")}), &["bytes"])
         .unwrap()
         .clone();
     assert_eq!(raw(&map, "bytes", 2).unwrap(), vec![1, 2]);
     assert!(raw(&map, "bytes", 1).is_err());
-    let map = exact(&norito::json::json!({"bytes":"AQI"}), &["bytes"])
+    let map = exact(&norito::json!({"bytes":("AQI")}), &["bytes"])
         .unwrap()
         .clone();
     assert!(raw(&map, "bytes", 2).is_err());
@@ -289,7 +289,7 @@ fn byte_originals_have_canonical_base64_and_nonzero_lowercase_digest_forms() {
         assert!(sha(&hash).is_err());
     }
     assert_eq!(sha(&"1".repeat(64)).unwrap(), [0x11; 32]);
-    assert!(exact(&norito::json::json!({"a":1,"b":2}), &["a"]).is_err());
+    assert!(exact(&norito::json!({"a":(1),"b":(2)}), &["a"]).is_err());
 }
 fn g1_key(seed: u8) -> SigningKey {
     SigningKey::from_bytes((&[seed; 32]).into()).unwrap()
@@ -304,6 +304,11 @@ fn g1_sign(key: &SigningKey, bytes: &[u8]) -> KagemushaWalletSignerOutputV1<'sta
     let signature: G1Signature = key.sign(bytes);
     KagemushaWalletSignerOutputV1::Raw(signature.to_bytes().into())
 }
+// Explicit SOFTWARE DATA buffers exercise metadata selection only. They cannot decode
+// as a Native verifier pack/catalog and cannot admit installation or a custody provider.
+const TEST_PACK: &[u8] = b"PUBLIC_SOFTWARE_DATA_UNADMITTED_PACK";
+const TEST_CATALOG: &[u8] = b"PUBLIC_SOFTWARE_DATA_UNADMITTED_CATALOG";
+const TEST_ROOT: &[u8] = b"/unadmitted/metadata-only";
 struct BaseFixture {
     key: KeyPair,
     app: Value,
@@ -313,7 +318,7 @@ struct BaseFixture {
 }
 impl BaseFixture {
     fn new() -> Self {
-        let native = NativeFinalityFixture::start("installed-runtime-metadata-fixture");
+        let native = NativeFinalityFixture::start("fc56984b-2be7-431d-840e-21514d1883f0");
         let genesis = native.genesis().encode_wire().unwrap();
         let epoch = genesis_epoch(native.genesis()).unwrap();
         let root = g1_key(7);
@@ -367,33 +372,64 @@ impl BaseFixture {
         )
         .unwrap();
         let asset = KagemushaWalletAssetScopeV1::new(
-            AssetDefinitionId::from_uuid_bytes([
-                0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
-                0xcd, 0x2f,
-            ])
+            AssetDefinitionId::from_str("7ZepsJTHCVLKsrFFNZGSRGZgvBhv").unwrap(),
+            &AxtAssetIncarnationV1::try_from_bytes(
+                *iroha_crypto::Hash::new(b"native-installation-test-incarnation").as_ref(),
+            )
             .unwrap(),
-            &AxtAssetIncarnationV1::try_from_bytes([2; 32]).unwrap(),
             2,
         )
         .unwrap();
-        let runtime = norito::json::json!({"schema":"bpng.current-wallet-core-runtime.v1","version":1,"scheme_id":hex::encode(scheme.scheme_id()),
-            "scheme_original_base64":STANDARD.encode(scheme.to_canonical_bytes().unwrap()),"asset_original_base64":STANDARD.encode(norito::encode_canonical(&asset).unwrap()),
-            "enrollment_certificate_original_base64":STANDARD.encode(enrollment_certificate.to_canonical_bytes().unwrap()),
-            "artifact_signer_certificate_original_base64":STANDARD.encode(artifact_certificate.to_canonical_bytes().unwrap()),
-            "artifact_manifest_original_base64":STANDARD.encode(manifest.to_canonical_bytes().unwrap()),
-            "regulatory_policy_original_base64":STANDARD.encode(norito::encode_canonical(&KagemushaWalletRegulatoryPolicyV1::default()).unwrap()),
-            "challenge_lifetime_ms":120000,"python_path":"/usr/bin/python3","python_sha256":"11".repeat(32),"openssl_path":"/usr/bin/openssl","openssl_sha256":"22".repeat(32),
-            "android":{"app_policy_hex":"33".repeat(32),"enrollment_policy_hex":"44".repeat(32),"verifier_configuration_path":"srv/etc/kagemusha/wallet-e1-android.json"},
-            "apple":{"app_policy_hex":"55".repeat(32),"enrollment_policy_hex":"66".repeat(32),"verifier_configuration_path":"srv/etc/kagemusha/wallet-e1-apple.json"}});
+        let platform = |apple| {
+            let app = KagemushaWalletAppPolicyV1 {
+                version: 1,
+                scheme_id: scheme.scheme_id(),
+                identity: if apple {
+                    KagemushaWalletAppIdentityV1::Apple {
+                        app_id: "TEAM.org.example.wallet".into(),
+                    }
+                } else {
+                    KagemushaWalletAppIdentityV1::Android {
+                        package_name: "org.example.wallet".into(),
+                        package_version: 7,
+                        app_signing_certificate_sha256: [3; 32],
+                    }
+                },
+            };
+            let enrollment = KagemushaWalletEnrollmentPolicyV1 {
+                version: 1,
+                scheme_id: scheme.scheme_id(),
+                asset_digest: asset.asset_digest(),
+                app_policy: app.policy_digest().unwrap(),
+                platform: if apple {
+                    KagemushaWalletEnrollmentPlatformV1::Apple {
+                        attestation_root_sha256: [4; 32],
+                    }
+                } else {
+                    KagemushaWalletEnrollmentPlatformV1::Android {
+                        attestation_root_sha256: [4; 32],
+                        hardware: KagemushaWalletAndroidHardwareV1::TeeOrStrongBox,
+                        patch_floor_yyyymm: 202610,
+                        play_integrity_maximum_age_ms: 120000,
+                        require_play_recognized: true,
+                        require_licensed: true,
+                        minimum_device_integrity: KagemushaWalletPlayIntegrityLevelV1::Device,
+                    }
+                },
+                regulatory_policy: KagemushaWalletRegulatoryPolicyV1::default(),
+                challenge_lifetime_ms: 120000,
+                attestation_lease_lifetime_ms: 0,
+            };
+            norito::json!({"app_policy_hex":(hex::encode(app.policy_digest().unwrap())),"enrollment_policy_hex":(hex::encode(enrollment.policy_digest().unwrap())),"app_policy_original_base64":(STANDARD.encode(norito::encode_canonical(&app).unwrap())),"enrollment_policy_original_base64":(STANDARD.encode(norito::encode_canonical(&enrollment).unwrap()))})
+        };
+        let runtime = norito::json!({"schema":("cbsi.kagemusha.wallet-runtime.v1"),"version":(1),"scheme_id":(hex::encode(scheme.scheme_id())),"scheme_original_base64":(STANDARD.encode(scheme.to_canonical_bytes().unwrap())),"asset_original_base64":(STANDARD.encode(norito::encode_canonical(&asset).unwrap())),"enrollment_certificate_original_base64":(STANDARD.encode(enrollment_certificate.to_canonical_bytes().unwrap())),"artifact_signer_certificate_original_base64":(STANDARD.encode(artifact_certificate.to_canonical_bytes().unwrap())),"artifact_manifest_original_base64":(STANDARD.encode(manifest.to_canonical_bytes().unwrap())),"regulatory_policy_original_base64":(STANDARD.encode(norito::encode_canonical(&KagemushaWalletRegulatoryPolicyV1::default()).unwrap())),"challenge_lifetime_ms":(120000),"android":(platform(false)),"apple":(platform(true))});
         let mut app = application();
         mutate(
             &mut app,
             "ledger",
-            norito::json::json!({"toriiUrl":"https://test.invalid","networkId":native.network_id().to_string(),"networkPrefix":42,
-            "chainId":native.chain_id(),"irohaSourceCommit":"77".repeat(20),"irohaBuildSha256":"88".repeat(32)}),
+            norito::json!({"toriiUrl":("https://bokolo.soramitsu.io"),"networkId":(native.network_id().to_string()),"networkPrefix":(369),"chainId":(native.chain_id()),"irohaSourceCommit":("77".repeat(20)),"irohaBuildSha256":("88".repeat(32))}),
         );
-        let validators:Vec<_>=epoch.committee.iter().map(|member|norito::json::json!({"peerId":member.validator.public_key().to_string(),
-            "directToriiUrl":"https://test.invalid","nodeFingerprint":"11".repeat(32),"buildFingerprint":"22".repeat(32),"configFingerprint":"33".repeat(32)})).collect();
+        let validators:Vec<_>=epoch.committee.iter().map(|member|norito::json!({"peerId":(member.validator.public_key().to_string()),"directToriiUrl":("https://test.invalid"),"nodeFingerprint":("11".repeat(32)),"buildFingerprint":("22".repeat(32)),"configFingerprint":("33".repeat(32))})).collect();
         let genesis_key = native
             .genesis()
             .external_transactions()
@@ -406,16 +442,20 @@ impl BaseFixture {
         mutate(
             &mut app,
             "consensus",
-            norito::json::json!({"mode":"iroha3-consensus::permissioned-sumeragi@v1","protocolVersion":1,
-            "networkId":native.network_id().to_string(),"genesisBlockHash":hex::encode(native.genesis().hash().as_ref()),
-            "signedGenesisSha256":hex::encode(BlobV1::of(&genesis).sha256),"genesisPublicKey":genesis_key,"finalityVerifierSha256":"99".repeat(32),
-            "validators":validators,"checkpointSha256":null,"checkpointHeight":null,"checkpointContextId":null}),
+            norito::json!({"mode":("iroha3-consensus::permissioned-sumeragi@v1"),"protocolVersion":(1),"networkId":(native.network_id().to_string()),"genesisBlockHash":(hex::encode(native.genesis().hash().as_ref())),"signedGenesisSha256":(hex::encode(BlobV1::of(&genesis).sha256)),"genesisPublicKey":(genesis_key),"finalityVerifierSha256":("99".repeat(32)),"validators":(validators),"checkpointSha256":("ab".repeat(32)),"checkpointHeight":(0),"checkpointContextId":("ac".repeat(32))}),
         );
         mutate(
             &mut app,
-            "digitalKina",
-            norito::json::json!({"assetAlias":"kina","assetDefinitionId":asset.asset.to_string(),"scale":2,"owningDomain":"test",
-            "physicalLaneId":1,"physicalLaneAlias":"lane","physicalDataspaceId":1,"physicalDataspaceAlias":"space","registrationTransactionHash":"aa".repeat(32)}),
+            "asset",
+            norito::json!({"assetAlias":("sbd#cbsi"),"assetDefinitionId":(asset.asset.to_string()),"scale":(2)}),
+        );
+        mobile_mut(&mut app).insert(
+            "scheme_id".into(),
+            Value::String(hex::encode(scheme.scheme_id())),
+        );
+        mobile_mut(&mut app).insert(
+            "artifact_manifest_digest".into(),
+            Value::String(hex::encode(manifest.manifest_digest())),
         );
         Self {
             key: KeyPair::from_seed(vec![14; 32], Algorithm::Ed25519),
@@ -430,11 +470,36 @@ impl BaseFixture {
             .unwrap()
             .into_bytes();
         let mut app = self.app.clone();
-        mutate(
-            &mut app,
-            "walletRuntime",
-            norito::json::json!({"schema":"bpng.current-wallet-runtime-pin.v1","currentRuntimeSha256":hex::encode(BlobV1::of(&runtime).sha256)}),
-        );
+        let mut assets = vec![];
+        for (name, bytes) in [
+            (
+                "kagemusha/genesis-manifest.json",
+                b"unadmitted-genesis-metadata".as_slice(),
+            ),
+            (
+                "kagemusha/network-configuration.toml",
+                b"unadmitted-network-metadata".as_slice(),
+            ),
+            ("kagemusha/producer-inventory.norito", TEST_CATALOG),
+            ("kagemusha/signed-genesis.norito", self.genesis.as_slice()),
+            (
+                "kagemusha/transport.json",
+                b"unadmitted-transport-metadata".as_slice(),
+            ),
+            ("kagemusha/verifier-pack.norito", TEST_PACK),
+            ("kagemusha/wallet-runtime.json", runtime.as_slice()),
+        ] {
+            assets.push(norito::json!({"file_name":(name),"sha256":(hex::encode(BlobV1::of(bytes).sha256)),"size_bytes":(bytes.len())}));
+        }
+        let original = b"unadmitted-proof-source";
+        assets.push(norito::json!({"file_name":(format!("kagemusha/originals/{}",hex::encode(BlobV1::of(original).sha256))),"sha256":(hex::encode(BlobV1::of(original).sha256)),"size_bytes":(original.len())}));
+        assets.sort_by(|left, right| {
+            left.as_object().unwrap()["file_name"]
+                .as_str()
+                .unwrap()
+                .cmp(right.as_object().unwrap()["file_name"].as_str().unwrap())
+        });
+        mobile_mut(&mut app).insert("trust_assets".into(), Value::Array(assets));
         let app = canonical(&app);
         let envelope = sign(&self.key, &app);
         (app, envelope, runtime)
@@ -447,10 +512,10 @@ impl BaseFixture {
                 app_manifest: &app,
                 envelope: &envelope,
                 wallet_runtime: &runtime,
-                verifier_pack: b"",
-                producer_inventory: b"",
+                verifier_pack: TEST_PACK,
+                producer_inventory: TEST_CATALOG,
                 signed_genesis: &self.genesis,
-                originals_root: b"",
+                originals_root: TEST_ROOT,
             },
         )
     }
@@ -461,7 +526,7 @@ fn genuine_signed_genesis_and_delegated_monetary_manifest_derive_installation_in
     let selection = fixture.load().unwrap();
     assert_eq!(selection.installation.scheme_id, fixture.scheme.scheme_id());
     assert_eq!(
-        *selection.genesis.network_id().as_bytes(),
+        *selection.genesis.initial_epoch().network_id.as_bytes(),
         fixture.scheme.network_id
     );
     assert_eq!(
@@ -472,6 +537,69 @@ fn genuine_signed_genesis_and_delegated_monetary_manifest_derive_installation_in
     assert_eq!(selection._originals._app_manifest.as_ref(), app);
     assert_eq!(selection._originals._envelope.as_ref(), envelope);
     assert_eq!(selection._originals._wallet_runtime.as_ref(), runtime);
+}
+
+#[test]
+fn signed_runtime_retains_canonical_enrollment_policy_preimages() {
+    let fixture = BaseFixture::new();
+    let selection = fixture.load().unwrap();
+    for (name, original, digest) in [
+        (
+            "android",
+            selection.android_enrollment_original,
+            selection.android_enrollment_policy,
+        ),
+        (
+            "apple",
+            selection.apple_enrollment_original,
+            selection.apple_enrollment_policy,
+        ),
+    ] {
+        let platform = object(field(object(&fixture.runtime).unwrap(), name).unwrap()).unwrap();
+        assert_eq!(
+            original,
+            raw(platform, "enrollment_policy_original_base64", 1024).unwrap()
+        );
+        let policy = KagemushaWalletEnrollmentPolicyV1::decode_canonical(
+            &original,
+            &fixture.scheme.scheme_id(),
+        )
+        .unwrap();
+        assert_eq!(policy.policy_digest().unwrap(), digest);
+    }
+}
+
+#[test]
+fn genuine_signed_runtime_rejects_missing_or_rebound_policy_preimages() {
+    for field_name in [
+        "app_policy_original_base64",
+        "enrollment_policy_original_base64",
+    ] {
+        let mut fixture = BaseFixture::new();
+        let Value::Object(runtime) = &mut fixture.runtime else {
+            panic!("runtime")
+        };
+        let Value::Object(platform) = runtime.get_mut("android").unwrap() else {
+            panic!("platform")
+        };
+        platform.remove(field_name);
+        assert!(fixture.load().is_err());
+
+        let mut fixture = BaseFixture::new();
+        let Value::Object(runtime) = &mut fixture.runtime else {
+            panic!("runtime")
+        };
+        let replacement = object(runtime.get("apple").unwrap()).unwrap()[field_name].clone();
+        mutate(runtime.get_mut("android").unwrap(), field_name, replacement);
+        assert!(fixture.load().is_err());
+    }
+    let mut fixture = BaseFixture::new();
+    mutate(
+        &mut fixture.runtime,
+        "challenge_lifetime_ms",
+        Value::from(120001u64),
+    );
+    assert!(fixture.load().is_err());
 }
 #[test]
 fn exact_whole_runtime_and_signed_genesis_preimages_cannot_be_retargeted() {
@@ -488,10 +616,10 @@ fn exact_whole_runtime_and_signed_genesis_preimages_cannot_be_retargeted() {
                 app_manifest: &app,
                 envelope: &envelope,
                 wallet_runtime: &runtime,
-                verifier_pack: b"",
-                producer_inventory: b"",
+                verifier_pack: TEST_PACK,
+                producer_inventory: TEST_CATALOG,
                 signed_genesis: &fixture.genesis,
-                originals_root: b""
+                originals_root: TEST_ROOT
             }
         )
         .is_err()
@@ -500,10 +628,9 @@ fn exact_whole_runtime_and_signed_genesis_preimages_cannot_be_retargeted() {
 #[test]
 fn genuinely_resigned_application_still_cannot_change_native_genesis_policy_or_asset() {
     let mut fixture = BaseFixture::new();
-    let Value::Object(app) = &mut fixture.app else {
-        panic!("app")
-    };
-    let consensus = app.get_mut("consensus").unwrap();
+    let consensus = native_installation_mut(&mut fixture.app)
+        .get_mut("consensus")
+        .unwrap();
     mutate(
         consensus,
         "mode",
@@ -511,18 +638,17 @@ fn genuinely_resigned_application_still_cannot_change_native_genesis_policy_or_a
     );
     assert!(fixture.load().is_err());
     let mut fixture = BaseFixture::new();
-    let Value::Object(app) = &mut fixture.app else {
-        panic!("app")
-    };
     mutate(
-        app.get_mut("digitalKina").unwrap(),
+        native_installation_mut(&mut fixture.app)
+            .get_mut("asset")
+            .unwrap(),
         "scale",
         Value::from(3u64),
     );
     assert!(fixture.load().is_err());
 }
 #[test]
-fn issuer_tool_metadata_is_bounded_data_and_never_an_executable_input() {
+fn closed_runtime_rejects_tool_fields_and_out_of_bounds_challenge_lifetime() {
     let mut fixture = BaseFixture::new();
     mutate(
         &mut fixture.runtime,
@@ -573,6 +699,170 @@ fn genuine_signed_base_cannot_omit_financial_originals_or_register_an_owner() {
             ..
         })
     ));
+}
+
+#[test]
+fn every_native_offered_original_role_is_mandatory_and_bounded() {
+    let fixture = BaseFixture::new();
+    let (app, envelope, runtime) = fixture.originals();
+    for offered in 0..8 {
+        let input = RuntimeOriginals {
+            app_manifest: &app,
+            envelope: &envelope,
+            wallet_runtime: &runtime,
+            signed_genesis: &fixture.genesis,
+            verifier_pack: if offered & 1 == 0 { b"" } else { TEST_PACK },
+            producer_inventory: if offered & 2 == 0 { b"" } else { TEST_CATALOG },
+            originals_root: if offered & 4 == 0 { b"" } else { TEST_ROOT },
+        };
+        if offered == 7 {
+            assert!(input.validate_bounds().is_ok());
+        } else {
+            assert_eq!(input.validate_bounds().unwrap_err().status, INVALID);
+        }
+    }
+    for missing in 0..7 {
+        let mut input = RuntimeOriginals {
+            app_manifest: &app,
+            envelope: &envelope,
+            wallet_runtime: &runtime,
+            signed_genesis: &fixture.genesis,
+            verifier_pack: TEST_PACK,
+            producer_inventory: TEST_CATALOG,
+            originals_root: TEST_ROOT,
+        };
+        match missing {
+            0 => input.app_manifest = b"",
+            1 => input.envelope = b"",
+            2 => input.wallet_runtime = b"",
+            3 => input.verifier_pack = b"",
+            4 => input.producer_inventory = b"",
+            5 => input.signed_genesis = b"",
+            _ => input.originals_root = b"",
+        }
+        assert_eq!(input.validate_bounds().unwrap_err().status, INVALID);
+    }
+}
+
+#[test]
+fn cbsi_signed_release_requires_exact_mobile_selection_and_all_seven_inventory_roles() {
+    let fixture = BaseFixture::new();
+    let selected = fixture.load().unwrap();
+    assert_eq!(selected._service_release_scope, [0x10; 32]);
+    assert_eq!(selected.producer_catalog_digest, [0x13; 32]);
+    for field_name in [
+        "service_release_scope",
+        "scheme_id",
+        "artifact_manifest_digest",
+        "producer_catalog_digest",
+        "native_installation",
+    ] {
+        let mut fixture = BaseFixture::new();
+        mobile_mut(&mut fixture.app).remove(field_name);
+        assert!(fixture.load().is_err());
+    }
+    for (name, changed) in [
+        ("mode", Value::String("disabled".into())),
+        ("scheme_id", Value::String("11".repeat(32))),
+        ("artifact_manifest_digest", Value::String("12".repeat(32))),
+    ] {
+        let mut fixture = BaseFixture::new();
+        mobile_mut(&mut fixture.app).insert(name.into(), changed);
+        assert!(fixture.load().is_err());
+    }
+    let (app, _, runtime) = fixture.originals();
+    let app = cbsi::signed_document(&app).unwrap();
+    for role in cbsi::REQUIRED {
+        let mut changed = app.clone();
+        let Value::Array(rows) = mobile_mut(&mut changed).get_mut("trust_assets").unwrap() else {
+            panic!("rows")
+        };
+        rows.retain(|row| row.as_object().unwrap()["file_name"].as_str().unwrap() != role);
+        let original = canonical(&changed);
+        assert!(
+            Selection::load(
+                &RuntimeTrust::test(fixture.key.public_key().clone()),
+                &RuntimeOriginals {
+                    app_manifest: &original,
+                    envelope: &sign(&fixture.key, &original),
+                    wallet_runtime: &runtime,
+                    verifier_pack: TEST_PACK,
+                    producer_inventory: TEST_CATALOG,
+                    signed_genesis: &fixture.genesis,
+                    originals_root: TEST_ROOT,
+                }
+            )
+            .is_err()
+        );
+    }
+    for role in [
+        "kagemusha/verifier-pack.norito",
+        "kagemusha/producer-inventory.norito",
+        "kagemusha/wallet-runtime.json",
+        "kagemusha/signed-genesis.norito",
+    ] {
+        let mut changed = app.clone();
+        let Value::Array(rows) = mobile_mut(&mut changed).get_mut("trust_assets").unwrap() else {
+            panic!("rows")
+        };
+        let row = rows
+            .iter_mut()
+            .find(|row| row.as_object().unwrap()["file_name"].as_str().unwrap() == role)
+            .unwrap();
+        object_mut(row).insert("sha256".into(), Value::String("ff".repeat(32)));
+        let original = canonical(&changed);
+        assert!(
+            Selection::load(
+                &RuntimeTrust::test(fixture.key.public_key().clone()),
+                &RuntimeOriginals {
+                    app_manifest: &original,
+                    envelope: &sign(&fixture.key, &original),
+                    wallet_runtime: &runtime,
+                    verifier_pack: TEST_PACK,
+                    producer_inventory: TEST_CATALOG,
+                    signed_genesis: &fixture.genesis,
+                    originals_root: TEST_ROOT,
+                }
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn retired_bpng_signature_domain_and_runtime_grammar_are_not_aliases() {
+    let fixture = BaseFixture::new();
+    let (app, envelope, _) = fixture.originals();
+    let mut envelope = json(&envelope, ENVELOPE_MAX, true).unwrap();
+    mutate(
+        &mut envelope,
+        "schema",
+        Value::String("bpng.taira-app-runtime-manifest-signature.v6".into()),
+    );
+    assert!(
+        signed_app(
+            &RuntimeTrust::test(fixture.key.public_key().clone()),
+            &app,
+            &canonical(&envelope)
+        )
+        .is_err()
+    );
+    let mut fixture = BaseFixture::new();
+    mutate(
+        &mut fixture.runtime,
+        "schema",
+        Value::String("bpng.current-wallet-core-runtime.v1".into()),
+    );
+    assert!(fixture.load().is_err());
+    let mut fixture = BaseFixture::new();
+    mutate(
+        native_installation_mut(&mut fixture.app)
+            .get_mut("firstDeviceAuthentication")
+            .unwrap(),
+        "schema",
+        Value::String("bpng.first-device-auth-runtime-selection.v1".into()),
+    );
+    assert!(fixture.load().is_err());
 }
 
 // These genuinely delegated credential signatures test signed scope only. Evidence facts

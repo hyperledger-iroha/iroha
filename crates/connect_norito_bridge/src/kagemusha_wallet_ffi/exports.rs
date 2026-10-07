@@ -210,7 +210,8 @@ pub extern "C" fn connect_norito_kagemusha_wallet_activity_v1(
 }
 /// Typed lifecycle input. Unused original slots and amount limbs must be zero/empty.
 /// Selectors: Load0, Send1, Receive2, Credential3, SchemePolicy4, Blacklist5,
-/// TimeAnchor6, QuotaShare7, Unload8, Retire9. These never select proof keys.
+/// TimeAnchor6, QuotaShare7, Unload8, Retire9, ReceiveFromOffer10. These never select proof keys.
+/// ReceiveFromOffer carries exact Payment and signed Offer originals; Native extracts payer custody.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct WalletOperationRequest {

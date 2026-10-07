@@ -21,7 +21,6 @@ mod confidential_prover;
 #[cfg(unix)]
 mod first_device_auth_key_v1;
 mod gpu;
-#[cfg(unix)]
 mod kagemusha_wallet_advance;
 mod kagemusha_wallet_review;
 

@@ -102,4 +102,28 @@ class KagemushaWalletHostNativeV1Test {
             assertTrue(reply.bytes().isEmpty())
         }
     }
+    @Test
+    fun realReviewJniReturnsSeparateFailuresWithoutAdmittingUnknownOwners() {
+        val id = ByteArray(32) { 1 }
+        val reply = assertNotNull(KagemushaWalletNativeV1.review(0, 1, 0, 0, byteArrayOf(1), byteArrayOf()))
+        assertEquals(-2, reply.status); assertEquals(-1, reply.reason); assertEquals(0, reply.platformCode)
+        // Strict negative Review parsing checks every private zero token/high/detail/bytes
+        // field. A malformed negative reply yields INVALID_NATIVE_OUTPUT rather than -2.
+        assertTrue(reply.cleanupToken()==null)
+        val refusal=assertFailsWith<KagemushaWalletExceptionV1> {
+            reply.review(Any(),KagemushaWalletReviewProjectionV1.Kind.SEND)
+        }
+        assertEquals(-2,refusal.status)
+        for (selector in listOf(0, 2, 9, 99)) {
+            assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, selector, 0, 0, byteArrayOf(1), byteArrayOf())).status)
+        }
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, 1, 0, byteArrayOf(1), byteArrayOf())).status)
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, 0, 0, ByteArray(10_001), byteArrayOf())).status)
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 8, 1, 0, byteArrayOf(1), byteArrayOf())).status)
+        val execution = assertNotNull(KagemushaWalletNativeV1.executeReviewed(0, 1, id))
+        assertEquals(-2, execution.status); assertTrue(execution.bytes().isEmpty())
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.executeReviewed(0, 1, ByteArray(31))).status)
+        assertEquals(-2, KagemushaWalletNativeV1.discardReview(0, 1))
+    }
+
 }

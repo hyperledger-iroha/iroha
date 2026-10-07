@@ -71,8 +71,8 @@ impl CatalogOriginals {
             return Err(Failure::code(INVALID));
         }
         let metadata = PrivateDirectory::open_exact(root).map_err(storage)?;
-        // All five agreed financial offering paths must exist. Metadata aliases are
-        // fixed, never guessed from source-writer names or selected by a transport row.
+        // All five financial offering paths have fixed current Native roles.
+        // A signed transport row cannot substitute a different path.
         for (name, bytes, cap) in [
             ("verifier-pack.norito", pack, VERIFIER_PACK_MAX_BYTES_V1),
             ("producer-inventory.norito", catalog, CATALOG_MAX_BYTES_V1),
@@ -85,8 +85,11 @@ impl CatalogOriginals {
         let transport = metadata
             .read("transport.json", 32 * 1024 * 1024)
             .map_err(storage)?;
+        if BlobV1::of(&transport) != selected.transport_identity {
+            return Err(Failure::code(INVALID));
+        }
         require_transport(inventory, &transport)?;
-        // The actual maintained mobile aliases are the only source directories. This
+        // The exact current financial roles are the only source directories. This
         // method creates no files and replaces no authority or old missing original.
         let wallet = DirectoryOriginalsV1::open_existing(
             root.join("wallet-originals"),
@@ -211,7 +214,8 @@ fn require_transport(inventory: &ProducerInventoryV1, bytes: &[u8]) -> Result<()
     );
     let value = selection::json_limits(bytes, 32 * 1024 * 1024, false, limits)?;
     let object = selection::exact(&value, &["schema", "walletOriginals", "finalityOriginals"])?;
-    if selection::text(object, "schema")? != "bpng.current-wallet-artifact-original-transport.v1" {
+    if selection::text(object, "schema")? != "iroha.kagemusha.wallet-artifact-original-transport.v1"
+    {
         return Err(Failure::code(INVALID));
     }
     let wallet = closed(

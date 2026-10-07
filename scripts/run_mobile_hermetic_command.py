@@ -52,7 +52,7 @@ ANDROID_CARGO_ENVIRONMENT = SERIALIZED_CARGO_ENVIRONMENT | {
 WALLET_RUNTIME_TRUST_INPUT = "MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX"
 
 
-def android_runtime_trust(value: str) -> str:
+def wallet_runtime_trust(value: str) -> str:
     """Validate public build DATA; it grants no runtime or monetary authority."""
     if re.fullmatch(r"[0-9a-f]{64}", value) is None or value == "0" * 64:
         raise RuntimeError("native wallet runtime trust must be nonzero lowercase 32-byte hex")
@@ -117,18 +117,21 @@ PROFILES = {
 }
 
 
+for _profile in AUTHENTICATED_CARGO_PROFILES:
+    PROFILES[_profile] = PROFILES[_profile] | {WALLET_RUNTIME_TRUST_INPUT}
+
+
 def validate_profile_environment(profile: str, environment: dict[str, str]) -> None:
-    """Enforce one exact closed profile with an optional public Android key."""
+    """Enforce an exact profile and mandatory immutable public Native signer root."""
     expected = PROFILES[profile]
-    if profile in {"android-cargo", "android-armv7-diagnostic-cargo"} and WALLET_RUNTIME_TRUST_INPUT in environment:
-        android_runtime_trust(environment[WALLET_RUNTIME_TRUST_INPUT])
-        expected = expected | {WALLET_RUNTIME_TRUST_INPUT}
     actual = set(environment)
     if actual != expected:
         raise RuntimeError(
             f"{profile} environment inventory is not exact "
             f"(missing={sorted(expected - actual)}, unexpected={sorted(actual - expected)})"
         )
+    if profile in AUTHENTICATED_CARGO_PROFILES:
+        wallet_runtime_trust(environment[WALLET_RUNTIME_TRUST_INPUT])
 
 
 def parse_assignment(raw: str) -> tuple[str, str]:

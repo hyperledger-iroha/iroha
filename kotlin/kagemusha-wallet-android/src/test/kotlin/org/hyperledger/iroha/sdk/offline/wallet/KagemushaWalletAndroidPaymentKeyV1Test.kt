@@ -773,6 +773,19 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.attestationChain(slot))
     }
 
+    @Test fun `enrollment attestation read binds the exact Native public key without generation`() {
+        val slot = slot()
+        val entry = keyStore.seed(alias(slot))
+        val publicKey = assertIs<KagemushaWalletAndroidKeyProbeV1.Present>(paymentKey.probe(slot)).publicKeySec1()
+        val chain = assertIs<KagemushaWalletAndroidAttestationChainV1.Present>(paymentKey.enrollmentAttestationChain(slot, publicKey))
+        assertEquals(entry.chain!!.map { it.encoded.toList() }, chain.certificatesDer().map { it.toList() })
+        assertEquals(KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE,
+            assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.enrollmentAttestationChain(slot, publicKey.copyOf().also { it[1] = (it[1].toInt() xor 1).toByte() })).reason)
+        keyStore.getKeyFailure = IllegalStateException("unavailable")
+        assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.enrollmentAttestationChain(slot, publicKey))
+        assertTrue(keyStore.generated.isEmpty())
+    }
+
     private fun KagemushaWalletAndroidKeyFactsV1.copy(
         insideSecureHardware: Boolean = this.insideSecureHardware,
         securityLevel: Int? = this.securityLevel,

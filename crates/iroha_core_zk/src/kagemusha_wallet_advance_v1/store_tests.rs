@@ -1187,3 +1187,123 @@ mod std_fs {
         ));
     }
 }
+
+#[cfg(windows)]
+mod windows_std_fs {
+    use super::*;
+    use crate::kagemusha_wallet_advance_v1::{
+        KagemushaWalletStdFsV1, kagemusha_wallet_probe_noreplace_v1,
+    };
+    fn native_store() -> (
+        tempfile::TempDir,
+        KagemushaWalletDurableStoreV1<KagemushaWalletStdFsV1>,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        assert_eq!(
+            KagemushaWalletStdFsV1::create_root(&root),
+            KagemushaWalletPublishOutcomeV1::Published
+        );
+        let fs = KagemushaWalletStdFsV1::open(&root).unwrap();
+        let store = KagemushaWalletDurableStoreV1::new(fs);
+        assert_eq!(
+            store.create_dir(&KagemushaWalletCustodyDirV1::root(), &name("d")),
+            KagemushaWalletPublishOutcomeV1::Published
+        );
+        (temp, store)
+    }
+    #[test]
+    fn wallet_windows_original_publication_collision_rewrite_sync_and_removal() {
+        let (_temp, store) = native_store();
+        assert_eq!(
+            store.write_new(&dir(), &name("record"), BYTES),
+            KagemushaWalletPublishOutcomeV1::Published
+        );
+        assert_eq!(
+            store.write_new(&dir(), &name("record"), OTHER),
+            KagemushaWalletPublishOutcomeV1::NotPublished(
+                KagemushaWalletNotPublishedV1::DestinationExists
+            )
+        );
+        assert_eq!(
+            store.read(&dir(), &name("record"), 1024),
+            KagemushaWalletReadV1::Present(BYTES.to_vec())
+        );
+        assert_eq!(
+            store.rewrite_same(&dir(), &name("record"), BYTES),
+            KagemushaWalletPublishOutcomeV1::Published
+        );
+        assert_eq!(store.sync_file(&dir(), &name("record")), Ok(()));
+        assert_eq!(store.remove_staging(&dir()), Ok(0));
+        assert_eq!(
+            store.remove_file(&dir(), &name("record")),
+            KagemushaWalletRemoveOutcomeV1::Removed
+        );
+        assert_eq!(kagemusha_wallet_probe_noreplace_v1(&store), Ok(()));
+    }
+    #[test]
+    fn wallet_windows_missing_sync_and_cached_empty_directory_removal() {
+        let (_temp, store) = native_store();
+        assert!(store.sync_file(&dir(), &name("missing")).is_err());
+        assert_eq!(
+            store.read(&dir(), &name("missing"), 1024),
+            KagemushaWalletReadV1::Absent
+        );
+        assert!(matches!(
+            store.list(&dir()),
+            KagemushaWalletProbeV1::Present(_)
+        ));
+        assert_eq!(
+            store.remove_dir(&KagemushaWalletCustodyDirV1::root(), &name("d")),
+            KagemushaWalletRemoveOutcomeV1::Removed
+        );
+        assert_eq!(
+            store.remove_dir(&KagemushaWalletCustodyDirV1::root(), &name("d")),
+            KagemushaWalletRemoveOutcomeV1::Removed
+        );
+    }
+    #[test]
+    fn wallet_windows_failed_consuming_removal_never_adopts_a_reopened_child() {
+        let (temp, store) = native_store();
+        assert!(matches!(
+            store.list(&dir()),
+            KagemushaWalletProbeV1::Present(_)
+        ));
+        // An independently retained exact child prevents the required DELETE transfer.
+        let held = iroha_fs::PrivateDirectory::open(temp.path().join("root/d")).unwrap();
+        assert!(!matches!(
+            store.remove_dir(&KagemushaWalletCustodyDirV1::root(), &name("d")),
+            KagemushaWalletRemoveOutcomeV1::Removed
+        ));
+        drop(held);
+        assert!(matches!(
+            store.list(&dir()),
+            KagemushaWalletProbeV1::Unavailable(_)
+        ));
+        assert!(matches!(
+            store.write_new(&dir(), &name("intruder"), BYTES),
+            KagemushaWalletPublishOutcomeV1::NotPublished(_)
+        ));
+        assert!(!temp.path().join("root/d/intruder").exists());
+        assert!(matches!(
+            store.create_dir(&KagemushaWalletCustodyDirV1::root(), &name("d")),
+            KagemushaWalletPublishOutcomeV1::Uncertain(_)
+        ));
+    }
+    #[test]
+    fn wallet_windows_ownership_fence_and_available_space_use_native_custody() {
+        let (temp, store) = native_store();
+        let other = KagemushaWalletDurableStoreV1::new(
+            KagemushaWalletStdFsV1::open(temp.path().join("root")).unwrap(),
+        );
+        let lock = store.lock_exclusive().unwrap();
+        assert_eq!(
+            other.lock_exclusive().err(),
+            Some(KagemushaWalletUnavailableV1::Busy)
+        );
+        assert!(std::fs::rename(temp.path().join("root"), temp.path().join("moved")).is_err());
+        assert!(store.available_bytes().unwrap() > 0);
+        drop(lock);
+        let _lock = other.lock_exclusive().unwrap();
+    }
+}

@@ -25,8 +25,9 @@ use iroha_plonk::keys::pk::artifact::ReadConfig;
 pub use review::{NativeOperationReviewV1, ReviewedOperationV1};
 use runtime::RuntimeCustodyV1;
 pub use runtime::{
-    NativeInstallationConfigV1, NativeOpenErrorV1, NativeOpenFailureV1, NativeStartupFailureV1,
-    NativeWalletCoordinatorV1, NativeWalletRuntimeV1, PendingNativeWalletOpenV1,
+    NativeEnrollmentOperationV1, NativeInstallationConfigV1, NativeOpenErrorV1,
+    NativeOpenFailureV1, NativeStartupFailureV1, NativeWalletCoordinatorV1, NativeWalletRuntimeV1,
+    PendingNativeWalletOpenV1,
 };
 use std::sync::{Arc, Mutex};
 

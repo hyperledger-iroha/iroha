@@ -2657,8 +2657,8 @@ class StorageAdmissionTests(unittest.TestCase):
                 def child(argv, **kwargs):
                     self.assertEqual(argv, ['pinned'])
                     self.assertEqual(kwargs['timeout'], runner.GUEST_OPERATION_TIMEOUT_SECONDS)
-                    self.assertEqual(kwargs['input'][:len((SCRIPTS / 'taira_update_guest.py').read_bytes())],
-                                     (SCRIPTS / 'taira_update_guest.py').read_bytes())
+                    self.assertEqual(kwargs['input'][:len(GUEST_FILE.read_bytes())],
+                                     GUEST_FILE.read_bytes())
                     kwargs['stderr'].write(b'private-secret\n')
                     self.assertTrue(heartbeat_seen.wait(2), 'heartbeat did not fire while guest was running')
                     if timeout:

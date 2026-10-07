@@ -10,8 +10,11 @@ import sqlite3
 import subprocess
 import sys
 import urllib.parse
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor, wait
+from types import SimpleNamespace
 import time
 import unittest
 import zipfile
@@ -20,9 +23,10 @@ from unittest.mock import patch
 
 from iroha_app_attestation.attestation import AttestationRejected
 from iroha_app_attestation.wallet_enrollment_worker import (
-    CONFIG_SCHEMA, SCHEMA, MAX_PACKET, MAX_REQUEST, MAX_ORIGINAL, EXCHANGE_WINDOW, VerifierOwner,
+    CONFIG_SCHEMA, PREPARATION_SCHEMA, SCHEMA, MAX_PACKET, MAX_REQUEST, MAX_ORIGINAL, EXCHANGE_WINDOW, VerifierOwner,
     configured_policy, encode, exact_json, read_packet, serve,
 )
+from iroha_app_attestation.wallet_enrollment import WalletEnrollmentScope
 from test_wallet_enrollment import (GENERATOR, scope, assertion, apple_object,
                                     configured_policy as fixture_policy, policy_scope, synthetic_root)
 from test_synthetic_platform_evidence import SignedEnvelope, keymint_description
@@ -30,6 +34,52 @@ from iroha_app_attestation import openssl_private_rsa as crypto, play_integrity 
 from iroha_app_attestation.attestation import ANDROID_KEY_DESCRIPTION_OID, Selection, VerificationUnavailable
 from iroha_app_attestation.google_oauth import GoogleServiceAccountTokenProvider, TOKEN_URI, OAUTH_SCOPE, POLICY_SCHEMA
 from test_google_oauth import SyntheticCodeOriginal, EMAIL, CLIENT_ID, PROJECT
+
+
+# These are private-packet DATA fixtures. Canonical Norito account decoding and Ed25519
+# signature authentication are Core responsibilities, never authority supplied by this test.
+ACCOUNT_SIGNATURE = b"s" * 64
+
+
+def preparation_original(owner, original):
+    value = exact_json(original, MAX_REQUEST)
+    selected = WalletEnrollmentScope(base64.b64decode(value["challenge_transcript_base64"]),
+                                     base64.b64decode(value["payment_key_base64"]))
+    return encode({"schema": PREPARATION_SCHEMA, "operation_id": selected.challenge_digest().hex(),
+        "challenge_transcript_base64": value["challenge_transcript_base64"],
+        "account_original_base64": base64.b64encode(b"synthetic canonical account DATA").decode(),
+        "account_owner_public_hex": "55" * 32,
+        "issued_at_ms": value["issued_at_ms"], "expires_at_ms": value["expires_at_ms"],
+        "platform": value["platform"], "app_policy_hex": owner.app_policy.hex(),
+        "enrollment_policy_hex": owner.enrollment_policy.hex(), "config_sha256": owner.config_digest.hex()})
+
+
+def dispatch(owner, original, action):
+    preparation = preparation_original(owner, original)
+    incarnation = owner.counters.incarnation
+    if action == "complete":
+        owner.prepare(incarnation, preparation)
+    return owner.perform(original, action, incarnation=incarnation, preparation=preparation,
+        account_signature=ACCOUNT_SIGNATURE, dispatch_time_ms=exact_json(original, MAX_REQUEST)["trusted_time_ms"])
+
+
+def packet(action="recover", *, exchange="31" * 32, owner=None, original=b"{}"):
+    operation = action in ("complete", "recover")
+    return encode({"schema": SCHEMA, "version": 1, "exchange_id": exchange, "action": action,
+        "journal_incarnation": None if action == "journal" else ("21" * 32 if owner is None else owner.counters.incarnation.hex()),
+        "preparation_base64": None if action == "journal" else base64.b64encode(
+            b"{}" if owner is None else preparation_original(owner, original)).decode(),
+        "original_base64": base64.b64encode(original).decode() if operation else None,
+        "account_signature_base64": base64.b64encode(ACCOUNT_SIGNATURE).decode() if operation else None,
+        "dispatch_time_ms": (1 if owner is None else exact_json(original, MAX_REQUEST)["trusted_time_ms"]) if operation else None})
+
+
+class ProtocolOnlyOwner:
+    # Only framing/error tests use this inert owner; it cannot produce evidence.
+    counters = SimpleNamespace(incarnation=b"!" * 32)
+    config_digest = b"c" * 32
+    def perform(self, original, action, **arguments): return None
+
 
 
 class WorkerTests(unittest.TestCase):
@@ -77,7 +127,7 @@ class WorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             open_owner, request, selected, key_id = self.owner_fixture(Path(temporary))
             owner = open_owner()
-            original = owner.perform(request, "verify")
+            original = dispatch(owner, request, "complete")
             projection = exact_json(original, MAX_PACKET)
             self.assertEqual(projection["key_binding"], selected.enrollment_key_binding().hex())
             self.assertEqual(projection["kind_tag"], 3)
@@ -88,10 +138,9 @@ class WorkerTests(unittest.TestCase):
             restarted = open_owner()
             with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
                        side_effect=AssertionError("recovery must not verify again")):
-                self.assertEqual(restarted.perform(request, "recover"), original)
-            with self.assertRaises(AttestationRejected):
-                restarted.perform(request, "verify")
-            with sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3") as connection:
+                self.assertEqual(dispatch(restarted, request, "recover"), original)
+            self.assertEqual(dispatch(restarted, request, "complete"), original)
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
                 self.assertEqual(connection.execute("SELECT counter FROM apple_keys WHERE key_id=?", (key_id,)).fetchone(), (1,))
                 self.assertEqual(connection.execute("SELECT count(*) FROM apple_client_data").fetchone(), (1,))
             restarted.close()
@@ -103,13 +152,13 @@ class WorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             open_owner, request, _, _ = self.owner_fixture(Path(temporary))
             owner = open_owner()
-            packet = encode({"schema": SCHEMA, "version": 1, "exchange_id": "31" * 32,
-                             "action": "verify", "original_base64": base64.b64encode(request).decode()})
+            owner.prepare(owner.counters.incarnation, preparation_original(owner, request))
+            message = packet("complete", owner=owner, original=request)
             with self.assertRaises(BrokenPipeError):
-                serve(owner, io.BytesIO(len(packet).to_bytes(4, "little") + packet), LostOutput())
+                serve(owner, io.BytesIO(len(message).to_bytes(4, "little") + message), LostOutput())
             owner.close()
             restarted = open_owner()
-            self.assertIsNotNone(restarted.perform(request, "recover"))
+            self.assertIsNotNone(dispatch(restarted, request, "recover"))
             restarted.close()
 
     def test_failed_apple_assertion_retains_attempt_without_counter_consumption(self):
@@ -122,35 +171,34 @@ class WorkerTests(unittest.TestCase):
             changed = encode(value)
             owner = open_owner()
             with self.assertRaises(AttestationRejected):
-                owner.perform(changed, "verify")
-            self.assertIsNone(owner.perform(changed, "recover"))
-            with self.assertRaises(AttestationRejected):
-                owner.perform(changed, "verify")
-            with sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3") as connection:
+                dispatch(owner, changed, "complete")
+            self.assertIsNone(dispatch(owner, changed, "recover"))
+            self.assertIsNone(dispatch(owner, changed, "complete"))
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
                 self.assertEqual(connection.execute("SELECT counter FROM apple_keys WHERE key_id=?", (key_id,)).fetchone(), (0,))
                 self.assertEqual(connection.execute("SELECT count(*) FROM apple_client_data").fetchone(), (0,))
             owner.close()
 
     def test_private_packet_bounds_duplicate_unknown_and_exchange_replay(self):
-        for packet in (b"x", b"\1\0\0\0", (MAX_PACKET + 1).to_bytes(4, "little")):
+        for malformed in (b"x", b"\1\0\0\0", (MAX_PACKET + 1).to_bytes(4, "little")):
             with self.assertRaises(AttestationRejected):
-                read_packet(io.BytesIO(packet))
+                read_packet(io.BytesIO(malformed))
         for original in (b'{"version":1,"version":1}', b'{} trailing', b'{"v":NaN}'):
             with self.assertRaises(AttestationRejected):
                 exact_json(original, MAX_PACKET)
-        class ProtocolOnlyOwner:
-            def perform(self, original, action):
-                return None
-        packet = encode({"schema": SCHEMA, "version": 1, "exchange_id": "31" * 32,
-                         "action": "recover", "original_base64": base64.b64encode(b"{}").decode()})
-        frame = len(packet).to_bytes(4, "little") + packet
+        message = packet()
+        frame = len(message).to_bytes(4, "little") + message
         with self.assertRaises(AttestationRejected):
             serve(ProtocolOnlyOwner(), io.BytesIO(frame + frame), io.BytesIO())
-        value = exact_json(packet, MAX_PACKET)
+        value = exact_json(message, MAX_PACKET)
         value["issuer_key"] = "forbidden"
         changed = encode(value)
         with self.assertRaises(AttestationRejected):
             serve(ProtocolOnlyOwner(), io.BytesIO(len(changed).to_bytes(4, "little") + changed), io.BytesIO())
+        retired = encode({"schema": SCHEMA, "version": 1, "exchange_id": "31" * 32,
+                          "action": "verify", "original_base64": "e30="})
+        with self.assertRaises(AttestationRejected):
+            serve(ProtocolOnlyOwner(), io.BytesIO(len(retired).to_bytes(4, "little") + retired), io.BytesIO())
 
     def test_fragmented_private_header_and_body_preserve_exact_packet(self):
         class Fragmented(io.BytesIO):
@@ -162,12 +210,11 @@ class WorkerTests(unittest.TestCase):
                                 (sqlite3.IntegrityError("private bearer"), "rejected"),
                                 (AttestationRejected("private bearer"), "rejected"),
                                 (VerificationUnavailable("private bearer"), "unavailable")):
-            class FailedOwner:
-                def perform(self, original, action): raise error
-            packet = encode({"schema": SCHEMA, "version": 1, "exchange_id": "31" * 32,
-                             "action": "recover", "original_base64": "e30="})
+            class FailedOwner(ProtocolOnlyOwner):
+                def perform(self, original, action, **arguments): raise error
+            message = packet()
             output = io.BytesIO()
-            serve(FailedOwner(), io.BytesIO(len(packet).to_bytes(4, "little") + packet), output)
+            serve(FailedOwner(), io.BytesIO(len(message).to_bytes(4, "little") + message), output)
             response = exact_json(read_packet(io.BytesIO(output.getvalue())), MAX_PACKET)
             self.assertEqual(response["outcome"], expected)
             self.assertIsNone(response["evidence_base64"])
@@ -183,17 +230,17 @@ class WorkerTests(unittest.TestCase):
                 value = exact_json(request, MAX_PACKET)
                 mutate(value)
                 with self.assertRaises(AttestationRejected):
-                    owner.perform(encode(value), "verify")
+                    dispatch(owner, encode(value), "complete")
             owner.close()
 
     def test_recovery_rechecks_original_custody_after_reading_committed_result(self):
         with tempfile.TemporaryDirectory() as temporary:
             open_owner, request, _, _ = self.owner_fixture(Path(temporary))
             owner = open_owner()
-            owner.perform(request, "verify")
+            dispatch(owner, request, "complete")
             with patch.object(owner, "recheck", side_effect=[None, AttestationRejected("changed original")]):
                 with self.assertRaises(AttestationRejected):
-                    owner.perform(request, "recover")
+                    dispatch(owner, request, "recover")
             owner.close()
 
 
@@ -224,46 +271,46 @@ class WorkerTests(unittest.TestCase):
                            lambda v: v.update({"issued_at_ms": True}),
                            lambda v: v.update({"trusted_time_ms": True})):
                 value = exact_json(request, MAX_PACKET); change(value)
-                with self.assertRaises(AttestationRejected): owner.perform(encode(value), "verify")
+                with self.assertRaises(AttestationRejected): dispatch(owner, encode(value), "complete")
             for index in (2, 34):
                 value = exact_json(request, MAX_PACKET)
                 transcript = bytearray(base64.b64decode(value["challenge_transcript_base64"]))
                 transcript[index] ^= 1
                 value["challenge_transcript_base64"] = base64.b64encode(transcript).decode()
-                with self.assertRaises(AttestationRejected): owner.perform(encode(value), "verify")
-            with sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3") as connection:
-                self.assertEqual(connection.execute("SELECT count(*) FROM wallet_e1_attempts").fetchone(), (0,))
+                with self.assertRaises(AttestationRejected): dispatch(owner, encode(value), "complete")
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                self.assertEqual(connection.execute("SELECT count(*) FROM wallet_e1_attempts WHERE request_sha256 IS NOT NULL").fetchone(), (0,))
 
     def test_recovery_requires_same_complete_configuration_original(self):
         with tempfile.TemporaryDirectory() as temporary:
             open_owner, request, _, _ = self.owner_fixture(Path(temporary))
-            owner = open_owner(); original = owner.perform(request, "verify"); owner.close()
+            owner = open_owner(); original = dispatch(owner, request, "complete"); owner.close()
             # Same semantic policy, different original: signed inventory and result binding differ.
             changed = open_owner.config + b" "
             restored = open_owner(changed); self.addCleanup(restored.close)
-            with self.assertRaises(AttestationRejected): restored.perform(request, "recover")
+            with self.assertRaises(AttestationRejected): dispatch(restored, request, "recover")
             unchanged = open_owner(); self.addCleanup(unchanged.close)
-            self.assertEqual(unchanged.perform(request, "recover"), original)
+            self.assertEqual(dispatch(unchanged, request, "recover"), original)
 
     def test_recovery_rejects_replaced_database_original(self):
         with tempfile.TemporaryDirectory() as temporary:
             open_owner, request, _, _ = self.owner_fixture(Path(temporary))
             owner = open_owner(); self.addCleanup(owner.close)
-            owner.perform(request, "verify")
+            dispatch(owner, request, "complete")
             path = Path(temporary) / "wallet-e1.sqlite3"
             replacement = Path(temporary) / "replacement.sqlite3"
             shutil.copyfile(path, replacement); replacement.chmod(0o600); replacement.replace(path)
-            with self.assertRaises(AttestationRejected): owner.perform(request, "recover")
+            with self.assertRaises(AttestationRejected): dispatch(owner, request, "recover")
 
     def test_recovery_rejects_hardlinked_database_and_shared_permissions(self):
         with tempfile.TemporaryDirectory() as temporary:
             open_owner, request, _, _ = self.owner_fixture(Path(temporary))
-            owner = open_owner(); self.addCleanup(owner.close); owner.perform(request, "verify")
+            owner = open_owner(); self.addCleanup(owner.close); dispatch(owner, request, "complete")
             path = Path(temporary) / "wallet-e1.sqlite3"
             link = Path(temporary) / "other.sqlite3"; os.link(path, link)
-            with self.assertRaises(AttestationRejected): owner.perform(request, "recover")
+            with self.assertRaises(AttestationRejected): dispatch(owner, request, "recover")
             link.unlink(); path.chmod(0o640)
-            with self.assertRaises(AttestationRejected): owner.perform(request, "recover")
+            with self.assertRaises(AttestationRejected): dispatch(owner, request, "recover")
 
     def test_held_configuration_original_is_rechecked_before_recovery(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -271,24 +318,21 @@ class WorkerTests(unittest.TestCase):
             path = Path(temporary) / "config.json"; path.write_bytes(open_owner.config); path.chmod(0o600)
             fd = os.open(path, os.O_RDONLY); self.addCleanup(os.close, fd)
             owner = open_owner(configuration_fd=fd); self.addCleanup(owner.close)
-            owner.perform(request, "verify")
+            dispatch(owner, request, "complete")
             path.write_bytes(open_owner.config + b" ")
-            with self.assertRaises(AttestationRejected): owner.perform(request, "recover")
+            with self.assertRaises(AttestationRejected): dispatch(owner, request, "recover")
 
     def test_bound_exchanges_continue_past_4096_and_recent_tags_still_reject(self):
-        class ReadOnlyProtocolOwner:
-            def perform(self, original, action): return None
         def frame(n):
-            packet = encode({"schema": SCHEMA, "version": 1, "exchange_id": n.to_bytes(32, "big").hex(),
-                             "action": "recover", "original_base64": "e30="})
-            return len(packet).to_bytes(4, "little") + packet
+            message = packet(exchange=n.to_bytes(32, "big").hex())
+            return len(message).to_bytes(4, "little") + message
         output = io.BytesIO()
-        serve(ReadOnlyProtocolOwner(), io.BytesIO(b"".join(frame(n) for n in range(1, EXCHANGE_WINDOW + 4))), output)
+        serve(ProtocolOnlyOwner(), io.BytesIO(b"".join(frame(n) for n in range(1, EXCHANGE_WINDOW + 4))), output)
         count = 0; replies = io.BytesIO(output.getvalue())
         while read_packet(replies) is not None: count += 1
         self.assertEqual(count, EXCHANGE_WINDOW + 3)
         with self.assertRaises(AttestationRejected):
-            serve(ReadOnlyProtocolOwner(), io.BytesIO(frame(1) + frame(2) + frame(1)), io.BytesIO())
+            serve(ProtocolOnlyOwner(), io.BytesIO(frame(1) + frame(2) + frame(1)), io.BytesIO())
 
     def test_attempt_original_cannot_be_changed_or_reverified_after_unknown_result(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -296,14 +340,257 @@ class WorkerTests(unittest.TestCase):
             owner = open_owner(); self.addCleanup(owner.close)
             with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
                        side_effect=VerificationUnavailable("synthetic outage")):
-                with self.assertRaises(VerificationUnavailable): owner.perform(request, "verify")
+                with self.assertRaises(VerificationUnavailable): dispatch(owner, request, "complete")
             with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
                        side_effect=AssertionError("ambiguous attempt must only recover")):
-                self.assertIsNone(owner.perform(request, "recover"))
-                with self.assertRaises(AttestationRejected): owner.perform(request, "verify")
+                self.assertIsNone(dispatch(owner, request, "recover"))
+                self.assertIsNone(dispatch(owner, request, "complete"))
             value = exact_json(request, MAX_PACKET); value["trusted_time_ms"] += 1
-            with self.assertRaises(sqlite3.IntegrityError): owner.perform(encode(value), "verify")
-            with self.assertRaises(AttestationRejected): owner.perform(encode(value), "recover")
+            with self.assertRaises(AttestationRejected): dispatch(owner, encode(value), "complete")
+            with self.assertRaises(AttestationRejected): dispatch(owner, encode(value), "recover")
+
+    def prepared(self, owner, request):
+        original = preparation_original(owner, request)
+        arguments = {"incarnation": owner.journal(), "preparation": original,
+            "account_signature": ACCOUNT_SIGNATURE,
+            "dispatch_time_ms": exact_json(request, MAX_REQUEST)["trusted_time_ms"]}
+        owner.prepare(arguments["incarnation"], original)
+        return arguments
+
+    def test_prepared_restart_closes_core_dispatch_gap_using_fresh_time(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, key_id = self.owner_fixture(Path(temporary))
+            owner = open_owner()
+            arguments = self.prepared(owner, request)
+            # Core can durably mark Attempted and die here, before delivering any request.
+            owner.close()
+            restarted = open_owner(); self.addCleanup(restarted.close)
+            self.assertEqual(restarted.journal(), arguments["incarnation"])
+            arguments["dispatch_time_ms"] += 123
+            result = restarted.perform(request, "recover", **arguments)
+            projection = exact_json(result, MAX_ORIGINAL)
+            self.assertEqual(projection["time_ms"], arguments["dispatch_time_ms"])
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                self.assertEqual(connection.execute("SELECT original, account_signature FROM wallet_e1_attempts").fetchone(),
+                                 (request, ACCOUNT_SIGNATURE))
+                self.assertEqual(connection.execute("SELECT counter FROM apple_keys WHERE key_id=?", (key_id,)).fetchone(), (1,))
+            arguments["dispatch_time_ms"] = exact_json(request, MAX_REQUEST)["expires_at_ms"] + 100000
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=AssertionError("cached recovery must not verify")):
+                restarted.prepare(arguments["incarnation"], arguments["preparation"])
+                self.assertEqual(restarted.perform(request, "recover", **arguments), result)
+                self.assertEqual(restarted.perform(request, "complete", **arguments), result)
+
+    def test_concurrent_complete_and_recover_have_one_real_external_verification(self):
+        from iroha_app_attestation.wallet_enrollment_worker import verify_apple_wallet_attestation_raw
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owners = [open_owner() for _ in range(8)]
+            for owner in owners: self.addCleanup(owner.close)
+            arguments = self.prepared(owners[0], request)
+            entered, release = threading.Event(), threading.Event()
+            barrier = threading.Barrier(len(owners))
+            def verify_once(*args, **kwargs):
+                entered.set()
+                if not release.wait(10): raise AssertionError("claim race did not finish")
+                return verify_apple_wallet_attestation_raw(*args, **kwargs)
+            def invoke(index):
+                barrier.wait(timeout=10)
+                return owners[index].perform(request, "complete" if index == 0 else "recover", **arguments)
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=verify_once) as external, ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [executor.submit(invoke, n) for n in range(8)]
+                try:
+                    self.assertTrue(entered.wait(10))
+                    completed, pending = wait(futures, timeout=2)
+                    self.assertEqual(len(completed), 7)
+                    self.assertEqual(len(pending), 1)
+                    self.assertTrue(all(item.result() is None for item in completed))
+                finally:
+                    release.set()
+                results = [item.result(timeout=10) for item in futures]
+                self.assertEqual(external.call_count, 1)
+                result = next(item for item in results if item is not None)
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                self.assertEqual(connection.execute("SELECT count(*) FROM apple_client_data").fetchone(), (1,))
+                self.assertEqual(connection.execute("SELECT result FROM wallet_e1_attempts").fetchone(), (result,))
+
+    def test_claimed_unknown_restart_never_repeats_external_verification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner()
+            arguments = self.prepared(owner, request)
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=VerificationUnavailable("lost external outcome")) as external:
+                with self.assertRaises(VerificationUnavailable): owner.perform(request, "recover", **arguments)
+                self.assertEqual(external.call_count, 1)
+            owner.close()
+            restored = open_owner(); self.addCleanup(restored.close)
+            arguments["dispatch_time_ms"] += 1000000
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=AssertionError("claimed NULL cannot grant another attempt")):
+                restored.prepare(arguments["incarnation"], arguments["preparation"])
+                for action in ("recover", "complete"):
+                    self.assertIsNone(restored.perform(request, action, **arguments))
+
+    def test_unknown_commit_acknowledgement_preserves_preparation_and_claim(self):
+        class LostCommitAcknowledgement:
+            def __init__(self, actual): self.actual = actual
+            def __getattr__(self, name): return getattr(self.actual, name)
+            def execute(self, statement, *args):
+                result = self.actual.execute(statement, *args)
+                if statement == "COMMIT":
+                    raise sqlite3.OperationalError("synthetic lost commit acknowledgement")
+                return result
+        for phase in ("prepare", "claim"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+                owner = open_owner()
+                epoch, original = owner.journal(), preparation_original(owner, request)
+                arguments = {"incarnation": epoch, "preparation": original,
+                    "account_signature": ACCOUNT_SIGNATURE,
+                    "dispatch_time_ms": exact_json(request, MAX_REQUEST)["trusted_time_ms"]}
+                if phase == "claim": owner.prepare(epoch, original)
+                connect = owner.counters._connect
+                with patch.object(owner.counters, "_connect", side_effect=lambda: LostCommitAcknowledgement(connect())), \
+                     patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                           side_effect=AssertionError("unknown commit must not invoke verifier")):
+                    with self.assertRaises(sqlite3.OperationalError):
+                        if phase == "prepare": owner.prepare(epoch, original)
+                        else: owner.perform(request, "recover", **arguments)
+                owner.close()
+                restarted = open_owner(); self.addCleanup(restarted.close)
+                self.assertEqual(restarted.journal(), epoch)
+                restarted.prepare(epoch, original)
+                if phase == "prepare":
+                    self.assertIsNotNone(restarted.perform(request, "recover", **arguments))
+                else:
+                    with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                               side_effect=AssertionError("claimed unknown never becomes prepared")):
+                        self.assertIsNone(restarted.perform(request, "recover", **arguments))
+
+    def test_missing_prepared_row_or_changed_epoch_never_grants_a_claim(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner()
+            original = preparation_original(owner, request)
+            epoch = owner.journal()
+            arguments = {"incarnation": epoch, "preparation": original,
+                "account_signature": ACCOUNT_SIGNATURE,
+                "dispatch_time_ms": exact_json(request, MAX_REQUEST)["trusted_time_ms"]}
+            for action in ("recover", "complete"):
+                with self.assertRaisesRegex(AttestationRejected, "prepared original absent"):
+                    owner.perform(request, action, **arguments)
+            owner.prepare(epoch, original)
+            owner.close()
+            (Path(temporary) / "wallet-e1.sqlite3").unlink()
+            replacement = open_owner(); self.addCleanup(replacement.close)
+            self.assertNotEqual(replacement.journal(), epoch)
+            # A delayed pre-crash prepare cannot reconstruct the old epoch or its row.
+            with self.assertRaisesRegex(AttestationRejected, "incarnation"):
+                replacement.prepare(epoch, original)
+            for action in ("recover", "complete"):
+                with self.assertRaisesRegex(AttestationRejected, "incarnation"):
+                    replacement.perform(request, action, **arguments)
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                self.assertEqual(connection.execute("SELECT count(*) FROM wallet_e1_attempts").fetchone(), (0,))
+
+    def test_legacy_partial_or_missing_incarnation_is_never_backfilled(self):
+        for state in ("empty", "legacy", "missing_epoch", "missing_counter"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
+                open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+                path = Path(temporary) / "wallet-e1.sqlite3"
+                if state in ("missing_epoch", "missing_counter"):
+                    owner = open_owner(); self.prepared(owner, request); owner.close()
+                    with closing(sqlite3.connect(path)) as connection:
+                        connection.execute("DELETE FROM wallet_e1_journal" if state == "missing_epoch"
+                                           else "DROP TABLE apple_client_data")
+                        connection.commit()
+                else:
+                    path.touch(mode=0o600)
+                    if state == "legacy":
+                        with closing(sqlite3.connect(path)) as connection:
+                            connection.execute("CREATE TABLE wallet_e1_attempts (request_sha256 BLOB PRIMARY KEY, result BLOB)")
+                            connection.commit()
+                before = path.read_bytes()
+                with self.assertRaises((AttestationRejected, sqlite3.Error)):
+                    open_owner()
+                self.assertEqual(path.read_bytes(), before)
+
+    def test_preparation_exact_scope_owner_originals_and_epoch_are_immutable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            arguments = self.prepared(owner, request)
+            source = exact_json(arguments["preparation"], MAX_PACKET)
+            changes = ({"schema": "foreign"}, {"operation_id": "09" * 32},
+                {"account_owner_public_hex": "00" * 32}, {"account_owner_public_hex": "66" * 32},
+                {"account_original_base64": "eA=="}, {"account_original_base64": "eA"},
+                {"platform": "android"}, {"app_policy_hex": "09" * 32},
+                {"enrollment_policy_hex": "09" * 32}, {"config_sha256": "09" * 32},
+                {"issued_at_ms": True}, {"expires_at_ms": source["expires_at_ms"] + 1}, {"unknown": None})
+            for change in changes:
+                with self.subTest(change=change), self.assertRaises(AttestationRejected):
+                    owner.prepare(arguments["incarnation"], encode(dict(source, **change)))
+            with self.assertRaisesRegex(AttestationRejected, "incarnation"):
+                owner.prepare(b"\0" * 32, arguments["preparation"])
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                self.assertEqual(connection.execute("SELECT preparation, request_sha256 FROM wallet_e1_attempts").fetchone(),
+                                 (arguments["preparation"], None))
+
+    def test_first_claim_requires_fresh_bounded_time_without_rewriting_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            arguments = self.prepared(owner, request)
+            source = exact_json(request, MAX_REQUEST)
+            for now in (None, True, source["trusted_time_ms"] - 1, source["expires_at_ms"], 1 << 64):
+                with self.subTest(now=now), self.assertRaises(AttestationRejected):
+                    owner.perform(request, "recover", **dict(arguments, dispatch_time_ms=now))
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                self.assertEqual(connection.execute("SELECT request_sha256 FROM wallet_e1_attempts").fetchone(), (None,))
+            result = owner.perform(request, "recover", **arguments)
+            self.assertEqual(exact_json(result, MAX_ORIGINAL)["time_ms"], source["trusted_time_ms"])
+
+    def test_claim_binds_exact_account_signature_and_every_request_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            arguments = self.prepared(owner, request)
+            result = owner.perform(request, "complete", **arguments)
+            for signature in (b"x" * 64, b"s" * 63, bytearray(ACCOUNT_SIGNATURE)):
+                with self.subTest(signature=signature), self.assertRaises(AttestationRejected):
+                    owner.perform(request, "recover", **dict(arguments, account_signature=signature))
+            for changed in (request + b" ", encode(dict(exact_json(request, MAX_REQUEST), trusted_time_ms=arguments["dispatch_time_ms"] + 1))):
+                with self.assertRaises(AttestationRejected):
+                    owner.perform(changed, "recover", **dict(arguments, dispatch_time_ms=arguments["dispatch_time_ms"] + 2))
+            self.assertEqual(owner.perform(request, "recover", **arguments), result)
+
+    def test_private_journal_prepare_and_recovery_responses_bind_whole_packet(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            for action, outcome in (("journal", "journal"), ("prepare", "prepared"), ("recover", "evidence")):
+                message = packet(action, owner=owner, original=request)
+                output = io.BytesIO()
+                serve(owner, io.BytesIO(len(message).to_bytes(4, "little") + message), output)
+                response = exact_json(read_packet(io.BytesIO(output.getvalue())), MAX_PACKET)
+                self.assertEqual(set(response), {"schema", "version", "exchange_id", "request_sha256",
+                    "journal_incarnation", "config_sha256", "outcome", "evidence_base64"})
+                self.assertEqual(response["request_sha256"], hashlib.sha256(message).hexdigest())
+                self.assertEqual(response["journal_incarnation"], owner.journal().hex())
+                self.assertEqual(response["config_sha256"], owner.config_digest.hex())
+                self.assertEqual(response["outcome"], outcome)
+            # Explicit nulls are part of the contract; a journal/prepare request cannot carry a dispatch.
+            for action, change in (("journal", {"journal_incarnation": owner.journal().hex()}),
+                                   ("prepare", {"account_signature_base64": base64.b64encode(ACCOUNT_SIGNATURE).decode()}),
+                                   ("prepare", {"dispatch_time_ms": 1})):
+                message = encode(dict(exact_json(packet(action, owner=owner, original=request), MAX_PACKET), **change))
+                output = io.BytesIO()
+                serve(owner, io.BytesIO(len(message).to_bytes(4, "little") + message), output)
+                response = exact_json(read_packet(io.BytesIO(output.getvalue())), MAX_PACKET)
+                self.assertEqual(response["outcome"], "rejected")
+                self.assertIsNone(response["evidence_base64"])
 
 
 class AndroidIntegratedWorkerTests(unittest.TestCase):
@@ -426,7 +713,7 @@ class AndroidIntegratedWorkerTests(unittest.TestCase):
             owner = self.actual_owner(config, directory, credential, stack)
             transport, calls, originals = self.transport(selected, now)
             stack.enter_context(patch("urllib.request.build_opener", return_value=transport))
-            result = owner.perform(request, "verify")
+            result = dispatch(owner, request, "complete")
             projection = exact_json(result, MAX_ORIGINAL)
             self.assertEqual(projection["kind_tag"], level)
             self.assertEqual(projection["payment_key_base64"], base64.b64encode(selected.payment_key_sec1).decode())
@@ -434,7 +721,7 @@ class AndroidIntegratedWorkerTests(unittest.TestCase):
             self.assertEqual(base64.b64decode(projection["original_items_base64"][-1]), originals["google"])
             self.assertEqual(calls, [revocation.GOOGLE_STATUS_URL, TOKEN_URI,
                                     "https://playintegrity.googleapis.com/v1/org.example.wallet:decodeIntegrityToken"])
-            self.assertEqual(owner.perform(request, "recover"), result)
+            self.assertEqual(dispatch(owner, request, "recover"), result)
             self.assertEqual(len(calls), 3)
 
     def test_current_tee_enrollment_real_keymint_oauth_and_google_original(self): self.check_level(1)
@@ -447,9 +734,9 @@ class AndroidIntegratedWorkerTests(unittest.TestCase):
             owner = self.actual_owner(config, directory, credential, stack)
             transport, calls, _ = self.transport(selected, now, wrong_hash=True)
             stack.enter_context(patch("urllib.request.build_opener", return_value=transport))
-            with self.assertRaises(AttestationRejected): owner.perform(request, "verify")
-            self.assertIsNone(owner.perform(request, "recover")); self.assertEqual(len(calls), 3)
-            with self.assertRaises(AttestationRejected): owner.perform(request, "verify")
+            with self.assertRaises(AttestationRejected): dispatch(owner, request, "complete")
+            self.assertIsNone(dispatch(owner, request, "recover")); self.assertEqual(len(calls), 3)
+            self.assertIsNone(dispatch(owner, request, "complete"))
 
     def test_android_software_boolean_or_foreign_google_original_cannot_enter_worker(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -533,9 +820,12 @@ class UnsignedArchiveTests(unittest.TestCase):
             archive = Path(temporary).resolve() / "current.pyz"
             builder.build(package, archive)
             code = ("import sys; sys.path.insert(0, sys.argv[1]); "
-                    "from iroha_app_attestation.wallet_enrollment_worker import CONFIG_SCHEMA, configured_policy; "
+                    "from iroha_app_attestation.wallet_enrollment_worker import CONFIG_SCHEMA, PREPARATION_SCHEMA, MAX_PREPARATION, VerifierOwner, configured_policy; "
                     "from iroha_app_attestation.wallet_policy import ConfiguredWalletEnrollmentPolicyV1; "
                     "assert CONFIG_SCHEMA == 'iroha.kagemusha.wallet-e1-verifier-config.v1'; "
+                    "assert PREPARATION_SCHEMA == 'bpng.wallet-e1-worker-preparation.v1'; "
+                    "assert MAX_PREPARATION == 16384; "
+                    "assert callable(VerifierOwner.prepare) and callable(VerifierOwner.journal); "
                     "assert callable(configured_policy)")
             result = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(archive)],
                                     cwd=temporary, env={}, capture_output=True, timeout=10)

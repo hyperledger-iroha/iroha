@@ -20,7 +20,8 @@ final class KagemushaWalletOpenV1Tests: XCTestCase {
       values[role] = Data()
       XCTAssertThrowsError(try KagemushaWalletOpenOriginalsV1(credential: values[0], enrollmentCertificates: values[1], account: values[2], assetScope: values[3]))
     }
-    XCTAssertThrowsError(try KagemushaWalletRuntimeV1(nativeRuntimeHandle: 0))
+    // Runtime raw-handle construction is internal and requires its actual driver/platform lease.
+    // Invalid internal handles and callback retention are covered by NativeLease component tests.
   }
   func testAccountChallengeAndOpenedHandleAreDistinctBoundedOutcomes() throws {
     XCTAssertNoThrow(try KagemushaWalletCallV1(status: 15, sequenceLow: 1, sequenceHigh: 0, detail: 0, bytes: Data(repeating: 1, count: 32)))

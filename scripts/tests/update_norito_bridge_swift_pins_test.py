@@ -229,6 +229,7 @@ def validate(
             "cargo_features": ["privacy-production-enabled"],
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",
+                "wallet_runtime_trust_ed25519_hex": "3" * 64,
                 "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
                 "hermetic_runner_sha256": hashlib.sha256(
                     (scripts / "run_mobile_hermetic_command.py").read_bytes()

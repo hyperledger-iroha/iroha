@@ -11,7 +11,7 @@ use advance::{
 use iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1 as PublicKey;
 use jni::{
     JNIEnv, JavaVM,
-    objects::{GlobalRef, JByteArray, JObject, JValue},
+    objects::{GlobalRef, JByteArray, JObject, JObjectArray, JValue},
 };
 
 /// Retains one Kotlin platform object; each upcall attaches its own worker thread/local frame.
@@ -129,6 +129,49 @@ impl Platform for AndroidPlatform {
             _ => Probe::Unavailable(U::Platform(0)),
         }
     }
+    fn key_attestation_chain(&self, slot: &Slot) -> Probe<Vec<Vec<u8>>> {
+        let Ok(mut env) = self.vm.attach_current_thread() else {
+            return Probe::Unavailable(U::Platform(0));
+        };
+        let answer = env.with_local_frame(32, |env| -> jni::errors::Result<(PlatformReply,Vec<Vec<u8>>)> {
+            let slot = env.byte_array_from_slice(&slot.0)?;
+            let empty = env.byte_array_from_slice(&[])?;
+            let reply = env.call_method(self.object.as_obj(), "nativeCall",
+                "(I[B[BI)Lorg/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletNativeReplyV1;",
+                &[JValue::Int(12),JValue::Object(&slot),JValue::Object(&empty),JValue::Int(0)])?.l()?;
+            let tag=env.get_field(&reply,"tag","I")?.i()?;
+            let reason=env.get_field(&reply,"reason","I")?.i()?;
+            let code=env.get_field(&reply,"code","I")?.i()?;
+            let bytes=JByteArray::from(env.call_method(&reply,"bytes","()[B",&[])?.l()?);
+            if env.get_array_length(&bytes)? != 0 { return Err(jni::errors::Error::WrongJValueType("nonempty", "chain-only bytes")); }
+            let originals=JObjectArray::from(env.call_method(&reply,"certificatesDer","()[[B",&[])?.l()?);
+            let count=env.get_array_length(&originals)?;
+            if (tag==0 && !(2..=8).contains(&count)) || (tag!=0 && count!=0) {
+                return Err(jni::errors::Error::WrongJValueType("chain count", "bounded original DER chain"));
+            }
+            let mut chain=Vec::with_capacity(count as usize);
+            for index in 0..count {
+                let original=JByteArray::from(env.get_object_array_element(&originals,index)?);
+                let length=env.get_array_length(&original)?;
+                if !(1..=16_384).contains(&length) { return Err(jni::errors::Error::WrongJValueType("DER extent", "bounded original certificate")); }
+                chain.push(env.convert_byte_array(&original)?);
+            }
+            Ok((PlatformReply {tag:tag as u32,reason:reason as u32,code,length:0},chain))
+        });
+        match answer {
+            Ok((reply, chain)) => match reply.tag {
+                0 => Probe::Present(chain),
+                1 if chain.is_empty() => Probe::Absent,
+                2 if chain.is_empty() => Probe::Unavailable(reason(reply)),
+                _ => Probe::Unavailable(U::Platform(0)),
+            },
+            Err(_) => {
+                let _ = env.exception_clear();
+                Probe::Unavailable(U::Platform(0))
+            }
+        }
+    }
+
     fn key_generate(
         &self,
         slot: &Slot,

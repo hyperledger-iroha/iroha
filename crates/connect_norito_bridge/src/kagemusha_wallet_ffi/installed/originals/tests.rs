@@ -38,7 +38,7 @@ fn fixture() -> ProducerInventoryV1 {
 }
 fn transport(rows: norito::json::Value) -> Vec<u8> {
     norito::json::to_json(
-        &norito::json::json!({"schema":"bpng.current-wallet-artifact-original-transport.v1",
+        &norito::json!({"schema":"iroha.kagemusha.wallet-artifact-original-transport.v1",
         "walletOriginals":rows,"finalityOriginals":[]}),
     )
     .unwrap()
@@ -47,7 +47,7 @@ fn transport(rows: norito::json::Value) -> Vec<u8> {
 fn rows() -> norito::json::Value {
     norito::json::Value::Array(
         (1u8..=5)
-            .map(|n| norito::json::json!({"bytes":16,"sha256":hex::encode([n;32])}))
+            .map(|n| norito::json!({"bytes":16,"sha256":(hex::encode([n;32]))}))
             .collect(),
     )
 }
@@ -132,10 +132,20 @@ fn partial_offerings_are_invalid_and_io_never_means_financial_absence() {
         UNAVAILABLE
     );
     let extra = norito::json::to_json(
-        &norito::json::json!({"schema":"bpng.current-wallet-artifact-original-transport.v1",
+        &norito::json!({"schema":"iroha.kagemusha.wallet-artifact-original-transport.v1",
         "walletOriginals":[],"finalityOriginals":[],"ready":true}),
     )
     .unwrap()
     .into_bytes();
     assert!(require_transport(&fixture(), &extra).is_err());
+}
+
+#[test]
+fn retired_project_transport_schema_is_rejected_even_with_exact_rows() {
+    let raw = transport(rows());
+    let old = std::str::from_utf8(&raw).unwrap().replace(
+        "iroha.kagemusha.wallet-artifact-original-transport.v1",
+        "bpng.current-wallet-artifact-original-transport.v1",
+    );
+    assert!(require_transport(&fixture(), old.as_bytes()).is_err());
 }

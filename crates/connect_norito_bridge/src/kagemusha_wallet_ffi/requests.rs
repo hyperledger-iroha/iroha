@@ -1,6 +1,9 @@
 //! Shared C/JNI typed intake. Only the installed owner may decode and prepare originals.
 
 use super::*;
+
+mod receive_offer;
+
 use iroha_data_model::isi::kagemusha_wallet::load_finality::KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1;
 
 /// Exact per-original bounds, applied before either foreign frontend allocates input copies.
@@ -21,6 +24,7 @@ pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
         7 => [KAGEMUSHA_WALLET_QUOTA_SHARE_MAX_BYTES_V1, message, 0],
         8 => [KAGEMUSHA_WALLET_CHARGE_QUOTE_MAX_BYTES_V1, message, 0],
         9 => [0; 3],
+        10 => [message, message, 0],
         _ => return Err(Failure::code(INVALID)),
     })
 }
@@ -39,7 +43,7 @@ pub(crate) fn request(
             .iter()
             .zip(limits)
             .any(|(bytes, limit)| bytes.len() > limit)
-        || (selector < 8
+        || ((selector < 8 || selector == 10)
             && originals
                 .iter()
                 .zip(limits)
@@ -87,6 +91,7 @@ pub(crate) fn request(
             }
         }
         9 => A::Retire,
+        10 => receive_offer::action(first, second)?,
         _ => return Err(Failure::code(INVALID)),
     };
     Ok(state::OperationRequestV1 { request_id, action })
@@ -135,7 +140,9 @@ mod tests {
                 assert!(request(&[1; 32], selector, 1, refs).is_err());
             }
         }
-        assert!(bounds(10).is_err());
+        assert_eq!(bounds(10).unwrap(), [10_000, 10_000, 0]);
+        assert!(bounds(11).is_err());
+        assert!(request(&[1; 32], 10, 0, [&[], &[], &[]]).is_err());
         assert!(request(&[1; 32], 8, 0, [&[]; 3]).is_err());
         assert!(request(&[1; 32], 8, 1, [&[1], &[], &[]]).is_err());
         assert!(request(&[1; 32], 8, 1, [&[], &[1], &[]]).is_err());

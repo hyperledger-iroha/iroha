@@ -312,14 +312,43 @@ pub(super) fn close(owner: Arc<RuntimeOwner>) -> Result<()> {
     })
 }
 
+/// The same loaded runtime and authenticated application binding, retained together.
+/// This owner cannot be cloned or converted into an unbound runtime. Registration retry
+/// consumes it and passes its original binding to the same Native registry admission.
+pub struct NativeRegistrationRetry<
+    P: advance::KagemushaWalletPlatformV1,
+    S: OriginalSourceV1 + Send,
+> {
+    originals: RegistrationOriginals<
+        state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
+        Option<super::installed::BoundOriginals>,
+    >,
+}
+struct RegistrationOriginals<R, B> {
+    runtime: R,
+    binding: B,
+}
+impl<P, S> NativeRegistrationRetry<P, S>
+where
+    P: advance::KagemushaWalletPlatformV1 + 'static,
+    S: OriginalSourceV1 + Send + 'static,
+{
+    /// Retry the same unadmitted owner without dropping or replacing its app binding.
+    /// # Errors
+    /// Registry refusal returns the same runtime and binding in another retry owner.
+    pub fn retry(self) -> std::result::Result<u64, NativeStartupFailure<P, S>> {
+        retain_runtime(self.originals.runtime, self.originals.binding)
+    }
+}
+
 /// Native deployment startup failure; custody and original-store ownership remain recoverable.
 pub enum NativeStartupFailure<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
     /// Signed artifact/source qualification failed before registration.
     Load(state::NativeStartupFailureV1<advance::KagemushaWalletStdFsV1, P, S>),
     /// The loaded runtime could not be registered; neither custody nor originals were dropped.
     Registration {
-        /// Exact loaded native runtime, ready for registration retry.
-        runtime: state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
+        /// Exact loaded native runtime AND authenticated binding, ready for consuming retry.
+        owner: NativeRegistrationRetry<P, S>,
         /// Registry failure.
         failure: Failure,
     },
@@ -385,43 +414,45 @@ where
     P: advance::KagemushaWalletPlatformV1 + 'static,
     S: OriginalSourceV1 + Send + 'static,
 {
-    let mut registry = match registry().lock() {
+    let originals = RegistrationOriginals { runtime, binding };
+    retain_registration(registry(), originals, |originals| RuntimeOwner {
+        closing: Arc::new(closing::CloseState::default()),
+        admission: Mutex::new(Some(Box::new(Runtime {
+            phase: Some(Phase::Ready(originals.runtime)),
+            binding: originals.binding,
+        }))),
+        finished: Mutex::new(None),
+    })
+    .map_err(|(originals, failure)| NativeStartupFailure::Registration {
+        owner: NativeRegistrationRetry { originals },
+        failure,
+    })
+}
+
+// A refusal returns the whole move-only owner before any factory is invoked. Production
+// uses only the existing registry and a genuine loaded runtime; local tests use DATA owners.
+fn retain_registration<T>(
+    selected_registry: &Mutex<Registry>,
+    originals: T,
+    admit: impl FnOnce(T) -> RuntimeOwner,
+) -> std::result::Result<u64, (T, Failure)> {
+    let mut registry = match selected_registry.lock() {
         Ok(registry) => registry,
-        Err(_) => {
-            return Err(NativeStartupFailure::Registration {
-                runtime,
-                failure: Failure::code(INTERNAL),
-            });
-        }
+        Err(_) => return Err((originals, Failure::code(INTERNAL))),
     };
     if registry.owners.len() + registry.runtimes.len() >= MAX_OWNERS {
-        return Err(NativeStartupFailure::Registration {
-            runtime,
-            failure: Failure::code(RESOURCE),
-        });
+        return Err((originals, Failure::code(RESOURCE)));
     }
     let Some(id) = registry
         .next
         .checked_add(1)
         .filter(|id| *id <= i64::MAX as u64)
     else {
-        return Err(NativeStartupFailure::Registration {
-            runtime,
-            failure: Failure::code(RESOURCE),
-        });
+        return Err((originals, Failure::code(RESOURCE)));
     };
+    let owner = admit(originals);
     registry.next = id;
-    registry.runtimes.insert(
-        id,
-        Arc::new(RuntimeOwner {
-            closing: Arc::new(closing::CloseState::default()),
-            admission: Mutex::new(Some(Box::new(Runtime {
-                phase: Some(Phase::Ready(runtime)),
-                binding,
-            }))),
-            finished: Mutex::new(None),
-        }),
-    );
+    registry.runtimes.insert(id, Arc::new(owner));
     Ok(id)
 }
 
@@ -510,6 +541,105 @@ mod tests {
         let mut registry = Registry::default();
         registry.runtimes.insert(1, Arc::clone(&owner));
         (Mutex::new(registry), owner, calls, drops)
+    }
+    struct RegistrationDataToken {
+        tag: u8,
+        drops: Arc<Mutex<Vec<u8>>>,
+    }
+    impl Drop for RegistrationDataToken {
+        fn drop(&mut self) {
+            self.drops.lock().unwrap().push(self.tag);
+        }
+    }
+    // Ownership-only DATA. These tokens cannot construct a Native installation or proof source.
+    struct RegistrationDataAdmission {
+        _originals: RegistrationOriginals<RegistrationDataToken, RegistrationDataToken>,
+    }
+    impl Admission for RegistrationDataAdmission {
+        fn begin(&mut self, _: [&[u8]; 4]) -> Result<Vec<u8>> {
+            Err(Failure::code(INVALID))
+        }
+        fn finish(&mut self, _: &[u8]) -> Result<(Box<dyn Wallet>, state::Scheduler)> {
+            Err(Failure::code(INVALID))
+        }
+        fn cancel(&mut self) -> Result<()> {
+            Err(Failure::code(INVALID))
+        }
+    }
+    #[test]
+    fn every_registration_refusal_retains_both_same_owners_and_retry_admits_once() {
+        let selected = Mutex::new(Registry::default());
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        let originals = RegistrationOriginals {
+            runtime: RegistrationDataToken {
+                tag: 1,
+                drops: Arc::clone(&drops),
+            },
+            binding: RegistrationDataToken {
+                tag: 2,
+                drops: Arc::clone(&drops),
+            },
+        };
+        let calls = AtomicUsize::new(0);
+        let factory =
+            |originals: RegistrationOriginals<RegistrationDataToken, RegistrationDataToken>| {
+                assert_eq!((originals.runtime.tag, originals.binding.tag), (1, 2));
+                assert!(Arc::ptr_eq(&originals.runtime.drops, &drops));
+                assert!(Arc::ptr_eq(&originals.binding.drops, &drops));
+                calls.fetch_add(1, Ordering::SeqCst);
+                RuntimeOwner {
+                    closing: Arc::new(closing::CloseState::default()),
+                    admission: Mutex::new(Some(Box::new(RegistrationDataAdmission {
+                        _originals: originals,
+                    }))),
+                    finished: Mutex::new(None),
+                }
+            };
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = selected.lock().unwrap();
+            panic!("local DATA registry poison");
+        }));
+        let Err((originals, failure)) = retain_registration(&selected, originals, factory) else {
+            panic!("poisoned registry admitted owner")
+        };
+        assert_eq!(failure.status, INTERNAL);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(drops.lock().unwrap().is_empty());
+        selected.clear_poison(); // Test-only repair, never an installer permission.
+        {
+            let mut registry = selected.lock().unwrap();
+            for id in 1..=MAX_OWNERS as u64 {
+                registry.runtimes.insert(id, local_runtime(None).1);
+            }
+        }
+        let Err((originals, failure)) = retain_registration(&selected, originals, factory) else {
+            panic!("full registry admitted owner")
+        };
+        assert_eq!(failure.status, RESOURCE);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(drops.lock().unwrap().is_empty());
+        {
+            let mut registry = selected.lock().unwrap();
+            registry.runtimes.clear();
+            registry.next = i64::MAX as u64;
+        }
+        let Err((originals, failure)) = retain_registration(&selected, originals, factory) else {
+            panic!("exhausted capability namespace admitted owner")
+        };
+        assert_eq!(failure.status, RESOURCE);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(drops.lock().unwrap().is_empty());
+        selected.lock().unwrap().next = 0; // Local DATA namespace only.
+        let id = match retain_registration(&selected, originals, factory) {
+            Ok(id) => id,
+            Err(_) => panic!("same owner retry refused"),
+        };
+        assert_eq!(id, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(drops.lock().unwrap().is_empty());
+        closing::close_with(&selected, id).unwrap();
+        assert_eq!(*drops.lock().unwrap(), vec![1, 2]);
+        assert!(selected.lock().unwrap().runtimes.is_empty());
     }
     #[test]
     fn registry_failure_retains_admitted_custody_and_retry_never_reauthorizes() {
@@ -610,12 +740,13 @@ mod tests {
     fn enrollment_input() -> enrollment::Input<'static> {
         enrollment::Input {
             selector: 0,
-            slot: &[],
             challenge: &[1],
             policy: &[1],
             account: &[1],
             original: &[],
             certificates: &[],
+            issued_at_ms: 1,
+            expires_at_ms: 2,
         }
     }
     #[test]

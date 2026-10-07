@@ -124,7 +124,6 @@ pub use self::store::{
     KagemushaWalletSimFaultV1, KagemushaWalletSimFsV1, KagemushaWalletSimLockV1,
     KagemushaWalletSimPowerLossV1, KagemushaWalletSimStagedFileV1, KagemushaWalletSimStepV1,
 };
-#[cfg(unix)]
 pub use self::store::{KagemushaWalletStdFsLockV1, KagemushaWalletStdFsV1};
 pub use self::{
     advance::{
@@ -142,8 +141,8 @@ pub use self::{
     completion::KagemushaWalletCompletionFrameV1,
     enrollment::{
         KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1, KagemushaWalletChallengeLivenessV1,
-        KagemushaWalletEnrollmentRecordV1, KagemushaWalletEnrollmentStepV1,
-        KagemushaWalletFreshGenerationV1, KagemushaWalletIntentV1,
+        KagemushaWalletEnrollmentDatesV1, KagemushaWalletEnrollmentRecordV1,
+        KagemushaWalletEnrollmentStepV1, KagemushaWalletFreshGenerationV1, KagemushaWalletIntentV1,
     },
     layout::{
         KAGEMUSHA_WALLET_BALLAST_BYTES_V1, KAGEMUSHA_WALLET_ROOT_DIR_NAME_V1,

@@ -2,7 +2,9 @@
 use super::*;
 use exports::{input, output};
 
-pub(crate) const PROJECTION_BYTES: usize = 491;
+const FINANCIAL_BYTES: usize = 491;
+pub(crate) const PROJECTION_FIXED_BYTES: usize = FINANCIAL_BYTES + 4;
+const ACCOUNT_MAX: usize = iroha_core_zk::kagemusha_wallet_intake_v1::ACCOUNT_ORIGINAL_MAX_BYTES_V1;
 const MAX_REVIEWS: usize = 8;
 const MAGIC: &[u8; 8] = b"KWORV1\0\0";
 
@@ -18,13 +20,16 @@ pub struct WalletReviewRequest {
     pub first: *const u8,
     /// Exact first-original length.
     pub first_length: usize,
-    /// Original certificate set for a nonempty Unload charge; empty for Send.
+    /// Canonical destination AccountId for Send; certificate set for nonempty Unload charge.
     pub second: *const u8,
     /// Exact second-original length.
     pub second_length: usize,
 }
 pub(crate) enum Input {
-    Send(Vec<u8>),
+    Send {
+        request: Vec<u8>,
+        destination_account: Vec<u8>,
+    },
     Unload {
         amount: u128,
         charge: Option<state::ChargeOriginalsV1>,
@@ -32,7 +37,8 @@ pub(crate) enum Input {
 }
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 2]> {
     Ok(match selector {
-        1 | 8 => {
+        1 => [KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, ACCOUNT_MAX],
+        8 => {
             let limits = requests::bounds(selector)?;
             [limits[0], limits[1]]
         }
@@ -45,7 +51,10 @@ pub(crate) fn request(selector: u32, amount: u128, first: &[u8], second: &[u8]) 
         return Err(Failure::code(INVALID));
     }
     Ok(match selector {
-        1 if amount == 0 && !first.is_empty() && second.is_empty() => Input::Send(first.to_vec()),
+        1 if amount == 0 && !first.is_empty() && !second.is_empty() => Input::Send {
+            request: first.to_vec(),
+            destination_account: second.to_vec(),
+        },
         8 if amount != 0 && first.is_empty() == second.is_empty() => Input::Unload {
             amount,
             charge: (!first.is_empty()).then(|| state::ChargeOriginalsV1 {
@@ -95,7 +104,12 @@ fn projection(value: &state::NativeOperationReviewV1) -> Result<Vec<u8>> {
         KagemushaWalletOperationKindV1::Unload => 8,
         _ => return Err(Failure::code(INTERNAL)),
     };
-    let mut out = Vec::with_capacity(PROJECTION_BYTES);
+    let account = match (selector, value.destination_account_original.as_deref()) {
+        (1, Some(original)) if !original.is_empty() && original.len() <= ACCOUNT_MAX => original,
+        (8, None) => &[],
+        _ => return Err(Failure::code(INTERNAL)),
+    };
+    let mut out = Vec::with_capacity(PROJECTION_FIXED_BYTES + account.len());
     out.extend_from_slice(MAGIC);
     out.push(selector);
     for amount in [
@@ -123,16 +137,21 @@ fn projection(value: &state::NativeOperationReviewV1) -> Result<Vec<u8>> {
         out.extend_from_slice(&digest);
     }
     out.extend_from_slice(value.payment_key.as_sec1_bytes());
-    if out.len() != PROJECTION_BYTES {
+    if out.len() != FINANCIAL_BYTES {
         return Err(Failure::code(INTERNAL));
     }
+    out.extend_from_slice(&(account.len() as u32).to_le_bytes());
+    out.extend_from_slice(account);
     Ok(out)
 }
 impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWallet<P, S> {
     pub(super) fn review_inner(&mut self, input: Input) -> Result<Response> {
         self.reviews.capacity()?;
         let review = match input {
-            Input::Send(request) => self.wallet.review_send(&request)?,
+            Input::Send {
+                request,
+                destination_account,
+            } => self.wallet.review_send(&request, &destination_account)?,
             Input::Unload { amount, charge } => self.wallet.review_unload(amount, charge)?,
         };
         let bytes = projection(review.projection())?;
@@ -168,7 +187,8 @@ pub(crate) fn discard_review(id: u64, token: u64) -> Result<()> {
 }
 
 /// Authenticate Send/Unload and retain the genuine one-use review. No monetary operation.
-/// Result18 contains exact491 DATA bytes and owner-local token in sequence_low.
+/// Result18 contains the491-byte financial prefix, LE u32 account length and exact
+/// authenticated AccountId DATA (Send1..4096; Unload0), with an owner-local one-use token.
 /// # Safety
 /// Caller supplies initialized inputs and writable result memory for stated lengths.
 #[unsafe(no_mangle)]
@@ -239,9 +259,12 @@ mod tests {
     use super::*;
     #[test]
     fn intake_refuses_other_operations_and_unused_authority() {
-        assert!(request(1, 0, &[7], &[]).is_ok());
-        assert!(request(1, 1, &[7], &[]).is_err());
-        assert!(request(1, 0, &[7], &[8]).is_err());
+        assert!(request(1, 0, &[7], &[8]).is_ok());
+        assert!(request(1, 1, &[7], &[8]).is_err());
+        assert!(request(1, 0, &[7], &[]).is_err());
+        assert!(request(1, 0, &[], &[8]).is_err());
+        assert_eq!(bounds(1).unwrap(), [10_000, ACCOUNT_MAX]);
+        assert!(request(1, 0, &[7], &vec![8; ACCOUNT_MAX + 1]).is_err());
         assert!(request(8, u128::MAX, &[], &[]).is_ok());
         assert!(request(8, 1, &[7], &[8]).is_ok());
         assert!(request(8, 1, &[7], &[]).is_err());
@@ -255,10 +278,81 @@ mod tests {
                 1,
                 0,
                 &vec![7; KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + 1],
-                &[]
+                &[8]
             )
             .is_err()
         );
+    }
+    fn unadmitted_projection_fixture() -> state::NativeOperationReviewV1 {
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::account::AccountId;
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let payment = p256::ecdsa::SigningKey::from_bytes((&[9; 32]).into()).unwrap();
+        state::NativeOperationReviewV1 {
+            kind: KagemushaWalletOperationKindV1::Send,
+            amount: 1,
+            fee: 2,
+            gross_debit: 3,
+            net_destination_amount: 1,
+            receiver_wallet_id: Some([4; 32]),
+            destination_account_digest: kagemusha_wallet_account_digest_v1(&account).unwrap(),
+            destination_account_original: Some(norito::encode_canonical(&account).unwrap()),
+            request_digest: [5; 32],
+            charge_quote_digest: [0; 32],
+            scheme_id: [6; 32],
+            wallet_id: [7; 32],
+            current_head: [8; 32],
+            source_state_commitment: [9; 32],
+            source_capsule_digest: [10; 32],
+            credential_digest: [11; 32],
+            payment_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
+                payment.verifying_key().to_encoded_point(false).as_bytes(),
+            )
+            .unwrap(),
+            artifact_manifest_digest: [12; 32],
+        }
+    }
+    #[test]
+    fn projection_transports_exact_bounded_original_with_explicit_length() {
+        // Public DATA framing only; this fixture cannot construct a genuine reviewed token.
+        let value = unadmitted_projection_fixture();
+        let original = value.destination_account_original.as_ref().unwrap();
+        let bytes = projection(&value).unwrap();
+        assert_eq!(bytes.len(), PROJECTION_FIXED_BYTES + original.len());
+        assert_eq!(
+            &bytes[FINANCIAL_BYTES..PROJECTION_FIXED_BYTES],
+            &(original.len() as u32).to_le_bytes()
+        );
+        assert_eq!(&bytes[PROJECTION_FIXED_BYTES..], original);
+        assert_eq!(&bytes[106..138], &value.destination_account_digest);
+        let mut copied = bytes;
+        copied[PROJECTION_FIXED_BYTES] ^= 1;
+        assert_ne!(&copied[PROJECTION_FIXED_BYTES..], original);
+        assert_eq!(
+            &projection(&value).unwrap()[PROJECTION_FIXED_BYTES..],
+            original.as_slice()
+        );
+    }
+    #[test]
+    fn projection_rejects_missing_oversized_and_foreign_unload_original_shapes() {
+        for original in [None, Some(vec![]), Some(vec![0; ACCOUNT_MAX + 1])] {
+            let mut value = unadmitted_projection_fixture();
+            value.destination_account_original = original;
+            assert_eq!(projection(&value).unwrap_err().status, INTERNAL);
+        }
+        let mut unload = unadmitted_projection_fixture();
+        unload.kind = KagemushaWalletOperationKindV1::Unload;
+        unload.receiver_wallet_id = None;
+        unload.request_digest = [0; 32];
+        assert_eq!(projection(&unload).unwrap_err().status, INTERNAL);
+        unload.destination_account_original = None;
+        let bytes = projection(&unload).unwrap();
+        assert_eq!(bytes.len(), PROJECTION_FIXED_BYTES);
+        assert_eq!(&bytes[FINANCIAL_BYTES..], &[0; 4]);
     }
     #[test]
     fn consumed_tokens_never_replay_or_alias_another_review() {

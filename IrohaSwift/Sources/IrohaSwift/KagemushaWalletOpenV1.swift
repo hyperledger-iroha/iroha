@@ -24,66 +24,137 @@ public struct KagemushaWalletOpenOriginalsV1: Sendable {
   }
 }
 
-/// Runtime already provisioned by the embedding app's trusted native startup loader.
-/// This handle selects retained native custody; it supplies no trust pins or proof verdicts.
-public final class KagemushaWalletRuntimeV1: @unchecked Sendable {
-  private let lock = NSLock()
+/// A cleanup view of the one actual Native owner, never a second admission registry.
+protocol KagemushaWalletCleanupResourceV1: AnyObject {
+  var cleanupLease: KagemushaWalletNativeLeaseV1? { get }
+}
+
+/// Only close is injectable for cleanup fault tests; this interface cannot admit or spend.
+protocol KagemushaWalletNativeCloseDriverV1: AnyObject, Sendable {
+  func closeNativeLease(_ owner: UInt64) -> Int32
+}
+
+extension KagemushaWalletNativeDriverV1: KagemushaWalletNativeCloseDriverV1 {
+  func closeNativeLease(_ owner: UInt64) -> Int32 { close(owner) }
+}
+
+/// Strongly owns the actual Native ID, its driver and its callback platform until close joins.
+/// Wrappers already own this lease before their deinit starts. A failed close quarantines
+/// the lease itself; it never publishes a wrapper whose destruction has begun.
+final class KagemushaWalletNativeLeaseV1: KagemushaWalletCleanupResourceV1, @unchecked Sendable {
+  private let condition = NSCondition()
   private var owner: UInt64
-  private let driver: KagemushaWalletNativeDriverV1
-  private let pending = KagemushaWalletAdmissionLifetimeV1<KagemushaWalletPendingOpenV1>()
-  public init(nativeRuntimeHandle: UInt64) throws {
-    guard nativeRuntimeHandle > 0 && nativeRuntimeHandle <= UInt64(Int64.max) else { throw KagemushaWalletErrorV1.invalidInput }
-    owner = nativeRuntimeHandle
-    driver = try KagemushaWalletNativeDriverV1()
+  private let driver: any KagemushaWalletNativeCloseDriverV1
+  private var platformOwner: AnyObject?
+  private var fenced = false, closing = false
+  private var closeFailure: Error?
+  init(owner: UInt64, driver: any KagemushaWalletNativeCloseDriverV1, platformOwner: AnyObject) {
+    precondition(owner > 0 && owner <= UInt64(Int64.max))
+    self.owner = owner; self.driver = driver; self.platformOwner = platformOwner
   }
-  /// Reconcile these originals, retaining the same challenge and pending owner on retry.
-  public func begin(_ originals: KagemushaWalletOpenOriginalsV1) throws -> KagemushaWalletPendingOpenV1 {
-    lock.lock(); defer { lock.unlock() }
-    guard owner != 0 else { throw KagemushaWalletErrorV1.closed }
-    let result = try driver.result { out in originals.withRequest { driver.openBegin(owner, $0, out) } }
-    guard result.status == 15 && result.sequenceLow == owner else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-    return try pending.select(result.bytes) { identity in
-      KagemushaWalletPendingOpenV1(runtime: self, identity: identity, challenge: result.bytes)
+  var cleanupLease: KagemushaWalletNativeLeaseV1? { self }
+  /// True only after this exact Native ID returned close status zero.
+  var isReleased: Bool {
+    condition.lock(); defer { condition.unlock() }; return owner == 0
+  }
+  func handle() throws -> UInt64 {
+    condition.lock(); defer { condition.unlock() }
+    guard !fenced && owner != 0 else { throw closeFailure ?? KagemushaWalletErrorV1.closed }
+    return owner
+  }
+  /// First close irrevocably blocks operations. Explicit retries use the unchanged ID.
+  /// Concurrent callers join the current attempt; a waiter never starts an implicit retry.
+  func close() throws {
+    condition.lock()
+    var waited = false
+    while closing { waited = true; condition.wait() }
+    if owner == 0 { condition.unlock(); return }
+    if waited {
+      let failure = closeFailure ?? KagemushaWalletErrorV1.closed
+      condition.unlock(); throw failure
+    }
+    fenced = true; closing = true; let value = owner; condition.unlock()
+    do {
+      // Invalid/no-owner, unavailable and provider errors are not release acknowledgements.
+      try KagemushaWalletNativeDriverV1.check(driver.closeNativeLease(value))
+      condition.lock()
+      owner = 0; platformOwner = nil; closeFailure = nil; closing = false
+      condition.broadcast(); condition.unlock()
+    } catch {
+      // Do not hold the lease lock while entering the existing quarantine lock.
+      let failure = KagemushaWalletInstalledRuntimeV1.retain(error, cleanup: error, resource: self)
+      condition.lock(); closeFailure = error; closing = false
+      condition.broadcast(); condition.unlock(); throw failure
     }
   }
-  // Called exclusively under this runtime's lock.
-  private func finishNative(_ signature: Data) throws -> KagemushaWalletV1 {
-    guard owner != 0 else { throw KagemushaWalletErrorV1.closed }
+}
+
+/// Runtime already provisioned by the embedding app's trusted native startup loader.
+/// This handle selects retained native custody; it supplies no trust pins or proof verdicts.
+public final class KagemushaWalletRuntimeV1: KagemushaWalletCleanupResourceV1, @unchecked Sendable {
+  private let lock = NSLock()
+  private var lease: KagemushaWalletNativeLeaseV1?
+  private let driver: KagemushaWalletNativeDriverV1
+  private let pending=KagemushaWalletAdmissionLifetimeV1<KagemushaWalletPendingOpenV1>()
+  // The optional close-only seam is internal and used solely by synthetic cleanup tests.
+  // Production installation always binds cleanup to the same real Native driver.
+  init(nativeRuntimeHandle: UInt64, driver: KagemushaWalletNativeDriverV1,
+    platformOwner: AnyObject, cleanupDriver: (any KagemushaWalletNativeCloseDriverV1)? = nil) throws {
+    guard nativeRuntimeHandle > 0 && nativeRuntimeHandle <= UInt64(Int64.max)
+    else { throw KagemushaWalletErrorV1.invalidInput }
+    lease = .init(owner: nativeRuntimeHandle, driver: cleanupDriver ?? driver, platformOwner: platformOwner)
+    self.driver = driver
+  }
+  var cleanupLease: KagemushaWalletNativeLeaseV1? {
+    lock.lock(); defer { lock.unlock() }; return lease
+  }
+  /// Begin with original issuer/account frames. Native reconciles before sampling its challenge.
+  public func begin(_ originals: KagemushaWalletOpenOriginalsV1) throws -> KagemushaWalletPendingOpenV1 {
+    lock.lock(); defer { lock.unlock() }
+    guard let lease else { throw KagemushaWalletErrorV1.closed }
+    let owner = try lease.handle()
+    let result = try driver.result { out in originals.withRequest { driver.openBegin(owner, $0, out) } }
+    guard result.status == 15 && result.sequenceLow == owner && result.sequenceHigh == 0 && result.detail == 0 && result.bytes.count == 32 && result.bytes.contains(where: { $0 != 0 }) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return try pending.select(result.bytes){identity in
+      KagemushaWalletPendingOpenV1(runtime:self,identity:identity,challenge:result.bytes)
+    }
+  }
+  // Called exclusively under this Runtime's lock.
+  private func finishNative(_ signature:Data) throws->KagemushaWalletV1 {
+    guard let lease else { throw KagemushaWalletErrorV1.closed }
+    let owner = try lease.handle()
     let result = try driver.result { out in signature.withUnsafeBytes { driver.openFinish(owner, $0.bindMemory(to: UInt8.self).baseAddress, $0.count, out) } }
-    guard result.status == 16 && result.sequenceLow == owner else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-    let wallet = KagemushaWalletV1(handle: owner, driver: driver)
-    owner = 0
+    guard result.status == 16 && result.sequenceLow == owner && result.sequenceHigh == 0 && result.detail == 0 && result.bytes.isEmpty else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    // Transfer the same pre-existing lease. No owner ID or callback lifetime is reconstructed.
+    let wallet = KagemushaWalletV1(lease: lease, driver: driver)
+    self.lease = nil
     return wallet
   }
-  fileprivate func finish(_ identity: KagemushaWalletAdmissionIdentityV1, signature: Data) throws -> KagemushaWalletV1 {
-    lock.lock(); defer { lock.unlock() }
-    return try pending.finish(identity) { try finishNative(signature) }
+  fileprivate func finish(_ identity:KagemushaWalletAdmissionIdentityV1,signature:Data) throws->KagemushaWalletV1 {
+    lock.lock();defer{lock.unlock()}
+    return try pending.finish(identity){try finishNative(signature)}
   }
-  // Called exclusively under this runtime's lock.
+  // Called exclusively under this Runtime's lock.
   private func cancelNative() throws {
-    guard owner != 0 else { throw KagemushaWalletErrorV1.closed }
-    try KagemushaWalletNativeDriverV1.check(driver.openCancel(owner))
+    guard let lease else{throw KagemushaWalletErrorV1.closed}
+    try KagemushaWalletNativeDriverV1.check(driver.openCancel(try lease.handle()))
   }
-  fileprivate func cancel(_ identity: KagemushaWalletAdmissionIdentityV1) throws {
-    lock.lock(); defer { lock.unlock() }
-    try pending.abandon(identity) { try cancelNative() }
+  fileprivate func cancel(_ identity:KagemushaWalletAdmissionIdentityV1) throws {
+    lock.lock();defer{lock.unlock()};try pending.abandon(identity){try cancelNative()}
   }
-  /// Discard a pending challenge after interrupted begin delivery, retaining native custody.
+  /// Discard a pending challenge after interrupted begin delivery, retaining Native custody.
   public func cancelPendingOpen() throws {
-    lock.lock(); defer { lock.unlock() }
-    try pending.complete { try cancelNative() }
+    lock.lock();defer{lock.unlock()};try pending.complete{try cancelNative()}
   }
-  /// Retry the retained challenge or recover interrupted finish delivery/registration.
-  public func retryOpenCompletion(accountSignature: Data) throws -> KagemushaWalletV1 {
-    lock.lock(); defer { lock.unlock() }
-    return try pending.complete { try finishNative(accountSignature) }
+  /// Ordinary authorization refusal retains the same Native Pending challenge, recoverable
+  /// by begin or retry; interrupted successful finish transfers the same actual owner.
+  public func retryOpenCompletion(accountSignature:Data) throws->KagemushaWalletV1 {
+    lock.lock();defer{lock.unlock()};return try pending.complete{try finishNative(accountSignature)}
   }
-  /// Successful finish transfers ownership to the wallet; closing this runtime then does nothing.
+  /// Close only unadmitted custody; a successful finish transfers ownership to its wallet.
   public func close() throws {
     lock.lock(); defer { lock.unlock() }
-    let value = owner; owner = 0
-    pending.clear()
-    if value != 0 { try KagemushaWalletNativeDriverV1.check(driver.close(value)) }
+    try lease?.close();pending.clear()
   }
   deinit { try? close() }
 }
@@ -96,7 +167,8 @@ public final class KagemushaWalletPendingOpenV1: @unchecked Sendable {
   fileprivate init(runtime: KagemushaWalletRuntimeV1, identity: KagemushaWalletAdmissionIdentityV1, challenge: Data) {
     self.runtime = runtime; self.identity = identity; self.challenge = challenge
   }
-  /// Ordinary refusal retains this pending owner for retry; success transfers ownership.
+  /// Ordinary refusal retains the same Native Pending challenge and managed owner for retry;
+  /// successful finish consumes this managed selection and transfers the actual lease.
   public func finish(accountSignature: Data) throws -> KagemushaWalletV1 {
     try runtime.finish(identity, signature: accountSignature)
   }

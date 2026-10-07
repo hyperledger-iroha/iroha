@@ -8,7 +8,11 @@ internal class KagemushaWalletNativeReplyV1(
     @JvmField val reason: Int = 4,
     @JvmField val code: Int = 0,
     bytes: ByteArray = byteArrayOf(),
+    chain:Array<ByteArray> = emptyArray(),
 ) {
+    init {require(chain.isEmpty() || (tag==0 && bytes.isEmpty() && chain.size in 2..8 && chain.all{it.size in 1..16_384}))}
+    private val certificates=chain.map{it.copyOf()}
+    fun certificatesDer():Array<ByteArray> = certificates.map{it.copyOf()}.toTypedArray()
     private val payload = bytes.copyOf()
     fun bytes(): ByteArray = payload.copyOf()
     companion object {
