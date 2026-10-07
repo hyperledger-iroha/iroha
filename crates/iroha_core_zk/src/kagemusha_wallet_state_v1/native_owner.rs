@@ -2,11 +2,14 @@
 
 use super::*;
 mod activation;
+pub use activation::ActivationFinalityProgressV1;
 mod close_loads;
 mod ledger;
 mod ledger_producer;
-pub use ledger_producer::{LoadProofProgressV1,LOAD_EVENT_PROOF_MAX_BYTES_V1, LEDGER_INSTRUCTION_MAX_BYTES_V1};
 pub use ledger::{LEDGER_PROOF_MAX_BYTES_V1, LedgerProgressV1, PAYOUT_RECORD_MAX_BYTES_V1};
+pub use ledger_producer::{
+    LEDGER_INSTRUCTION_MAX_BYTES_V1, LOAD_EVENT_PROOF_MAX_BYTES_V1, LoadProofProgressV1,
+};
 mod bootstrap;
 mod review;
 mod runtime;

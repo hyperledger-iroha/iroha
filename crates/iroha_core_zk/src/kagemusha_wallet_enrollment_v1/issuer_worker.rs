@@ -167,6 +167,11 @@ impl VerifierRequestV1 {
             .require_live_challenge(challenge_created_at_ms, verification_time_ms)
             .map_err(|_| Error("retained challenge time"))?;
         let expires = preparation.expires_at_ms;
+        // The authenticated session can shorten the policy lifetime. First capture must
+        // fit that original deadline; restoring a captured request keeps its original time.
+        if verification_time_ms >= expires {
+            return Err(Error("retained preparation deadline"));
+        }
         let mobile =
             PlatformEvidenceV1::decode(&request.body.evidence, approved_policy).map_err(Error)?;
         let (platform, evidence) = match mobile {

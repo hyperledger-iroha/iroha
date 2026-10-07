@@ -1955,13 +1955,25 @@ typedef struct {
 // LoadProofProgress31(first receipt <=512) and IngestLoadProof32(first receipt <=512, second ordinary proof <=36MiB)
 // use a separate durable receipt-bound recursive cursor. Kind43: sequence_low=receipt proposed height>1,
 // sequence_high/detail=0, bytes8BE=verified height (0..receipt height). Completed proofs are retained before return.
+// UnloadProofProgress33(nonzero tx hash setup_id, first exact Unload <=65536) returns kind33 or34.
+// IngestUnloadProof34 adds second ordinary proof <=36MiB and returns kind33. Both use a separate
+// transaction+claim-bound cursor; ConfirmUnload30 consumes its selected block, independent of later global tips.
+// ConfirmActivation35(first exact signed Activate transaction <=65536) returns kind44 only after
+// Native verifies successful exact input/output inclusion and durably selects the confirmation.
+// IngestActivationProof36(first exact signed transaction <=65536, second complete finality <=36MiB)
+// proves one next block in a separate Activate-bound cursor, independent of the ordinary ledger tip.
+// Matching successful execution is confirmed atomically before the cursor can pass its block.
+// ActivationProofProgress37(first exact signed transaction <=65536) reads that cursor after restart.
+// Results44 confirmed /45 verifying: sequence_low=verified height, sequence_high/detail=0, bytes=32-byte block hash.
+// Result46 not started: zero sequence/detail, empty bytes. Confirmed result44 requires height>=2.
+// Setup35..37 use zero setup_id/amount/token and no unused originals. No HTTP receipt is authority.
 // CloseLoads19(nonzero setup_id retry identity, no originals) returns kind30, exact durable signed closure frame <=16,384 bytes;
 // Reuse an id for exact retries; a fresh id selects current native source after a preissued Load.
 // It does not confirm ledger closure or authorize key retirement.
 // Activation15(no inputs) returns kind17, exact durable Activate frame <=16,384 bytes.
 // CreditedReceive16(first=Receive package), CreditedStatus17(first=CreditStatus) return
 // kind12 canonical Credited data after native shape/scheme/full-envelope bounds; no proof verdict.
-// setup_id is exactly32 bytes: nonzero only for Offer/Request and all zero otherwise.
+// setup_id is exactly32 bytes: nonzero only for selectors1/2/19/20/25/27/30/33/34; all zero otherwise.
 // Unused originals/amount/token are empty/zero. Original bounds are selected by Native;
 // signer certificate frames are <=512 bytes. No caller clock, nonce, proof or signing body.
 // Transport uses first only and returns canonical bytes; it grants no monetary verdict.
@@ -1988,7 +2000,10 @@ int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_
  * 4 Apple(keyid32/attestation/assertion),5 E5 account signature,6 exact E6 result,7 load runtime,8 begin original open from retained E5/E6,9 signed pre-key permit<=2048,10 permanently abandon unused enrollment,11 installed-session JWT<=16384/DPoP<=4096/rootDER<=16384,12 persisted E6<=262144/account<=4096 (Native-selected asset, ordinary original open),
  * 13 retained Apple vendor originals,14 consume stage1..3 one-dispatch authorization,
  * 15 retain actual stage1..3 vendor return,16 read retained E5,17 final Apple collection live check,
- * 18 read/adopt exact durable E6 (25 original or20 verified absence).
+ * 18 read/adopt exact durable E6 (25 original or20 verified absence),
+ * 19 renew the same owner's authenticated session(JWT/DPoP/root bounds as11):39 empty ack.
+ * Renewal preserves provider/platform/slot/attempt dates/evidence/E5/E6 and invalidates
+ * pending dispatch/challenges. A new0 with the same request ID precedes new live effects.
  * Selectors13/16/17/18 have no inputs; unavailable, lost or malformed custody remains an error.
  * Apple originals result38 is three u32-BE length-prefixed DATA originals (keyID UTF8<=4096,
  * attestation<=65536, assertion<=4096); result39 acknowledges custody, never monetary success.

@@ -258,24 +258,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 .verify(&candidate)
                 .map_err(|_| Error::Proof("Load cursor continuity"))?
         };
-        let sources = Arc::clone(&self.proofs.sources);
-        let graph = sources.finality_producer();
-        let next = {
-            let mut originals = self
-                .proofs
-                .originals
-                .lock()
-                .map_err(|_| Error::ArtifactsUnavailable("Load original owner"))?;
-            match prefix {
-                None => producer(graph.genesis(&mut *originals, self.proofs.budget))?,
-                Some(prefix) => {
-                    let input =
-                        block_witness(graph.installed().anchor(), &self.proofs.chain, &block)
-                            .map_err(|_| Error::Proof("Load original block witness"))?;
-                    producer(graph.append(&mut *originals, &prefix, &input, self.proofs.budget))?
-                }
-            }
-        };
+        let next = self.prove_recursive_successor(prefix, &block)?;
         session.checkpoint = Some(
             verifier
                 .export_checkpoint(&candidate)

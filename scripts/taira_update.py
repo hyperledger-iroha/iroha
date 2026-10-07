@@ -15,6 +15,9 @@ pinned Mac SSH route and VM backing directory; it contacts no host.
 --observe-installation captures a v2 initial cohort without stopping validators.
 --installed-observation binds that actual capture for the first preserved-state
 update; it makes no claim that an earlier update or checkpoint receipt exists.
+--retained-renderer selects an explicit public renderer source whose exact digest
+must equal the unchanged deployment and predecessor pins, independently of this
+controller checkout. The new plan retains that source path and rechecks it at apply.
 """
 import argparse
 import contextlib
@@ -234,7 +237,7 @@ def failed_start_inputs(reference, deployment, prior, guest, operation, candidat
     return dict(reference, installed=installed), entries[-1][0]
 
 
-def make_plan(build, deployment, prior, guest, operation, failed_start=None):
+def make_plan(build, deployment, prior, guest, operation, failed_start=None, *, retained_renderer=None):
     reject_retired_worker_plan(prior)
     commit = build['commit']
     artifacts = validate_build(build, commit)
@@ -252,12 +255,17 @@ def make_plan(build, deployment, prior, guest, operation, failed_start=None):
     else:
         need(prior.get('schema') == current['plan_schema'] and prior.get('commit') == current['commit']
              and prior.get('network_id') == deployment['network_id'], 'installed predecessor plan differs')
-    need(sha(read_public(ROOT / 'scripts/taira_validator_unit.py')) == deployment['renderer_sha256']
+    renderer = Path(retained_renderer) if retained_renderer is not None else ROOT / 'scripts/taira_validator_unit.py'
+    need(renderer.is_absolute() and str(renderer) == os.path.normpath(str(renderer)),
+         'retained renderer requires an absolute canonical source path')
+    need(sha(read_public(renderer)) == deployment['renderer_sha256']
          == prior['renderer_sha256'], 'reviewed custody renderer changed')
     need([row['role'] for row in prior['units']] == deployment['roles'], 'predecessor cohort differs')
     value = {'schema':'taira.daemon-update.plan.v2' if modern else 'taira.daemon-update.plan.v1', 'commit':commit,
              'network_id':deployment['network_id'], 'artifacts':artifacts,
              'operation':operation, 'deployment':deployment}
+    if retained_renderer is not None:
+        value['retained_renderer_path'] = str(renderer)
     installed_plan = prior
     if failed_start is not None:
         value['failed_start'], installed_plan = failed_start_inputs(
@@ -502,7 +510,8 @@ def apply_plan(args):
     for name, field in [('taira_update_guest.py', 'guest_sha256'), ('taira_update.py', 'runner_sha256'),
                         ('taira_disk_capacity.py', 'capacity_sha256')]:
         need(sha(read_public(HERE / name)) == plan[field], 'reviewed coordinator source changed')
-    need(sha(read_public(ROOT / 'scripts/taira_validator_unit.py')) == plan['renderer_sha256'],
+    renderer = Path(plan.get('retained_renderer_path', ROOT / 'scripts/taira_validator_unit.py'))
+    need(sha(read_public(renderer)) == plan['renderer_sha256'],
          'reviewed custody renderer changed')
     if 'failed_start' in plan:
         current = plan['deployment']['current']
@@ -510,7 +519,8 @@ def apply_plan(args):
         guest = module(HERE / 'taira_update_guest.py', 'runtime_update_recovery_validation')
         reference = {key: value for key, value in plan['failed_start'].items() if key != 'installed'}
         rebound = make_plan(json.loads(build_raw), plan['deployment'], prior, guest,
-                            plan['operation'], reference)
+                            plan['operation'], reference,
+                            retained_renderer=plan.get('retained_renderer_path'))
         need(rebound['failed_start'] == plan['failed_start'] and rebound['units'] == plan['units']
              and rebound['retained_predecessor'] == plan['retained_predecessor'],
              'failed-start recovery plan differs from its public inputs')
@@ -577,6 +587,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--deployment', type=Path, required=True)
     parser.add_argument('--prepared-result', type=Path)
+    parser.add_argument('--retained-renderer', type=Path,
+                        help='explicit public renderer source matching the unchanged deployment and predecessor digest pins')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--operation',
                         help='explicit fresh update-<32hex> operation identity')
@@ -600,18 +612,20 @@ def main():
              and args.prepared_result is None and args.operation is None
              and not args.prepare_artifacts
              and not args.observe_installation and args.installed_observation is None
-             and not args.plan_only and args.failed_start_chain is None,
+             and not args.plan_only and args.failed_start_chain is None and args.retained_renderer is None,
              'backing authoring requires only deployment, backing-route, backing-path and fresh output')
     elif args.observe_installation:
         need(args.prepared_result is None and args.operation is None and not args.prepare_artifacts
              and not args.plan_only and args.failed_start_chain is None
-             and args.installed_observation is None and args.backing_route is None and args.backing_path is None,
+             and args.installed_observation is None and args.backing_route is None and args.backing_path is None
+             and args.retained_renderer is None,
              'initial observation is a separate read-only command')
     else:
         need(args.backing_route is None and args.backing_path is None
              and args.prepared_result is not None and args.operation is not None,
              'update requires prepared-result and operation; backing authoring is a separate local command')
-    need(not args.prepare_artifacts or (not args.plan_only and args.failed_start_chain is None),
+    need(not args.prepare_artifacts or (not args.plan_only and args.failed_start_chain is None
+                                       and args.retained_renderer is None),
          'prepare-artifacts is separate from plan-only and failed-start recovery')
     os.umask(0o077)
     need(subprocess.check_output(['git', 'branch', '--show-current'], cwd=ROOT, text=True).strip()
@@ -650,7 +664,8 @@ def main():
         value = make_plan(retry.decode(build_raw), deployment, retry.decode(prior_raw), guest,
                           args.operation,
                           retry.decode(read_public(args.failed_start_chain))
-                          if args.failed_start_chain is not None else None)
+                          if args.failed_start_chain is not None else None,
+                          retained_renderer=args.retained_renderer)
         value.update(build_result_path=str(args.prepared_result), build_result_sha256=sha(build_raw))
         raw = (json.dumps(value, sort_keys=True)+'\n').encode()
         if args.plan_only:

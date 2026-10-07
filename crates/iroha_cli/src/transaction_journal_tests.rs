@@ -12,6 +12,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::topology::DataSpaceId;
 use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation, PipelineTransactionStatus};
+use norito::json;
 use std::{cell::Cell, time::Duration};
 
 fn fixture(message: &str) -> (Config, SignedTransaction, PreparedOperation) {
@@ -347,7 +348,7 @@ fn retained_applied_evidence_without_the_original_intent_never_authorizes_dispat
     let path = directory.path().join("operation");
     let journal = Journal::create_prepared(&path, &operation).unwrap();
     journal
-        .write_applied_evidence(&json::json!({"unexpected": true}))
+        .write_applied_evidence(&norito::json!({"unexpected": true}))
         .unwrap();
     assert!(
         dispatch_once(&journal, &operation, &transaction, 2_000, || panic!(

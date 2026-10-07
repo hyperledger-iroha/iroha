@@ -401,6 +401,9 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             }
         }
         let (mut selected, mut manifest) = self.sync_manifest()?;
+        if request.kind() == KagemushaWalletOperationKindV1::Load {
+            self.require_ledger_activation(&manifest)?;
+        }
         // This dispatcher starts from an enrolled/released wallet. Enrollment is a separate
         // pre-wallet owner; no preparation may manufacture a Bootstrap source.
         let sequence = manifest.indexed.ok_or(Error::NoHead)?;

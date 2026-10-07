@@ -38,7 +38,18 @@ extension KagemushaWalletV1 {
         guard result.status == 40 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
         return result.bytes
     }
-    /// Confirm exact successful input/output inclusion of this original Unload in Native's selected block.
+    /// Read this exact transaction and Unload claim's independently retained history.
+    public func unloadFinalityProgress(transactionHash: Data, original: Data) throws -> KagemushaWalletLedgerProgressV1? {
+        let result = try setup(.init(selector: 33, identity: transactionHash, first: original))
+        if result.status == 34 { return nil }
+        return try .init(result)
+    }
+    /// Verify one next original block for this Unload's own durable history cursor.
+    public func ingestUnloadFinality(transactionHash: Data, original: Data, finality: Data) throws -> KagemushaWalletLedgerProgressV1 {
+        try .init(setup(.init(selector: 34, identity: transactionHash, first: original, second: finality)))
+    }
+
+    /// Confirm exact successful input/output inclusion of this original Unload in its own Native-selected block.
     public func confirmLedgerUnload(transactionHash: Data, original: Data) throws -> KagemushaWalletUnloadConfirmationV1 {
         let result = try setup(.init(selector: 30, identity: transactionHash, first: original))
         guard result.status == 42 else { throw KagemushaWalletErrorV1.invalidNativeOutput }

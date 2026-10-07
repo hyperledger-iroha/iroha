@@ -416,6 +416,26 @@ fn bounded_preparation_preserves_shortened_session_deadline_and_rejects_extensio
             .unwrap();
             let value = decode(prepared.original(), 16 * 1024).unwrap();
             assert_eq!(integer(&value, "expires_at_ms").unwrap(), expires);
+            let captured = VerifierRequestV1::from_prepared(
+                request.request.clone(),
+                &prepared,
+                expires - 1,
+            )
+            .unwrap();
+            for time in [expires, expires + 1, u64::MAX] {
+                assert!(
+                    VerifierRequestV1::from_prepared(request.request.clone(), &prepared, time)
+                        .is_err()
+                );
+            }
+            // Recovery reconstructs the original captured time, never the later retry time.
+            let restored = VerifierRequestV1::from_prepared(
+                request.request.clone(),
+                &prepared,
+                expires - 1,
+            )
+            .unwrap();
+            assert_eq!(restored.original(), captured.original());
         }
         for expires in [0, 999, 1_000, maximum + 1, u64::MAX] {
             assert!(

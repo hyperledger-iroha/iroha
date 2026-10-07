@@ -28,28 +28,28 @@ pub(crate) struct StoppedOwnerMaintenance {
 #[cfg(any(target_os = "linux", test))]
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
-struct MaintenanceRequest {
-    schema: String,
-    operation_directory: String,
-    owner: MaintenanceOwner,
+pub(super) struct MaintenanceRequest {
+    pub(super) schema: String,
+    pub(super) operation_directory: String,
+    pub(super) owner: MaintenanceOwner,
 }
 
 #[cfg(any(target_os = "linux", test))]
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
-struct MaintenanceOwner {
-    pid: u32,
-    start_time_ticks: u64,
-    argv: Vec<String>,
-    lock: MaintenanceLock,
+pub(super) struct MaintenanceOwner {
+    pub(super) pid: u32,
+    pub(super) start_time_ticks: u64,
+    pub(super) argv: Vec<String>,
+    pub(super) lock: MaintenanceLock,
 }
 
 #[cfg(any(target_os = "linux", test))]
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
-struct MaintenanceLock {
-    device: u64,
-    inode: u64,
+pub(super) struct MaintenanceLock {
+    pub(super) device: u64,
+    pub(super) inode: u64,
 }
 
 impl StoppedOwnerMaintenance {
@@ -88,18 +88,21 @@ fn text_field<'a>(value: &'a json::Value, field: &str) -> Result<&'a str> {
 }
 
 #[cfg(any(target_os = "linux", test))]
-struct MaintenanceScope {
-    operation: String,
-    runtime: PathBuf,
-    config: PathBuf,
-    state: PathBuf,
-    previous_daemon: PathBuf,
-    candidate_cli: PathBuf,
-    units: Vec<Vec<u8>>,
+pub(super) struct MaintenanceScope {
+    pub(super) operation: String,
+    pub(super) runtime: PathBuf,
+    pub(super) config: PathBuf,
+    pub(super) state: PathBuf,
+    pub(super) previous_daemon: PathBuf,
+    pub(super) candidate_cli: PathBuf,
+    pub(super) units: Vec<Vec<u8>>,
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn maintenance_scope(request: &MaintenanceRequest, plan: &json::Value) -> Result<MaintenanceScope> {
+pub(super) fn maintenance_scope(
+    request: &MaintenanceRequest,
+    plan: &json::Value,
+) -> Result<MaintenanceScope> {
     let operation = text_field(plan, "operation")?;
     if request.schema != REQUEST_SCHEMA
         || text_field(plan, "schema")? != "taira.daemon-update.plan.v2"
@@ -197,7 +200,7 @@ fn maintenance_scope(request: &MaintenanceRequest, plan: &json::Value) -> Result
 }
 
 #[cfg(target_os = "linux")]
-fn public_bytes(path: &Path, maximum: u64) -> Result<Vec<u8>> {
+pub(super) fn public_bytes(path: &Path, maximum: u64) -> Result<Vec<u8>> {
     require_root_no_symlink_ancestors(path, "maintenance public evidence")?;
     let pinned = pin_owner_private_file(path, "maintenance public evidence")?;
     if pinned.snapshot.len > maximum {
@@ -274,10 +277,11 @@ fn require_updater_flock(bytes: &[u8], owner: &MaintenanceOwner) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn verify_owner(
+pub(super) fn verify_owner(
     request: &MaintenanceRequest,
     scope: &MaintenanceScope,
     deadline: Instant,
+    allow_failure: bool,
 ) -> Result<()> {
     if Instant::now() >= deadline {
         return Err(eyre!("maintenance deadline elapsed"));
@@ -290,6 +294,9 @@ fn verify_owner(
         "rollback.json",
         "start-intent.json",
     ] {
+        if allow_failure && terminal == "failure.json" {
+            continue;
+        }
         match fs::symlink_metadata(directory.join(terminal)) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             _ => return Err(eyre!("maintenance operation has started or terminated")),
@@ -417,7 +424,7 @@ fn run_maintenance(request: &MaintenanceRequest) -> Result<json::Value> {
         ));
     }
     let vacant = || {
-        verify_owner(request, &scope, deadline)?;
+        verify_owner(request, &scope, deadline, false)?;
         if public_bytes(&directory.join("intent.json"), 8 * 1024 * 1024)? != plan_bytes {
             return Err(eyre!("maintenance public plan changed"));
         }

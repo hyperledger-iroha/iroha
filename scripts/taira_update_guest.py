@@ -3,10 +3,14 @@
 
 Python reads public units/status and metadata only. Retained file metadata binds
 private configuration; the native daemon alone consumes config/key contents.
-No ledger removal, key/config rewrite, reset, or Python signing. Retired epoch
+Native alone retires the exact obsolete zk.halo2 table; Python never reads or
+rewrites config/key contents. No ledger removal, reset, or Python signing. Retired epoch
 worker services and state are rejected without process or journal mutation.
 Startup replay may expose a lower prefix; success still requires each retained
 checkpoint and a fresh anchored quorum. Heights within one process never regress.
+A prestart Native restore leaves validators paused and publishes actual restored
+config metadata. It is not a healthy completion: a later update must reconcile
+that receipt because atomic restoration can change the original config inode.
 """
 import ast
 import base64
@@ -36,6 +40,7 @@ FAILED_START_RECORDS = ('intent.json', 'before.json', 'checkpoint-stopped.json',
                       'start-intent.json', 'failure.json')
 BOUND = False
 DEPLOYMENT_LOCK_FD = None
+CONFIG_RETIREMENT = None
 RETIRED_WORKER_STATE = Path('/var/lib/taira-epoch-supervisor')
 RETIRED_WORKER_UNIT = Path('/etc/systemd/system/iroha-taira-epoch-supervisor.service')
 
@@ -56,7 +61,7 @@ def reject_retired_epoch_worker():
 def configure(plan):
     """Bind deployment-owned public paths once, before any guest observation."""
     global BOUND, BASE, OLD, CANDIDATE_COMMIT, CONFIG_RELEASE, PREVIOUS_DAEMON, DAEMON, CLI, KAGAMI
-    global ATTEMPT, NETWORK, ROLES, UNITS, REPLAY_BARRIER, PUBLIC_ORIGIN
+    global ATTEMPT, NETWORK, ROLES, UNITS, REPLAY_BARRIER, PUBLIC_ORIGIN, CONFIG_RETIREMENT
     global STATE_ROOT, CONFIG_ROOT, GENESIS_MANIFEST, PORTS, PREDECESSOR, CONFIG_FILENAME, INITIAL_DAEMONS, KURA_HASH_JOURNAL
     need(not BOUND, 'one deployment per guest process')
     reject_retired_worker_plan(plan)
@@ -87,6 +92,7 @@ def configure(plan):
     PORTS = tuple(deployment['ports'])
     REPLAY_BARRIER = deployment['replay_floor']
     PUBLIC_ORIGIN = deployment['public_origin']
+    CONFIG_RETIREMENT = None
     BOUND = True
 
 
@@ -104,7 +110,7 @@ def validate_update_plan_shape(plan):
                 'units', 'retained_predecessor', 'guest_sha256', 'capacity_sha256',
                 'runner_sha256', 'renderer_sha256', 'secret_contents_read',
                 'transaction_submission', 'python_transaction_submission'}
-    optional = {'failed_start', 'build_result_path', 'build_result_sha256'}
+    optional = {'failed_start', 'build_result_path', 'build_result_sha256', 'retained_renderer_path'}
     need(isinstance(plan, dict) and required <= set(plan) <= required | optional,
          'update plan fields differ from the canonical contract')
     need(plan['schema'] in ('taira.daemon-update.plan.v1', 'taira.daemon-update.plan.v2')
@@ -116,6 +122,11 @@ def validate_update_plan_shape(plan):
          'update and deployment versions differ')
     need(not (plan['schema'].endswith('.v2') and 'failed_start' in plan),
          'v2 failed starts require explicit reconciliation; v1 lineage is not reused')
+    if 'retained_renderer_path' in plan:
+        value = plan['retained_renderer_path']
+        need(isinstance(value, str) and value.startswith('/')
+             and os.path.normpath(value) == value and not re.search(r'[\x00-\x1f\x7f]', value),
+             'retained renderer requires an absolute canonical source path')
 
 
 def load_capacity(plan, capacity_source):
@@ -145,6 +156,11 @@ def storage_capacity(plan, capacity_source, phase):
             ('/etc/systemd/system', 'unit publication and rollback', 2 * units, 10, 0),
             (plan['deployment']['state_root'], 'retained validator state', 0, 0, 0),
         ]
+        if plan['schema'].endswith('.v2'):
+            # Native bounds each of four configs at 1 MiB, with original, staged
+            # and restore publications. No private contents are read for sizing.
+            requirements.append((plan['deployment']['config_root'],
+                                 'native config retirement and rollback', 12 * 1024**2, 12, 0))
     allocations, observations = [], {}
     for path, label, size, files, directories in requirements:
         if path not in observations:
@@ -980,9 +996,17 @@ def stop_all():
     return states
 
 
-def compare_retained_identity(old, new):
-    for key in ('config_stamp', 'state_root_identity', 'current_target'):
+def compare_retained_identity(old, new, *, allow_config_retirement=False):
+    for key in ('state_root_identity', 'current_target'):
         need(old[key] == new[key], 'retained identity changed: ' + key)
+    if allow_config_retirement and CONFIG_RETIREMENT is not None:
+        rows = CONFIG_RETIREMENT['rows']
+        matches = [row for row in rows if row['role'] == old['role'] == new['role']]
+        need(len(matches) == 1 and old['config_stamp'] == matches[0]['before_stamp']
+             and new['config_stamp'] == matches[0]['installed_stamp'],
+             'retained config_stamp differs from native retirement receipt')
+    else:
+        need(old['config_stamp'] == new['config_stamp'], 'retained identity changed: config_stamp')
 
 
 def cohort_retained_tip(checkpoints):
@@ -1048,7 +1072,7 @@ def observe_healthy_cohort(rows, before, *, after, commit, retained_tip,
         last_height = prior['public']['height'] if prior is not None and prior['public'] else 0
         new = observe(row, after=after, allow_unavailable=True,
                       expected_commit=commit, minimum_height=last_height)
-        compare_retained_identity(old, new)
+        compare_retained_identity(old, new, allow_config_retirement=after)
         public = new['public']
         fresh = public is not None
         if fresh:
@@ -1253,6 +1277,87 @@ def stopped_owner_maintenance(operation):
          and report['operation'] == operation
          and report['all_four_stopped_owners_clean'] is True,
          'native stopped-owner maintenance did not prove the exact stopped cohort')
+
+
+CONFIG_RETIREMENT_FIELDS = {'role', 'source_path', 'staged_path', 'original_path', 'changed',
+                            'source_sha256', 'output_sha256', 'before_stamp', 'staged_stamp'}
+
+
+def valid_config_stamp(value):
+    """Validate only public filesystem metadata; configuration bytes stay native-owned."""
+    return (isinstance(value, list) and len(value) == 9
+            and all(type(part) is int and part >= 0 for part in value)
+            and stat.S_ISREG(value[2]) and not value[2] & 0o022
+            and value[3] == 0 and value[5] == 1)
+
+
+def validate_config_retirement(report, operation, action, before, prepared=None):
+    """Bind native evidence to the unchanged cohort and exact metadata transition."""
+    stage = {'prepare': 'prepared', 'install': 'installed', 'restore': 'restored'}[action]
+    need(isinstance(report, dict)
+         and set(report) == {'schema', 'operation', 'source_commit', 'network_id', 'rows'}
+         and report['schema'] == 'taira.validator-config-retirement.' + stage + '.v1'
+         and report['operation'] == operation and report['source_commit'] == CANDIDATE_COMMIT
+         and report['network_id'] == NETWORK and isinstance(report['rows'], list)
+         and len(report['rows']) == len(before) == len(ROLES) == 4,
+         'native config retirement receipt identity differs')
+    need(action == 'prepare' or prepared is not None, 'native preparation receipt required')
+    extra = set() if action == 'prepare' else {stage + '_stamp'}
+    for index, (role, row, original) in enumerate(zip(ROLES, report['rows'], before, strict=True)):
+        source = retained_config(role)
+        staged = source.with_name('.' + source.name + '.' + operation + '.retirement-next')
+        backup = source.with_name('.' + source.name + '.' + operation + '.retirement-original')
+        need(isinstance(row, dict) and set(row) == CONFIG_RETIREMENT_FIELDS | extra
+             and row['role'] == original['role'] == role
+             and row['source_path'] == str(source) and row['staged_path'] == str(staged)
+             and row['original_path'] == str(backup) and type(row['changed']) is bool
+             and all(isinstance(row[key], str) and re.fullmatch('[0-9a-f]{64}', row[key])
+                     for key in ('source_sha256', 'output_sha256'))
+             and row['changed'] == (row['source_sha256'] != row['output_sha256'])
+             and valid_config_stamp(row['before_stamp']) and valid_config_stamp(row['staged_stamp'])
+             and row['before_stamp'] == original['config_stamp'],
+             'native config retirement row differs from retained original')
+        if prepared is not None:
+            need({key: row[key] for key in CONFIG_RETIREMENT_FIELDS} == prepared['rows'][index],
+                 'native config retirement changed its preparation')
+        if action == 'prepare':
+            need(stamp(source) == row['before_stamp'] and stamp(staged) == row['staged_stamp'],
+                 'native staged configuration metadata changed')
+        else:
+            final = row[stage + '_stamp']
+            need(valid_config_stamp(final) and stamp(source) == final,
+                 'native installed/restored configuration metadata changed')
+            if action == 'install':
+                need(final != row['before_stamp'] if row['changed'] else final == row['before_stamp'],
+                     'native no-op or changed config transition differs')
+    return report
+
+
+def retire_validator_configs(operation, action, before, prepared=None):
+    """Dispatch the native adapter once; consume only its bounded public receipt."""
+    need(action in ('prepare', 'install', 'restore'), 'unknown config retirement action')
+    stage = {'prepare': 'prepared', 'install': 'installed', 'restore': 'restored'}[action]
+    request_name = 'config-retirement-' + action + '-request.json'
+    record(request_name, {'schema': 'taira.validator-config-retirement.request.v1',
+                         'operation_directory': str(ATTEMPT), 'owner': cohort_observation_owner()})
+    request_fd = os.open(ATTEMPT / request_name, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        raw = command([CLI, 'taira', 'retire-validator-config', '--action', action,
+                       '--request-fd', str(request_fd)], timeout=150,
+                      name='config-retirement-' + action + '-command', pass_fds=(request_fd,))
+    finally:
+        os.close(request_fd)
+    need(len(raw) <= 65_536, 'native config retirement report exceeds bound')
+    try:
+        report = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise RuntimeError('native config retirement report is not valid JSON') from None
+    validate_config_retirement(report, operation, action, before, prepared)
+    # Native owns durable receipt publication. Python cannot invent a config transition
+    # from stdout alone or overwrite the evidence used by later runtime verification.
+    need(retained_public_record(ATTEMPT, 'config-retirement-' + stage + '.json') == report,
+         'native config retirement report differs from its published receipt')
+    return report
 
 
 def verify_cohort_observation_owner(intent):
@@ -1473,6 +1578,7 @@ def retained_attempt(plan):
 
 
 def apply(plan, capacity_source):
+    global CONFIG_RETIREMENT
     validate_update_plan_shape(plan)
     configure(plan)
     need(os.geteuid() == 0 and plan['network_id'] == NETWORK, 'guest or network differs')
@@ -1521,11 +1627,17 @@ def apply(plan, capacity_source):
         before.append(snapshot)
         write_new(ATTEMPT / (row['role'] + '.before.service'), raw)
         write_new(ATTEMPT / (f'iroha3d-{row["role"]}.service'), after, snapshot['unit_stamp'][2] & 0o7777)
-        config = retained_config(row['role'])
+    record('retained-entry.json', before)
+    # Native retirement owns the v2 retained installation. The v1 recovery corridor
+    # keeps its existing config validation and never invokes the v2-only adapter.
+    prepared_configs = (retire_validator_configs(plan['operation'], 'prepare', before)
+                        if plan['schema'].endswith('.v2') else None)
+    check_paths = ([Path(row['staged_path']) for row in prepared_configs['rows']]
+                   if prepared_configs is not None else [retained_config(role) for role in ROLES])
+    for index, config in enumerate(check_paths):
         native_private_command([DAEMON, '--config', config, '--genesis-manifest-json',
                  GENESIS_MANIFEST, '--sora', '--check-config'],
                 timeout=90, name=f'check-config-{index+1}')
-    record('retained-entry.json', before)
     command(['/usr/bin/systemd-analyze', 'verify',
              *[ATTEMPT / (f'iroha3d-{row["role"]}.service') for row in plan['units']]],
             name='verify-units')
@@ -1534,6 +1646,7 @@ def apply(plan, capacity_source):
     new_start_attempted = False
     validator_stop_attempted = False
     validator_stop_confirmed = False
+    config_install_attempted = False
     try:
         record('stop-intent.json', {'units': UNITS, 'configuration_or_ledger_mutation': False})
         validator_stop_attempted = True
@@ -1549,19 +1662,24 @@ def apply(plan, capacity_source):
         retained_tip = verify_stopped_cohort_prefixes(checkpoints)
         record('cohort-retained-tip.json', retained_tip)
         stopped_owner_maintenance(plan['operation'])
+        if prepared_configs is not None:
+            config_install_attempted = True
+            CONFIG_RETIREMENT = retire_validator_configs(plan['operation'], 'install', before, prepared_configs)
         for row, original in zip(plan['units'], before, strict=True):
             path = Path('/etc/systemd/system') / f'iroha3d-{row["role"]}.service'
             install_unit(path, base64.b64decode(row['after']), base64.b64decode(row['before']),
                          original['unit_stamp'][2] & 0o7777)
             installed.append(row)
         command(['/usr/bin/systemctl', 'daemon-reload'], name='daemon-reload')
-        record('start-intent.json', {'units': UNITS, 'automatic_old_binary_rollback_after_start': False})
         for checkpoint in checkpoints:
             need(snapshot_selection(checkpoint['role']) == checkpoint['selection'],
                  'retained checkpoint changed before new runtime startup')
             need(native_kura_tip(checkpoint['role']) == checkpoint['kura_tip'],
                  'stopped Kura tip changed before new runtime startup')
+        # An uncertain start-intent publication closes the rollback boundary too.
+        # Native restoration refuses any retained intent even when start was not reached.
         new_start_attempted = True
+        record('start-intent.json', {'units': UNITS, 'automatic_old_binary_rollback_after_start': False})
         command(['/usr/bin/systemctl', 'start', *UNITS], timeout=150, name='start')
         startup_processes = [{'role': role, 'systemd': systemd(unit)}
                              for role, unit in zip(ROLES, UNITS, strict=True)]
@@ -1655,6 +1773,10 @@ def apply(plan, capacity_source):
                     need(current in (old, new), 'unit has an unknown rollback successor')
                     if current != old:
                         install_unit(path, old, new, original['unit_stamp'][2] & 0o7777)
+                config_restored = None
+                if config_install_attempted:
+                    config_restored = retire_validator_configs(plan['operation'], 'restore', before, prepared_configs)
+                    CONFIG_RETIREMENT = None
                 command(['/usr/bin/systemctl', 'daemon-reload'], name='rollback-reload')
                 restored = []
                 for unit in UNITS:
@@ -1663,9 +1785,16 @@ def apply(plan, capacity_source):
                          and state['MainPID'] == state['ControlPID'] == '0' and state['Job'] == '',
                          'rollback did not retain the paused cohort: ' + unit)
                     restored.append({'unit': unit, 'systemd': state})
-                record('rollback.json', {'restored_previous_stopped_cohort': True,
-                    'old_daemons_restarted': False,
-                    'observations': restored})
+                rollback = {'restored_previous_stopped_cohort': True,
+                            'old_daemons_restarted': False, 'observations': restored}
+                if config_restored is not None:
+                    rollback.update(config_retirement_restored_receipt='config-retirement-restored.json',
+                                    restored_config_stamps=[{'role': row['role'], 'config_stamp': row['restored_stamp']}
+                                                           for row in config_restored['rows']],
+                                    config_identity_reconciliation_required=any(
+                                        row['restored_stamp'] != row['before_stamp']
+                                        for row in config_restored['rows']))
+                record('rollback.json', rollback)
             else:
                 # An ambiguous stop is never retried. Before-stop failures leave
                 # validators untouched; partial-stop failures require read-only

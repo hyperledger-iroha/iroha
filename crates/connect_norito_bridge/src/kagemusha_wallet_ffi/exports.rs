@@ -408,6 +408,11 @@ mod setup_boundary_tests {
                 setup::Setup::ConfirmUnload { .. } => panic!("unexpected unload confirmation fixture"),
                 setup::Setup::LoadProofProgress(_) => panic!("unexpected load proof progress fixture"),
                 setup::Setup::LoadProofStep { .. } => panic!("unexpected load proof step fixture"),
+                setup::Setup::UnloadProofProgress { .. } => panic!("unexpected unload proof progress fixture"),
+                setup::Setup::UnloadProofStep { .. } => panic!("unexpected unload proof step fixture"),
+                setup::Setup::ConfirmActivation(_) => panic!("unexpected activation confirmation fixture"),
+                setup::Setup::ActivationProofProgress(_) => panic!("unexpected activation progress fixture"),
+                setup::Setup::ActivationProofStep { .. } => panic!("unexpected activation step fixture"),
                 setup::Setup::FinishTime { .. } => panic!("unexpected unsigned time fixture"),
             };
             Ok(Response {

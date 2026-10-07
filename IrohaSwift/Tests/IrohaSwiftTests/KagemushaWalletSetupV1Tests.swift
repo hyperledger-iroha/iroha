@@ -20,6 +20,12 @@ final class KagemushaWalletSetupV1Tests: XCTestCase {
     for kind in [UInt64(0), 4] { XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 29, token: kind, first: Data([1]))) }
     XCTAssertNoThrow(try KagemushaWalletSetupInputV1(selector: 30, identity: id, first: Data([1])))
     XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 30, first: Data([1])))
+    XCTAssertNoThrow(try KagemushaWalletSetupInputV1(selector: 33, identity: id, first: Data([1])))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 33, first: Data([1])))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 33, identity: id, first: Data([1]), second: Data([2])))
+    XCTAssertNoThrow(try KagemushaWalletSetupInputV1(selector: 34, identity: id, first: Data([1]), second: Data([2])))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 34, identity: id, first: Data([1])))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 34, identity: id, first: Data([1]), second: Data([2]), third: Data([3])))
     XCTAssertNoThrow(try KagemushaWalletSetupInputV1(selector: 31, first: Data([1])))
     XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 31))
   }

@@ -24,7 +24,7 @@ use iroha_torii_shared::{
     FeeQuoteResponse, PipelineTransactionDetailsResponse, PipelineTransactionStatusResponse,
 };
 use iroha_version::codec::DecodeVersioned as _;
-use norito::json::{self, JsonDeserialize, JsonSerialize};
+use norito::json::{JsonDeserialize, JsonSerialize};
 use std::{
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -417,13 +417,13 @@ fn print_report<C: RunContext>(
     submission_recorded: bool,
     submission_acknowledged_now: bool,
 ) -> Result<()> {
-    context.print_data(&json::json!({
+    context.print_data(&norito::json!({
         "schema": "iroha.cli.transaction-journal-report.v1",
         "journal": (journal.path().display().to_string()),
         "transaction_hash": (operation.transaction_hash.clone()),
         "network_id": (operation.network_id.to_string()),
-        "state": observation.state,
-        "block_height": observation.block_height,
+        "state": (observation.state),
+        "block_height": (observation.block_height),
         "submission_recorded": submission_recorded,
         "submission_acknowledged_now": submission_acknowledged_now,
         "exact_committed_envelope_verified": (observation.state == "Applied")

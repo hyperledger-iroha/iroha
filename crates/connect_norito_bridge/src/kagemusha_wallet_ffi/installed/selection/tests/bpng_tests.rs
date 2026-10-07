@@ -191,9 +191,9 @@ fn bpng_session_authenticates_actual_retail_claims_and_exact_signed_release() {
     // Re-signing a changed public selection produces a different release preimage.
     let mut other = BpngFixture::new();
     mutate(
-        &mut other.0.runtime,
-        "challenge_lifetime_ms",
-        norito::json!(1234),
+        &mut other.0.app,
+        "generatedAt",
+        Value::String("2026-10-07T00:00:00Z".into()),
     );
     let other = other.load().unwrap();
     assert_ne!(

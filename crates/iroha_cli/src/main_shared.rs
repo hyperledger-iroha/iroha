@@ -1567,6 +1567,11 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
         return map_command_result(reset.run_without_client_config(io::stdout()))
             .map(|()| std::process::ExitCode::SUCCESS);
     }
+    if let Command::Taira(taira::Command::RetireValidatorConfig(command)) = &args.command {
+        reject_irrelevant_local_tool_globals(&args, "taira retire-validator-config")?;
+        return map_command_result(command.run_without_client_config(io::stdout()))
+            .map(|()| std::process::ExitCode::SUCCESS);
+    }
     if let Command::Taira(taira::Command::StoppedOwnerMaintenance(command)) = &args.command {
         reject_irrelevant_local_tool_globals(&args, "taira stopped-owner-maintenance")?;
         return map_command_result(command.run_without_client_config(io::stdout()))

@@ -1,4 +1,5 @@
 //! Read-only build-identity transition after an actual preserved-state Taira update.
+//! A native retired-table receipt may change config file metadata, never peer config authority.
 //! Original deployment intent and genesis/peer/config authority are never rewritten.
 
 use super::*;
@@ -159,6 +160,17 @@ fn validate_records(
 ) -> Result<()> {
     let plan = &records["intent.json"];
     let result = &records["result.json"];
+    let retirement = match (
+        records.get("config-retirement-prepared.json"),
+        records.get("config-retirement-installed.json"),
+    ) {
+        (Some(prepared), Some(installed)) => {
+            crate::taira_public_reset::validate_retirement_records(prepared, installed, plan)?;
+            Some(rows(field(installed, "rows")?)?)
+        }
+        (None, None) => None,
+        _ => return Err(eyre!("runtime config retirement evidence is incomplete")),
+    };
     let deployment = field(plan, "deployment")?;
     require(
         matches!(
@@ -320,13 +332,28 @@ fn validate_records(
                 && number(stopped, "checkpoint_height")? > 0,
             "runtime update did not restore its retained checkpoint",
         )?;
-        for key in ["config_stamp", "state_root_identity", "current_target"] {
+        for key in ["state_root_identity", "current_target"] {
             require(
                 field(before, key)? == field(after, key)?
                     && field(after, key)? == field(&final_rows[index], key)?,
-                "runtime update changed retained config or state custody",
+                "runtime update changed retained state custody",
             )?;
         }
+        let expected_config = if let Some(retirement) = retirement {
+            let row = &retirement[index];
+            require(
+                field(before, "config_stamp")? == field(row, "before_stamp")?,
+                "runtime config retirement predecessor differs",
+            )?;
+            field(row, "installed_stamp")?
+        } else {
+            field(before, "config_stamp")?
+        };
+        require(
+            expected_config == field(after, "config_stamp")?
+                && expected_config == field(&final_rows[index], "config_stamp")?,
+            "runtime update changed retained config without native retirement",
+        )?;
         for row in [after, &final_rows[index]] {
             let public = field(row, "public")?;
             require(
@@ -542,6 +569,25 @@ impl Verified {
                 records.insert(name.to_owned(), json::from_slice(&input.bytes)?);
                 held.push(input);
             }
+            for name in [
+                "config-retirement-prepared.json",
+                "config-retirement-installed.json",
+            ] {
+                let selected = path.join(name);
+                match fs::symlink_metadata(&selected) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                    Ok(_) => {}
+                }
+                require(
+                    root_path(&selected, false)?.mode() & 0o7777 == 0o600,
+                    "runtime config retirement receipt custody differs",
+                )?;
+                let input = PublicInput::read(&selected)?;
+                hashes.insert(name.to_owned(), digest(&input.bytes));
+                records.insert(name.to_owned(), json::from_slice(&input.bytes)?);
+                held.push(input);
+            }
             let identity = crate::compiled_build_identity()?;
             let source = identity.release_source_commit()?;
             validate_records(
@@ -635,6 +681,18 @@ impl Verified {
                 )?;
             }
             let plan = &self.records["intent.json"];
+            if let Some(prepared) = self.records.get("config-retirement-prepared.json") {
+                let installed = self
+                    .records
+                    .get("config-retirement-installed.json")
+                    .ok_or_else(|| eyre!("runtime config retirement completion missing"))?;
+                crate::taira_public_reset::verify_installed_retirement(prepared, installed, plan)?;
+                require(
+                    fs::symlink_metadata(self.directory.join("config-retirement-restored.json"))
+                        .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound),
+                    "runtime config retirement was restored",
+                )?;
+            }
             let deployment = field(plan, "deployment")?;
             let release = text(deployment, "config_release")?;
             require(
@@ -812,6 +870,90 @@ mod tests {
             network,
             trust,
         )
+    }
+
+    #[test]
+    fn runtime_transition_accepts_only_the_native_config_stamp_join() {
+        let (mut records, operation, network, trust) = fixture();
+        let deployment = records
+            .get_mut("intent.json")
+            .unwrap()
+            .get_mut("deployment")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        deployment.insert("config_release".into(), norito::json!(PREVIOUS));
+        deployment.insert("config_filename".into(), norito::json!("beacon.toml"));
+        let mut prepared_rows = Vec::new();
+        let mut installed_rows = Vec::new();
+        for index in 0..4 {
+            let role = format!("taira-validator-{}", index + 1);
+            let source = format!("/srv/taira/{role}/releases/{PREVIOUS}/config/beacon.toml");
+            let sibling =
+                format!("/srv/taira/{role}/releases/{PREVIOUS}/config/.beacon.toml.{operation}");
+            let before = norito::json!([1, (10 + index), 33152, 0, 0, 1, 100, 1000, 1000]);
+            let staged = norito::json!([1, (20 + index), 33152, 0, 0, 1, 90, 2000, 2000]);
+            let installed = norito::json!([1, (20 + index), 33152, 0, 0, 1, 90, 2000, 3000]);
+            let row = norito::json!({"role":role,"source_path":source,"staged_path":(format!("{sibling}.retirement-next")),"original_path":(format!("{sibling}.retirement-original")),"changed":true,"source_sha256":("d".repeat(64)),"output_sha256":("e".repeat(64)),"before_stamp":(before.clone()),"staged_stamp":staged});
+            let mut final_row = row.clone();
+            final_row
+                .as_object_mut()
+                .unwrap()
+                .insert("installed_stamp".into(), installed.clone());
+            prepared_rows.push(row);
+            installed_rows.push(final_row);
+            *records
+                .get_mut("retained-entry.json")
+                .unwrap()
+                .get_mut(index)
+                .unwrap()
+                .get_mut("config_stamp")
+                .unwrap() = before;
+            *records
+                .get_mut("after.json")
+                .unwrap()
+                .get_mut(index)
+                .unwrap()
+                .get_mut("config_stamp")
+                .unwrap() = installed.clone();
+            *records
+                .get_mut("cohort-ready.json")
+                .unwrap()
+                .get_mut("observations")
+                .unwrap()
+                .get_mut(index)
+                .unwrap()
+                .get_mut("config_stamp")
+                .unwrap() = installed;
+        }
+        for (kind, rows) in [("prepared", prepared_rows), ("installed", installed_rows)] {
+            records.insert(format!("config-retirement-{kind}.json"), norito::json!({"schema":(format!("taira.validator-config-retirement.{kind}.v1")),"operation":(operation.clone()),"source_commit":SOURCE,"network_id":(network.to_string()),"rows":rows}));
+        }
+        validate_records(&records, &operation, network, SOURCE, &trust, VERSION).unwrap();
+        let mut changed = records.clone();
+        *changed
+            .get_mut("after.json")
+            .unwrap()
+            .get_mut(0usize)
+            .unwrap()
+            .get_mut("config_stamp")
+            .unwrap()
+            .get_mut(1usize)
+            .unwrap() = norito::json!(999);
+        assert!(validate_records(&changed, &operation, network, SOURCE, &trust, VERSION).is_err());
+        records.remove("config-retirement-prepared.json");
+        records.remove("config-retirement-installed.json");
+        assert!(validate_records(&records, &operation, network, SOURCE, &trust, VERSION).is_err());
+    }
+
+    #[test]
+    fn runtime_transition_requires_complete_native_retirement_evidence() {
+        let (mut records, operation, network, trust) = fixture();
+        records.insert("config-retirement-prepared.json".into(), norito::json!({}));
+        assert!(validate_records(&records, &operation, network, SOURCE, &trust, VERSION).is_err());
+        records.remove("config-retirement-prepared.json");
+        records.insert("config-retirement-installed.json".into(), norito::json!({}));
+        assert!(validate_records(&records, &operation, network, SOURCE, &trust, VERSION).is_err());
     }
 
     #[test]

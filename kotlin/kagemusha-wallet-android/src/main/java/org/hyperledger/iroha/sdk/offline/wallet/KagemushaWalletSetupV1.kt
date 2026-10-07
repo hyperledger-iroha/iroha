@@ -41,9 +41,10 @@ internal class KagemushaWalletSetupInputV1(
             25 -> intArrayOf(32 * 1024 * 1024, 1024, 0)
             26 -> intArrayOf(21_024, 16_384, 0)
             28 -> intArrayOf(512, 8192, 0)
-            29, 30 -> intArrayOf(65_536, 0, 0)
+            29, 30, 33, 35, 37 -> intArrayOf(65_536, 0, 0)
             31 -> intArrayOf(512, 0, 0)
             32 -> intArrayOf(512, 36 * 1024 * 1024, 0)
+            34, 36 -> intArrayOf(65_536, 36 * 1024 * 1024, 0)
             2 -> intArrayOf(10_000, 1_024, 512)
             3, in 7..14, in 16..17 -> intArrayOf(10_000, 0, 0)
             5 -> intArrayOf(512, 512, 0)
@@ -56,14 +57,14 @@ internal class KagemushaWalletSetupInputV1(
         a = first.copyOf()
         b = second.copyOf()
         c = third.copyOf()
-        require((selector in listOf(1, 2, 19, 20, 25, 27, 30)) == id.any { it != 0.toByte() }) { "setup identity" }
+        require((selector in listOf(1, 2, 19, 20, 25, 27, 30, 33, 34)) == id.any { it != 0.toByte() }) { "setup identity" }
         require((selector in listOf(1, 27)) == (amount.low != 0L || amount.high != 0L)) { "Offer or Load amount" }
         require(token >= 0 && ((selector in listOf(5, 6, 29)) == (token != 0L))) { "native setup token" }
-        require(selector !in listOf(30, 31, 32) || a.isNotEmpty()) { "Unload original" }
+        require(selector !in listOf(30, 31, 32, 33, 34, 35, 36, 37) || a.isNotEmpty()) { "ledger original" }
         require(selector != 29 || (token in 1L..3L && a.isNotEmpty())) { "ledger transport kind and original" }
         require(selector != 2 || (a.isNotEmpty() && b.isEmpty() == c.isEmpty())) { "Request originals" }
         require((selector != 3 && selector !in 7..14 && selector !in 16..17 && selector !in 21..23) || a.isNotEmpty()) { "Credited original" }
-        require(selector !in listOf(5, 25, 26, 28, 32) || (a.isNotEmpty() && b.isNotEmpty())) { "paired setup originals" }
+        require(selector !in listOf(5, 25, 26, 28, 32, 34, 36) || (a.isNotEmpty() && b.isNotEmpty())) { "paired setup originals" }
     }
     fun identity(): ByteArray = id.copyOf()
     fun first(): ByteArray = a.copyOf()
