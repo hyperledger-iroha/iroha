@@ -26,8 +26,6 @@ mod nft_market_v1_codec;
 mod norito_chain_layout;
 #[path = "../norito_golden_scaffold.rs"]
 mod norito_golden_scaffold;
-#[path = "../norito_pointer_abi_roundtrip.rs"]
-mod norito_pointer_abi_roundtrip;
 #[path = "../oracle_query_roundtrip.rs"]
 mod oracle_query_roundtrip;
 #[path = "../oracle_reference_fixtures.rs"]

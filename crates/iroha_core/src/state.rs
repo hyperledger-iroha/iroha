@@ -34699,25 +34699,29 @@ fn lane_topology_diff<'a>(
         relabelled,
     }
 }
-static DEFAULT_TEST_IDENTITIES: LazyLock<(
+// This reads only the two exact identities in the checked-in fixture. State construction
+// does not start a daemon publisher or admit its custody. Daemon startup supplies both
+// identities through `try_new_with_chain_and_network_id` after full configuration validation.
+fn read_default_fixture_identities(
+    mut reader: iroha_config::base::read::ConfigReader,
+) -> Result<(
     iroha_model_base::chain::ChainId,
     iroha_data_model::NetworkId,
-)> = LazyLock::new(|| {
-    use iroha_config::{base::read::ConfigReader, parameters::user};
-    let config_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
-    let mut reader = ConfigReader::new()
-        .without_env()
-        .read_toml_with_extends(&config_path)
-        .unwrap_or_else(|err| {
-            panic!(
-                "failed to read default testing config `{}`: {err:?}",
-                config_path.display()
-            )
-        });
-    // Read fixture identities through the canonical typed parser, then complete
-    // the user schema. Operational startup supplies its explicitly configured
-    // chain and network to these constructors.
+)> {
+    for source in reader.toml_sources_mut() {
+        source
+            .table_mut()
+            .retain(|key, _| key == "chain" || key == "genesis");
+        if let Some(genesis) = source
+            .table_mut()
+            .get_mut("genesis")
+            .and_then(|value| value.as_table_mut())
+        {
+            // A file reference is not an inline fixture identity. Keep it visible so the
+            // completed reader rejects an ambiguous or substituted source rather than guessing.
+            genesis.retain(|key, _| key == "expected_hash" || key == "expected_hash_file");
+        }
+    }
     let chain = reader
         .read_parameter::<iroha_model_base::chain::ChainId>(["chain"])
         .value_required()
@@ -34726,16 +34730,166 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
         .read_parameter::<iroha_data_model::NetworkId>(["genesis", "expected_hash"])
         .value_required()
         .finish();
-    let _user_config = reader
-        .read_and_complete::<user::Root>()
+    reader
+        .into_result()
+        .map_err(|error| eyre::eyre!("{error:?}"))?;
+    let network = network.unwrap();
+    eyre::ensure!(
+        network.as_bytes() != &[0; 32],
+        "default fixture genesis identity must be nonzero"
+    );
+    Ok((chain.unwrap(), network))
+}
+static DEFAULT_TEST_IDENTITIES: LazyLock<(
+    iroha_model_base::chain::ChainId,
+    iroha_data_model::NetworkId,
+)> = LazyLock::new(|| {
+    let config_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
+    let reader = iroha_config::base::read::ConfigReader::new()
+        .without_env()
+        .read_toml_with_extends(&config_path)
         .unwrap_or_else(|err| {
             panic!(
-                "default testing config `{}` is incomplete: {err:?}",
+                "failed to read default testing config `{}`: {err:?}",
                 config_path.display()
             )
         });
-    (chain.unwrap(), network.unwrap())
+    read_default_fixture_identities(reader).unwrap_or_else(|err| {
+        panic!(
+            "failed to read exact default testing identities `{}`: {err}",
+            config_path.display()
+        )
+    })
 });
+#[cfg(test)]
+mod default_fixture_identity_tests {
+    use super::*;
+    use iroha_config::base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
+
+    #[test]
+    fn default_fixture_identities_are_exact_required_and_independent_of_publisher_custody() {
+        let original = TomlSource::inline(
+            include_str!("../../iroha_config/iroha_test_config.toml")
+                .parse()
+                .unwrap(),
+        );
+        assert!(!original.table().contains_key("kagemusha_load_authorizer"));
+        let chain: iroha_model_base::chain::ChainId =
+            original.table()["chain"].as_str().unwrap().parse().unwrap();
+        let network: NetworkId = original.table()["genesis"]["expected_hash"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let environment = MockEnv::new()
+            .set("CHAIN", "ambient-substitution")
+            .set("GENESIS_EXPECTED_HASH", "invalid ambient identity");
+        let expected = (chain, network);
+        assert_eq!(
+            read_default_fixture_identities(
+                ConfigReader::new()
+                    .with_env(environment.clone())
+                    .with_toml_source(original.clone())
+            )
+            .unwrap(),
+            expected,
+        );
+        assert_eq!(environment.unvisited().len(), 2);
+        assert_eq!((*DEFAULT_TEST_CHAIN_ID).clone(), expected.0);
+        assert_eq!(*DEFAULT_TEST_NETWORK_ID, expected.1);
+        for parameter in ["chain", "expected_hash"] {
+            let mut missing = original.clone();
+            if parameter == "chain" {
+                missing.table_mut().remove(parameter);
+            } else {
+                missing
+                    .table_mut()
+                    .get_mut("genesis")
+                    .unwrap()
+                    .as_table_mut()
+                    .unwrap()
+                    .remove(parameter);
+            }
+            let error =
+                read_default_fixture_identities(ConfigReader::new().with_toml_source(missing))
+                    .unwrap_err();
+            assert!(format!("{error:?}").contains(parameter));
+        }
+        for (parameter, value) in [
+            ("chain", "invalid chain"),
+            ("expected_hash", "hash:invalid#0000"),
+        ] {
+            let mut malformed = original.clone();
+            if parameter == "chain" {
+                malformed.table_mut().insert(parameter.into(), value.into());
+            } else {
+                malformed
+                    .table_mut()
+                    .get_mut("genesis")
+                    .unwrap()
+                    .as_table_mut()
+                    .unwrap()
+                    .insert(parameter.into(), value.into());
+            }
+            assert!(
+                read_default_fixture_identities(ConfigReader::new().with_toml_source(malformed))
+                    .is_err()
+            );
+        }
+        // `Hash::prehashed` marks zero input as nonzero 00...01. Construct the exact
+        // checksummed zero record instead, so canonical native hash validation must refuse it.
+        let zero_literal = norito::literal::format("hash", &hex::encode_upper([0; Hash::LENGTH]));
+        assert!(zero_literal.parse::<NetworkId>().is_err());
+        let mut zero_identity = original.clone();
+        zero_identity
+            .table_mut()
+            .get_mut("genesis")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .insert("expected_hash".into(), zero_literal.into());
+        assert!(
+            read_default_fixture_identities(ConfigReader::new().with_toml_source(zero_identity))
+                .is_err()
+        );
+        let mut substituted = original.clone();
+        substituted
+            .table_mut()
+            .insert("chain".into(), "exact-substituted-chain".into());
+        let changed_network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::new(b"a distinct exact fixture genesis"),
+        ));
+        substituted
+            .table_mut()
+            .get_mut("genesis")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .insert("expected_hash".into(), changed_network.to_string().into());
+        let changed =
+            read_default_fixture_identities(ConfigReader::new().with_toml_source(substituted))
+                .unwrap();
+        assert_eq!(changed.0.as_str(), "exact-substituted-chain");
+        assert_eq!(changed.1, changed_network);
+        assert_ne!(changed, expected);
+        let mut ambiguous = original;
+        ambiguous
+            .table_mut()
+            .get_mut("genesis")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .insert(
+                "expected_hash_file".into(),
+                "unread-genesis-identity".into(),
+            );
+        assert!(
+            read_default_fixture_identities(ConfigReader::new().with_toml_source(ambiguous))
+                .is_err()
+        );
+    }
+}
 static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_model_base::chain::ChainId> =
     LazyLock::new(|| DEFAULT_TEST_IDENTITIES.0.clone());
 static DEFAULT_TEST_NETWORK_ID: LazyLock<iroha_data_model::NetworkId> =

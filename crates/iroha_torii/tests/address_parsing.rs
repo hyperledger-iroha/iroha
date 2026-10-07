@@ -6,11 +6,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use http_body_util::BodyExt as _;
-use iroha_core::{
-    kiso::KisoHandle,
-    query::store::LiveQueryStore,
-    state::World,
-};
+use iroha_core::{kiso::KisoHandle, query::store::LiveQueryStore, state::World};
 use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::{
     account::{Account, AccountAddressErrorCode, AccountId},
@@ -1047,11 +1043,7 @@ async fn kaigi_relay_detail_accepts_encoded_segments() {
             .unwrap();
         let resp = app
             .clone()
-            .oneshot(app.operator_signed_request(
-                &operator_key_pair,
-                request,
-                &[],
-            ))
+            .oneshot(app.operator_signed_request(&operator_key_pair, request, &[]))
             .await
             .unwrap();
         assert!(
@@ -1075,11 +1067,7 @@ async fn kaigi_relay_detail_rejects_invalid_segment() {
         .unwrap();
     let resp = app
         .clone()
-        .oneshot(app.operator_signed_request(
-            &operator_key_pair,
-            request,
-            &[],
-        ))
+        .oneshot(app.operator_signed_request(&operator_key_pair, request, &[]))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1102,11 +1090,7 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
         .unwrap();
     let resp = app
         .clone()
-        .oneshot(app.operator_signed_request(
-            &operator_key_pair,
-            request,
-            &[],
-        ))
+        .oneshot(app.operator_signed_request(&operator_key_pair, request, &[]))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1130,11 +1114,7 @@ async fn kaigi_relay_detail_malformed_segment_increments_invalid_metric() {
         .unwrap();
     let resp = app
         .clone()
-        .oneshot(app.operator_signed_request(
-            &operator_key_pair,
-            request,
-            &[],
-        ))
+        .oneshot(app.operator_signed_request(&operator_key_pair, request, &[]))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);

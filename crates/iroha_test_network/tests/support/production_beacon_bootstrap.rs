@@ -19,7 +19,6 @@ use iroha_data_model::{
         ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
         ThresholdKeyLifecycleCertificateV1,
     },
-    parameter::system::SumeragiNposParameters,
     sumeragi::finality::{NativeFinalityArtifact, NativeFinalityJournal, NativeFinalityLimits},
     transaction::TransactionEntrypoint,
 };
@@ -326,7 +325,7 @@ fn config(path: &Path) -> Result<iroha_config::parameters::actual::Root> {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     let parsed: iroha_config::parameters::actual::Root = ConfigReader::new()
         .without_env()
-        .read_toml_with_extends(path.to_owned())
+        .read_toml_with_extends(path)
         .map_err(|_| eyre!("cannot read native fixture config"))?
         .read_and_complete::<iroha_config::parameters::user::Root>()
         .map_err(|_| eyre!("cannot decode native fixture config"))?
@@ -906,7 +905,7 @@ impl ProviderBroker {
 }
 
 fn configure_stock_broker(table: &mut toml::Table, endpoint: &Path) -> Result<()> {
-    let sumeragi = table
+    table
         .get_mut("sumeragi")
         .and_then(toml::Value::as_table_mut)
         .ok_or_else(|| eyre!("native Sumeragi config absent"))?;
@@ -1496,7 +1495,7 @@ fn verify_pulse(
                 }
             },
         )?;
-        let proof = (block.hash(), pulse.clone());
+        let proof = (block.hash(), *pulse);
         if let Some(expected) = &common {
             ensure!(
                 expected == &proof,
@@ -1595,13 +1594,13 @@ impl Runtime<'_> {
         timeout_at(restart, async {
             loop {
                 let mut complete = true;
-                for peer in 0..4 {
+                for (peer, &height) in heights.iter().enumerate() {
                     let status = validator_status_until(&self.clients[peer], restart).await?;
-                    complete &= status.blocks >= heights[peer]
+                    complete &= status.blocks >= height
                         && public_sequence::snapshot_log_contains_height(
                             &peer_logs(self.directory, peer, self.run),
                             "Successfully loaded the state from a snapshot",
-                            heights[peer],
+                            height,
                         )?;
                 }
                 if complete {

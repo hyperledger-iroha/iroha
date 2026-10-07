@@ -1360,7 +1360,9 @@ fn proof_attachment_json_proof_bytes_are_bounded_while_streaming() {
     // The production decoder uses the multi-million-byte V1 ceiling. A
     // small const-generic limit exercises the identical boundary without
     // constructing an adversarial 64 MiB fixture in a unit test.
-    assert!(proof_box_max_proof_bytes_v1("pipa-r/pasta").is_some_and(|maximum| maximum > 1_000_000));
+    assert!(
+        proof_box_max_proof_bytes_v1("pipa-r/pasta").is_some_and(|maximum| maximum > 1_000_000)
+    );
     let at_limit = norito::json::from_str::<ProofAttachmentJsonProofBoxV1<4>>(
         r#"{ "backend": "pipa-r/pasta", "bytes": [0, 1, 2, 3] }"#,
     )

@@ -10,9 +10,9 @@ use rayon::prelude::*;
 use sha2::{Digest as _, Sha256};
 use std::{collections::VecDeque, format, num::NonZeroU64, string::String, vec, vec::Vec};
 use thiserror::Error;
+mod application_allocation;
 #[cfg(test)]
 mod borrowed_serialization_tests;
-mod application_allocation;
 mod proof_siblings;
 const COMPACT_MERKLE_PROOF_MAX_DEPTH: u8 = 32;
 /// Maximum number of leaves addressable by the canonical `u32` proof index.

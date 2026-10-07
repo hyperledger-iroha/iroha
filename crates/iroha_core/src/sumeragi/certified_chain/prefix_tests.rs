@@ -212,21 +212,33 @@ fn assert_streamed_prefix_checks_exact_native_quorum_at_retained_empty_epoch_bou
                 qc.agg_sig.0[0] ^= 1;
             }
         });
-        let error = prefix.push(tampered).unwrap_err();
+        let (rejected, counts) = relation_counts::measure(|| prefix.push(tampered));
+        // Source/result binding precedes BLS verification; the two tamper cases
+        // must preserve their distinct typed errors and leave the cursor intact.
         if alter_result {
-            assert_eq!(
-                error,
-                ExecutionAttemptError::Rejected(ChainReadError::ResultMismatch { height: 10 }),
+            assert!(
+                matches!(
+                    rejected,
+                    Err(ExecutionAttemptError::Rejected(
+                        ChainReadError::ResultMismatch { height: 10 }
+                    ))
+                ),
+                "changed result must fail source binding: {rejected:?}"
             );
+            assert!(counts.qcs.is_empty());
         } else {
             assert!(
                 matches!(
-                    error,
-                    ExecutionAttemptError::Rejected(ChainReadError::Certificate { height: 10, .. })
+                    rejected,
+                    Err(ExecutionAttemptError::Rejected(
+                        ChainReadError::Certificate { height: 10, .. }
+                    ))
                 ),
-                "changed aggregate must fail certificate verification: {error:?}",
+                "changed aggregate must fail certificate verification: {rejected:?}"
             );
+            assert_eq!(counts.qcs, [10]);
         }
+        assert_eq!(counts.frames, [10]);
         assert_eq!(prefix.prefix.tip.height(), 9);
     }
     let (_, qc) = decode_certificate(original.commit_certificate().unwrap()).unwrap();

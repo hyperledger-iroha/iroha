@@ -1,6 +1,6 @@
 # Status
 
-Reviewed 2026-10-05. Iroha 3 remains under implementation and qualification.
+Reviewed 2026-10-07. Iroha 3 remains under implementation and qualification.
 Component checks cover substantial portions of the system, but the combined
 source has not passed the complete workspace, SDK, hardware and release gates.
 The [roadmap](roadmap.md) lists outstanding outcomes; the linked specifications
@@ -11,7 +11,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Area | Current state | Remaining qualification |
 | --- | --- | --- |
 | Sumeragi | The sans-IO core, simulator and node driver are integrated; the previous consensus runtime is removed. Certified results bind World roots and ordered events. | Current-candidate simulator/mutation gates, consumers, network faults and authenticated accelerated restoration. |
-| Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. Lifecycle/restart have component and node coverage. | Dataspace instances with their own State, cross-dataspace AMX, isolation and current-source network scale/restart. |
+| Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. The daemon can host an independent signed dataspace root with its own State, Kura, allocation pool and native context archive. Lifecycle/restart have component and node coverage. | Production AMX bootstrap, complete outbound proof custody, durable validator relaying and current-source network isolation, scale and restart. |
 | Storage and execution | `lanes::LaneRunner` and `SumeragiLaneMerge` are the production path. Kura owns a shared fail-stop gate and authenticated native tips/journals. | Original funded execution custody through acquisition, certification, publication, replay and retained-generation reclamation. |
 | Configuration and DPN | Private dataspace definitions are separate from validator settings. `iroha dataspace plan/apply/status` derives artifacts and retains once-only transactions under one budget. Kagami has an isolated BPNG catalog/paid-namespace genesis preset. | Profile-based generator closure, four-daemon paid deployment/readback and physical isolation. BPNG local contracts, fee authority and application provisioning remain incomplete. Owner-node provisioning is outside this path. |
 | Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Installed-runtime fixtures cover config-free startup, all three deployment inputs, restart recovery and four-parent/four-private attachment. | The focused Core, Deploy, filesystem, Kagami and Xtask test targets compile with the latest recovery corrections. All 212 frontend checks and selected Core and custody regressions passed the preceding candidate; the corrected candidate's native regression run is in progress. The original bounded 64-history deadline and default-stack parent recovery remain unverified after those corrections. Matching normal-package and installed-runtime validation, combined paid provisioning, anchoring, payload isolation, provider renewal, and publication/frontend handoff remain required. Cold registry publication, the approved committed Taira installation profile and recurring signed checkpoint publication, native desktop interaction, signed native OS matrices and reference-host latency remain open. Release bundling refuses without that approved public profile. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
@@ -28,12 +28,13 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 
 ## Immediate blockers
 
-The Nexus proposal/status repairs and original invocation binding have recorded native
-functional coverage: the rebuilt daemon and harness passed ten fresh sixteen-validator
-paid settlements and the original serial all-seat restart/readback diagnostic. The
+The Nexus proposal/status repairs, publisher-custody fixture and original invocation
+binding have fresh native functional coverage: the rebuilt daemon and harness passed
+ten fresh sixteen-validator paid settlements and the original serial all-seat
+restart/readback diagnostic. The
 independent disjoint-lane control also passed stopped-committee progress, recovery
-without resubmission and all-process restart. Subsequent crypto, evidence and snapshot
-repairs require a fresh combined-candidate run. Full fault/leakage campaigns and the
+without resubmission and all-process restart. Subsequent AMX custody and harness
+repairs require fresh affected checks. Full fault/leakage campaigns and the
 complete original funded execution graph remain open.
 
 Native ceremony handoff preserves overlapping descriptors and read-only phase pipes.
@@ -56,8 +57,10 @@ accelerated complete-State restoration remains open.
 
 The runtime and trigger permission guards reject malformed recognized payloads before
 delegation; decoder refusals preserve local deferral. Core strict lint still fails on
-unused production/resource graphs. The repaired Rust SDK client source passes its unit
-suite and strict lint; qualification of the final combined source, signed RS16
+unused production/resource graphs, and blanket Clippy allowances leave entire lint
+groups unqualified. Dependency and test-network lint failures also remain open until
+their repairs pass the actual affected commands. The repaired Rust SDK client source
+passes its unit suite and strict lint; qualification of the final combined source, signed RS16
 loss/withholding and release remains open. Exact finalized-carrier retries retain
 original execution without requeueing or charging again; changed source requires fresh
 evidence.
@@ -165,12 +168,13 @@ require the explicitly approved OVH target.
 
 ## Build and release qualification
 
-The current `optimizations` checkout has merged HEAD
-`f6903d2de355a71aba2dc75cab5450d5a85eb645` and uncommitted handoff repairs.
+The current `optimizations` checkout includes uncommitted handoff repairs.
 Fresh combined Core, node, workspace and SDK qualification remains open.
-The repaired MV and crypto dependency graph compiles, but observed Core release
-compiler memory exceeds the 13 GiB ceiling. Normal-stack Core unit tests and
-fresh native network consumers still require the same repaired candidate.
+The repaired daemon and Nexus harness build with the original optimized compiler
+settings. Their observed Core compiler invocations stay below the unchanged 13 GiB
+kernel-measured ceiling, but both builds exceed the 20-minute target. Other feature
+combinations and the complete release remain unqualified. Complete Core unit tests
+and fresh native network consumers still require the same repaired candidate.
 The earlier eighteen-target Core/Kagami build and all 262 selected native
 executions passed with their recorded source and artifacts; they do not qualify
 the changed combined candidate. They account for all original

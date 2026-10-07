@@ -1040,6 +1040,7 @@ fn native_proof_rejects_retired_bridge_context_and_artifact_fields() {
     }
 }
 
+#[cfg(feature = "transparent_api")]
 impl Fixture {
     pub(crate) fn next_header(&self) -> BlockHeader {
         BlockHeader::new(

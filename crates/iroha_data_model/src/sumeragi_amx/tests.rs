@@ -1639,3 +1639,73 @@ fn amx_intrinsic_codec_limit_without_caller_scope_remains_a_proof_error() {
         AmxError::Resource(error.decode_resource_error().unwrap())
     );
 }
+
+/// Construct the actual allocation owner from the existing exact-quorum BLS AMX fixture.
+/// The producer grants no authority; native source authentication and paid execution remain
+/// independently exercised by Core. All fixture input allocation predates its finite pool.
+pub(crate) fn allocated_amx_instruction_fixture() -> (
+    AmxTransactionV1,
+    AllocatedAmxRecordProofV1,
+    iroha_allocation::AllocationBudget,
+) {
+    use crate::block::CommitCertificate;
+    let transaction = transaction(&[DS1, DS2], 9, 0x71);
+    let record = AmxRecordV1::Begin(transaction.begin().unwrap());
+    let context = fixture(4);
+    let writes = vec![
+        write_of(&record),
+        (b"unrelated original field".to_vec(), vec![0x31; 5]),
+    ];
+    let block = certify(GLOBAL, &context, 2, &writes, None, 3);
+    let complete = block_writes(&context, 2, &writes);
+    let ordinary_root = write_set_root(
+        complete
+            .iter()
+            .map(|(key, value)| (key.as_slice(), value.as_slice())),
+    )
+    .unwrap();
+    let expected = AmxRecordProofV1::from_writes(
+        block.clone(),
+        complete
+            .iter()
+            .map(|(key, value)| (key.as_slice(), value.as_slice())),
+        record,
+    )
+    .unwrap();
+    assert_eq!(
+        AmxForeignInstanceV1::new(GLOBAL, context)
+            .unwrap()
+            .verify_record(&expected)
+            .unwrap()
+            .height,
+        2
+    );
+    // This input remains explicitly offchain/unadmitted. Its BLS fixture check above does
+    // not make the allocation owner a production publication or monetary credential.
+    let certificate = CommitCertificate::from_untrusted_parts(
+        block.consensus_header,
+        block.commit_qc,
+        block.result_preimage,
+        Vec::new(),
+    );
+    let witness = ExecWitness {
+        writes: complete
+            .into_iter()
+            .map(|(key, value)| ExecKv { key, value })
+            .collect(),
+        ..ExecWitness::default()
+    };
+    let pool = iroha_allocation::AllocationBudget::new(1 << 20);
+    let original = AllocatedAmxRecordProofV1::from_original_witness(
+        &certificate,
+        &witness,
+        AmxRecordKind::Begin,
+        transaction.id().unwrap(),
+        ordinary_root,
+        &pool,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(original.canonical(), &expected);
+    (transaction, original, pool)
+}

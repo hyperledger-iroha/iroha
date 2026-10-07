@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     account::AccountId,
     events::{
-        EventBox, EventFilter,
+        EventBox,
         data::{DataEvent, DataEventFilter},
     },
 };
@@ -43,10 +43,15 @@ fn event_binds_complete_validated_receipt_and_exact_filter() {
     assert_eq!(event.receipt_digest, receipt.receipt_digest().unwrap());
     let data = DataEvent::from(event);
     assert!(data.domain().is_none());
-    assert!(DataEventFilter::Any.matches(&data));
-    assert!(DataEventFilter::KagemushaLoadCommitted(None).matches(&data));
-    assert!(DataEventFilter::KagemushaLoadCommitted(Some(event.receipt_digest)).matches(&data));
-    assert!(!DataEventFilter::KagemushaLoadCommitted(Some([0; 32])).matches(&data));
+    #[cfg(feature = "transparent_api")]
+    {
+        use crate::events::EventFilter;
+
+        assert!(DataEventFilter::Any.matches(&data));
+        assert!(DataEventFilter::KagemushaLoadCommitted(None).matches(&data));
+        assert!(DataEventFilter::KagemushaLoadCommitted(Some(event.receipt_digest)).matches(&data));
+        assert!(!DataEventFilter::KagemushaLoadCommitted(Some([0; 32])).matches(&data));
+    }
     let mut changed = receipt.clone();
     changed.amount += 1;
     assert_ne!(

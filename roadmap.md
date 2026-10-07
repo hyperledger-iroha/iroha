@@ -55,7 +55,7 @@ Authoritative contracts: [Sumeragi](specs/sumeragi.md),
 
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
-| N0 | Complete Sumeragi | Core/P2P/Kura | S1–S9: execute-before-vote, round overlay, signed RS16 acquisition, DS-local finality, AMX and evidence/committee scheduling; the KAGEMUSHA mint-finality authority is deleted. The generic consensus attestation extension is deleted. Qualify retained validator-generation identities, BLS committee proofs, exact quorums and CommitQC safety with named mutation tests and real networks. |
+| N0 | Complete Sumeragi | Core/P2P/Kura | S1–S9: execute-before-vote, round overlay, signed RS16 acquisition, DS-local finality, AMX and evidence/committee scheduling; the KAGEMUSHA mint-finality authority is deleted. The generic consensus attestation extension is deleted. Qualify retained validator-generation identities, BLS committee proofs, exact quorums, committee-boundary progress, CommitQC safety, rejection of retired wire fields and original execution custody with named mutation tests and real networks. |
 | N1 | Driver/storage closure | Driver/State/Kura/daemon | Sole driver passes conformance oracles, certified execution and retained custody; per-key safety records and remaining retired storage/SDK owner removal. |
 | N2 | Consensus qualification | Simulator/CI/operators | Nightly fault scenarios at 10,000 seeds and every mutation killed; native authority and fresh Taira four-validator readiness/write/restart. Governance owns deployment policy. |
 | N3 | Dataspace topology/SNS | Nexus/Core/deployment | Manifest-owned membership/privacy/DA/governance; additive activation preserves certified history and cold replay; prove physical server/storage isolation. |
@@ -76,7 +76,7 @@ loss/replay, all-seat restart and final-transaction progress on one four/seven-p
 candidate. Geometry changes cannot silently remove or replace live lanes.
 
 [Staking](specs/staking_validator_completion.md) requires real-XOR eligibility and
-consent, immutable mint-key generations, E+2 elections, a full E+1 preparation
+consent, immutable validator authority generations, E+2 elections, a full E+1 preparation
 interval, per-seat beacon custody and atomic activation. Close paid 4→7→4,
 rewards/exits/slashing/withdrawals and distinct-fee-asset bounds, then DA/liveness,
 formal, SDK and workspace gates.

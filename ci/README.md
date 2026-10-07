@@ -348,3 +348,13 @@ build closure. After an approved graph change, replace the sole digest and
 provision a fresh external snapshot; previous graph snapshots remain historical
 evidence and cannot authorize new builds. Retain locked metadata validation and
 independent root/external identity checks before and after it.
+
+The affected-lane Clippy and Rustdoc checks select every declared feature and
+implicit optional-dependency feature through `scripts/rust_ci.py`. The four
+`mutation-testing` owners are excluded from non-test compilation because their
+selectors belong to the dedicated Sumeragi, Core, Model and daemon mutation jobs.
+The same feature matrix serves workspace diagnostics. Defaults, governance,
+fixture helpers, simulator coverage and explicitly isolated test-network features
+remain selected; this diagnostic matrix does not qualify a shipping feature graph.
+A supported feature or dependency that forwards a mutation selector fails before
+Cargo starts and requires an explicit ownership review.

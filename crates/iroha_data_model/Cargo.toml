@@ -13,6 +13,8 @@ license.workspace = true
 workspace = true
 
 [features]
+# Model-owned spec §13.4 switches; rejected in every non-test library build.
+mutation-testing = []
 default = ["application-model"]
 dev-tools = ["dep:tempfile", "dep:rustix"]
 # Public application model; node-only additions are requested by node crates.
@@ -89,7 +91,6 @@ mv = { workspace = true }
 criterion = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "sm", "bfv-test-fixtures"] }
 hex-literal = { workspace = true }
-ivm_abi = { path = "../ivm_abi" }
 
 tempfile = { workspace = true }
 

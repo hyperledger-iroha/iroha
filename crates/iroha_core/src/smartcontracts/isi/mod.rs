@@ -112,6 +112,50 @@ fn dispatch_instruction<T: Execute + Clone + 'static>(
         .downcast_ref::<T>()
         .map(|isi| isi.clone().execute(authority, state_transaction))
 }
+/// The three retained AMX instructions share their exact registered fields with execution.
+/// Their owned Execute implementations delegate to the same body for ordinary owned callers.
+trait ExecuteOriginalAmx {
+    fn execute_original(
+        &self,
+        authority: &AccountId,
+        state: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error>;
+}
+macro_rules! original_amx_execution {
+    ($instruction:ty, $body:path) => {
+        impl ExecuteOriginalAmx for $instruction {
+            fn execute_original(
+                &self,
+                authority: &AccountId,
+                state: &mut StateTransaction<'_, '_>,
+            ) -> Result<(), Error> {
+                $body(self, authority, state)
+            }
+        }
+    };
+}
+original_amx_execution!(
+    iroha_data_model::isi::sumeragi_amx::RelayAmxPreparedV1,
+    crate::sumeragi::amx::execute_relay_prepared_original
+);
+original_amx_execution!(
+    iroha_data_model::isi::sumeragi_amx::PrepareAmxV1,
+    crate::sumeragi::amx::execute_prepare_original
+);
+original_amx_execution!(
+    iroha_data_model::isi::sumeragi_amx::SettleAmxV1,
+    crate::sumeragi::amx::execute_settle_original
+);
+fn dispatch_original_amx<T: ExecuteOriginalAmx + 'static>(
+    instruction: &InstructionBox,
+    authority: &AccountId,
+    state: &mut StateTransaction<'_, '_>,
+) -> Option<Result<(), Error>> {
+    instruction
+        .as_any()
+        .downcast_ref::<T>()
+        .map(|instruction| instruction.execute_original(authority, state))
+}
 /// Fixed rejection for explicitly unavailable native operations, including at genesis.
 pub(crate) const INITIAL_NATIVE_INSTRUCTION_CLOSED_REASON: &str =
     "native instruction is explicitly closed; Core execution is unavailable";
@@ -259,11 +303,11 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::BeginAmxV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayAmxPreparedV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_original_amx::<iroha_data_model::isi::sumeragi_amx::RelayAmxPreparedV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayAmxHandoffV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RegisterAmxParticipantV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::PrepareAmxV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
-    dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::SettleAmxV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
+    dispatch_original_amx::<iroha_data_model::isi::sumeragi_amx::PrepareAmxV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
+    dispatch_original_amx::<iroha_data_model::isi::sumeragi_amx::SettleAmxV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RelayGlobalAmxHandoffV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::repo::RepoInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoIsi>,

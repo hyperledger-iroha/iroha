@@ -6,12 +6,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use http_body_util::BodyExt as _;
-use iroha_core::{
-    kiso::KisoHandle,
-    query::store::LiveQueryStore,
-    queue::Queue,
-    state::World,
-};
+use iroha_core::{kiso::KisoHandle, query::store::LiveQueryStore, queue::Queue, state::World};
 use iroha_data_model::{
     account::AccountId,
     isi::musubi::SetMusubiReleaseYankV1,
@@ -33,7 +28,9 @@ use tower::ServiceExt as _;
 mod fixtures;
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 const TOOL_LIST_PAGE_LIMIT: usize = 128;
-fn build_router(mut cfg: iroha_config::parameters::actual::Root) -> fixtures::CommittedToriiRouterRuntime {
+fn build_router(
+    mut cfg: iroha_config::parameters::actual::Root,
+) -> fixtures::CommittedToriiRouterRuntime {
     let native_chain = fixtures::commit_genesis_fixture(
         World::default(),
         cfg.common.chain.clone(),

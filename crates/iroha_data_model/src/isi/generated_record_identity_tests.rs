@@ -217,15 +217,20 @@ where
 
 #[test]
 fn retired_load_instruction_without_asset_and_ordinal_is_rejected() {
-    // Exact pre-cutover root frame. Its nominal type identity is unchanged, so the
-    // required asset/ordinal fields must reject the retired payload itself.
-    let retired = unhex(
+    // Exact retired root frames before and after the verifier-install variant
+    // was added. The latter uses the current IssueLoad tag but still lacks the
+    // required asset/ordinal fields; neither payload may be decoded.
+    for retired in [
         "4e52543000008eef66c2b4be9ed7b2604aec85793350007b000000000000000a09ab00d41fc01a020000000000000000200101010101010101010101010101010101010101010101010101010101010101590400000020020202020202020202020202020202020202020202020202020202020202020220030303030303030303030303030303030303030303030303030303030303030310070000000000000000000000000000000100",
-    );
-    assert!(
-        norito::decode_from_bytes::<super::kagemusha_wallet::KagemushaWalletLedgerV1>(&retired,)
-            .is_err()
-    );
+        "4e52543000008eef66c2b4be9ed7b2604aec85793350007b00000000000000d6e8c972dd8bf2a0020000000000000000200101010101010101010101010101010101010101010101010101010101010101590500000020020202020202020202020202020202020202020202020202020202020202020220030303030303030303030303030303030303030303030303030303030303030310070000000000000000000000000000000100",
+    ] {
+        let retired = unhex(retired);
+        assert!(
+            norito::decode_from_bytes::<super::kagemusha_wallet::KagemushaWalletLedgerV1>(&retired)
+                .is_err(),
+            "retired Load instructions must not decode"
+        );
+    }
 }
 
 #[test]
