@@ -345,10 +345,39 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
             let fresh = original
                 .fees
                 .options(Instant::now() + Duration::from_secs(30));
+            let recovery_started = Instant::now();
             assert_eq!(finalities(owner.recover(fresh.deadline).unwrap()), expected);
+            eprintln!(
+                "parent offline recovery timing: recover_elapsed_ms={} fresh_remaining_ms={} original_signing_utc_remaining_ms={:?}",
+                recovery_started.elapsed().as_millis(),
+                fresh
+                    .deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis(),
+                now_ms().map(|now| authorization
+                    .test_terms()
+                    .signing_deadline_unix_ms
+                    .saturating_sub(now)),
+            );
+            eprintln!(
+                "parent offline recovery timing: before advance fresh_remaining_ms={}",
+                fresh
+                    .deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis(),
+            );
+            let advance_started = Instant::now();
             assert_eq!(
                 finalities(owner.advance(authorization, fresh.deadline).unwrap()),
                 expected
+            );
+            eprintln!(
+                "parent offline recovery timing: advance_elapsed_ms={} fresh_remaining_ms={}",
+                advance_started.elapsed().as_millis(),
+                fresh
+                    .deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis(),
             );
             let epoch_inventory = directory
                 .open_child("epochs")

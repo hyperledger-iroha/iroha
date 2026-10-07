@@ -10,10 +10,15 @@ import Darwin
 import Glibc
 #endif
 
-let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+// Foundation standardization can rewrite /private/tmp to its /tmp symlink alias.
+// Use the same physical filesystem identity as the artifact and custody guards.
+guard let packageManifestPath = canonicalExistingFilesystemPath(#filePath) else {
+    fatalError("error: the Swift package manifest must have an existing canonical filesystem path.")
+}
+let packageDirectory = URL(fileURLWithPath: packageManifestPath).deletingLastPathComponent()
 let bridgeRelativePath = "../dist/NoritoBridge.xcframework"
-let requiredBridgeAbiVersion = 26
-let repositoryDirectory = packageDirectory.deletingLastPathComponent().standardizedFileURL
+let requiredBridgeAbiVersion = 27
+let repositoryDirectory = packageDirectory.deletingLastPathComponent()
 let localIntegrationArtifactDirectory = repositoryDirectory
     .appendingPathComponent("target/norito-bridge-local/artifacts", isDirectory: true).path
 let localUnitArtifactParent = repositoryDirectory
@@ -134,9 +139,8 @@ if let configuredArtifactDirectory = selectedArtifactDirectory {
         to: bridgeAbsolutePath
     )
 } else {
-    bridgeAbsolutePath = packageDirectory
-        .appendingPathComponent(bridgeRelativePath)
-        .standardizedFileURL
+    bridgeAbsolutePath = repositoryDirectory
+        .appendingPathComponent("dist/NoritoBridge.xcframework", isDirectory: true)
     bridgeTargetPath = bridgeRelativePath
 }
 

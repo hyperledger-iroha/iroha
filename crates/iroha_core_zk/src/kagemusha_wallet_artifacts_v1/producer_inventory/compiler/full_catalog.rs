@@ -34,7 +34,9 @@ mod acceptance;
 mod reuse;
 #[path = "full_catalog/transport.rs"]
 mod transport;
-pub(crate) use acceptance::open_pinned_engineering_wallet_sources;
+pub(crate) use acceptance::{
+    open_pinned_engineering_finality_sources, open_pinned_engineering_wallet_sources,
+};
 
 const RECORDS: usize = 4_096;
 const INVENTORY_BYTES: usize = RECORDS * 2_048 + 4_096;

@@ -1201,7 +1201,10 @@ mod tests {
         let event_read = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_EVENT_PROOF_GET;
         assert_eq!(event_read.method(), HttpMethod::Get);
         assert_eq!(event_read.effect(), RouteEffect::ReadOnly);
-        assert_eq!(event_read.authentication(), AuthenticationPolicy::CanonicalAccountSignature);
+        assert_eq!(
+            event_read.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
         assert_eq!(load_read.method(), HttpMethod::Get);
         assert_eq!(load_read.effect(), RouteEffect::ReadOnly);
         assert_eq!(
@@ -1220,7 +1223,8 @@ mod tests {
                         .project(projection, features)
                         .iter()
                         .all(|route| !route.path().starts_with("/v1/kagemusha/")
-                            || **route == load_read || **route == event_read),
+                            || **route == load_read
+                            || **route == event_read),
                     "retired KAGEMUSHA transport remains in {projection:?}"
                 );
             }

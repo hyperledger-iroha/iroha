@@ -112,11 +112,13 @@ the current evidence digest from exact originals. Public projections or success 
 not evidence originals or signer capabilities.
 
 The coordinated Native issuer still owns authenticated workload purpose/method/path/body,
-access subject and exact canonical account/asset scope. Current enrollment eligibility and
-freeze status come from the user's bank middleware through the
-[challenge-bound eligibility SDK contract](kagemusha_enrollment_eligibility_v1.md). An explicitly
-enacted Parliament mandate may cover a governed non-regulated token; it cannot replace bank
-eligibility for a regulated asset or claim bank KYC. The issuer independently authenticates
+access subject and exact canonical account/asset scope. Every universal-dataspace token may
+use offline enrollment without Parliament approval or a named-token allowlist. Under a
+Bank policy, current KYC approval and freeze status come from the user's bank middleware
+through the [challenge-bound eligibility SDK contract](kagemusha_enrollment_eligibility_v1.md).
+Other schemes select their authorized operator and may explicitly admit public enrollment.
+Parliament is an optional provider for assets it governs; it has no required protocol role.
+A missing or failed bank observation never selects an operator policy implicitly. The issuer independently authenticates
 current authority/routing and retains each fresh observation at its durable boundary. It owns
 approved original selection, CSPRNG nonce, challenge CAS/use, durable Apple counters, genuine
 time, original evidence/result retention and one genuine scheme-rooted Enrollment-role P256

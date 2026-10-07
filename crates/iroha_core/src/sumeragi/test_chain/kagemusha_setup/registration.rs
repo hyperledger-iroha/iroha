@@ -2,13 +2,11 @@
 //! The existing fixture executes all accounts, permissions and asset state from signed genesis.
 
 use super::*;
+use iroha_core_zk::kagemusha_wallet_registration_v1::verify_finalized_kagemusha_wallet_registration_v1;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     asset::AssetBalanceScope,
-    isi::kagemusha_wallet::{
-        KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1,
-        registration_finality::verify_finalized_kagemusha_wallet_registration_v1,
-    },
+    isi::kagemusha_wallet::{KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1},
     kagemusha::{
         KagemushaDevicePublicKeyV1, KagemushaWalletSchemeV1, kagemusha_wallet_provider_contract_v1,
     },
@@ -22,7 +20,7 @@ fn scheme(setup: &ExecutedKagemushaSetup) -> KagemushaWalletSchemeV1 {
         version: 1,
         network_id: *setup.chain.network_id().as_bytes(),
         scheme_root_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            key.verifying_key().to_encoded_point(true).as_bytes(),
+            key.verifying_key().to_encoded_point(false).as_bytes(),
         )
         .unwrap(),
         relation_id: [9; 32],

@@ -75,7 +75,7 @@ class KagemushaWalletInstallationAttemptV1 private constructor(
                     KagemushaWalletInstalledRuntimeNativeV1.closeInstallation(0L)!=-1)
                     throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
                 KagemushaWalletInstalledRuntimeNativeV1.beginInstallation(platform,
-                    frames[0],frames[1],frames[2],frames[3],frames[4],frames[5],frames[6])
+                    frames[0],frames[1],frames[2],frames[3],frames[4],frames[5],frames[6],frames[7])
             }catch(_:LinkageError){throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)}
             attempt.pointer=installationAttemptPointerV1(result)
             return attempt

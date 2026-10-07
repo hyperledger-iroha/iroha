@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test
 /** Exact owned DATA contracts only. No wallet, Native admission or financial fixture is faked. */
 class KagemushaWalletInstalledHolderV1Test {
     private fun runtime(inputs: List<ByteArray> = List(6) { byteArrayOf(7) }, root: String = "/selected/originals") =
-        KagemushaWalletInstallationOriginalsV1(inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5], root.toByteArray(Charsets.UTF_8))
+        KagemushaWalletInstallationOriginalsV1(inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5], root.toByteArray(Charsets.UTF_8), byteArrayOf())
     @Test fun `runtime and enrollment bytes survive source and accessor mutation`() {
         val bytes = ByteArray(2) { 7 }
         val r = runtime(List(6) { bytes })

@@ -213,10 +213,16 @@ fn row_wise_reference<C: PastaCurve>(
                     for (index, (lookup, [product, input, table])) in
                         compiled.lookups.iter().zip(&lookups).enumerate()
                     {
-                        let compressed_input =
-                            CompiledExpressions::compress(&lookup.inputs, &scratch, theta);
-                        let compressed_table =
-                            CompiledExpressions::compress(&lookup.tables, &scratch, theta);
+                        let compressed_input = CompiledExpressions::compress(
+                            &lookup.inputs,
+                            EvaluatedRow::new(&scratch, 1, 0),
+                            theta,
+                        );
+                        let compressed_table = CompiledExpressions::compress(
+                            &lookup.tables,
+                            EvaluatedRow::new(&scratch, 1, 0),
+                            theta,
+                        );
                         let table_value = (compressed_input + beta) * (compressed_table + gamma);
                         let a_minus_s = input[row] - table[row];
                         let term = |part| ConstraintTerm::Lookup {

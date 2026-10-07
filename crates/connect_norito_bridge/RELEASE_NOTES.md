@@ -7,7 +7,11 @@ publication, including slices restored from CI. Its host macOS consumer also
 checks SHA3-256/SHAKE256 known answers, ML-DSA signing/verification and tamper
 rejection, and ML-KEM encapsulation/decapsulation.
 
-Current source ABI: 26. ABI 26 replaces caller-supplied wallet commit capsules with typed native preparation through `execute` and durable `request_status`; the generic wallet commit export is removed. Artifacts built for ABI 25 are rejected. The bridge exports native transaction and instruction
+Current source ABI: 27. Wallet runtime installation now carries the exact
+registration-source original in its C structure and JNI constructor. Artifacts
+built for ABI 26 or earlier are rejected before that changed layout is called.
+Wallet operations use typed native preparation through `execute` and durable
+`request_status`; no generic wallet commit export is supported. The bridge exports native transaction and instruction
 encoding, account admission, SoraFS reference validation, privacy proofs and
 Parliament timed-OVN verification. Its Kotlin/JVM and Java/Android
 `NativeSignerBridge` surface requires native-signer JNI contract revision 7.
@@ -39,7 +43,7 @@ attempt trust anchors. They verify finality, the fixed witness, membership,
 archive replay, and exact compact binding before borrowing a wallet seed.
 
 The archive checksums below are historical and do not establish a current
-ABI-26/revision-7 artifact. Regenerate, verify, and republish the bridge
+ABI-27/revision-7 artifact. Regenerate, verify, and republish the bridge
 artifacts before cutting an SDK release that depends on the current source
 surface.
 

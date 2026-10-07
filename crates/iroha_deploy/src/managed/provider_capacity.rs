@@ -227,8 +227,9 @@ impl ManagedProviderCapacity {
             None,
             |attempt| {
                 account
-                    .inspect_provider_capacity_declaration_preparation(
-                        &attempt.wallet_path(),
+                    .inspect_provider_capacity_declaration_preparation_in_parent(
+                        attempt.directory(),
+                        std::ffi::OsStr::new("transaction"),
                         &original.request(attempt.terms(), deadline),
                     )
                     .map_err(|_| invalid("capacity attempt differs from exact wallet request"))
@@ -443,8 +444,9 @@ impl ManagedProviderCapacity {
         let verify_custody = || {
             original.verify_wallets(|intent, attempt| {
                 account
-                    .inspect_provider_capacity_declaration_preparation(
-                        &attempt.wallet_path(),
+                    .inspect_provider_capacity_declaration_preparation_in_parent(
+                        attempt.directory(),
+                        std::ffi::OsStr::new("transaction"),
                         &intent.request(attempt.terms(), deadline),
                     )
                     .map_err(|_| invalid("retained capacity attempt history changed"))
@@ -452,7 +454,11 @@ impl ManagedProviderCapacity {
         };
         verify_custody()?;
         let preparation = account
-            .inspect_provider_capacity_declaration_preparation(&path, &original.request(deadline))
+            .inspect_provider_capacity_declaration_preparation_in_parent(
+                directory,
+                std::ffi::OsStr::new("transaction"),
+                &original.request(deadline),
+            )
             .map_err(|_| invalid("wallet preparation differs from the exact original request"))?;
         let unprepared_expired = preparation.unprepared_status() == Some(OperationStatus::Expired);
         let retained = match preparation.phase() {

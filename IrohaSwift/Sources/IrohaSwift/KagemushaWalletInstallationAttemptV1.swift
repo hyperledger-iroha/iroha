@@ -54,6 +54,7 @@ private final class KagemushaWalletInstallationLeaseV1: KagemushaWalletCleanupLe
         value.producer_inventory=ptr[4]; value.producer_inventory_length=originals.originals[4].count
         value.signed_genesis=ptr[5]; value.signed_genesis_length=originals.originals[5].count
         value.originals_root=ptr[6]; value.originals_root_length=originals.originals[6].count
+        value.registration_source=ptr[7]; value.registration_source_length=originals.originals[7].count
         return driver.begin(&value,&callbacks,&pointer)
       }
     }

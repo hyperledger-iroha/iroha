@@ -7,7 +7,9 @@
 //! Inspection only reads an exact retained result and never claims an operation, including
 //! when the issuer recovers an already consumed attempt after the challenge deadline.
 //! The node journal retains these original requests and checked replies before signing.
-//! TODO: connect the node service's approved policy, private process custody and signer.
+//! Core now selects the current configured provider and exact registered asset; Torii owns
+//! authenticated calls, the private worker process and the retained enrollment signer.
+//! TODO: qualify actual Linux private-worker deployment and issuer recovery end to end.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_data_model::kagemusha::*;

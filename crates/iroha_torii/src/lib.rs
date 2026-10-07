@@ -40172,13 +40172,21 @@ impl Torii {
         #[cfg(not(feature = "app_api"))]
         if config.kagemusha_load_finality.is_some() {
             return Err(ToriiBuildError::invalid_configuration(
-                "kagemusha_load_finality", "Load finality requires the shipping app_api surface"));
+                "kagemusha_load_finality",
+                "Load finality requires the shipping app_api surface",
+            ));
         }
         #[cfg(feature = "app_api")]
-        let kagemusha_load_finality = config.kagemusha_load_finality.clone()
-            .map(|selected| kagemusha_wallet_finality::FinalityService::open(state.clone(), selected))
+        let kagemusha_load_finality = config
+            .kagemusha_load_finality
+            .clone()
+            .map(|selected| {
+                kagemusha_wallet_finality::FinalityService::open(state.clone(), selected)
+            })
             .transpose()
-            .map_err(|error| ToriiBuildError::component_initialization("kagemusha_load_finality", error))?
+            .map_err(|error| {
+                ToriiBuildError::component_initialization("kagemusha_load_finality", error)
+            })?
             .map(Arc::new);
         let torii = Self {
             build_identity,

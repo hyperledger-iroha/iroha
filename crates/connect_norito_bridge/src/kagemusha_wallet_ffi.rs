@@ -34,11 +34,13 @@ mod closing;
 pub(crate) mod enrollment;
 mod exports;
 mod installed;
+pub(crate) use installed::relocate_registration_source;
 pub use installed::{WalletInstallationAttempt, WalletRuntimeOriginals};
 pub use installed::{
     connect_norito_kagemusha_wallet_installation_begin_v1,
     connect_norito_kagemusha_wallet_installation_close_v1,
     connect_norito_kagemusha_wallet_installation_register_v1,
+    connect_norito_kagemusha_wallet_registration_source_relocate_v1,
 };
 pub(crate) mod open;
 pub use open::{

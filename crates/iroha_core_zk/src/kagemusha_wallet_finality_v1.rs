@@ -14,6 +14,9 @@ use iroha_data_model::{
 };
 use iroha_kagemusha_proof::finality::history::HistoryAnchor;
 
+mod history;
+pub use history::{HISTORY_ORIGINAL_MAX_BYTES_V1, HistoryOriginalErrorV1, HistoryOriginalV1};
+
 mod input;
 pub use input::{FinalityInputError, block_witness, load_witness};
 

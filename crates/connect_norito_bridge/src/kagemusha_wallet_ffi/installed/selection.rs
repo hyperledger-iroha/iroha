@@ -32,12 +32,18 @@ const APP_FIELDS: &[&str] = &[
 mod bpng;
 mod cbsi;
 mod session;
+mod universal;
 pub(crate) use session::Session;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "The immutable native build selects one configured deployment authority; unselected variants remain for other builds."
+)]
 enum RuntimeAuthority {
     BpngTairaV7,
     CbsiReleaseV1,
+    ApplicationReleaseV1,
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +103,12 @@ struct RetainedBaseOriginals {
 /// Each variant retains only authority actually present in its independently signed release.
 /// The BPNG runtime does not invent a CBSI service scope or a foreign catalog pin.
 enum ApplicationBinding {
+    ApplicationReleaseV1 {
+        _registration: Box<
+            iroha_core_zk::kagemusha_wallet_registration_v1::FinalizedKagemushaWalletRegistrationV1,
+        >,
+        _source: Box<[u8]>,
+    },
     CbsiReleaseV1 {
         service_release_scope: [u8; 32],
         scheme_id: [u8; 32],
@@ -109,14 +121,21 @@ enum ApplicationBinding {
     },
 }
 
-pub(super) struct Selection {
+/// Authenticated application/root and shared financial selection, independent of any asset.
+/// Construction stays inside signed release intake; it grants no enrollment or wallet authority.
+pub(super) struct AuthenticatedBase {
     _originals: RetainedBaseOriginals,
-    application: ApplicationBinding,
     pub financial: Option<FinancialSelection>,
     pub scheme: KagemushaWalletSchemeV1,
     pub artifact_certificate: Vec<u8>,
     pub artifact_manifest: Vec<u8>,
     pub installation: InstallationV1,
+    pub genesis: Arc<SumeragiFinalityVerifier>,
+}
+
+pub(super) struct Selection {
+    pub(super) base: Arc<AuthenticatedBase>,
+    application: ApplicationBinding,
     pub asset: KagemushaWalletAssetScopeV1,
     pub asset_original: Vec<u8>,
     pub android_app_policy: [u8; 32],
@@ -132,7 +151,6 @@ pub(super) struct Selection {
     fi_sessions: Vec<session::FiAuthority>,
     bpng_session: Option<session::BpngAuthority>,
     pub apple_app_policy: [u8; 32],
-    pub genesis: Arc<SumeragiFinalityVerifier>,
 }
 
 fn invalid() -> Failure {
@@ -251,6 +269,12 @@ fn raw(map: &Map, key: &str, maximum: usize) -> Result<Vec<u8>> {
 fn signed_app(trust: &RuntimeTrust, manifest: &[u8], envelope: &[u8]) -> Result<Value> {
     bounded(manifest, APP_MANIFEST_MAX)?;
     let (schema, domain, signature_field, encoding) = match trust.authority {
+        RuntimeAuthority::ApplicationReleaseV1 => (
+            "iroha.kagemusha.wallet-application-release-signature.v1",
+            "iroha.kagemusha.wallet-application-release.v1",
+            "signatureBase64",
+            &STANDARD,
+        ),
         RuntimeAuthority::CbsiReleaseV1 => (
             "cbsi.iroha-application-release-signature.v1",
             "cbsi.iroha-application-release.v1",
@@ -301,6 +325,11 @@ fn signed_app(trust: &RuntimeTrust, manifest: &[u8], envelope: &[u8]) -> Result<
         .verify(&trust.key, &message)
         .map_err(|_| invalid())?;
     let manifest = match trust.authority {
+        RuntimeAuthority::ApplicationReleaseV1 => {
+            let document = json(manifest, APP_MANIFEST_MAX, true)?;
+            universal::application(&document)?;
+            document
+        }
         RuntimeAuthority::CbsiReleaseV1 => {
             let document = cbsi::signed_document(manifest)?;
             cbsi::application(&document)?;
@@ -353,21 +382,18 @@ fn first_device_authentication(app: &Map, expected_schema: &str) -> Result<()> {
     Ok(())
 }
 
-impl Selection {
+impl std::ops::Deref for Selection {
+    type Target = AuthenticatedBase;
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+impl AuthenticatedBase {
     pub(super) fn require_producer_selection(
         &self,
         installed: &InstalledVerifierPackV1,
     ) -> Result<()> {
         let financial = self.financial.as_ref().ok_or_else(invalid)?;
-        if let ApplicationBinding::CbsiReleaseV1 {
-            producer_catalog_digest,
-            ..
-        } = &self.application
-        {
-            if financial.producer_catalog_digest != *producer_catalog_digest {
-                return Err(invalid());
-            }
-        }
         if installed.originals().producer_catalog_digest != financial.producer_catalog_digest {
             return Err(invalid());
         }
@@ -375,16 +401,33 @@ impl Selection {
     }
     pub(super) fn require_transport_selection(&self, bytes: &[u8]) -> Result<()> {
         let financial = self.financial.as_ref().ok_or_else(invalid)?;
-        if let ApplicationBinding::CbsiReleaseV1 { transport, .. } = &self.application {
-            if financial.transport_identity != *transport {
-                return Err(invalid());
-            }
-        }
         if BlobV1::of(bytes) != financial.transport_identity {
             return Err(invalid());
         }
-        // The exact complete authenticated catalog closure remains mandatory below.
         Ok(())
+    }
+}
+
+impl Selection {
+    pub(super) fn authenticated_base(&self) -> Result<Arc<AuthenticatedBase>> {
+        if let ApplicationBinding::CbsiReleaseV1 {
+            scheme_id,
+            manifest_digest,
+            producer_catalog_digest,
+            transport,
+            ..
+        } = &self.application
+        {
+            let financial = self.financial.as_ref().ok_or_else(invalid)?;
+            if self.installation.scheme_id != *scheme_id
+                || self.installation.manifest_digest != *manifest_digest
+                || financial.producer_catalog_digest != *producer_catalog_digest
+                || financial.transport_identity != *transport
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(Arc::clone(&self.base))
     }
     pub(super) fn installed(input: &RuntimeOriginals<'_>) -> Result<Self> {
         Self::load(&RuntimeTrust::installed()?, input)
@@ -392,7 +435,14 @@ impl Selection {
     fn load(trust: &RuntimeTrust, input: &RuntimeOriginals<'_>) -> Result<Self> {
         input.validate_bounds()?;
         let document = signed_app(trust, input.app_manifest, input.envelope)?;
+        if trust.authority == RuntimeAuthority::ApplicationReleaseV1 {
+            return universal::load(&document, input);
+        }
+        if !input.registration_source.is_empty() {
+            return Err(invalid());
+        }
         let (app, application, financial) = match trust.authority {
+            RuntimeAuthority::ApplicationReleaseV1 => return Err(invalid()),
             RuntimeAuthority::CbsiReleaseV1 => {
                 let selected = cbsi::current(&document, input)?;
                 (
@@ -441,6 +491,7 @@ impl Selection {
             "apple",
         ];
         let runtime_schema = match trust.authority {
+            RuntimeAuthority::ApplicationReleaseV1 => return Err(invalid()),
             RuntimeAuthority::CbsiReleaseV1 => "cbsi.kagemusha.wallet-runtime.v1",
             RuntimeAuthority::BpngTairaV7 => {
                 runtime_fields.extend([
@@ -477,10 +528,10 @@ impl Selection {
             &sha(text(runtime, "scheme_id")?)?,
         )
         .map_err(|_| invalid())?;
-        if let ApplicationBinding::CbsiReleaseV1 { scheme_id, .. } = &application {
-            if scheme.scheme_id() != *scheme_id {
-                return Err(invalid());
-            }
+        if let ApplicationBinding::CbsiReleaseV1 { scheme_id, .. } = &application
+            && scheme.scheme_id() != *scheme_id
+        {
+            return Err(invalid());
         }
         let artifact_certificate = raw(
             runtime,
@@ -505,10 +556,9 @@ impl Selection {
         if let ApplicationBinding::CbsiReleaseV1 {
             manifest_digest, ..
         } = &application
+            && manifest.manifest_digest() != *manifest_digest
         {
-            if manifest.manifest_digest() != *manifest_digest {
-                return Err(invalid());
-            }
+            return Err(invalid());
         }
         let asset_original = raw(
             runtime,
@@ -731,6 +781,7 @@ impl Selection {
         let native = SumeragiFinalityVerifier::new(&genesis, text(ledger, "chainId")?, roster)
             .map_err(|_| invalid())?;
         let selected_asset = match trust.authority {
+            RuntimeAuthority::ApplicationReleaseV1 => return Err(invalid()),
             RuntimeAuthority::CbsiReleaseV1 => exact(
                 field(app, "asset")?,
                 &["assetAlias", "assetDefinitionId", "scale"],
@@ -755,6 +806,7 @@ impl Selection {
                 &apple.1,
             )?,
             ApplicationBinding::BpngTairaV7 { .. } => Vec::new(),
+            ApplicationBinding::ApplicationReleaseV1 { .. } => return Err(invalid()),
         };
         let bpng_session = match &application {
             ApplicationBinding::BpngTairaV7 { .. } => Some(session::bpng_authority(
@@ -774,33 +826,36 @@ impl Selection {
                 ],
             )?),
             ApplicationBinding::CbsiReleaseV1 { .. } => None,
+            ApplicationBinding::ApplicationReleaseV1 { .. } => return Err(invalid()),
         };
         Ok(Self {
             fi_sessions,
             bpng_session,
             enrollment_certificate,
             application,
-            financial,
-            _originals: RetainedBaseOriginals {
-                _app_manifest: input.app_manifest.into(),
-                _envelope: input.envelope.into(),
-                _wallet_runtime: input.wallet_runtime.into(),
-                _signed_genesis: input.signed_genesis.into(),
-            },
-            scheme,
-            artifact_certificate,
-            artifact_manifest,
-            installation: InstallationV1 {
-                scheme_id: scheme.scheme_id(),
-                manifest_digest: manifest.manifest_digest(),
-            },
+            base: Arc::new(AuthenticatedBase {
+                financial,
+                _originals: RetainedBaseOriginals {
+                    _app_manifest: input.app_manifest.into(),
+                    _envelope: input.envelope.into(),
+                    _wallet_runtime: input.wallet_runtime.into(),
+                    _signed_genesis: input.signed_genesis.into(),
+                },
+                scheme,
+                artifact_certificate,
+                artifact_manifest,
+                installation: InstallationV1 {
+                    scheme_id: scheme.scheme_id(),
+                    manifest_digest: manifest.manifest_digest(),
+                },
+                genesis: Arc::new(native),
+            }),
             asset,
             asset_original,
             android_app_policy: android.0.policy_digest().map_err(|_| invalid())?,
             apple_app_policy: apple.0.policy_digest().map_err(|_| invalid())?,
             android_enrollment: android,
             apple_enrollment: apple,
-            genesis: Arc::new(native),
         })
     }
 }

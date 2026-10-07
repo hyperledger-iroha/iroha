@@ -35,6 +35,11 @@ pub struct WalletRuntimeOriginals {
     pub originals_root: *const u8,
     /// Exact root extent, at most 4096 bytes; no caller-selected role paths.
     pub originals_root_length: usize,
+    /// Canonical verified-registration source locator DATA; required by generic application release.
+    /// Deployment-specific asset adapters require an empty original, never an implicit fallback.
+    pub registration_source: *const u8,
+    /// Exact registration source extent, at most 8192 bytes.
+    pub registration_source_length: usize,
 }
 unsafe fn bytes<'a>(pointer: *const u8, length: usize, bound: usize) -> Result<&'a [u8]> {
     if length > bound || (pointer.is_null() && length != 0) {
@@ -45,6 +50,28 @@ unsafe fn bytes<'a>(pointer: *const u8, length: usize, bound: usize) -> Result<&
     }
     // SAFETY: the caller supplies exactly declared initialized bytes, bounded above.
     Ok(unsafe { std::slice::from_raw_parts(pointer, length) })
+}
+/// Replace only the registration locator's platform-specific path after the caller has copied
+/// its exact originals into private storage. Returns canonical DATA with status 12, not admission.
+/// No file is copied or proof verified; normal installation must still authenticate the package.
+/// # Safety
+/// Inputs are initialized buffers of their declared lengths and `out` is writable and aligned.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_registration_source_relocate_v1(
+    source: *const u8,
+    source_length: usize,
+    root: *const u8,
+    root_length: usize,
+    out: *mut WalletResult,
+) -> i32 {
+    unsafe {
+        super::super::exports::output(out, || {
+            relocate_registration_source(
+                bytes(source, source_length, REGISTRATION_MAX)?,
+                bytes(root, root_length, ROOT_MAX)?,
+            )
+        })
+    }
 }
 impl WalletRuntimeOriginals {
     unsafe fn originals(&self) -> Result<RuntimeOriginals<'_>> {
@@ -79,6 +106,11 @@ impl WalletRuntimeOriginals {
                     GENESIS_MAX,
                 )?,
                 originals_root: bytes(self.originals_root, self.originals_root_length, ROOT_MAX)?,
+                registration_source: bytes(
+                    self.registration_source,
+                    self.registration_source_length,
+                    REGISTRATION_MAX,
+                )?,
             })
         }
     }

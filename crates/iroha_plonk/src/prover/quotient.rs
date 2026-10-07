@@ -68,6 +68,9 @@ use crate::{
 /// Rows per parallel task; results do not depend on it.
 const ROWS_PER_TASK: usize = 1 << 8;
 
+mod evaluation;
+use evaluation::{EvaluatedRow, TilePlan};
+
 mod workspace;
 pub use workspace::{QuotientWorkspace, WorkspaceError};
 
@@ -376,7 +379,7 @@ impl<F: PastaField> CompiledExpressions<F> {
     }
 
     /// `fold(acc * theta + value)` over `roots`.
-    fn compress(roots: &[u32], scratch: &[F], theta: F) -> F {
+    fn compress(roots: &[u32], scratch: EvaluatedRow<'_, F>, theta: F) -> F {
         roots
             .iter()
             .fold(F::ZERO, |acc, root| acc * theta + scratch[*root as usize])
@@ -389,7 +392,7 @@ impl<F: PastaField> CompiledExpressions<F> {
         columns: &BoundColumns<'_, F>,
         n: usize,
         width: usize,
-        emit: impl Fn(&[F], &mut [F]) + Sync,
+        emit: impl Fn(EvaluatedRow<'_, F>, &mut [F]) + Sync,
         cancellation: Option<&CancellationToken>,
     ) -> Vec<Vec<F>> {
         let mut outputs = vec![vec![F::ZERO; n]; width];
@@ -401,6 +404,7 @@ impl<F: PastaField> CompiledExpressions<F> {
                 task.push(chunk);
             }
         }
+        let plan = TilePlan::new::<F>(self.nodes.len(), n);
         tasks
             .into_par_iter()
             .enumerate()
@@ -410,16 +414,20 @@ impl<F: PastaField> CompiledExpressions<F> {
                 }
                 let start = task * ROWS_PER_TASK;
                 let rows = chunks.first().map_or(0, |chunk| chunk.len());
-                let mut scratch = SecretPolynomial::new(vec![F::ZERO; self.nodes.len()]);
+                let mut scratch =
+                    SecretPolynomial::new(vec![F::ZERO; self.nodes.len() * plan.width]);
                 let mut row_out = SecretPolynomial::new(vec![F::ZERO; width]);
-                for offset in 0..rows {
-                    self.evaluate_row(columns, start + offset, &mut scratch);
-                    emit(&scratch, &mut row_out);
-                    for (chunk, value) in chunks.iter_mut().zip(row_out.iter()) {
-                        chunk[offset] = *value;
+                for offset in (0..rows).step_by(plan.width) {
+                    self.evaluate_tile(columns, start + offset, plan.width, &mut scratch);
+                    for lane in 0..plan.width {
+                        emit(EvaluatedRow::new(&scratch, plan.width, lane), &mut row_out);
+                        for (chunk, value) in chunks.iter_mut().zip(row_out.iter()) {
+                            chunk[offset + lane] = *value;
+                        }
                     }
                 }
             });
+        drop(plan);
         outputs
     }
 
@@ -927,6 +935,7 @@ pub(super) fn evaluate_with_workspace_cancellable<C: PastaCurve>(
                 task.push(chunk);
             }
         }
+        let tile_plan = TilePlan::new::<C::ScalarExt>(compiled.nodes.len(), n);
         values
             .par_chunks_mut(ROWS_PER_TASK)
             .zip(numerator_tasks.into_par_iter())
@@ -936,76 +945,85 @@ pub(super) fn evaluate_with_workspace_cancellable<C: PastaCurve>(
                     return;
                 }
                 let start = task * ROWS_PER_TASK;
-                let mut scratch =
-                    SecretPolynomial::new(vec![C::ScalarExt::ZERO; compiled.nodes.len()]);
+                let mut scratch = SecretPolynomial::new(vec![
+                    C::ScalarExt::ZERO;
+                    compiled.nodes.len() * tile_plan.width
+                ]);
                 let mut x_row = shift * omega.pow_vartime([start as u64]);
-                for (offset, out) in out.iter_mut().enumerate() {
-                    let row = start + offset;
-                    let r_next = (row + 1) & mask;
-                    compiled.evaluate_row(&bound, row, &mut scratch);
-                    let mut value = C::ScalarExt::ZERO;
-                    // Every term is computed; a filtered term adds zero but
-                    // keeps its power of y.
-                    let mut push = |term: ConstraintTerm, contribution: C::ScalarExt| {
-                        value = value * y
-                            + if filter.keeps(term) {
-                                contribution
-                            } else {
-                                C::ScalarExt::ZERO
-                            };
-                    };
-                    for (polynomial, root) in compiled.gates.iter().enumerate() {
-                        push(ConstraintTerm::Gate { polynomial }, scratch[*root as usize]);
-                    }
-                    if let (Some(first), Some(last)) = (products.first(), products.last()) {
-                        let r_last = (row + last_offset) & mask;
-                        push(
-                            ConstraintTerm::PermutationFirst,
-                            (one - first[row]) * l0[row],
-                        );
-                        push(
-                            ConstraintTerm::PermutationLast,
-                            (last[row].square() - last[row]) * l_last[row],
-                        );
-                        for (index, pair) in products.windows(2).enumerate() {
-                            push(
-                                ConstraintTerm::PermutationLink { set: index + 1 },
-                                (pair[1][row] - pair[0][r_last]) * l0[row],
-                            );
+                for (tile, out) in out.chunks_mut(tile_plan.width).enumerate() {
+                    let offset = tile * tile_plan.width;
+                    compiled.evaluate_tile(&bound, start + offset, tile_plan.width, &mut scratch);
+                    for (lane, out) in out.iter_mut().enumerate() {
+                        let offset = offset + lane;
+                        let row = start + offset;
+                        let r_next = (row + 1) & mask;
+                        let scratch = EvaluatedRow::new(&scratch, tile_plan.width, lane);
+                        let mut value = C::ScalarExt::ZERO;
+                        // Every term is computed; a filtered term adds zero but
+                        // keeps its power of y.
+                        let mut push = |term: ConstraintTerm, contribution: C::ScalarExt| {
+                            value = value * y
+                                + if filter.keeps(term) {
+                                    contribution
+                                } else {
+                                    C::ScalarExt::ZERO
+                                };
+                        };
+                        for (polynomial, root) in compiled.gates.iter().enumerate() {
+                            push(ConstraintTerm::Gate { polynomial }, scratch[*root as usize]);
                         }
-                        let mut current_delta = beta * x_row;
-                        for (set_index, ((set, set_columns), set_sigma)) in products
-                            .iter()
-                            .zip(permutation_columns.chunks(shape.chunk_len))
-                            .zip(sigma_refs.chunks(shape.chunk_len))
-                            .enumerate()
-                        {
-                            let mut left = set[r_next];
-                            for (column, sigma) in set_columns.iter().zip(set_sigma) {
-                                left *= column[row] + beta * sigma[row] + gamma;
-                            }
-                            let mut right = set[row];
-                            for column in set_columns {
-                                right *= column[row] + current_delta + gamma;
-                                current_delta *= delta;
-                            }
+                        if let (Some(first), Some(last)) = (products.first(), products.last()) {
+                            let r_last = (row + last_offset) & mask;
                             push(
-                                ConstraintTerm::PermutationProduct { set: set_index },
-                                (left - right) * l_active[row],
+                                ConstraintTerm::PermutationFirst,
+                                (one - first[row]) * l0[row],
                             );
+                            push(
+                                ConstraintTerm::PermutationLast,
+                                (last[row].square() - last[row]) * l_last[row],
+                            );
+                            for (index, pair) in products.windows(2).enumerate() {
+                                push(
+                                    ConstraintTerm::PermutationLink { set: index + 1 },
+                                    (pair[1][row] - pair[0][r_last]) * l0[row],
+                                );
+                            }
+                            let mut current_delta = beta * x_row;
+                            for (set_index, ((set, set_columns), set_sigma)) in products
+                                .iter()
+                                .zip(permutation_columns.chunks(shape.chunk_len))
+                                .zip(sigma_refs.chunks(shape.chunk_len))
+                                .enumerate()
+                            {
+                                let mut left = set[r_next];
+                                for (column, sigma) in set_columns.iter().zip(set_sigma) {
+                                    left *= column[row] + beta * sigma[row] + gamma;
+                                }
+                                let mut right = set[row];
+                                for column in set_columns {
+                                    right *= column[row] + current_delta + gamma;
+                                    current_delta *= delta;
+                                }
+                                push(
+                                    ConstraintTerm::PermutationProduct { set: set_index },
+                                    (left - right) * l_active[row],
+                                );
+                            }
                         }
+                        for (lookup, numerator) in compiled.lookups.iter().zip(&mut numerators) {
+                            let compressed_input =
+                                CompiledExpressions::compress(&lookup.inputs, scratch, theta);
+                            let compressed_table =
+                                CompiledExpressions::compress(&lookup.tables, scratch, theta);
+                            numerator[offset] =
+                                (compressed_input + beta) * (compressed_table + gamma);
+                        }
+                        *out = value;
+                        x_row *= omega;
                     }
-                    for (lookup, numerator) in compiled.lookups.iter().zip(&mut numerators) {
-                        let compressed_input =
-                            CompiledExpressions::compress(&lookup.inputs, &scratch, theta);
-                        let compressed_table =
-                            CompiledExpressions::compress(&lookup.tables, &scratch, theta);
-                        numerator[offset] = (compressed_input + beta) * (compressed_table + gamma);
-                    }
-                    *out = value;
-                    x_row *= omega;
                 }
             });
+        drop(tile_plan);
         CancellationToken::checkpoint(cancellation)?;
         if let Some([product, input, table]) = &mut lookup_cosets {
             for (index, (lookup, numerator)) in
@@ -1086,3 +1104,5 @@ pub(super) fn evaluate_with_workspace_cancellable<C: PastaCurve>(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tile_experiment;

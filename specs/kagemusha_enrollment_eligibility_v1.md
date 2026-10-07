@@ -142,31 +142,49 @@ remains 10,000 bytes.
 
 ## Component evidence and remaining integration
 
-TODO: the installed CBSI/BPNG profiles still select one authenticated `asset_original`;
-the shared ledger's generic asset support does not yet expose every universal token through
-the installed SDK. Replace that sole selection path with authenticated universal-dataspace
-asset/scheme registration selection. Keep app/release/platform trust separate from asset
-selection, and retain the exact asset incarnation, scale, global balance scope and reserve
-binding through enrollment, loading and wallet reopening. Caller-supplied token metadata is
-not an authenticated registration, and another fixed token allowlist would not meet the target.
+The generic installed selector now uses one independently signed application release and
+asset-independent enrollment templates. A separate bounded registration source must prove a
+successful direct Global Register under the installed genesis before it can select the exact
+asset, incarnation, scale and consenting reserve. The original CBSI/BPNG selections remain
+specific deployment authentication adapters. Neither the generic selector nor the operator
+`iroha offline registration-package` command contains a token allowlist or grants enrollment
+from caller-supplied metadata. The package command publishes a fresh immutable source only
+after native verification; importing it cannot change the installed trust root. TODO: qualify
+this new path through actual ledger execution, rebuilt ABI27 C/JNI/Swift/Kotlin artifacts and
+wallet reopening. The constructor layout change refuses older native ABI versions.
 
 The actual Rust generator covers both authorities, four purposes and three decisions in
-[`enrollment_eligibility_v1_vectors.json`](../fixtures/kagemusha/enrollment_eligibility_v1_vectors.json).
-All 24 actual Rust-generated cases match Kotlin/JVM byte for byte, including frames, digests,
-signing messages and signatures. The captured model passes 11 cases (one explicit maintenance
-generator ignored), Rust middleware passes eight, Kotlin passes eight and its Java consumer
-passes one. Owned sources remained unchanged during these component runs; records are under
-`target/qualification/eligibility-generic-provider`. Tests
-include current freezes, denied/unavailable sources, wrong keys, rotated policy, changed
-account/actor/attempt/operation, expiry, time rollback and a slow source read. Test keys and
-policies are unadmitted DATA. These results establish neither an actual bank integration nor
-current authority installation or a release candidate's complete source closure.
+[`enrollment_eligibility_v1_vectors.json`](../fixtures/kagemusha/enrollment_eligibility_v1_vectors.json)
+and the new template/observation forms in
+[`enrollment_eligibility_template_v1_vectors.json`](../fixtures/kagemusha/enrollment_eligibility_template_v1_vectors.json).
+All24 original and24 template cases match Kotlin/JVM frames, digests and signatures; nine
+Kotlin tests and one Java consumer pass. The captured Model passes15 eligibility cases
+(two explicit maintenance generators ignored) and nine enrollment-policy cases. The initial
+four registration tests fail at a compressed public-key fixture; after correction to the
+required uncompressed original, all four pass from the refreshed Model executable
+(`target/qualification/universal-asset-model-sdk-2`). Their native quorum certificates cover
+synthetic execution rows; the actual Core execution tests remain distinct. All original
+failures are retained. The generated template is198B, concrete policy231B, inner request264B,
+asset-bearing observation344B and signed response174B; each fits the2048B frame cap.
 
-The Rust account-authenticated HTTP client and its surrounding transport components pass
-29 cases with zero ignored (`target/qualification/sdk-enrollment-http-current`). An independent
-supplement checks the actual 45 local compiler depfiles and five build-script outputs: the
-eligibility-spec prose drift is not an input to that copied binary or these tests. The original
-broad source-inconclusive record remains retained; this is component evidence only.
+The Rust middleware and HTTP components pass32 cases with zero ignored from the same copied
+SDK executable:11 middleware, seven enrollment HTTP, seven Load HTTP and seven pool-lifecycle
+cases. They include three distinct assets under one Bank or SchemeOperator template, exact
+same-attempt cross-asset refusal, changed template/asset originals, stale or unavailable
+observations, freeze priority and clock rollback. Runtime sources and binary remain unchanged.
+Independent review of48 actual local compiler depfiles and five build-script outputs excludes
+22 concurrent CLI/bridge/mobile changes from this build's inputs, preserving its original
+broad source-inconclusive classification. These are executable-bound component results, not
+actual provider installation or a complete release candidate. The copied native bridge also
+passes66 installed-selection, custody and layout cases with unchanged runtime sources, including
+the generic application release and asset-independent session configuration. Rebuilt ABI27
+Swift/JNI delivery remains separate.
+
+The regenerated worker originals pass the full214-case Python suite in37.691s with unchanged
+source and interpreter pins (`target/qualification/enrollment-inspect/full-suite-6-universal-template`).
+This includes A→B→A under one retained generation and refusal of the retired preparation schema.
+The platform signatures are synthetic and transport is scripted; real Linux launch and service
+deployment remain open.
 
 The node enrollment journal retains each complete request, selected Scheme/policy, signed
 response and consumption timestamp in its single atomic attempt record. The index is append-only
@@ -179,8 +197,11 @@ cases with no failures or ignores (`target/qualification/enrollment-service-core
 They include the configured SchemeOperator path without a bank or Parliament gate, current
 account/actor binding, selection races, freeze/expiry refusal, live recovery versus passive
 Inspect and fresh-authorized exact E6 recovery. The build retains its broad source-drift record;
-these are executable-bound component results, not whole-checkout qualification. Concrete
-Torii transport, signer and worker runtime qualification remains separate. Local atomicity
+these are executable-bound component results, not whole-checkout qualification. The corrected
+universal-template Torii copy passes31 signer, local HTTPS, authentication and process/lifetime
+cases (`target/qualification/enrollment-universal-torii-cli-current/issuer-runtime`). Its exact
+executable remains unchanged; broad source/runtime drift from the following coordinated
+repairs is retained. Actual Linux worker launch and service deployment still require qualification. Local atomicity
 does not establish protection against arbitrary rollback of the entire issuer store.
 
 The wire verifier and middleware adapter do not establish a serving issuer. TODO: qualify the

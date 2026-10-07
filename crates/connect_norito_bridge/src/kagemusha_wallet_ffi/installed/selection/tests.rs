@@ -391,6 +391,7 @@ impl BaseFixture {
                 producer_inventory: TEST_CATALOG,
                 signed_genesis: &self.genesis,
                 originals_root: TEST_ROOT,
+                registration_source: b"",
             },
         )
     }
@@ -439,6 +440,46 @@ fn signed_runtime_retains_canonical_enrollment_policy_preimages() {
         )
         .unwrap();
         assert_eq!(policy.policy_digest().unwrap(), digest);
+    }
+}
+
+#[test]
+fn authenticated_base_refuses_fixed_adapter_duplicate_pin_substitution() {
+    let fixture = BaseFixture::new();
+    let selected = fixture.load().unwrap();
+    assert!(Arc::ptr_eq(
+        &selected.authenticated_base().unwrap(),
+        &selected.base
+    ));
+    for change in 0..5 {
+        let mut selected = fixture.load().unwrap();
+        let ApplicationBinding::CbsiReleaseV1 {
+            scheme_id,
+            manifest_digest,
+            producer_catalog_digest,
+            transport,
+            ..
+        } = &mut selected.application
+        else {
+            panic!("CBSI fixture")
+        };
+        match change {
+            0 => scheme_id[0] ^= 1,
+            1 => manifest_digest[0] ^= 1,
+            2 => producer_catalog_digest[0] ^= 1,
+            3 => transport.sha256[0] ^= 1,
+            _ => transport.bytes += 1,
+        }
+        assert!(
+            matches!(
+                selected.authenticated_base(),
+                Err(Failure {
+                    status: INVALID,
+                    ..
+                })
+            ),
+            "change {change}"
+        );
     }
 }
 
@@ -492,7 +533,8 @@ fn exact_whole_runtime_and_signed_genesis_preimages_cannot_be_retargeted() {
                 verifier_pack: TEST_PACK,
                 producer_inventory: TEST_CATALOG,
                 signed_genesis: &fixture.genesis,
-                originals_root: TEST_ROOT
+                originals_root: TEST_ROOT,
+                registration_source: b"",
             }
         )
         .is_err()
@@ -562,6 +604,7 @@ fn genuine_signed_base_cannot_omit_financial_originals_or_register_an_owner() {
             producer_inventory: b"",
             signed_genesis: &fixture.genesis,
             originals_root: b"",
+            registration_source: b"",
         },
         selected,
     );
@@ -587,6 +630,7 @@ fn cbsi_financial_original_roles_remain_mandatory_and_bounded() {
             verifier_pack: if offered & 1 == 0 { b"" } else { TEST_PACK },
             producer_inventory: if offered & 2 == 0 { b"" } else { TEST_CATALOG },
             originals_root: if offered & 4 == 0 { b"" } else { TEST_ROOT },
+            registration_source: b"",
         };
         if offered == 0 || offered == 7 {
             assert!(input.validate_bounds().is_ok());
@@ -611,6 +655,7 @@ fn cbsi_financial_original_roles_remain_mandatory_and_bounded() {
             verifier_pack: TEST_PACK,
             producer_inventory: TEST_CATALOG,
             originals_root: TEST_ROOT,
+            registration_source: b"",
         };
         match missing {
             0 => input.app_manifest = b"",
@@ -679,6 +724,7 @@ fn cbsi_signed_release_requires_exact_mobile_selection_and_all_seven_inventory_r
                     producer_inventory: TEST_CATALOG,
                     signed_genesis: &fixture.genesis,
                     originals_root: TEST_ROOT,
+                    registration_source: b"",
                 }
             )
             .is_err()
@@ -711,6 +757,7 @@ fn cbsi_signed_release_requires_exact_mobile_selection_and_all_seven_inventory_r
                     producer_inventory: TEST_CATALOG,
                     signed_genesis: &fixture.genesis,
                     originals_root: TEST_ROOT,
+                    registration_source: b"",
                 }
             )
             .is_err()
@@ -1131,3 +1178,5 @@ fn fi_collection_requires_policy_bound_roots_and_positive_canonical_project() {
         assert!(fixture.load().is_err());
     }
 }
+
+mod universal_tests;

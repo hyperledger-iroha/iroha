@@ -86,6 +86,9 @@ use rand_chacha::{
 };
 use sha2::{Digest as _, Sha256};
 
+#[path = "m3_gates/export_descriptors.rs"]
+mod export_descriptors;
+
 /// The circuit size of every gate.
 const K: u32 = 16;
 /// Proofs per measurement process (the key is generated once).

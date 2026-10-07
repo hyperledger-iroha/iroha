@@ -231,20 +231,20 @@ public final class SorafsReferenceValidatorsTests {
     assert SorafsOrderbookSide.BID.bridgeCode() == 1;
     assert SorafsOrderbookTier.ARCHIVE.bridgeCode() == 3;
     assert SorafsOrderbookCancelReason.REPLACED.bridgeCode() == 4;
-    assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 26;
+    assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 27;
     assert !SorafsReferenceValidators.isBridgeAbiSupported(20);
     assert !SorafsReferenceValidators.isBridgeAbiSupported(23);
-    assert SorafsReferenceValidators.isBridgeAbiSupported(26);
+    assert SorafsReferenceValidators.isBridgeAbiSupported(27);
     assert !SorafsReferenceValidators.isBridgeAbiSupported(22);
     assert !SorafsReferenceValidators.isBridgeAbiSupported(21);
-    assert !SorafsReferenceValidators.isGovernanceDagBridgeSupported(26, false);
-    assert SorafsReferenceValidators.isGovernanceDagBridgeSupported(26, true);
-    assert !SorafsReferenceValidators.isFixtureBundleBridgeSupported(26, false);
-    assert SorafsReferenceValidators.isFixtureBundleBridgeSupported(26, true);
-    assert !SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(26, false);
-    assert SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(26, true);
-    assert !SorafsReferenceValidators.isAppealFinanceBridgeSupported(26, false);
-    assert SorafsReferenceValidators.isAppealFinanceBridgeSupported(26, true);
+    assert !SorafsReferenceValidators.isGovernanceDagBridgeSupported(27, false);
+    assert SorafsReferenceValidators.isGovernanceDagBridgeSupported(27, true);
+    assert !SorafsReferenceValidators.isFixtureBundleBridgeSupported(27, false);
+    assert SorafsReferenceValidators.isFixtureBundleBridgeSupported(27, true);
+    assert !SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(27, false);
+    assert SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(27, true);
+    assert !SorafsReferenceValidators.isAppealFinanceBridgeSupported(27, false);
+    assert SorafsReferenceValidators.isAppealFinanceBridgeSupported(27, true);
     assert SorafsReferenceValidators.ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 == 256;
     assert SorafsReferenceValidators.GOVERNANCE_DAG_MAX_BLOCKS_V1 == 64;
     assert SorafsReferenceValidators.GOVERNANCE_DAG_CID_BYTES_V1 == 32;
@@ -958,7 +958,7 @@ public final class SorafsReferenceValidatorsTests {
   private static void requireNativeBridge() {
     if (!SorafsReferenceValidators.isNativeAvailable()) {
       throw new AssertionError(
-          "ABI-26 connect_norito_bridge with all SoraFS reference symbols is required.");
+          "ABI-27 connect_norito_bridge with all SoraFS reference symbols is required.");
     }
   }
 

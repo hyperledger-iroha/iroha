@@ -2635,7 +2635,7 @@ final class ToriiClientTests: XCTestCase {
                     return XCTFail("Expected signature-bound decode refusal, got \(error)")
                 }
                 XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation", "signature"])
-                XCTAssertTrue(context.debugDescription.contains("canonical signature bound"))
+                XCTAssertTrue(context.debugDescription.contains("exceeds the canonical signature bound"))
             }
         }
 
@@ -2697,7 +2697,7 @@ final class ToriiClientTests: XCTestCase {
                         return XCTFail("Expected signature-bound decode refusal, got \(error)")
                     }
                     XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation", "signature"])
-                    XCTAssertTrue(context.debugDescription.contains("canonical signature bound"))
+                    XCTAssertTrue(context.debugDescription.contains("exceeds the canonical signature bound"))
                 }
             }
             // Keep wrong-suite key rejection reachable within the DTO's wire bound.
@@ -3020,8 +3020,28 @@ final class ToriiClientTests: XCTestCase {
                 XCTFail("expected dataCorrupted decode error, got \(error)")
                 return
             }
-            XCTAssertTrue(context.debugDescription.contains("signature"))
-            XCTAssertTrue(context.debugDescription.contains("valid hex"))
+            XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation", "signature"])
+            XCTAssertTrue(context.debugDescription.contains("requires exact lowercase raw hex"))
+            XCTAssertTrue(context.underlyingError is ToriiClientError)
+        }
+    }
+
+    func testIdentifierReceiptPreservesSignatureTypeMismatchDuringDecode() throws {
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: try canonicalOwnerLiteral(),
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "hkdf-sha3-512-prf-v1"
+        )
+        let json = try identifierReceiptJSON(payload: payload, signatureHex: "01")
+            .replacingOccurrences(of: "\"signature\":\"01\"", with: "\"signature\":17")
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiIdentifierResolutionReceipt.self, from: Data(json.utf8))) { error in
+            guard case let DecodingError.typeMismatch(type, context) = error else {
+                return XCTFail("expected signature typeMismatch, got \(error)")
+            }
+            XCTAssertTrue(type == String.self)
+            XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation", "signature"])
         }
     }
 
@@ -3830,7 +3850,8 @@ final class ToriiClientTests: XCTestCase {
                 XCTFail("expected dataCorrupted decode error, got \(error)")
                 return
             }
-            XCTAssertTrue(context.debugDescription.contains("require only signature"))
+            XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation"])
+            XCTAssertTrue(context.debugDescription.contains("requires its exact current fields"))
         }
     }
 
@@ -3867,7 +3888,8 @@ final class ToriiClientTests: XCTestCase {
                 XCTFail("expected dataCorrupted decode error, got \(error)")
                 return
             }
-            XCTAssertTrue(context.debugDescription.contains("signature must be exact"))
+            XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation", "signature"])
+            XCTAssertTrue(context.debugDescription.contains("surrounding whitespace"))
         }
     }
 
@@ -3907,7 +3929,8 @@ final class ToriiClientTests: XCTestCase {
                 XCTFail("expected dataCorrupted decode error, got \(error)")
                 return
             }
-            XCTAssertTrue(context.debugDescription.contains("opening.signature must be exact"))
+            XCTAssertEqual(context.codingPath.map(\.stringValue), ["payload", "opening", "signature"])
+            XCTAssertTrue(context.debugDescription.contains("requires exact lowercase raw hex"))
         }
     }
 
@@ -3946,7 +3969,8 @@ final class ToriiClientTests: XCTestCase {
                 XCTFail("expected dataCorrupted decode error, got \(error)")
                 return
             }
-            XCTAssertTrue(context.debugDescription.contains("require only signature"))
+            XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation"])
+            XCTAssertTrue(context.debugDescription.contains("requires its exact current fields"))
         }
     }
 
@@ -3983,18 +4007,16 @@ final class ToriiClientTests: XCTestCase {
                 XCTFail("expected dataCorrupted decode error, got \(error)")
                 return
             }
-            XCTAssertTrue(context.debugDescription.contains("attestation kind"))
+            XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation", "kind"])
+            XCTAssertTrue(context.debugDescription.contains("must be signed or proof"))
         }
     }
 
-    func testIdentifierReceiptCanonicalPayloadMatchesLiveToriiFixtureAndRejectsLegacySignature() throws {
+    func testIdentifierReceiptCanonicalPayloadRejectsLegacyReceiptAndSignature() throws {
         let accountId = "sorauﾛ1NiGｸﾛﾋRuﾎQtﾐpヱﾈｻHﾍﾐ3RZﾕYdvbｺhcｽG8A8ｿRﾗeP1E463"
-        // Retain the historical signature as a negative control over today's
-        // network-bound payload; only the current receipt layout is decoded.
         let receiptJSON = """
         {
           "payload":{
-            "network_id":"\(ToriiIdentifierOwnerContract.rawNetwork(TestNetworkIds.canonical))",
             "policy_id":"email#retail",
             "execution":{
               "program_id":"email_retail",
@@ -4021,7 +4043,7 @@ final class ToriiClientTests: XCTestCase {
                 "opened_at_ms":1776812470694,
                 "expires_at_ms":1776812500694
               },
-              "signature":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+              "signature":"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
             },
             "opaque_id":"opaque:fd14cb369e853352d4b9c578745627d154471ce5fd3462c4db542c104766e983",
             "receipt_hash":"51bbe55b70e09d4c2bb75d9c31b2cde46a7bdd5414134f6786255c679a68ac53",
@@ -4034,12 +4056,28 @@ final class ToriiClientTests: XCTestCase {
           }
         }
         """
-        let receipt = try JSONDecoder().decode(
-            ToriiIdentifierResolutionReceipt.self,
-            from: Data(receiptJSON.utf8)
-        )
-        XCTAssertFalse(try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload).isEmpty)
-        let policy = ToriiIdentifierPolicySummary(
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            ToriiIdentifierResolutionReceipt.self, from: Data(receiptJSON.utf8)
+        )) { error in
+            guard case let DecodingError.dataCorrupted(context) = error else {
+                return XCTFail("expected legacy payload decode rejection, got \(error)")
+            }
+            XCTAssertEqual(context.codingPath.map(\.stringValue), ["payload"])
+            XCTAssertTrue(context.debugDescription.contains("requires its exact current fields"))
+        }
+
+        // The same historical signature is also refused after projecting the fixture into
+        // the current network-bound layout with the original lowercase opening signature.
+        var currentObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(receiptJSON.utf8)) as? [String: Any])
+        var currentPayload = try object(currentObject, "payload")
+        currentPayload["network_id"] = ToriiIdentifierOwnerContract.rawNetwork(TestNetworkIds.canonical)
+        var currentOpening = try object(currentPayload, "opening")
+        currentOpening["signature"] = String(repeating: "ff", count: 64)
+        currentPayload["opening"] = currentOpening
+        currentObject["payload"] = currentPayload
+        let currentReceipt = try identifierReceipt(fromFixture: currentObject)
+        XCTAssertFalse(try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(currentReceipt.payload).isEmpty)
+        let historicalPolicy = ToriiIdentifierPolicySummary(
             policyId: "email#retail",
             programId: "identifier_lookup_retail",
             owner: accountId,
@@ -4055,7 +4093,24 @@ final class ToriiClientTests: XCTestCase {
             proofVerifier: nil,
             note: nil
         )
-        XCTAssertEqual(try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false)
+        XCTAssertFalse(try currentReceipt.verifyResolverAttestation(
+            using: historicalPolicy, intendedNetworkId: TestNetworkIds.canonical))
+
+        let fixtureURL = repositoryRootURL()
+            .appendingPathComponent("fixtures/soracloud/identifier_receipt_vectors_v1.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any])
+        let receipt = try identifierReceipt(fromFixture: object(fixture, "receipt"))
+        let policy = try identifierReceiptPolicy(fromFixture: object(fixture, "policy"))
+        let intendedNetworkId = try ToriiIdentifierOwnerContract.network("5e60c5da42509f0077c6adf39b7dd708611eb4d6a9f1cbb71769092c26d20bf1")
+        let payloadBytes = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload)
+        XCTAssertFalse(payloadBytes.isEmpty)
+        XCTAssertEqual(sha256Hex(payloadBytes), try string(fixture, "canonical_payload_sha256"))
+        XCTAssertTrue(try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: intendedNetworkId))
+        let legacySignatureReceipt = try identifierReceipt(
+            payload: receipt.payload,
+            signatureHex: "4B26BF33F721C551C13F102D4D7F483CB8DD8A13FD6BF4ED26C845E2B69D5D0124B8CFA05493772F6748A42408EEE4542C470B284AB87F686B423F9DF87C8D00"
+        )
+        XCTAssertFalse(try legacySignatureReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: intendedNetworkId))
     }
 
     @available(iOS 15.0, macOS 12.0, *)

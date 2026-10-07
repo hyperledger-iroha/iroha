@@ -7,8 +7,9 @@
 //!
 //! Proof verification is one part of monetary admission. The transition owner must also
 //! authenticate consumed credentials/objects and compare actual state, map openings and
-//! effects before Advance. TODO(G3/G4): connect the complete operation/fold prover catalog
-//! and native preparation owner; this module alone must not enable foreign wallet open.
+//! effects before Advance. The installed native state owner connects preparation and the
+//! qualified operation/fold source catalog; wallet open requires that complete source grant.
+//! This verifier alone grants neither wallet admission nor catalog qualification.
 
 use std::{collections::BTreeMap, sync::Arc};
 

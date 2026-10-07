@@ -50,6 +50,21 @@ impl QualifiedReceiptSourceV1 {
         self.receipt.source()
     }
 
+    /// Authenticate the exact terminal history state through the complete verifier-only graph.
+    /// This grants no wallet producer and authenticates no earlier result or caller checkpoint.
+    /// # Errors
+    /// Wrong state, endpoints or proof/claims, or cooperative cancellation.
+    pub fn restore_history(
+        &self,
+        state: &iroha_kagemusha_proof::finality::history::HistoryState,
+        evidence: iroha_kagemusha_proof::finality::continuity::SourceNodeEvidence,
+        budget: iroha_pasta::msm::MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<iroha_kagemusha_proof::finality::native::HistoryPrefix, SourceError> {
+        self.receipt
+            .restore_history(state, evidence, budget, cancellation)
+    }
+
     /// Fully verify the exact receipt statement and both original carried claims.
     /// The operation owner must separately bind the original receipt transcript,
     /// wallet terms and this installation to its own authenticated state.

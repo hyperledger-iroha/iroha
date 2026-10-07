@@ -59,6 +59,7 @@ pub(super) enum Request {
     Enroll(StreamTokenCustodyEnrollRequest),
 }
 impl Request {
+    #[cfg(test)]
     pub(super) fn inspect(
         &self,
         account: &AccountService,
@@ -72,14 +73,36 @@ impl Request {
                 account.inspect_stream_token_custody_enroll_preparation(path, request)
             }
         }
-        .map_err(|_error| {
-            #[cfg(test)]
-            crate::managed::native_operation::deadline_diagnostics::wallet_error(
-                "wallet preparation inspection",
-                &_error,
-            );
-            invalid("custody wallet preparation differs from original request")
-        })
+        .map_err(Self::inspection_error)
+    }
+    pub(super) fn inspect_in_parent(
+        &self,
+        account: &AccountService,
+        parent: &PrivateDirectory,
+    ) -> Result<iroha_wallet::operations::VerifiedNativePreparation> {
+        match self {
+            Self::Configure(request) => account
+                .inspect_stream_token_custody_configure_preparation_in_parent(
+                    parent,
+                    std::ffi::OsStr::new("transaction"),
+                    request,
+                ),
+            Self::Enroll(request) => account
+                .inspect_stream_token_custody_enroll_preparation_in_parent(
+                    parent,
+                    std::ffi::OsStr::new("transaction"),
+                    request,
+                ),
+        }
+        .map_err(Self::inspection_error)
+    }
+    fn inspection_error(_error: color_eyre::eyre::Report) -> crate::managed::Error {
+        #[cfg(test)]
+        crate::managed::native_operation::deadline_diagnostics::wallet_error(
+            "wallet preparation inspection",
+            &_error,
+        );
+        invalid("custody wallet preparation differs from original request")
     }
     pub(super) fn retain(
         &self,
@@ -417,7 +440,7 @@ pub(super) fn explicit(
         |attempt| {
             original
                 .request(attempt.terms(), attempt.observation()?, options.deadline)?
-                .inspect(account, &attempt.wallet_path())
+                .inspect_in_parent(account, attempt.directory())
         },
         |attempt, observation, deadline| {
             original

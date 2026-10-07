@@ -18,7 +18,7 @@ enum Store {
 /// Clones share retained native ancestry and immutable metadata; never PK buffers.
 #[derive(Clone)]
 pub(super) struct CatalogOriginals {
-    _selected: Arc<Selection>,
+    _selected: Arc<selection::AuthenticatedBase>,
     source: CatalogReader,
 }
 
@@ -67,7 +67,7 @@ impl CatalogOriginals {
         root: &[u8],
         pack: &[u8],
         catalog: &[u8],
-        selected: Arc<Selection>,
+        selected: Arc<selection::AuthenticatedBase>,
     ) -> Result<Self> {
         let inventory = authenticated.inventory();
         if root.is_empty() || root.len() > ROOT_MAX || root.contains(&0) {
