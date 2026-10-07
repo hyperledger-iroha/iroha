@@ -23,7 +23,7 @@ class Parameters:
     @classmethod
     def decode(cls, raw: bytes, curve: Curve, k: int):
         """Require the exact existing compiled-table digest before using any point."""
-        require(1 <= k <= 10, 'reference parameter exponent')
+        require(type(k) is int and 1 <= k <= 10, 'reference parameter exponent')
         pinned = [entry for entry in KATS['params_ipa'][curve.name] if entry['k'] == k]
         require(len(pinned) == 1, 'no pinned parameter authority for this exponent')
         require(isinstance(raw, bytes) and len(raw) == 4 + 64 * (1 << k) + 64 and
@@ -40,7 +40,8 @@ def _decide(params: Parameters, encoded_point: bytes, challenges):
     curve = params.curve
     require(isinstance(encoded_point, bytes), 'encoded generator claim required')
     point = curve.decode(encoded_point)
-    require(len(challenges) == params.k and all(0 < u < curve.scalar for u in challenges),
+    require(isinstance(challenges, (list, tuple)) and len(challenges) == params.k and
+            all(type(u) is int and 0 < u < curve.scalar for u in challenges),
             'generator claim challenges')
     # Each next challenge occupies the next (descending) generator-index bit.
     weights = [1]

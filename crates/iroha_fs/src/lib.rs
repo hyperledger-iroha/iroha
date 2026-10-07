@@ -360,16 +360,6 @@ pub struct PrivateReadTreeScope<'tree> {
     _lease: &'tree mut (),
 }
 
-/// One borrowed directory within a closed read-only tree transaction.
-///
-/// Entries and record reads retain their original native bodies and lazy order. The view
-/// cannot be cloned, retained, or used to create or mutate source directories or files.
-pub struct PrivateReadTreeDirectory<'scope> {
-    directory: &'scope platform::Directory,
-    anchor: &'scope platform::Directory,
-    _lease: &'scope mut (),
-}
-
 impl PrivateReadTreeScope<'_> {
     /// Consume one directory's lazy records and inventory in a closed tree read transaction.
     ///
@@ -394,109 +384,47 @@ impl PrivateReadTreeScope<'_> {
     where
         E: From<io::Error>,
     {
-        self.with_directory(directory, |directory| {
+        self.with_directory_custody(directory, || {
             let mut lease = ();
             read(&mut PrivateReadScope {
-                directory: directory.directory,
+                directory: &directory.inner,
                 _lease: &mut lease,
             })
         })
     }
 
-    /// Inspect one retained directory, closing its fresh suffix on every ordinary result.
+    /// Revalidate one retained directory within this closed read-only tree transaction.
     ///
-    /// Every original ancestry link must be the same shared owner as the tree anchor before
-    /// that prefix can be omitted for a strict descendant. The anchor itself, independently
-    /// opened and unrelated owners use full checks. The view cannot leave this callback.
+    /// This empty read operation checks the original directory at entry and again at exit.
+    /// Strict descendants share only the complete identical native prefix. The anchor,
+    /// independently reopened and unrelated owners retain full ancestry checks.
+    /// No reader, native owner or validation verdict is returned or retained.
     ///
     /// # Errors
-    /// Refuses changed native custody at entry or exit. Exit custody takes precedence over
-    /// the callback's typed error or result; otherwise that original result is preserved.
-    pub fn with_directory<T, E>(
-        &mut self,
+    /// Refuses changed or unsafe native custody at either observation. This does not promise
+    /// an atomic snapshot or detection of an interior change restored between observations.
+    pub fn revalidate_directory(&self, directory: &PrivateDirectory) -> io::Result<()> {
+        self.with_directory_custody(directory, || Ok(()))
+    }
+
+    // One closed owner for both actual reads and empty directory checks. Keep the native
+    // relationship admission and all-result exit in this private recipe; no public nested
+    // directory view or parallel read/entries/comparison implementation is retained.
+    fn with_directory_custody<T, E>(
+        &self,
         directory: &PrivateDirectory,
-        read: impl for<'scope> FnOnce(&mut PrivateReadTreeDirectory<'scope>) -> Result<T, E>,
+        read: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, E>
     where
         E: From<io::Error>,
     {
         directory.inner.revalidate_in_tree(self.directory)?;
-        let mut lease = ();
-        let result = read(&mut PrivateReadTreeDirectory {
-            directory: &directory.inner,
-            anchor: self.directory,
-            _lease: &mut lease,
-        });
+        let result = read();
         if let Err(error) = directory.inner.revalidate_in_tree(self.directory) {
             drop(result);
             return Err(error.into());
         }
         result
-    }
-}
-
-impl PrivateReadTreeDirectory<'_> {
-    /// List the same bounded native inventory with fresh directory-suffix fences.
-    ///
-    /// # Errors
-    /// Refuses unsafe suffix custody, invalid names, excessive entries and native I/O errors.
-    pub fn entries(&self, maximum: usize) -> io::Result<Vec<std::ffi::OsString>> {
-        self.revalidate()?;
-        self.directory.entries_native(maximum, |mut names| {
-            self.revalidate()?;
-            names.sort();
-            Ok(names)
-        })
-    }
-
-    /// Consume lazy private records with original leaf checks and codec admission.
-    ///
-    /// The one zeroized buffer and native leaf owners remain live through each borrowed
-    /// consumer. No source prefetch, decode, authority result or currentness is cached.
-    ///
-    /// # Errors
-    /// Refuses unsafe suffix custody at entry or ordinary-result exit and preserves typed
-    /// callback errors only after exit closes. Each raw leaf keeps its original I/O errors.
-    pub fn read_scope<T, E>(
-        &mut self,
-        read: impl for<'scope> FnOnce(&mut PrivateReadScope<'scope>) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<io::Error>,
-    {
-        self.revalidate()?;
-        let mut lease = ();
-        let result = read(&mut PrivateReadScope {
-            directory: self.directory,
-            _lease: &mut lease,
-        });
-        if let Err(error) = self.revalidate() {
-            drop(result);
-            return Err(error.into());
-        }
-        result
-    }
-
-    /// Compare ordered exact private bytes inside this borrowed directory's suffix fences.
-    ///
-    /// Uses the same comparison recipe and native leaf admission as
-    /// [`PrivateDirectory::compare_files`]. One zeroized transient buffer is held at a time;
-    /// the first stable mismatch stops later reads. Empty slices still close suffix custody.
-    /// Full shared-prefix custody remains with the enclosing tree transaction.
-    ///
-    /// # Errors
-    /// Refuses invalid names, unsafe leaf custody, excessive or changing extents and native
-    /// errors. Ordinary-result exit refusal takes precedence over mismatch or read failure.
-    pub fn compare_files(&mut self, inputs: &[PrivateFileComparison<'_>]) -> io::Result<bool> {
-        self.read_scope(|reader| reader.compare_files(inputs))
-    }
-
-    /// Recheck every original held and freshly named suffix directory.
-    ///
-    /// # Errors
-    /// Refuses changed custody or native I/O errors. Nonshared owners use full ancestry.
-    pub fn revalidate(&self) -> io::Result<()> {
-        self.directory.revalidate_in_tree(self.anchor)
     }
 }
 

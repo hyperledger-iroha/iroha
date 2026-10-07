@@ -388,11 +388,12 @@ are recorded in `specs/native_prover_migration_inventory.md`. It is never a Carg
 resolver-2 feature unification would leak it into shipping binaries. A stray `RUSTFLAGS` setting
 could still compile it in, so `iroha_plonk::ORACLE_BUILD` reports the cfg and every shipping root
 that links `iroha_plonk` (node, CLI, SDK and wallet bridges) must fail its build on it with
-`const _: () = assert!(!iroha_plonk::ORACLE_BUILD);`. The current source audit found
-these shipping-root assertions still missing; the dependency graph guard does not
-substitute for rejecting a stray cfg. This remains a release blocker until the
-compile-time guards and negative build checks land. The temporary oracle remains
-a separate nonpublishable test owner.
+`const _: () = assert!(!iroha_plonk::ORACLE_BUILD);`. The retained production
+consumer boundaries now contain unconditional assertions. An actual Kaigi build
+with oracle cfg fails at that assertion with the required E0080 diagnostic;
+unrelated compilation failures do not satisfy the CI negative test. Normal-mode
+CoreZk/bridge library and test strict lint passes. The dependency graph guard
+remains a separate check, and the temporary oracle is a nonpublishable test owner.
 
 Assignment-table import (`keygen_from_tables`, `Witness::from_columns`) is public API, not an
 oracle hook. It has no soundness effect, because the verifier evaluates only `D` and the key.

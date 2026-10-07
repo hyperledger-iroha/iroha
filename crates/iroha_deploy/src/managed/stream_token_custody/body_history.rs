@@ -615,10 +615,10 @@ impl BodyHistory {
         // independently reopened or unrelated handles keep the full native fallback.
         self.root.read_tree_scope(|tree| {
             if let Some(container) = &self.body_root {
-                tree.with_directory(container, |_| Ok::<_, crate::managed::Error>(()))?;
+                tree.revalidate_directory(container)?;
             }
             for body in &self.bodies {
-                tree.with_directory(&body.directory, |_| Ok::<_, crate::managed::Error>(()))?;
+                tree.revalidate_directory(&body.directory)?;
             }
             if let Some(active) = &self.active {
                 active

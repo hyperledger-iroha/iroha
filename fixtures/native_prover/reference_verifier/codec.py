@@ -29,6 +29,7 @@ class Cursor:
     """A finite byte span with explicit fixed/compact field lengths."""
 
     def __init__(self, data: bytes, compact: bool = True):
+        require(isinstance(data, bytes), 'encoded byte span required')
         self.data = data
         self.position = 0
         self.compact = compact
@@ -83,7 +84,8 @@ class Cursor:
 
 def descriptor_frame(raw: bytes, version: int) -> Cursor:
     """Authenticate exact V1/V2 type, header, layout, length and checksum."""
-    require(version in (1, 2), 'explicit descriptor version')
+    require(type(version) is int and version in (1, 2), 'explicit descriptor version')
+    require(isinstance(raw, bytes), 'encoded descriptor required')
     require(40 <= len(raw) <= MAX_FRAME, 'descriptor frame bound')
     header = Cursor(raw[:40], False)
     require(header.read(6) == b'NRT0\0\0', 'Norito version')

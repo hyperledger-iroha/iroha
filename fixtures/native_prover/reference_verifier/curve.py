@@ -55,7 +55,7 @@ class Curve:
     """One explicit Pasta curve; Pallas has Fp coordinates and Fq scalars."""
 
     def __init__(self, tag: int):
-        require(tag in (0, 1), 'curve tag')
+        require(type(tag) is int and tag in (0, 1), 'curve tag')
         self.tag = tag
         self.name = 'ep' if tag == 0 else 'eq'
         self.base, self.scalar = (P, Q) if tag == 0 else (Q, P)
@@ -159,7 +159,7 @@ class Curve:
 
     def omega(self, k: int) -> int:
         """The canonical 5-generated 2^k root from the field conventions."""
-        require(1 <= k <= 32, 'root exponent')
+        require(type(k) is int and 1 <= k <= 32, 'root exponent')
         value = pow(5, (self.scalar - 1) >> k, self.scalar)
         require(pow(value, 1 << k, self.scalar) == 1 and
                 pow(value, 1 << (k - 1), self.scalar) != 1, 'root order')

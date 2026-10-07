@@ -8,6 +8,11 @@ on:
       - "crates/iroha_pasta/**"
       - "crates/iroha_plonk/**"
       - "crates/iroha_plonk_oracle/**"
+      - "crates/kaigi_zk/**"
+      - "crates/iroha_core_zk/src/lib.rs"
+      - "crates/iroha_kagemusha_proof/src/lib.rs"
+      - "crates/sorafs_manifest/src/lib.rs"
+      - "crates/connect_norito_bridge/src/lib.rs"
       - "crates/iroha_allocation/**"
       - "crates/iroha_audio/**"
       - "crates/iroha_derive*/**"
@@ -22,6 +27,7 @@ on:
       - ".cargo/**"
       - "ci/native_prover_oracle.py"
       - "scripts/tests/native_prover_oracle_test.py"
+      - "scripts/tests/native_prover_retirement_source_test.py"
       - ".github/workflows/native_prover_parity.yml"
   workflow_dispatch:
 
@@ -55,7 +61,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Exercise complete-harness admission
-        run: python3 -I -B scripts/tests/native_prover_oracle_test.py
+        run: |
+          python3 -I -B scripts/tests/native_prover_oracle_test.py
+          python3 -I -B scripts/tests/native_prover_retirement_source_test.py
       - name: Run every release correctness case, including large ignored cases
         run: python3 -I -B ci/native_prover_oracle.py --target '${{ matrix.target }}'
       - name: Retain source, toolchain, compiler and test records
