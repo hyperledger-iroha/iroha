@@ -13,6 +13,11 @@ use super::*;
 fn root() -> (tempfile::TempDir, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().canonicalize().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
     (temp, path)
 }
 fn name() -> String {

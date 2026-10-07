@@ -260,7 +260,7 @@ async fn read(
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn issuance_http_requires_exact_network_auth_binary_accept_and_finality() {
+    async fn load_original_http_requires_exact_network_auth_binary_accept_and_finality() {
         use crate::tests_runtime_handlers::{
             app_auth_test_guard, mk_app_state_for_tests_with_world, signed_network_app_headers,
             world_with_account,
@@ -273,47 +273,51 @@ mod tests {
         let app = mk_app_state_for_tests_with_world(world_with_account(&payer));
         let router = axum::Router::new()
             .route(ROUTE, axum::routing::get(handler))
+            .route(EVENT_ROUTE, axum::routing::get(event_handler))
+            .route(FINALITY_ROUTE, axum::routing::get(finality_handler))
             .with_state(app.clone());
-        let uri: axum::http::Uri = format!(
-            "/v1/kagemusha/{}/wallets/{}/loads/{}",
-            "11".repeat(32),
-            "22".repeat(32),
-            "33".repeat(32)
-        )
-        .parse()
-        .unwrap();
-        for (authenticated, accept, expected) in [
-            (false, "application/x-norito", StatusCode::UNAUTHORIZED),
-            (true, "application/json", StatusCode::NOT_ACCEPTABLE),
-            (
-                true,
-                "application/x-norito",
-                StatusCode::SERVICE_UNAVAILABLE,
-            ),
-        ] {
-            let mut request = axum::http::Request::builder()
-                .method("GET")
-                .uri(uri.clone())
-                .body(Body::empty())
-                .unwrap();
-            if authenticated {
-                *request.headers_mut() = signed_network_app_headers(
-                    app.state.network_id_ref(),
-                    &payer,
-                    &key,
-                    &axum::http::Method::GET,
-                    &uri,
-                    &[],
-                );
+        for suffix in ["", "/event-proof", "/finality-proof"] {
+            let uri: axum::http::Uri = format!(
+                "/v1/kagemusha/{}/wallets/{}/loads/{}{suffix}",
+                "11".repeat(32),
+                "22".repeat(32),
+                "33".repeat(32)
+            )
+            .parse()
+            .unwrap();
+            for (authenticated, accept, expected) in [
+                (false, "application/x-norito", StatusCode::UNAUTHORIZED),
+                (true, "application/json", StatusCode::NOT_ACCEPTABLE),
+                (
+                    true,
+                    "application/x-norito",
+                    StatusCode::SERVICE_UNAVAILABLE,
+                ),
+            ] {
+                let mut request = axum::http::Request::builder()
+                    .method("GET")
+                    .uri(uri.clone())
+                    .body(Body::empty())
+                    .unwrap();
+                if authenticated {
+                    *request.headers_mut() = signed_network_app_headers(
+                        app.state.network_id_ref(),
+                        &payer,
+                        &key,
+                        &axum::http::Method::GET,
+                        &uri,
+                        &[],
+                    );
+                }
+                request
+                    .headers_mut()
+                    .insert(axum::http::header::ACCEPT, HeaderValue::from_static(accept));
+                request.extensions_mut().insert(axum::extract::ConnectInfo(
+                    "127.0.0.1:19090".parse::<std::net::SocketAddr>().unwrap(),
+                ));
+                let response = router.clone().oneshot(request).await.unwrap();
+                assert_eq!(response.status(), expected, "{uri}");
             }
-            request
-                .headers_mut()
-                .insert(axum::http::header::ACCEPT, HeaderValue::from_static(accept));
-            request.extensions_mut().insert(axum::extract::ConnectInfo(
-                "127.0.0.1:19090".parse::<std::net::SocketAddr>().unwrap(),
-            ));
-            let response = router.clone().oneshot(request).await.unwrap();
-            assert_eq!(response.status(), expected);
         }
     }
     #[test]
