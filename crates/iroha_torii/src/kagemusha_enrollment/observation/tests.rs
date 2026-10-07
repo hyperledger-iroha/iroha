@@ -322,6 +322,7 @@ fn outer_transport_retains_exact_provider_selection_before_any_request() {
     selected.observation_credential = path.clone();
     let owner = EligibilityObservationTransport::open(&selected).unwrap();
     owner.revalidate(&selected).unwrap();
+    let asset = super::super::test_fixture::asset(41, 0);
     for case in 0..6 {
         let mut changed = selected.clone();
         match case {
@@ -343,12 +344,7 @@ fn outer_transport_retains_exact_provider_selection_before_any_request() {
         assert!(matches!(owner.revalidate(&changed), Err(Error::Selection)));
         // Changed selection must reject before canonical decoding or any HTTPS dispatch.
         assert!(matches!(
-            owner.observe(
-                &changed,
-                &super::super::test_fixture::asset(5, 2),
-                b"malformed",
-                Duration::from_secs(1)
-            ),
+            owner.observe(&changed, &asset, b"malformed", Duration::from_secs(1)),
             Err(Error::Selection)
         ));
     }

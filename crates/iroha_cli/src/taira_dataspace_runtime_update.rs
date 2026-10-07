@@ -17,6 +17,135 @@ const RECORDS: [&str; 7] = [
     "cohort-ready.json",
 ];
 
+/// Compute the existing native build identity from independently selected target source.
+/// Source signature/tree verification belongs to the caller's accepted source authority.
+pub(super) fn selected_source_fingerprint(source: &str, version: &str) -> Result<Hash> {
+    require(
+        source.len() == 40
+            && source
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            && !version.is_empty()
+            && version.len() <= 128
+            && version.trim() == version
+            && version.bytes().all(|b| b.is_ascii_graphic()),
+        "selected target source or version is malformed",
+    )?;
+    // Identical to release_identity::BuildIdentity::build_fingerprint and the
+    // existing prior-build join below; this is not a caller-selected fingerprint.
+    Ok(Hash::new([version.as_bytes(), source.as_bytes()].concat()))
+}
+
+#[derive(JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+struct PublicReceipt {
+    schema: String,
+    operation_directory: String,
+    source_commit: String,
+    receipt_sha256: BTreeMap<String, String>,
+    original_trust_sha256: String,
+    effective_trust_sha256: String,
+    chain_write_performed: bool,
+}
+
+/// Select only the existing public seven originals plus the exact optional retirement pair.
+pub(super) fn portable_record_names(receipt: &json::Value) -> Result<Vec<String>> {
+    let receipt: PublicReceipt = json::from_value(receipt.clone())?;
+    let mut required = RECORDS
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+    let prepared = receipt
+        .receipt_sha256
+        .contains_key("config-retirement-prepared.json");
+    let installed = receipt
+        .receipt_sha256
+        .contains_key("config-retirement-installed.json");
+    require(
+        prepared == installed,
+        "portable runtime config retirement pair is incomplete",
+    )?;
+    if prepared {
+        required.insert("config-retirement-prepared.json".into());
+        required.insert("config-retirement-installed.json".into());
+    }
+    require(
+        receipt.schema == "iroha.dataspace-runtime-update-verification.v1"
+            && !receipt.chain_write_performed
+            && receipt
+                .receipt_sha256
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+                == required
+            && receipt.receipt_sha256.values().all(|v| {
+                v.len() == 64
+                    && v.bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            }),
+        "portable runtime receipt fields or original closure differ",
+    )?;
+    Ok(required.into_iter().collect())
+}
+
+/// Recheck public original hashes and semantic joins without claiming host custody.
+pub(super) fn verify_public_originals(
+    value: &json::Value,
+    originals: &BTreeMap<String, Vec<u8>>,
+    original: &DeploymentTrustV1,
+    effective: &DeploymentTrustV1,
+    network: NetworkId,
+    source: &str,
+    version: &str,
+) -> Result<json::Value> {
+    let names = portable_record_names(value)?;
+    let receipt: PublicReceipt = json::from_value(value.clone())?;
+    let directory = Path::new(&receipt.operation_directory);
+    let operation = directory
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| eyre!("runtime operation missing"))?;
+    require(
+        directory.parent() == Some(Path::new(BASE))
+            && operation.strip_prefix("update-").is_some_and(|s| {
+                s.len() == 32
+                    && s.bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+            && receipt.source_commit == source
+            && receipt.original_trust_sha256 == digest(&json::to_vec(original)?)
+            && receipt.effective_trust_sha256 == digest(&json::to_vec(effective)?)
+            && originals.len() == names.len(),
+        "portable runtime selection or trust join differs",
+    )?;
+    let fingerprint = selected_source_fingerprint(source, version)?;
+    let mut selected = original.clone();
+    for peer in &mut selected.peers {
+        peer.build_fingerprint = fingerprint;
+    }
+    require(
+        selected == *effective,
+        "portable runtime changed non-build trust authority",
+    )?;
+    let mut records = BTreeMap::new();
+    for name in names {
+        let bytes = originals
+            .get(&name)
+            .ok_or_else(|| eyre!("portable runtime original missing"))?;
+        require(
+            bytes.len() <= MAX_BYTES && digest(bytes) == receipt.receipt_sha256[&name],
+            "portable runtime original bytes changed",
+        )?;
+        records.insert(name, json::from_slice(bytes)?);
+    }
+    validate_records(&records, operation, network, source, original, version)?;
+    Ok(
+        norito::json!({"schema":"iroha.dataspace-runtime-update-public-joins.v1", "operation":operation,
+        "source_commit":source,"receipt_sha256":(digest(&json::to_vec(value)?)),"record_sha256":(receipt.receipt_sha256),
+        "semantic_joins_verified":true,"host_custody_verified":false}),
+    )
+}
+
 fn field<'a>(value: &'a json::Value, name: &str) -> Result<&'a json::Value> {
     value
         .get(name)
@@ -432,6 +561,8 @@ fn verify_process(
 }
 
 pub(super) struct Verified {
+    pub(super) source_commit: String,
+    pub(super) source_version: String,
     pub(super) trust: DeploymentTrustV1,
     pub(super) receipt: json::Value,
     #[cfg(target_os = "linux")]
@@ -520,14 +651,81 @@ fn process(role: &str) -> Result<BTreeMap<String, String>> {
 }
 
 impl Verified {
+    /// Export only exact already-admitted public originals. Private configurations
+    /// and measured binaries remain in the actual Linux custody verifier.
+    pub(super) fn public_originals(&self) -> Result<BTreeMap<String, Vec<u8>>> {
+        #[cfg(not(target_os = "linux"))]
+        {
+            eyre::bail!("runtime public originals require admitted Linux custody");
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.revalidate()?;
+            let names = portable_record_names(&self.receipt)?;
+            let receipt: PublicReceipt = json::from_value(self.receipt.clone())?;
+            let mut originals = BTreeMap::new();
+            for name in names {
+                let input = PublicInput::read(&self.directory.join(&name))?;
+                require(
+                    digest(&input.bytes) == receipt.receipt_sha256[&name],
+                    "runtime public original changed",
+                )?;
+                input.revalidate()?;
+                originals.insert(name, input.bytes);
+            }
+            self.revalidate()?;
+            Ok(originals)
+        }
+    }
     pub(super) fn admit(
         path: &Path,
         original: &DeploymentTrustV1,
         network: NetworkId,
     ) -> Result<Self> {
+        let identity = crate::compiled_build_identity()?;
+        Self::admit_selected(
+            path,
+            original,
+            network,
+            identity.release_source_commit()?,
+            identity.version(),
+            true,
+        )
+    }
+
+    /// Read-only target admission by a separately authenticated verifier. This
+    /// changes only how the target build identity is selected: the exact Linux
+    /// candidate binaries, root-owned originals and live cohort remain mandatory.
+    pub(super) fn admit_target(
+        path: &Path,
+        original: &DeploymentTrustV1,
+        network: NetworkId,
+        source: &str,
+        version: &str,
+    ) -> Result<Self> {
+        Self::admit_selected(path, original, network, source, version, false)
+    }
+
+    fn admit_selected(
+        path: &Path,
+        original: &DeploymentTrustV1,
+        network: NetworkId,
+        source: &str,
+        version: &str,
+        require_candidate_executable: bool,
+    ) -> Result<Self> {
+        let fingerprint = selected_source_fingerprint(source, version)?;
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (path, original, network);
+            let _ = (
+                path,
+                original,
+                network,
+                source,
+                version,
+                require_candidate_executable,
+                fingerprint,
+            );
             eyre::bail!("runtime update verification requires the actual Linux validator guest");
         }
         #[cfg(target_os = "linux")]
@@ -588,19 +786,10 @@ impl Verified {
                 records.insert(name.to_owned(), json::from_slice(&input.bytes)?);
                 held.push(input);
             }
-            let identity = crate::compiled_build_identity()?;
-            let source = identity.release_source_commit()?;
-            validate_records(
-                &records,
-                operation,
-                network,
-                source,
-                original,
-                identity.version(),
-            )?;
+            validate_records(&records, operation, network, source, original, version)?;
             let release = Path::new(BASE).join(format!("release-{source}-{operation}/bin"));
             require(
-                std::env::current_exe()? == release.join("iroha"),
+                !require_candidate_executable || std::env::current_exe()? == release.join("iroha"),
                 "runtime verifier is not the actual prepared candidate CLI",
             )?;
             let mut binaries = Vec::new();
@@ -636,13 +825,15 @@ impl Verified {
             }
             let mut trust = original.clone();
             for peer in &mut trust.peers {
-                peer.build_fingerprint = identity.build_fingerprint();
+                peer.build_fingerprint = fingerprint;
             }
             let receipt = norito::json!({"schema":"iroha.dataspace-runtime-update-verification.v1",
                 "operation_directory":(path.to_string_lossy().into_owned()), "source_commit":source,
                 "receipt_sha256":hashes, "original_trust_sha256":(digest(&json::to_vec(original)?)),
                 "effective_trust_sha256":(digest(&json::to_vec(&trust)?)), "chain_write_performed":false});
             let value = Self {
+                source_commit: source.to_owned(),
+                source_version: version.to_owned(),
                 trust,
                 receipt,
                 held,
@@ -870,6 +1061,124 @@ mod tests {
             network,
             trust,
         )
+    }
+
+    fn public_fixture() -> (
+        json::Value,
+        BTreeMap<String, Vec<u8>>,
+        DeploymentTrustV1,
+        DeploymentTrustV1,
+        NetworkId,
+    ) {
+        let (records, operation, network, original) = fixture();
+        let originals = records
+            .iter()
+            .map(|(name, value)| (name.clone(), json::to_vec(value).unwrap()))
+            .collect::<BTreeMap<_, _>>();
+        let hashes = originals
+            .iter()
+            .map(|(name, bytes)| (name.clone(), digest(bytes)))
+            .collect::<BTreeMap<_, _>>();
+        let mut effective = original.clone();
+        for peer in &mut effective.peers {
+            peer.build_fingerprint = selected_source_fingerprint(SOURCE, VERSION).unwrap();
+        }
+        let receipt = norito::json!({"schema":"iroha.dataspace-runtime-update-verification.v1", "operation_directory":(format!("{BASE}/{operation}")),
+            "source_commit":SOURCE,"receipt_sha256":hashes,"original_trust_sha256":(digest(&json::to_vec(&original).unwrap())),
+            "effective_trust_sha256":(digest(&json::to_vec(&effective).unwrap())),"chain_write_performed":false});
+        (receipt, originals, original, effective, network)
+    }
+
+    #[test]
+    fn portable_runtime_public_joins_preserve_authority_scope_and_exact_source() {
+        let (receipt, originals, original, effective, network) = public_fixture();
+        let result = verify_public_originals(
+            &receipt, &originals, &original, &effective, network, SOURCE, VERSION,
+        )
+        .unwrap();
+        assert_eq!(result["semantic_joins_verified"].as_bool(), Some(true));
+        assert_eq!(result["host_custody_verified"].as_bool(), Some(false));
+        let compiled = iroha_core::release_identity::BuildIdentity::from_compiled_parts(
+            VERSION,
+            Some(SOURCE),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            selected_source_fingerprint(SOURCE, VERSION).unwrap(),
+            compiled.build_fingerprint()
+        );
+        assert!(
+            verify_public_originals(
+                &receipt, &originals, &original, &effective, network, PREVIOUS, VERSION
+            )
+            .is_err()
+        );
+        assert!(
+            verify_public_originals(
+                &receipt,
+                &originals,
+                &original,
+                &effective,
+                network,
+                SOURCE,
+                "another-version"
+            )
+            .is_err()
+        );
+        let mut changed = effective.clone();
+        changed.peers[0].config_fingerprint = Hash::new(b"substituted config");
+        assert!(
+            verify_public_originals(
+                &receipt, &originals, &original, &changed, network, SOURCE, VERSION
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn portable_runtime_requires_whole_originals_and_paired_retirement_metadata() {
+        let (receipt, originals, original, effective, network) = public_fixture();
+        for name in RECORDS {
+            let mut missing = originals.clone();
+            missing.remove(name);
+            assert!(
+                verify_public_originals(
+                    &receipt, &missing, &original, &effective, network, SOURCE, VERSION
+                )
+                .is_err()
+            );
+            let mut changed = originals.clone();
+            changed.get_mut(name).unwrap().push(b' ');
+            assert!(
+                verify_public_originals(
+                    &receipt, &changed, &original, &effective, network, SOURCE, VERSION
+                )
+                .is_err()
+            );
+        }
+        for single in [
+            "config-retirement-prepared.json",
+            "config-retirement-installed.json",
+        ] {
+            let mut changed = receipt.clone();
+            changed
+                .get_mut("receipt_sha256")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(single.into(), norito::json!("a".repeat(64)));
+            assert!(portable_record_names(&changed).is_err());
+        }
+        let mut changed = receipt.clone();
+        changed
+            .as_object_mut()
+            .unwrap()
+            .insert("host_verified".into(), norito::json!(true));
+        assert!(portable_record_names(&changed).is_err());
     }
 
     #[test]

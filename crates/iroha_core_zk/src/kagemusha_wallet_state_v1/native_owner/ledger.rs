@@ -101,116 +101,53 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         manifest.ledger_retired = None;
         self.publish_manifest(root, &manifest).map(|_| ())
     }
-    pub(super) fn clean_recursive_retired(&mut self) -> Result<(), Error> {
-        let (root, mut manifest) = self.sync_manifest()?;
-        if let Some(address) = manifest.recursive_retired {
-            if manifest.recursive_checkpoint == Some(address) {
-                return Err(Error::WitnessLost("recursive cleanup selected prefix"));
-            }
-            self.archive.remove(ArchiveKey::Object(address))?;
-            manifest.recursive_retired = None;
-            self.publish_manifest(root, &manifest)?;
-        }
-        self.clean_retired_ledger()
-    }
-    // Single native verification and atomic paired-publication path. Production supplies the
-    // installed recursive prover; custody tests explicitly replace only that expensive proof step.
-    pub(super) fn ingest_ledger_transition<R>(
+    fn ingest_ledger_original(
         &mut self,
         genesis: &SumeragiFinalityVerifier,
         bytes: &[u8],
-        restore: impl FnOnce(&mut Self, &manifest::Manifest) -> Result<Option<R>, Error>,
-        next_height: impl Fn(&R) -> u64,
-        prove: impl FnOnce(
-            &mut Self,
-            Option<R>,
-            &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
-        ) -> Result<(u64, Vec<u8>), Error>,
     ) -> Result<LedgerProgressV1, Error> {
         if !matches!(self.status()?, SlotStatus::Released(_)) {
             return Err(Error::NoHead);
         }
         let candidate = proof_original(bytes)?;
-        self.clean_recursive_retired()?;
+        // Reconcile only cleanup already authorized by the selected manifest. An invalid
+        // new candidate can trigger that old cleanup, but can never select a new tip.
+        self.clean_retired_ledger()?;
         let (root, mut manifest) = self.sync_manifest()?;
         let (mut verifier, previous) = self.selected_ledger(&manifest, genesis)?;
-        if manifest.ledger_checkpoint.is_some() != manifest.recursive_checkpoint.is_some()
-            || manifest
-                .recursive_checkpoint
-                .is_some_and(|address| manifest.recursive_retired == Some(address))
-        {
-            return Err(Error::WitnessLost("paired ledger prefix selection"));
-        }
-        let prefix = restore(self, &manifest)?;
-        if previous.is_some() != prefix.is_some() {
-            return Err(Error::WitnessLost("paired ledger prefix restoration"));
-        }
         if let Some(previous) = previous.as_ref() {
-            let prefix = prefix
-                .as_ref()
-                .ok_or(Error::WitnessLost("recursive selected prefix"))?;
-            if next_height(prefix)
-                != previous
-                    .height()
-                    .checked_add(1)
-                    .ok_or(Error::Invalid("ledger height overflow"))?
-            {
-                return Err(Error::WitnessLost("recursive native height binding"));
-            }
             if candidate.height() == previous.height() {
                 verifier
                     .verify_retained_decision(&candidate)
-                    .map_err(|_| Error::Proof("recursive ledger retry decision"))?;
+                    .map_err(|_| Error::Proof("ledger retry decision"))?;
                 return Ok(progress(previous));
             }
-            if candidate.height() != next_height(prefix) {
-                return Err(Error::Invalid("recursive ledger requires next height"));
+            if candidate.height() < previous.height() {
+                return Err(Error::Invalid("ledger proof precedes selected tip"));
             }
         }
-        let block = if previous.is_none() {
-            if candidate.height() != 1 {
-                return Err(Error::Invalid("recursive ledger starts at genesis"));
-            }
-            verifier
-                .verify_retained_decision(&candidate)
-                .or_else(|_| verifier.verify(&candidate))
-                .map_err(|_| Error::Proof("recursive ledger genesis"))?
-        } else {
+        // The local verifier is discarded on every error. A successful but uncertain manifest
+        // write is reconciled from actual custody on retry, never from this ephemeral value.
+        if previous.is_some() || verifier.verify_retained_decision(&candidate).is_err() {
             verifier
                 .verify(&candidate)
-                .map_err(|_| Error::Proof("recursive ledger continuity"))?
-        };
-        let (proved_next, prefix_original) = prove(self, prefix, &block)?;
-        if proved_next
-            != candidate
-                .height()
-                .checked_add(1)
-                .ok_or(Error::Invalid("ledger height overflow"))?
-        {
-            return Err(Error::Proof("recursive successor height"));
+                .map_err(|_| Error::Proof("ledger prefix continuity"))?;
         }
         let checkpoint = verifier
             .export_checkpoint(&candidate)
-            .map_err(|_| Error::Proof("recursive native checkpoint"))?;
-        let checkpoint_bytes = checkpoint
+            .map_err(|_| Error::Proof("ledger verified checkpoint"))?;
+        let bytes = checkpoint
             .encode_canonical()
-            .map_err(|_| Error::Proof("recursive native checkpoint encoding"))?;
-        let checkpoint_address = self
+            .map_err(|_| Error::Proof("ledger checkpoint encoding"))?;
+        let address = self
             .archive
-            .write_object(&checkpoint_bytes, MAX_FINALITY_CHECKPOINT_BYTES)?;
-        let prefix_address = self.archive.write_object(
-            &prefix_original,
-            crate::kagemusha_wallet_finality_v1::HISTORY_ORIGINAL_MAX_BYTES_V1,
-        )?;
+            .write_object(&bytes, MAX_FINALITY_CHECKPOINT_BYTES)?;
         manifest.ledger_retired = manifest.ledger_checkpoint;
-        manifest.ledger_checkpoint = Some(checkpoint_address);
-        manifest.recursive_retired = manifest.recursive_checkpoint;
-        manifest.recursive_checkpoint = Some(prefix_address);
+        manifest.ledger_checkpoint = Some(address);
         self.publish_manifest(root, &manifest)?;
-        self.clean_recursive_retired()?;
+        self.clean_retired_ledger()?;
         Ok(progress(&checkpoint))
     }
-
     fn ledger_progress_selected(
         &mut self,
         genesis: &SumeragiFinalityVerifier,
@@ -261,7 +198,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Bounded canonical decoding, certificate/continuity, custody and publication failures.
     pub fn ingest_ledger_finality(&mut self, original: &[u8]) -> Result<LedgerProgressV1, Error> {
         let _payment = self.scheduler.payment();
-        self.ingest_recursive_ledger(original)
+        let genesis = Arc::clone(&self.proofs.genesis);
+        self.ingest_ledger_original(&genesis, original)
     }
     /// Read only the authoritative selected native prefix, not an uncommitted in-memory tip.
     /// # Errors

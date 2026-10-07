@@ -103,18 +103,20 @@ pub enum RegistrationErrorV1 {
     /// Noncanonical, malformed, out-of-order or foreign source DATA.
     #[error("invalid registration original: {0}")]
     Invalid(&'static str),
-    /// Existing native finality verification failed.
+    /// Native finality read or verification failed; original decoder resource causes remain typed.
     #[error(transparent)]
-    Finality(#[from] FinalityError),
-    /// A locally derived checkpoint failed the existing native reader.
-    #[error(transparent)]
-    Checkpoint(#[from] FinalityReadError),
+    Finality(#[from] FinalityReadError),
     /// Actual successful instruction extraction failed.
     #[error(transparent)]
     Registration(#[from] KagemushaWalletRegistrationErrorV1),
     /// Caller cancellation stopped bounded progress without producing an asset capability.
     #[error("registration source read cancelled")]
     Cancelled,
+}
+impl From<FinalityError> for RegistrationErrorV1 {
+    fn from(error: FinalityError) -> Self {
+        Self::Finality(error.into())
+    }
 }
 fn storage(error: io::Error) -> RegistrationErrorV1 {
     #[cfg(unix)]

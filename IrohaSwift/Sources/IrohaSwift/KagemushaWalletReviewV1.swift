@@ -118,8 +118,9 @@ struct KagemushaWalletReviewInputV1 {
         !second.isEmpty, second.count <= 4_096
       else { throw KagemushaWalletErrorV1.invalidInput }
     case 8:
-      guard nonzero, first.count <= 1_024, second.count <= 10_000, first.isEmpty == second.isEmpty
+      guard nonzero, first.count <= 1_024, first.isEmpty == second.isEmpty
       else { throw KagemushaWalletErrorV1.invalidInput }
+      if !second.isEmpty { try KagemushaWalletUnloadChargeReviewV1.validate(second) }
     default: throw KagemushaWalletErrorV1.invalidInput
     }
     self.selector = selector; self.amount = amount; self.first = first; self.second = second

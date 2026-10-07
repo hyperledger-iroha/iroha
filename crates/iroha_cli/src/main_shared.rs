@@ -40,6 +40,10 @@ mod subscriptions;
 mod sumeragi;
 mod taira;
 mod taira_dataspace_deploy;
+pub use taira_dataspace_deploy::{
+    DataspaceAuthorityOriginal, VerifiedDataspaceAuthority, dataspace_authority_completion_sha256,
+    dataspace_authority_original_inventory, verify_dataspace_authority_originals,
+};
 mod taira_public_reset;
 mod transaction_journal;
 mod transaction_load;
@@ -1721,14 +1725,21 @@ fn run_local_dataspace_profile(
     args: &Args,
     output: impl std::io::Write,
 ) -> Option<ReportResult<(), MainError>> {
-    let Command::Dataspace(taira_dataspace_deploy::Command::ExportProfile(command)) = &args.command
-    else {
-        return None;
-    };
-    Some((|| {
-        reject_irrelevant_local_tool_globals(args, "dataspace export-profile")?;
-        map_command_result(command.run_without_client_config(output))
-    })())
+    match &args.command {
+        Command::Dataspace(taira_dataspace_deploy::Command::ExportProfile(command)) => {
+            Some((|| {
+                reject_irrelevant_local_tool_globals(args, "dataspace export-profile")?;
+                map_command_result(command.run_without_client_config(output))
+            })())
+        }
+        Command::Dataspace(taira_dataspace_deploy::Command::VerifyAuthority(command)) => {
+            Some((|| {
+                reject_irrelevant_local_tool_globals(args, "dataspace verify-authority")?;
+                map_command_result(command.run_without_client_config(output))
+            })())
+        }
+        _ => None,
+    }
 }
 fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
     result.map_err(|error| command_error_report(&error))

@@ -14,35 +14,16 @@ extension KagemushaWalletV1 {
         return result.bytes
     }
 
-    /// Read the actual receipt-bound cursor, independent of later global ledger activity.
-    public func loadFinalityProgress(receipt: Data) throws -> KagemushaWalletLoadProofProgressV1 {
-        try .init(setup(.init(selector: 31, first: receipt)))
-    }
-
-    /// Verify and prove exactly one next original block for this receipt's own durable cursor.
-    public func ingestLoadFinality(receipt: Data, original: Data) throws -> KagemushaWalletLoadProofProgressV1 {
-        try .init(setup(.init(selector: 32, first: receipt, second: original)))
-    }
-
-    /// Produce the complete recursive proof from the selected Native history and actual originals.
-    /// Receipt data, HTTP status and ordinary finality alone cannot credit the wallet.
-    public func proveLoadFinality(receipt: Data, eventProof: Data) throws -> Data {
-        let result = try setup(.init(selector: 28, first: receipt, second: eventProof))
-        guard result.status == 41 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-        return result.bytes
-    }
-
     /// Canonical instruction framing only; ledger execution still validates every authority.
     public func ledgerInstruction(kind: KagemushaWalletLedgerTransportV1, original: Data) throws -> Data {
         let result = try setup(.init(selector: 29, token: kind.rawValue, first: original))
         guard result.status == 40 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
         return result.bytes
     }
-    /// Read this exact transaction and Unload claim's independently retained history.
-    public func unloadFinalityProgress(transactionHash: Data, original: Data) throws -> KagemushaWalletLedgerProgressV1? {
-        let result = try setup(.init(selector: 33, identity: transactionHash, first: original))
-        if result.status == 34 { return nil }
-        return try .init(result)
+    /// Read the exact retained confirmation or history for this transaction and claim.
+    /// Absent inclusion is explicit; malformed or mismatched custody remains an error.
+    public func unloadFinalityProgress(transactionHash: Data, original: Data) throws -> KagemushaWalletUnloadFinalityV1 {
+        try .init(setup(.init(selector: 33, identity: transactionHash, first: original)))
     }
     /// Verify one next original block for this Unload's own durable history cursor.
     public func ingestUnloadFinality(transactionHash: Data, original: Data, finality: Data) throws -> KagemushaWalletLedgerProgressV1 {
@@ -80,17 +61,28 @@ public struct KagemushaWalletUnloadConfirmationV1: Sendable {
     public let blockHash: Data
 }
 
-/// Native-selected per-request proving progress. Receipt height is a DATA locator until completion.
-public struct KagemushaWalletLoadProofProgressV1: Sendable {
-    public let receiptHeight: UInt64
-    public let verifiedHeight: UInt64
+/// Native-owned Unload history. Only a confirmation establishes successful settlement.
+public struct KagemushaWalletUnloadFinalityV1: Sendable {
+    public let confirmation: KagemushaWalletUnloadConfirmationV1?
+    public let verifiedHeight: UInt64?
+    public let blockHash: Data?
     init(_ result: KagemushaWalletCallV1) throws {
-        guard result.status == 43, result.bytes.count == 8,
-            result.sequenceLow > 1, result.sequenceHigh == 0, result.detail == 0
-        else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-        let verified = result.bytes.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
-        guard verified <= result.sequenceLow else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-        receiptHeight = result.sequenceLow; verifiedHeight = verified
+        switch result.status {
+        case 42:
+            confirmation = .init(height: result.sequenceLow, blockHash: result.bytes)
+            verifiedHeight = result.sequenceLow
+            blockHash = result.bytes
+        case 33:
+            confirmation = nil
+            verifiedHeight = result.sequenceLow
+            blockHash = result.bytes
+        case 34:
+            confirmation = nil
+            verifiedHeight = nil
+            blockHash = nil
+        default:
+            throw KagemushaWalletErrorV1.invalidNativeOutput
+        }
     }
 }
 

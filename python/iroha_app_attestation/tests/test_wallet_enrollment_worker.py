@@ -1058,13 +1058,13 @@ class AndroidIntegratedWorkerTests(unittest.TestCase):
         # Actual local descriptor custody is checked without replacing the provider.
         # The first half exercises the real non-root service UID on ordinary CI/hosts.
         with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
-            directory = Path(temporary)
+            directory = Path(temporary).resolve(strict=True)
             config, _, _, _, credential = self.fixture(directory)
             owner = self.actual_owner(config, directory, credential, stack)
             self.assertEqual(owner.oauth._owner_uid, os.geteuid())
             self.assertTrue(owner.oauth._read())
         with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
-            directory = Path(temporary)
+            directory = Path(temporary).resolve(strict=True)
             config, _, _, _, credential = self.fixture(directory)
             original_fstat = os.fstat
             identity = credential.stat()

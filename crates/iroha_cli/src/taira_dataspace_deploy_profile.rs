@@ -136,7 +136,7 @@ impl PublicInput {
 }
 
 #[cfg(unix)]
-fn publish_profile(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(super) fn publish_profile(path: &Path, bytes: &[u8]) -> Result<()> {
     use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags};
     require(
         path.is_absolute()

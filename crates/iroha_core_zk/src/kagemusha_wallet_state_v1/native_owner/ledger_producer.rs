@@ -1,54 +1,24 @@
-//! Complete recursive Load finality and current ledger instruction preparation.
+//! Current ledger instruction preparation and native Unload confirmation.
 use super::*;
-mod load_session;
 mod unload_session;
-use crate::kagemusha_wallet_artifacts_v1::producer_inventory::FinalityProducerErrorV1;
-use crate::kagemusha_wallet_finality_v1::{block_witness, load_witness, retain_load_finality};
-use iroha_crypto::MerkleProof;
-use iroha_data_model::isi::kagemusha_wallet::load_finality::KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1;
 use iroha_data_model::{
-    events::EventBox,
-    isi::kagemusha_wallet::{
-        KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1, KagemushaWalletLoadReceiptV1,
-    },
+    isi::kagemusha_wallet::{KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1},
     sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
 };
-use iroha_kagemusha_proof::finality::native::HistoryPrefix;
-pub use load_session::LoadProofProgressV1;
-
-/// Complete counted Load event path, including canonical Norito framing.
-pub const LOAD_EVENT_PROOF_MAX_BYTES_V1: usize = 8192;
 /// One complete current ledger instruction, including its original signed transport.
 pub const LEDGER_INSTRUCTION_MAX_BYTES_V1: usize = 64 * 1024;
-use crate::kagemusha_wallet_finality_v1::{HISTORY_ORIGINAL_MAX_BYTES_V1, HistoryOriginalV1};
 
-pub(super) fn history_error(
-    error: crate::kagemusha_wallet_finality_v1::HistoryOriginalErrorV1,
-) -> Error {
-    match error {
-        crate::kagemusha_wallet_finality_v1::HistoryOriginalErrorV1::Encoding => {
-            Error::WitnessLost("recursive prefix original")
-        }
-        crate::kagemusha_wallet_finality_v1::HistoryOriginalErrorV1::Proof(error)
-            if error.is_cancelled() =>
-        {
-            Error::Cancelled
-        }
-        _ => Error::Proof("selected recursive prefix"),
-    }
+/// Exact transaction-and-claim-bound Unload settlement state selected by Native custody.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnloadFinalityProgressV1 {
+    /// No independently verified history has been retained for this transaction.
+    NotStarted,
+    /// A genuine prefix is retained, but successful inclusion is not yet established.
+    Verifying(LedgerProgressV1),
+    /// Exact successful inclusion was authenticated and durably retained.
+    Confirmed(LedgerProgressV1),
 }
-fn producer<T>(result: Result<T, FinalityProducerErrorV1>) -> Result<T, Error> {
-    result.map_err(|error| match error {
-        FinalityProducerErrorV1::Original(
-            crate::kagemusha_wallet_proofs_v1::Error::Unavailable,
-        ) => Error::ArtifactsUnavailable("recursive finality original"),
-        FinalityProducerErrorV1::Original(crate::kagemusha_wallet_proofs_v1::Error::Cancelled) => {
-            Error::Cancelled
-        }
-        FinalityProducerErrorV1::Source(error) if error.is_cancelled() => Error::Cancelled,
-        _ => Error::Proof("complete recursive finality producer"),
-    })
-}
+
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::LedgerLoadPlanV1")]
 struct LoadPlan {
@@ -64,6 +34,31 @@ struct UnloadConfirmation {
     original_digest: [u8; 32],
     height: u64,
     block_hash: [u8; 32],
+}
+
+impl UnloadConfirmation {
+    fn progress(&self, original_digest: &[u8; 32]) -> Result<LedgerProgressV1, Error> {
+        if self.original_digest != *original_digest || self.height < 2 || self.block_hash == [0; 32]
+        {
+            return Err(Error::WitnessLost("retained Unload confirmation"));
+        }
+        Ok(LedgerProgressV1 {
+            height: self.height,
+            block_hash: self.block_hash,
+        })
+    }
+}
+
+fn retained_unload_confirmation(
+    archive: &mut impl index::ObjectStore,
+    confirmations: &index::IndexRoot,
+    transaction: &[u8; 32],
+    original_digest: &[u8; 32],
+) -> Result<Option<LedgerProgressV1>, Error> {
+    confirmations
+        .get(archive, transaction)?
+        .map(|bytes| archive::decode::<UnloadConfirmation>(&bytes)?.progress(original_digest))
+        .transpose()
 }
 
 // Inclusion is checked while each certified original is selected, before its cursor can move.
@@ -140,88 +135,6 @@ fn contains_successful_unload(
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send>
     Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>
 {
-    pub(super) fn prove_recursive_successor(
-        &mut self,
-        prefix: Option<HistoryPrefix>,
-        block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
-    ) -> Result<HistoryPrefix, Error> {
-        let sources = Arc::clone(&self.proofs.sources);
-        let graph = sources.finality_producer();
-        let next = {
-            let mut originals = self
-                .proofs
-                .originals
-                .lock()
-                .map_err(|_| Error::ArtifactsUnavailable("recursive original owner"))?;
-            match prefix {
-                None => producer(graph.genesis(&mut *originals, self.proofs.budget))?,
-                Some(prefix) => {
-                    let input =
-                        block_witness(graph.installed().anchor(), &self.proofs.chain, block)
-                            .map_err(|_| Error::Proof("native recursive block witness"))?;
-                    producer(graph.append(&mut *originals, &prefix, &input, self.proofs.budget))?
-                }
-            }
-        };
-        Ok(next)
-    }
-    pub(super) fn recursive_prefix(
-        &mut self,
-        manifest: &manifest::Manifest,
-    ) -> Result<Option<HistoryPrefix>, Error> {
-        let Some(address) = manifest.recursive_checkpoint else {
-            if manifest.ledger_checkpoint.is_some() {
-                return Err(Error::WitnessLost("recursive ledger prefix missing"));
-            }
-            return Ok(None);
-        };
-        if manifest.recursive_retired == Some(address) || manifest.ledger_checkpoint.is_none() {
-            return Err(Error::WitnessLost("recursive ledger selection"));
-        }
-        let bytes = self
-            .archive
-            .read_object(&address, HISTORY_ORIGINAL_MAX_BYTES_V1)?;
-        let original = HistoryOriginalV1::decode_canonical(&bytes)
-            .map_err(|_| Error::WitnessLost("recursive prefix original"))?;
-        original
-            .restore_producer(
-                self.proofs.sources.finality_producer().installed(),
-                self.proofs.budget,
-            )
-            .map(Some)
-            .map_err(history_error)
-    }
-    pub(super) fn ingest_recursive_ledger(
-        &mut self,
-        bytes: &[u8],
-    ) -> Result<LedgerProgressV1, Error> {
-        let genesis = Arc::clone(&self.proofs.genesis);
-        self.ingest_ledger_transition(
-            &genesis,
-            bytes,
-            |this, manifest| this.recursive_prefix(manifest),
-            |prefix| prefix.state().next_height,
-            |this, prefix, block| {
-                let prefix = this.prove_recursive_successor(prefix, block)?;
-                Ok((
-                    prefix.state().next_height,
-                    archive::encode(&HistoryOriginalV1::from_prefix(&prefix))?,
-                ))
-            },
-        )
-    }
-
-    /// Produce actual compact finality for an original Load and counted event path at the selected tip.
-    /// # Errors
-    /// Foreign receipt, changed/native prefix, invalid event inclusion, missing originals or actual proof failure.
-    pub fn prove_load_finality(
-        &mut self,
-        receipt_original: &[u8],
-        event_original: &[u8],
-    ) -> Result<Vec<u8>, Error> {
-        self.prove_load_session(receipt_original, event_original)
-    }
-
     /// Freeze the actual next native Load ordinal and instruction under a stable caller request.
     /// Retrying the same request returns its original instruction, even after credit changes the head.
     /// # Errors
@@ -353,21 +266,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         }
         let original_digest = self.unload_original_digest(&transaction, original)?;
         let (selected, mut manifest) = self.sync_manifest()?;
-        if let Some(bytes) = manifest
-            .ledger_unload_confirmations
-            .get(&mut self.archive, &transaction)?
-        {
-            let confirmed: UnloadConfirmation = archive::decode(&bytes)?;
-            if confirmed.original_digest != original_digest
-                || confirmed.height < 2
-                || confirmed.block_hash == [0; 32]
-            {
-                return Err(Error::WitnessLost("retained Unload confirmation"));
-            }
-            return Ok(LedgerProgressV1 {
-                height: confirmed.height,
-                block_hash: confirmed.block_hash,
-            });
+        if let Some(confirmed) = retained_unload_confirmation(
+            &mut self.archive,
+            &manifest.ledger_unload_confirmations,
+            &transaction,
+            &original_digest,
+        )? {
+            return Ok(confirmed);
         }
         let genesis = Arc::clone(&self.proofs.genesis);
         let (verifier, checkpoint) =

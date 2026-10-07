@@ -7,6 +7,10 @@ use super::super::transition_custody::PreparedTransitionV1;
 use super::*;
 mod unload;
 
+mod delivery;
+mod projection;
+pub use projection::CreditProjectionV1;
+
 const FROZEN_BOUND: usize =
     KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1 + KAGEMUSHA_WALLET_CREDENTIAL_MAX_BYTES_V1 + 1024;
 const PLAN_BOUND: usize = PREPARATION_MAX_BYTES + SOURCE_CUSTODY_MAX_BYTES + 1024;

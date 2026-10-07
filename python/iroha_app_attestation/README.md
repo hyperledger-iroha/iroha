@@ -185,19 +185,10 @@ and [Google's attestation revocation policy](https://developer.android.com/priva
 ## Tests
 
 From this package directory, use Python 3.10+ and the selected OpenSSL 3 on `PATH`.
-Build the unsigned auth-only archive fixture before full discovery:
+The archive tests build their own unsigned fixtures with the current package builder:
 
 ```sh
-mkdir -p ../../target/qualification
-attestation_test_dir="$(mktemp -d "$(cd ../../target/qualification && pwd)/app-attestation.XXXXXX")"
-python3 -B tools/build_retail_auth_verifier_zipapp.py \
-  --generic-package "$PWD" --auth-package "$PWD" \
-  --output "$attestation_test_dir/iroha-retail-auth-verifier.pyz" \
-  --inventory "$attestation_test_dir/archive-inventory.json"
-BPNG_AUTH_TEST_BUILDER="$PWD/tools/build_retail_auth_verifier_zipapp.py" \
-BPNG_AUTH_TEST_ARCHIVE="$attestation_test_dir/iroha-retail-auth-verifier.pyz" \
-BPNG_AUTH_TEST_WORKER="$PWD/src/iroha_app_attestation/retail_auth_worker.py" \
-TMPDIR="$attestation_test_dir" PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
   python3 -B -m unittest discover -s tests -v
 ```
 

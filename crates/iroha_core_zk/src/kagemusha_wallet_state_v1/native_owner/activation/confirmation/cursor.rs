@@ -1,24 +1,25 @@
-//! Activation-bound recursive history: later global ledger activity cannot skip Activate.
-use super::super::super::ledger_producer::history_error;
+//! Activation-bound native verification: later global ledger activity cannot skip Activate.
 use super::*;
-use crate::kagemusha_wallet_finality_v1::{HISTORY_ORIGINAL_MAX_BYTES_V1, HistoryOriginalV1};
 use iroha_data_model::sumeragi_finality::{
     MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint,
 };
-use iroha_kagemusha_proof::finality::native::HistoryPrefix;
 
-const CURSOR_MAX: usize =
-    TRANSACTION_MAX + MAX_FINALITY_CHECKPOINT_BYTES + HISTORY_ORIGINAL_MAX_BYTES_V1 + 4096;
+const CURSOR_MAX: usize = TRANSACTION_MAX + MAX_FINALITY_CHECKPOINT_BYTES + 4096;
 
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::ActivationFinalityCursorV1")]
+#[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::ActivationVerifierCursorV1")]
 pub(super) struct Cursor {
     activation: [u8; 32],
     signed_transaction: Vec<u8>,
     // Owned complete originals, never aliases to a global checkpoint which cleanup can retire.
     checkpoint: Vec<u8>,
-    prefix: HistoryOriginalV1,
 }
+/// Decode the sole current cursor schema. An unknown or corrupt original never
+/// means absence and cannot restart verification from genesis.
+fn decode_cursor(bytes: &[u8]) -> Result<Cursor, Error> {
+    archive::decode(bytes)
+}
+
 impl Cursor {
     fn require(&self, plan: &Plan, signed_wire: &[u8]) -> Result<(), Error> {
         if Some(self.activation) != plan.output
@@ -35,6 +36,27 @@ impl Cursor {
         }
         Ok(())
     }
+    // Only called for a checkpoint from a custody-selected exact original. No
+    // foreign checkpoint/HTTP verdict reaches this local recovery boundary.
+    fn restore(
+        &self,
+        genesis: &SumeragiFinalityVerifier,
+    ) -> Result<(SumeragiFinalityVerifier, SumeragiFinalityCheckpoint), Error> {
+        let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(&self.checkpoint)
+            .map_err(|_| Error::WitnessLost("activation cursor checkpoint"))?;
+        let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &checkpoint,
+            &genesis.initial_epoch().network_id,
+            &genesis.chain_id(),
+        )
+        .map_err(|_| Error::WitnessLost("activation cursor checkpoint root"))?;
+        if verifier.initial_epoch() != genesis.initial_epoch()
+            || verifier.instance() != genesis.instance()
+        {
+            return Err(Error::WitnessLost("activation cursor genesis binding"));
+        }
+        Ok((verifier, checkpoint))
+    }
 }
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     pub(super) fn retained_activation_cursor(
@@ -48,7 +70,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         if plan.retired_cursor == Some(address) || plan.confirmation.is_some() {
             return Err(Error::WitnessLost("activation cursor selection"));
         }
-        let cursor: Cursor = archive::decode(&self.archive.read_object(&address, CURSOR_MAX)?)?;
+        let cursor = decode_cursor(&self.archive.read_object(&address, CURSOR_MAX)?)?;
         cursor.require(plan, signed_wire)?;
         Ok(Some(cursor))
     }
@@ -68,7 +90,18 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     "activation cleanup selects current original",
                 ));
             }
-            self.archive.remove(ArchiveKey::Object(retired))?;
+            if let Some(bytes) = self.archive.get(ArchiveKey::Object(retired), CURSOR_MAX)? {
+                let actual =
+                    crate::kagemusha_wallet_advance_v1::kagemusha_wallet_archive_object_digest_v1(
+                        &bytes,
+                    );
+                if actual != retired {
+                    return Err(Error::WitnessLost("activation retired cursor digest"));
+                }
+                let cursor = decode_cursor(&bytes)?;
+                cursor.require(&plan, &cursor.signed_transaction)?;
+                self.archive.remove(ArchiveKey::Object(retired))?;
+            }
             plan.retired_cursor = None;
             manifest.activation = Some(
                 self.archive
@@ -131,41 +164,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     pub(super) fn restore_activation_cursor(
         &self,
         cursor: &Cursor,
-    ) -> Result<
-        (
-            SumeragiFinalityVerifier,
-            SumeragiFinalityCheckpoint,
-            HistoryPrefix,
-        ),
-        Error,
-    > {
+    ) -> Result<(SumeragiFinalityVerifier, SumeragiFinalityCheckpoint), Error> {
         self.activation_cursor_root()?;
-        let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(&cursor.checkpoint)
-            .map_err(|_| Error::WitnessLost("activation cursor checkpoint"))?;
-        let genesis = &self.proofs.genesis;
-        let verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
-            &checkpoint,
-            &genesis.initial_epoch().network_id,
-            &self.proofs.chain,
-        )
-        .map_err(|_| Error::WitnessLost("activation cursor checkpoint root"))?;
-        if verifier.initial_epoch() != genesis.initial_epoch()
-            || verifier.instance() != genesis.instance()
-        {
-            return Err(Error::WitnessLost("activation cursor genesis binding"));
-        }
-        let prefix = cursor
-            .prefix
-            .clone()
-            .restore_producer(
-                self.proofs.sources.finality_producer().installed(),
-                self.proofs.budget,
-            )
-            .map_err(history_error)?;
-        if checkpoint.height().checked_add(1) != Some(prefix.state().next_height) {
-            return Err(Error::WitnessLost("activation cursor recursive height"));
-        }
-        Ok((verifier, checkpoint, prefix))
+        cursor.restore(&self.proofs.genesis)
     }
     fn activation_cursor_intake(
         &mut self,
@@ -210,16 +211,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         let Some(cursor) = self.retained_activation_cursor(&plan, signed_wire)? else {
             return Ok(ActivationFinalityProgressV1::NotStarted);
         };
-        let (_, checkpoint, _) = self.restore_activation_cursor(&cursor)?;
+        let (_, checkpoint) = self.restore_activation_cursor(&cursor)?;
         Ok(ActivationFinalityProgressV1::Verifying(ledger::progress(
             &checkpoint,
         )))
     }
-    /// Verify and prove one exact next block, then atomically retain either progress or successful
+    /// Verify one exact next block, then atomically retain either progress or successful
     /// Activate inclusion. This cursor never advances past the matching transaction unconfirmed.
     /// # Errors
-    /// Gaps, invalid finality, changed transaction, failed execution, missing proving originals,
-    /// failed recursive proof, or uncertain publication leave first Load unavailable.
+    /// Gaps, invalid finality, changed transaction, failed execution, missing selected originals,
+    /// or uncertain publication leave first Load unavailable.
     pub fn ingest_activation_finality(
         &mut self,
         signed_wire: &[u8],
@@ -243,11 +244,11 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             ));
         }
         let selected = self.retained_activation_cursor(&plan, signed_wire)?;
-        let (mut verifier, previous, prefix) = if let Some(cursor) = &selected {
-            let (verifier, checkpoint, prefix) = self.restore_activation_cursor(cursor)?;
-            (verifier, Some(checkpoint), Some(prefix))
+        let (mut verifier, previous) = if let Some(cursor) = &selected {
+            let (verifier, checkpoint) = self.restore_activation_cursor(cursor)?;
+            (verifier, Some(checkpoint))
         } else {
-            (self.proofs.genesis.as_ref().clone(), None, None)
+            (self.proofs.genesis.as_ref().clone(), None)
         };
         if let Some(previous) = &previous {
             if candidate.height() == previous.height() {
@@ -289,7 +290,6 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         } else {
             None
         };
-        let prefix = self.prove_recursive_successor(prefix, &verified)?;
         if let Some(progress) = confirmation {
             let confirmation = Confirmation {
                 version: 1,
@@ -314,7 +314,6 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             checkpoint: checkpoint
                 .encode_canonical()
                 .map_err(|_| Error::Proof("activation cursor checkpoint encoding"))?,
-            prefix: HistoryOriginalV1::from_prefix(&prefix),
         };
         self.publish_activation_cursor(root, manifest, &plan, &cursor)?;
         Ok(ActivationFinalityProgressV1::Verifying(ledger::progress(
@@ -322,3 +321,6 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         )))
     }
 }
+
+#[cfg(test)]
+mod tests;

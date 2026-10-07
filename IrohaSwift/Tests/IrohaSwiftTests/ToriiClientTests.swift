@@ -2623,10 +2623,16 @@ final class ToriiClientTests: XCTestCase {
             payload: payload,
             signatureHex: shortSignature.hexUppercased()
         )
-        for signature in [overlongSignature, Data(repeating: 0x33, count: MlDsaSuite.mlDsa87.parameters().signatureLength)] {
-            XCTAssertThrowsError(try identifierReceipt(payload: payload, signatureHex: signature.hexUppercased())) { error in
+        for signature in [
+            overlongSignature,
+            Data(repeating: 0x33, count: MlDsaSuite.mlDsa87.parameters().signatureLength),
+        ] {
+            XCTAssertThrowsError(try identifierReceipt(
+                payload: payload,
+                signatureHex: signature.hexUppercased()
+            )) { error in
                 guard case let DecodingError.dataCorrupted(context) = error else {
-                    return XCTFail("expected bounded signature decode rejection, got \(error)")
+                    return XCTFail("Expected signature-bound decode refusal, got \(error)")
                 }
                 XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation", "signature"])
                 XCTAssertTrue(context.debugDescription.contains("exceeds the canonical signature bound"))
@@ -2639,13 +2645,22 @@ final class ToriiClientTests: XCTestCase {
                 resolverPublicKey: "\(prefix):\(publicKeyMultihash)"
             )
             XCTAssertEqual(try shortReceipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical), false, prefix)
-            let signature = Data(repeating: 0x33, count: MlDsaSuite.mlDsa44.parameters().signatureLength)
-            let receipt = try identifierReceipt(payload: payload, signatureHex: signature.hexUppercased())
-            XCTAssertEqual(
-                try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical),
-                false,
-                "protocol ML-DSA verification must reject the ML-DSA-44 signature width for \(prefix)"
-            )
+
+            for suite in [MlDsaSuite.mlDsa44, .mlDsa87] {
+                let signature = Data(
+                    repeating: 0x33,
+                    count: min(suite.parameters().signatureLength, params.signatureLength)
+                )
+                let receipt = try identifierReceipt(
+                    payload: payload,
+                    signatureHex: signature.hexUppercased()
+                )
+                XCTAssertEqual(
+                    try receipt.verifyResolverAttestation(using: policy, intendedNetworkId: TestNetworkIds.canonical),
+                    false,
+                    "protocol ML-DSA verification must reject the in-bound \(suite) signature for \(prefix)"
+                )
+            }
         }
     }
 
@@ -2673,19 +2688,24 @@ final class ToriiClientTests: XCTestCase {
                 algorithm: .mlDsa,
                 payload: keypair.publicKey
             )
-            if suite == .mlDsa87 {
-                XCTAssertThrowsError(try identifierReceipt(payload: payload, signatureHex: signature.hexUppercased())) { error in
+            if signature.count > MlDsaSuite.mlDsa65.parameters().signatureLength {
+                XCTAssertThrowsError(try identifierReceipt(
+                    payload: payload,
+                    signatureHex: signature.hexUppercased()
+                )) { error in
                     guard case let DecodingError.dataCorrupted(context) = error else {
-                        return XCTFail("expected ML-DSA-87 decode rejection, got \(error)")
+                        return XCTFail("Expected signature-bound decode refusal, got \(error)")
                     }
                     XCTAssertEqual(context.codingPath.map(\.stringValue), ["attestation", "signature"])
                     XCTAssertTrue(context.debugDescription.contains("exceeds the canonical signature bound"))
                 }
-                continue
             }
+            // Keep wrong-suite key rejection reachable within the DTO's wire bound.
+            // The actual ML-DSA-65 signature remains unchanged and must verify.
+            let boundedSignature = Data(signature.prefix(MlDsaSuite.mlDsa65.parameters().signatureLength))
             let receipt = try identifierReceipt(
                 payload: payload,
-                signatureHex: signature.hexUppercased()
+                signatureHex: boundedSignature.hexUppercased()
             )
 
             for resolverPublicKey in ["ml-dsa:\(multihash)", multihash] {
@@ -4045,6 +4065,36 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(context.codingPath.map(\.stringValue), ["payload"])
             XCTAssertTrue(context.debugDescription.contains("requires its exact current fields"))
         }
+
+        // The same historical signature is also refused after projecting the fixture into
+        // the current network-bound layout with the original lowercase opening signature.
+        var currentObject = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(receiptJSON.utf8)) as? [String: Any])
+        var currentPayload = try object(currentObject, "payload")
+        currentPayload["network_id"] = ToriiIdentifierOwnerContract.rawNetwork(TestNetworkIds.canonical)
+        var currentOpening = try object(currentPayload, "opening")
+        currentOpening["signature"] = String(repeating: "ff", count: 64)
+        currentPayload["opening"] = currentOpening
+        currentObject["payload"] = currentPayload
+        let currentReceipt = try identifierReceipt(fromFixture: currentObject)
+        XCTAssertFalse(try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(currentReceipt.payload).isEmpty)
+        let historicalPolicy = ToriiIdentifierPolicySummary(
+            policyId: "email#retail",
+            programId: "identifier_lookup_retail",
+            owner: accountId,
+            active: true,
+            normalization: .emailAddress,
+            resolverPublicKey: "ed01200376E59E9078B647F55003896B59758B7BE99908535EC24BAF80A6D52C8B3EB8",
+            outputOpeningPublicKey: "ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+            backend: "bfv-programmed-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: nil,
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
+        XCTAssertFalse(try currentReceipt.verifyResolverAttestation(
+            using: historicalPolicy, intendedNetworkId: TestNetworkIds.canonical))
 
         let fixtureURL = repositoryRootURL()
             .appendingPathComponent("fixtures/soracloud/identifier_receipt_vectors_v1.json")

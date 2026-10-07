@@ -561,6 +561,8 @@ def ssh_host_key_paths(argv, *, proxy=False):
         "checkhostip": "no",
         "connectionattempts": "1",
         "numberofpasswordprompts": "0",
+        # Compress the byte stream before SSH encryption; payload pins stay exact.
+        "compression": "yes",
     }
     require(
         set(options)

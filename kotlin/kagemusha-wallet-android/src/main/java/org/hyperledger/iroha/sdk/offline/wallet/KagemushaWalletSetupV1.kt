@@ -35,19 +35,18 @@ internal class KagemushaWalletSetupInputV1(
     private val c: ByteArray
     init {
         val limits = when (selector) {
-            0, 1, 4, 6, 15, 18, 19, 20, 24, 27 -> intArrayOf(0, 0, 0)
+            0, 1, 4, 6, 15, 18, 19, 20, 24, 27, 38, 43 -> intArrayOf(0, 0, 0)
+            39 -> intArrayOf(10_000, 10_000, 10_000)
+            40, 44 -> intArrayOf(10_000, 10_000, 0)
             21, 22 -> intArrayOf(21_024, 0, 0)
             23 -> intArrayOf(36 * 1024 * 1024, 0, 0)
             25 -> intArrayOf(32 * 1024 * 1024, 1024, 0)
             26 -> intArrayOf(21_024, 16_384, 0)
-            38 -> intArrayOf(16_384, 0, 0)
-            28 -> intArrayOf(512, 8192, 0)
+            45 -> intArrayOf(16_384, 0, 0)
             29, 30, 33, 35, 37 -> intArrayOf(65_536, 0, 0)
-            31 -> intArrayOf(512, 0, 0)
-            32 -> intArrayOf(512, 36 * 1024 * 1024, 0)
             34, 36 -> intArrayOf(65_536, 36 * 1024 * 1024, 0)
             2 -> intArrayOf(10_000, 1_024, 512)
-            3, in 7..14, in 16..17 -> intArrayOf(10_000, 0, 0)
+            3, in 7..14, in 16..17, 41, 42 -> intArrayOf(10_000, 0, 0)
             5 -> intArrayOf(512, 512, 0)
             else -> throw IllegalArgumentException("unknown setup action")
         }
@@ -58,14 +57,16 @@ internal class KagemushaWalletSetupInputV1(
         a = first.copyOf()
         b = second.copyOf()
         c = third.copyOf()
-        require((selector in listOf(1, 2, 19, 20, 25, 27, 30, 33, 34, 38)) == id.any { it != 0.toByte() }) { "setup identity" }
+        require((selector in listOf(1, 2, 19, 20, 25, 27, 30, 33, 34, 39, 41, 42, 43, 44, 45)) == id.any { it != 0.toByte() }) { "setup identity" }
         require((selector in listOf(1, 27)) == (amount.low != 0L || amount.high != 0L)) { "Offer or Load amount" }
         require(token >= 0 && ((selector in listOf(5, 6, 29)) == (token != 0L))) { "native setup token" }
-        require(selector !in listOf(30, 31, 32, 33, 34, 35, 36, 37) || a.isNotEmpty()) { "ledger original" }
+        require(selector !in listOf(30, 33, 34, 35, 36, 37) || a.isNotEmpty()) { "ledger original" }
         require(selector != 29 || (token in 1L..3L && a.isNotEmpty())) { "ledger transport kind and original" }
-        require(selector != 2 || (a.isNotEmpty() && b.isEmpty() == c.isEmpty())) { "Request originals" }
+        require(selector !in listOf(2, 39) || (a.isNotEmpty() && b.isEmpty() == c.isEmpty())) { "Request originals" }
+        require(selector != 40 || (a.isNotEmpty() && b.isNotEmpty())) { "fee PolicyData pair" }
+        require(selector !in listOf(41, 42, 44) || a.isNotEmpty()) { "bound Credited original" }
         require((selector != 3 && selector !in 7..14 && selector !in 16..17 && selector !in 21..23) || a.isNotEmpty()) { "Credited original" }
-        require(selector !in listOf(5, 25, 26, 28, 32, 34, 36) || (a.isNotEmpty() && b.isNotEmpty())) { "paired setup originals" }
+        require(selector !in listOf(5, 25, 26, 34, 36) || (a.isNotEmpty() && b.isNotEmpty())) { "paired setup originals" }
     }
     fun identity(): ByteArray = id.copyOf()
     fun first(): ByteArray = a.copyOf()

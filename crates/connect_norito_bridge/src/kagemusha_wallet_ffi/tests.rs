@@ -51,9 +51,15 @@ impl Wallet for TestWallet {
     }
     fn review(&mut self, input: review::Input) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let review::Input::Unload { amount, charge } = input else {
+        let review::Input::Unload {
+            amount,
+            charge,
+            beneficiary,
+        } = input
+        else {
             panic!("expected Unload review fixture")
         };
+        assert_eq!(beneficiary, Some(vec![3, 255, 0, 1]));
         assert_eq!(
             state::OperationActionV1::Unload { amount, charge },
             self.expected_request
@@ -749,13 +755,18 @@ fn c_operation_request_layout_and_reviewed_unsigned_amount_reach_the_exact_typed
         INVALID
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let mut companion = b"KWUCV1\0\0".to_vec();
+    companion.extend_from_slice(&(certificates.len() as u32).to_le_bytes());
+    companion.extend_from_slice(&certificates);
+    companion.extend_from_slice(&4_u32.to_le_bytes());
+    companion.extend_from_slice(&[3, 255, 0, 1]);
     let review = WalletReviewRequest {
         selector: request.selector,
         amount: request.amount,
         first: request.first,
         first_length: request.first_length,
-        second: request.second,
-        second_length: request.second_length,
+        second: companion.as_ptr(),
+        second_length: companion.len(),
     };
     // The stand-in review owner asserts the exact unsigned amount and charge originals.
     assert_eq!(
@@ -852,7 +863,7 @@ fn unload_setup_c_refuses_unknown_owner_and_invalid_shape_without_output() {
     let zero = [0; 32];
     let mut request = WalletSetupRequest {
         setup_id: id.as_ptr(),
-        selector: 38,
+        selector: 45,
         amount: WalletU128 { low: 0, high: 0 },
         token: 0,
         first: std::ptr::null(),

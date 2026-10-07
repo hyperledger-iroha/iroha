@@ -372,6 +372,53 @@ fn root_and_selected_child_symlinks_are_custody_failures() {
 }
 
 #[test]
+fn checkpoint_read_preserves_allocation_refusal_and_allows_unrestricted_retry() {
+    let native = NativeFinalityFixture::start("registration-checkpoint-allocation");
+    let genesis = native.verifier();
+    let checkpoint = genesis.export_checkpoint(native.genesis_proof()).unwrap();
+    let original = checkpoint.encode_canonical().unwrap();
+    let restore = || -> Result<SumeragiFinalityVerifier, RegistrationErrorV1> {
+        Ok(SumeragiFinalityVerifier::from_trusted_checkpoint(
+            &checkpoint,
+            &native.network_id(),
+            genesis.chain_id(),
+        )?)
+    };
+    let no_allocation = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+    let error = norito::with_decode_limits_scope(no_allocation, restore).unwrap_err();
+    let RegistrationErrorV1::Finality(FinalityReadError::DecodeResource(cause)) = error else {
+        panic!("checkpoint resource refusal was reclassified: {error:?}");
+    };
+    assert_eq!(
+        cause.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    assert!(matches!(
+        cause.into_error().decode_resource_error(),
+        Some(norito::core::DecodeResourceError::TotalAllocationExceeded { attempted, limit: 0 })
+            if attempted > 0
+    ));
+    assert_eq!(checkpoint.encode_canonical().unwrap(), original);
+    assert_eq!(
+        restore()
+            .unwrap()
+            .export_checkpoint(native.genesis_proof())
+            .unwrap(),
+        checkpoint
+    );
+}
+
+#[test]
+fn completed_finality_verdict_remains_distinct_from_unfinished_reads() {
+    let cause = FinalityError("foreign registration network".into());
+    let error = RegistrationErrorV1::from(cause.clone());
+    assert!(matches!(
+        error,
+        RegistrationErrorV1::Finality(FinalityReadError::Invalid(actual)) if actual == cause
+    ));
+}
+
+#[test]
 fn publisher_authenticates_lazy_readers_and_emits_deterministic_inventory() {
     let f = fixture();
     let parent = PrivateDirectory::open_exact(f._temp.path().canonicalize().unwrap()).unwrap();

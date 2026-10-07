@@ -19,6 +19,10 @@ use std::{
 #[path = "taira_authenticated_height.rs"]
 pub(crate) mod authenticated_height;
 
+#[path = "taira_dataspace_deploy_authority_replay.rs"]
+mod authority_replay;
+pub(super) use authority_replay::OriginalCompletion;
+
 const MAX_NEW_PROOFS: usize = 128;
 const VERIFICATION_PEERS: usize = 4;
 

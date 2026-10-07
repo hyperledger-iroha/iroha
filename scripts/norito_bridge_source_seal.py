@@ -82,6 +82,7 @@ APPLE_REQUIRED_ROOT_INPUTS = ("IrohaSwift/Package.resolved",)
 # CBSI consumes these Gradle builds directly through composite substitution, so
 # their shipping JVM sources must be bound alongside the native `.so` closure.
 ANDROID_ROOT_INPUTS = (
+    "scripts/norito_bridge_local_integration.py",
     "scripts/publish_android_sdk.sh",
     "scripts/android_publish_snapshot.sh",
     "scripts/android_sbom_provenance.sh",
@@ -944,6 +945,7 @@ def metadata(
     invocation_directory = root
     invocation_observation = None
     diagnostic_configuration = None
+    cargo_configuration = None
     if android_armv7_diagnostic:
         if target not in ANDROID_ARMV7_DIAGNOSTIC_TARGETS:
             raise RuntimeError("Android diagnostic metadata requires the exact armv7 target")
@@ -959,8 +961,8 @@ def metadata(
         specification.loader.exec_module(configuration_owner)
         configured_invocation = os.environ.get("NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR", str(root))
         if configured_invocation != str(root):
-            if target not in APPLE_TARGETS and not android_armv7_diagnostic:
-                raise RuntimeError("an explicit Cargo invocation directory requires an Apple or armv7 diagnostic profile")
+            if target in ANDROID_TARGETS and not android_armv7_diagnostic:
+                cargo_configuration = android_cargo_configuration(root)
             invocation_observation = configuration_owner.authenticate_cargo_invocation_directory(
                 root, pathlib.Path(configured_invocation)
             )
@@ -997,6 +999,9 @@ def metadata(
         if (diagnostic_configuration is not None
                 and android_armv7_diagnostic_configuration(root) != diagnostic_configuration):
             raise RuntimeError("Android diagnostic configuration changed during metadata authentication")
+        if (cargo_configuration is not None
+                and android_cargo_configuration(root) != cargo_configuration):
+            raise RuntimeError("Android Cargo configuration changed during metadata authentication")
         if lockfile_identity(lockfile) != lock_identity_before:
             raise RuntimeError("selected Cargo lock changed during metadata authentication")
         if lockfile_identity(root_lock) != root_lock_identity_before:
@@ -1313,22 +1318,28 @@ def source_commit(root: pathlib.Path) -> str:
 
 
 
-def android_armv7_diagnostic_configuration(root: pathlib.Path) -> dict[str, object]:
-    """Bind explicit private cache/cwd/config originals to the diagnostic seal."""
+def android_cargo_configuration(root: pathlib.Path, *, diagnostic: bool = False) -> dict[str, object]:
+    """Bind explicit private cache/cwd/config originals to the source seal."""
     cache = os.environ.get("NORITO_BRIDGE_SEAL_CARGO_HOME")
     invocation = os.environ.get("NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR")
     if (not cache or not invocation or cache != str(pathlib.Path(cache))
             or invocation != str(pathlib.Path(invocation))):
-        raise RuntimeError("Android armv7 diagnostic seal requires explicit canonical Cargo cache and invocation directory")
+        raise RuntimeError("Android Cargo seal requires explicit canonical Cargo cache and invocation directory")
     helper = pathlib.Path(__file__).with_name("norito_bridge_local_integration.py")
     specification = importlib.util.spec_from_file_location("android_armv7_configuration_policy", helper)
     if specification is None or specification.loader is None:
         raise RuntimeError("Android diagnostic configuration policy is unavailable")
     owner = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(owner)
-    return owner.android_armv7_diagnostic_configuration(
-        root, pathlib.Path(cache), pathlib.Path(invocation), local_integration=True,
-    )
+    if diagnostic:
+        return owner.android_armv7_diagnostic_configuration(
+            root, pathlib.Path(cache), pathlib.Path(invocation), local_integration=True,
+        )
+    return owner.android_cargo_configuration(root, pathlib.Path(cache), pathlib.Path(invocation))
+
+
+def android_armv7_diagnostic_configuration(root: pathlib.Path) -> dict[str, object]:
+    return android_cargo_configuration(root, diagnostic=True)
 
 
 def snapshot(
@@ -1345,6 +1356,11 @@ def snapshot(
     diagnostic_configuration = (
         android_armv7_diagnostic_configuration(root)
         if platform == "android-armv7-diagnostic" else None
+    )
+    cargo_configuration = (
+        android_cargo_configuration(root)
+        if platform == "android" and "NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR" in os.environ
+        else None
     )
     inputs = seal_inputs(root, platform, lockfile)
     source_commit_before = source_commit(root)
@@ -1373,6 +1389,9 @@ def snapshot(
     if (diagnostic_configuration is not None
             and android_armv7_diagnostic_configuration(root) != diagnostic_configuration):
         raise RuntimeError("Android diagnostic configuration changed while authenticating the source snapshot")
+    if (cargo_configuration is not None
+            and android_cargo_configuration(root) != cargo_configuration):
+        raise RuntimeError("Android Cargo configuration changed while authenticating the source snapshot")
     document = {
         "schema": SNAPSHOT_SCHEMA,
         "platform": platform,
@@ -1384,6 +1403,8 @@ def snapshot(
     }
     if diagnostic_configuration is not None:
         document["diagnostic_configuration"] = diagnostic_configuration
+    if cargo_configuration is not None:
+        document["cargo_configuration"] = cargo_configuration
     return document
 
 

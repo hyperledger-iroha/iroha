@@ -666,12 +666,28 @@ pub(super) struct TestProofs {
     expire_during_publication: bool,
 }
 
+#[path = "lifecycle/delivery_tests.rs"]
+mod bound_delivery;
+#[path = "lifecycle/projection_tests.rs"]
+mod credit_projection;
 #[path = "lifecycle/tests.rs"]
 mod lifecycle;
 #[path = "transition_custody/tests.rs"]
 mod transition_custody_tests;
 impl NativeProofs for TestProofs {
     type AdvanceCheck = usize;
+    fn verify_credited(
+        &self,
+        credited: &KagemushaWalletCreditedV1,
+        request: &KagemushaWalletRequestV1,
+        payment: &KagemushaWalletPaymentV1,
+    ) -> Result<(), Error> {
+        // Explicit host probe only; never installed monetary proof authority.
+        if self.reject {
+            return Err(Error::Proof("mock Credited proof refusal"));
+        }
+        valid(credited.verify_for(&self.ledger_scope()?.0, request, payment)).map(|_| ())
+    }
     fn enrollment_certificates(
         &self,
         credential: &KagemushaWalletCredentialV1,
@@ -862,11 +878,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         close_loads: IndexRoot::default(),
         ledger_checkpoint: None,
         ledger_retired: None,
-        recursive_checkpoint: None,
-        recursive_retired: None,
         ledger_load_plans: IndexRoot::default(),
-        ledger_load_proofs: IndexRoot::default(),
-        ledger_load_retired: None,
         ledger_unload_confirmations: IndexRoot::default(),
         ledger_unload_proofs: IndexRoot::default(),
         ledger_unload_retired: None,

@@ -739,6 +739,20 @@ class HttpClientTransport private constructor(
         return readKagemushaWalletLedgerOriginalV1(request, requireCurrentOwner)
     }
 
+    /** The exact Load's compact terminal proof, never an ordinary block-finality substitute.
+     * The response is unverified DATA. Native authenticates its installed source/global anchor,
+     * exact receipt binding and both carried claims before any offline credit is possible. */
+    fun getKagemushaWalletLoadFinalityOriginalV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        requireCurrentOwner: Runnable,
+    ): CompletableFuture<ByteArray> {
+        requireCurrentOwner.run()
+        config.requireLocalSigningContext()
+        val request = buildKagemushaWalletLedgerOriginalRequestV1(selection.path + "/finality-proof", 16_384, canonicalAuth)
+        return readKagemushaWalletLedgerOriginalV1(request, requireCurrentOwner)
+    }
+
     /** One original ordinary finality proof. Height is a locator, never a verified checkpoint. */
     fun getKagemushaWalletLedgerFinalityOriginalV1(
         height: BigInteger,

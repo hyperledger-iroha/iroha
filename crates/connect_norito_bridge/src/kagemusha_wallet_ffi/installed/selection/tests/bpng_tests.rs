@@ -12,7 +12,7 @@ impl BpngFixture {
         // Complete public BPNG v7 DATA fixture from the maintained Android runtime
         // fixture. Replace its graph selections with this genuine signed genesis and
         // genuine scheme/certificate/policy originals; no proof graph is fabricated.
-        let mut app: Value = norito::json::from_slice(include_bytes!("bpng_app_v6.json")).unwrap();
+        let mut app: Value = norito::json::from_slice(include_bytes!("bpng_app_v7.json")).unwrap();
         mutate(
             object_mut(&mut app).get_mut("digitalKina").unwrap(),
             "assetDefinitionId",
@@ -982,7 +982,7 @@ fn accepts_signed_authentication_selection(selection: Value) -> bool {
         authority: RuntimeAuthority::BpngTairaV7,
         key: key.public_key().clone(),
     };
-    let mut app: Value = norito::json::from_slice(include_bytes!("bpng_app_v6.json")).unwrap();
+    let mut app: Value = norito::json::from_slice(include_bytes!("bpng_app_v7.json")).unwrap();
     mutate(&mut app, "firstDeviceAuthentication", selection);
     let bytes = canonical(&app);
     signed_app(&trust, &bytes, &bpng_sign(&key, &bytes)).is_ok()
@@ -1022,7 +1022,7 @@ fn signed_authentication_selection_requires_exact_current_fields_and_types() {
         assert!(!accepts_signed_authentication_selection(changed));
     }
     let key = KeyPair::from_seed(vec![15; 32], Algorithm::Ed25519);
-    let mut missing: Value = norito::json::from_slice(include_bytes!("bpng_app_v6.json")).unwrap();
+    let mut missing: Value = norito::json::from_slice(include_bytes!("bpng_app_v7.json")).unwrap();
     object_mut(&mut missing).remove("firstDeviceAuthentication");
     let bytes = canonical(&missing);
     assert!(

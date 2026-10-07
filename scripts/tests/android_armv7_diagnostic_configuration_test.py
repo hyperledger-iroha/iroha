@@ -147,15 +147,16 @@ class AndroidArmv7DiagnosticConfigurationTests(unittest.TestCase):
         self.assertIn("require the fixed warm Cargo target", rejected.stderr)
         self.assertEqual(self.retained.read_bytes(), b"keep warm target original")
 
-    def test_production_does_not_accept_diagnostic_cwd_or_escape_global_config(self):
-        self.config(self.account, '[env]\nTEST_ONLY = "synthetic"\n')
-        rejected = self.launch(profile="android-cargo")
-        self.assertNotEqual(rejected.returncode, 0)
-        self.assertEqual(rejected.stdout, "")
-        self.assertIn("requires an Apple or armv7 diagnostic Cargo profile", rejected.stderr)
+    def test_production_explicit_isolation_preserves_profile_and_default_config_refusal(self):
+        global_config = self.config(self.account, '[env]\nTEST_ONLY = "synthetic"\n')
+        accepted = self.launch(profile="android-cargo")
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        observed = json.loads(accepted.stdout)
+        self.assertEqual(observed["cwd"], str(self.cwd))
+        self.assertEqual(observed["argv"], self.arguments)
+        self.assertEqual(global_config.read_text(), '[env]\nTEST_ONLY = "synthetic"\n')
         rejected = self.launch(profile="android-cargo", cwd=False)
         self.assertNotEqual(rejected.returncode, 0)
-        self.assertEqual(rejected.stdout, "")
         self.assertIn("configuration forbids env", rejected.stderr)
 
     def test_diagnostic_requires_local_scope_explicit_existing_cache_and_cwd(self):
@@ -419,10 +420,11 @@ class AndroidArmv7DiagnosticConfigurationTests(unittest.TestCase):
         self.assertEqual(arguments[-1], "armv7-linux-androideabi")
         self.assertIn("--locked", arguments)
         self.assertIn("--offline", arguments)
-        with self.assertRaisesRegex(RuntimeError, "requires an Apple or armv7 diagnostic profile"):
-            self.metadata(diagnostic=False)
+        production, production_observed = self.metadata(diagnostic=False)
+        self.assertEqual(production["packages"], [])
+        self.assertEqual(production_observed[0][0], self.cwd)
 
-    def test_snapshot_binds_diagnostic_configuration_but_production_has_no_new_fields(self):
+    def test_snapshot_binds_explicit_configuration_without_diagnostic_production_authority(self):
         for platform in ("android-armv7-diagnostic", "android"):
             with self.subTest(platform=platform), mock.patch.dict(os.environ, self.seal_environment()), \
                  mock.patch.object(seal, "seal_inputs", return_value=["Cargo.toml", "Cargo.lock"]), \
@@ -432,14 +434,16 @@ class AndroidArmv7DiagnosticConfigurationTests(unittest.TestCase):
                 result = seal.snapshot(self.root, platform, self.root / "Cargo.lock")
                 if platform == "android":
                     self.assertNotIn("diagnostic_configuration", result)
+                    self.assertEqual(result["cargo_configuration"],
+                                     policy.android_cargo_configuration(self.root, self.cache, self.cwd))
                     self.assertEqual(result["targets"], list(seal.ANDROID_TARGETS))
                 else:
                     self.assertEqual(result["diagnostic_configuration"], self.observe())
                     self.assertEqual(result["targets"], ["armv7-linux-androideabi"])
         self.assertIn("scripts/norito_bridge_local_integration.py",
                       seal.PLATFORM_ROOT_INPUTS["android-armv7-diagnostic"])
-        self.assertNotIn("scripts/norito_bridge_local_integration.py",
-                         seal.PLATFORM_ROOT_INPUTS["android"])
+        self.assertIn("scripts/norito_bridge_local_integration.py",
+                      seal.PLATFORM_ROOT_INPUTS["android"])
 
     def test_snapshot_refuses_configuration_drift_during_source_authentication(self):
         changed = self.cwd / ".cargo/config.toml"

@@ -71,6 +71,8 @@ mod iso_profile;
 mod kagemusha_enrollment;
 #[cfg(feature = "app_api")]
 mod kagemusha_wallet;
+#[cfg(feature = "app_api")]
+mod kagemusha_wallet_finality;
 mod ledger_state_finality;
 mod multisig_execution_evidence;
 mod native_projection_response;
@@ -2490,6 +2492,8 @@ struct AppState {
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
     kagemusha_enrollment: Option<Arc<kagemusha_enrollment::EnrollmentService>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_load_finality: Option<Arc<kagemusha_wallet_finality::FinalityService>>,
     kiso: KisoHandle,
     query_service: LiveQueryStoreHandle,
     query_inflight: Arc<tokio::sync::Semaphore>,
@@ -33131,8 +33135,9 @@ async fn handler_identifier_claim_receipt(
         &account_literal,
         "/v1/accounts/{account_id}/identifiers/claim-receipt",
     )?;
-    // The signed path selects the beneficiary. Authorization comes from both
-    // ledger policy owners below, which may differ from that beneficiary.
+    // The signed path selects the beneficiary; its ledger account and UAID bind
+    // the receipt. Both active ledger policies authorize the caller below,
+    // allowing the policy owner to act for a distinct beneficiary.
     let policy_id = iroha_data_model::identifier::IdentifierPolicyId::from_str(&request.policy_id)
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34883,6 +34888,8 @@ pub struct Torii {
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
     kagemusha_enrollment: Option<Arc<kagemusha_enrollment::EnrollmentService>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_load_finality: Option<Arc<kagemusha_wallet_finality::FinalityService>>,
     telemetry: routing::MaybeTelemetry,
     online_peers: OnlinePeersProvider,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -37517,6 +37524,7 @@ impl Torii {
             KAGEMUSHA_LOAD_ISSUANCE_GET => canonical_signature_get(kagemusha_wallet::handler);
             KAGEMUSHA_ENROLLMENT_POST => limited_canonical_signature_post(kagemusha_enrollment::handler, iroha_torii_shared::kagemusha_enrollment::ENROLLMENT_SERVICE_REQUEST_MAX_BYTES_V1);
             KAGEMUSHA_LOAD_EVENT_PROOF_GET => canonical_signature_get(kagemusha_wallet::event_handler);
+            KAGEMUSHA_LOAD_FINALITY_PROOF_GET => canonical_signature_get(kagemusha_wallet::finality_handler);
             SORAFS_RESERVE_PROVIDERS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers);
             SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider);
             SORAFS_RESERVE_TOP_UP_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up, contracts_body_limit);
@@ -38697,6 +38705,7 @@ impl Torii {
             // starts their mutation workers.
             config.privacy_bootle_lantern_issuer = None;
             config.kagemusha_enrollment = None;
+            config.kagemusha_load_finality = None;
             config.webhooks_enabled = false;
             config.zk_attachments_enabled = false;
             config.zk_prover_enabled = false;
@@ -40160,6 +40169,25 @@ impl Torii {
                 ToriiBuildError::component_initialization("kagemusha_enrollment", error)
             })?
             .map(Arc::new);
+        #[cfg(not(feature = "app_api"))]
+        if config.kagemusha_load_finality.is_some() {
+            return Err(ToriiBuildError::invalid_configuration(
+                "kagemusha_load_finality",
+                "Load finality requires the shipping app_api surface",
+            ));
+        }
+        #[cfg(feature = "app_api")]
+        let kagemusha_load_finality = config
+            .kagemusha_load_finality
+            .clone()
+            .map(|selected| {
+                kagemusha_wallet_finality::FinalityService::open(state.clone(), selected)
+            })
+            .transpose()
+            .map_err(|error| {
+                ToriiBuildError::component_initialization("kagemusha_load_finality", error)
+            })?
+            .map(Arc::new);
         let torii = Self {
             build_identity,
             chain_id: Arc::new(chain_id),
@@ -40180,6 +40208,8 @@ impl Torii {
             bootle_lantern_issuance_runtime,
             #[cfg(feature = "app_api")]
             kagemusha_enrollment,
+            #[cfg(feature = "app_api")]
+            kagemusha_load_finality,
             online_peers,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_telemetry_urls,
@@ -41111,6 +41141,8 @@ impl Torii {
             bootle_lantern_issuance_runtime: self.bootle_lantern_issuance_runtime.clone(),
             #[cfg(feature = "app_api")]
             kagemusha_enrollment: self.kagemusha_enrollment.clone(),
+            #[cfg(feature = "app_api")]
+            kagemusha_load_finality: self.kagemusha_load_finality.clone(),
             kiso: self.kiso.clone(),
             query_service: self.query_service.clone(),
             query_inflight,

@@ -29,10 +29,10 @@ const APP_FIELDS: &[&str] = &[
     "evidence",
 ];
 pub(super) const VALIDATOR_BASES: [&str; 4] = [
-    "https://taira.sora.org",
-    "https://taira.sora.org/native-peer-2",
-    "https://taira.sora.org/native-peer-3",
-    "https://taira.sora.org/native-peer-4",
+    "https://taira.sora.org:9441",
+    "https://taira.sora.org:9442",
+    "https://taira.sora.org:9443",
+    "https://taira.sora.org:9444",
 ];
 
 pub(super) fn application(document: &Value) -> Result<&Map> {

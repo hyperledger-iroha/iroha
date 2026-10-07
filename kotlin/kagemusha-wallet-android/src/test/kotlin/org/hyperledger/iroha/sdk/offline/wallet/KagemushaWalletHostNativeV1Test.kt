@@ -37,7 +37,7 @@ class KagemushaWalletHostNativeV1Test {
     fun unloadSetupUsesActualJniAndNeverInventsACompletedClaim() {
         val id = ByteArray(32) { 9 }
         fun call(identity: ByteArray = id, beneficiary: ByteArray = byteArrayOf(), token: Long = 0) =
-            assertNotNull(KagemushaWalletNativeV1.setup(0, identity, 38, 0, 0, token,
+            assertNotNull(KagemushaWalletNativeV1.setup(0, identity, 45, 0, 0, token,
                 beneficiary, byteArrayOf(), byteArrayOf()))
         val unknown = call()
         assertEquals(-2, unknown.status)
