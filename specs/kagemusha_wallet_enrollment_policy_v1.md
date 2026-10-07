@@ -112,7 +112,12 @@ the current evidence digest from exact originals. Public projections or success 
 not evidence originals or signer capabilities.
 
 The coordinated Native issuer still owns authenticated workload purpose/method/path/body,
-access subject, exact canonical account/asset scope, trusted KYC/current unfrozen controls,
+access subject and exact canonical account/asset scope. Current enrollment eligibility and
+freeze status come from the user's bank middleware through the
+[challenge-bound eligibility SDK contract](kagemusha_enrollment_eligibility_v1.md). An explicitly
+enacted Parliament mandate may cover a governed non-regulated token; it cannot replace bank
+eligibility for a regulated asset or claim bank KYC. The issuer independently authenticates
+current authority/routing and retains each fresh observation at its durable boundary. It owns
 approved original selection, CSPRNG nonce, challenge CAS/use, durable Apple counters, genuine
 time, original evidence/result retention and one genuine scheme-rooted Enrollment-role P256
 signer. FI access/DPoP/workload keys are separate transport signers. It must build the current

@@ -10,6 +10,8 @@ Before exposing E1, Core anchors this journal's incarnation and exact prepared o
 its protected challenge record. Complete and recover can claim only that prepared original.
 Claim commits before any external verification; a claimed row without a result stays unknown.
 Fresh Core dispatch time governs a delayed first claim without rewriting its captured request.
+Inspect reads only an exact retained outcome; it never claims a prepared operation, including
+before E1 expires. The issuer uses it for passive recovery after the verification window.
 """
 from __future__ import annotations
 
@@ -365,7 +367,7 @@ class VerifierOwner:
 
     def perform(self, original: bytes, action: str, *, incarnation: bytes,
                 preparation: bytes, account_signature: bytes, dispatch_time_ms: int) -> bytes | None:
-        require(action in ("complete", "recover"), "invalid private operation")
+        require(action in ("complete", "recover", "inspect"), "invalid private operation")
         self.recheck()
         prepared, operation = self.preparation(preparation)
         value, scope = self.request(original)
@@ -395,8 +397,10 @@ class VerifierOwner:
                             "private recovery scope differs")
                     self.recheck()
                     connection.execute("COMMIT")
-                    return row[6]  # Claimed NULL is unknown; neither action repeats verification.
+                    return row[6]  # Claimed NULL is unknown; no action repeats verification.
                 require(all(item is None for item in row[2:]), "invalid prepared journal state")
+                if action == "inspect":
+                    raise VerificationUnavailable("private operation has no claimed outcome")
                 require(dispatch_time_ms < value["expires_at_ms"], "private first dispatch expired")
                 changed = connection.execute("""UPDATE wallet_e1_attempts SET request_sha256=?,
                     key_binding=?, original=?, account_signature=?

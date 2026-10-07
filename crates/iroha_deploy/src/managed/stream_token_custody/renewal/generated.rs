@@ -245,8 +245,10 @@ impl GeneratedRenewalTurn {
                     .checked_mul(1000)
                     .ok_or_else(|| invalid("provider interval overflow"))?,
             );
+            #[cfg(test)]
+            begin_scope_tests::before_lease_root_selection();
             let lease = Lease::issue(
-                PrivateDirectory::open_exact(history.root().path())?,
+                history.root().retain()?,
                 history.outer_bytes()?,
                 &self.fees,
                 Scope::Renewal { provider, sequence },

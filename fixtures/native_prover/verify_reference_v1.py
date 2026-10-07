@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from reference_verifier import InvalidProof, require
 from reference_verifier.verify import verify, verify_captured_oracle
+from reference_verifier.descriptor import Descriptor
 
 
 def expected_names():
@@ -34,6 +35,33 @@ def expected_names():
     return names
 
 
+def case_identity(case):
+    """Bind every required matrix label to the decoded descriptor, not its name alone."""
+    require(type(case['descriptor_version']) is int and type(case['k']) is int and
+            type(case['curve']) is str and type(case['name']) is str, 'canonical reference metadata')
+    d = Descriptor.decode(bytes.fromhex(case['descriptor']), case['descriptor_version'])
+    require(case['curve'] == d.curve.name and case['k'] == d['k'], 'reference curve/domain identity')
+    parts = case['name'].split('/')
+    require(parts[0] == d.curve.name, 'reference curve label')
+    profile = ('blake', 'poseidon', 'base')[d['transcript']]
+    mode = ('Committed', 'Direct')[d['instance_mode']]
+    if parts[1] == 'oracle':
+        require(d.version == 1 and parts[2:] == [profile, str(d['k'])], 'oracle profile label')
+    elif parts[1] == 'v1':
+        require(d.version == 1 and d['k'] == 6 and
+                parts[2:] == [profile, mode, str(bool(d['selectors'][0])).lower()] and
+                d['proof_suffix'] == d['selectors'][0], 'V1 profile label')
+    else:
+        require(parts[1] == 'v2' and d.version == 2 and parts[2] == profile, 'V2 profile label')
+        if parts[3] == 'Direct' or parts[3] == 'Committed':
+            require(parts[3:] == [mode, 'field'] and d['k'] == 6 and
+                    d['instance_types'] == [(0, None)], 'V2 retained profile label')
+        else:
+            kind = (2, 4) if parts[4] == 'bits4' else (1, None) if d['k'] == 6 else (0, None)
+            require(parts[3] == f"k{d['k']}" and profile == 'base' and
+                    d['instance_types'] == [kind], 'V2 typed profile label')
+
+
 def check(document):
     """Verify every exact case and enforce the complete positive matrix."""
     require(document['format'] == 'iroha.pipa.reference.v1', 'reference fixture format')
@@ -44,8 +72,7 @@ def check(document):
     require(set(parameters) == {f'{curve}/{k}' for curve in ('ep', 'eq') for k in range(6, 11)},
             'reference parameter matrix')
     for case in cases:
-        require(type(case['descriptor_version']) is int and type(case['k']) is int,
-                'canonical reference metadata')
+        case_identity(case)
         proof = bytes.fromhex(case['proof'])
         require(hashlib.sha256(proof).hexdigest() == case['proof_sha256'], 'captured proof digest')
         common = dict(descriptor=bytes.fromhex(case['descriptor']), key=bytes.fromhex(case['verifying_key']),

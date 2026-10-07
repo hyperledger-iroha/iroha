@@ -749,6 +749,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             faucet: None,
             tx_history: None,
             recipient_lookup: Default::default(),
+            kagemusha_enrollment: None,
             public_dataspace_upstreams: Vec::new(),
             webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
             zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,

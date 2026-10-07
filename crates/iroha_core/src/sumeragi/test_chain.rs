@@ -22,6 +22,8 @@ mod availability;
 mod committee_custody;
 #[cfg(test)]
 mod genesis_policy;
+#[cfg(test)]
+pub(crate) mod kagemusha_setup;
 mod local_certificate;
 #[cfg(test)]
 pub(crate) use genesis_policy::{signed_genesis_fixture_for_state, staged_genesis_policies};

@@ -53,7 +53,7 @@ fn scope() -> SourceScopeV1 {
 }
 
 #[derive(Clone)]
-struct Tiny<F: PastaField>(F);
+pub(super) struct Tiny<F: PastaField>(pub(super) F);
 impl<F: PastaField> Circuit<F> for Tiny<F> {
     type Config = (GlueConfig, Column<Instance>);
     type Params = ();
@@ -290,4 +290,78 @@ fn real_bootstrap_offline_construction_needs_no_signed_placeholder_or_qualified_
     eprintln!(
         "OFFLINE_BOOTSTRAP_SOURCE sigma=16 Q=2 A=2 W=1 Omega=1 signed_placeholder=false original_imports=true complete_catalog=false"
     );
+}
+
+fn indexed_original_reuse<C: PastaCurve>() {
+    let mut disk = Memory::default();
+    let params = PinnedParams::<C>::derive(8).unwrap();
+    let cfg = config(vec![InstanceType::Bounded], false, limits());
+    let circuit = Tiny(C::ScalarExt::ONE);
+    let mut compiler = OfflineCompilerV1::new(scope(), &mut disk, limits(), 1 << 30).unwrap();
+    let first = compiler.key(&circuit, &params, &cfg).unwrap();
+    let changed = compiler
+        .key(&Tiny(C::ScalarExt::from(2)), &params, &cfg)
+        .unwrap();
+    let total = compiler.bytes;
+    drop(compiler);
+    let short_vk = first.metadata.key().to_bytes()[..16].to_vec();
+    let short_blob = BlobV1::of(&short_vk);
+    disk.store(short_blob, &short_vk).unwrap();
+    let retained_count = disk.blobs.len();
+    let mut compiler = OfflineCompilerV1::new(scope(), &mut disk, limits(), 1 << 30).unwrap();
+    let mut truncated = first.original;
+    truncated.verifying_key = short_blob;
+    assert!(compiler.index_original(truncated).is_err());
+    compiler.index_original(first.original).unwrap();
+    compiler.index_original(changed.original).unwrap();
+    assert_eq!(
+        compiler.bytes, 0,
+        "index alone admits and accounts no selected source"
+    );
+    let imported = compiler.key(&circuit, &params, &cfg).unwrap();
+    assert_eq!(imported.original, first.original);
+    assert!(equal(&imported.metadata, &first.metadata));
+    let selected = compiler.bytes;
+    assert_eq!(
+        compiler.key(&circuit, &params, &cfg).unwrap().original,
+        first.original
+    );
+    assert_eq!(compiler.bytes, selected);
+    assert_eq!(
+        compiler
+            .key(&Tiny(C::ScalarExt::from(2)), &params, &cfg)
+            .unwrap()
+            .original,
+        changed.original
+    );
+    assert_eq!(compiler.bytes, total);
+    // An adversarial lookup result cannot substitute another fixed-table source
+    // even when its descriptor is identical and all its own hashes are valid.
+    assert_eq!(first.metadata.binding(), changed.metadata.binding());
+    let identity = iroha_plonk::keys::source_fingerprint_v2(&params, &circuit, &cfg, None).unwrap();
+    compiler
+        .candidates
+        .insert(*identity.digest(), changed.original);
+    assert!(compiler.key(&circuit, &params, &cfg).is_err());
+    drop(compiler);
+    assert_eq!(disk.blobs.len(), retained_count);
+    let mut compiler = OfflineCompilerV1::new(scope(), &mut disk, limits(), 1).unwrap();
+    compiler.index_original(first.original).unwrap();
+    assert!(compiler.key(&circuit, &params, &cfg).is_err());
+    assert_eq!(compiler.bytes, 0);
+    assert!(compiler.blobs.is_empty());
+    let indexed = compiler.candidates.clone();
+    drop(compiler);
+    disk.corrupt = true;
+    let mut compiler = OfflineCompilerV1::new(scope(), &mut disk, limits(), 1 << 30).unwrap();
+    compiler.candidates = indexed;
+    assert!(compiler.key(&circuit, &params, &cfg).is_err());
+    assert_eq!(compiler.bytes, 0);
+    assert!(compiler.index_original(first.original).is_err());
+}
+
+#[test]
+fn indexed_original_reuse_requires_complete_source_import_on_both_curves() {
+    indexed_original_reuse::<Ep>();
+    indexed_original_reuse::<Eq>();
 }

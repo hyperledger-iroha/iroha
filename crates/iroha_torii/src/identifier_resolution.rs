@@ -1,5 +1,5 @@
 //! Identifier resolution service plumbing for app-facing endpoints.
-mod owner_prf;
+pub(crate) mod owner_prf;
 use iroha_crypto::{
     BfvIdentifierPublicParameters, BfvProgrammedPublicParameters, BfvRamProgramProfile,
     ClientRequest, Hash, HiddenRamFheProgram, KeyPair, RamLfeBackend, RamLfeError, RamLfeSecret,

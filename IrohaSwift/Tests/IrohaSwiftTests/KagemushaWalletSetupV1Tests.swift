@@ -1,8 +1,68 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import XCTest
 @testable import IrohaSwift
 
 final class KagemushaWalletSetupV1Tests: XCTestCase {
+  func testActualDriverCopiesEveryCurrentSetupStatusAndRejectsUnknownStatus() throws {
+    let driver = try KagemushaWalletNativeDriverV1()
+    // Test only the shared native reply decoder and malloc/free ownership. These bytes
+    // are deliberately opaque DATA, not a qualified wallet, signed claim or proof.
+    for status in Int32(29)...37 {
+      let count = [30, 31, 36, 37].contains(status) ? 7 : status == 33 ? 32 : 0
+      let result = try driver.result { output in
+        output.pointee.status = status
+        output.pointee.sequence_low = status == 33 ? 1 : 0
+        output.pointee.length = count
+        if count != 0 {
+          let bytes = malloc(count)!.assumingMemoryBound(to: UInt8.self)
+          bytes.initialize(repeating: 0xa5, count: count)
+          output.pointee.bytes = bytes
+        }
+        return 0
+      }
+      XCTAssertEqual(result.status, status)
+      XCTAssertEqual(result.bytes, Data(repeating: 0xa5, count: count))
+      XCTAssertThrowsError(try result.completion())
+    }
+    XCTAssertThrowsError(try driver.result { output in
+      output.pointee.status = 38
+      return 0
+    }) { error in
+      XCTAssertEqual(error as? KagemushaWalletErrorV1, .invalidNativeOutput)
+    }
+  }
+
+  func testActualNativeUnloadSelectorRefusesUnknownOwnerWithoutClaimBytes() throws {
+    let driver = try KagemushaWalletNativeDriverV1()
+    let input = try KagemushaWalletSetupInputV1(selector: 27, identity: Data(repeating: 9, count: 32))
+    XCTAssertThrowsError(try driver.result { output in
+      input.withRequest { driver.setup(0, $0, output) }
+    }) { error in
+      XCTAssertEqual(error as? KagemushaWalletErrorV1, .closed)
+    }
+  }
+
+  func testUnloadClaimRequiresRetainedIdentityAndPreservesNativeData() throws {
+    let id = Data(repeating: 7, count: 32)
+    XCTAssertNoThrow(try KagemushaWalletSetupInputV1(selector: 27, identity: id))
+    XCTAssertNoThrow(try KagemushaWalletSetupInputV1(selector: 27, identity: id, first: Data(repeating: 1, count: 16_384)))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 27))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 27, identity: id, first: Data(repeating: 1, count: 16_385)))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 27, identity: id, second: Data([1])))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 27, identity: id, token: 1))
+    let bytes = Data(repeating: 255, count: 16_384)
+    let result = try KagemushaWalletCallV1(status: 37, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: bytes)
+    XCTAssertEqual(try result.unloadClaimOriginal(), bytes)
+    XCTAssertThrowsError(try result.completion()); XCTAssertThrowsError(try result.feeClaimOriginal())
+    XCTAssertThrowsError(try KagemushaWalletCallV1(status: 37, sequenceLow: 1, sequenceHigh: 0, detail: 0, bytes: Data([1])))
+    XCTAssertThrowsError(try KagemushaWalletCallV1(status: 37, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: Data(repeating: 1, count: 16_385)))
+  }
+
   func testFeeClaimTransportPreservesNativeBytesAndRejectsUnusedAuthority() throws {
     let retained = try KagemushaWalletCallV1(status: 31, sequenceLow: 0, sequenceHigh: 0, detail: 0, bytes: Data([0, 255, 7]))
     let beneficiary = Data([3, 0, 255])

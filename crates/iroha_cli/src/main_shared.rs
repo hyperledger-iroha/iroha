@@ -3079,7 +3079,12 @@ mod asset {
         #[derive(clap::Args, Debug)]
         pub struct Register {
             /// Immutable owning domain, independent from any alias.
-            #[arg(long, required_unless_present_any = ["dataspace", "global_home"], conflicts_with_all = ["dataspace", "global_home"])]
+            #[arg(
+                long,
+                value_parser = parse_domain_id_literal,
+                required_unless_present_any = ["dataspace", "global_home"],
+                conflicts_with_all = ["dataspace", "global_home"]
+            )]
             pub domain: Option<DomainId>,
             /// Exact nonzero dataspace ID for direct namespace ownership.
             #[arg(long, required_unless_present_any = ["domain", "global_home"], conflicts_with_all = ["domain", "global_home"])]
@@ -3410,6 +3415,25 @@ mod asset {
                 let global = Parser::try_parse_from(base.into_iter().chain(["--global-home"]))
                     .expect("explicit genesis global home");
                 assert!(global.registration.global_home);
+                let domain = DomainId::try_new("issuer", "public").expect("canonical domain");
+                let literal = domain.to_string();
+                let parsed = Parser::try_parse_from(base.into_iter().chain(["--domain", literal.as_str()]))
+                    .expect("canonical fully-qualified domain home");
+                assert_eq!(parsed.registration.domain, Some(domain));
+                assert!(parsed.registration.dataspace.is_none());
+                assert!(!parsed.registration.global_home);
+                for literal in [
+                    "issuer",
+                    ".public",
+                    "issuer.",
+                    "issuer.public.extra",
+                    " issuer.public",
+                    "issuer.public ",
+                ] {
+                    let error = Parser::try_parse_from(base.into_iter().chain(["--domain", literal]))
+                        .expect_err("bare or invalid domain home must fail during argument parsing");
+                    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+                }
             }
         }
     }

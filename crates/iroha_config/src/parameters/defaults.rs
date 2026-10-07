@@ -2598,6 +2598,16 @@ pub mod torii {
             None
         }
     }
+    /// Local limits only; no default issuer, bank, policy, signer or worker is selected.
+    pub mod kagemusha_enrollment {
+        /// Complete fresh bank observation timeout in milliseconds.
+        pub const REQUEST_TIMEOUT_MS: u64 = 5_000;
+        /// Complete private platform verification exchange timeout.
+        pub const WORKER_EXCHANGE_TIMEOUT_MS: u64 = 60_000;
+        /// Maximum concurrent authenticated service requests.
+        pub const MAX_INFLIGHT: usize = 16;
+    }
+
     /// Retail recipient lookup defaults (disabled unless routes are configured).
     pub mod recipient_lookup {
         /// HTTP request timeout applied to configured bank Core API lookups.

@@ -240,6 +240,12 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
     ) {
         let policies = &original.policies;
         for (slot, selected) in policies.providers.iter().enumerate() {
+            // Preserve the real child order while identifying the last completed provider
+            // if a bounded native run fails before reaching offline parent recovery.
+            eprintln!(
+                "parent recovery diagnostic: starting provider {slot} at native height {}",
+                native.chain.height()
+            );
             let provider = selected.provider_id;
             let mut custody = ManagedStreamTokenCustody::open(prepared, provider).unwrap();
             let configure = if slot == 0 {
@@ -299,6 +305,10 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
                     .unwrap(),
             );
             drop(gateway);
+            eprintln!(
+                "parent recovery diagnostic: completed provider {slot} at native height {}",
+                native.chain.height()
+            );
         }
     }
 

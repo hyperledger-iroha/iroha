@@ -4,6 +4,8 @@
 //! authenticate its worker/runtime/configuration, retain the original request before dispatch,
 //! enforce challenge single use and complete only a durably prepared operation. Recovery may
 //! win an unclaimed preparation; an already claimed operation never repeats verification.
+//! Inspection only reads an exact retained result and never claims an operation, including
+//! when the issuer recovers an already consumed attempt after the challenge deadline.
 //! The node journal retains these original requests and checked replies before signing.
 //! TODO: connect the node service's approved policy, private process custody and signer.
 
@@ -45,13 +47,17 @@ pub struct VerifierRequestV1 {
     preparation: VerifierPreparationV1,
 }
 
-/// Action selected by the durable issuer owner. An uncertain verification must only recover.
+/// Action selected by the durable issuer owner. Inspection cannot start verification.
 #[derive(Debug, Clone, Copy)]
 pub enum ActionV1 {
     /// Claim the durably prepared operation or return its exact retained outcome.
     Complete,
     /// Recover this exact prepared operation; only an unclaimed preparation can verify once.
     Recover,
+    /// Read this exact retained result without preparing, claiming or verifying an operation.
+    /// A missing or unclaimed operation is unavailable; a claimed operation without a result
+    /// remains outcome-unknown. Reading after the challenge deadline grants no new attempt.
+    Inspect,
 }
 
 /// Separate outcome classes; none is a credential, approval, or permission to repeat verification.
@@ -223,9 +229,10 @@ impl VerifierRequestV1 {
         &self.original
     }
 
-    /// Retain a complete or recovery exchange with a fresh nonzero session identifier.
+    /// Retain a complete, recovery or inspection exchange with a fresh nonzero identifier.
     /// The immutable request time is unchanged; this fresh issuer time selects the first
-    /// verification time only if the worker wins the prepared operation's atomic claim.
+    /// verification time only if Complete or Recover wins the operation's atomic claim.
+    /// Inspect uses the time only as an upper bound on a retained result, never for a claim.
     /// # Errors
     /// Empty identities, backwards dispatch time, or packet bounds.
     pub fn packet(

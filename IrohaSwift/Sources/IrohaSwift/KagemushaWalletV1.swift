@@ -1,5 +1,7 @@
 import Foundation
 
+private let kagemushaWalletMaximumResultStatusV1: Int32 = 37
+
 /// Native wallet failure; uncertain outcomes require reconciliation, never a replacement debit.
 public enum KagemushaWalletErrorV1: Error, Equatable, Sendable {
   case bridgeUnavailable, artifactsUnavailable, invalidInput, invalidNativeOutput, closed
@@ -12,7 +14,7 @@ public struct KagemushaWalletCallV1: Sendable {
   /// idle6, caught up7, checkpoint8, folded9, CreditStatus10, preparing11, setup12,
   /// timeChallenge13, timeRetained14, accountChallenge15, opened16, activation17;
   /// background29, closure30, retainedFee31, noFee32, ledgerTip33, noTip34, payoutRecorded35,
-  /// feeClaimTransport36; enrollment18...28 is projected by the separate enrollment owner.
+  /// feeClaimTransport36, unloadClaimTransport37; enrollment18...28 is projected by the separate enrollment owner.
   public let status: Int32
   public let sequenceLow: UInt64
   public let sequenceHigh: UInt64
@@ -23,9 +25,9 @@ public struct KagemushaWalletCallV1: Sendable {
   public let bytes: Data
   init(status: Int32, sequenceLow: UInt64, sequenceHigh: UInt64, detail: UInt32, bytes: Data) throws
   {
-    guard (0...36).contains(status), bytes.count <= kagemushaWalletOutputBoundV1(status),
-      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
-      ![12, 14, 17, 30, 31, 32, 34, 35, 36].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
+    guard (0...kagemushaWalletMaximumResultStatusV1).contains(status), bytes.count <= kagemushaWalletOutputBoundV1(status),
+      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36, 37].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
+      ![12, 14, 17, 30, 31, 32, 34, 35, 36, 37].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
       !([13, 15, 16].contains(status) || (18...28).contains(status))
         || (sequenceLow > 0 && sequenceLow <= UInt64(Int64.max) && sequenceHigh == 0 && detail == 0),
       ![13, 15, 18, 23].contains(status) || bytes.count == 32,
@@ -88,6 +90,15 @@ public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @uncheck
     let result = try setup(.init(selector: 19, identity: requestId))
     guard result.status == 30 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return result.bytes
+  }
+  /// Canonical claim for a completed Unload, never settlement confirmation. Native selects
+  /// the admitted account and exact retained package/quote. Charged Unload requires the
+  /// quote's canonical beneficiary; uncharged Unload requires absence.
+  public func unloadClaimTransport(requestId: Data, chargeBeneficiary: Data? = nil) throws -> Data {
+    guard chargeBeneficiary == nil || !(chargeBeneficiary?.isEmpty ?? true) else {
+      throw KagemushaWalletErrorV1.invalidInput
+    }
+    return try setup(.init(selector: 27, identity: requestId, first: chargeBeneficiary ?? Data())).unloadClaimOriginal()
   }
   /// Read both exact fee-claim originals atomically from one native-retained frame.
   /// Nil means no pending claim; missing selected bytes are an error, never a paid verdict.
@@ -478,7 +489,7 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
     let status = action(&value)
     defer { if let bytes = value.bytes { free(bytes) } }
     try Self.check(status, reason: value.reason, platform: value.platform_code)
-    guard (0...28).contains(value.status), value.length >= 0,
+    guard (0...kagemushaWalletMaximumResultStatusV1).contains(value.status), value.length >= 0,
       value.length <= kagemushaWalletOutputBoundV1(value.status), value.length == 0 || value.bytes != nil
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return try KagemushaWalletCallV1(
@@ -615,5 +626,5 @@ func kagemushaWalletCallbacksV1(_ platform: KagemushaWalletApplePlatformV1)
 }
 
 func kagemushaWalletOutputBoundV1(_ status: Int32) -> Int {
-  switch status { case 17, 27, 30, 36: return 16_384; case 24: return 131_072; case 25: return 262_144; case 28: return 1024; case 31: return 21_024; case 33: return 32; default: return 10_000 }
+  switch status { case 17, 27, 30, 36, 37: return 16_384; case 24: return 131_072; case 25: return 262_144; case 28: return 1024; case 31: return 21_024; case 33: return 32; default: return 10_000 }
 }

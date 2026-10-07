@@ -36570,15 +36570,15 @@ mod explorer_lookup_tests {
             definition_id.clone(), "Kina", iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted, None,
         ).build(&owner);
         let account = dm::Account::new(owner.clone()).build(&owner);
-        let asset_id = dm::AssetId::with_scope(definition_id.clone(), owner.clone(), dm::asset::AssetBalanceScope::Dataspace(bucket));
+        let asset_id = dm::AssetId::with_scope(definition_id.clone(), owner.clone(), iroha_data_model::asset::AssetBalanceScope::Dataspace(bucket));
         let asset = dm::Asset::new(asset_id.clone(), iroha_primitives::numeric::Quantity::from(1_u32));
         let mut world = World::with_assets([], [account], [definition], [asset], []);
         world.set_asset_definition_dataspace_for_testing(definition_id, home).expect("direct home fixture");
-        crate::test_utils::bind_fixture_root(&mut world, dm::block::consensus::SumeragiRootScope::Global);
+        crate::test_utils::bind_fixture_root(&mut world, iroha_data_model::block::consensus::SumeragiRootScope::Global);
         let catalog = DataSpaceCatalog::new(vec![
-            dm::nexus::DataSpaceMetadata::default(),
-            dm::nexus::DataSpaceMetadata { id: home, alias: "home".to_owned(), description: None, fault_tolerance: 1 },
-            dm::nexus::DataSpaceMetadata { id: bucket, alias: "bucket".to_owned(), description: None, fault_tolerance: 1 },
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata { id: home, alias: "home".to_owned(), description: None, fault_tolerance: 1 },
+            iroha_data_model::nexus::DataSpaceMetadata { id: bucket, alias: "bucket".to_owned(), description: None, fault_tolerance: 1 },
         ]).expect("catalog");
         let state = Arc::new(State::new_with_pre_genesis_nexus_for_testing(
             world,

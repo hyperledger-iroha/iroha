@@ -847,6 +847,53 @@ fn setup_c_layout_and_bounds_preserve_exact_identity_amount_and_unused_slots() {
 }
 
 #[test]
+fn unload_setup_c_refuses_unknown_owner_and_invalid_shape_without_output() {
+    let id = [9; 32];
+    let zero = [0; 32];
+    let mut request = WalletSetupRequest {
+        setup_id: id.as_ptr(),
+        selector: 27,
+        amount: WalletU128 { low: 0, high: 0 },
+        token: 0,
+        first: std::ptr::null(),
+        first_length: 0,
+        second: std::ptr::null(),
+        second_length: 0,
+        third: std::ptr::null(),
+        third_length: 0,
+    };
+    let mut result = WalletResult::default();
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        CLOSED
+    );
+    assert_eq!(result.status, CLOSED);
+    assert!(result.bytes.is_null());
+    assert_eq!(result.length, 0);
+    request.setup_id = zero.as_ptr();
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        INVALID
+    );
+    request.setup_id = id.as_ptr();
+    request.token = 1;
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        INVALID
+    );
+    request.token = 0;
+    let overlong = vec![1; 16_385];
+    request.first = overlong.as_ptr();
+    request.first_length = overlong.len();
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_setup_v1(0, &request, &mut result) },
+        INVALID
+    );
+    assert!(result.bytes.is_null());
+    assert_eq!(result.length, 0);
+}
+
+#[test]
 fn interrupted_open_response_recovers_same_live_handle_and_closed_is_final() {
     let (id, calls, drops) = installed();
     for _ in 0..2 {

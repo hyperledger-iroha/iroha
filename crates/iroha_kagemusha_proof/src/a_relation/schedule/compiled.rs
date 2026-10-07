@@ -64,18 +64,26 @@ impl OperationSchedule {
                     vec![],
                 ],
                 vec![
-                    vec![
-                        ReceiveOwnProof,
-                        ReceiveConsumedEffects,
-                        ReceiveCreditEffects,
-                    ],
+                    if variant == Variant::ReceiveRenewed {
+                        vec![ReceiveOwnProof, ReceiveConsumedEffects]
+                    } else {
+                        vec![
+                            ReceiveOwnProof,
+                            ReceiveConsumedEffects,
+                            ReceiveCreditEffects,
+                        ]
+                    },
                     vec![],
                     vec![ReceiveProofs],
                     vec![ReceiveProofDigest],
                     vec![ReceiveObjects],
                     vec![ReceiveAuthorization],
                     vec![],
-                    vec![ReceiveSignatures],
+                    if variant == Variant::ReceiveRenewed {
+                        vec![ReceiveSignatures, ReceiveCreditEffects]
+                    } else {
+                        vec![ReceiveSignatures]
+                    },
                     vec![ReceiveNonmembership, ReceiveBlacklist],
                     vec![ReceiveEffects],
                 ],
@@ -352,6 +360,38 @@ mod tests {
                 3
             };
             assert_eq!(q, (0..expected_q).collect::<Vec<_>>());
+        }
+    }
+    #[test]
+    fn renewed_receive_moves_only_credit_owner_and_preserves_every_obligation() {
+        let plain = OperationSchedule::for_variant(Variant::Receive);
+        let renewed = OperationSchedule::for_variant(Variant::ReceiveRenewed);
+        assert_eq!(plain.q, renewed.q);
+        assert_eq!(plain.predecessor, renewed.predecessor);
+        let mut expected = plain.tasks.clone();
+        assert_eq!(expected[0].pop(), Some(OperationTask::ReceiveCreditEffects));
+        expected[7].push(OperationTask::ReceiveCreditEffects);
+        assert_eq!(renewed.tasks, expected);
+        assert_eq!(
+            plain.tasks[0],
+            [
+                OperationTask::ReceiveOwnProof,
+                OperationTask::ReceiveConsumedEffects,
+                OperationTask::ReceiveCreditEffects
+            ]
+        );
+        let mut dropped = renewed.tasks.clone();
+        assert_eq!(dropped[7].pop(), Some(OperationTask::ReceiveCreditEffects));
+        assert!(OperationTask::validate(Variant::ReceiveRenewed, &dropped).is_err());
+        let mut substituted = dropped;
+        substituted[7].push(OperationTask::ReceiveConsumedEffects);
+        assert!(OperationTask::validate(Variant::ReceiveRenewed, &substituted).is_err());
+        let mut duplicate = renewed.tasks.clone();
+        duplicate[0].push(OperationTask::ReceiveCreditEffects);
+        assert!(OperationTask::validate(Variant::ReceiveRenewed, &duplicate).is_err());
+        for variant in [Variant::Receive, Variant::ReceiveRenewed] {
+            OperationTask::validate(variant, OperationSchedule::for_variant(variant).tasks())
+                .unwrap();
         }
     }
     #[test]

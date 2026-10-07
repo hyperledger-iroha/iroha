@@ -45,7 +45,11 @@ verification/recovery channel. Before exposing E1, Native retains the worker's a
 incarnation, selects its immutable preparation and durably retains the worker acknowledgement.
 Complete or Recover can atomically claim that prepared row once. A delayed first claim uses
 fresh trusted Native dispatch time without changing its original request. Once claimed, an
-unknown result stays `outcome_unknown`; neither action repeats external verification. Missing
+unknown result stays `outcome_unknown`; no action repeats external verification. Inspect
+reads an exact retained result without claiming a prepared row, even while E1 is live.
+An unclaimed Inspect returns `unavailable`; an already claimed row without a result returns
+`outcome_unknown`. The issuer uses Inspect for passive recovery after E1 expiry and requires
+fresh bank eligibility before any live Complete/Recover that could claim a row. Missing
 prepared custody remains `unavailable`, never a definitive evidence rejection or permission
 to recreate a row. Native prohibits Prepare after E5 selection, including during recovery.
 The journal retains exact request/result originals and their configuration pin. Apple assertion

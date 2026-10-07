@@ -294,13 +294,24 @@ impl Journal {
                 .parent()
                 .ok_or_else(|| eyre!("journal has no parent"))?,
         )?;
-        let selected = parent.path().join(name);
-        let outcome = match std::fs::symlink_metadata(&selected) {
-            Ok(_) => Self::open(&selected).map(Some),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Self::open_optional_in_parent(&parent, name)
+    }
+
+    // The original parent remains held through the child lock/sync boundary and every exit.
+    // A successful child shares its native ancestry; no second absolute owner is selected.
+    fn open_optional_in_parent(
+        parent: &OwnerDirectory,
+        name: &std::ffi::OsStr,
+    ) -> Result<Option<Self>> {
+        let outcome = match parent.open_private_child_optional(name) {
+            Ok(Some(directory)) => Self::lock_directory(directory, false).map(Some),
+            Ok(None) => Ok(None),
             Err(error) => Err(error.into()),
         };
-        parent.revalidate()?;
+        if let Err(error) = parent.revalidate() {
+            drop(outcome);
+            return Err(error.into());
+        }
         outcome
     }
 
@@ -463,7 +474,7 @@ impl Journal {
                 "journal must be a fresh directory; existing evidence is never replaced",
             )?
         } else {
-            PrivateDirectory::open(parent.path().join(name))?
+            parent.open_private_child(name)?
         };
         Self::lock_directory(directory, create)
     }
@@ -907,3 +918,6 @@ mod read_exit_tests;
 
 #[cfg(test)]
 mod native_scope_tests;
+
+#[cfg(test)]
+mod parent_admission_tests;

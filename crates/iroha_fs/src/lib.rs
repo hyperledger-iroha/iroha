@@ -1060,6 +1060,39 @@ impl OwnerDirectory {
         })
     }
 
+    /// Open an existing private child through this retained project parent.
+    ///
+    /// The child's native owner shares every original ancestor descriptor with this parent;
+    /// no absolute path is reopened. The parent keeps its existing reader policy, while the
+    /// child independently requires current-user private custody.
+    ///
+    /// # Errors
+    /// Refuses invalid names, missing children, unsafe custody and native observation errors.
+    pub fn open_private_child(&self, name: impl AsRef<OsStr>) -> io::Result<PrivateDirectory> {
+        Ok(PrivateDirectory {
+            inner: self
+                .inner
+                .child(checked_name(name.as_ref())?, false, false)?,
+        })
+    }
+
+    /// Open an optional private child through the original retained project parent.
+    ///
+    /// Only its first native child open admits absence. Success closes the complete shared
+    /// ancestry; every native admission failure or absence closes the original parent. Missing
+    /// ancestors, replaced parents and loss after admission remain errors.
+    ///
+    /// # Errors
+    /// Refuses invalid names, unsafe custody and all post-admission native errors.
+    pub fn open_private_child_optional(
+        &self,
+        name: impl AsRef<OsStr>,
+    ) -> io::Result<Option<PrivateDirectory>> {
+        self.inner
+            .child_optional(checked_name(name.as_ref())?)
+            .map(|child| child.map(|inner| PrivateDirectory { inner }))
+    }
+
     /// Create a private child under this retained safe owner directory.
     ///
     /// # Errors
@@ -1774,3 +1807,6 @@ mod optional_child_tests;
 
 #[cfg(test)]
 mod tree_read_producer_tests;
+
+#[cfg(test)]
+mod owner_private_child_tests;

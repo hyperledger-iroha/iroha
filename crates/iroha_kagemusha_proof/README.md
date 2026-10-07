@@ -226,6 +226,21 @@ fixture has synthetic execution results and a real four-validator test QC; it
 does not establish funded-ledger execution or full-wallet catalog admission.
 The run remains unqualified until the complete proof chain passes.
 
+The `ordinary_finality` source-only entry point accepts a separately pinned
+`iroha.kagemusha.executed-ledger-setup.v1` setup. It checks all nine exact originals,
+validates the canonical signed genesis against its raw manifest, verifies the fixed
+H1/H2 native proof array contiguously, and derives the Global history anchor from
+that same signed root. The setup's accounts and asset registration must occur in
+the signed instructions. The external execution receipt remains responsible for
+funding and incarnation provenance; this compiler does not execute ledger state.
+`canonical_executed_setup_admits_only_exact_source_inputs` performs intake alone;
+`canonical_executed_setup_compiles_complete_finality_sources_without_load` writes
+a complete source graph into a fresh exclusive output. Its completion record is
+published only after the graph's strict original imports succeed. Neither entry
+point manufactures a Load, creates a finality proof, or grants wallet installation
+authority. Both require explicit setup and source pins; their full canonical-setup
+runtime qualification remains pending the executed setup export.
+
 A separate bounded receipt loader pins the producer binary, source manifest,
 original fixture and completed inventory, then reconstructs the receipt verifier
 using descriptor/VK originals only. It derives the six expected endpoints from

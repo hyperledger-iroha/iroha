@@ -147,6 +147,19 @@ to the canonical domainless `AccountId`, network, scheme, asset incarnation,
 wallet key, app identity and enrollment policy. A new incarnation always begins
 at zero; reenrollment never imports an old balance or resets its replay state.
 
+Any compatible fungible asset may opt into KAGEMUSHA through its authorized asset/scheme
+operator, with reserve accounting and the required enrollment and proof configuration.
+Current enrollment eligibility and freeze status use the
+[eligibility SDK contract](kagemusha_enrollment_eligibility_v1.md). Bank-required enrollment
+uses the user's bank middleware for KYC approval and freeze status. Other schemes select
+their own authorized provider, including an issuer, community operator or SORA Parliament
+for assets it governs. Parliament approval is not a protocol prerequisite. A scheme may
+explicitly admit public enrollment; missing bank data never selects that policy implicitly.
+The issuer rechecks authenticated authority, account routing and fresh eligibility at the
+online enrollment boundaries. These observations do not replace platform evidence or confer
+monetary authority, and add no per-payment call. Regulatory classification is an issuer policy
+concern, not a cryptographic limitation or a legal classification made by the codec.
+
 The issuer verifies platform evidence and issues a compact signed credential:
 
 `(scheme, asset_incarnation, wallet_id, account_id, payment_key,

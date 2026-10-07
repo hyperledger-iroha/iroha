@@ -4,6 +4,10 @@ use super::*;
 
 pub(crate) enum Setup {
     Bootstrap,
+    UnloadClaim {
+        request_id: [u8; 32],
+        beneficiary: Option<Vec<u8>>,
+    },
     FeeClaim {
         credit: [u8; 32],
     },
@@ -66,6 +70,7 @@ pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
         0 | 1 | 4 | 6 | 15 | 18 | 19 | 20 | 24 => [0; 3],
         21 | 22 => [state::FEE_CLAIM_MAX_BYTES_V1, 0, 0],
         23 => [state::LEDGER_PROOF_MAX_BYTES_V1, 0, 0],
+        27 => [KAGEMUSHA_WALLET_UNLOAD_CLAIM_MAX_BYTES_V1, 0, 0],
         26 => [
             state::FEE_CLAIM_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1,
@@ -107,7 +112,7 @@ pub(crate) fn request(
 ) -> Result<Setup> {
     let id: [u8; 32] = id.try_into().map_err(|_| Failure::code(INVALID))?;
     let bounds = bounds(selector)?;
-    if (matches!(selector, 1 | 2 | 19 | 20 | 25) != (id != [0; 32]))
+    if (matches!(selector, 1 | 2 | 19 | 20 | 25 | 27) != (id != [0; 32]))
         || ((selector == 1) != (amount != 0))
         || (matches!(selector, 5 | 6) != (token != 0))
         || originals
@@ -120,6 +125,10 @@ pub(crate) fn request(
     let [first, second, third] = originals;
     Ok(match selector {
         0 => Setup::Bootstrap,
+        27 => Setup::UnloadClaim {
+            request_id: id,
+            beneficiary: (!first.is_empty()).then(|| first.to_vec()),
+        },
         20 => Setup::FeeClaim { credit: id },
         21 | 22 if !first.is_empty() => Setup::FeeOriginal {
             request: selector == 22,
@@ -209,6 +218,18 @@ where
 {
     pub(super) fn setup_inner(&mut self, input: Setup) -> Result<Response> {
         let bytes = match input {
+            Setup::UnloadClaim {
+                request_id,
+                beneficiary,
+            } => {
+                return Ok(Response {
+                    kind: 37,
+                    bytes: self
+                        .wallet
+                        .unload_claim_bytes(&request_id, beneficiary.as_deref())?,
+                    ..Response::default()
+                });
+            }
             Setup::FeeClaim { credit } => {
                 let original = self.wallet.fee_claim(credit)?;
                 return Ok(match original {
@@ -380,7 +401,20 @@ mod tests {
             assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_ok());
             assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_err());
         }
-        assert!(bounds(27).is_err());
+        assert!(bounds(28).is_err());
+    }
+    #[test]
+    fn unload_projection_requires_request_identity_and_only_optional_beneficiary() {
+        let id = [7; 32];
+        assert_eq!(bounds(27).unwrap(), [16_384, 0, 0]);
+        assert!(request(&id, 27, 0, 0, [&[]; 3]).is_ok());
+        assert!(request(&id, 27, 0, 0, [&vec![1; 16_384], &[], &[]]).is_ok());
+        assert!(request(&[0; 32], 27, 0, 0, [&[]; 3]).is_err());
+        assert!(request(&id, 27, 1, 0, [&[]; 3]).is_err());
+        assert!(request(&id, 27, 0, 1, [&[]; 3]).is_err());
+        assert!(request(&id, 27, 0, 0, [&vec![1; 16_385], &[], &[]]).is_err());
+        assert!(request(&id, 27, 0, 0, [&[], &[1], &[]]).is_err());
+        assert!(request(&id, 27, 0, 0, [&[], &[], &[1]]).is_err());
     }
     #[test]
     fn ledger_and_fee_setup_enforce_bounds_identity_and_progress_shape() {

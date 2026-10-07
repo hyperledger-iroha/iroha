@@ -65,7 +65,7 @@ def dispatch(owner, original, action):
 
 
 def packet(action="recover", *, exchange="31" * 32, owner=None, original=b"{}"):
-    operation = action in ("complete", "recover")
+    operation = action in ("complete", "recover", "inspect")
     return encode({"schema": SCHEMA, "version": 1, "exchange_id": exchange, "action": action,
         "journal_incarnation": None if action == "journal" else ("21" * 32 if owner is None else owner.counters.incarnation.hex()),
         "preparation_base64": None if action == "journal" else base64.b64encode(
@@ -434,6 +434,101 @@ class WorkerTests(unittest.TestCase):
             "dispatch_time_ms": exact_json(request, MAX_REQUEST)["trusted_time_ms"]}
         owner.prepare(arguments["incarnation"], original)
         return arguments
+
+    def test_inspect_never_claims_missing_or_prepared_operation_even_when_live(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            preparation = preparation_original(owner, request)
+            arguments = {"incarnation": owner.journal(), "preparation": preparation,
+                "account_signature": ACCOUNT_SIGNATURE,
+                "dispatch_time_ms": exact_json(request, MAX_REQUEST)["trusted_time_ms"]}
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=AssertionError("Inspect must not verify")):
+                with self.assertRaises(VerificationUnavailable):
+                    owner.perform(request, "inspect", **arguments)
+                with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                    self.assertEqual(connection.execute("SELECT count(*) FROM wallet_e1_attempts").fetchone(), (0,))
+                owner.prepare(arguments["incarnation"], preparation)
+                for now in (arguments["dispatch_time_ms"], exact_json(request, MAX_REQUEST)["expires_at_ms"] + 1):
+                    with self.subTest(now=now), self.assertRaises(VerificationUnavailable):
+                        owner.perform(request, "inspect", **dict(arguments, dispatch_time_ms=now))
+                with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                    self.assertEqual(connection.execute("SELECT preparation, request_sha256, key_binding, original, account_signature, result FROM wallet_e1_attempts").fetchone(),
+                                     (preparation, None, None, None, None, None))
+                    self.assertEqual(connection.execute("SELECT count(*) FROM apple_client_data").fetchone(), (0,))
+
+    def test_inspect_returns_exact_verified_original_after_expiry_and_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, key_id = self.owner_fixture(Path(temporary))
+            owner = open_owner()
+            arguments = self.prepared(owner, request)
+            original = owner.perform(request, "complete", **arguments)
+            owner.close()
+            owner = open_owner(); self.addCleanup(owner.close)
+            arguments["dispatch_time_ms"] = exact_json(request, MAX_REQUEST)["expires_at_ms"] + 1
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=AssertionError("Inspect must not verify")):
+                self.assertEqual(owner.perform(request, "inspect", **arguments), original)
+                for changed in (request + b" ", encode(dict(exact_json(request, MAX_REQUEST), trusted_time_ms=arguments["dispatch_time_ms"] - 2))):
+                    with self.subTest(changed=changed), self.assertRaises(AttestationRejected):
+                        owner.perform(changed, "inspect", **arguments)
+                with self.assertRaises(AttestationRejected):
+                    owner.perform(request, "inspect", **dict(arguments, account_signature=b"x" * 64))
+                with self.assertRaises(AttestationRejected):
+                    owner.perform(request, "inspect", **dict(arguments, incarnation=b"x" * 32))
+                with self.assertRaises(AttestationRejected):
+                    owner.perform(request, "inspect", **dict(arguments, dispatch_time_ms=True))
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                self.assertEqual(connection.execute("SELECT counter FROM apple_keys WHERE key_id=?", (key_id,)).fetchone(), (1,))
+                self.assertEqual(connection.execute("SELECT count(*) FROM apple_client_data").fetchone(), (1,))
+                self.assertEqual(connection.execute("SELECT original, result FROM wallet_e1_attempts").fetchone(), (request, original))
+
+    def test_inspect_unknown_claim_cannot_restart_external_verification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner()
+            arguments = self.prepared(owner, request)
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=VerificationUnavailable("lost result")) as verifier:
+                with self.assertRaises(VerificationUnavailable):
+                    owner.perform(request, "complete", **arguments)
+                self.assertEqual(verifier.call_count, 1)
+            owner.close()
+            owner = open_owner(); self.addCleanup(owner.close)
+            arguments["dispatch_time_ms"] = exact_json(request, MAX_REQUEST)["expires_at_ms"] + 1
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=AssertionError("Inspect cannot reclaim")):
+                self.assertIsNone(owner.perform(request, "inspect", **arguments))
+                value = exact_json(packet("inspect", owner=owner, original=request), MAX_PACKET)
+                message = encode(dict(value, dispatch_time_ms=arguments["dispatch_time_ms"]))
+                output = io.BytesIO()
+                serve(owner, io.BytesIO(len(message).to_bytes(4, "little") + message), output)
+                response = exact_json(read_packet(io.BytesIO(output.getvalue())), MAX_PACKET)
+                self.assertEqual(response["outcome"], "outcome_unknown")
+                self.assertEqual(response["request_sha256"], hashlib.sha256(message).hexdigest())
+                self.assertEqual(response["journal_incarnation"], arguments["incarnation"].hex())
+                self.assertIsNone(response["evidence_base64"])
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                self.assertEqual(connection.execute("SELECT original, result FROM wallet_e1_attempts").fetchone(), (request, None))
+
+    def test_inspect_packet_unclaimed_is_unavailable_without_changing_preparation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            open_owner, request, _, _ = self.owner_fixture(Path(temporary))
+            owner = open_owner(); self.addCleanup(owner.close)
+            arguments = self.prepared(owner, request)
+            message = packet("inspect", owner=owner, original=request)
+            output = io.BytesIO()
+            with patch("iroha_app_attestation.wallet_enrollment_worker.verify_apple_wallet_attestation_raw",
+                       side_effect=AssertionError("Inspect cannot claim")):
+                serve(owner, io.BytesIO(len(message).to_bytes(4, "little") + message), output)
+            response = exact_json(read_packet(io.BytesIO(output.getvalue())), MAX_PACKET)
+            self.assertEqual(response["outcome"], "unavailable")
+            self.assertEqual(response["request_sha256"], hashlib.sha256(message).hexdigest())
+            self.assertEqual(response["journal_incarnation"], arguments["incarnation"].hex())
+            self.assertIsNone(response["evidence_base64"])
+            with closing(sqlite3.connect(Path(temporary) / "wallet-e1.sqlite3")) as connection:
+                self.assertEqual(connection.execute("SELECT request_sha256, result FROM wallet_e1_attempts").fetchone(), (None, None))
 
     def test_prepared_restart_closes_core_dispatch_gap_using_fresh_time(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -188,7 +188,7 @@ mod direct_dataspace_home_tests {
         let home = DataSpaceId::new(10);
         let foreign_bucket = DataSpaceId::new(12);
         let id = AssetDefinitionId::derive_from_components(
-            "cash.universal".parse().expect("id seed"),
+            iroha_model_base::domain::DomainId::try_new("cash", "universal").expect("id seed"),
             "kina".parse().expect("name"),
         );
         let definition = AssetDefinition::numeric(

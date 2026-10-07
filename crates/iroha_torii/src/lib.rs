@@ -16666,7 +16666,7 @@ mod direct_dataspace_definition_query_scope_tests {
     fn direct_definition_query_uses_exact_home_and_unknown_id_stays_unclassified() {
         let mut world = iroha_core::state::World::default();
         let id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            "cash.universal".parse().expect("id seed"),
+            DomainId::try_new("cash", "universal").expect("id seed"),
             "kina".parse().expect("name"),
         );
         let home = DataSpaceId::new(8_648_377_547_929_788_715);
@@ -32894,8 +32894,11 @@ async fn handler_ram_lfe_execute(
         .map_err(identifier_execution_error)?;
     let response = ram_lfe_execute_response(&receipt, &draft);
     let response = json_ok(response)?;
-    identifier_resolution::validate_owner_prf_lease(draft.executed_at_ms, draft.expires_at_ms)
-        .map_err(identifier_execution_error)?;
+    identifier_resolution::owner_prf::validate_owner_prf_lease(
+        draft.executed_at_ms,
+        draft.expires_at_ms,
+    )
+    .map_err(identifier_execution_error)?;
     Ok(response)
 }
 #[cfg(feature = "app_api")]
@@ -33072,7 +33075,8 @@ async fn handler_identifier_resolve(
     {
         return Ok(StatusCode::CONFLICT.into_response());
     }
-    let now_ms = identifier_resolution::owner_prf_now_ms().map_err(identifier_execution_error)?;
+    let now_ms =
+        identifier_resolution::owner_prf::owner_prf_now_ms().map_err(identifier_execution_error)?;
     if !identifier_claim_is_live_at(&claim, now_ms) {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
@@ -33084,8 +33088,8 @@ async fn handler_identifier_resolve(
         draft.backend.as_str(),
     )?)?;
     let delivery_now_ms =
-        identifier_resolution::owner_prf_now_ms().map_err(identifier_execution_error)?;
-    identifier_resolution::validate_owner_prf_lease_at(
+        identifier_resolution::owner_prf::owner_prf_now_ms().map_err(identifier_execution_error)?;
+    identifier_resolution::owner_prf::validate_owner_prf_lease_at(
         receipt.payload.opening.payload.opened_at_ms,
         receipt.payload.opening.payload.expires_at_ms,
         delivery_now_ms,
@@ -33252,7 +33256,7 @@ async fn handler_identifier_claim_receipt(
             output_opening,
             phone_retail_canonicality_payload,
         })?;
-        identifier_resolution::validate_owner_prf_lease(
+        identifier_resolution::owner_prf::validate_owner_prf_lease(
             original_opened_at_ms,
             original_expires_at_ms,
         )
@@ -33273,7 +33277,7 @@ async fn handler_identifier_claim_receipt(
         &receipt,
         draft.backend.as_str(),
     )?)?;
-    identifier_resolution::validate_owner_prf_lease(
+    identifier_resolution::owner_prf::validate_owner_prf_lease(
         receipt.payload.opening.payload.opened_at_ms,
         receipt.payload.opening.payload.expires_at_ms,
     )

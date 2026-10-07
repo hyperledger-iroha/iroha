@@ -31,6 +31,9 @@ pub enum EnrollmentJournalErrorV1 {
     /// The permanent selection or exact original differs.
     #[error("enrollment journal selection conflicts")]
     Conflict,
+    /// The authenticated definitive eligibility observation denies this operation.
+    #[error("enrollment eligibility denied")]
+    Ineligible,
     /// This owner observed a failed publication and must reopen and reconcile.
     #[error("enrollment journal outcome is uncertain")]
     Uncertain,
@@ -125,6 +128,7 @@ struct Record {
     worker_result_time_ms: u64,
     credential_body: Vec<u8>,
     issued: Vec<u8>,
+    eligibility: Vec<eligibility::EligibilityRecord>,
 }
 impl Record {
     fn validate(&self) -> Result<()> {
@@ -172,7 +176,7 @@ impl Record {
         {
             return Err(Invalid);
         }
-        Ok(())
+        eligibility::validate_index(self)
     }
 }
 
@@ -396,6 +400,7 @@ impl EnrollmentJournalV1 {
             worker_result_time_ms: 0,
             credential_body: Vec::new(),
             issued: Vec::new(),
+            eligibility: Vec::new(),
         };
         let original = encode(&record)?;
         self.publish(
@@ -569,6 +574,7 @@ impl EnrollmentJournalV1 {
     }
 }
 
+mod eligibility;
 mod permits;
 mod preparation;
 mod worker;
@@ -579,7 +585,7 @@ mod tests;
 
 #[cfg(test)]
 #[path = "enrollment_journal/permit_tests.rs"]
-mod permit_tests;
+pub(super) mod permit_tests;
 
 #[cfg(test)]
 #[path = "enrollment_journal/worker_tests.rs"]

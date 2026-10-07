@@ -40,6 +40,7 @@ internal class KagemushaWalletSetupInputV1(
             23 -> intArrayOf(36 * 1024 * 1024, 0, 0)
             25 -> intArrayOf(32 * 1024 * 1024, 1024, 0)
             26 -> intArrayOf(21_024, 16_384, 0)
+            27 -> intArrayOf(16_384, 0, 0)
             2 -> intArrayOf(10_000, 1_024, 512)
             3, in 7..14, in 16..17 -> intArrayOf(10_000, 0, 0)
             5 -> intArrayOf(512, 512, 0)
@@ -52,7 +53,7 @@ internal class KagemushaWalletSetupInputV1(
         a = first.copyOf()
         b = second.copyOf()
         c = third.copyOf()
-        require((selector in listOf(1, 2, 19, 20, 25)) == id.any { it != 0.toByte() }) { "setup identity" }
+        require((selector in listOf(1, 2, 19, 20, 25, 27)) == id.any { it != 0.toByte() }) { "setup identity" }
         require((selector == 1) == (amount.low != 0L || amount.high != 0L)) { "Offer amount" }
         require(token >= 0 && ((selector == 5 || selector == 6) == (token != 0L))) { "native time token" }
         require(selector != 2 || (a.isNotEmpty() && b.isEmpty() == c.isEmpty())) { "Request originals" }

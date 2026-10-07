@@ -215,8 +215,8 @@ cargo test -p iroha_plonk_oracle
 cargo test --release -p iroha_plonk_oracle --lib --test vendored_goldens \
     --test native_prover_kats --test pasta_parity -- --include-ignored
 python3 fixtures/native_prover/verify_kats_v1.py
-# Engine and verifier parity (oracle builds, own target directory; manual,
-# TODO: CI job):
+# Engine and verifier parity (oracle builds, own target directory; also covered
+# by .github/workflows/native_prover_parity.yml):
 RUSTFLAGS="--cfg iroha_plonk_oracle" CARGO_TARGET_DIR=target/plonk-oracle \
     cargo test --release -p iroha_plonk_oracle --lib --test vendored_goldens \
     -- --include-ignored
@@ -246,3 +246,12 @@ in `iroha_plonk::verifier::captured_succinct_tests` remains after this crate is
 removed. The path-filtered parity CI requires all four named oracle cases; this
 corpus does not qualify the current operation catalog or claim parity with the
 deliberately different PIPA-AS-v1 accumulation transcript.
+
+`reference_fixture` regenerates the complete independent-reference fixture in
+memory and requires exact equality with `fixtures/native_prover/reference_v1.json`.
+It covers both curves, V1/V2 production transcript profiles and genuine full
+proofs through k10. The independent Python command verifies all 46 proofs using
+only the standard library. The parity CI requires this named Rust comparison,
+runs the Python command, and separately tests adversarial parser and complete
+decision cases. Its ignored maintenance capture printer is excluded from CI;
+it never edits the fixture. This reference is retained after oracle deletion.

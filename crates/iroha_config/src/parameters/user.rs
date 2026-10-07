@@ -64,6 +64,8 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
+mod kagemusha_enrollment;
+pub use kagemusha_enrollment::{KagemushaEnrollmentGoogle, KagemushaEnrollmentProvider, KagemushaEnrollmentIssuer, KagemushaEnrollmentWorker};
 mod app_routed_read_config;
 mod musubi_publication_installation;
 pub use musubi_publication_installation::MusubiPublicationInstallation;
@@ -15020,6 +15022,8 @@ pub struct Torii {
     pub tx_history: Option<ToriiTxHistory>,
     /// Retail recipient lookup routes used by Torii app API.
     pub recipient_lookup: Option<ToriiRecipientLookup>,
+    /// Optional KAGEMUSHA issuer; all trust and runtime leaves are mandatory when present.
+    pub kagemusha_enrollment: Option<KagemushaEnrollmentIssuer>,
     /// Explicit Torii origins used for public-dataspace routed reads.
     #[config(default)]
     pub public_dataspace_upstreams: Vec<ToriiPublicDataspaceUpstream>,
@@ -15071,6 +15075,7 @@ impl core::fmt::Debug for Torii {
             )
             .field("tx_history", &self.tx_history)
             .field("recipient_lookup", &self.recipient_lookup)
+            .field("kagemusha_enrollment", &self.kagemusha_enrollment)
             .field(
                 "public_dataspace_upstream_count",
                 &self.public_dataspace_upstreams.len(),
@@ -16305,6 +16310,9 @@ impl Torii {
                 .and_then(|config| config.parse_with_file_source(files, emitter)),
             ram_lfe: self.ram_lfe.and_then(|config| config.parse(emitter)),
             tx_history: self.tx_history.map(|config| config.parse(emitter)),
+            kagemusha_enrollment: self
+                .kagemusha_enrollment
+                .and_then(|config| config.parse(emitter)),
             recipient_lookup: self
                 .recipient_lookup
                 .and_then(|config| config.parse(emitter))

@@ -1940,13 +1940,17 @@ typedef struct {
 // native selected-tip authentication and durable exact payout acknowledgement. No caller checkpoints/verdicts accepted.
 // FeeClaimTransport26(first retained pair <=21,024, second canonical beneficiary AccountId <=16,384)
 // returns kind36 canonical FeeClaim <=16,384 after exact schedule/beneficiary binding; DATA only, not payout confirmation.
+// UnloadClaim27(nonzero completed Unload request id in setup_id; optional first canonical charge beneficiary <=16,384;
+// no other inputs) returns kind37 canonical UnloadClaim <=16,384 from exact selected originals and native-admitted account.
+// Pending remains an error requiring the existing retry flow; this projection never signs, debits or acknowledges settlement.
 // CloseLoads19(nonzero setup_id retry identity, no originals) returns kind30, exact durable signed closure frame <=16,384 bytes;
 // Reuse an id for exact retries; a fresh id selects current native source after a preissued Load.
 // It does not confirm ledger closure or authorize key retirement.
 // Activation15(no inputs) returns kind17, exact durable Activate frame <=16,384 bytes.
 // CreditedReceive16(first=Receive package), CreditedStatus17(first=CreditStatus) return
 // kind12 canonical Credited data after native shape/scheme/full-envelope bounds; no proof verdict.
-// setup_id is exactly32 bytes: nonzero only for Offer/Request and all zero otherwise.
+// setup_id is exactly32 bytes: nonzero for Offer/Request, CloseLoads, FeeClaim, FeePayout,
+// and UnloadClaim as specified above; all zero for other selectors.
 // Unused originals/amount/token are empty/zero. Original bounds are selected by Native;
 // signer certificate frames are <=512 bytes. No caller clock, nonce, proof or signing body.
 // Transport uses first only and returns canonical bytes; it grants no monetary verdict.

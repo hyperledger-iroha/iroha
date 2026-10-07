@@ -64,3 +64,86 @@ fn completed_first_load_receipt_restores_without_reproving_finality() {
         restored.verifier_reads
     );
 }
+
+fn environment_pin(name: &str) -> [u8; 32] {
+    let text = std::env::var(name).expect("independently retained SHA256 pin");
+    assert_eq!(text.len(), 64);
+    core::array::from_fn(|index| u8::from_str_radix(&text[2 * index..2 * index + 2], 16).unwrap())
+}
+
+#[test]
+#[ignore = "independently pinned canonical executed setup; validates native H1/H2 without keygen"]
+fn canonical_executed_setup_admits_only_exact_source_inputs() {
+    let input =
+        std::env::var_os("KAGEMUSHA_EXECUTED_LEDGER_SETUP").expect("pinned setup directory");
+    driver::source_only::check(
+        std::path::Path::new(&input),
+        environment_pin("KAGEMUSHA_EXECUTED_LEDGER_SETUP_SHA256"),
+    );
+}
+
+#[test]
+#[ignore = "explicit complete source compilation from canonical executed setup; no Load or proof campaign"]
+fn canonical_executed_setup_compiles_complete_finality_sources_without_load() {
+    let input =
+        std::env::var_os("KAGEMUSHA_EXECUTED_LEDGER_SETUP").expect("pinned setup directory");
+    let output = std::env::var_os("KAGEMUSHA_FINALITY_OUTPUT").expect("fresh exclusive output");
+    driver::source_only::run(
+        std::path::Path::new(&output),
+        std::path::Path::new(&input),
+        environment_pin("KAGEMUSHA_EXECUTED_LEDGER_SETUP_SHA256"),
+        environment_pin("KAGEMUSHA_FINALITY_SOURCE_SHA256"),
+    );
+}
+
+fn executed_load_selection<'a>(
+    paths: &'a [std::path::PathBuf; 3],
+) -> driver::executed_load::Selection<'a> {
+    driver::executed_load::Selection {
+        setup_root: &paths[0],
+        setup_sha256: environment_pin("KAGEMUSHA_EXECUTED_LEDGER_SETUP_SHA256"),
+        target: &paths[1],
+        target_sha256: environment_pin("KAGEMUSHA_NATIVE_LOAD_TARGET_SHA256"),
+        capture: &paths[2],
+        capture_sha256: environment_pin("KAGEMUSHA_EXECUTED_LOAD_CAPTURE_SHA256"),
+        receipt_sha256: environment_pin("KAGEMUSHA_NATIVE_LOAD_RECEIPT_SHA256"),
+    }
+}
+fn executed_load_paths() -> [std::path::PathBuf; 3] {
+    [
+        "KAGEMUSHA_EXECUTED_LEDGER_SETUP",
+        "KAGEMUSHA_NATIVE_LOAD_TARGET",
+        "KAGEMUSHA_EXECUTED_LOAD_CAPTURE",
+    ]
+    .map(|name| {
+        std::env::var_os(name)
+            .map(std::path::PathBuf::from)
+            .expect("explicit independently pinned executed input")
+    })
+}
+
+#[test]
+#[ignore = "requires genuine native A target and actual ledger H1..H5 originals; no keygen or proofs"]
+fn executed_load_intake_authenticates_ordered_history_and_counted_event() {
+    let paths = executed_load_paths();
+    driver::executed_load::check(&executed_load_selection(&paths));
+}
+
+#[test]
+#[ignore = "full exact H2..H5 recursive finality campaign; completed canonical sources and executed A Load required"]
+fn executed_load_proves_complete_history_and_exports_exact_receipt() {
+    let paths = executed_load_paths();
+    let output =
+        std::env::var_os("KAGEMUSHA_FINALITY_OUTPUT").expect("exclusive proof/checkpoint output");
+    let sources = std::env::var_os("KAGEMUSHA_CANONICAL_FINALITY_SOURCES")
+        .expect("completed source-only directory");
+    driver::executed_load::run(
+        std::path::Path::new(&output),
+        &executed_load_selection(&paths),
+        &driver::executed_load::SourceSelection {
+            root: std::path::Path::new(&sources),
+            completion_sha256: environment_pin("KAGEMUSHA_CANONICAL_FINALITY_COMPLETION_SHA256"),
+        },
+        environment_pin("KAGEMUSHA_FINALITY_SOURCE_SHA256"),
+    );
+}

@@ -12,6 +12,7 @@ pub mod da;
 mod error;
 pub mod http;
 mod http_default;
+pub mod kagemusha_enrollment;
 pub mod nexus_app;
 pub mod privacy_issuance;
 pub mod query;

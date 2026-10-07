@@ -25,6 +25,23 @@ class KagemushaWalletHostNativeV1Test {
     }
 
     @Test
+    fun unloadSetupUsesActualJniAndNeverInventsACompletedClaim() {
+        val id = ByteArray(32) { 9 }
+        fun call(identity: ByteArray = id, beneficiary: ByteArray = byteArrayOf(), token: Long = 0) =
+            assertNotNull(KagemushaWalletNativeV1.setup(0, identity, 27, 0, 0, token,
+                beneficiary, byteArrayOf(), byteArrayOf()))
+        val unknown = call()
+        assertEquals(-2, unknown.status)
+        assertEquals(-1, unknown.reason)
+        assertEquals(0, unknown.platformCode)
+        assertTrue(unknown.bytes().isEmpty())
+        for (invalid in listOf(call(ByteArray(32)), call(beneficiary = ByteArray(16_385)), call(token = 1))) {
+            assertEquals(-1, invalid.status)
+            assertTrue(invalid.bytes().isEmpty())
+        }
+    }
+
+    @Test
     fun unavailableArtifactsNeverOpenAnOwnerOrMutateCustody() {
         val keys = TestKeyStoreV1()
         val platform = KagemushaWalletAndroidPlatformV1.create(TestEnvironmentV1(directory), keys)
@@ -137,7 +154,9 @@ class KagemushaWalletHostNativeV1Test {
     @Test
     fun realReviewJniReturnsSeparateFailuresWithoutAdmittingUnknownOwners() {
         val id = ByteArray(32) { 1 }
-        val reply = assertNotNull(KagemushaWalletNativeV1.review(0, 1, 0, 0, byteArrayOf(1), byteArrayOf()))
+        // Both required original slots must pass the shape gate before the unknown owner.
+        val reply = assertNotNull(KagemushaWalletNativeV1.review(0, 1, 0, 0, byteArrayOf(1), byteArrayOf(2)))
+        assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, 0, 0, byteArrayOf(1), byteArrayOf())).status)
         assertEquals(-2, reply.status); assertEquals(-1, reply.reason); assertEquals(0, reply.platformCode)
         // Strict negative Review parsing checks every private zero token/high/detail/bytes
         // field. A malformed negative reply yields INVALID_NATIVE_OUTPUT rather than -2.

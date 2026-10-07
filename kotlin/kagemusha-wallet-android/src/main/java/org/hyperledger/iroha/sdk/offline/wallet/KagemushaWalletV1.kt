@@ -32,11 +32,11 @@ class KagemushaWalletCallV1 internal constructor(
     bytes: ByteArray,
 ) {
     init {
-        val carriesBytes = status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status == CLOSE_LOADS || status == 31 || status == 33 || status == 36 || status in listOf(18, 19, 23, 24, 25, 27, 28)
-        if ((status >= 0 && status !in UNKNOWN..36) || bytes.size > when (status) { ACTIVATION, ENROLLMENT_DISPATCH, CLOSE_LOADS, 36 -> 16_384; 24 -> 131_072; 25 -> 262_144; 28 -> 1024; 31 -> 21_024; 33 -> 32; else -> 10_000 } ||
+        val carriesBytes = status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status == CLOSE_LOADS || status == 31 || status == 33 || status == 36 || status == 37 || status in listOf(18, 19, 23, 24, 25, 27, 28)
+        if ((status >= 0 && status !in UNKNOWN..37) || bytes.size > when (status) { ACTIVATION, ENROLLMENT_DISPATCH, CLOSE_LOADS, 36, 37 -> 16_384; 24 -> 131_072; 25 -> 262_144; 28 -> 1024; 31 -> 21_024; 33 -> 32; else -> 10_000 } ||
             (if (carriesBytes) bytes.isEmpty() else bytes.isNotEmpty()) ||
             ((status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE) && (bytes.size != 32 || sequenceLow <= 0 || sequenceHigh != 0L)) ||
-            (status in listOf(ACTIVATION, CLOSE_LOADS, 31, 32, 34, 35, 36) && (sequenceLow != 0L || sequenceHigh != 0L || detail != 0)) ||
+            (status in listOf(ACTIVATION, CLOSE_LOADS, 31, 32, 34, 35, 36, 37) && (sequenceLow != 0L || sequenceHigh != 0L || detail != 0)) ||
             (status == OPENED && (sequenceLow <= 0 || sequenceHigh != 0L)) ||
             (status in 18..28 && (sequenceLow <= 0 || sequenceHigh != 0L || detail != 0)) ||
             (status in listOf(18, 23) && bytes.size != 32) || (status == 19 && bytes.size != 161) ||
@@ -64,6 +64,10 @@ class KagemushaWalletCallV1 internal constructor(
     }
     internal fun feeClaimOriginal(): ByteArray {
         if (status != 36) invalid()
+        return retainedBytes.copyOf()
+    }
+    internal fun unloadClaimOriginal(): ByteArray {
+        if (status != 37) invalid()
         return retainedBytes.copyOf()
     }
     internal fun creditedInput(): KagemushaWalletSetupInputV1 {
@@ -161,6 +165,15 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
         val result = setup(KagemushaWalletSetupInputV1(19, identity = requestId))
         if (result.status != KagemushaWalletCallV1.CLOSE_LOADS) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         return result.bytes()
+    }
+    /** Canonical ledger claim for a completed Unload request, never settlement confirmation.
+     * Native selects the admitted account and exact retained package/quote. A charged Unload
+     * requires the quote's canonical beneficiary; uncharged Unload requires absence. */
+    @JvmOverloads
+    fun unloadClaimTransport(requestId: ByteArray, chargeBeneficiary: ByteArray? = null): ByteArray {
+        require(chargeBeneficiary == null || chargeBeneficiary.isNotEmpty()) { "charge beneficiary original" }
+        return setup(KagemushaWalletSetupInputV1(27, identity = requestId,
+            first = chargeBeneficiary ?: ByteArray(0))).unloadClaimOriginal()
     }
     /** Read both exact originals from one native-retained fee claim; null means no pending claim. */
     fun feeClaim(creditId: ByteArray): KagemushaWalletFeeClaimV1? {

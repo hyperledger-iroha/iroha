@@ -134,7 +134,9 @@ fn add_authenticated_application_compute_routes(
     builder.route(
         &route_catalog::application_api::RAM_LFE_PROGRAMS_BY_PROGRAM_ID_EXECUTE_POST,
         catalog_post(handler_ram_lfe_execute)
-            .authenticated_canonical_account_body(app_state.clone(), max_body_bytes),
+            .layer(DefaultBodyLimit::max(max_body_bytes))
+            .layer(axum::middleware::from_fn(identifier_owner_private_response))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
     );
     builder.route(
         &route_catalog::application_api::RAM_LFE_RECEIPTS_VERIFY_POST,
@@ -143,13 +145,17 @@ fn add_authenticated_application_compute_routes(
     );
     builder.route(
         &route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_IDENTIFIERS_CLAIM_RECEIPT_POST,
-        catalog_post(handler_authenticated_identifier_claim_receipt)
-            .authenticated_canonical_account_body(app_state.clone(), max_body_bytes),
+        catalog_post(handler_identifier_claim_receipt)
+            .layer(DefaultBodyLimit::max(max_body_bytes))
+            .layer(axum::middleware::from_fn(identifier_owner_private_response))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
     );
     builder.route(
         &route_catalog::application_api::IDENTIFIERS_RESOLVE_POST,
         catalog_post(handler_identifier_resolve)
-            .authenticated_canonical_account_body(app_state, max_body_bytes),
+            .layer(DefaultBodyLimit::max(max_body_bytes))
+            .layer(axum::middleware::from_fn(identifier_owner_private_response))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
     );
 }
 #[cfg(feature = "app_api")]
@@ -186,31 +192,17 @@ async fn handler_authenticated_space_directory_manifest_revoke(
     )?;
     handler_space_directory_manifest_revoke(State(app), headers, remote, request).await
 }
+// The raw identifier handlers verify the policy owner's original request once.
+// This response-only layer retains their private cache policy without consuming
+// the signature nonce again or treating the beneficiary as the policy owner.
 #[cfg(feature = "app_api")]
-async fn handler_authenticated_identifier_claim_receipt(
-    State(app): State<SharedAppState>,
-    axum::extract::Extension(verified): axum::extract::Extension<
-        crate::app_auth::VerifiedCanonicalRequest,
-    >,
-    headers: axum::http::HeaderMap,
-    remote: axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(account_literal): AxPath<String>,
-    request: NoritoJson<routing::IdentifierResolveRequestDto>,
-) -> Result<AxResponse, Error> {
-    let account_id = parse_account_id_for_endpoint(
-        &app,
-        &account_literal,
-        "/v1/accounts/{account_id}/identifiers/claim-receipt",
-    )?;
-    require_runtime_governance_account(&account_id, &verified.account, "identifier claim receipt")?;
-    handler_identifier_claim_receipt(
-        State(app),
-        headers,
-        remote,
-        AxPath(account_literal),
-        request,
-    )
-    .await
+async fn identifier_owner_private_response(
+    request: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    let mut response = next.run(request).await;
+    install_canonical_account_private_cache_headers(&mut response);
+    response
 }
 #[cfg(all(test, feature = "app_api"))]
 mod application_account_auth_tests {
@@ -225,13 +217,16 @@ mod application_account_auth_tests {
             "space-directory manifest publication draft",
         )
         .expect("the exact authenticated authority must be accepted");
-        let error =
-            require_runtime_governance_account(&BOB_ID, &ALICE_ID, "identifier claim receipt")
-                .expect_err("another authority must be rejected");
+        let error = require_runtime_governance_account(
+            &BOB_ID,
+            &ALICE_ID,
+            "space-directory manifest revocation draft",
+        )
+        .expect_err("another authority must be rejected");
         assert!(matches!(
             error,
             Error::Query(ValidationFail::NotPermitted(message))
-                if message.contains("identifier claim receipt authority")
+                if message.contains("space-directory manifest revocation draft authority")
         ));
     }
 }

@@ -44249,7 +44249,7 @@ mod direct_asset_home_tests {
             .set_parameter(iroha_data_model::parameter::Parameter::Custom(
                 iroha_data_model::parameter::custom::CustomParameter::new(
                     AssetDefinitionDataspaceRegistryV1::parameter_id(),
-                    iroha_primitives::json::Json::from_norito_value_ref(&norito::json::json!({}))
+                    iroha_primitives::json::Json::from_norito_value_ref(&norito::json!({}))
                         .unwrap(),
                 ),
             ));
