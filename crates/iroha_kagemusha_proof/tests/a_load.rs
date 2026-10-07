@@ -1,4 +1,4 @@
-//! Genuine Load sigma, signed issuer/receipt Q and production-depth recovery.
+//! Genuine Load sigma, ordinary receipt, own signature Q and production-depth recovery.
 //! Component checks here do not accept a lineage without the recursive A chain.
 
 #[path = "common/bootstrap.rs"]
@@ -50,7 +50,8 @@ use iroha_plonk_recursion::{
 pub(crate) struct LoadMaps {
     pub(crate) witness: LoadWitness,
     pub(crate) insertion: IndexedInsert<Fp>,
-    pub(crate) objects: [bootstrap_objects::Signed; 5],
+    pub(crate) receipt: load_objects::OrdinaryReceipt,
+    pub(crate) objects: [bootstrap_objects::Signed; 3],
     pub(crate) known: bool,
 }
 #[derive(Clone, Debug)]
@@ -133,9 +134,8 @@ impl LoadMaps {
     }
     fn public(&self) -> Vec<Vec<Fp>> {
         vec![
-            self.objects
-                .iter()
-                .map(bootstrap_objects::Signed::digest)
+            std::iter::once(self.receipt.digest())
+                .chain(self.objects.iter().map(bootstrap_objects::Signed::digest))
                 .collect(),
         ]
     }
@@ -155,7 +155,7 @@ impl Circuit<Fp> for LoadMaps {
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);
-        let public = meta.instance_column(5);
+        let public = meta.instance_column(4);
         meta.enable_equality(public);
         Config {
             verifier,
@@ -193,15 +193,34 @@ impl Circuit<Fp> for LoadMaps {
                     )),
                 )?;
                 let sigma = SigmaBindingCells::from_statement(&statement, index, vec![]);
-                let sources = self
-                    .objects
-                    .each_ref()
-                    .map(|o| o.bytes.iter().map(|v| self.value(*v)).collect::<Vec<_>>());
+                let sources: [Vec<Value<u8>>; 4] = core::array::from_fn(|i| {
+                    let raw: &[u8] = if i == 0 {
+                        &self.receipt.bytes
+                    } else {
+                        &self.objects[i - 1].bytes
+                    };
+                    raw.iter().map(|v| self.value(*v)).collect()
+                });
                 let objects = LoadObjects::decode(
                     &mut chip,
                     &mut bytes,
                     &mut region,
                     sources.each_ref().map(Vec::as_slice),
+                )?;
+                objects.bind_finalized_terms(
+                    &mut region,
+                    LoadInputs {
+                        predecessor: MapState {
+                            state: &before,
+                            lineage: &pred,
+                        },
+                        successor: MapState {
+                            state: &after,
+                            lineage: &next,
+                        },
+                        sigma: &sigma,
+                        signatures: &[],
+                    },
                 )?;
                 let insertion = self.insertion(&mut chip.uint(), &mut region)?;
                 LoadObjects::recovery(
@@ -242,7 +261,7 @@ fn fixture() -> (LoadMaps, Vec<u8>) {
 pub(crate) fn fixture_from(
     before: &iroha_kagemusha_proof::admin_sigma::BootstrapWitness,
 ) -> (LoadMaps, Vec<u8>) {
-    let (witness, insertion, certificate, voucher) = load_objects::authorized(before);
+    let (witness, insertion, ordinary) = load_objects::funded(before);
     let sigma = LoadCircuit::new(&witness);
     let params = common::vesta_params(12);
     let key = keygen_pk_v2(
@@ -276,19 +295,19 @@ pub(crate) fn fixture_from(
         LoadMaps {
             witness,
             insertion,
-            objects: [certificate, voucher, receipt, enrollment, current],
+            receipt: ordinary,
+            objects: [receipt, enrollment, current],
             known: true,
         },
         proof.proof,
     )
 }
 #[test]
-fn load_policy_requires_fixed_nonzero_scope_and_finite_root() {
+fn load_policy_requires_fixed_nonzero_provider_and_finite_root() {
     use iroha_plonk_gadgets::p256::native::{Affine, P};
-    assert!(OwnPolicy::new([1, 2], [3, 4], Affine::GENERATOR).is_ok());
-    assert!(OwnPolicy::new([0; 2], [3, 4], Affine::GENERATOR).is_err());
-    assert!(OwnPolicy::new([1, 2], [0; 2], Affine::GENERATOR).is_err());
-    assert!(OwnPolicy::new([1, 2], [3, 4], Affine { x: P, y: [0; 4] }).is_err());
+    assert!(OwnPolicy::new([3, 4], Affine::GENERATOR).is_ok());
+    assert!(OwnPolicy::new([0; 2], Affine::GENERATOR).is_err());
+    assert!(OwnPolicy::new([3, 4], Affine { x: P, y: [0; 4] }).is_err());
     let _ = load_objects::policy();
 }
 #[test]
@@ -333,13 +352,12 @@ fn genuine_load_sigma_signed_objects_and_recovery_share_exact_roots() {
     }
 }
 #[test]
-fn actual_load_signature_q_proves_role2_voucher_and_receipt_bytes() {
+fn actual_load_signature_q_proves_own_receipt_and_current_enrollment() {
     let (circuit, _) = fixture();
-    let (signature, instances) =
-        bootstrap_objects::signatures(&core::array::from_fn(|i| circuit.objects[i].clone()));
+    let (signature, instances) = load_objects::own_signature(circuit.objects[0].signature);
     let (current, current_instances) = load_objects::current_signatures(&[
-        circuit.objects[4].signature,
-        circuit.objects[3].signature,
+        circuit.objects[2].signature,
+        circuit.objects[1].signature,
     ]);
     let current_report =
         check_circuit(&current, 16, &current_instances, CheckMode::Strict).unwrap();
@@ -367,7 +385,7 @@ fn actual_load_signature_q_proves_role2_voucher_and_receipt_bytes() {
     )
     .unwrap();
     opening.decide(&params, MemoryBudget::DEFAULT).unwrap();
-    for i in [0, 10, 20, 21, 29] {
+    for i in 0..instances[0].len() {
         let mut wrong = instances.clone();
         wrong[0][i] += Fq::ONE;
         assert!(
@@ -383,7 +401,7 @@ fn actual_load_signature_q_proves_role2_voucher_and_receipt_bytes() {
         );
     }
     eprintln!(
-        "actual Load 2V1F Q bytes={}; A must bind opaque slots to object semantics",
+        "actual Load own-receipt 1V Q bytes={}; A must bind opaque slots to object semantics",
         proof.proof.len()
     );
 }

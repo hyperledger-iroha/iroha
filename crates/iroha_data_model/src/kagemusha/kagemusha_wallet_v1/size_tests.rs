@@ -103,6 +103,7 @@ struct Sizes {
     largest_joint_proof: usize,
     credited_receive: usize,
     credited_receive_overhead: usize,
+    largest_sigma_in_receive: usize,
     credited_status: usize,
     credited_status_overhead: usize,
     credit_status: usize,
@@ -211,6 +212,7 @@ fn measure(f: &MessageFixture) -> Sizes {
         }),
         credited_receive: lengths[4],
         credited_receive_overhead: lengths[4] - sigma_recv,
+        largest_sigma_in_receive: largest_fitting(message_max, SEARCH_LIMIT, receive_len),
         credited_status: lengths[5],
         credited_status_overhead: lengths[5] - omega,
         credit_status: norito::encode_canonical(&status)
@@ -253,13 +255,15 @@ fn kagemusha_wallet_v1_split_lineage_envelopes_fit_their_bounds() {
         "KAGEMUSHA wallet V1 fixed overheads (bytes): Payment {} + |Ω proof| + |σ_send|, \
          Credited::Receive {} + |σ_recv|, Credited::Status {} + |Ω(h) proof| (32 siblings), \
          Lineage {} + |Ω proof|; largest Ω proof in a Payment with the sample σ_send {}, \
-         largest |Ω proof| + |σ_send| {}, largest Ω(h) proof in Credited::Status {}",
+         largest |Ω proof| + |σ_send| {}, largest σ_recv in Credited::Receive {}, \
+         largest Ω(h) proof in Credited::Status {}",
         sizes.payment_overhead,
         sizes.credited_receive_overhead,
         sizes.credited_status_overhead,
         sizes.lineage_overhead,
         sizes.largest_omega_with_sample_sigma,
         sizes.largest_joint_proof,
+        sizes.largest_sigma_in_receive,
         sizes.largest_omega_in_status,
     );
     for (name, len, bound) in [
@@ -295,6 +299,34 @@ fn kagemusha_wallet_v1_split_lineage_envelopes_fit_their_bounds() {
     assert_eq!(
         sizes.largest_omega_with_sample_sigma,
         KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1 - SAMPLE_SIGMA_SEND_BYTES
+    );
+    // Receive is bounded by its complete carrying envelope, independently of the sample
+    // proof length. The frozen key still selects one exact length within this budget.
+    assert_eq!(
+        sizes.credited_receive_overhead,
+        KAGEMUSHA_WALLET_CREDITED_RECEIVE_FIXED_BYTES_V1
+    );
+    assert_eq!(
+        sizes.largest_sigma_in_receive,
+        KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1
+    );
+    let f = &vector_world().f;
+    let credited = f.credited_receive(&f.payment(false, 32), 32);
+    let receive_at_cap =
+        credited_with(&credited, KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1);
+    assert_eq!(envelope_len(&receive_at_cap), message_max);
+    KagemushaWalletEnvelopeV1::new(receive_at_cap)
+        .to_canonical_bytes()
+        .expect("Receive at its complete envelope limit");
+    let receive_over_cap = credited_with(
+        &credited,
+        KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1 + 1,
+    );
+    assert_eq!(envelope_len(&receive_over_cap), message_max + 1);
+    assert!(
+        KagemushaWalletEnvelopeV1::new(receive_over_cap)
+            .to_canonical_bytes()
+            .is_err()
     );
     // F_status and the Ω cap of the verifying-key allowlist are pinned: with the fixed
     // 32-sibling opening the Credited::Status bound caps Ω at 10,000 − F_status.

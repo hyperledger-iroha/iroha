@@ -17,6 +17,22 @@ pub struct ScheduleRanges {
 }
 
 impl ScheduleRanges {
+    /// Restore previously proved ranges; this alone confers no parse authority.
+    pub(crate) fn from_source_parts(height: Uint<Fp, 64>, fields: [FieldSpan; 4]) -> Self {
+        let [current, boundary, next, after_next] = fields;
+        Self {
+            height,
+            current,
+            boundary,
+            next,
+            after_next,
+        }
+    }
+    /// Complete ordered ranges retained in the parser continuation.
+    pub(crate) fn source_parts(&self) -> [&FieldSpan; 4] {
+        [&self.current, &self.boundary, &self.next, &self.after_next]
+    }
+
     /// Consume exactly the native result and schedule fields and bind both heights.
     /// Skipped execution/beacon/lane payloads remain part of the complete R hash;
     /// they never supply independent authority through this decoder.

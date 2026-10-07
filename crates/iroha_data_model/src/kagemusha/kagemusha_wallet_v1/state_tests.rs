@@ -129,7 +129,7 @@ fn sample_effects(f: &IdentityFixture) -> [KagemushaWalletEffectV1; 8] {
             enrollment_marker: MARKER,
         },
         KagemushaWalletEffectV1::Load {
-            voucher: field_value(0x62),
+            receipt_digest: field_value(0x62),
             load_ordinal: 0,
             amount: 5_000,
             online_charge: 25,
@@ -596,12 +596,12 @@ fn kagemusha_wallet_v1_effect_validation_rules() {
     for (effect, field) in [
         (
             KagemushaWalletEffectV1::Load {
-                voucher: [0x62; 32],
+                receipt_digest: [0x62; 32],
                 load_ordinal: 0,
                 amount: 1,
                 online_charge: 0,
             },
-            "effect.voucher",
+            "effect.receipt_digest",
         ),
         (
             KagemushaWalletEffectV1::Unload {
@@ -678,12 +678,12 @@ fn kagemusha_wallet_v1_effect_validation_rules() {
         ),
         (
             KagemushaWalletEffectV1::Load {
-                voucher: [0; 32],
+                receipt_digest: [0; 32],
                 load_ordinal: 0,
                 amount: 1,
                 online_charge: 0,
             },
-            "effect.voucher",
+            "effect.receipt_digest",
         ),
         (
             KagemushaWalletEffectV1::Receive {
@@ -987,7 +987,7 @@ fn kagemusha_wallet_v1_statement_layout_and_validation() {
             next_load,
             KagemushaWalletLifecycleV1::Retiring,
             KagemushaWalletEffectV1::Load {
-                voucher: [1; 32],
+                receipt_digest: [1; 32],
                 load_ordinal,
                 amount: 1,
                 online_charge: 0,
@@ -1203,7 +1203,7 @@ fn kagemusha_wallet_v1_statement_successor_rules() {
             ordinal + 1,
             lifecycle,
             KagemushaWalletEffectV1::Load {
-                voucher: field_value(0x62),
+                receipt_digest: field_value(0x62),
                 load_ordinal: ordinal,
                 amount: 1,
                 online_charge: 0,
@@ -1274,7 +1274,7 @@ fn kagemusha_wallet_v1_statement_successor_rules() {
         reverted.validate_successor_of(&retiring),
         "statement.lifecycle"
     ));
-    // A Retiring wallet keeps sending, receiving, loading issued vouchers, archiving,
+    // A Retiring wallet keeps sending, receiving, loading finalized Load receipts, archiving,
     // unloading and refreshing policy (§6.3).
     let body = &f.credential.body;
     for effect in [
@@ -1316,7 +1316,7 @@ fn kagemusha_wallet_v1_statement_successor_rules() {
             2,
             KagemushaWalletLifecycleV1::Retiring,
             KagemushaWalletEffectV1::Load {
-                voucher: field_value(0x63),
+                receipt_digest: field_value(0x63),
                 load_ordinal: 1,
                 amount: 1,
                 online_charge: 0,
@@ -1325,7 +1325,7 @@ fn kagemusha_wallet_v1_statement_successor_rules() {
     };
     late_load
         .validate_successor_of(&retiring)
-        .expect("a retiring wallet loads issued vouchers");
+        .expect("a retiring wallet loads finalized Load receipts");
     let mut late_send = reverted;
     late_send.lifecycle = KagemushaWalletLifecycleV1::Retiring;
     let mut stale_load = late_send;
@@ -1427,7 +1427,7 @@ fn kagemusha_wallet_v1_statement_consumer_checks_against_lineage() {
     let load = statement_for(
         &f,
         KagemushaWalletEffectV1::Load {
-            voucher: [1; 32],
+            receipt_digest: [1; 32],
             load_ordinal: 0,
             amount: 1,
             online_charge: 0,
@@ -2596,7 +2596,7 @@ fn kagemusha_wallet_v1_map_leaves_keys_and_values() {
     // One load/redeem recovery map keyed by (kind, ordinal) (owner answer Q3).
     let load = KagemushaWalletLoadLeafV1 {
         ordinal: 7,
-        voucher_digest: [8; 32],
+        receipt_digest: [8; 32],
         amount: 9,
     };
     let mut items = vec![int(7)];
@@ -2751,11 +2751,11 @@ fn kagemusha_wallet_v1_map_leaves_keys_and_values() {
         ));
         assert!(is_invalid(
             KagemushaWalletLoadLeafV1 {
-                voucher_digest: invalid,
+                receipt_digest: invalid,
                 ..load
             }
             .leaf_value(),
-            "load.voucher_digest"
+            "load.receipt_digest"
         ));
         assert!(is_invalid(
             KagemushaWalletRedeemLeafV1 {

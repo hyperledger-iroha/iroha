@@ -47,7 +47,7 @@ mod tests;
 // Active tapes separately constrain each individual length to its fixed capacity.
 // Their UInt32 lengths make this UInt33 sum exact, including cap+1; this shared
 // component is exercised for every boundary split without duplicating raw tapes.
-fn joint_length_valid(
+pub(super) fn joint_length_valid(
     uint: &mut UintChip<'_, Fp>,
     region: &mut Region<'_, Fp>,
     omega: &Uint<Fp, 32>,
@@ -188,7 +188,7 @@ impl ReceiveObjects {
         )?;
         let objects = &signed.objects;
         let mut context = signed.context.to_vec();
-        let scope = policy.scope(chip, region)?;
+        let provider = policy.provider(chip, region)?;
         let run = bytes.run(
             region,
             source.payment,
@@ -209,7 +209,7 @@ impl ReceiveObjects {
                 payer: &payer,
                 statement: input.sigma.incoming_statement()?,
                 receipt: &objects[2],
-                provider: &scope.provider,
+                provider: &provider,
                 proof_digest: &proof_digest,
             },
             input.incoming.public(),
@@ -232,7 +232,6 @@ impl ReceiveObjects {
         // verdict for an otherwise valid fixed Payment. Scope/relation are
         // likewise anchored by the authenticated current receiver.
         for (a, b) in [
-            (&own[3..5], scope.scheme.as_slice()),
             (&own[1..3], &input.receiver.fields()[3..5]),
             (&own[3..5], &input.receiver.fields()[1..3]),
             (&own[18..20], request.object().identifier(3)?.as_slice()),
@@ -325,14 +324,27 @@ impl ReceiveObjects {
         stage: u32,
         input: &ContextInputs<'_>,
     ) -> Result<(), Error> {
-        self.bind_context_inputs(chip, region, plan, input)?;
+        let valid = self.derive_objects(chip, region, plan, input)?;
         input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
             region,
             plan.receive_results().ok_or(Error::Synthesis)?,
             stage,
             ReceiveResultTag::Objects,
-            &self.valid,
+            &valid,
         )
+    }
+
+    // Native preparation consumes the same private Objects predicate. The complete
+    // fixed owning stage still binds this bit and proves all of its original sources.
+    pub(crate) fn derive_objects(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        input: &ContextInputs<'_>,
+    ) -> Result<Bit<Fp>, Error> {
+        self.bind_context_inputs(chip, region, plan, input)?;
+        Ok(self.valid.clone())
     }
 
     fn bind_context_inputs(

@@ -297,6 +297,59 @@ impl IndexRoot {
             }
         }
     }
+
+    /// Remove one key and return a new durable root, preserving the original snapshot.
+    /// An absent key leaves the root unchanged. Only its bounded Patricia path is retained;
+    /// collapsed branches keep their exact sibling subtree without rewriting its history.
+    ///
+    /// # Errors
+    /// Unavailable, corrupt or oversized nodes, or uncertain object publication.
+    pub fn remove(
+        self,
+        store: &mut impl ObjectStore,
+        key: &[u8; 32],
+    ) -> Result<Self, Error> {
+        let mut root = self.0;
+        let mut minimum = 0;
+        let mut path = Vec::new();
+        while root != [0; 32] {
+            match load(store, root, minimum)? {
+                Node::Leaf { key: held, .. } => {
+                    if held != *key {
+                        return Ok(self);
+                    }
+                    let Some((_, _, sibling, _)) = path.pop() else {
+                        return Ok(Self::default());
+                    };
+                    let mut replacement = sibling;
+                    while let Some((branch, prefix, sibling, right_side)) = path.pop() {
+                        let (left, right) = if right_side {
+                            (sibling, replacement)
+                        } else {
+                            (replacement, sibling)
+                        };
+                        replacement = save(store, &Node::Branch {
+                            bit: branch,
+                            prefix,
+                            left,
+                            right,
+                        })?;
+                    }
+                    return Ok(Self(replacement));
+                }
+                Node::Branch { bit: branch, prefix, left, right } => {
+                    if common(key, &prefix) < branch {
+                        return Ok(self);
+                    }
+                    let right_side = bit(key, branch);
+                    path.push((branch, prefix, if right_side { left } else { right }, right_side));
+                    root = if right_side { right } else { left };
+                    minimum = branch + 1;
+                }
+            }
+        }
+        Ok(self)
+    }
 }
 
 #[cfg(test)]
@@ -389,5 +442,39 @@ mod tests {
             root.get(&mut store, &key).is_err(),
             "missing authenticated nodes are never absence"
         );
+    }
+
+    #[test]
+    fn removal_collapses_only_its_path_and_preserves_old_snapshots() {
+        let mut store = Memory::default();
+        let mut root = IndexRoot::default();
+        let mut expected = BTreeMap::new();
+        for i in 0_u64..96 {
+            let key = digest(&i.to_le_bytes());
+            let value = i.to_le_bytes().to_vec();
+            root = root.set(&mut store, key, &value).unwrap();
+            expected.insert(key, value);
+        }
+        let original = root;
+        assert_eq!(root.remove(&mut store, &[0xff; 32]).unwrap(), root);
+        let keys: Vec<_> = expected.keys().copied().collect();
+        for key in keys {
+            store.reads = 0;
+            root = root.remove(&mut store, &key).unwrap();
+            assert!(store.reads <= 257);
+            expected.remove(&key);
+            assert_eq!(root.get(&mut store, &key).unwrap(), None);
+            assert!(original.get(&mut store, &key).unwrap().is_some());
+            assert_eq!(root.remove(&mut store, &key).unwrap(), root);
+            for (held, value) in &expected {
+                assert_eq!(root.get(&mut store, held).unwrap(), Some(value.clone()));
+            }
+        }
+        assert_eq!(root, IndexRoot::default());
+        let bytes = store.objects.remove(&original.0).unwrap();
+        assert!(original.remove(&mut store, &[0; 32]).is_err());
+        store.objects.insert(original.0, bytes);
+        store.objects.get_mut(&original.0).unwrap().push(0);
+        assert!(original.remove(&mut store, &[0; 32]).is_err());
     }
 }

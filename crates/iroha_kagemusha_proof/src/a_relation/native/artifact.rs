@@ -3,15 +3,77 @@
 //! Descriptor checks bind the arithmetic layout, transcript and public schema.
 //! They do not replace authentication of the stage's verifying-key commitments.
 
-use iroha_pasta::Fp;
+use iroha_pasta::{Fp, PastaCurve};
 use iroha_plonk::{
-    DescriptorBinding,
+    DescriptorBinding, ProvingKey, VerifyingKey,
     cs::{
         CircuitDescriptorV1, CircuitDescriptorV2, ConstraintSystem, CurveV1, DescriptorConfig,
         InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV1, TranscriptV2,
     },
     frontend::Circuit,
 };
+
+/// Exact installed verifier identity mismatch; no failure grants source admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArtifactError {
+    /// The complete descriptor or canonical verifying-key bytes differ.
+    Identity,
+}
+impl core::fmt::Display for ArtifactError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "native artifact identity mismatch")
+    }
+}
+impl std::error::Error for ArtifactError {}
+
+/// Authenticated verifier metadata without proving polynomials or original PK bytes.
+///
+/// The installation owner authenticates the exact descriptor, VK and compiled-source
+/// catalog. Constructing this pair checks identity only; it does not establish scheme
+/// authority or validate an original PK against the compiled operation source.
+#[derive(Clone, Debug)]
+pub struct KeyArtifact<C: PastaCurve> {
+    binding: DescriptorBinding,
+    key: VerifyingKey<C>,
+}
+impl<C: PastaCurve> KeyArtifact<C> {
+    /// Retain an exact installed descriptor/verifier pair without any PK backreference.
+    /// # Errors
+    /// The verifier is bound to another descriptor.
+    pub fn new(binding: DescriptorBinding, key: VerifyingKey<C>) -> Result<Self, ArtifactError> {
+        if key.descriptor_digest() != binding.digest() {
+            return Err(ArtifactError::Identity);
+        }
+        Ok(Self { binding, key })
+    }
+    /// Exact installed proof descriptor.
+    #[must_use]
+    pub const fn binding(&self) -> &DescriptorBinding {
+        &self.binding
+    }
+    /// Exact installed verifier; this owns no proving polynomials.
+    #[must_use]
+    pub const fn key(&self) -> &VerifyingKey<C> {
+        &self.key
+    }
+    /// Check a borrowed stage PK before any fold or proof work.
+    ///
+    /// Both the entire descriptor and canonical VK bytes must match. Matching only
+    /// a descriptor cannot establish the operation, stage or compiled source.
+    /// Original-source validation remains the owning importer's responsibility.
+    /// # Errors
+    /// Another descriptor or same-descriptor foreign stage/verifier.
+    pub fn require_prover(&self, key: &ProvingKey<C>) -> Result<(), ArtifactError> {
+        if key.binding() != &self.binding || key.vk().to_bytes() != self.key.to_bytes() {
+            return Err(ArtifactError::Identity);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "artifact/metadata_tests.rs"]
+mod metadata_tests;
 
 /// Reconstruct the fixed k16 source descriptor without synthesizing a witness.
 /// The caller supplies its concrete circuit and circuit-fixed profile parameters.
@@ -81,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn current_native_sources_share_exact_tagged3_and_reject_retired_layout() {
+    fn native_terminal_sources_share_tagged3_and_internal_sources_have_exact_profiles() {
         let expected = finalize(configured(true, 3, 69)).unwrap();
         assert_eq!(
             source_descriptor::<super::super::bootstrap::StageCircuit>(()).unwrap(),
@@ -98,6 +160,26 @@ mod tests {
         assert_eq!(
             source_descriptor::<super::super::consuming::StageCircuit>(()).unwrap(),
             expected
+        );
+        assert_eq!(
+            source_descriptor::<super::super::receive::StageCircuit>(3).unwrap(),
+            expected
+        );
+        assert_eq!(
+            source_descriptor::<super::super::receive::StageCircuit>(4).unwrap(),
+            finalize(configured(true, 4, 69)).unwrap()
+        );
+        assert_eq!(
+            source_descriptor::<super::super::refresh::StageCircuit>(()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            source_descriptor::<super::super::archive::StageCircuit>(3).unwrap(),
+            expected
+        );
+        assert_eq!(
+            source_descriptor::<super::super::archive::StageCircuit>(4).unwrap(),
+            finalize(configured(true, 4, 69)).unwrap()
         );
         assert_ne!(finalize(configured(false, 4, 69)).unwrap(), expected);
         assert_ne!(finalize(configured(true, 4, 69)).unwrap(), expected);

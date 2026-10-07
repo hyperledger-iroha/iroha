@@ -19,7 +19,7 @@ use crate::{
         },
         results::ReceiveResultClaims,
         schedule::OperationTask,
-        split::{ContextLinkCells, SplitPlan, close_first, close_stage, resume_context},
+        split::{SplitPlan, close_first, close_stage, resume_context},
         verify_predecessor, verify_q,
     },
     admin_sigma::StateWitness,
@@ -274,14 +274,12 @@ pub(super) struct Continuation {
     pub(super) proof: Vec<u8>,
     pub(super) carried: AccumulatorT<Ep>,
     pub(super) vesta: AccumulatorT<Eq>,
-    pub(super) history: Vec<(AccumulatorT<Ep>, AccumulatorT<Eq>)>,
 }
 #[derive(Clone)]
 pub(super) struct Stage {
     pub(super) source: Arc<Source>,
     pub(super) continuation: Option<Continuation>,
     pub(super) pallas: AccumulatorT<Ep>,
-    pub(super) first: AccumulatorT<Ep>,
     pub(super) fold: Vec<u8>,
     pub(super) known: bool,
 }
@@ -850,23 +848,12 @@ impl Circuit<Fp> for Stage {
                     let pallas =
                         cells.pallas(&mut chip, &mut region, &continuation.carried.as_input())?;
                     let vesta = cells.vesta(&mut chip, &mut region, &continuation.vesta)?;
-                    let retained_history = &continuation.history;
-                    let history = retained_history
-                        .iter()
-                        .map(|(p, v)| {
-                            Ok(ContextLinkCells {
-                                pallas: cells.pallas(&mut chip, &mut region, &p.as_input())?,
-                                vesta: cells.vesta(&mut chip, &mut region, v)?,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, Error>>()?;
                     let proof = cells.proof(&mut chip, &mut region, &continuation.proof)?;
                     let resumed = resume_context(
                         &mut chip,
                         &mut region,
                         &continuation.plan,
                         &input,
-                        &history,
                         &pallas,
                         &vesta,
                         &proof,

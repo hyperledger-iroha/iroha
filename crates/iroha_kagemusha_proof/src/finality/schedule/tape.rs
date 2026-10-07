@@ -46,6 +46,13 @@ pub struct ResultTapeWitness {
 }
 
 impl ResultTapeWitness {
+    /// Empty witness assignments for metadata-only layout synthesis; this is not a tape root.
+    pub const fn unknown() -> Self {
+        Self {
+            tree: Value::unknown(),
+        }
+    }
+
     /// Build witness paths from the original frame, with exact tag and zero pad.
     /// Unknown input preserves the same circuit layout through every read.
     /// # Errors
@@ -153,6 +160,27 @@ impl ResultTapeWitness {
         let first = self.opening(uint.glue(), region, index)?;
         let second = self.opening(uint.glue(), region, index.map(|index| index + 1))?;
         tape.read_window(uint, hash, region, offset, &[first, second])
+    }
+
+    /// Read a bounded frame suffix and synthesize zero bytes past its end.
+    /// The offset itself must be inside or exactly at the frame end. Bytes
+    /// outside the original frame cannot influence the returned cells.
+    /// # Errors
+    /// Layout errors; invalid paths or an offset past the frame are unsatisfied.
+    pub fn read_padded<const N: usize>(
+        &self,
+        tape: &ResultTape,
+        uint: &mut UintChip<'_, Fp>,
+        hash: &mut impl WordHasher<Fp>,
+        region: &mut Region<'_, Fp>,
+        offset: &Uint<Fp, 32>,
+    ) -> Result<[Word<Fp>; N], Error> {
+        let index = offset
+            .value()
+            .map(|offset| (offset + RESULT_TAG.len() as u128) / 32);
+        let first = self.opening(uint.glue(), region, index)?;
+        let second = self.opening(uint.glue(), region, index.map(|index| index + 1))?;
+        tape.read_padded_window(uint, hash, region, offset, &[first, second])
     }
 }
 
@@ -263,6 +291,43 @@ impl ResultTape {
         }
         let end = uint.checked_add_constant(region, offset, N as u128)?;
         uint.assert_le(region, &end, &self.frame_len)?;
+        self.raw_window(uint, hash, region, offset, openings)
+    }
+
+    /// Read the original frame suffix, replacing every out-of-frame byte with
+    /// a constrained zero. Membership of padding is never treated as authority.
+    /// # Errors
+    /// Layout errors; invalid paths or an offset past the frame are unsatisfied.
+    pub fn read_padded_window<const N: usize>(
+        &self,
+        uint: &mut UintChip<'_, Fp>,
+        hash: &mut impl WordHasher<Fp>,
+        region: &mut Region<'_, Fp>,
+        offset: &Uint<Fp, 32>,
+        openings: &[ChunkOpening; 2],
+    ) -> Result<[Word<Fp>; N], Error> {
+        uint.assert_le(region, offset, &self.frame_len)?;
+        let source: [Word<Fp>; N] = self.raw_window(uint, hash, region, offset, openings)?;
+        let mut out = Vec::with_capacity(N);
+        for (i, byte) in source.iter().enumerate() {
+            let position = uint.checked_add_constant(region, offset, i as u128)?;
+            let active = uint.lt(region, &position, &self.frame_len)?;
+            out.push(uint.glue().mul(region, active.word(), byte)?);
+        }
+        out.try_into().map_err(|_| Error::Synthesis)
+    }
+
+    fn raw_window<const N: usize>(
+        &self,
+        uint: &mut UintChip<'_, Fp>,
+        hash: &mut impl WordHasher<Fp>,
+        region: &mut Region<'_, Fp>,
+        offset: &Uint<Fp, 32>,
+        openings: &[ChunkOpening; 2],
+    ) -> Result<[Word<Fp>; N], Error> {
+        if !(1..=32).contains(&N) {
+            return Err(Error::Synthesis);
+        }
         let absolute = uint.checked_add_constant(region, offset, RESULT_TAG.len() as u128)?;
         let index = uint.assign::<12>(region, absolute.value().map(|value| value / 32))?;
         let within = uint.assign::<5>(region, absolute.value().map(|value| value % 32))?;
@@ -280,17 +345,14 @@ impl ResultTape {
         let mut selectors = Vec::with_capacity(32);
         let mut count = uint.glue().constant(region, Fp::ZERO)?;
         let mut selected_index = uint.glue().constant(region, Fp::ZERO)?;
-        for i in 0..32 {
+        for i in 0_u64..32 {
             let selected = uint
                 .glue()
-                .boolean(region, within.value().map(|value| value == i as u128))?;
+                .boolean(region, within.value().map(|value| value == u128::from(i)))?;
             count = uint.glue().add(region, &count, selected.word())?;
             selected_index = uint.glue().linear(
                 region,
-                &[
-                    (Fp::ONE, &selected_index),
-                    (Fp::from(i as u64), selected.word()),
-                ],
+                &[(Fp::ONE, &selected_index), (Fp::from(i), selected.word())],
                 Fp::ZERO,
             )?;
             selectors.push(selected);
@@ -323,6 +385,32 @@ pub struct TapeResultHashStream {
 }
 
 impl TapeResultHashStream {
+    /// Reopen the complete state committed by a preceding scan endpoint.
+    /// The caller must authenticate that endpoint and this unchanged tape root;
+    /// importing bounded words alone never authenticates a hash prefix.
+    /// # Errors
+    /// Layout errors; invalid lengths, progress or chaining words fail.
+    pub fn resume(
+        uint: &mut UintChip<'_, Fp>,
+        blake: &mut Blake2bChip<'_, Fp>,
+        region: &mut Region<'_, Fp>,
+        tape: &ResultTape,
+        processed: &Uint<Fp, 32>,
+        words: &[Word<Fp>; 8],
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            tape: tape.clone(),
+            stream: ResultHashStream::resume(
+                uint,
+                blake,
+                region,
+                tape.frame_len(),
+                processed,
+                words,
+            )?,
+        })
+    }
+
     /// Start at the exact native IV and offset zero.
     /// # Errors
     /// Layout errors or an oversized result length.
@@ -373,6 +461,52 @@ impl TapeResultHashStream {
             tape: self.tape.clone(),
             stream: self.stream.absorb(uint, blake, region, &bytes)?,
         })
+    }
+
+    /// Advance an unfinished stream, or preserve every completed state word.
+    ///
+    /// This supports a fixed source schedule. Activity is derived from the
+    /// constrained byte progress; a witness cannot disable an unfinished block.
+    /// Completed streams authenticate the first four tape chunks and execute a
+    /// discarded compression at offset zero, keeping the same circuit layout.
+    /// Their actual progress and all eight chaining words remain unchanged.
+    /// # Errors
+    /// Layout errors; invalid membership, alignment, domain or padding fails.
+    pub fn absorb_padded(
+        &self,
+        uint: &mut UintChip<'_, Fp>,
+        hash: &mut impl WordHasher<Fp>,
+        blake: &mut Blake2bChip<'_, Fp>,
+        region: &mut Region<'_, Fp>,
+        openings: &[ChunkOpening; 4],
+    ) -> Result<Self, Error> {
+        let total =
+            uint.checked_add_constant(region, self.tape.frame_len(), RESULT_TAG.len() as u128)?;
+        let active = uint.lt(region, self.stream.processed(), &total)?;
+        let zero = uint.glue().constant(region, Fp::ZERO)?;
+        let safe_progress =
+            uint.glue()
+                .select(region, &active, self.stream.processed().word(), &zero)?;
+        let safe_progress = uint.range_check::<32>(region, &safe_progress)?;
+        let words = blake
+            .state_words(region, self.stream.state())?
+            .map(|word| word.word().clone());
+        let safe = Self::resume(uint, blake, region, &self.tape, &safe_progress, &words)?;
+        let next = safe.absorb(uint, hash, blake, region, openings)?;
+        let next_words = blake.state_words(region, next.stream.state())?;
+        let mut selected = Vec::with_capacity(8);
+        for (before, after) in words.iter().zip(&next_words) {
+            selected.push(uint.glue().select(region, &active, after.word(), before)?);
+        }
+        let selected = selected.try_into().map_err(|_| Error::Synthesis)?;
+        let processed = uint.glue().select(
+            region,
+            &active,
+            next.stream.processed().word(),
+            self.stream.processed().word(),
+        )?;
+        let processed = uint.range_check::<32>(region, &processed)?;
+        Self::resume(uint, blake, region, &self.tape, &processed, &selected)
     }
 
     /// Require complete consumption and release its exact native result digest.

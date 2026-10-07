@@ -37,7 +37,53 @@ pub(crate) fn rooted_compact_bootstrap_with_identity(
     let initial_binding = initial_key.binding().clone();
     let initial_vk = initial_key.vk().clone();
     let digest = initial_vk.kagemusha_digest(&initial_binding).unwrap();
+    let original = initial_key.artifact_bytes_v2().unwrap();
     drop(initial_key);
+
+    // The installation factory independently reconstructs the same source from
+    // only the terminal originals. It must not need the valid source witness used
+    // by the engineering diagnostic above or change the already selected key.
+    let catalog = [initial.key.to_bytes().to_vec()];
+    let native_program = iroha_kagemusha_proof::omega::native::Program::for_compiled_catalog(
+        initial.binding.encoded(),
+        &catalog,
+        PinnedParams::<Eq>::derive(16).unwrap(),
+        params.clone(),
+    )
+    .unwrap();
+    let factory = native_program.source_circuit().unwrap();
+    let (factory_binding, factory_key) =
+        iroha_plonk::keys::keygen_vk_with_binding_v2(&params, &factory, &config).unwrap();
+    assert_eq!(factory_binding, initial_binding);
+    assert_eq!(factory_key.to_bytes(), initial_vk.to_bytes());
+    let native = iroha_kagemusha_proof::omega::native::Prover::from_original_artifact(
+        native_program.clone(),
+        initial_binding.encoded(),
+        initial_vk.to_bytes(),
+        &original,
+        iroha_plonk::keys::pk::artifact::ReadConfig {
+            maximum_bytes: original.len(),
+            maximum_rows: 1 << 16,
+            coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+            msm_budget: MemoryBudget::DEFAULT,
+        },
+    )
+    .unwrap();
+    assert_eq!(native.binding(), &initial_binding);
+    assert_eq!(native.verifying_key().to_bytes(), initial_vk.to_bytes());
+    drop(native);
+    drop(original);
+    for bad_catalog in [vec![], vec![catalog[0].clone(), catalog[0].clone()]] {
+        assert!(
+            iroha_kagemusha_proof::omega::native::Program::for_compiled_catalog(
+                initial.binding.encoded(),
+                &bad_catalog,
+                PinnedParams::<Eq>::derive(16).unwrap(),
+                params.clone(),
+            )
+            .is_err()
+        );
+    }
 
     // The signed credential, receipt, sigma, Q and each A/W stage are rebuilt
     // with the actual digest. No public word is changed after a proof exists.

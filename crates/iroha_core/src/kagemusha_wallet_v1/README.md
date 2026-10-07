@@ -37,6 +37,17 @@ enclosing transaction rolls the event back with its debit and receipt. The indep
 event-inclusion verifier requires native global finality and the complete expected
 receipt. Event naming or an unsigned receipt alone cannot authorize offline value.
 
+The output seal retains each Load's counted event path in the same World overlay before
+capturing the World root and execution witness. Each row has a fixed 32-sibling bound and
+contains only its receipt digest, height, root, count and index; it contains no certificate or
+carrier hash. Snapshot validation requires every issuance to retain its matching path.
+`NativeFinalityCursorV1::advance_to_height` advances a charged in-memory prefix from the
+original signed genesis in bounded steps and returns an opaque historical native result.
+`CommittedLoadReceipts::event_evidence_for` joins that result to the indexed original receipt
+and path, checks the certified event root and count, and invokes the model's event verifier.
+The cursor cannot import checkpoint trust or rewind progress. Receipt-only recovery remains
+available without historical certificate custody; authenticated event evidence requires it.
+
 Load deposits and Unload/fee payouts use the existing atomic numeric movement owner,
 including transfer controls, source custody, exact balances, admission and execution
 transcripts. Both balance buckets must equal the registered scope. Online asset controls

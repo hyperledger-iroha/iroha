@@ -140,7 +140,7 @@ fn tasks(variant: Variant) -> Vec<Vec<OperationTask>> {
 
 #[test]
 fn every_refresh_kind_pins_its_exact_original_shape_and_all_five_signature_slots() {
-    let policy = OwnPolicy::new([1, 2], [3, 4], Affine::GENERATOR).unwrap();
+    let policy = OwnPolicy::new([3, 4], Affine::GENERATOR).unwrap();
     let schemas = RefreshStagePlan::signature_schemas(policy).unwrap();
     assert_eq!(schemas[0].slots().len(), 3);
     assert_eq!(schemas[1].slots().len(), 2);
@@ -194,7 +194,7 @@ fn every_refresh_kind_pins_its_exact_original_shape_and_all_five_signature_slots
 
 #[test]
 fn refresh_task_schemas_cannot_omit_duplicate_or_relabel_authentication_or_maps() {
-    let policy = OwnPolicy::new([1, 2], [3, 4], Affine::GENERATOR).unwrap();
+    let policy = OwnPolicy::new([3, 4], Affine::GENERATOR).unwrap();
     let schemas = RefreshStagePlan::signature_schemas(policy).unwrap();
     for variant in VARIANTS {
         let operation = operation(variant, &schemas);

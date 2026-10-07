@@ -75,8 +75,8 @@ pub enum OperationTask {
     BootstrapAuthorization = 2,
     /// Load arithmetic and exact depth32 insert-only recovery entry.
     LoadRecovery = 3,
-    /// Load issuer authorization and exact operation receipt.
-    LoadAuthorization = 4,
+    /// Exact own Advance receipt under the predecessor payment key.
+    LoadReceipt = 4,
     /// Send current credential, exact Request and held fee terms.
     SendObjects = 5,
     /// Send pending descriptor insertion into the adjusted lineage map.
@@ -137,7 +137,7 @@ pub enum OperationTask {
     ArchiveAuthorization = 33,
     /// Exact own sigma tape and its sigma-only receipt digest.
     ArchiveOwnProof = 34,
-    /// Hard pending removals and terminal evidence iff/no-op rule.
+    /// Terminal evidence iff/no-op rule and exact incoming mode closure.
     ArchiveEffects = 35,
     /// Exact OQ-3 consumed-credit map update under the complete Receive verdict.
     ReceiveConsumedEffects = 36,
@@ -149,6 +149,14 @@ pub enum OperationTask {
     RefreshQuotaWindowRoot = 39,
     /// Authenticate all64 successor usage leaves aligned with the new windows.
     RefreshQuotaUsageRoot = 40,
+    /// Complete genesis-rooted ordinary receipt proof and both source claims.
+    LoadFinality = 41,
+    /// Exact retained Omega/sigma tapes and their unconditional joint bound.
+    ArchiveRetainedProofs = 42,
+    /// Unconditional removal of the exact retained descriptor from the core map.
+    ArchiveCorePending = 43,
+    /// Hard adjusted pending path with the complete committed evidence verdict.
+    ArchiveLineagePending = 44,
 }
 impl OperationTask {
     /// Stable context-schema code, not an operation's wire tag.
@@ -162,8 +170,9 @@ impl OperationTask {
             Variant::Bootstrap => &[Self::BootstrapState, Self::BootstrapAuthorization],
             Variant::Load => &[
                 Self::LoadRecovery,
-                Self::LoadAuthorization,
+                Self::LoadReceipt,
                 Self::LoadCurrentAuthorization,
+                Self::LoadFinality,
             ],
             Variant::Send => &[
                 Self::SendObjects,
@@ -225,6 +234,9 @@ impl OperationTask {
                 Self::ArchiveAuthorization,
                 Self::ArchiveOwnProof,
                 Self::ArchiveEffects,
+                Self::ArchiveRetainedProofs,
+                Self::ArchiveCorePending,
+                Self::ArchiveLineagePending,
             ],
         }
     }
@@ -430,3 +442,6 @@ mod circuit_tests {
         );
     }
 }
+
+/// Compiled full operation partitions shared by native sources and artifact identity.
+pub mod compiled;

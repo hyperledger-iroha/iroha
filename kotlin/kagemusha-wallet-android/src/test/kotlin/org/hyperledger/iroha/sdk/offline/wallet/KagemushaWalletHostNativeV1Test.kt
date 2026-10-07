@@ -1,0 +1,103 @@
+// Copyright 2026 Hyperledger Iroha Contributors
+// SPDX-License-Identifier: Apache-2.0
+package org.hyperledger.iroha.sdk.offline.wallet
+
+import java.io.File
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+
+/** Actual host JNI boundary checks; no installed monetary provider or phone qualification. */
+@Tag("host-native")
+class KagemushaWalletHostNativeV1Test {
+    @TempDir lateinit var directory: File
+
+    @BeforeEach
+    fun requireCurrentNativeBridge() {
+        assertTrue(NativeSignerBridge.isNativeAvailable(), "The supplied ABI-26 native bridge must load")
+        assertEquals(1, KagemushaWalletNativeV1.revision())
+    }
+
+    @Test
+    fun unavailableArtifactsNeverOpenAnOwnerOrMutateCustody() {
+        val keys = TestKeyStoreV1()
+        val platform = KagemushaWalletAndroidPlatformV1.create(TestEnvironmentV1(directory), keys)
+        fun files() = directory.walkTopDown().filter { it.isFile }
+            .associate { it.relativeTo(directory).path to it.readBytes().toList() }
+        val before = files()
+        val probes = keys.getKeyCalls
+        val id = ByteArray(32) { 1 }
+        repeat(2) {
+            val error = assertFailsWith<KagemushaWalletExceptionV1> {
+                KagemushaWalletV1.open(platform, id, id, id, id)
+            }
+            assertEquals(KagemushaWalletExceptionV1.ARTIFACTS_UNAVAILABLE, error.status)
+        }
+        assertEquals(before, files())
+        assertEquals(probes, keys.getKeyCalls)
+        assertTrue(keys.generated.isEmpty())
+        assertEquals(0, keys.signCalls)
+        assertEquals(0, keys.deleteCalls)
+    }
+
+    @Test
+    fun unknownHandlesReturnExactFailureObjectsAndNeverCompletionBytes() {
+        val id = ByteArray(32) { 1 }
+        for (operation in 1..5) {
+            val first = if (operation == 1 || operation == 4 || operation == 5) id else byteArrayOf()
+            val second = if (operation == 4) id else byteArrayOf()
+            val reply = assertNotNull(KagemushaWalletNativeV1.call(0, operation, first, second))
+            assertEquals(-2, reply.status)
+            assertEquals(-1, reply.reason)
+            assertEquals(0, reply.platformCode)
+            assertTrue(reply.bytes().isEmpty())
+        }
+        val execute = assertNotNull(KagemushaWalletNativeV1.execute(0, id, 9, 0, 0, byteArrayOf(), byteArrayOf(), byteArrayOf()))
+        assertEquals(-2, execute.status)
+        assertTrue(execute.bytes().isEmpty())
+        val snapshot = assertNotNull(KagemushaWalletNativeV1.snapshot(0))
+        assertEquals(-2, snapshot.status)
+        assertEquals(-1, snapshot.reason)
+        assertEquals(0, snapshot.platformCode)
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletSnapshotV1(snapshot) }
+        assertEquals(-2, KagemushaWalletNativeV1.close(0))
+        assertEquals(-2, KagemushaWalletNativeV1.activity(0, 1, 0))
+        assertEquals(-1, KagemushaWalletNativeV1.activity(0, 2, 0))
+    }
+
+    @Test
+    fun malformedNativeCallsRejectBeforeUnknownHandleLookup() {
+        val id = ByteArray(32) { 1 }
+        val platform = KagemushaWalletAndroidPlatformV1.create(TestEnvironmentV1(directory), TestKeyStoreV1())
+        assertEquals(-1L, KagemushaWalletNativeV1.open(platform, ByteArray(31), id, id, id))
+        assertEquals(-1L, KagemushaWalletNativeV1.open(platform, id, id, id, ByteArray(32)))
+        val cases = listOf(
+            Triple(0, byteArrayOf(), byteArrayOf()),
+            Triple(1, ByteArray(31), byteArrayOf()),
+            Triple(2, byteArrayOf(1), byteArrayOf()),
+            Triple(3, byteArrayOf(), byteArrayOf(1)),
+            Triple(4, ByteArray(31), id),
+            Triple(4, id, ByteArray(31)),
+            Triple(99, byteArrayOf(), byteArrayOf()),
+        )
+        for (selector in 0..10) {
+            val reply = assertNotNull(KagemushaWalletNativeV1.execute(0, id, selector, 0, 0,
+                ByteArray(2_228_737), byteArrayOf(), byteArrayOf()))
+            assertEquals(-1, reply.status)
+            assertTrue(reply.bytes().isEmpty())
+        }
+        for ((operation, first, second) in cases) {
+            val reply = assertNotNull(KagemushaWalletNativeV1.call(0, operation, first, second))
+            assertEquals(-1, reply.status)
+            assertEquals(-1, reply.reason)
+            assertEquals(0, reply.platformCode)
+            assertTrue(reply.bytes().isEmpty())
+        }
+    }
+}

@@ -3,54 +3,30 @@
 #[cfg(test)]
 mod tests;
 
+#[path = "checkpoint.rs"]
+mod checkpoint;
+pub use checkpoint::{CheckpointKind, CheckpointLayout};
+#[path = "original.rs"]
+mod original;
+
 use super::circuit::{Continuation, Stage};
 use super::*;
 use crate::{
-    a_relation::split::{SplitPlan, WCircuit, WKey},
+    a_relation::{
+        native::artifact::KeyArtifact,
+        split::{SplitPlan, WCircuit, WKey},
+    },
     omega::OmegaWitness,
 };
-use iroha_pasta::PastaCurve;
 use iroha_plonk::{
     ProverConfig, ProverRandomness, ProvingKey, Witness, create_proof_owned_with_claim,
 };
 
-/// Authenticated verifier metadata retained without any proving-key buffers.
-/// Artifact installation authenticates this pair before constructing the producer.
-#[derive(Clone, Debug)]
-pub struct KeyArtifact<C: PastaCurve> {
-    binding: DescriptorBinding,
-    key: VerifyingKey<C>,
-}
-impl<C: PastaCurve> KeyArtifact<C> {
-    /// Import the exact installed descriptor and verifying key.
-    /// # Errors
-    /// The key is not bound to this descriptor.
-    pub fn new(binding: DescriptorBinding, key: VerifyingKey<C>) -> Result<Self, Error> {
-        if key.descriptor_digest() != binding.digest() {
-            return Err(Error::Artifact);
-        }
-        Ok(Self { binding, key })
-    }
-    /// Exact installed proof descriptor.
-    pub const fn binding(&self) -> &DescriptorBinding {
-        &self.binding
-    }
-    /// Exact installed verifier; this owns no proving polynomials.
-    pub const fn key(&self) -> &VerifyingKey<C> {
-        &self.key
-    }
-    fn require_prover(&self, key: &ProvingKey<C>) -> Result<(), Error> {
-        if key.binding() != &self.binding || key.vk().to_bytes() != self.key.to_bytes() {
-            return Err(Error::Artifact);
-        }
-        Ok(())
-    }
-}
-
 /// Installed A1–A10 and W0–W8 artifacts for the complete Receive owner schedule.
 /// Only verifier metadata is retained. The caller borrows one matching stage
 /// proving key for each proving call and may release it immediately afterward.
-/// Package authentication and original PK import belong to artifact installation.
+/// Package authentication belongs to artifact installation. Original PK intake
+/// checks one stage against the fixed compiled source before returning its key.
 pub struct Prover {
     plan: Plan,
     a: [KeyArtifact<Eq>; A_STAGE_COUNT],
@@ -231,7 +207,8 @@ impl Session<'_> {
             .a
             .get(stage)
             .ok_or(Error::Artifact)?
-            .require_prover(key)?;
+            .require_prover(key)
+            .map_err(|_| Error::Artifact)?;
         let public = stage_public(&circuit)?;
         let actual = StageCircuit {
             inner: circuit.clone(),
@@ -260,7 +237,9 @@ impl Session<'_> {
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<ACheckpoint, Error> {
-        self.prover.a[0].require_prover(key)?;
+        self.prover.a[0]
+            .require_prover(key)
+            .map_err(|_| Error::Artifact)?;
         self.prove_a(
             0,
             self.prepared.first(salt, fold)?,
@@ -284,7 +263,6 @@ impl Session<'_> {
             source: self.prepared.source.clone(),
             continuation: None,
             pallas: pallas.clone(),
-            first: pallas,
             fold: vec![],
             known: true,
         };
@@ -312,7 +290,8 @@ impl Session<'_> {
             .w
             .get(source.stage)
             .ok_or(Error::Artifact)?
-            .require_prover(key)?;
+            .require_prover(key)
+            .map_err(|_| Error::Artifact)?;
         self.verify_a(source, fold.kernel_budget)?;
         if source.stage + 1 >= A_STAGE_COUNT {
             return Err(Error::Input);
@@ -429,13 +408,6 @@ impl Session<'_> {
         )
         .map_err(|_| Error::Artifact)?;
         let previous = &wrapper.source.circuit;
-        let mut history = previous
-            .continuation
-            .as_ref()
-            .map_or_else(Vec::new, |c| c.history.clone());
-        if let Some(c) = &previous.continuation {
-            history.push((c.carried.clone(), c.vesta.clone()));
-        }
         Ok(Stage {
             source: self.prepared.source.clone(),
             continuation: Some(Continuation {
@@ -443,10 +415,8 @@ impl Session<'_> {
                 proof: wrapper.proof.clone(),
                 carried: previous.pallas.clone(),
                 vesta: wrapper.vesta.clone(),
-                history,
             }),
             pallas,
-            first: previous.first.clone(),
             fold,
             known: true,
         })
@@ -526,13 +496,14 @@ impl Session<'_> {
             .a
             .get(index)
             .ok_or(Error::Artifact)?
-            .require_prover(key)?;
+            .require_prover(key)
+            .map_err(|_| Error::Artifact)?;
         let circuit = self.prepare_advance(wrapper, salt, fold)?;
         self.prove_a(index, circuit, key, randomness, config, fold.kernel_budget)
     }
     /// Restore a subsequent A from its exact W predecessor and carried Pallas bytes.
     /// # Errors
-    /// Wrong retained history/context, malformed claim, failed proof or decide.
+    /// Wrong retained context, malformed claim, failed proof or decide.
     pub fn restore_a(
         &self,
         wrapper: &WCheckpoint,
@@ -574,7 +545,7 @@ impl Session<'_> {
     }
 }
 
-/// Verified source-bound A proof and retained exact continuation history.
+/// Verified source-bound A proof and retained exact continuation source.
 #[derive(Clone)]
 pub struct ACheckpoint {
     stage: usize,

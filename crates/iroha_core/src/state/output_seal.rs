@@ -440,6 +440,22 @@ impl StateBlock<'_> {
             }
             // Borrow the actual World journals after every finalizer effect.
             // Encoding failure is a local ownership error before attachment.
+            // Retain inclusion paths from this exact event cut before World and
+            // witness capture. No carrier/QC hash enters these deterministic rows.
+            let budget = state.state_ref.ivm_execution_budget();
+            let height = state._curr_block.height().get();
+            crate::kagemusha_wallet_v1::event_evidence::retain(&mut state.world, height, &budget)
+                .map_err(|error| match error {
+                crate::kagemusha_wallet_v1::event_evidence::PreparationError::Invalid(reason) => {
+                    ExecutionOutputSealError::Owner(reason)
+                }
+                crate::kagemusha_wallet_v1::event_evidence::PreparationError::Deferred(reason) => {
+                    ExecutionOutputSealError::Deferred(reason)
+                }
+            })?;
+            state
+                .require_storage_admission()
+                .map_err(ExecutionOutputSealError::Storage)?;
             let world_delta = state.world.net_state_delta()?;
             block
                 .set_execution_outputs(

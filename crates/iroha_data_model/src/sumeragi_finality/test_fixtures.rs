@@ -126,15 +126,22 @@ impl NativeFinalityFixture {
     /// Fixed public fixture keys and synthetic execution results grant no runtime authority.
     #[must_use]
     pub fn new_with_explicit_parameters() -> Self {
-        let mut fixture = Self::start_with_mode_and_scope_parameters(
-            "portable-native-fixture",
-            SumeragiConsensusMode::Permissioned,
-            crate::block::consensus::SumeragiRootScope::Global,
-            true,
-        );
+        let mut fixture = Self::start_with_explicit_parameters("portable-native-fixture");
         let block = fixture.block_with_submitted_work(fixture.next_header());
         fixture.certify(block);
         fixture
+    }
+
+    /// Start at a signed global genesis containing every explicit chain parameter.
+    /// This fixture owner leaves H2 available for the caller's submitted work.
+    #[must_use]
+    pub fn start_with_explicit_parameters(chain_id: &str) -> Self {
+        Self::start_with_mode_and_scope_parameters(
+            chain_id,
+            SumeragiConsensusMode::Permissioned,
+            crate::block::consensus::SumeragiRootScope::Global,
+            true,
+        )
     }
 
     /// Start at deterministic signed genesis for a separately selected fixture chain label.
@@ -631,7 +638,6 @@ impl NativeFinalityFixture {
     }
 }
 
-#[cfg(test)]
 mod npos_capture;
 
 #[cfg(test)]

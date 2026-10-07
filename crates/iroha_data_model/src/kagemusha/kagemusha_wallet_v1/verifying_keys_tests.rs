@@ -4,6 +4,7 @@ use iroha_crypto::Hash;
 
 use super::*;
 use crate::kagemusha::kagemusha_wallet_v1::{
+    KAGEMUSHA_WALLET_CREDITED_RECEIVE_FIXED_BYTES_V1,
     KAGEMUSHA_WALLET_CREDITED_STATUS_FIXED_BYTES_V1, KAGEMUSHA_WALLET_PAYMENT_FIXED_BYTES_V1,
     KAGEMUSHA_WALLET_VERSION_V1, KagemushaWalletValidationErrorV1,
     codec_tests::norito_tag,
@@ -492,6 +493,69 @@ fn kagemusha_wallet_v1_verifying_key_allowlist_rules() {
     receive
         .validate()
         .expect("σ_recv outside the Payment budget");
+}
+
+#[test]
+fn kagemusha_wallet_v1_verifying_key_receive_budget_preserves_exact_selectors() {
+    use KagemushaWalletOperationKindV1 as Kind;
+
+    let budget = KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1;
+    assert_eq!(
+        budget,
+        10_000 - KAGEMUSHA_WALLET_CREDITED_RECEIVE_FIXED_BYTES_V1
+    );
+    assert_eq!(budget, 9_321);
+    for mask in [0, KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1] {
+        let mut allowlist = sample_allowlist();
+        let selected = allowlist
+            .steps
+            .iter_mut()
+            .find(|entry| entry.selector() == (Kind::Receive.tag(), mask))
+            .expect("Receive selector");
+        selected.proof_bytes = u32::try_from(budget).expect("budget");
+        let digest = selected.verifying_key_digest;
+        allowlist
+            .validate()
+            .expect("Receive exactly at its envelope budget");
+        let proof = stand_in_proof(budget);
+        assert_eq!(
+            allowlist
+                .check_step_proof(Kind::Receive, mask, &proof)
+                .expect("exact selected proof length"),
+            digest
+        );
+        assert_invalid(
+            allowlist.check_step_proof(Kind::Receive, mask, &stand_in_proof(budget - 1)),
+            "step_proof.length",
+        );
+        assert_invalid(
+            allowlist.check_step_proof(Kind::Receive, mask, &stand_in_proof(budget + 1)),
+            "step_proof.length",
+        );
+        assert_invalid(
+            allowlist.check_step_proof(
+                Kind::Receive,
+                mask ^ KAGEMUSHA_WALLET_CONTROL_BLACKLIST_V1,
+                &proof,
+            ),
+            "step_proof.length",
+        );
+        assert_invalid(
+            allowlist.check_step_proof(Kind::Receive, KAGEMUSHA_WALLET_CONTROL_QUOTAS_V1, &proof),
+            "verifying_keys.selector",
+        );
+        allowlist
+            .steps
+            .iter_mut()
+            .find(|entry| entry.selector() == (Kind::Receive.tag(), mask))
+            .expect("Receive selector")
+            .proof_bytes += 1;
+        assert_invalid(allowlist.validate(), "verifying_keys.receive_proof_bytes");
+        assert_invalid(
+            allowlist.verifying_key_set_digest(),
+            "verifying_keys.receive_proof_bytes",
+        );
+    }
 }
 
 #[test]

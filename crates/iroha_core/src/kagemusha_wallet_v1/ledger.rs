@@ -202,7 +202,7 @@ pub fn issue_load(tx: &mut impl Transaction, command: &LoadCommand) -> Result<Is
         transaction_hash: tx.transaction_hash(),
         block_height: tx.block_height(),
         request_id: command.request_id,
-        payer: tx.authority().clone(),
+        payer_account_digest: kagemusha_wallet_account_digest_v1(tx.authority())?,
     };
     body.validate()?;
     let issuance = Issuance {

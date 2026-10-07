@@ -1,4 +1,4 @@
-//! Private operation selection for the one ordinary CommitVote BLS program.
+//! Private operation selection for the one ordinary `CommitVote` BLS program.
 use iroha_plonk_gadgets::bls12_381::{
     curve::{
         g1_program::G1_SUBGROUP_STEPS,
@@ -36,14 +36,15 @@ pub struct BlsLeafPlan {
 impl BlsLeafPlan {
     /// Number of real leaves, excluding any outer recursion-tree padding.
     pub const LENGTH: u32 = 1084;
-    /// Ordinary Sumeragi CommitVote preimage length.
+    /// Ordinary Sumeragi `CommitVote` preimage length.
     pub const MESSAGE_BYTES: usize = 165;
     /// Fixed first-release program identity.
     pub const PROGRAM_ID: u64 = u64::from_le_bytes(*b"kgwblsp1");
     /// Select a compiled leaf by its exact program cursor.
     /// Out-of-program indices have no plan or admissible source key.
     pub fn at(cursor: u32) -> Option<Self> {
-        let segments: &[(usize, fn(usize) -> Step)] = &[
+        type Segment = (usize, fn(usize) -> Step);
+        let segments: &[Segment] = &[
             (1, |_| Step::Start),
             (G1_SUBGROUP_STEPS.len(), Step::G1),
             (1, |_| Step::StartSignature),

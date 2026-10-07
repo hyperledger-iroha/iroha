@@ -1,6 +1,9 @@
 //! Production Bootstrap A1/W/A2 assembly from original signed object tapes.
 //!
-//! The installed owner supplies fixed Q, A and W artifacts and converts canonical
+//! The installed owner authenticates the fixed Q/A/W plan and verifier identities
+//! independently of operation witnesses. Original A/W proving material is imported
+//! against those keys and the exact witnessless compiled source; no separate PK
+//! byte-signing format is required by this component. The owner converts canonical
 //! G1 objects to these typed proof inputs. Every Q proof is verified in full here;
 //! A1 binds its sigma tape, A2 authenticates the original Enrollment certificate,
 //! Credential and Advance Receipt and retains Q0, W and Q1 opening obligations.
@@ -12,6 +15,7 @@
 mod checkpoint;
 pub use checkpoint::{CheckpointKind, CheckpointLayout};
 
+use super::artifact::KeyArtifact;
 use core::fmt;
 use std::sync::Arc;
 
@@ -20,10 +24,14 @@ use iroha_pasta::{
     Ep, Eq, EqAffine, Fp, Fq, PastaAffine, msm::MemoryBudget, poseidon::hash_with_domain,
 };
 use iroha_plonk::{
-    ProverConfig, ProverRandomness, ProvingKey, VerifyingKey, Witness,
+    DescriptorBinding, ProverConfig, ProverRandomness, ProvingKey, VerifyingKey, Witness,
     create_proof_owned_with_claim,
-    cs::{Column, ConstraintSystem, Instance, InstanceType},
+    cs::{
+        Column, ConstraintSystem, CurveV1, Instance, InstanceModeV1, InstanceType, ProofSuffixV1,
+        TranscriptV2,
+    },
     frontend::{Circuit, Error as LayoutError, Layouter, Region, SimpleFloorPlanner, Value},
+    keys::pk::artifact::ReadConfig,
     pcs::ipa::PinnedParams,
     transcript::decode_point,
     verifier::{accumulate_generator, verify_full},
@@ -52,7 +60,6 @@ use super::super::{
     bind_signature_q,
     bootstrap::{BootstrapInputs, BootstrapObjects, BootstrapPolicy},
     context::{ContextInputs, ContextPlan, ContextState},
-    schedule::OperationTask,
     split::{SplitPlan, WCircuit, WKey, close_first, close_stage, resume_context},
     verify_q, verify_sigma,
 };
@@ -66,6 +73,9 @@ use crate::{
 /// The fixed source profile measured with the complete Bootstrap/Load catalog.
 /// A witness cannot select another bus count or a generic fallback profile.
 pub const SOURCE_RANGE_BUSES: usize = 3;
+
+const DESCRIPTOR_MAX_BYTES: usize = 1 << 20;
+const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
 
 /// Production preparation or proof failure. No failure changes a monetary head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,8 +124,8 @@ pub struct Inputs {
 /// Installed A1 and W0 keys for the first recursive transition.
 #[derive(Clone, Copy)]
 pub struct WrapperKeys<'a> {
-    /// Exact first-stage proving key whose proof W0 consumes.
-    pub first: &'a ProvingKey<Eq>,
+    /// Exact first-stage verifier metadata whose proof W0 consumes.
+    pub first: &'a KeyArtifact<Eq>,
     /// Exact installed W0 proving key.
     pub wrapper: &'a ProvingKey<Ep>,
 }
@@ -187,22 +197,15 @@ impl Plan {
         {
             return Err(Error::Artifact);
         }
-        let context = ContextPlan::new(
+        let context = crate::a_relation::schedule::compiled::OperationSchedule::for_variant(
+            Variant::Bootstrap,
+        )
+        .bind(
             operation,
-            1,
             BootstrapObjects::context_specs()
                 .map_err(|_| Error::Artifact)?
                 .to_vec(),
         )
-        .and_then(|plan| {
-            plan.with_operation_tasks(vec![
-                vec![],
-                vec![
-                    OperationTask::BootstrapState,
-                    OperationTask::BootstrapAuthorization,
-                ],
-            ])
-        })
         .map_err(|_| Error::Artifact)?;
         Ok(Self {
             context,
@@ -315,41 +318,83 @@ fn check_sigma_tape(input: &Inputs) -> Result<(), Error> {
     Ok(())
 }
 
-/// Already installed proving artifacts for this single Bootstrap source profile.
-/// The native artifact loader authenticates these exact keys before construction.
-/// Each runtime session then uses these fixed keys without a witness profile choice.
+fn artifact_metadata<C: iroha_pasta::PastaCurve>(
+    artifact: &KeyArtifact<C>,
+    curve: CurveV1,
+    lengths: &[u32],
+    types: &[InstanceType],
+) -> Result<(), Error> {
+    let binding = artifact.binding();
+    let d = binding.descriptor();
+    if binding.encoded().len() > DESCRIPTOR_MAX_BYTES
+        || artifact.key().to_bytes().len() > VERIFYING_KEY_MAX_BYTES
+        || d.k != 16
+        || d.curve != curve
+        || d.transcript != TranscriptV2::KagemushaPoseidonRp57Base
+        || d.instance_mode != InstanceModeV1::Direct
+        || d.proof_suffix != ProofSuffixV1::FoldedGenerator
+        || d.instance_lengths.as_slice() != lengths
+        || d.instance_types.as_deref() != Some(types)
+    {
+        return Err(Error::Artifact);
+    }
+    Ok(())
+}
+fn original_bounds(original: &[u8], rows: usize, config: ReadConfig) -> Result<(), Error> {
+    if original.is_empty() || original.len() > config.maximum_bytes || rows > config.maximum_rows {
+        return Err(Error::Artifact);
+    }
+    Ok(())
+}
+
+/// Verifier metadata mounted against the single fixed Bootstrap plan.
+/// The owner authenticates the plan and verifier identities independently. This
+/// producer retains neither original PK bytes nor proving polynomials. Each proof
+/// borrows one strictly imported key and rechecks its complete installed identity.
+/// TODO(G3/G4): connect the complete authenticated producer catalog and original
+/// G1 preparation to the wallet owner before enabling Native wallet open.
 pub struct Prover {
     plan: Plan,
-    first: Arc<ProvingKey<Eq>>,
-    wrapper: Arc<ProvingKey<Ep>>,
-    terminal: Arc<ProvingKey<Eq>>,
+    first: KeyArtifact<Eq>,
+    wrapper: KeyArtifact<Ep>,
+    terminal: KeyArtifact<Eq>,
     w: WKey,
 }
 impl Prover {
-    /// Install the exact A1/W0/A2 proving keys under the fixed two-stage plan.
-    /// This method imports and checks keys; it never generates one.
+    /// Mount A1/W0/A2 verifier metadata without retaining any proving key.
     ///
+    /// The installation owner authenticates the scheme, Q keys, roots, schedule,
+    /// descriptors and complete compiled-source catalog before this call. This
+    /// constructor checks metadata consistency, not scheme/catalog authority or
+    /// original-key admissibility. The per-stage importers perform exact source,
+    /// table and commitment checks with no transaction witness or runtime keygen.
     /// # Errors
-    /// A key differs from the exact Tagged3 source descriptor, or W metadata is invalid.
+    /// Wrong stage/curve/k/public profile or noncanonical source descriptor.
     pub fn from_artifacts(
         plan: Plan,
-        first: Arc<ProvingKey<Eq>>,
-        wrapper: Arc<ProvingKey<Ep>>,
-        terminal: Arc<ProvingKey<Eq>>,
+        first: KeyArtifact<Eq>,
+        wrapper: KeyArtifact<Ep>,
+        terminal: KeyArtifact<Eq>,
     ) -> Result<Self, Error> {
+        artifact_metadata(&first, CurveV1::Vesta, &[69], &[InstanceType::Bounded])?;
+        artifact_metadata(
+            &wrapper,
+            CurveV1::Pallas,
+            &[1, 2, 16],
+            &crate::omega::OmegaPlan::instance_types(),
+        )?;
+        artifact_metadata(&terminal, CurveV1::Vesta, &[69], &[InstanceType::Bounded])?;
         let expected =
             super::artifact::source_descriptor::<StageCircuit>(()).ok_or(Error::Artifact)?;
-        for key in [&first, &terminal] {
-            if key.binding() != &expected {
-                return Err(Error::Artifact);
-            }
+        if first.binding() != &expected || terminal.binding() != &expected {
+            return Err(Error::Artifact);
         }
         let w = WKey::from_artifact(
             &plan.context,
             0,
             wrapper.binding().clone(),
             plan.pallas.clone(),
-            wrapper.vk().clone(),
+            wrapper.key().clone(),
         )
         .map_err(|_| Error::Artifact)?;
         Ok(Self {
@@ -359,6 +404,83 @@ impl Prover {
             terminal,
             w,
         })
+    }
+
+    /// Import exactly one A1 original against the fixed unknown first-stage source.
+    /// The producer retains neither the returned PK nor its original byte slice.
+    /// # Errors
+    /// Original/domain cap, source/table/commitment or complete installed-key mismatch.
+    pub fn import_first(
+        &self,
+        original: &[u8],
+        config: ReadConfig,
+    ) -> Result<ProvingKey<Eq>, Error> {
+        original_bounds(original, self.first.binding().n(), config)?;
+        let source = self.plan.source_circuit(0, None)?;
+        let key = ProvingKey::from_artifact_v2(
+            original,
+            self.first.binding(),
+            &self.plan.vesta,
+            &source,
+            config,
+        )
+        .map_err(|_| Error::Artifact)?;
+        self.first
+            .require_prover(&key)
+            .map_err(|_| Error::Artifact)?;
+        Ok(key)
+    }
+
+    /// Import exactly one W0 original bound to the complete installed A1 identity.
+    /// The producer retains neither the returned PK nor its original byte slice.
+    /// # Errors
+    /// Original/domain cap, source/table/commitment or complete installed-key mismatch.
+    pub fn import_wrapper(
+        &self,
+        original: &[u8],
+        config: ReadConfig,
+    ) -> Result<ProvingKey<Ep>, Error> {
+        original_bounds(original, self.wrapper.binding().n(), config)?;
+        let source = self
+            .plan
+            .wrapper_source(0, self.first.binding(), self.first.key())?;
+        let key = ProvingKey::from_artifact_v2(
+            original,
+            self.wrapper.binding(),
+            &self.plan.pallas,
+            &source,
+            config,
+        )
+        .map_err(|_| Error::Artifact)?;
+        self.wrapper
+            .require_prover(&key)
+            .map_err(|_| Error::Artifact)?;
+        Ok(key)
+    }
+
+    /// Import exactly one A2 original bound to the complete installed W0 identity.
+    /// The producer retains neither the returned PK nor its original byte slice.
+    /// # Errors
+    /// Original/domain cap, source/table/commitment or complete installed-key mismatch.
+    pub fn import_terminal(
+        &self,
+        original: &[u8],
+        config: ReadConfig,
+    ) -> Result<ProvingKey<Eq>, Error> {
+        original_bounds(original, self.terminal.binding().n(), config)?;
+        let source = self.plan.source_circuit(1, Some(self.w.clone()))?;
+        let key = ProvingKey::from_artifact_v2(
+            original,
+            self.terminal.binding(),
+            &self.plan.vesta,
+            &source,
+            config,
+        )
+        .map_err(|_| Error::Artifact)?;
+        self.terminal
+            .require_prover(&key)
+            .map_err(|_| Error::Artifact)?;
+        Ok(key)
     }
 
     /// Verify source inputs and create a session using only these installed keys.
@@ -383,7 +505,7 @@ impl Prover {
     }
 }
 
-/// One exact Bootstrap source coupled to the immutable installed proving keys.
+/// One exact Bootstrap source coupled to immutable installed verifier metadata.
 /// The custody owner retains source originals and checkpoints before advancing.
 pub struct Session<'a> {
     prover: &'a Prover,
@@ -395,11 +517,15 @@ impl Session<'_> {
     /// Wrong installed circuit, failed proof or complete decide.
     pub fn first(
         &self,
+        key: &ProvingKey<Eq>,
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<FirstCheckpoint, Error> {
-        self.prepared
-            .prove_first(&self.prover.first, randomness, config)
+        self.prover
+            .first
+            .require_prover(key)
+            .map_err(|_| Error::Artifact)?;
+        self.prepared.prove_first(key, randomness, config)
     }
     /// Reverify A1 proof bytes reloaded from the source-bound custody archive.
     /// # Errors
@@ -414,14 +540,14 @@ impl Session<'_> {
             &self.prepared.openings[0],
             &self.prepared.part,
         )?;
-        public[0] = self.prepared.context_digest()?;
+        public[0] = self.prepared.first_stage_digest()?;
         let checkpoint = FirstCheckpoint {
             public,
             proof,
             carried: self.prepared.openings[0].clone(),
         };
         self.prepared.resume_first(
-            self.prover.first.vk(),
+            self.prover.first.key(),
             self.prover.first.binding(),
             checkpoint,
             budget,
@@ -433,16 +559,21 @@ impl Session<'_> {
     pub fn wrapper(
         &self,
         first: &FirstCheckpoint,
+        key: &ProvingKey<Ep>,
         salt: Fq,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<WrapperCheckpoint, Error> {
+        self.prover
+            .wrapper
+            .require_prover(key)
+            .map_err(|_| Error::Artifact)?;
         self.prepared.prove_wrapper(
             first,
             WrapperKeys {
                 first: &self.prover.first,
-                wrapper: &self.prover.wrapper,
+                wrapper: key,
             },
             salt,
             fold,
@@ -463,7 +594,7 @@ impl Session<'_> {
         let checkpoint = WrapperCheckpoint {
             proof,
             vesta,
-            context: self.prepared.context_digest()?,
+            context: self.prepared.first_stage_digest()?,
         };
         self.prepared
             .resume_wrapper(&self.prover.w, checkpoint, budget)
@@ -474,16 +605,21 @@ impl Session<'_> {
     pub fn terminal(
         &self,
         wrapper: &WrapperCheckpoint,
+        key: &ProvingKey<Eq>,
         salt: Fp,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<Terminal, Error> {
+        self.prover
+            .terminal
+            .require_prover(key)
+            .map_err(|_| Error::Artifact)?;
         self.prepared.prove_terminal(
             wrapper,
             TerminalKeys {
                 wrapper: &self.prover.w,
-                terminal: &self.prover.terminal,
+                terminal: key,
             },
             salt,
             fold,
@@ -533,7 +669,9 @@ impl Prepared {
     #[must_use]
     pub fn first_circuit(&self) -> StageCircuit {
         StageCircuit {
-            prepared: self.clone(),
+            plan: self.plan.clone(),
+            original: self.original.clone(),
+            carried: Some(self.openings[0].clone()),
             stage: Stage::First,
             known: true,
         }
@@ -553,7 +691,7 @@ impl Prepared {
         let circuit = self.first_circuit();
         let carried = &self.openings[0];
         let mut public = frame(&self.original.state.lineage, carried, &self.part)?;
-        public[0] = self.context_digest()?;
+        public[0] = self.first_stage_digest()?;
         let proof = prove_vesta(&self.plan, key, &circuit, &public, randomness, config)?;
         Ok(FirstCheckpoint {
             public,
@@ -575,7 +713,7 @@ impl Prepared {
         budget: MemoryBudget,
     ) -> Result<FirstCheckpoint, Error> {
         let mut expected = frame(&self.original.state.lineage, &self.openings[0], &self.part)?;
-        expected[0] = self.context_digest()?;
+        expected[0] = self.first_stage_digest()?;
         if checkpoint.public != expected || checkpoint.carried != self.openings[0] {
             return Err(Error::Input);
         }
@@ -599,15 +737,15 @@ impl Prepared {
     pub fn wrapper_circuit(
         &self,
         first: &FirstCheckpoint,
-        a1: &ProvingKey<Eq>,
+        a1: &KeyArtifact<Eq>,
         salt: Fq,
         config: &FoldConfig,
     ) -> Result<WrapperPreparation, Error> {
-        self.resume_first(a1.vk(), a1.binding(), first.clone(), config.kernel_budget)?;
+        self.resume_first(a1.key(), a1.binding(), first.clone(), config.kernel_budget)?;
         let opening = accumulate_generator(
             &self.plan.vesta,
             a1.binding(),
-            a1.vk(),
+            a1.key(),
             std::slice::from_ref(&first.public),
             &first.proof,
             config.kernel_budget,
@@ -633,7 +771,7 @@ impl Prepared {
             .decide(&self.plan.vesta, config.kernel_budget)
             .map_err(|_| Error::Proof)?;
         let allowed = a1
-            .vk()
+            .key()
             .kagemusha_digest(a1.binding())
             .map_err(|_| Error::Artifact)?;
         let circuit = WCircuit::new(
@@ -643,7 +781,7 @@ impl Prepared {
             self.plan.vesta.clone(),
             vec![allowed],
             OmegaWitness {
-                key: a1.vk().clone(),
+                key: a1.key().clone(),
                 instances: first.public.clone(),
                 proof: first.proof.clone(),
                 length: u32::try_from(first.proof.len()).map_err(|_| Error::Input)?,
@@ -651,7 +789,7 @@ impl Prepared {
             },
         )
         .map_err(|_| Error::Input)?;
-        let instances = omega_instances(self.context_digest()?, &vesta)?;
+        let instances = omega_instances(self.first_stage_digest()?, &vesta)?;
         Ok((circuit, instances, vesta))
     }
 
@@ -690,7 +828,7 @@ impl Prepared {
         Ok(WrapperCheckpoint {
             proof: output.proof,
             vesta,
-            context: self.context_digest()?,
+            context: self.first_stage_digest()?,
         })
     }
 
@@ -706,7 +844,7 @@ impl Prepared {
         checkpoint: WrapperCheckpoint,
         budget: MemoryBudget,
     ) -> Result<WrapperCheckpoint, Error> {
-        if checkpoint.context != self.context_digest()? {
+        if checkpoint.context != self.first_stage_digest()? {
             return Err(Error::Input);
         }
         let public = omega_instances(checkpoint.context, &checkpoint.vesta)?;
@@ -764,11 +902,14 @@ impl Prepared {
         let split = SplitPlan::new(self.plan.context.clone(), 1, w.clone(), &self.plan.pallas)
             .map_err(|_| Error::Artifact)?;
         let circuit = StageCircuit {
-            prepared: self.clone(),
+            plan: self.plan.clone(),
+            original: self.original.clone(),
+            carried: Some(self.openings[0].clone()),
             known: true,
             stage: Stage::Last(Box::new(LastStage {
                 split,
-                wrapper: wrapper.clone(),
+                proof: wrapper.proof.clone(),
+                vesta: Some(wrapper.vesta.clone()),
                 fold: fold.to_bytes(),
             })),
         };
@@ -823,7 +964,7 @@ impl Prepared {
         })
     }
 
-    fn context_digest(&self) -> Result<Fp, Error> {
+    fn immutable_context_digest(&self) -> Result<Fp, Error> {
         let mut words = self.plan.context.schema().to_vec();
         words.extend(self.original.state.statement);
         words.extend(self.original.state.core);
@@ -855,8 +996,16 @@ impl Prepared {
                 hash_with_domain(u64::from_le_bytes(*b"kgwctap1"), &tape),
             ]);
         }
-        push_pallas(&mut words, &self.openings[0])?;
         Ok(hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words))
+    }
+
+    // Bootstrap has one internal A stage. Its proof-bound D0 includes the
+    // current Q opening; durable source identity is the separate immutable C.
+    fn first_stage_digest(&self) -> Result<Fp, Error> {
+        let base = self.immutable_context_digest()?;
+        let mut link = vec![Fp::ONE, self.plan.context.schema()[1], Fp::ONE, base];
+        push_pallas(&mut link, &self.openings[0])?;
+        Ok(hash_with_domain(u64::from_le_bytes(*b"kgwlink1"), &link))
     }
 }
 
@@ -1037,18 +1186,144 @@ enum Stage {
 #[derive(Clone)]
 struct LastStage {
     split: SplitPlan,
-    wrapper: WrapperCheckpoint,
+    proof: Vec<u8>,
+    vesta: Option<AccumulatorT<Eq>>,
     fold: [u8; 1120],
 }
 /// Complete first or terminal Bootstrap circuit. Stage and keys are fixed by
 /// native assembly; source evidence and original tapes remain private witnesses.
 #[derive(Clone)]
 pub struct StageCircuit {
-    prepared: Prepared,
+    plan: Arc<Plan>,
+    original: Arc<Inputs>,
+    carried: Option<FoldInput<Ep>>,
     stage: Stage,
     known: bool,
 }
+
+impl Plan {
+    /// Reconstruct unknown A1 or A2 from the compiled Bootstrap source.
+    /// Only A2 takes a wrapper, which must be this context's exact W0.
+    /// This creates no prepared input, accepted proof or monetary authority.
+    /// # Errors
+    /// Out-of-range stage, missing/extra wrapper or wrong fixed context/stage.
+    pub fn source_circuit(
+        &self,
+        stage: usize,
+        previous: Option<WKey>,
+    ) -> Result<StageCircuit, Error> {
+        match (stage, previous) {
+            (0, None) => StageCircuit::blank(Arc::new(self.clone()), Stage::First),
+            (1, Some(w)) => StageCircuit::blank_terminal(Arc::new(self.clone()), &w),
+            _ => Err(Error::Artifact),
+        }
+    }
+
+    /// Reconstruct unknown W0 bound to the exact A1 verifier.
+    /// The strict original importer uses this same source factory.
+    /// # Errors
+    /// Nonzero stage, foreign A source profile or invalid A verifier.
+    pub fn wrapper_source(
+        &self,
+        stage: usize,
+        binding: &DescriptorBinding,
+        key: &VerifyingKey<Eq>,
+    ) -> Result<WCircuit, Error> {
+        if stage != 0
+            || binding
+                != &super::artifact::source_descriptor::<StageCircuit>(()).ok_or(Error::Artifact)?
+        {
+            return Err(Error::Artifact);
+        }
+        wrapper_source(self, binding, key)
+    }
+}
+
+// Installation specimens supply dimensions and unknown values only. They never
+// pass through Plan::prepare or construct a verified opening/checkpoint owner.
+fn wrapper_source(
+    plan: &Plan,
+    first: &DescriptorBinding,
+    first_vk: &VerifyingKey<Eq>,
+) -> Result<WCircuit, Error> {
+    let allowed = first_vk
+        .kagemusha_digest(first)
+        .map_err(|_| Error::Artifact)?;
+    let length = iroha_plonk::Protocol::new(first.descriptor())
+        .map_err(|_| Error::Artifact)?
+        .proof_length();
+    let witness = OmegaWitness {
+        key: first_vk.clone(),
+        instances: vec![Fp::ZERO; 69],
+        proof: vec![0; length],
+        length: u32::try_from(length).map_err(|_| Error::Artifact)?,
+        fold: [0; 1120],
+    };
+    WCircuit::new(
+        &plan.context,
+        0,
+        first.clone(),
+        plan.vesta.clone(),
+        vec![allowed],
+        witness,
+    )
+    .map(|source| source.without_witnesses())
+    .map_err(|_| Error::Artifact)
+}
+
 impl StageCircuit {
+    fn blank(plan: Arc<Plan>, stage: Stage) -> Result<Self, Error> {
+        let operation = plan.context.operation();
+        let sigma = operation.sigma.class(0).ok_or(Error::Artifact)?;
+        let q = [0, 1].map(|index| -> Result<QInput, Error> {
+            let fixed = operation.q(index).ok_or(Error::Artifact)?;
+            Ok(QInput {
+                proof: vec![0; fixed.verifier().proof_length()],
+                instances: fixed
+                    .verifier()
+                    .binding()
+                    .descriptor()
+                    .instance_lengths
+                    .iter()
+                    .map(|length| vec![Fq::ZERO; *length as usize])
+                    .collect(),
+            })
+        });
+        let [q0, q1] = q;
+        let original = Inputs {
+            state: BootstrapWitness {
+                core: [Fp::ZERO; 33],
+                rest: [Fp::ZERO; 8],
+                lineage: [Fp::ZERO; 18],
+                statement: [Fp::ZERO; 26],
+            },
+            sigma: vec![0; sigma.verifier().proof_length()],
+            objects: object_kinds().map(|kind| vec![0; kind.body_len() + 64]),
+            q: [q0?, q1?],
+        };
+        Ok(Self {
+            plan,
+            original: Arc::new(original),
+            carried: None,
+            stage,
+            known: false,
+        })
+    }
+
+    fn blank_terminal(plan: Arc<Plan>, w: &WKey) -> Result<Self, Error> {
+        let split = SplitPlan::new(plan.context.clone(), 1, w.clone(), &plan.pallas)
+            .map_err(|_| Error::Artifact)?;
+        Self::blank(
+            plan,
+            Stage::Last(Box::new(LastStage {
+                split,
+                proof: vec![0; w.verifier().proof_length()],
+                vesta: None,
+                fold: [0; 1120],
+            })),
+        )
+    }
+
     fn value<T: Copy>(&self, value: T) -> Value<T> {
         if self.known {
             Value::known(value)
@@ -1062,8 +1337,8 @@ impl StageCircuit {
         bytes: &mut BytesChip<Fp>,
         region: &mut Region<'_, Fp>,
     ) -> Result<Vec<Word<Fp>>, LayoutError> {
-        let source = &self.prepared.original;
-        let plan = &self.prepared.plan;
+        let source = &self.original;
+        let plan = &self.plan;
         let core = chip
             .uint()
             .glue()
@@ -1117,12 +1392,22 @@ impl StageCircuit {
         let objects =
             BootstrapObjects::decode(chip, bytes, region, values.each_ref().map(Vec::as_slice))?;
         let context_objects = objects.context().to_vec();
-        let carried = &self.prepared.openings[0];
-        let point = chip.witness_point(region, self.value(Ep::from(*carried.g())))?;
-        let challenges = carried
-            .challenges()
-            .iter()
-            .map(|v| scalar(chip, region, self.value(*v)))
+        let point = chip.witness_point(
+            region,
+            self.carried.as_ref().map_or(Value::unknown(), |carried| {
+                self.value(Ep::from(*carried.g()))
+            }),
+        )?;
+        let challenges = (0..K)
+            .map(|index| {
+                scalar(
+                    chip,
+                    region,
+                    self.carried.as_ref().map_or(Value::unknown(), |carried| {
+                        self.value(carried.challenges()[index])
+                    }),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let pallas = FoldInputCells::from_normalized(
             chip,
@@ -1176,23 +1461,41 @@ impl StageCircuit {
             Stage::Last(last) => {
                 let LastStage {
                     split,
-                    wrapper,
+                    proof,
+                    vesta,
                     fold,
                 } = last.as_ref();
-                let proof = carrier(chip, bytes, region, &wrapper.proof, self.known)?;
+                let proof = carrier(chip, bytes, region, proof, self.known)?;
                 let sigma =
                     sigma_binding(chip, bytes, region, &statement, &source.sigma, self.known)?;
-                let (x, y) = Option::<(Fq, Fq)>::from(wrapper.vesta.g().coordinates())
-                    .ok_or(LayoutError::Synthesis)?;
+                let coordinates = vesta
+                    .as_ref()
+                    .map(|claim| {
+                        Option::<(Fq, Fq)>::from(claim.g().coordinates())
+                            .ok_or(LayoutError::Synthesis)
+                    })
+                    .transpose()?;
                 let coordinates = [
-                    scalar(chip, region, self.value(x))?,
-                    scalar(chip, region, self.value(y))?,
+                    scalar(
+                        chip,
+                        region,
+                        coordinates.map_or(Value::unknown(), |(x, _)| self.value(x)),
+                    )?,
+                    scalar(
+                        chip,
+                        region,
+                        coordinates.map_or(Value::unknown(), |(_, y)| self.value(y)),
+                    )?,
                 ];
-                let challenges = wrapper
-                    .vesta
-                    .challenges()
-                    .iter()
-                    .map(|v| chip.uint().glue().witness(region, self.value(*v)))
+                let challenges = (0..K)
+                    .map(|index| {
+                        chip.uint().glue().witness(
+                            region,
+                            vesta.as_ref().map_or(Value::unknown(), |claim| {
+                                self.value(claim.challenges()[index])
+                            }),
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 let vesta = VestaClaimCells::constrain(
                     chip,
@@ -1201,17 +1504,8 @@ impl StageCircuit {
                     coordinates,
                     challenges.try_into().map_err(|_| LayoutError::Synthesis)?,
                 )?;
-                let resumed = resume_context(
-                    chip,
-                    region,
-                    split,
-                    &input,
-                    &[],
-                    &pallas,
-                    &vesta,
-                    &proof,
-                    &sigma,
-                )?;
+                let resumed =
+                    resume_context(chip, region, split, &input, &pallas, &vesta, &proof, &sigma)?;
                 let proof = carrier(chip, bytes, region, &source.q[1].proof, self.known)?;
                 let verified = verify_q(chip, region, plan.context.operation(), 1, &q[1], &proof)?;
                 let slots = bind_signature_q(

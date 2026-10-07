@@ -66,6 +66,11 @@ pub fn validate_row(key: &KagemushaWalletLedgerKeyV1, bytes: &[u8]) -> Result<()
         return Err(Error::Binding);
     }
     match *kind {
+        super::event_evidence::KIND => {
+            let value: super::event_evidence::KagemushaLoadEventPathV1 =
+                decode(bytes, super::event_evidence::CAP)?;
+            value.validate(key)
+        }
         super::artifacts::KIND => {
             let value: super::artifacts::VerifierInstallation =
                 decode(bytes, super::artifacts::CAP)?;
@@ -99,7 +104,8 @@ pub fn validate_row(key: &KagemushaWalletLedgerKeyV1, bytes: &[u8]) -> Result<()
                 || value.command.asset != value.body.asset_digest
                 || value.command.ordinal != value.body.ordinal
                 || value.command.request_id != value.body.request_id
-                || value.payer != value.body.payer
+                || kagemusha_wallet_account_digest_v1(&value.payer)?
+                    != value.body.payer_account_digest
             {
                 return Err(Error::Binding);
             }
@@ -269,6 +275,14 @@ pub(crate) fn validate_snapshot<'a>(
             }
             ISSUANCE => {
                 let issuance: Issuance = decode(bytes, bytes.len())?;
+                let path_key = super::event_evidence::key(issuance.body.receipt_digest()?);
+                let path_bytes = lookup(&path_key).ok_or(Error::Unavailable)?;
+                validate_row(&path_key, path_bytes)?;
+                let path: super::event_evidence::KagemushaLoadEventPathV1 =
+                    decode(path_bytes, super::event_evidence::CAP)?;
+                if path.height() != issuance.body.block_height {
+                    return Err(Error::Binding);
+                }
                 let registration_key = key(REGISTRATION, scheme, issuance.body.asset_digest);
                 let encoded = lookup(&registration_key).ok_or(Error::Unavailable)?;
                 validate_row(&registration_key, encoded)?;

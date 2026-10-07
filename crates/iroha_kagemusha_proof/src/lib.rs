@@ -119,6 +119,7 @@ pub use proof::{
 };
 pub use shape::{
     PROOF_BYTES_GATE, ShapeChoice, ShapePolicy, SigmaShape, limb_bits_for, select_shape,
+    wallet_monetary_shape,
 };
 pub use tree::{BlacklistGap, IndexedInsert, IndexedLeaf, QuotaWindow};
 pub use vectors::{Mutation, SAMPLE_RELATION_ID, sample_witness};

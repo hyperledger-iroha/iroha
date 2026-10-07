@@ -9,6 +9,8 @@ mod common;
 /// Shared signed Refresh source proofs and exact owner witness assignment.
 #[path = "a_refresh.rs"]
 pub mod components;
+#[path = "common/native_source_factory_checks.rs"]
+mod native_source_factory_checks;
 
 use components::{Owner, refresh_objects};
 use ff::{Field, PrimeField};
@@ -18,9 +20,7 @@ use iroha_kagemusha_proof::{
         context::{ContextInputs, ContextPlan, ContextPredecessor, ContextState},
         refresh::{RefreshObjects, RefreshStagePlan, RefreshStageWitness},
         schedule::OperationTask,
-        split::{
-            ContextLinkCells, SplitPlan, WCircuit, WKey, close_first, close_stage, resume_context,
-        },
+        split::{SplitPlan, WCircuit, WKey, close_first, close_stage, resume_context},
         verify_predecessor, verify_q, verify_sigma,
     },
     admin_sigma::StateWitness,
@@ -34,7 +34,7 @@ use iroha_plonk::{
     create_proof_owned_with_claim,
     cs::{Column, ConstraintSystem, Instance, InstanceType},
     frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner, synthesize},
-    keys::{KeygenConfigV2, keygen_pk_v2},
+    keys::{KeygenConfigV2, keygen_pk_v2, keygen_vk_with_binding_v2},
     pcs::ipa::PinnedParams,
     verifier::accumulate_generator,
 };
@@ -100,13 +100,11 @@ struct Resume {
     wrapper: Vec<u8>,
     carried: AccumulatorT<Ep>,
     vesta: AccumulatorT<Eq>,
-    history: Vec<(AccumulatorT<Ep>, AccumulatorT<Eq>)>,
 }
 #[derive(Clone)]
 struct Stage {
     owner: Owner,
     predecessor: Arc<Predecessor>,
-    initial_pallas: AccumulatorT<Ep>,
     pallas: AccumulatorT<Ep>,
     fold: Vec<u8>,
     resume: Option<Resume>,
@@ -159,7 +157,10 @@ impl Stage {
     }
     fn public(&self) -> Vec<Vec<Fp>> {
         let Some(resume) = &self.resume else {
-            return internal_public(self.context_digest(), &self.owner.source.part);
+            return internal_public(
+                stage_digest(self.context(), 0, self.context_digest(), &self.pallas),
+                &self.owner.source.part,
+            );
         };
         if resume.plan.is_terminal() {
             let mut lineage = self.owner.source.fixture.witness.successor.lineage.to_vec();
@@ -181,20 +182,10 @@ impl Stage {
             assert_eq!(out.len(), 69);
             return vec![out];
         }
-        let mut digest = self.context_digest();
-        for (i, (p, v)) in resume.history.iter().enumerate() {
-            let next = resume
-                .history
-                .get(i + 1)
-                .map_or(&resume.carried, |(p, _)| p);
-            digest = continued_digest(self.context(), i + 1, digest, p, v, next);
-        }
-        digest = continued_digest(
+        let digest = stage_digest(
             self.context(),
             self.owner.stage,
-            digest,
-            &resume.carried,
-            &resume.vesta,
+            self.context_digest(),
             &self.pallas,
         );
         internal_public(digest, &resume.vesta.as_input())
@@ -216,7 +207,6 @@ impl Stage {
             words.extend(foreign_limbs(v).map(Fp::from_u128));
         }
         words.extend(object_claims(source).into_iter().flatten());
-        push_pallas(&mut words, &self.initial_pallas.as_input());
         hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words)
     }
 }
@@ -409,23 +399,12 @@ impl Circuit<Fp> for Stage {
                 if let Some(resume) = &self.resume {
                     let cp = self.pallas_cells(&mut chip, &mut r, &resume.carried.as_input())?;
                     let cv = self.vesta_cells(&mut chip, &mut r, &resume.vesta)?;
-                    let history = resume
-                        .history
-                        .iter()
-                        .map(|(p, v)| {
-                            Ok(ContextLinkCells {
-                                pallas: self.pallas_cells(&mut chip, &mut r, &p.as_input())?,
-                                vesta: self.vesta_cells(&mut chip, &mut r, v)?,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, Error>>()?;
                     let wrapper = o.proof(&mut chip, &mut bytes, &mut r, &resume.wrapper)?;
                     let resumed = resume_context(
                         &mut chip,
                         &mut r,
                         &resume.plan,
                         &input,
-                        &history,
                         &cp,
                         &cv,
                         &wrapper,
@@ -527,24 +506,16 @@ fn internal_public(digest: Fp, part: &FoldInput<Eq>) -> Vec<Vec<Fp>> {
     assert_eq!(words.len(), 69);
     vec![words]
 }
-fn continued_digest(
-    plan: &ContextPlan,
-    stage: usize,
-    previous: Fp,
-    pallas: &AccumulatorT<Ep>,
-    vesta: &AccumulatorT<Eq>,
-    current: &AccumulatorT<Ep>,
-) -> Fp {
+fn stage_digest(plan: &ContextPlan, stage: usize, base: Fp, current: &AccumulatorT<Ep>) -> Fp {
+    assert!(stage + 1 < plan.stage_count());
     let mut words = vec![
         Fp::ONE,
         plan.schema()[1],
         Fp::from(u64::try_from(stage + 1).unwrap()),
-        previous,
+        base,
     ];
-    push_pallas(&mut words, &pallas.as_input());
-    words.extend(vesta_words(&vesta.as_input()));
     push_pallas(&mut words, &current.as_input());
-    hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words)
+    hash_with_domain(u64::from_le_bytes(*b"kgwlink1"), &words)
 }
 
 /// Actual Refresh terminal A and decided pending claims, without Ω admission.
@@ -567,6 +538,7 @@ fn rejected(circuit: &Stage, public: &[Vec<Fp>]) -> bool {
 fn prove_stage(
     circuit: &Stage,
     expected: Option<&DescriptorBinding>,
+    planned: Option<&PlannedKey<Eq>>,
 ) -> (ProvingKey<Eq>, ProverOutput<Eq>) {
     let public = circuit.public();
     let (assigned, k) = match synthesize(circuit, 16, Some(&public)) {
@@ -609,6 +581,9 @@ fn prove_stage(
     let key = keygen_pk_v2(&params, circuit, &cfg).unwrap();
     if let Some(expected) = expected {
         assert_eq!(key.binding(), expected);
+    }
+    if let Some(planned) = planned {
+        planned.require(&key);
     }
     let proof = create_proof_owned_with_claim(
         &params,
@@ -717,7 +692,7 @@ fn prepare_refresh(rooted: &bootstrap_outer::RootedBootstrapOmega, variant: Vari
             pallas: rooted.source.pallas.clone(),
             vesta: rooted.vesta.clone(),
         }),
-        initial_pallas: pallas.clone(),
+
         pallas: pallas.clone(),
         fold: fold.to_bytes().to_vec(),
         resume: None,
@@ -725,18 +700,30 @@ fn prepare_refresh(rooted: &bootstrap_outer::RootedBootstrapOmega, variant: Vari
     }
 }
 
-// Layout-only metadata never produces or admits a proof. Each stage uses the
-// exact source descriptor, schema and claim counts with unknown witness values.
-// A real first-stage key supplies the W verifier shape; its identity is irrelevant
-// to row counts and is not asserted as an actual continuation key for later stages.
-fn preflight_stage_layouts(first: &Stage) {
+// Unknown-source planning retains only exact sequential verifier identities. It
+// never produces accepted proofs or checkpoints. Every actual A/W PK must match
+// this plan before its proof is generated; descriptors alone are insufficient.
+struct PlannedKey<C: iroha_pasta::PastaCurve> {
+    binding: DescriptorBinding,
+    key: VerifyingKey<C>,
+}
+impl<C: iroha_pasta::PastaCurve> PlannedKey<C> {
+    fn require(&self, key: &ProvingKey<C>) {
+        assert_eq!(key.binding(), &self.binding);
+        assert_eq!(key.vk().to_bytes(), self.key.to_bytes());
+    }
+}
+struct PlannedKeys {
+    a: Vec<PlannedKey<Eq>>,
+    w: Vec<PlannedKey<Ep>>,
+}
+fn preflight_stage_layouts(first: &Stage) -> PlannedKeys {
     let p = PinnedParams::<Ep>::derive(16).unwrap();
     let v = common::vesta_params(16);
-    let mut config = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded]);
-    config.compress_selectors = false;
-    let (binding, key) =
-        iroha_plonk::keys::keygen_vk_with_binding_v2(&v, &first.without_witnesses(), &config)
-            .unwrap();
+    let mut a_config = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded]);
+    a_config.compress_selectors = false;
+    let mut w_config = KeygenConfigV2::pipa_r(OmegaPlan::instance_types().to_vec());
+    w_config.compress_selectors = false;
     let trivial_v = AccumulatorT::trivial(&v, MemoryBudget::DEFAULT).unwrap();
     let vclaims: [FoldInput<Eq>; 4] = core::array::from_fn(|_| trivial_v.as_input());
     let (vf, _) = create_fold(
@@ -746,65 +733,12 @@ fn preflight_stage_layouts(first: &Stage) {
         &FoldConfig::default(),
     )
     .unwrap();
-    let wc = WCircuit::new(
-        first.context(),
-        0,
-        binding.clone(),
-        v,
-        vec![key.kagemusha_digest(&binding).unwrap()],
-        OmegaWitness {
-            key,
-            instances: vec![Fp::ZERO; 69],
-            length: 7744,
-            proof: vec![0; 7744],
-            fold: vf.to_bytes(),
-        },
-    )
-    .unwrap()
-    .without_witnesses();
-    let (wrapper_key, _) = WKey::keygen(&wc, &p).unwrap();
-    let mut all_fit = true;
+    let mut planned = PlannedKeys {
+        a: vec![],
+        w: vec![],
+    };
+    let mut current = first.without_witnesses();
     for stage in 0..first.context().stage_count() {
-        let current = if stage == 0 {
-            first.without_witnesses()
-        } else {
-            let mut claims = vec![first.pallas.as_input(); 2];
-            claims.extend(
-                first
-                    .context()
-                    .q_partition(stage)
-                    .unwrap()
-                    .iter()
-                    .map(|i| first.owner.source.q_openings[*i].clone()),
-            );
-            let (fold, pallas) =
-                create_fold(&p, &claims, Fp::from(198).to_repr(), &FoldConfig::default()).unwrap();
-            let key = WKey::from_artifact(
-                first.context(),
-                stage - 1,
-                wrapper_key.verifier().binding().clone(),
-                p.clone(),
-                wrapper_key.verifying_key().clone(),
-            )
-            .unwrap();
-            Stage {
-                owner: Owner {
-                    stage,
-                    known: false,
-                    ..first.owner.clone()
-                },
-                pallas,
-                fold: fold.to_bytes().to_vec(),
-                resume: Some(Resume {
-                    plan: SplitPlan::new(first.context().clone(), stage, key, &p).unwrap(),
-                    wrapper: vec![0; wrapper_key.verifier().proof_length()],
-                    carried: first.pallas.clone(),
-                    vesta: trivial_v.clone(),
-                    history: vec![(first.pallas.clone(), trivial_v.clone()); stage - 1],
-                }),
-                ..first.clone()
-            }
-        };
         let (assigned, fits) = match synthesize(&current, 16, None) {
             Ok(a) => (a, true),
             Err(error) => {
@@ -819,12 +753,78 @@ fn preflight_stage_layouts(first: &Stage) {
             .map(|column| column.iter().rposition(|v| *v).map_or(0, |i| i + 1))
             .collect::<Vec<_>>();
         eprintln!(
-            "REFRESH_LAYOUT_PREFLIGHT variant={:?} stage={stage} rows={rows:?} production_k16_fit={fits} unknown_witness_only=true proof_qualification=false",
+            "REFRESH_LAYOUT_PREFLIGHT variant={:?} stage={stage} rows={rows:?} production_k16_fit={fits} exact_sequential_verifiers=true unknown_witness_only=true proof_qualification=false",
             first.owner.source.fixture.variant
         );
-        all_fit &= fits;
+        drop(assigned);
+        assert!(fits, "every exact source must fit before full proving");
+        let (binding, key) = keygen_vk_with_binding_v2(&v, &current, &a_config).unwrap();
+        planned.a.push(PlannedKey {
+            binding: binding.clone(),
+            key: key.clone(),
+        });
+        if stage + 1 == first.context().stage_count() {
+            break;
+        }
+        let length = VerifierPlan::new(binding.clone(), v.clone())
+            .unwrap()
+            .proof_length();
+        let wc = WCircuit::new(
+            first.context(),
+            stage,
+            binding.clone(),
+            v.clone(),
+            vec![key.kagemusha_digest(&binding).unwrap()],
+            OmegaWitness {
+                key,
+                instances: vec![Fp::ZERO; 69],
+                length: u32::try_from(length).unwrap(),
+                proof: vec![0; length],
+                fold: vf.to_bytes(),
+            },
+        )
+        .unwrap()
+        .without_witnesses();
+        let (binding, key) = keygen_vk_with_binding_v2(&p, &wc, &w_config).unwrap();
+        planned.w.push(PlannedKey {
+            binding: binding.clone(),
+            key: key.clone(),
+        });
+        let wrapper_key =
+            WKey::from_artifact(first.context(), stage, binding, p.clone(), key).unwrap();
+        let next = stage + 1;
+        let mut claims = vec![first.pallas.as_input(); 2];
+        claims.extend(
+            first
+                .context()
+                .q_partition(next)
+                .unwrap()
+                .iter()
+                .map(|i| first.owner.source.q_openings[*i].clone()),
+        );
+        let (fold, pallas) =
+            create_fold(&p, &claims, Fp::from(198).to_repr(), &FoldConfig::default()).unwrap();
+        current = Stage {
+            owner: Owner {
+                stage: next,
+                known: false,
+                ..first.owner.clone()
+            },
+            pallas,
+            fold: fold.to_bytes().to_vec(),
+            resume: Some(Resume {
+                plan: SplitPlan::new(first.context().clone(), next, wrapper_key.clone(), &p)
+                    .unwrap(),
+                wrapper: vec![0; wrapper_key.verifier().proof_length()],
+                carried: first.pallas.clone(),
+                vesta: trivial_v.clone(),
+            }),
+            ..first.clone()
+        };
     }
-    assert!(all_fit, "all source stages must fit before full proving");
+    assert_eq!(planned.a.len(), first.context().stage_count());
+    assert_eq!(planned.w.len() + 1, planned.a.len());
+    planned
 }
 
 fn build_refresh(
@@ -834,15 +834,13 @@ fn build_refresh(
     native: bool,
 ) -> AuthenticatedRefresh {
     let first = prepare_refresh(rooted, variant);
-    if variant == Variant::RefreshQuotaShare {
-        preflight_stage_layouts(&first);
-    }
+    let planned = (variant == Variant::RefreshQuotaShare).then(|| preflight_stage_layouts(&first));
     let p = PinnedParams::<Ep>::derive(16).unwrap();
     let v = common::vesta_params(16);
     let source = first.owner.source.clone();
     let pallas = first.pallas.clone();
     let claims = [rooted.source.pallas.as_input(), rooted.opening.clone()];
-    let (mut key, mut proof) = prove_stage(&first, None);
+    let (mut key, mut proof) = prove_stage(&first, None, planned.as_ref().map(|keys| &keys.a[0]));
     let binding = key.binding().clone();
     let mut internal_keys = vec![key.vk().clone()];
     let mut recorded = NativeRecord::default();
@@ -855,7 +853,6 @@ fn build_refresh(
     let mut public = first.public();
     let mut carried = pallas;
     let mut part = source.part.clone();
-    let mut history = Vec::new();
     if adversarial {
         if variant == Variant::RefreshQuotaShare {
             for mutation in [8, 9] {
@@ -929,6 +926,9 @@ fn build_refresh(
         )
         .unwrap();
         let (wkey, wprover) = WKey::keygen(&wc, &p).unwrap();
+        if let Some(planned) = &planned {
+            planned.w[stage - 1].require(&wprover);
+        }
         for wrong in 0..=first.context().stage_count() {
             if wrong != stage {
                 assert!(SplitPlan::new(first.context().clone(), wrong, wkey.clone(), &p).is_err());
@@ -989,12 +989,15 @@ fn build_refresh(
                 wrapper: wrapper.proof,
                 carried: carried.clone(),
                 vesta: vesta.clone(),
-                history: history.clone(),
             }),
             ..first.clone()
         };
         public = current.public();
-        let (next_key, next_proof) = prove_stage(&current, Some(&binding));
+        let (next_key, next_proof) = prove_stage(
+            &current,
+            Some(&binding),
+            planned.as_ref().map(|keys| &keys.a[stage]),
+        );
         if native {
             recorded.a.push(Arc::new(next_key.clone()));
             recorded
@@ -1048,10 +1051,18 @@ fn build_refresh(
                     "rehashed quota proposal cannot replace earlier context stage{stage}"
                 );
             }
-            if !history.is_empty() {
+            for replace_pallas in [true, false] {
                 let mut bad = current.clone();
-                bad.resume.as_mut().unwrap().history.clear();
-                assert!(rejected(&bad, &public), "dropped context history");
+                let resume = bad.resume.as_mut().unwrap();
+                if replace_pallas {
+                    resume.carried = AccumulatorT::trivial(&p, MemoryBudget::DEFAULT).unwrap();
+                } else {
+                    resume.vesta = AccumulatorT::trivial(&v, MemoryBudget::DEFAULT).unwrap();
+                }
+                assert!(
+                    rejected(&bad, &public),
+                    "substituted current P/V obligation"
+                );
             }
             if indices.contains(&1) || indices.contains(&2) {
                 let mut changed = (*source).clone();
@@ -1108,7 +1119,6 @@ fn build_refresh(
             };
         }
         internal_keys.push(next_key.vk().clone());
-        history.push((carried, vesta.clone()));
         carried = pallas;
         part = vesta.as_input();
         key = next_key;
@@ -1145,6 +1155,50 @@ fn compact_bootstrap_completes_split_quota_refresh() {
 }
 
 /// Actual diagnostic artifacts retained only by the explicit native parity run.
+#[derive(Clone)]
+struct NativeRefreshOriginal {
+    descriptor: Vec<u8>,
+    vk: Vec<u8>,
+    pk: Vec<u8>,
+}
+impl NativeRefreshOriginal {
+    fn from_key<C: iroha_pasta::PastaCurve>(key: &iroha_plonk::ProvingKey<C>) -> Self {
+        Self {
+            descriptor: key.binding().encoded().to_vec(),
+            vk: key.vk().to_bytes().to_vec(),
+            pk: key.artifact_bytes_v2().unwrap(),
+        }
+    }
+    fn borrow(&self) -> NativeRefreshView<'_> {
+        NativeRefreshView {
+            descriptor: &self.descriptor,
+            verifying_key: &self.vk,
+            proving_key: &self.pk,
+        }
+    }
+}
+// Test storage of original files is separate from the metadata-only producer.
+// No original byte slice or PK is retained by a native session or checkpoint.
+#[derive(Clone, Copy)]
+struct NativeRefreshView<'a> {
+    descriptor: &'a [u8],
+    verifying_key: &'a [u8],
+    proving_key: &'a [u8],
+}
+impl NativeRefreshView<'_> {
+    fn metadata<C: iroha_pasta::PastaCurve>(
+        self,
+    ) -> Result<
+        iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact<C>,
+        iroha_kagemusha_proof::a_relation::native::refresh::Error,
+    > {
+        use iroha_kagemusha_proof::a_relation::native::{artifact::KeyArtifact, refresh::Error};
+        let binding = DescriptorBinding::decode_v2(self.descriptor).map_err(|_| Error::Artifact)?;
+        let key = VerifyingKey::read(self.verifying_key, &binding).map_err(|_| Error::Artifact)?;
+        KeyArtifact::new(binding, key).map_err(|_| Error::Artifact)
+    }
+}
+
 #[derive(Default)]
 struct NativeRecord {
     a: Vec<Arc<iroha_plonk::ProvingKey<Eq>>>,
@@ -1170,6 +1224,35 @@ impl NativeRecord {
         )
         .unwrap();
         assert_eq!(plan.context().schema(), source.plan.context().schema());
+        native_source_factory_checks::assert_factories(
+            plan.context(),
+            &PinnedParams::<Ep>::derive(16).unwrap(),
+            &common::vesta_params(16),
+            &self
+                .a
+                .iter()
+                .map(|key| {
+                    iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact::new(
+                        key.binding().clone(),
+                        key.vk().clone(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>(),
+            &self
+                .w
+                .iter()
+                .map(|key| {
+                    iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact::new(
+                        key.binding().clone(),
+                        key.vk().clone(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>(),
+            |stage, previous| plan.source_circuit(stage, previous),
+            |stage, binding, key| plan.wrapper_source(stage, binding, key),
+        );
         let input = native::Inputs {
             state: source.fixture.witness,
             sigma: source.sigma.clone(),
@@ -1198,7 +1281,7 @@ impl NativeRecord {
             .unwrap();
         assert_eq!(public, first.public()[0]);
         let expected = synthesize(first, 16, Some(&first.public())).unwrap();
-        let actual = synthesize(&candidate, 16, Some(&vec![public.clone()])).unwrap();
+        let actual = synthesize(&candidate, 16, Some(std::slice::from_ref(&public))).unwrap();
         let unknown = synthesize(&candidate.without_witnesses(), 16, None).unwrap();
         assert_eq!(expected.tables.fixed(), actual.tables.fixed());
         assert_eq!(expected.tables.permutation(), actual.tables.permutation());
@@ -1213,21 +1296,146 @@ impl NativeRecord {
             unknown.tables.advice_assigned()
         );
         drop((expected, actual, unknown));
-        let prover = native::Prover::from_artifacts(plan, self.a, self.w).unwrap();
+        // Mount only exact installed originals. The importer has no witness or
+        // Prepared argument and reconstructs every A/W source from fixed metadata.
+        let originals_a = self
+            .a
+            .iter()
+            .map(|key| NativeRefreshOriginal::from_key(key.as_ref()))
+            .collect::<Vec<_>>();
+        let originals_w = self
+            .w
+            .iter()
+            .map(|key| NativeRefreshOriginal::from_key(key.as_ref()))
+            .collect::<Vec<_>>();
+        drop((self.a, self.w));
+        let a = originals_a
+            .iter()
+            .map(NativeRefreshOriginal::borrow)
+            .collect::<Vec<_>>();
+        let w = originals_w
+            .iter()
+            .map(NativeRefreshOriginal::borrow)
+            .collect::<Vec<_>>();
+        let read = iroha_plonk::keys::pk::artifact::ReadConfig {
+            maximum_bytes: originals_a
+                .iter()
+                .chain(&originals_w)
+                .map(|o| o.pk.len())
+                .max()
+                .unwrap(),
+            maximum_rows: 1 << 16,
+            coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+            msm_budget: budget,
+        };
+        let install =
+            |plan: native::Plan, a: &[NativeRefreshView<'_>], w: &[NativeRefreshView<'_>]| {
+                native::Prover::from_artifacts(
+                    plan,
+                    a.iter()
+                        .map(|v| v.metadata())
+                        .collect::<Result<Vec<_>, _>>()?,
+                    w.iter()
+                        .map(|v| v.metadata())
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
+            };
+        let check_originals = |plan: native::Plan,
+                               a: &[NativeRefreshView<'_>],
+                               w: &[NativeRefreshView<'_>]|
+         -> Result<(), native::Error> {
+            let prover = install(plan, a, w)?;
+            for (stage, source) in a.iter().enumerate() {
+                drop(prover.import_a(stage, source.proving_key, read)?);
+                if let Some(source) = w.get(stage) {
+                    drop(prover.import_w(stage, source.proving_key, read)?);
+                }
+            }
+            Ok(())
+        };
+        assert!(install(plan.clone(), &a[..a.len() - 1], &w).is_err());
+        assert!(install(plan.clone(), &a, &w[..w.len() - 1]).is_err());
+        for mutation in 0..6 {
+            let mut bad_a = a.clone();
+            let mut bad_w = w.clone();
+            match mutation {
+                0 => bad_a.swap(0, 1),
+                1 => bad_w.swap(0, 1),
+                2 => bad_a[0].verifying_key = a[1].verifying_key,
+                3 => bad_w[0].verifying_key = w[1].verifying_key,
+                4 => bad_a[0].descriptor = w[0].descriptor,
+                _ => bad_a[0].proving_key = &a[0].proving_key[..a[0].proving_key.len() - 1],
+            }
+            assert!(
+                check_originals(plan.clone(), &bad_a, &bad_w).is_err(),
+                "original Refresh mutation {mutation}"
+            );
+        }
+        let mut changed_pk = originals_a[0].pk.clone();
+        changed_pk[44 + originals_a[0].vk.len()] ^= 1;
+        let mut bad_a = a.clone();
+        bad_a[0].proving_key = &changed_pk;
+        assert!(check_originals(plan.clone(), &bad_a, &w).is_err());
+        drop(bad_a);
+        drop(changed_pk);
+        let prover = install(plan, &a, &w).unwrap();
+        assert!(prover.import_a(a.len(), a[0].proving_key, read).is_err());
+        assert!(prover.import_w(w.len(), w[0].proving_key, read).is_err());
+        assert!(
+            prover
+                .import_a(
+                    0,
+                    a[0].proving_key,
+                    iroha_plonk::keys::pk::artifact::ReadConfig {
+                        maximum_bytes: 0,
+                        ..read
+                    }
+                )
+                .is_err()
+        );
+        assert!(
+            prover
+                .import_w(
+                    0,
+                    w[0].proving_key,
+                    iroha_plonk::keys::pk::artifact::ReadConfig {
+                        maximum_rows: (1 << 16) - 1,
+                        ..read
+                    }
+                )
+                .is_err()
+        );
         assert_eq!(prover.descriptors().len(), self.proofs.len() * 2 - 1);
+        let layouts = prover.checkpoint_layouts().unwrap();
+        assert_eq!(layouts.len(), self.proofs.len() * 2 - 1);
         let mut changed = input.clone();
         changed.q[0].proof[0] ^= 1;
         assert!(prover.prepare(changed, budget).is_err());
         let session = prover.prepare(input, budget).unwrap();
         let fold = FoldConfig::default();
+        let foreign = prover.import_a(1, a[1].proving_key, read).unwrap();
+        assert!(matches!(
+            session.first(
+                &foreign,
+                Fp::from(244),
+                &fold,
+                common::recovery(245),
+                ProverConfig::default()
+            ),
+            Err(native::Error::Artifact)
+        ));
+        drop(foreign);
+        let key = prover.import_a(0, a[0].proving_key, read).unwrap();
         let mut checkpoint = session
             .first(
+                &key,
                 Fp::from(244),
                 &fold,
                 common::recovery(245),
                 ProverConfig::default(),
             )
             .unwrap();
+        drop(key);
         assert_eq!(checkpoint.proof(), self.proofs[0].0);
         assert_eq!(checkpoint.pallas_bytes(), self.proofs[0].1);
         assert!(session.terminal(&checkpoint, budget).is_err());
@@ -1241,17 +1449,55 @@ impl NativeRecord {
         checkpoint = session
             .restore_first(self.proofs[0].0.clone(), &self.proofs[0].1, budget)
             .unwrap();
+        let first_payload = session.encode_a_checkpoint(&checkpoint, budget).unwrap();
+        assert_eq!(first_payload.len(), layouts[0].payload_bytes());
+        assert!(
+            session
+                .restore_first_checkpoint(&first_payload[..first_payload.len() - 1], budget)
+                .is_err()
+        );
+        let mut bad_payload = first_payload.clone();
+        *bad_payload.last_mut().unwrap() ^= 1;
+        assert!(
+            session
+                .restore_first_checkpoint(&bad_payload, budget)
+                .is_err()
+        );
+        checkpoint = session
+            .restore_first_checkpoint(&first_payload, budget)
+            .unwrap();
+        assert_eq!(checkpoint.proof(), self.proofs[0].0);
         for stage in 1..self.proofs.len() {
             let salt = u64::try_from(stage).unwrap();
+            if stage == 1 {
+                let foreign = prover.import_w(1, w[1].proving_key, read).unwrap();
+                assert!(matches!(
+                    session.wrapper(
+                        &checkpoint,
+                        &foreign,
+                        Fq::from(410 + salt),
+                        &fold,
+                        common::recovery(221),
+                        ProverConfig::default()
+                    ),
+                    Err(native::Error::Artifact)
+                ));
+                drop(foreign);
+            }
+            let key = prover
+                .import_w(stage - 1, w[stage - 1].proving_key, read)
+                .unwrap();
             let wrapper = session
                 .wrapper(
                     &checkpoint,
+                    &key,
                     Fq::from(410 + salt),
                     &fold,
                     common::recovery(220 + u8::try_from(stage).unwrap()),
                     ProverConfig::default(),
                 )
                 .unwrap();
+            drop(key);
             assert_eq!(wrapper.proof(), self.wrappers[stage - 1].0);
             assert_eq!(wrapper.vesta_bytes(), self.wrappers[stage - 1].1);
             let wrapper = session
@@ -1262,15 +1508,45 @@ impl NativeRecord {
                     budget,
                 )
                 .unwrap();
+            let payload = session.encode_wrapper_checkpoint(&wrapper, budget).unwrap();
+            assert_eq!(payload.len(), layouts[2 * stage - 1].payload_bytes());
+            assert!(session.restore_first_checkpoint(&payload, budget).is_err());
+            let wrapper = session
+                .restore_wrapper_checkpoint(&checkpoint, &payload, budget)
+                .unwrap();
+            assert_eq!(wrapper.proof(), self.wrappers[stage - 1].0);
+            assert!(
+                session
+                    .restore_a_checkpoint(&wrapper, &first_payload, budget)
+                    .is_err()
+            );
+            if stage == 1 {
+                let foreign = prover.import_a(0, a[0].proving_key, read).unwrap();
+                assert!(matches!(
+                    session.advance(
+                        &wrapper,
+                        &foreign,
+                        Fp::from(420 + salt),
+                        &fold,
+                        common::recovery(246),
+                        ProverConfig::default()
+                    ),
+                    Err(native::Error::Artifact)
+                ));
+                drop(foreign);
+            }
+            let key = prover.import_a(stage, a[stage].proving_key, read).unwrap();
             let next = session
                 .advance(
                     &wrapper,
+                    &key,
                     Fp::from(420 + salt),
                     &fold,
                     common::recovery(245 + u8::try_from(stage).unwrap()),
                     ProverConfig::default(),
                 )
                 .unwrap();
+            drop(key);
             assert_eq!(next.proof(), self.proofs[stage].0);
             assert_eq!(next.pallas_bytes(), self.proofs[stage].1);
             let mut bad = self.proofs[stage].0.clone();
@@ -1288,13 +1564,28 @@ impl NativeRecord {
                     budget,
                 )
                 .unwrap();
+            let payload = session.encode_a_checkpoint(&checkpoint, budget).unwrap();
+            assert_eq!(payload.len(), layouts[2 * stage].payload_bytes());
+            let mut bad_payload = payload.clone();
+            *bad_payload.last_mut().unwrap() ^= 1;
+            assert!(
+                session
+                    .restore_a_checkpoint(&wrapper, &bad_payload, budget)
+                    .is_err()
+            );
+            checkpoint = session
+                .restore_a_checkpoint(&wrapper, &payload, budget)
+                .unwrap();
+            assert_eq!(checkpoint.proof(), self.proofs[stage].0);
         }
         let terminal = session.terminal(&checkpoint, budget).unwrap();
         assert_eq!(terminal.proof, self.proofs.last().unwrap().0);
+        let key = prover.import_w(0, w[0].proving_key, read).unwrap();
         assert!(
             session
                 .wrapper(
                     &checkpoint,
+                    &key,
                     Fq::ONE,
                     &fold,
                     common::recovery(200),
@@ -1303,7 +1594,7 @@ impl NativeRecord {
                 .is_err()
         );
         eprintln!(
-            "NATIVE_REFRESH_PARITY variant={:?} stages={} exact_original_keys_and_proofs=true checkpoints_restored=true full_catalog=false",
+            "NATIVE_REFRESH_PARITY variant={:?} stages={} exact_original_keys_and_proofs=true original_pk_source_import=true borrowed_stage_PK=true metadata_only_producer=true checkpoints_restored=true canonical_payloads_restored=true full_catalog=false",
             source.fixture.variant,
             self.proofs.len()
         );

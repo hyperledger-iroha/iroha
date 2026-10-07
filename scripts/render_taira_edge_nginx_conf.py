@@ -1068,6 +1068,8 @@ def render_edge_nginx_conf(
             "  http2 on;",
             f"  server_name {public_host};",
             f"  client_max_body_size {client_max_body_size};",
+            "  # Stream signed transaction bodies without nginx temporary files.",
+            "  proxy_request_buffering off;",
             "",
             f"  ssl_certificate /etc/letsencrypt/live/{tls_lineage}/fullchain.pem;",
             f"  ssl_certificate_key /etc/letsencrypt/live/{tls_lineage}/privkey.pem;",

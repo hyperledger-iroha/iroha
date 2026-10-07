@@ -42,6 +42,7 @@ fn accepts(leaf: &AggregateLeafCircuit) -> bool {
 fn native_quorum_witnesses_have_exact_context_and_contiguous_complete_boundaries() {
     for n in [4, 7, 31] {
         let (keys, bitmap, aggregate) = fixture(n);
+        assert_eq!(propose_aggregate_key(&keys, &bitmap).unwrap(), aggregate);
         let leaves = prepare_aggregation(&keys, &bitmap, aggregate).unwrap();
         assert_eq!(leaves.len(), PROGRAM_LENGTH as usize);
         let context = leaves[0].context.digest();
@@ -65,11 +66,14 @@ fn native_quorum_witnesses_have_exact_context_and_contiguous_complete_boundaries
         assert!(prepare_aggregation(&keys, &bitmap, wrong).is_err());
         let mut wrong = bitmap.clone();
         wrong[0] ^= 1;
+        assert!(propose_aggregate_key(&keys, &wrong).is_err());
         assert!(prepare_aggregation(&keys, &wrong, aggregate).is_err());
         wrong = bitmap.clone();
         wrong.push(0);
+        assert!(propose_aggregate_key(&keys, &wrong).is_err());
         assert!(prepare_aggregation(&keys, &wrong, aggregate).is_err());
     }
+    assert!(propose_aggregate_key(&[], &[]).is_err());
 }
 
 #[test]
@@ -117,4 +121,45 @@ fn strict_complete_aggregation_program_at_k16() {
             assert!(accepts(leaf), "n={n}, step={i}");
         }
     }
+}
+
+#[test]
+fn metadata_source_factory_preserves_original_aggregation_layouts() {
+    let (keys, bitmap, aggregate) = fixture(4);
+    let leaves = prepare_aggregation(&keys, &bitmap, aggregate).unwrap();
+    for cursor in 0..PROGRAM_LENGTH {
+        let source = AggregateLeafCircuit::for_source(cursor).unwrap();
+        assert_eq!(source.cursor, cursor);
+        assert!(!source.known);
+        assert_eq!(source.before.is_some(), cursor > 0);
+        assert_eq!(source.after.is_some(), cursor < 32);
+        assert_eq!(source.seat.is_some(), (1..32).contains(&cursor));
+    }
+    for cursor in [0, 1, 2, 4, 17, 31, 32] {
+        let original = synthesize(&leaves[cursor].without_witnesses(), 16, None).unwrap();
+        let source = AggregateLeafCircuit::for_source(u32::try_from(cursor).unwrap()).unwrap();
+        let metadata = synthesize(&source, 16, None).unwrap();
+        assert_eq!(
+            original.tables.fixed(),
+            metadata.tables.fixed(),
+            "fixed {cursor}"
+        );
+        assert_eq!(
+            original.tables.selectors(),
+            metadata.tables.selectors(),
+            "selectors {cursor}"
+        );
+        assert_eq!(
+            original.tables.permutation(),
+            metadata.tables.permutation(),
+            "permutation {cursor}"
+        );
+        assert_eq!(
+            original.tables.advice_assigned(),
+            metadata.tables.advice_assigned(),
+            "advice {cursor}"
+        );
+    }
+    assert!(AggregateLeafCircuit::for_source(PROGRAM_LENGTH).is_err());
+    assert!(AggregateLeafCircuit::for_source(u32::MAX).is_err());
 }

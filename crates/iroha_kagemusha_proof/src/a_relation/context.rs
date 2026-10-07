@@ -33,6 +33,8 @@ use iroha_plonk_recursion::{
 
 /// Separate digest domain for an internal split context, never a lineage head.
 pub const CONTEXT_DOMAIN: [u8; 8] = *b"kgwctx_1";
+/// Fixed-stage internal frame domain, distinct from context and final lineage.
+pub const STAGE_DOMAIN: [u8; 8] = *b"kgwlink1";
 const TAPE_DOMAIN: [u8; 8] = *b"kgwctap1";
 const ACTIVE_TAPE_DOMAIN: [u8; 8] = *b"kgwcact1";
 const INTERNAL_WORDS_DOMAIN: [u8; 8] = *b"kgwciw_1";
@@ -64,6 +66,27 @@ fn push_q_context(
     } else {
         words.extend([value.lo().word().clone(), value.hi().word().clone()]);
     }
+    Ok(())
+}
+
+/// Append an injective encoding of all256 message bits as two128-bit words.
+/// The verifier's bounded `(lo128, hi127, top1)` representation permits exact
+/// recomposition of its high half without a field reduction or byte assumption.
+fn push_message_context(
+    words: &mut Vec<Word<Fp>>,
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    message: &iroha_plonk_gadgets::bytes::element::LeElement<Fp>,
+) -> Result<(), Error> {
+    let high = chip.uint().glue().linear(
+        region,
+        &[
+            (Fp::ONE, message.hi().word()),
+            (Fp::from(2).pow_vartime([127]), message.top().word()),
+        ],
+        Fp::ZERO,
+    )?;
+    words.extend([message.lo().word().clone(), high]);
     Ok(())
 }
 
@@ -479,8 +502,8 @@ impl ContextPlan {
         region: &mut Region<'_, Fp>,
         values: &[[Value<Fp>; 3]],
     ) -> Result<Vec<ContextObjectCells>, Error> {
-        use iroha_plonk_recursion::obligation::ledger::Variant;
         use super::archive::{results::ArchiveResultPlan, stage::ArchiveStagePlan};
+        use iroha_plonk_recursion::obligation::ledger::Variant;
         let variant = self.operation.frame().variant();
         let expected_count = match variant {
             Variant::ArchiveReceive => 17,
@@ -489,22 +512,36 @@ impl ContextPlan {
         };
         if self.objects.len() != expected_count
             || values.len() != expected_count
-            || self.objects != ArchiveStagePlan::context_specs(
-                variant,
-                self.objects[9].capacity as usize,
-                self.objects[10].capacity as usize,
-                self.objects[13].capacity as usize,
-            )?
+            || self.objects
+                != ArchiveStagePlan::context_specs(
+                    variant,
+                    self.objects[9].capacity as usize,
+                    self.objects[10].capacity as usize,
+                    self.objects[13].capacity as usize,
+                )?
         {
             return Err(Error::Synthesis);
         }
         ArchiveResultPlan::new(self, expected_count - 1)?;
-        self.objects.iter().zip(values).map(|(spec, values)| {
-            let [authenticated_digest, length, tape_digest] = chip.uint().glue()
-                .witnesses(region, values)?.try_into().map_err(|_| Error::Synthesis)?;
-            let length = chip.uint().range_check::<32>(region, &length)?;
-            Ok(ContextObjectCells { spec: *spec, authenticated_digest, length, tape_digest })
-        }).collect()
+        self.objects
+            .iter()
+            .zip(values)
+            .map(|(spec, values)| {
+                let [authenticated_digest, length, tape_digest] = chip
+                    .uint()
+                    .glue()
+                    .witnesses(region, values)?
+                    .try_into()
+                    .map_err(|_| Error::Synthesis)?;
+                let length = chip.uint().range_check::<32>(region, &length)?;
+                Ok(ContextObjectCells {
+                    spec: *spec,
+                    authenticated_digest,
+                    length,
+                    tape_digest,
+                })
+            })
+            .collect()
     }
 
     /// Pin a nonempty initial Q partition and every source Q key identity.
@@ -796,7 +833,7 @@ impl ContextPlan {
         3 * usize::from(self.operation.frame().has_incoming())
             + usize::from(self.operation.sigma.slot_count() == 2)
     }
-    /// Recompute the complete context and carried A1 Pallas claim.
+    /// Recompute the complete immutable operation context, excluding stage claims.
     /// The consumer must additionally bind the appropriate verified Q partition
     /// using [`Self::bind_q_partition`] and verify W or produce the A1 proof.
     ///
@@ -807,7 +844,6 @@ impl ContextPlan {
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
         input: &ContextInputs<'_>,
-        carried: &FoldInputCells<Ep>,
     ) -> Result<Word<Fp>, Error> {
         let incoming_sigma = self.operation.sigma.slot_count() == 2;
         let incoming_omega = self.operation.frame().has_incoming();
@@ -864,11 +900,7 @@ impl ContextPlan {
                 super::proof::IncomingProofBinding::Messages(proof) => {
                     words.push(proof.length().word().clone());
                     for message in proof.messages() {
-                        words.extend([
-                            message.lo().word().clone(),
-                            message.hi().word().clone(),
-                            message.top().word().clone(),
-                        ]);
+                        push_message_context(&mut words, chip, region, message)?;
                     }
                 }
                 super::proof::IncomingProofBinding::ReceiveActive(_) => {
@@ -940,8 +972,39 @@ impl ContextPlan {
                 words.extend([value.lo().word().clone(), value.hi().word().clone()]);
             }
         }
-        push_pallas(&mut words, carried)?;
         chip.hash_words(region, u64::from_le_bytes(CONTEXT_DOMAIN), &words)
+    }
+
+    /// Bind an immutable context and its exact carried Pallas claim to one
+    /// circuit-fixed internal A stage. The next stage recomputes this digest
+    /// before hard-verifying the immediately preceding W key. Earlier claims
+    /// remain in the P/V folds; no historical hash trace is required.
+    ///
+    /// # Errors
+    /// Terminal/out-of-range stage, non-k16 claim or synthesis failure.
+    pub fn stage_digest(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        stage: usize,
+        context: &Word<Fp>,
+        carried: &FoldInputCells<Ep>,
+    ) -> Result<Word<Fp>, Error> {
+        let ordinal = stage.checked_add(1).ok_or(Error::BoundsFailure)?;
+        if ordinal >= self.stage_count() {
+            return Err(Error::Synthesis);
+        }
+        let mut words = [
+            Fp::ONE,
+            *self.schema().get(1).ok_or(Error::Synthesis)?,
+            Fp::from(u64::try_from(ordinal).map_err(|_| Error::BoundsFailure)?),
+        ]
+        .into_iter()
+        .map(|value| chip.uint().glue().constant(region, value))
+        .collect::<Result<Vec<_>, _>>()?;
+        words.push(context.clone());
+        push_pallas(&mut words, carried)?;
+        chip.hash_words(region, u64::from_le_bytes(STAGE_DOMAIN), &words)
     }
 
     pub(super) fn incoming_proof_binding(

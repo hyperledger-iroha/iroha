@@ -1,39 +1,108 @@
-//! One fixed tag7 leaf for all five refresh kinds; signed originals belong to A.
-
-use ff::Field;
-use iroha_plonk_gadgets::{Bit, Word};
+//! Single-source `RefreshPolicy` sigma with a constrained five-kind update selector.
+//!
+//! Update projections are private witnesses. Native preparation and A must bind
+//! them to the actual signed object; they grant no authentication or map authority.
+//! The fixed k12 source fits the measured 2,499-row maximum advice lane.
+//! All five kinds use one original key; no runtime shape selection is provided.
 
 use super::*;
-use crate::{
-    operation_relation::{state::rest_index as rest, statement::RefreshClassStatementCells},
-    witness::core_index as core,
+use crate::operation_relation::{
+    map_effects::MapState,
+    refresh::selected::{SelectedRefreshTransition, UPDATE_FIELDS, constrain_selected},
+    statement::RefreshStatementCells,
 };
 
-/// Refresh state openings and the update projections authenticated separately by A.
-#[derive(Clone, Copy, Debug)]
-pub struct RefreshWitness {
-    /// Original committed state and its adjusted lineage.
-    pub predecessor: StateWitness,
-    /// Successor state and unchanged adjusted lineage values.
-    pub successor: StateWitness,
-    /// Exact tag7 statement; effect kind is constrained to 1 through 5.
-    pub statement: [Fp; 26],
-    /// Signed update time, or predecessor floor for a scheme policy.
-    pub issued: Fp,
-    /// Scheme-policy controls before permission intersection; zero for other kinds.
-    pub policy_controls: Fp,
+/// Fixed k12 domain shared by every `RefreshPolicy` update kind.
+/// The source uses the existing administrative sigma descriptor class.
+pub const REFRESH_K: u32 = BOOTSTRAP_K;
+
+/// The five canonical update kinds; the value enters the circuit as advice only.
+/// It never selects a different Rust synthesis branch, descriptor or proving key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RefreshKind {
+    /// Same-incarnation credential renewal.
+    Credential = 1,
+    /// Newer scheme policy and its permitted controls intersection.
+    SchemePolicy = 2,
+    /// Newer blacklist and its separately authenticated history insertion.
+    Blacklist = 3,
+    /// Newer quota share and its separately authenticated usage-array rebuild.
+    QuotaShare = 4,
+    /// A different time anchor for the same wallet.
+    TimeAnchor = 5,
 }
 
-/// Shared `RefreshPolicy` sigma class with a witness-independent circuit/key shape.
-/// A binds every update projection to the signed original and proves the history
-/// insertion or fixed64 quota rebuild. This leaf cannot authenticate an update.
+/// Canonical fixed-width projection of one update, authenticated separately by A.
+/// Every unused field must be zero in the circuit. Integer fields remain raw Fp
+/// witnesses so range violations cannot disappear through host-side truncation.
+#[derive(Clone, Copy, Debug)]
+pub struct RefreshUpdateWitness {
+    /// Typed kind, constrained equal to the statement's update kind.
+    pub kind: RefreshKind,
+    /// Original signed object's digest, nonzero for every kind.
+    pub digest: Fp,
+    /// Scheme for all kinds except Credential, where both limbs are zero.
+    pub scheme: [Fp; 2],
+    /// Asset for `SchemePolicy`/`QuotaShare`, zero otherwise.
+    pub asset: [Fp; 2],
+    /// Wallet for QuotaShare/TimeAnchor, zero otherwise.
+    pub wallet: [Fp; 2],
+    /// Policy epoch, list version or share id; zero for Credential/TimeAnchor.
+    pub counter: Fp,
+    /// Signed issue/issuer time; zero for `SchemePolicy`, which preserves the floor.
+    pub issued_at_ms: Fp,
+    /// Credential lease or quota expiry, zero otherwise.
+    pub expires_at_ms: Fp,
+    /// Blacklist entries root or quota windows root, zero otherwise.
+    pub root: Fp,
+    /// Scheme policy's three-bit controls, zero otherwise.
+    pub controls: Fp,
+    /// Scheme policy's optional fee-schedule digest, zero otherwise.
+    pub fee_schedule: Fp,
+}
+impl RefreshUpdateWitness {
+    fn fields(&self) -> [Fp; UPDATE_FIELDS] {
+        [
+            self.digest,
+            self.scheme[0],
+            self.scheme[1],
+            self.asset[0],
+            self.asset[1],
+            self.wallet[0],
+            self.wallet[1],
+            self.counter,
+            self.issued_at_ms,
+            self.expires_at_ms,
+            self.root,
+            self.controls,
+            self.fee_schedule,
+        ]
+    }
+}
+
+/// Complete G1 openings, exact statement and the update's canonical projection.
+#[derive(Clone, Copy, Debug)]
+pub struct RefreshWitness {
+    /// Original committed state; this operation can start from an unfolded head.
+    pub predecessor: StateWitness,
+    /// Successor after exactly one selected refresh effect.
+    pub successor: StateWitness,
+    /// Exact 26-field tag7 statement with update kind, digest and accepted floor.
+    pub statement: [Fp; 26],
+    /// Typed fixed-layout update projection, not an issuer-authentication verdict.
+    pub update: RefreshUpdateWitness,
+}
+
+/// One fixed circuit for all five kinds under selector `(RefreshPolicy, 0)`.
+/// A still owns signatures, immutable renewal identity and exact map/rebuild checks.
 #[derive(Clone, Copy, Debug)]
 pub struct RefreshCircuit {
     witness: RefreshWitness,
     known: bool,
 }
 impl RefreshCircuit {
-    /// Carry the proposed state and exact statement to the shared relation.
+    /// Carry original witnesses without authenticating an update or accepting a step.
     #[must_use]
     pub const fn new(witness: &RefreshWitness) -> Self {
         Self {
@@ -41,7 +110,8 @@ impl RefreshCircuit {
             known: true,
         }
     }
-    /// One bounded statement digest for canonical sigma selector14.
+
+    /// The one bounded statement digest, always derived from the original fields.
     #[must_use]
     pub fn instances(&self) -> [Vec<Fp>; 1] {
         [vec![hash_with_domain(
@@ -49,7 +119,8 @@ impl RefreshCircuit {
             &self.witness.statement,
         )]]
     }
-    /// Exact homogeneous PIPA-R public-input type.
+
+    /// Exact homogeneous PIPA-R instance membership.
     #[must_use]
     pub const fn instance_types() -> [InstanceType; 1] {
         [InstanceType::Bounded]
@@ -59,18 +130,21 @@ impl Circuit<Fp> for RefreshCircuit {
     type Config = AdminConfig;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();
+
     fn without_witnesses(&self) -> Self {
         Self {
             known: false,
             ..*self
         }
     }
-    fn configure(meta: &mut ConstraintSystem<Fp>) -> AdminConfig {
+
+    fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
         BootstrapCircuit::configure(meta)
     }
+
     fn synthesize(
         &self,
-        config: AdminConfig,
+        config: Self::Config,
         mut layouter: impl Layouter<Fp>,
     ) -> Result<(), Error> {
         let mut glue = GlueChip::starting_at(config.glue, load::BASE_HASH_ROWS);
@@ -78,24 +152,26 @@ impl Circuit<Fp> for RefreshCircuit {
         let mut sponge = SpongeChip::new(config.sponge);
         range.load_table(&mut layouter)?;
         let digest = layouter.assign_region(
-            || "shared five-kind RefreshPolicy sigma",
+            || "single-source RefreshPolicy sigma",
             |mut region| {
-                let w = &self.witness;
-                let projections = [w.issued, w.policy_controls];
-                let values = w
-                    .predecessor
+                let before = &self.witness.predecessor;
+                let after = &self.witness.successor;
+                let projection = self.witness.update.fields();
+                let kind = Fp::from(self.witness.update.kind as u64);
+                let values = before
                     .core
                     .iter()
-                    .chain(&w.predecessor.rest)
-                    .chain(&w.predecessor.lineage)
-                    .chain(&w.successor.core)
-                    .chain(&w.successor.rest)
-                    .chain(&w.successor.lineage)
-                    .chain(&w.statement)
-                    .chain(&projections)
-                    .map(|v| {
+                    .chain(&before.rest)
+                    .chain(&before.lineage)
+                    .chain(&after.core)
+                    .chain(&after.rest)
+                    .chain(&after.lineage)
+                    .chain(&self.witness.statement)
+                    .chain(std::iter::once(&kind))
+                    .chain(&projection)
+                    .map(|value| {
                         if self.known {
-                            Value::known(*v)
+                            Value::known(*value)
                         } else {
                             Value::unknown()
                         }
@@ -103,39 +179,42 @@ impl Circuit<Fp> for RefreshCircuit {
                     .collect::<Vec<_>>();
                 let words = glue.witnesses(&mut region, &values)?;
                 let mut uint = UintChip::new(&mut glue, &mut range);
-                let n = load::STATE_WORDS;
-                let (before, previous) =
-                    load::state(&mut uint, &mut sponge, &mut region, &words[..n])?;
-                let (after, lineage) =
-                    load::state(&mut uint, &mut sponge, &mut region, &words[n..2 * n])?;
-                let statement = RefreshClassStatementCells::constrain(
+                let (before, previous) = load::state(
                     &mut uint,
                     &mut sponge,
                     &mut region,
-                    &::core::array::from_fn(|i| words[2 * n + i].clone()),
+                    &words[..load::STATE_WORDS],
                 )?;
-                statement.bind_states(
+                let (after, successor) = load::state(
+                    &mut uint,
+                    &mut sponge,
+                    &mut region,
+                    &words[load::STATE_WORDS..2 * load::STATE_WORDS],
+                )?;
+                let offset = 2 * load::STATE_WORDS;
+                let statement = RefreshStatementCells::constrain(
+                    &mut uint,
+                    &mut sponge,
+                    &mut region,
+                    &core::array::from_fn(|i| words[offset + i].clone()),
+                )?;
+                GlueChip::assert_equal(&mut region, &words[offset + 26], &statement.fields()[17])?;
+                constrain_selected(
                     &mut uint,
                     &mut region,
-                    (&before, &previous),
-                    &after,
-                    &lineage,
+                    &SelectedRefreshTransition {
+                        statement: &statement,
+                        predecessor: MapState {
+                            state: &before,
+                            lineage: &previous,
+                        },
+                        successor: MapState {
+                            state: &after,
+                            lineage: &successor,
+                        },
+                    },
+                    &core::array::from_fn(|i| words[offset + 27 + i].clone()),
                 )?;
-                effects(
-                    &mut uint,
-                    &mut region,
-                    &statement,
-                    &before,
-                    &after,
-                    [&words[2 * n + 26], &words[2 * n + 27]],
-                )?;
-                for i in [14, 15, 16] {
-                    GlueChip::assert_equal(
-                        &mut region,
-                        &previous.fields()[i],
-                        &lineage.fields()[i],
-                    )?;
-                }
                 if sponge.lane().rows_used() != load::BASE_HASH_ROWS {
                     return Err(Error::Synthesis);
                 }
@@ -144,158 +223,4 @@ impl Circuit<Fp> for RefreshCircuit {
         )?;
         layouter.constrain_instance(digest.cell(), config.public, 0)
     }
-}
-
-fn equal_if(
-    uint: &mut UintChip<'_, Fp>,
-    region: &mut iroha_plonk::frontend::Region<'_, Fp>,
-    selected: &Word<Fp>,
-    a: &Word<Fp>,
-    b: &Word<Fp>,
-) -> Result<(), Error> {
-    let difference = uint.glue().sub(region, a, b)?;
-    let mismatch = uint.glue().mul(region, selected, &difference)?;
-    GlueChip::assert_constant(region, &mismatch, Fp::ZERO)
-}
-
-fn require_if(
-    uint: &mut UintChip<'_, Fp>,
-    region: &mut iroha_plonk::frontend::Region<'_, Fp>,
-    selected: &Bit<Fp>,
-    valid: &Bit<Fp>,
-) -> Result<(), Error> {
-    let invalid = uint.glue().not(region, valid)?;
-    let failure = uint.glue().mul(region, selected.word(), invalid.word())?;
-    GlueChip::assert_constant(region, &failure, Fp::ZERO)
-}
-
-fn effects(
-    uint: &mut UintChip<'_, Fp>,
-    region: &mut iroha_plonk::frontend::Region<'_, Fp>,
-    statement: &RefreshClassStatementCells,
-    before: &StateCells,
-    after: &StateCells,
-    projections: [&Word<Fp>; 2],
-) -> Result<(), Error> {
-    let kinds = statement.kinds();
-    let b = before.core();
-    let a = after.core();
-    let br = before.rest();
-    let ar = after.rest();
-    let [issued, policy_controls] = projections;
-    let zero = uint.glue().constant(region, Fp::ZERO)?;
-    let one = uint.glue().constant(region, Fp::ONE)?;
-    for (kind, target) in [
-        &a[core::CREDENTIAL],
-        &ar[rest::SCHEME_POLICY],
-        &ar[rest::BLACKLIST],
-        &ar[rest::QUOTA_SHARE],
-        &ar[rest::TIME_ANCHOR],
-    ]
-    .iter()
-    .enumerate()
-    {
-        equal_if(
-            uint,
-            region,
-            kinds[kind].word(),
-            target,
-            &statement.fields()[18],
-        )?;
-    }
-    for (kind, old, new) in [
-        (1, &b[core::POLICY_EPOCH], &a[core::POLICY_EPOCH]),
-        (2, &b[core::BLACKLIST_VERSION], &a[core::BLACKLIST_VERSION]),
-        (3, &br[rest::QUOTA_SHARE_ID], &ar[rest::QUOTA_SHARE_ID]),
-    ] {
-        let old = uint.range_check::<64>(region, old)?;
-        let new = uint.range_check::<64>(region, new)?;
-        let increasing = uint.lt(region, &old, &new)?;
-        require_if(uint, region, &kinds[kind], &increasing)?;
-    }
-    let unchanged_anchor =
-        uint.glue()
-            .is_equal(region, &br[rest::TIME_ANCHOR], &ar[rest::TIME_ANCHOR])?;
-    let changed_anchor = uint.glue().not(region, &unchanged_anchor)?;
-    require_if(uint, region, &kinds[4], &changed_anchor)?;
-    equal_if(uint, region, kinds[1].word(), issued, &b[core::TIME_FLOOR])?;
-    equal_if(
-        uint,
-        region,
-        kinds[2].word(),
-        issued,
-        &a[core::BLACKLIST_ISSUED_AT],
-    )?;
-    let issued = uint.range_check::<64>(region, issued)?;
-    let floor = uint.range_check::<64>(region, &b[core::TIME_FLOOR])?;
-    let advances = uint.lt(region, &floor, &issued)?;
-    let accepted = uint
-        .glue()
-        .select(region, &advances, issued.word(), floor.word())?;
-    GlueChip::assert_equal(region, &accepted, &a[core::TIME_FLOOR])?;
-    GlueChip::assert_equal(region, &accepted, &statement.fields()[19])?;
-    let expires = uint.range_check::<64>(region, &a[core::QUOTA_SHARE_EXPIRY])?;
-    let valid_expiry = uint.lt(region, &issued, &expires)?;
-    require_if(uint, region, &kinds[3], &valid_expiry)?;
-    let policy = crate::operation_relation::refresh::mask(uint, region, policy_controls)?;
-    let permitted = crate::operation_relation::refresh::mask(uint, region, &br[rest::PERMITTED])?;
-    let mut enabled = Vec::with_capacity(3);
-    for i in 0..3 {
-        enabled.push(
-            uint.glue()
-                .mul(region, policy[i].word(), permitted[i].word())?,
-        );
-    }
-    let intersection = uint.glue().linear(
-        region,
-        &[
-            (Fp::ONE, &enabled[0]),
-            (Fp::from(2), &enabled[1]),
-            (Fp::from(4), &enabled[2]),
-        ],
-        Fp::ZERO,
-    )?;
-    equal_if(
-        uint,
-        region,
-        kinds[1].word(),
-        &intersection,
-        &a[core::ENABLED_CONTROLS],
-    )?;
-    let other = uint.glue().not(region, &kinds[1])?;
-    equal_if(uint, region, other.word(), policy_controls, &zero)?;
-    for (index, old) in b.iter().enumerate() {
-        if matches!(index, core::SEQUENCE | core::STATE_NONCE | core::TIME_FLOOR) {
-            continue;
-        }
-        let kind = match index {
-            core::CREDENTIAL | core::LEASE_EXPIRY => Some(0),
-            core::POLICY_EPOCH | core::ENABLED_CONTROLS => Some(1),
-            core::BLACKLIST_VERSION | core::BLACKLIST_ROOT | core::BLACKLIST_ISSUED_AT => Some(2),
-            core::QUOTA_WINDOWS_ROOT | core::QUOTA_SHARE_EXPIRY | core::QUOTA_USAGE_ROOT => Some(3),
-            _ => None,
-        };
-        let preserve = if let Some(kind) = kind {
-            uint.glue().not(region, &kinds[kind])?.word().clone()
-        } else {
-            one.clone()
-        };
-        equal_if(uint, region, &preserve, old, &a[index])?;
-    }
-    for (index, old) in br.iter().enumerate() {
-        let kind = match index {
-            rest::SCHEME_POLICY | rest::FEE_SCHEDULE => Some(1),
-            rest::BLACKLIST | rest::BLACKLIST_HISTORY => Some(2),
-            rest::QUOTA_SHARE | rest::QUOTA_SHARE_ID => Some(3),
-            rest::TIME_ANCHOR => Some(4),
-            _ => None,
-        };
-        let preserve = if let Some(kind) = kind {
-            uint.glue().not(region, &kinds[kind])?.word().clone()
-        } else {
-            one.clone()
-        };
-        equal_if(uint, region, &preserve, old, &ar[index])?;
-    }
-    Ok(())
 }

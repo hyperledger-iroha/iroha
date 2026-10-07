@@ -759,12 +759,7 @@ impl Objects {
                 u128::from_le_bytes(bytes[16..32].try_into().unwrap()),
             ]
         };
-        let policy = OwnPolicy::new(
-            pair(&source[0][2..34]),
-            pair(&source[2][66..98]),
-            Affine::GENERATOR,
-        )
-        .unwrap();
+        let policy = OwnPolicy::new(pair(&source[2][66..98]), Affine::GENERATOR).unwrap();
         let mut out = Self {
             plan,
             omega,

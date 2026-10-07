@@ -54,7 +54,7 @@ implementation returns an explicit error rather than reporting a payment complet
 |---|---|---|
 | R1 | Offline payments | After enrollment and loading, peers need only each other (§5). |
 | R2 | Mainstream phones | Stock Android/vendor equivalents and iPhone, hardware-backed keys, no custom applet (§2). Actual platform evidence and measurements are recorded separately. Activation, loading and receiving require a device class whose published lineage budget is met (§5.3). |
-| R3 | Load from the ledger | A finalized reserve debit creates one wallet-bound load voucher (§6). |
+| R3 | Load from the ledger | A finalized reserve debit creates one wallet-bound ordinary Load receipt (§6). |
 | R4 | Final device-to-device value, unbounded hops | Send irreversibly transfers value to the bound receiver. Receive makes it immediately and durably owned by the receiver, subject only to the P4 burn exception (§3.2). The value becomes onward-spendable offline once the receiver's local lineage fold reaches its current head, which covers the crediting head; the fold needs no network, counterparty or approval. Only exact Payment replay can finish delivery; no refund or hop ceiling (§§3–5). |
 | R5 | Optional return online | Unload is the holder's choice, available from any folded head (§3.1). Remaining offline has no deadline unless an enabled regulatory control supplies one (§§6–7). |
 | R6 | Account blacklist | With the control enabled, a payment does not take place if the payer's own committed list contains the receiver when it sends, or the receiver's own committed list contains the payer when it issues the Request. The Request records the receiver's list, and Receive checks only that list, so a newer receiver list never strands a committed Payment. Lists are best effort and may differ between phones (§7). |
@@ -284,7 +284,7 @@ recomputes is Poseidon:
   the chains, the statement digest (σ's public-input encoding of its statement,
   which the receipt also binds), `operation_id`, the unload nullifier, the object
   digest of each signed object that a relation verifies or names (requests,
-  receipts, credentials, certificates, load vouchers, fee schedules, scheme
+  receipts, credentials, certificates, ordinary Load receipts, fee schedules, scheme
   policies, blacklists, quota shares, time anchors and charge quotes, over the
   signed message and the signature), the certificate-set and package digests, and
   the roots, leaves and openings of every wallet map, of the blacklist,
@@ -422,7 +422,7 @@ domain (§4.1):
 To make a transition:
 
 1. Natively verify every input package and object (an incoming Payment,
-   Credited evidence, a load voucher, a policy update). For Send, Unload and
+   Credited evidence, an ordinary Load receipt, a policy update). For Send, Unload and
    Retiring the predecessor must be folded. The wallet uses the Ω recorded as
    self-verified at fold time (step 5) and does not re-verify it on the payment
    path.
@@ -502,7 +502,7 @@ check runs.
     case;
   - this step's σ and τ, and every input package's Ω, σ and τ;
   - every signature it owns: the Request and receiver credential only in
-    Λ_recv; load vouchers in Λ_load; certificates, credentials, and policy,
+    Λ_recv; ordinary Load receipts in Λ_load; certificates, credentials, and policy,
     list, time and credential updates in the step that consumes them;
   - the Request's account digests against the credential each belongs to:
     Λ_send checks the payer account digest against the payer's own
@@ -613,14 +613,14 @@ Post-commit failure is contained:
   commit. The Request signature and receiver credential are checked natively
   before Advance, and in-circuit only in the receiver's own Λ_recv. Fee terms
   are checked against the payer's own policy.
-- Load vouchers, certificates, fee schedules, credentials, and policy, list,
+- Ordinary Load receipts, certificates, fee schedules, credentials, and policy, list,
   time and credential updates have no failure branch. The issuer and ledger
   roles of §2.3 sign them. A peer can relay them but cannot forge or re-encode
   them (§8), so only a verifier defect can make them fail in-circuit. The next
   two rules target that defect.
 - Native and in-circuit verifiers accept exactly the same set for every object
   that Λ verifies after a native check: Ω including its deferred values, σ, τ,
-  the Request, Credited evidence, load vouchers, fee schedules, certificates,
+  the Request, Credited evidence, ordinary Load receipts, fee schedules, certificates,
   credentials, and policy, list, time and credential updates.
 - Every signature that Λ verifies uses a P-256 gadget that is complete for every
   input the native verifier accepts.
@@ -638,12 +638,12 @@ credential without its uninstalled enrollment marker is a used incarnation and
 is never initialized again.
 The ledger enables load issuance only after verifying and recording the complete
 Bootstrap package for that incarnation. A credential alone cannot receive a
-load voucher. This activation is idempotent and occurs during enrollment.
+ordinary Load receipt. This activation is idempotent and occurs during enrollment.
 An interrupted enrollment resumes the same installation; it never creates two
 initialized heads. Abandonment is allowed only while the enrollment marker is
 still selected and Bootstrap has never committed. It commits a terminal marker
 and records its receipt in a ledger instruction that atomically rejects prior
-activation and permanently disables activation and loads. No voucher or monetary
+activation and permanently disables activation and loads. No receipt or monetary
 balance exists to return. Once Bootstrap commits, including an uncertain
 activation response, recover that incarnation and use §6.3; do not abandon funded
 obligations. Releasing an unused quota allocation requires that terminal evidence
@@ -716,7 +716,7 @@ a hash or a key-store marker alone is insufficient for onward spending.
 Until a durable Ω covers a step, the capsule and completion records of that
 step retain every input that Λ verifies for it: σ, τ, every consumed input (the
 incoming Payment with the payer's Ω, σ and τ; the Request; Credited evidence
-and the matching Payment; the load voucher; policy, list, time and credential
+and the matching Payment; the ordinary Load receipt; policy, list, time and credential
 updates with their certificates and fee schedules) and the map openings. These
 fold witnesses are outside backup sets and marker-bound. A missing witness is
 custody loss under §1.2, shown as such, never a silent wait.
@@ -916,7 +916,7 @@ budget is met when its published Λ peak memory and fold-witness storage for
 the operation's relation fit the device's available app memory and reserved
 storage. A class with no published budget does not meet it. A wallet activates,
 Loads, Receives or commits RefreshPolicy only on a device class whose published
-lineage budget is met; otherwise it refuses before commit, and the voucher or
+lineage budget is met; otherwise it refuses before commit, and the receipt or
 Payment stays deliverable. Never rely on platform background-execution time
 for multi-minute proving: folds resume whenever the app runs. Fold-witness
 storage counts toward the reserved capacity. Existing measurements do not yet
@@ -947,10 +947,10 @@ scheme, wallet, asset digest, expected next ordinal, nonzero request ID, net
 amount and any canonical charge quote and beneficiary. Ledger execution compares
 the exact asset and ordinal, debits the payer into the scheme reserve, applies
 any displayed charge and advances the ordinal atomically. A stale ordinal or
-changed retry terms fail. No separate Load signer, publisher service or voucher
+changed retry terms fail. No separate Load signer, publisher service or receipt
 publication transaction participates in this operation.
 
-The immutable `KagemushaWalletLoadReceiptV1` records those terms, the payer,
+The immutable `KagemushaWalletLoadReceiptV1` records those terms, the payer account digest,
 original transaction hash and block height. An exact replay within the original
 transaction and height can recover its original result; another transaction or
 height cannot reuse that request ID successfully. After a lost response, the
@@ -970,31 +970,31 @@ transaction and height. The query's serialized receipt alone is not finality
 proof. `Load` must absorb only its exact next ordinal and cannot credit a
 duplicate.
 
-**Remaining proof work:** this native capability does not replace the offline
-Load relation. The current wire/model `KagemushaWalletLoadVoucherV1` and
-`LoadAuthorization` role, and the proof circuit's issuer-signature check, still
-exist. Replacing that relation with a succinct proof of ordinary consensus
-finality, binding the same transaction, successful execution and receipt, is
-**not implemented**. Neither the receipt codec nor native finality verification
-completes that offline proof path; the remaining voucher references describe
-that unfinished replacement, not an additional production issuer role.
+The offline Load relation now consumes the exact ordinary receipt and an original
+terminal finality proof under an independently installed source key and complete
+global-genesis anchor. It verifies the proof and retains both carried curve
+claims. The model has no Load issuer certificate role, voucher signing domain
+or fallback decoder. A receipt or native-verification verdict alone cannot
+supply this proof authority.
 
-TODO(G3/G5): build a generic recursive finality proof during the online Load,
-with proving off-device and public inputs binding the independently selected
-network, chain and canonical receipt digest. The relation must prove the exact
-CommitQC signer bitmap/quorum and authenticated epoch schedule from genesis,
-Blake2b header/result linkage, and counted input/output Merkle membership for
-the successful direct original transaction and its complete approved terms.
-`A_Load` must verify this proof and bind its receipt to the Load effect, so later
-Receive and Unload inherit the authorization through ordinary lineage recursion
-without carrying an expanding certificate history. Missing primitives include
-BLS12-381 canonical/subgroup checks, the exact W3f hash-to-G2 transcript and
-pairing verification; the existing foreign-field chip supports only 256-bit
-residues. Blake2b and canonical consensus-input constraints also need PIPA
-implementations. Rebuild the Load/model/wire producers and common recursive
-catalog, then measure complete envelopes against 10,000 bytes; unchanged public
-lineage fields alone do not establish that bound. No host verdict or additional
-signer substitutes for this unfinished proof.
+The finality source binds the exact native CommitQC, ordered normal committee,
+aggregate signer selection, complete signed result, epoch schedule from genesis
+and counted successful-Load event membership. Under the ordinary consensus
+assumption (at most `f` faulty committee members and honest validators signing
+only after normal block and execution validation), the quorum certifies those
+execution terms. The source does not reexecute the VM or replace the native
+provider's full original-envelope and custody checks. Fixed byte-scan schedules
+and a two-source recursive history catalog permit a finite installed key set.
+The native producer mounts that complete fixed graph, imports original proving
+tables per active node, advances each history height and re-verifies terminal
+receipt evidence before local custody. Its Core adapter preserves native block
+and event originals and derives the anchor from explicitly signed genesis parameters.
+
+TODO(G3/G5): qualify the complete producer from original source artifacts,
+through genesis-rooted finality, Load, subsequent Receive/Unload and the common
+terminal catalog. Rebuild original keys after source changes and measure genuine
+complete Payment envelopes against 10,000 bytes. Component constraints, internal
+wrapper sizes and structural fixture bytes do not establish that release gate.
 
 `Unload` subtracts a chosen positive amount, increments `next_redeem` and creates
 a ledger-directed claim with a domain-separated nullifier derived from scheme,
@@ -1062,15 +1062,15 @@ Retirement closes new setup and funding, while preserving existing claims:
 1. Commit a proven `Retiring` transition from a folded head (§3.1). It issues
    no new Request quotes, but
    continues to Receive valid Payments under previously signed quotes, including
-   Sends that commit later. It may Load vouchers already issued, Send or Unload
+   Sends that commit later. It may Ordinary Load receipts already issued, Send or Unload
    remaining value and finish delivery, fee and redemption claims. The lifecycle
    never reverts to Active.
 2. Submit a ledger-control instruction carrying the complete Retiring package,
    or a later complete Send or Unload package proving that lifecycle and its
    `next_load`. Each of these commits only from a folded head and carries its
    predecessor Ω (§3.1). In one transaction, the ledger
-   checks that no voucher at or above that ordinal exists and permanently
-   disables further loads. If a voucher exists, the instruction fails and the
+   checks that no receipt at or above that ordinal exists and permanently
+   disables further loads. If a receipt exists, the instruction fails and the
    wallet loads it first. A load submitted after
    closure is refused and debits nothing. Repeating closure is idempotent;
    later activation attempts cannot reopen it.
@@ -1085,7 +1085,7 @@ custody deletion writes a terminal marker before deleting key material and
 warns that late incoming Payments and any retained claims will be lost. It is
 a destructive custody action under §1.2, not a lossless monetary drain or a
 way to refund the payer. Unused enrollment abandonment has the separate
-unactivated/no-voucher condition in §3.2.
+unactivated/no-receipt condition in §3.2.
 
 There is no seed restore that recreates spent offline value on another phone
 or automatic issuer reissue. The issuer cannot reclaim or reissue a committed

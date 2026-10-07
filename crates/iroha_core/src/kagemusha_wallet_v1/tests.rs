@@ -346,7 +346,10 @@ fn load_requires_exact_asset_and_next_ordinal_before_any_debit() {
     }
     let first = issue_load(&mut tx, &command).unwrap();
     assert_eq!(first.body.request_id, command.request_id);
-    assert_eq!(first.body.payer, tx.authority);
+    assert_eq!(
+        first.body.payer_account_digest,
+        kagemusha_wallet_account_digest_v1(&tx.authority).unwrap()
+    );
     let mut stale = command.clone();
     stale.request_id = [0x77; 32];
     let funded = tx.balances.clone();

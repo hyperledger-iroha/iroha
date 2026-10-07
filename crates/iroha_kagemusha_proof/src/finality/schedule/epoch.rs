@@ -22,6 +22,40 @@ pub struct EpochRanges {
 }
 
 impl EpochRanges {
+    /// Restore a complete previously proved epoch field split.
+    pub(crate) fn from_source_parts(body: FieldSpan, fields: [FieldSpan; 7]) -> Self {
+        let [
+            layout,
+            version,
+            network,
+            mode,
+            authorization,
+            committee,
+            seed,
+        ] = fields;
+        Self {
+            body,
+            layout,
+            version,
+            network,
+            mode,
+            authorization,
+            committee,
+            seed,
+        }
+    }
+    /// Every original field range retained by the parser's state commitment.
+    pub(crate) fn source_parts(&self) -> [&FieldSpan; 7] {
+        [
+            &self.layout,
+            &self.version,
+            &self.network,
+            &self.mode,
+            &self.authorization,
+            &self.committee,
+            &self.seed,
+        ]
+    }
     /// Decode exactly the seven native fields of a present/absent epoch body.
     /// # Errors
     /// Layout errors; changed lengths, trailing fields or foreign source fail.
@@ -147,9 +181,21 @@ impl EpochRanges {
         index: &Uint<Fp, 5>,
     ) -> Result<MemberCells, Error> {
         reader.same_span(region, &self.body, &header.body)?;
+        self.member_for_source_count(reader, region, &header.count, index)
+    }
+
+    /// Continue roster extraction using the count authenticated by this same
+    /// parser program's earlier header stage. This is not standalone authority.
+    pub(crate) fn member_for_source_count<H: WordHasher<Fp>>(
+        &self,
+        reader: &mut ScheduleReader<'_, '_, H>,
+        region: &mut Region<'_, Fp>,
+        count: &Uint<Fp, 5>,
+        index: &Uint<Fp, 5>,
+    ) -> Result<MemberCells, Error> {
         let thirty_one = reader.uint.constant::<5>(region, 31)?;
         reader.uint.assert_lt(region, index, &thirty_one)?;
-        let active = reader.uint.lt(region, index, &header.count)?;
+        let active = reader.uint.lt(region, index, count)?;
         let source = reader.only_when(region, &self.committee, &active)?;
         let relative =
             reader
@@ -218,7 +264,7 @@ impl EpochHeader {
     pub const fn network(&self) -> &[Word<Fp>; 32] {
         &self.network
     }
-    /// Native policy tag:0 permissioned,1 NPoS.
+    /// Native policy tag: 0 permissioned, 1 `NPoS`.
     pub const fn mode(&self) -> &Uint<Fp, 1> {
         &self.mode
     }
@@ -236,7 +282,7 @@ impl EpochHeader {
     }
 }
 
-/// Original BLS key and PoP at one exact roster position. No key/PoP cryptography
+/// Original BLS key and `PoP` at one exact roster position. No key/`PoP` cryptography
 /// or authority is implied; the surrounding native BLS relation must verify them.
 #[derive(Clone, Debug)]
 pub struct MemberCells {

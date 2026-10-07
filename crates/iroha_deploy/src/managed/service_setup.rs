@@ -543,7 +543,7 @@ impl Setup {
         self.validate_intent(&original.intent)?;
         self.authority
             .decode_checkpoint(&original.checkpoint)?
-            .verified_tip()
+            .verified_tip_ref()
             .map_err(|_| invalid("invalid original service setup checkpoint"))?
             .verify_global_scope(
                 self.authority.config.network_id,

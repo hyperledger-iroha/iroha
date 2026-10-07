@@ -341,7 +341,7 @@ fn actual_renewed_three_variable_one_fixed_leaf_preserves_every_signature() {
         }
     };
     let root = point("scheme_root");
-    let policy = OwnPolicy::new([1, 2], [3, 4], root).unwrap();
+    let policy = OwnPolicy::new([3, 4], root).unwrap();
     let schemas = ReceiveStagePlan::signature_schemas(Variant::ReceiveRenewed, policy).unwrap();
     assert_eq!(schemas[0].slots().len(), 3);
     let schema = schemas[1].clone();

@@ -232,7 +232,7 @@ fn append_bytes(out: &mut Vec<Fp>, bytes: &[u8]) {
 fn expected(circuit: &ScheduleCircuit, schedule: &norito::json::Value) -> Vec<Vec<Fp>> {
     let witness = ResultTapeWitness::from_frame(&Value::known(circuit.frame.clone())).unwrap();
     let mut out = Vec::new();
-    witness.root().map(|root| out.push(root));
+    let _ = witness.root().map(|root| out.push(root));
     out.push(Fp::from(num(schedule, "height")));
     let boundary = schedule.get("boundary").unwrap();
     let has_boundary = !matches!(boundary, norito::json::Value::Null);
@@ -292,7 +292,7 @@ fn expected(circuit: &ScheduleCircuit, schedule: &norito::json::Value) -> Vec<Ve
                 num(epoch, "epoch"),
                 num(epoch, "first_height"),
                 num(epoch, "last_height"),
-                num(epoch, "generation"),
+                le(authorization[5]),
                 le(authorization[10]),
             ]
             .into_iter()
@@ -363,7 +363,7 @@ fn native_current_and_authorized_epoch_members_include31_seats_and_zero_inactive
     for case in fixtures.get("cases").unwrap().as_array().unwrap() {
         let blocks = case.get("blocks").unwrap().as_array().unwrap();
         for (height, phase, seat) in [
-            (1, 1, (num(case, "seats") - 1) as u8),
+            (1, 1, u8::try_from(num(case, "seats") - 1).unwrap()),
             (2, 1, 30),
             (2, 2, 0),
             (3, 2, 0),
@@ -444,7 +444,8 @@ mod shared_lanes {
                 || "tape windows retain shared verifier lanes",
                 |mut region| {
                     let root = chip.uint().glue().witness(&mut region, source.root())?;
-                    let before = chip.hash_words(&mut region, BEFORE, &[root.clone()])?;
+                    let before =
+                        chip.hash_words(&mut region, BEFORE, std::slice::from_ref(&root))?;
                     let (mut uint, hash) = chip.uint_and_hasher()?;
                     let length = uint
                         .assign::<32>(&mut region, witness(self.known, self.frame.len() as u128))?;
@@ -484,12 +485,14 @@ mod shared_lanes {
     #[test]
     fn verifier_shared_lanes_bind_cross_chunk_windows_and_refuse_active_transcripts() {
         let circuit = SharedTape {
-            frame: (0..80).map(|index| (index * 17 + 3) as u8).collect(),
+            frame: (0..80)
+                .map(|index| u8::try_from((index * 17 + 3) % 256).unwrap())
+                .collect(),
             known: true,
         };
         let source = ResultTapeWitness::from_frame(&Value::known(circuit.frame.clone())).unwrap();
         let mut expected = Vec::new();
-        source.root().map(|root| {
+        let _ = source.root().map(|root| {
             let first = circuit.frame[7..23]
                 .iter()
                 .map(|byte| Fp::from(u64::from(*byte)))

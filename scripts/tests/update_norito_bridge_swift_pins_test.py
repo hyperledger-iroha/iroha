@@ -224,7 +224,7 @@ def validate(
             )
         payload = {
             "version": "1.0.0",
-            "native_bridge_abi_version": 25,
+            "native_bridge_abi_version": 26,
             "privacy_production_enabled": True,
             "cargo_features": ["privacy-production-enabled"],
             "build_environment": {

@@ -191,6 +191,8 @@ struct PathCircuit<F> {
     siblings: Vec<[u8; 32]>,
     root: [u8; 32],
     known: bool,
+    padded_slots: Option<usize>,
+    resume_only: bool,
     field: PhantomData<F>,
 }
 
@@ -238,11 +240,29 @@ impl<F: PastaField> Circuit<F> for PathCircuit<F> {
                 )?;
                 GlueChip::assert_constant(&mut region, count.word(), F::from(self.count))?;
                 let leaf = assign_bytes(&mut uint, &mut region, self.known, &self.leaf)?;
-                let mut path =
-                    PathCells::start(&mut hash, &mut uint, &mut region, &index, &count, &leaf)?;
-                for sibling in &self.siblings {
+                let mut path = if self.resume_only {
+                    PathCells::resume(&mut uint, &mut region, &index, &count, &leaf)?
+                } else {
+                    PathCells::start(&mut hash, &mut uint, &mut region, &index, &count, &leaf)?
+                };
+                let slots = self.padded_slots.unwrap_or(self.siblings.len());
+                for slot in 0..slots {
+                    let sibling = self.siblings.get(slot).unwrap_or(&[0; 32]);
                     let sibling = assign_bytes(&mut uint, &mut region, self.known, sibling)?;
-                    path = path.step(&mut hash, &mut uint, &mut region, &sibling)?;
+                    path = if self.padded_slots.is_some() {
+                        let index =
+                            uint.range_check::<32>(&mut region, path.geometry().index().word())?;
+                        let resumed = PathCells::resume(
+                            &mut uint,
+                            &mut region,
+                            &index,
+                            path.geometry().width(),
+                            path.digest(),
+                        )?;
+                        resumed.step_padded(&mut hash, &mut uint, &mut region, &sibling)?
+                    } else {
+                        path.step(&mut hash, &mut uint, &mut region, &sibling)?
+                    };
                 }
                 let root = self
                     .root
@@ -292,6 +312,8 @@ fn fixture<F: PastaField>(count: u32, index: u32) -> PathCircuit<F> {
             .collect(),
         root: *tree.root().unwrap().as_ref(),
         known: true,
+        padded_slots: None,
+        resume_only: false,
         field: PhantomData,
     }
 }
@@ -344,4 +366,61 @@ fn paths_reject_wrong_count_order_padding_marker_and_root() {
     for (index, case) in cases.iter().enumerate() {
         assert!(!satisfies(case, 16), "consistent forgery {index}");
     }
+}
+
+fn padded_paths<F: PastaField>() {
+    for (count, index) in [(1, 0), (2, 1), (3, 2), (5, 4)] {
+        let honest = PathCircuit {
+            padded_slots: Some(4),
+            ..fixture::<F>(count, index)
+        };
+        // This differential harness composes four steps and a leaf hash. The
+        // production source gives each step its own separately checked k16 leaf.
+        assert!(satisfies(&honest, 17), "padded {count}/{index}");
+        let mut wrong = honest.clone();
+        wrong.siblings.resize(4, [0; 32]);
+        wrong.siblings[3][31] = 1;
+        assert!(!satisfies(&wrong, 17), "padding has one unique encoding");
+        let mut wrong = honest;
+        wrong.root[0] ^= 1;
+        assert!(
+            !satisfies(&wrong, 17),
+            "resumption preserves the exact digest"
+        );
+    }
+}
+
+#[test]
+fn resumed_fixed_capacity_paths_and_padding_match_on_both_fields() {
+    padded_paths::<Fp>();
+    padded_paths::<Fq>();
+}
+
+fn resume_checks<F: PastaField>() {
+    let mut honest = fixture::<F>(1, 0);
+    honest.resume_only = true;
+    honest.root = honest.leaf;
+    assert!(satisfies(&honest, 10));
+    assert!(undetected_tampers(&honest, 10, &[]).unwrap().is_empty());
+    for digest in [[0; 32], [2; 32]] {
+        let mut wrong = honest.clone();
+        wrong.leaf = digest;
+        wrong.root = digest;
+        assert!(
+            !satisfies(&wrong, 10),
+            "consistent unmarked root is rejected"
+        );
+    }
+    let mut wrong = honest.clone();
+    wrong.count = 0;
+    assert!(!satisfies(&wrong, 10));
+    let mut wrong = honest;
+    wrong.index = 1;
+    assert!(!satisfies(&wrong, 10));
+}
+
+#[test]
+fn resumed_geometry_and_marked_digest_are_constrained_on_both_fields() {
+    resume_checks::<Fp>();
+    resume_checks::<Fq>();
 }

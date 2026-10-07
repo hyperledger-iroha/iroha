@@ -23,10 +23,9 @@ use iroha_plonk::{
 #[test]
 fn bootstrap_policy_rejects_invalid_fixed_artifacts() {
     use iroha_plonk_gadgets::p256::native::{Affine, P};
-    assert!(BootstrapPolicy::new([1, 2], [3, 4], Affine::GENERATOR).is_ok());
-    assert!(BootstrapPolicy::new([0; 2], [3, 4], Affine::GENERATOR).is_err());
-    assert!(BootstrapPolicy::new([1, 2], [0; 2], Affine::GENERATOR).is_err());
-    assert!(BootstrapPolicy::new([1, 2], [3, 4], Affine { x: P, y: [0; 4] }).is_err());
+    assert!(BootstrapPolicy::new([3, 4], Affine::GENERATOR).is_ok());
+    assert!(BootstrapPolicy::new([0; 2], Affine::GENERATOR).is_err());
+    assert!(BootstrapPolicy::new([3, 4], Affine { x: P, y: [0; 4] }).is_err());
 }
 
 #[test]

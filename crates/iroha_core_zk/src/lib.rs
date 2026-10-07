@@ -89,6 +89,11 @@ pub(crate) mod frame_test_support;
 pub mod kagemusha_wallet_advance_v1;
 /// Complete installed wallet verifier inventory and native artifact identity owner.
 pub mod kagemusha_wallet_artifacts_v1;
+/// Canonical G1 preparation and typed real native sigma/A/W inputs.
+pub mod kagemusha_wallet_preparation_v1;
+
+/// Native authenticated global genesis policy for ordinary Load history.
+pub mod kagemusha_wallet_finality_v1;
 /// Authenticated native wallet proof artifacts and full sigma/Omega verification.
 pub mod kagemusha_wallet_proofs_v1;
 pub mod kagemusha_wallet_state_v1;
@@ -2454,7 +2459,10 @@ mod stark_backend_tag_tests {
                 format!("generic/namespace/{label}"),
             ] {
                 assert!(
-                    !pipa_r_open_verify_circuit_id_matches_backend(ZK_BACKEND_NATIVE_PIPA_R, &circuit_id),
+                    !pipa_r_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_NATIVE_PIPA_R,
+                        &circuit_id
+                    ),
                     "Halo2 generic admission must reject privacy circuit id {circuit_id:?}"
                 );
                 assert!(

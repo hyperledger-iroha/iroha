@@ -16,9 +16,9 @@ use super::LoadReceiptCells;
 // This is the HashOf<EventBox> preimage, not a top-level canonical Norito frame.
 // Enum tags, nested compact lengths and the sole fixed32 field are invariant;
 // the shared fixture pins this prefix against the native codec.
-const PREFIX: [u8; 13] = [2, 0, 0, 0, 40, 39, 38, 24, 0, 0, 0, 33, 32];
+pub const PREFIX: [u8; 13] = [2, 0, 0, 0, 40, 39, 38, 24, 0, 0, 0, 33, 32];
 
-/// Exact canonical event encoding and marked BLAKE2b hash of the parsed receipt.
+/// Exact canonical event encoding and marked `BLAKE2b` hash of the parsed receipt.
 /// Inclusion and validator finality must still be proved by the enclosing source.
 #[derive(Clone, Debug)]
 pub struct LoadEventCells {

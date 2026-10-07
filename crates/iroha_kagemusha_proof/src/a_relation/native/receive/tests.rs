@@ -1,6 +1,8 @@
 //! Native Receive input, exact original digest and deciding-selection rejection tests.
 
 use super::*;
+use crate::a_relation::schedule::OperationTask;
+use iroha_plonk_recursion::K;
 
 #[test]
 fn installed_transport_and_sigma_descriptors_must_fit_the_exact_payment_budget() {
@@ -205,39 +207,6 @@ fn corrected_vesta_retains_challenges_and_requires_a_distinct_deciding_point() {
 }
 
 #[test]
-fn normalized_q_part_rejects_dropped_slots_wrong_source_and_noncanonical_scalars() {
-    let v = incoming().vesta;
-    let (x, y) = Option::<(Fq, Fq)>::from(v.g().coordinates()).unwrap();
-    let columns = vec![
-        vec![Fq::ONE; K],
-        vec![x, y],
-        vec![Fq::from(10), Fq::from(2)],
-        vec![Fq::ONE, Fq::ONE, Fq::ONE, Fq::ZERO, Fq::ZERO],
-        vec![Fq::from(16)],
-    ];
-    assert_eq!(q_sigma_part(&columns).unwrap(), v.as_input());
-    for mutation in 0..7 {
-        let mut bad = columns.clone();
-        match mutation {
-            0 => {
-                bad.pop();
-            }
-            1 => {
-                bad[2].pop();
-            }
-            2 => bad[3][0] = Fq::ZERO,
-            3 => bad[4][0] = Fq::from(12),
-            4 => bad[1] = vec![Fq::ZERO, Fq::ZERO],
-            5 => bad[0][0] = Fq::ZERO,
-            _ => {
-                bad[3].pop();
-            }
-        }
-        assert!(q_sigma_part(&bad).is_err(), "mutation={mutation}");
-    }
-}
-
-#[test]
 fn exact_original_digest_distinguishes_lengths_tails_and_every_signed_limb() {
     let specs =
         ReceiveStagePlan::context_specs(Variant::Receive, MAX_OMEGA_RAW_BYTES, MAX_SIGMA_RAW_BYTES)
@@ -275,7 +244,10 @@ fn exact_original_digest_distinguishes_lengths_tails_and_every_signed_limb() {
 
 #[test]
 fn mandatory_owner_schedule_keeps_own_sigma_before_its_later_q_verification() {
-    let tasks = task_schedule();
+    let tasks =
+        crate::a_relation::schedule::compiled::OperationSchedule::for_variant(Variant::Receive)
+            .tasks()
+            .to_vec();
     assert_eq!(tasks.len(), A_STAGE_COUNT);
     assert_eq!(
         tasks[0],
@@ -316,26 +288,29 @@ fn native_terminal_matches_current_catalog_profile_and_internal_is_exactly_disti
 #[test]
 fn every_admitted_joint_split_and_one_byte_over_boundary_is_exact() {
     let bound = 320 + PAYMENT_PROOF_BUDGET;
-    assert_eq!(validate_envelope_lengths(0, 0), Ok(()));
+    assert_eq!(check_payment_original_sizes(0, 0), Ok(()));
     for sigma in 0..=MAX_SIGMA_RAW_BYTES {
         let omega = bound - sigma;
-        assert_eq!(validate_envelope_lengths(omega, sigma), Ok(()));
+        assert_eq!(check_payment_original_sizes(omega, sigma), Ok(()));
         assert_eq!(
-            validate_envelope_lengths(omega + 1, sigma),
+            check_payment_original_sizes(omega + 1, sigma),
             Err(Error::Input)
         );
         assert_eq!(
-            validate_envelope_lengths(omega, sigma + 1),
+            check_payment_original_sizes(omega, sigma + 1),
             Err(Error::Input)
         );
     }
-    assert_eq!(validate_envelope_lengths(usize::MAX, 1), Err(Error::Input));
     assert_eq!(
-        validate_envelope_lengths(0, MAX_SIGMA_RAW_BYTES + 1),
+        check_payment_original_sizes(usize::MAX, 1),
         Err(Error::Input)
     );
     assert_eq!(
-        validate_envelope_lengths(MAX_OMEGA_RAW_BYTES + 1, 0),
+        check_payment_original_sizes(0, MAX_SIGMA_RAW_BYTES + 1),
+        Err(Error::Input)
+    );
+    assert_eq!(
+        check_payment_original_sizes(MAX_OMEGA_RAW_BYTES + 1, 0),
         Err(Error::Input)
     );
 }

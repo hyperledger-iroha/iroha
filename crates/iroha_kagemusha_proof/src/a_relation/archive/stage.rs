@@ -9,10 +9,10 @@ use super::{
     authorization::ArchiveAuthorizationObjects,
     evidence::{self, ArchiveEvidenceSource},
     incoming::ArchiveIncomingObjects,
-    maps::{self, ArchiveEffectsCells},
+    maps::{self, ArchiveEffectsCells, ArchivePendingWitness},
     proofs::{ArchiveProofInputs, ArchiveProofSources},
     results::{ArchiveResultClaims, ArchiveResultPlan},
-    retained::ArchiveRetainedPayment,
+    retained::{ArchiveRetainedPayment, ArchiveRetainedProofs},
 };
 use crate::{
     a_relation::{
@@ -21,7 +21,6 @@ use crate::{
         own::OwnPolicy,
         schedule::OperationTask,
     },
-    operation_relation::map_effects::ArchiveMapWitness,
     q_signature::QSignaturePlan,
 };
 
@@ -46,6 +45,8 @@ pub struct ArchiveStageInputs<'a> {
     pub own: Option<&'a ArchiveAuthorizationObjects>,
     /// Exact historical Payment only for its mandatory hard owner.
     pub retained: Option<&'a ArchiveRetainedPayment>,
+    /// Exact opaque proof tapes only for their independent hard owner.
+    pub retained_proofs: Option<&'a ArchiveRetainedProofs>,
     /// Held Request/receiver and soft receipt, for Evidence or Signatures.
     pub incoming: Option<&'a ArchiveIncomingObjects>,
     /// Own sigma projection only for the own-proof owner.
@@ -65,13 +66,60 @@ pub struct ArchiveStageWitness<'a> {
     pub proof: Option<ArchiveProofInputs<'a>>,
     /// Original incoming evidence tapes, only for Evidence.
     pub evidence: Option<ArchiveEvidenceSource<'a>>,
-    /// Both authenticated pending removals, only for terminal Effects.
-    pub maps: Option<&'a ArchiveMapWitness>,
+    /// Exact unconditional committed-core pending removal.
+    pub core_pending: Option<&'a ArchivePendingWitness>,
+    /// Exact adjusted pending removal, with the committed three-result verdict.
+    pub lineage_pending: Option<&'a ArchivePendingWitness>,
 }
 
 impl ArchiveStagePlan {
+    /// Compose every original-source owner over the complete envelope domain.
+    ///
+    /// The first stage verifies the hard predecessor. Q0 has a dedicated proof
+    /// stage; Q1 belongs to Authorization and Q2 to Signatures. Source capacities and owner
+    /// order are compiled properties; private inputs cannot narrow them.
+    /// Actual source key generation must still establish each stage's capacity
+    /// and every recursive proof must close before artifact admission.
+    /// # Errors
+    /// Wrong operation, missing predecessor or invalid fixed Q/source schema.
+    pub fn full(
+        operation: crate::a_relation::AProofPlan,
+        policy: OwnPolicy,
+    ) -> Result<Self, Error> {
+        let variant = operation.frame().variant();
+        let specs = Self::full_context_specs(variant)?;
+        let context =
+            crate::a_relation::schedule::compiled::OperationSchedule::for_variant(variant)
+                .bind(operation, specs)?;
+        Self::new(context, policy)
+    }
+
+    /// Complete current envelope domains, including malformed incoming originals.
+    ///
+    /// Historical proof bytes are opaque to the retained owner, so its capacity
+    /// cannot be inferred from a measured sigma or pending-descriptor membership.
+    /// The retained owner separately enforces the hard combined Payment bound.
+    /// Exact incoming descriptor lengths remain total verifier predicates.
+    /// # Errors
+    /// Non-Archive variant or invalid fixed source schema.
+    pub fn full_context_specs(variant: Variant) -> Result<Vec<ContextObjectSpec>, Error> {
+        let incoming = match variant {
+            Variant::ArchiveReceive => super::MAX_RECEIVE_SIGMA_RAW_BYTES,
+            Variant::ArchiveStatus => super::MAX_STATUS_OMEGA_RAW_BYTES,
+            _ => return Err(Error::Synthesis),
+        };
+        Self::context_specs(
+            variant,
+            crate::a_relation::receive::MAX_OMEGA_RAW_BYTES,
+            crate::a_relation::receive::MAX_SIGMA_RAW_BYTES,
+            incoming,
+        )
+    }
+
     /// Own3, retained9, incoming receipt/raw proof, exact evidence and typed results.
     /// All capacities belong to this fixed key schema, never a witness choice.
+    /// Smaller component profiles do not qualify the complete envelope domain;
+    /// production composition starts with [`Self::full_context_specs`].
     /// # Errors
     /// Wrong variant or empty/overflowing active-proof capacity.
     pub fn context_specs(
@@ -205,6 +253,10 @@ impl ArchiveStagePlan {
                 input.retained.is_some(),
             ),
             (
+                tasks.contains(&ArchiveRetainedProofs),
+                input.retained_proofs.is_some(),
+            ),
+            (
                 tasks.contains(&ArchiveEvidence) || tasks.contains(&ArchiveSignatures),
                 input.incoming.is_some(),
             ),
@@ -220,7 +272,14 @@ impl ArchiveStagePlan {
                 witness.incoming_signatures.is_some(),
             ),
             (tasks.contains(&ArchiveEvidence), witness.evidence.is_some()),
-            (tasks.contains(&ArchiveEffects), witness.maps.is_some()),
+            (
+                tasks.contains(&ArchiveCorePending),
+                witness.core_pending.is_some(),
+            ),
+            (
+                tasks.contains(&ArchiveLineagePending),
+                witness.lineage_pending.is_some(),
+            ),
         ] {
             if required != present {
                 return Err(Error::Synthesis);
@@ -232,6 +291,10 @@ impl ArchiveStagePlan {
         let mut effects = None;
         for task in tasks {
             match task {
+                ArchiveRetainedProofs => input
+                    .retained_proofs
+                    .ok_or(Error::Synthesis)?
+                    .bind_context(region, &self.context, stage, input.context)?,
                 ArchiveRetainedPayment => input.retained.ok_or(Error::Synthesis)?.bind_context(
                     region,
                     &self.context,
@@ -298,9 +361,25 @@ impl ArchiveStagePlan {
                         stage,
                         input.context,
                         input.results,
-                        witness.maps.ok_or(Error::Synthesis)?,
                     )?)
                 }
+                ArchiveCorePending => maps::constrain_core_pending(
+                    chip,
+                    region,
+                    &self.context,
+                    stage,
+                    input.context,
+                    witness.core_pending.ok_or(Error::Synthesis)?,
+                )?,
+                ArchiveLineagePending => maps::constrain_lineage_pending(
+                    chip,
+                    region,
+                    &self.context,
+                    stage,
+                    input.context,
+                    input.results,
+                    witness.lineage_pending.ok_or(Error::Synthesis)?,
+                )?,
                 _ => return Err(Error::Synthesis),
             }
         }

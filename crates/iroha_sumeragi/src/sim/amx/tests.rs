@@ -91,7 +91,7 @@ impl Chain {
             proposer: 0,
             skipped_leaders: Vec::new(),
             control_witness: ControlWitness::empty(),
-            // The toy application flags nothing, epoch boundaries included (§3.7 A1).
+            // The toy application uses the canonical consensus header at every epoch.
         };
         let block_hash = header.hash(&validators.crypto);
         let preimage = preimage::vote_preimage(

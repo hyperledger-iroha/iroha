@@ -58,11 +58,11 @@ pub fn transition(
         after.statement[19] = amount;
         // Zero online fees are the default; there is no quote to authenticate.
         let (initial, _, _) = bootstrap_objects::enrollment();
-        let (loaded, _, _, voucher) = load_objects::authorized(&initial);
+        let (loaded, _, ordinary) = load_objects::funded(&initial);
         let mut tree = IndexedTree::new();
         tree.insert(
             Fp::from(2).pow_vartime([128]),
-            hash_with_domain(LOAD_DOMAIN, &[Fp::ZERO, voucher.digest(), Fp::from(100)]),
+            hash_with_domain(LOAD_DOMAIN, &[Fp::ZERO, ordinary.digest(), Fp::from(100)]),
         )
         .unwrap();
         assert_eq!(tree.root(), loaded.successor.core[core::LOAD_REDEEM_ROOT]);

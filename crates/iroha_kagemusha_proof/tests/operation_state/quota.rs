@@ -68,8 +68,13 @@ impl Fixture {
         let committed = witness.commitment_words();
         assert_eq!(committed.len(), QUOTA_WITNESS_WORDS);
         assert_eq!(
-            committed.iter().map(|word| word.cell()).collect::<Vec<_>>(),
-            w.iter().map(|word| word.cell()).collect::<Vec<_>>(),
+            committed
+                .iter()
+                .map(iroha_plonk_gadgets::Word::cell)
+                .collect::<Vec<_>>(),
+            w.iter()
+                .map(iroha_plonk_gadgets::Word::cell)
+                .collect::<Vec<_>>(),
             "fixed quota commitment preserves every assigned word in order"
         );
         match self.scope {

@@ -1,8 +1,8 @@
-//! Genuine four-stage C4 Load wrapped by the complete Omega predicate.
+//! Genuine five-stage native Load wrapped by the complete Omega predicate.
 //! Bootstrap-only or two-terminal catalogs remain explicit component scopes;
 //! neither establishes the complete operation catalog or production byte gate.
 
-/// Shared genuine Bootstrap predecessor and four-stage Load continuation fixtures.
+/// Shared genuine Bootstrap predecessor and five-stage Load continuation fixtures.
 #[path = "a_load_recursive.rs"]
 pub mod load_chain;
 
@@ -16,6 +16,7 @@ use iroha_plonk::{
     verifier::accumulate_generator,
 };
 use iroha_plonk_recursion::{AccumulatorT, FoldConfig, create_fold};
+pub use load_chain::LoadFixture;
 
 /// Complete outer artifacts, carrying the construction's explicit provenance.
 #[allow(dead_code)]
@@ -32,9 +33,16 @@ pub(crate) struct DiagnosticLoadOmega {
 /// Produces a real native outer proof while retaining the Bootstrap-only
 /// predecessor catalog. Its carried outer key is not rebound to the resulting
 /// Load-only wrapper, so this cannot serve as a continuity-checked predecessor.
-pub(crate) fn diagnostic_load_omega(diagnostics: bool) -> DiagnosticLoadOmega {
-    let predecessor = load_chain::bootstrap_outer::rooted_bootstrap_omega(false);
-    let load = load_chain::authenticated_load(&predecessor, 4, false);
+pub(crate) fn diagnostic_load_omega(
+    diagnostics: bool,
+    fixture: &LoadFixture,
+) -> DiagnosticLoadOmega {
+    let predecessor = load_chain::bootstrap_outer::rooted_bootstrap_omega_with_profile(
+        false,
+        load_chain::bootstrap_outer::bootstrap_chain::SourceProfile::Tagged { buses: 3 },
+        Some(2),
+    );
+    let load = load_chain::authenticated_load(&predecessor, fixture);
     let params = PinnedParams::<Eq>::derive(16).unwrap();
     let trivial = AccumulatorT::trivial(&params, MemoryBudget::DEFAULT).unwrap();
     let (fold, vesta) = create_fold(
@@ -75,7 +83,7 @@ pub(crate) fn diagnostic_load_omega(diagnostics: bool) -> DiagnosticLoadOmega {
     .unwrap();
     if diagnostics {
         eprintln!(
-            "LOAD_COMPACT_CANDIDATE source_buses=4 operation_authorization_complete=true full_catalog=false carried_outer_key_rebound=false"
+            "LOAD_COMPACT_CANDIDATE source_buses=3 operation_authorization_complete=true full_catalog=false carried_outer_key_rebound=false"
         );
         load_chain::bootstrap_outer::compact_diagnostic(&circuit, &public);
         let pinned = circuit
@@ -130,10 +138,10 @@ pub(crate) fn diagnostic_load_omega(diagnostics: bool) -> DiagnosticLoadOmega {
     }
 }
 
-#[test]
-#[ignore = "real authenticated Bootstrap and four-stage Load with complete outer proof; run optimized"]
-fn four_bus_authenticated_load_reaches_complete_outer_predicate() {
-    let _ = diagnostic_load_omega(true);
+/// Run the retained composition assertions with genuine native Load originals.
+#[allow(dead_code)] // Called by the full-finality qualification fixture once installed.
+pub fn native_load_reaches_complete_outer_predicate(fixture: &LoadFixture) {
+    let _ = diagnostic_load_omega(true, fixture);
 }
 
 /// A common-key Bootstrap→Load component catalog, with exact carried-key continuity.
@@ -246,28 +254,14 @@ fn catalog_key_config() -> KeygenConfigV2 {
 /// Rebuild both complete source chains under one immutable two-terminal Omega key.
 /// Every before/after terminal key and descriptor must remain exactly identical.
 #[allow(dead_code)]
-pub(crate) fn two_terminal_load_omega(adversarial: bool) -> TwoTerminalLoadOmega {
-    two_terminal_load_omega_with_q_layout(adversarial, 4, None)
-}
-/// Rebind both catalog terminals using an explicit uniform candidate Q/A profile.
-#[allow(dead_code)] // Consumed by candidate Send/catalog integration tests.
-pub(crate) fn two_terminal_load_omega_with_q_layout(
-    adversarial: bool,
-    source_buses: usize,
-    q_buses: Option<usize>,
-) -> TwoTerminalLoadOmega {
+pub(crate) fn two_terminal_load_omega(fixture: &LoadFixture) -> TwoTerminalLoadOmega {
     use load_chain::bootstrap_outer::{RootedBootstrapOmega, bootstrap_chain};
-    let initial_predecessor = load_chain::bootstrap_outer::rooted_bootstrap_omega_with_q_layout(
+    let initial_predecessor = load_chain::bootstrap_outer::rooted_bootstrap_omega_with_profile(
         false,
-        source_buses,
-        q_buses,
+        bootstrap_chain::SourceProfile::Tagged { buses: 3 },
+        Some(2),
     );
-    let initial_load = load_chain::authenticated_load_with_q_layout(
-        &initial_predecessor,
-        source_buses,
-        q_buses,
-        adversarial,
-    );
+    let initial_load = load_chain::authenticated_load(&initial_predecessor, fixture);
     let initial_bootstrap = &initial_predecessor.source;
     assert_eq!(
         initial_load.binding, initial_bootstrap.binding,
@@ -307,7 +301,7 @@ pub(crate) fn two_terminal_load_omega_with_q_layout(
         "catalog size1→2 must retain the exact predecessor program descriptor",
     );
     eprintln!(
-        "TWO_TERMINAL_PROFILE source_range_buses={source_buses} q_range_buses={q_buses:?} outer_compress_selectors=false catalog_size1_to2_descriptor_equal=true outer_shape={:?} compact_production_profile=false",
+        "TWO_TERMINAL_PROFILE source_range_buses=3 q_range_buses=2 outer_compress_selectors=false catalog_size1_to2_descriptor_equal=true outer_shape={:?} compact_production_profile=false",
         iroha_plonk::Protocol::new(outer_key.binding().descriptor())
             .unwrap()
             .shape(),
@@ -316,11 +310,11 @@ pub(crate) fn two_terminal_load_omega_with_q_layout(
         .vk()
         .kagemusha_digest(outer_key.binding())
         .unwrap();
-    let bootstrap = bootstrap_chain::authenticated_bootstrap_with_q_layout(
+    let bootstrap = bootstrap_chain::authenticated_bootstrap_with_profile(
         false,
         digest,
-        source_buses,
-        q_buses,
+        bootstrap_chain::SourceProfile::Tagged { buses: 3 },
+        Some(2),
     );
     assert_eq!(initial_bootstrap.binding, bootstrap.binding);
     assert_eq!(initial_bootstrap.key.to_bytes(), bootstrap.key.to_bytes());
@@ -352,8 +346,7 @@ pub(crate) fn two_terminal_load_omega_with_q_layout(
         .unwrap(),
         vesta,
     };
-    let load =
-        load_chain::authenticated_load_with_q_layout(&bootstrap, source_buses, q_buses, false);
+    let load = load_chain::authenticated_load(&bootstrap, fixture);
     assert_eq!(initial_load.binding, load.binding);
     assert_eq!(initial_load.key.to_bytes(), load.key.to_bytes());
     assert_eq!(load.state.lineage[17], digest);
@@ -391,10 +384,10 @@ pub(crate) fn two_terminal_load_omega_with_q_layout(
         catalog,
     }
 }
-#[test]
-#[ignore = "real two-terminal four-bus source catalog rebuilt under one immutable Omega key"]
-fn common_bootstrap_load_catalog_rebinds_every_proof_and_key() {
-    let output = two_terminal_load_omega(true);
+/// Run the retained composition assertions with genuine native Load originals.
+#[allow(dead_code)] // Called by the full-finality qualification fixture once installed.
+pub fn common_bootstrap_load_catalog_rebinds_every_proof_and_key(fixture: &LoadFixture) {
+    let output = two_terminal_load_omega(fixture);
     assert_eq!(
         output.artifact.source.state.lineage[17],
         output

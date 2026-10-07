@@ -68,10 +68,10 @@ impl HashedResultPrefix {
 }
 
 #[derive(Clone, Debug)]
-struct ResultPrefix {
-    height: Uint<Fp, 64>,
-    event_root: [Word<Fp>; 32],
-    event_count: Uint<Fp, 64>,
+pub(crate) struct ResultPrefix {
+    pub(crate) height: Uint<Fp, 64>,
+    pub(crate) event_root: [Word<Fp>; 32],
+    pub(crate) event_count: Uint<Fp, 64>,
 }
 
 /// A result stream that retains a prefix extracted from its first three blocks.
@@ -170,14 +170,15 @@ fn little_endian_u64(
 }
 
 impl ResultPrefix {
-    // Private: callers can only receive parsed fields with the full-stream hash.
-    fn parse(
+    // Internal source programs may parse authenticated tape openings, provided
+    // their terminal owner joins the complete scan of that exact tape/length.
+    pub(crate) fn parse(
         uint: &mut UintChip<'_, Fp>,
         region: &mut Region<'_, Fp>,
         frame_len: &Uint<Fp, 32>,
         bytes: &[Word<Fp>],
     ) -> Result<Self, Error> {
-        if bytes.len() < 303 {
+        if bytes.len() < 261 {
             return Err(Error::Synthesis);
         }
         for (i, expected) in b"NRT0\0\0".iter().chain(RESULT_CODEC_ID.iter()).enumerate() {
@@ -274,6 +275,33 @@ impl ResultHashStream {
         Ok(Self {
             state: blake.initial_state(region)?,
             processed: uint.constant(region, 0)?,
+            total,
+            frame_len: frame_len.clone(),
+        })
+    }
+
+    /// Reopen a complete recursive chaining state, with bounded byte progress.
+    ///
+    /// This grants no prefix authenticity: the source owner must commit all
+    /// eight words, `processed`, and the frame length in its before endpoint,
+    /// and join that endpoint to the preceding constrained scan step.
+    /// # Errors
+    /// Layout errors; oversized lengths or progress beyond the end fail.
+    pub fn resume(
+        uint: &mut UintChip<'_, Fp>,
+        blake: &mut Blake2bChip<'_, Fp>,
+        region: &mut Region<'_, Fp>,
+        frame_len: &Uint<Fp, 32>,
+        processed: &Uint<Fp, 32>,
+        words: &[Word<Fp>; 8],
+    ) -> Result<Self, Error> {
+        let maximum = uint.constant::<32>(region, u128::from(MAX_RESULT_BYTES))?;
+        uint.assert_le(region, frame_len, &maximum)?;
+        let total = uint.checked_add_constant(region, frame_len, RESULT_TAG.len() as u128)?;
+        uint.assert_le(region, processed, &total)?;
+        Ok(Self {
+            state: blake.state_from_words(region, words)?,
+            processed: processed.clone(),
             total,
             frame_len: frame_len.clone(),
         })

@@ -43,13 +43,13 @@ fn fq2(a: Fp2) -> Fq2 {
 fn fp2(a: Fq2) -> Fp2 {
     [a.c0.into_bigint().0, a.c1.into_bigint().0]
 }
-fn fp12(a: Fq12) -> Fp12 {
+fn fp12(a: &Fq12) -> Fp12 {
     [
         [fp2(a.c0.c0), fp2(a.c0.c1), fp2(a.c0.c2)],
         [fp2(a.c1.c0), fp2(a.c1.c1), fp2(a.c1.c2)],
     ]
 }
-fn fq12(a: Fp12) -> Fq12 {
+fn fq12(a: &Fp12) -> Fq12 {
     Fq12::new(
         Fq6::new(fq2(a[0][0]), fq2(a[0][1]), fq2(a[0][2])),
         Fq6::new(fq2(a[1][0]), fq2(a[1][1]), fq2(a[1][2])),
@@ -109,7 +109,7 @@ fn psi(p: G2Affine) -> G2Affine {
     let mut carry = 0_u128;
     for i in (0..6).rev() {
         let n = (carry << 64) + u128::from(exponent.0[i]);
-        third[i] = (n / 3) as u64;
+        third[i] = u64::try_from(n / 3).unwrap();
         carry = n % 3;
     }
     exponent.div2();
@@ -174,44 +174,53 @@ fn g2_step(step: G2Step, r: &mut [G2Affine; 6]) {
         } => r[destination] = psi(psi(r[source])),
     }
 }
-fn miller_double(p: MillerG2Witness) -> (MillerG2Witness, [Fp2; 3]) {
-    let (x, y, z) = (fq2(p.x), fq2(p.y), fq2(p.z));
+fn miller_double(point: &MillerG2Witness) -> (MillerG2Witness, [Fp2; 3]) {
+    let (x, y, z) = (fq2(point.x), fq2(point.y), fq2(point.z));
     let half = Fq2::new(Fq::from(2_u64).inverse().unwrap(), Fq::ZERO);
-    let a = x * y * half;
-    let b = y.square();
-    let c = z.square();
-    let e = Fq2::new(Fq::from(4), Fq::from(4)) * (c + c + c);
-    let f = e + e + e;
-    let g = (b + f) * half;
-    let h = (y + z).square() - b - c;
-    let i = e - b;
-    let j = x.square();
+    let xy_half = x * y * half;
+    let y_squared = y.square();
+    let z_squared = z.square();
+    let curve_term = Fq2::new(Fq::from(4), Fq::from(4)) * (z_squared + z_squared + z_squared);
+    let triple_curve_term = curve_term + curve_term + curve_term;
+    let mean_term = (y_squared + triple_curve_term) * half;
+    let yz_cross = (y + z).square() - y_squared - z_squared;
+    let line_constant = curve_term - y_squared;
+    let x_squared = x.square();
     (
         MillerG2Witness {
-            x: fp2(a * (b - f)),
-            y: fp2(g.square() - (e.square() + e.square() + e.square())),
-            z: fp2(b * h),
+            x: fp2(xy_half * (y_squared - triple_curve_term)),
+            y: fp2(mean_term.square()
+                - (curve_term.square() + curve_term.square() + curve_term.square())),
+            z: fp2(y_squared * yz_cross),
         },
-        [fp2(i), fp2(j + j + j), fp2(-h)],
+        [
+            fp2(line_constant),
+            fp2(x_squared + x_squared + x_squared),
+            fp2(-yz_cross),
+        ],
     )
 }
-fn miller_add(p: MillerG2Witness, q: G2Affine) -> (MillerG2Witness, [Fp2; 3]) {
-    let (x, y, z) = (fq2(p.x), fq2(p.y), fq2(p.z));
-    let theta = y - q.y * z;
-    let lambda = x - q.x * z;
-    let c = theta.square();
-    let d = lambda.square();
-    let e = lambda * d;
-    let f = z * c;
-    let g = x * d;
-    let h = e + f - g - g;
+fn miller_add(point: &MillerG2Witness, addend: G2Affine) -> (MillerG2Witness, [Fp2; 3]) {
+    let (x, y, z) = (fq2(point.x), fq2(point.y), fq2(point.z));
+    let theta = y - addend.y * z;
+    let lambda = x - addend.x * z;
+    let theta_squared = theta.square();
+    let lambda_squared = lambda.square();
+    let lambda_cubed = lambda * lambda_squared;
+    let z_theta_squared = z * theta_squared;
+    let x_lambda_squared = x * lambda_squared;
+    let joined_term = lambda_cubed + z_theta_squared - x_lambda_squared - x_lambda_squared;
     (
         MillerG2Witness {
-            x: fp2(lambda * h),
-            y: fp2(theta * (g - h) - e * y),
-            z: fp2(z * e),
+            x: fp2(lambda * joined_term),
+            y: fp2(theta * (x_lambda_squared - joined_term) - lambda_cubed * y),
+            z: fp2(z * lambda_cubed),
         },
-        [fp2(theta * q.x - lambda * q.y), fp2(-theta), fp2(lambda)],
+        [
+            fp2(theta * addend.x - lambda * addend.y),
+            fp2(-theta),
+            fp2(lambda),
+        ],
     )
 }
 fn isogeny(p: ark_ec::short_weierstrass::Affine<Iso>) -> G2Affine {
@@ -316,13 +325,13 @@ fn oracle(step: Step, c: &BlsContextWitness, state: &BlsStateWitness) -> BlsStat
             let h = a[4];
             S::Miller {
                 message_point: h,
-                points: [h, c.signature_point].map(|p| MillerG2Witness {
+                points: Box::new([h, c.signature_point].map(|p| MillerG2Witness {
                     x: p.x,
                     y: p.y,
                     z: fp2(Fq2::ONE),
-                }),
-                lines: [[[native::ZERO; 2]; 3]; 2],
-                accumulator: ONE12,
+                })),
+                lines: Box::new([[[native::ZERO; 2]; 3]; 2]),
+                accumulator: Box::new(ONE12),
             }
         }
         (
@@ -334,18 +343,18 @@ fn oracle(step: Step, c: &BlsContextWitness, state: &BlsStateWitness) -> BlsStat
                 accumulator,
             },
         ) => {
-            let mut points = *points;
-            let mut lines = *lines;
-            let mut acc = fq12(*accumulator);
+            let mut points = **points;
+            let mut lines = **lines;
+            let mut acc = fq12(accumulator);
             match MILLER_STEPS[index] {
                 MillerStep::Square => acc.square_in_place(),
                 MillerStep::Double { pair } => {
-                    (points[pair], lines[pair]) = miller_double(points[pair]);
+                    (points[pair], lines[pair]) = miller_double(&points[pair]);
                     &mut acc
                 }
                 MillerStep::Add { pair } => {
                     (points[pair], lines[pair]) = miller_add(
-                        points[pair],
+                        &points[pair],
                         [p2(*message_point), p2(c.signature_point)][pair],
                     );
                     &mut acc
@@ -367,9 +376,9 @@ fn oracle(step: Step, c: &BlsContextWitness, state: &BlsStateWitness) -> BlsStat
             };
             S::Miller {
                 message_point: *message_point,
-                points,
-                lines,
-                accumulator: fp12(acc),
+                points: Box::new(points),
+                lines: Box::new(lines),
+                accumulator: Box::new(fp12(&acc)),
             }
         }
         (
@@ -381,7 +390,7 @@ fn oracle(step: Step, c: &BlsContextWitness, state: &BlsStateWitness) -> BlsStat
             },
         ) => {
             assert_eq!(
-                fq12(*accumulator),
+                fq12(accumulator),
                 Bls12_381::multi_miller_loop(
                     [p1(c.key_point), -G1Affine::generator()],
                     [p2(*message_point), p2(c.signature_point)],
@@ -390,11 +399,11 @@ fn oracle(step: Step, c: &BlsContextWitness, state: &BlsStateWitness) -> BlsStat
                 "fixed Miller trace matches the independent native pairing engine"
             );
             let mut r = [ZERO12; 5];
-            r[0] = *accumulator;
-            S::Final(r)
+            r[0] = **accumulator;
+            S::Final(Box::new(r))
         }
         (Step::Final(index), S::Final(a)) => {
-            let mut r = a.map(fq12);
+            let mut r = a.each_ref().map(fq12);
             match FINAL_EXPONENT_STEPS[index] {
                 FinalExponentStep::Copy {
                     destination,
@@ -423,13 +432,13 @@ fn oracle(step: Step, c: &BlsContextWitness, state: &BlsStateWitness) -> BlsStat
                     power,
                 } => r[destination] = r[source].frobenius_map(power),
             }
-            S::Final(r.map(fp12))
+            S::Final(Box::new(r.each_ref().map(fp12)))
         }
         (Step::Finish, S::Final(_)) => S::Done,
         _ => panic!("wrong oracle shape at {step:?}"),
     }
 }
-fn context() -> BlsContextWitness {
+pub(super) fn context() -> BlsContextWitness {
     let mut secret = [0; 32];
     secret[0] = 17;
     let key =
@@ -448,12 +457,12 @@ fn context() -> BlsContextWitness {
         signature_point: w2(G2Affine::deserialize_compressed(bytes.as_slice()).unwrap()),
     }
 }
-fn trace(c: BlsContextWitness) -> Vec<BlsLeafCircuit> {
+fn trace(c: &BlsContextWitness) -> Vec<BlsLeafCircuit> {
     let mut before = BlsStateWitness::Empty;
     (0..BlsLeafPlan::LENGTH)
         .map(|cursor| {
             let plan = BlsLeafPlan::at(cursor).unwrap();
-            let after = oracle(plan.step(), &c, &before);
+            let after = oracle(plan.step(), c, &before);
             let leaf = BlsLeafCircuit::new(plan, c.clone(), before.clone(), after.clone()).unwrap();
             before = after;
             leaf
@@ -482,18 +491,18 @@ fn assert_trace(trace: &[BlsLeafCircuit], valid: bool) {
 #[test]
 fn native_complete_trace_matches_real_normal_bls() {
     let c = context();
-    let good = trace(c.clone());
+    let good = trace(&c);
     assert_trace(&good, true);
     let mut bad_message = c.clone();
     bad_message.message[37] ^= 1;
-    assert_trace(&trace(bad_message), false);
+    assert_trace(&trace(&bad_message), false);
     let mut bad_signature = c;
     let changed = (p2(bad_signature.signature_point) + G2Affine::generator()).into_affine();
     bad_signature.signature_point = w2(changed);
     let mut bytes = Vec::new();
     changed.serialize_compressed(&mut bytes).unwrap();
     bad_signature.signature = bytes.try_into().unwrap();
-    assert_trace(&trace(bad_signature), false);
+    assert_trace(&trace(&bad_signature), false);
     assert!(BlsLeafPlan::at(BlsLeafPlan::LENGTH).is_none());
     assert_eq!(w1(G1Affine::generator()), G1_GENERATOR);
 }
@@ -529,12 +538,12 @@ fn check(leaf: &BlsLeafCircuit) -> bool {
 #[test]
 fn strict_bls_program_boundaries_and_terminal_reject_invalid_signature() {
     let c = context();
-    let good = trace(c.clone());
+    let good = trace(&c);
     assert!(check(&good[0]));
     assert!(check(good.last().unwrap()));
     let mut bad = c;
     bad.message[37] ^= 1;
-    let bad = trace(bad);
+    let bad = trace(&bad);
     assert!(
         !check(bad.last().unwrap()),
         "fully recomputed invalid signature must fail the pairing equation"
@@ -560,7 +569,7 @@ fn strict_bls_program_boundaries_and_terminal_reject_invalid_signature() {
 #[test]
 #[ignore = "expensive complete BLS source qualification; run explicitly before qualifying these keys"]
 fn strict_complete_native_bls_trace_at_k16() {
-    let trace = trace(context());
+    let trace = trace(&context());
     assert_trace(&trace, true);
     for leaf in &trace {
         assert!(
@@ -574,7 +583,7 @@ fn strict_complete_native_bls_trace_at_k16() {
 #[test]
 #[ignore = "expensive representative k16 layouts for every source phase"]
 fn strict_bls_phase_layouts_and_consistent_state_mutations() {
-    let trace = trace(context());
+    let trace = trace(&context());
     for cursor in [
         0, 1, 2, 141, 142, 143, 144, 213, 214, 215, 216, 217, 218, 219, 220, 221, 370, 371, 372,
         373, 374, 375, 376, 377, 378, 706, 707, 708, 709, 710, 711, 712, 713, 1082, 1083,
@@ -589,5 +598,121 @@ fn strict_bls_phase_layouts_and_consistent_state_mutations() {
                 .is_satisfied()
         );
         synthesize(&leaf.without_witnesses(), 16, None).unwrap();
+    }
+}
+
+#[test]
+fn bounded_production_witness_matches_every_native_trace_register_without_authority() {
+    for changed_message in [false, true] {
+        let mut source = context();
+        if changed_message {
+            source.message[37] ^= 1;
+        }
+        let expected = trace(&source);
+        let actual = prepare_bls_witness(source.message, source.public_key, source.signature)
+            .expect("fixed native point encodings and bounded witness arithmetic");
+        assert_eq!(actual.len(), BlsLeafPlan::LENGTH as usize);
+        for (actual, expected) in actual.iter().zip(&expected) {
+            assert_eq!(actual.plan, expected.plan);
+            assert_eq!(actual.context.message, expected.context.message);
+            assert_eq!(actual.context.public_key, expected.context.public_key);
+            assert_eq!(actual.context.signature, expected.context.signature);
+            assert_eq!(actual.context.key_point, expected.context.key_point);
+            assert_eq!(
+                actual.context.signature_point,
+                expected.context.signature_point
+            );
+            assert_eq!(actual.before.tag(), expected.before.tag());
+            assert_eq!(
+                actual.before.words(),
+                expected.before.words(),
+                "before {}",
+                actual.plan.cursor()
+            );
+            assert_eq!(actual.after.tag(), expected.after.tag());
+            assert_eq!(
+                actual.after.words(),
+                expected.after.words(),
+                "after {}",
+                actual.plan.cursor()
+            );
+        }
+        assert_eq!(
+            check(actual.last().unwrap()),
+            !changed_message,
+            "witness preparation grants no signature acceptance; the final circuit decides"
+        );
+    }
+    let source = context();
+    for bytes in [[0; 48], {
+        let mut identity = [0; 48];
+        identity[0] = 0xc0;
+        identity
+    }] {
+        assert!(matches!(
+            prepare_bls_witness(source.message, bytes, source.signature),
+            Err(BlsWitnessError::PublicKey)
+        ));
+    }
+    for bytes in [[0; 96], {
+        let mut identity = [0; 96];
+        identity[0] = 0xc0;
+        identity
+    }] {
+        assert!(matches!(
+            prepare_bls_witness(source.message, source.public_key, bytes),
+            Err(BlsWitnessError::Signature)
+        ));
+    }
+}
+
+#[test]
+fn metadata_source_factory_has_every_exact_program_phase_without_live_inputs() {
+    for cursor in 0..BlsLeafPlan::LENGTH {
+        let plan = BlsLeafPlan::at(cursor).unwrap();
+        let source = BlsLeafCircuit::for_source(plan).unwrap();
+        assert_eq!(source.plan(), plan);
+        assert_eq!(source.before.tag(), plan.before_tag());
+        assert_eq!(source.after.tag(), plan.after_tag());
+        assert!(!source.known);
+        assert_eq!(source.context.message, [0; 165]);
+        assert_eq!(source.context.public_key, [0; 48]);
+        assert_eq!(source.context.signature, [0; 96]);
+    }
+    assert!(BlsStateWitness::for_tag(12).is_err());
+    assert!(BlsLeafPlan::at(BlsLeafPlan::LENGTH).is_none());
+}
+
+#[test]
+#[ignore = "original k16 metadata-only layout equality across every BLS phase and varied cursors"]
+fn metadata_source_factory_preserves_original_bls_layouts() {
+    let trace = trace(&context());
+    for cursor in [
+        0, 1, 2, 141, 142, 143, 144, 213, 214, 215, 216, 217, 218, 219, 220, 221, 370, 371, 372,
+        373, 374, 375, 376, 377, 378, 706, 707, 708, 709, 710, 711, 712, 713, 1082, 1083,
+    ] {
+        let original = synthesize(&trace[cursor].without_witnesses(), 16, None).unwrap();
+        let source = BlsLeafCircuit::for_source(trace[cursor].plan()).unwrap();
+        let metadata = synthesize(&source, 16, None).unwrap();
+        assert_eq!(
+            original.tables.fixed(),
+            metadata.tables.fixed(),
+            "fixed {cursor}"
+        );
+        assert_eq!(
+            original.tables.selectors(),
+            metadata.tables.selectors(),
+            "selectors {cursor}"
+        );
+        assert_eq!(
+            original.tables.permutation(),
+            metadata.tables.permutation(),
+            "permutation {cursor}"
+        );
+        assert_eq!(
+            original.tables.advice_assigned(),
+            metadata.tables.advice_assigned(),
+            "advice {cursor}"
+        );
     }
 }

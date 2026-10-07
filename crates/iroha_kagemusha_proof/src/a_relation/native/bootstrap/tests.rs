@@ -138,3 +138,24 @@ fn homogeneous_frame_binds_high_foreign_challenge_limbs_and_fixed_absent_slots()
     assert_ne!(altered[0], public[0]);
     assert_eq!(&altered[1..], &public[1..]);
 }
+
+#[test]
+fn original_bounds_reject_missing_oversized_and_over_domain_tables() {
+    let config = ReadConfig {
+        maximum_bytes: 16,
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    assert_eq!(original_bounds(&[], 1 << 16, config), Err(Error::Artifact));
+    assert_eq!(
+        original_bounds(&[0; 17], 1 << 16, config),
+        Err(Error::Artifact)
+    );
+    assert_eq!(
+        original_bounds(&[0; 16], (1 << 16) + 1, config),
+        Err(Error::Artifact)
+    );
+    assert_eq!(original_bounds(&[0; 16], 1 << 16, config), Ok(()));
+    // Passing these bounds alone never parses or admits an original proving key.
+}

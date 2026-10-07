@@ -5,13 +5,38 @@
 use super::{storage, *};
 use crate::state::{StateReadOnly as _, StateView, TransactionsReadOnly as _};
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::transaction::TransactionEntrypoint;
+use iroha_data_model::{
+    isi::kagemusha_wallet::load_finality::{
+        VerifiedKagemushaWalletLoadEventV1, verify_finalized_kagemusha_wallet_load_event_v1,
+    },
+    transaction::TransactionEntrypoint,
+};
+
+/// Original receipt and retained event path joined to an actual native certificate.
+/// No serialized row or claimed height can construct this capability.
+pub struct CommittedLoadEventEvidenceV1 {
+    verified: VerifiedKagemushaWalletLoadEventV1,
+    path: KagemushaLoadEventPathV1,
+}
+impl CommittedLoadEventEvidenceV1 {
+    /// Exact receipt authenticated by the original certified event commitment.
+    #[must_use]
+    pub const fn verified(&self) -> &VerifiedKagemushaWalletLoadEventV1 {
+        &self.verified
+    }
+    /// Bounded original event inclusion data, independently checked against native finality.
+    #[must_use]
+    pub const fn path(&self) -> &KagemushaLoadEventPathV1 {
+        &self.path
+    }
+}
 
 /// Read immutable Load receipt data from one consistent committed State view.
 ///
-/// The source is private and cannot be a live instruction overlay. Reads check account,
-/// scope, World row and committed transaction membership; they do not reconstruct a
-/// historical certificate or produce a cryptographic finality capability.
+/// The source is private and cannot be a live instruction overlay. Receipt reads check
+/// account, scope, World row and committed transaction membership. Event evidence also
+/// requires an independently verified native certificate at the exact receipt height;
+/// this owner never reconstructs historical finality or grants authority from a row alone.
 pub struct CommittedLoadReceipts<'view, 'state> {
     view: &'view StateView<'state>,
     record_bytes: usize,
@@ -82,6 +107,60 @@ impl<'view, 'state> CommittedLoadReceipts<'view, 'state> {
     ) -> Result<KagemushaWalletLoadReceiptV1> {
         self.decode_budget
             .with(|| self.read_receipt(payer, scheme, wallet, request))
+    }
+
+    /// Recover the original event evidence at one independently verified native height.
+    ///
+    /// This performs bounded indexed World reads and one counted Merkle check. The
+    /// supplied cursor owner already verified original genesis, schedules, R and QC;
+    /// this method never scans history or accepts a serialized checkpoint as trust.
+    /// # Errors
+    /// Refuses another payer/network/chain/height, a missing or changed retained
+    /// path, a different certified event root/count, or exhausted decoding bounds.
+    pub fn event_evidence_for(
+        &self,
+        native: &crate::sumeragi::finality::NativeFinalityAtHeightV1,
+        payer: &AccountId,
+        scheme: &Digest,
+        wallet: &Digest,
+        request: &Digest,
+    ) -> Result<CommittedLoadEventEvidenceV1> {
+        self.decode_budget.with(|| {
+            let receipt = self.read_receipt(payer, scheme, wallet, request)?;
+            let height = usize::try_from(receipt.block_height).map_err(|_| Error::Overflow)?;
+            if native.block().height() != receipt.block_height
+                || height == 0
+                || self.view.block_hashes.get(height - 1) != Some(&native.block().block().hash())
+            {
+                return Err(Error::Binding);
+            }
+            let key = event_evidence::key(receipt.receipt_digest()?);
+            let bytes = self
+                .view
+                .world
+                .kagemusha_wallet_ledger
+                .get(&key)
+                .ok_or(Error::Unavailable)?;
+            if bytes.len() > self.record_bytes.min(event_evidence::CAP) {
+                return Err(Error::Unavailable);
+            }
+            validate_row(&key, bytes)?;
+            let path: KagemushaLoadEventPathV1 = storage::decode(bytes, event_evidence::CAP)?;
+            if path.height() != receipt.block_height
+                || native.block().execution().event_commitment != Some(path.commitment())
+            {
+                return Err(Error::Binding);
+            }
+            let verified = verify_finalized_kagemusha_wallet_load_event_v1(
+                native.block(),
+                &path.proof()?,
+                *self.view.network_id(),
+                self.view.chain_id().as_str(),
+                &receipt,
+            )
+            .map_err(|_| Error::Proof)?;
+            Ok(CommittedLoadEventEvidenceV1 { verified, path })
+        })
     }
 
     fn read_receipt(

@@ -9,15 +9,19 @@ use iroha_plonk::frontend::{Error, Region, Value};
 use iroha_plonk_gadgets::{Bit, GlueChip};
 use iroha_plonk_recursion::{
     accumulation_circuit::{FoldInputCells, FoldSource},
-    obligation::ledger::Variant,
+    obligation::{ModeCells, ledger::Variant},
     verifier::VerifierChip,
 };
 
 use super::{require_task, require_variant};
 use crate::a_relation::{
-    bind_modes,
-    context::{ContextInputs, ContextObjectCells, ContextObjectSpec, ContextPlan},
+    AProofPlan, IncomingOmegaCells, IncomingVestaCells, SelectedPallasCells, bind_modes,
+    context::{
+        ContextIncomingProof, ContextInputs, ContextObjectCells, ContextObjectSpec, ContextPlan,
+    },
+    proof::IncomingProofBinding,
     schedule::OperationTask,
+    select_incoming,
 };
 
 #[cfg(test)]
@@ -109,7 +113,7 @@ impl ArchiveResultPlan {
         })
     }
 
-    /// Derive result ownership from all seven mandatory Archive operation tasks.
+    /// Derive result ownership from all mandatory Archive operation tasks.
     /// This constructor validates metadata, not execution or artifact admission.
     /// # Errors
     /// Wrong variant, missing/duplicated tasks, nonterminal Effects, terminal
@@ -139,6 +143,16 @@ impl ArchiveResultPlan {
     /// The exact internal-word schema committed by every continuation.
     pub const fn spec(self) -> ContextObjectSpec {
         self.spec
+    }
+
+    fn require_status_selection(self, stage: u32, stage_count: usize) -> Result<(), Error> {
+        if self.variant != Variant::ArchiveStatus
+            || usize::try_from(stage).ok().and_then(|s| s.checked_add(1)) != Some(stage_count)
+            || self.owner(ArchiveResultTag::Proofs) >= stage
+        {
+            return Err(Error::Synthesis);
+        }
+        Ok(())
     }
 }
 
@@ -257,6 +271,92 @@ impl ArchiveResultClaims {
         self.opening.as_ref().ok_or(Error::Synthesis)
     }
 
+    /// Select the original Status obligations retained by the authenticated context.
+    ///
+    /// The complete staged source must resume W and execute terminal Effects.
+    /// Its preceding Proofs owner binds the exact result and original opening
+    /// retained here; no independently supplied verdict or opening is accepted.
+    /// Transported Pallas, verifier opening and Vesta remain distinct obligations.
+    /// # Errors
+    /// Wrong variant or terminal owner, missing original messages, changed result
+    /// context, incorrect correction/mode shape, or layout failure.
+    pub fn select_status_incoming(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        stage: u32,
+        input: &ContextInputs<'_>,
+    ) -> Result<(SelectedPallasCells, IncomingVestaCells), Error> {
+        require_task(plan, stage, OperationTask::ArchiveEffects)?;
+        self.bind_context(region, plan, input)?;
+        self.plan
+            .require_status_selection(stage, plan.stage_count())?;
+        let incoming = input.incoming.ok_or(Error::Synthesis)?;
+        let ContextIncomingProof::Messages(messages) = incoming.proof else {
+            return Err(Error::Synthesis);
+        };
+        let [pallas_mode, opening_mode, vesta_mode] = input.modes else {
+            return Err(Error::Synthesis);
+        };
+        let [pallas_correction, opening_correction] = input.pallas_corrections else {
+            return Err(Error::Synthesis);
+        };
+        let [vesta_correction] = input.vesta_corrections else {
+            return Err(Error::Synthesis);
+        };
+        let origin = IncomingOmegaCells {
+            carried_key: input.successor.public.omega_key_digest().clone(),
+            lineage_valid: incoming.public.valid().clone(),
+            public: incoming.public.fields().clone(),
+            vesta: incoming.vesta.clone(),
+            proof: IncomingProofBinding::Messages(messages.clone()),
+            valid: self.values[ArchiveResultTag::Proofs as usize - 1].clone(),
+            pallas: incoming.pallas.clone(),
+            opening: self.opening()?.clone(),
+        };
+        let selected = select_incoming(
+            chip,
+            region,
+            &origin,
+            &[pallas_mode.clone(), opening_mode.clone()],
+            &[pallas_correction.clone(), opening_correction.clone()],
+        )?;
+        Ok((
+            selected,
+            IncomingVestaCells {
+                claim: incoming.vesta.clone(),
+                mode: vesta_mode.clone(),
+                corrected: vesta_correction.clone(),
+            },
+        ))
+    }
+
+    pub(super) fn lineage_verdict(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        stage: u32,
+        input: &ContextInputs<'_>,
+    ) -> Result<Bit<Fp>, Error> {
+        require_task(plan, stage, OperationTask::ArchiveLineagePending)?;
+        self.bind_context(region, plan, input)?;
+        self.mode_verdict(chip, region, plan.operation(), input.modes)
+    }
+
+    // Shared by the early adjusted-map owner and the terminal iff closure.
+    // A corrected obligation forces no-op even when every soft bit is true.
+    fn mode_verdict(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        operation: &AProofPlan,
+        modes: &[ModeCells<Fp>],
+    ) -> Result<Bit<Fp>, Error> {
+        bind_modes(chip, region, operation, &self.values, modes)
+    }
+
     pub(super) fn terminal_modes(
         &self,
         chip: &mut VerifierChip<Ep>,
@@ -270,6 +370,6 @@ impl ArchiveResultClaims {
         if usize::try_from(stage).ok().and_then(|s| s.checked_add(1)) != Some(plan.stage_count()) {
             return Err(Error::Synthesis);
         }
-        bind_modes(chip, region, plan.operation(), &self.values, input.modes)
+        self.mode_verdict(chip, region, plan.operation(), input.modes)
     }
 }

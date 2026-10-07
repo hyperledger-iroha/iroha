@@ -4,6 +4,7 @@
 //! of the response. Only the native verifier can supply the finalized block capability.
 
 use super::{KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1};
+use crate::kagemusha::kagemusha_wallet_v1::{decode_frame_v1, encode_frame_v1};
 use crate::{
     Decode, DeriveJsonDeserialize, DeriveJsonSerialize, Encode, NetworkId,
     account::AccountId,
@@ -23,8 +24,10 @@ use crate::{
 };
 use iroha_crypto::{HashOf, MerkleProof};
 
-/// Poseidon packed-byte domain `kgwolod1`, dedicated to an ordinary ledger Load receipt.
-pub const KAGEMUSHA_WALLET_LOAD_RECEIPT_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgwolod1");
+/// Maximum complete canonical original receipt, including its fixed payer account digest.
+pub const KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1: usize = 512;
+
+pub use crate::kagemusha::KAGEMUSHA_WALLET_LOAD_RECEIPT_DOMAIN_V1;
 /// Exact fixed transcript width: version, four identities, three amounts, quote, transaction,
 /// height, and canonical payer account digest.
 pub const KAGEMUSHA_WALLET_LOAD_RECEIPT_TRANSCRIPT_BYTES_V1: usize = 2 + 7 * 32 + 3 * 16 + 8;
@@ -36,6 +39,7 @@ pub const KAGEMUSHA_WALLET_LOAD_RECEIPT_TRANSCRIPT_BYTES_V1: usize = 2 + 7 * 32 
 #[derive(
     Debug,
     Clone,
+    Copy,
     PartialEq,
     Eq,
     Encode,
@@ -71,8 +75,8 @@ pub struct KagemushaWalletLoadReceiptV1 {
     pub transaction_hash: [u8; 32],
     /// Height of the successful execution, after genesis.
     pub block_height: u64,
-    /// Authenticated transaction authority that funded the Load.
-    pub payer: AccountId,
+    /// Canonical account digest of the authenticated transaction authority that funded the Load.
+    pub payer_account_digest: [u8; 32],
 }
 
 impl KagemushaWalletLoadReceiptV1 {
@@ -95,6 +99,10 @@ impl KagemushaWalletLoadReceiptV1 {
             ("load_receipt.wallet_id", &self.wallet_id),
             ("load_receipt.request_id", &self.request_id),
             ("load_receipt.transaction_hash", &self.transaction_hash),
+            (
+                "load_receipt.payer_account_digest",
+                &self.payer_account_digest,
+            ),
         ] {
             if *value == [0; 32] {
                 return Err(Error::InvalidField { field });
@@ -130,20 +138,137 @@ impl KagemushaWalletLoadReceiptV1 {
         Ok(())
     }
 
+    /// Check the independently retained charge quote against this receipt's exact terms.
+    /// This validates data consistency only; it does not authenticate execution or the quote.
+    ///
+    /// # Errors
+    /// Rejects missing, unexpected or mismatched charge terms and invalid quote data.
+    pub fn require_charge_quote(
+        &self,
+        quote: Option<&KagemushaWalletChargeQuoteV1>,
+    ) -> Result<(), KagemushaWalletValidationErrorV1> {
+        use KagemushaWalletValidationErrorV1 as Error;
+        self.validate()?;
+        match (self.charge_quote == [0; 32], quote) {
+            (true, None) => Ok(()),
+            (true, Some(_)) | (false, None) => Err(Error::InvalidField {
+                field: "load_receipt.charge_quote",
+            }),
+            (false, Some(quote)) => {
+                quote.validate()?;
+                if quote.charge_quote_digest() != self.charge_quote {
+                    return Err(Error::InvalidField {
+                        field: "load_receipt.charge_quote",
+                    });
+                }
+                if quote.body.scheme_id != self.scheme_id {
+                    return Err(Error::SchemeMismatch {
+                        field: "charge_quote.scheme_id",
+                    });
+                }
+                if quote.body.asset_digest != self.asset_digest {
+                    return Err(Error::InvalidField {
+                        field: "charge_quote.asset_digest",
+                    });
+                }
+                quote.require_terms(
+                    KagemushaWalletChargeKindV1::Load,
+                    &self.wallet_id,
+                    self.ordinal,
+                    self.amount,
+                    self.online_charge,
+                )
+            }
+        }
+    }
+
+    /// Check that this receipt describes the next ordinal of the supplied wallet state.
+    /// This is a data binding check; finality remains a separate proof obligation.
+    ///
+    /// # Errors
+    /// Rejects invalid data or another scheme, asset, wallet or next ordinal.
+    pub fn require_next_for(
+        &self,
+        state: &crate::kagemusha::KagemushaWalletStateV1,
+    ) -> Result<(), KagemushaWalletValidationErrorV1> {
+        use KagemushaWalletValidationErrorV1 as Error;
+        self.validate()?;
+        state.validate()?;
+        if self.scheme_id != state.core.scheme_id {
+            return Err(Error::SchemeMismatch {
+                field: "load_receipt.scheme_id",
+            });
+        }
+        for (field, valid) in [
+            (
+                "load_receipt.asset_digest",
+                self.asset_digest == state.core.asset_digest,
+            ),
+            (
+                "load_receipt.wallet_id",
+                self.wallet_id == state.core.wallet_id,
+            ),
+            ("load_receipt.ordinal", self.ordinal == state.core.next_load),
+        ] {
+            if !valid {
+                return Err(Error::InvalidField { field });
+            }
+        }
+        Ok(())
+    }
+
+    /// Derive the public Load effect without granting authority to apply it.
+    ///
+    /// # Errors
+    /// Rejects invalid receipt data.
+    pub fn load_effect(
+        &self,
+    ) -> Result<crate::kagemusha::KagemushaWalletEffectV1, KagemushaWalletValidationErrorV1> {
+        Ok(crate::kagemusha::KagemushaWalletEffectV1::Load {
+            receipt_digest: self.receipt_digest()?,
+            load_ordinal: self.ordinal,
+            amount: self.amount,
+            online_charge: self.online_charge,
+        })
+    }
+
+    /// Exact checked total debit represented by this receipt, including its online charge.
+    ///
+    /// # Errors
+    /// Rejects invalid receipt fields or an overflowing debit.
+    pub fn ledger_debit(&self) -> Result<u128, KagemushaWalletValidationErrorV1> {
+        self.validate()?;
+        self.amount.checked_add(self.online_charge).ok_or(
+            KagemushaWalletValidationErrorV1::ArithmeticOverflow {
+                field: "load_receipt.online_debit",
+            },
+        )
+    }
+
     /// Encode the validated receipt as one complete canonical Norito frame.
     ///
     /// # Errors
     /// Returns structural validation or canonical encoding errors.
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, KagemushaWalletValidationErrorV1> {
         self.validate()?;
-        Ok(norito::encode_canonical(self)?)
+        encode_frame_v1(self, KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1)
+    }
+
+    /// Decode one complete bounded canonical receipt frame; this grants no finality authority.
+    ///
+    /// # Errors
+    /// Rejects oversized, noncanonical or structurally invalid receipt data.
+    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, KagemushaWalletValidationErrorV1> {
+        let receipt: Self = decode_frame_v1(bytes, KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1)?;
+        receipt.validate()?;
+        Ok(receipt)
     }
 
     /// Exact fixed transcript, with integers in little-endian order and the canonical
-    /// account digest in place of the variable-width payer frame.
+    /// payer account digest.
     ///
     /// # Errors
-    /// Returns structural validation or payer account encoding errors.
+    /// Returns structural validation errors.
     pub fn transcript(
         &self,
     ) -> Result<
@@ -151,7 +276,6 @@ impl KagemushaWalletLoadReceiptV1 {
         KagemushaWalletValidationErrorV1,
     > {
         self.validate()?;
-        let payer = kagemusha_wallet_account_digest_v1(&self.payer)?;
         let mut bytes = [0; KAGEMUSHA_WALLET_LOAD_RECEIPT_TRANSCRIPT_BYTES_V1];
         let mut offset = 0;
         for field in [
@@ -166,7 +290,7 @@ impl KagemushaWalletLoadReceiptV1 {
             &self.charge_quote,
             &self.transaction_hash,
             self.block_height.to_le_bytes().as_slice(),
-            &payer,
+            &self.payer_account_digest,
         ] {
             bytes[offset..offset + field.len()].copy_from_slice(field);
             offset += field.len();
@@ -179,7 +303,7 @@ impl KagemushaWalletLoadReceiptV1 {
     /// This digest is an identity only; it is not an offline Load proof.
     ///
     /// # Errors
-    /// Returns structural validation or canonical encoding errors.
+    /// Returns structural validation errors.
     pub fn receipt_digest(&self) -> Result<[u8; 32], KagemushaWalletValidationErrorV1> {
         Ok(kagemusha_wallet_poseidon_bytes_v1(
             KAGEMUSHA_WALLET_LOAD_RECEIPT_DOMAIN_V1,
@@ -357,7 +481,7 @@ pub fn verify_finalized_kagemusha_wallet_load_event_v1(
         return Err(Error::WrongEvent);
     }
     Ok(VerifiedKagemushaWalletLoadEventV1 {
-        receipt: expected_receipt.clone(),
+        receipt: *expected_receipt,
         network: expected_network,
         block_hash: verified.header().hash(),
         event_index: proof.leaf_index(),
@@ -493,7 +617,7 @@ fn receipt_from_instruction(
         charge_quote,
         transaction_hash: *transaction.hash().as_ref(),
         block_height,
-        payer: transaction.authority().clone(),
+        payer_account_digest: kagemusha_wallet_account_digest_v1(transaction.authority())?,
     };
     receipt.validate()?;
     Ok(receipt)

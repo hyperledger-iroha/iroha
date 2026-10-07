@@ -136,6 +136,7 @@ struct ReadCircuit {
     frame_len: u128,
     offset: u128,
     attack: usize,
+    padded: bool,
     known: bool,
 }
 
@@ -178,8 +179,17 @@ impl Circuit<Fp> for ReadCircuit {
                 let length = uint.assign::<32>(&mut region, witness(self.known, self.frame_len))?;
                 let offset = uint.assign::<32>(&mut region, witness(self.known, self.offset))?;
                 let tape = ResultTape::new(&mut uint, &mut region, &root, &length)?;
-                let bytes =
-                    tape.read_window::<32>(&mut uint, &mut hash, &mut region, &offset, &openings)?;
+                let bytes = if self.padded {
+                    tape.read_padded_window::<32>(
+                        &mut uint,
+                        &mut hash,
+                        &mut region,
+                        &offset,
+                        &openings,
+                    )?
+                } else {
+                    tape.read_window::<32>(&mut uint, &mut hash, &mut region, &offset, &openings)?
+                };
                 let mut out = vec![root, length.word().clone(), offset.word().clone()];
                 out.extend(bytes);
                 Ok(out)
@@ -202,14 +212,21 @@ fn read_public(circuit: &ReadCircuit) -> Vec<Vec<Fp>> {
     words.extend(
         circuit.tape.bytes[start..start + 32]
             .iter()
-            .map(|byte| Fp::from(u64::from(*byte))),
+            .enumerate()
+            .map(|(i, byte)| {
+                if circuit.padded && circuit.offset + i as u128 >= circuit.frame_len {
+                    Fp::ZERO
+                } else {
+                    Fp::from(u64::from(*byte))
+                }
+            }),
     );
     vec![words]
 }
 
 #[test]
 fn authenticated_windows_cross_chunks_at_every_possible_byte_offset() {
-    let frame: Vec<_> = (0..256).map(|i| i as u8).collect();
+    let frame: Vec<_> = (0..=u8::MAX).collect();
     let tape = NativeTape::new(&frame, false);
     for offset in 0..32 {
         let circuit = ReadCircuit {
@@ -217,6 +234,7 @@ fn authenticated_windows_cross_chunks_at_every_possible_byte_offset() {
             frame_len: 256,
             offset,
             attack: 0,
+            padded: false,
             known: true,
         };
         assert!(
@@ -230,12 +248,13 @@ fn authenticated_windows_cross_chunks_at_every_possible_byte_offset() {
 
 #[test]
 fn authenticated_windows_reject_substituted_bytes_paths_indices_and_out_of_frame_reads() {
-    let frame: Vec<_> = (0..256).map(|i| i as u8).collect();
+    let frame: Vec<_> = (0..=u8::MAX).collect();
     let circuit = ReadCircuit {
         tape: NativeTape::new(&frame, false),
         frame_len: 256,
         offset: 31,
         attack: 0,
+        padded: false,
         known: true,
     };
     let public = read_public(&circuit);
@@ -264,6 +283,54 @@ fn authenticated_windows_reject_substituted_bytes_paths_indices_and_out_of_frame
     let unknown = synthesize(&circuit.without_witnesses(), 13, None).unwrap();
     assert_eq!(known.tables.fixed(), unknown.tables.fixed());
     assert_eq!(known.tables.selectors(), unknown.tables.selectors());
+    assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+}
+
+#[test]
+fn padded_windows_zero_every_byte_past_exact_original_frame_end() {
+    // Deliberately populate the unauthenticated tail: none of these cells may
+    // influence a padded read. Normal complete-hash closure is a separate source.
+    let frame: Vec<_> = (1..=u8::MAX).chain(std::iter::once(0)).collect();
+    let circuit = ReadCircuit {
+        tape: NativeTape::new(&frame, false),
+        frame_len: 23,
+        offset: 20,
+        attack: 0,
+        padded: true,
+        known: true,
+    };
+    for offset in [20, 22, 23] {
+        let circuit = ReadCircuit {
+            offset,
+            ..circuit.clone()
+        };
+        let public = read_public(&circuit);
+        assert!(
+            check_circuit(&circuit, 13, &public, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+        let mut forged = public;
+        forged[0][34] = Fp::ONE;
+        assert!(
+            !check_circuit(&circuit, 13, &forged, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        );
+    }
+    let outside = ReadCircuit {
+        offset: 24,
+        ..circuit.clone()
+    };
+    assert!(
+        !check_circuit(&outside, 13, &read_public(&outside), CheckMode::Strict)
+            .unwrap()
+            .is_satisfied()
+    );
+    let public = read_public(&circuit);
+    let known = synthesize(&circuit, 13, Some(&public)).unwrap();
+    let unknown = synthesize(&circuit.without_witnesses(), 13, None).unwrap();
+    assert_eq!(known.tables.fixed(), unknown.tables.fixed());
     assert_eq!(known.tables.permutation(), unknown.tables.permutation());
 }
 

@@ -1,6 +1,6 @@
 //! Native executable format admission shared by CLI packaging and runtime qualification.
 
-use iroha_fs::{FileSnapshot, RetainedFile};
+use iroha_fs::{FileSnapshot, RetainedBuildInput, RetainedFile};
 use std::{
     env,
     io::{self, Read, Seek, SeekFrom},
@@ -143,9 +143,31 @@ pub fn admit_native_program(file: &mut RetainedFile) -> io::Result<()> {
             return Err(invalid("CLI program is not executable"));
         }
     }
-    file.file_mut().seek(SeekFrom::Start(0))?;
+    admit_native_header(file.file_mut())?;
+    file.revalidate()
+}
+
+/// Admit the same native executable format from a retained Cargo build input.
+///
+/// This supplies format admission only; it never grants installed or private-file authority.
+/// # Errors
+/// Refuses a nonexecutable, wrong-host or malformed original, changed custody and native errors.
+pub fn admit_native_build_input(file: &mut RetainedBuildInput) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if file.permissions()?.mode() & 0o100 == 0 {
+            return Err(invalid("CLI program is not executable"));
+        }
+    }
+    admit_native_header(file)?;
+    file.revalidate()
+}
+
+fn admit_native_header(file: &mut (impl Read + Seek + ?Sized)) -> io::Result<()> {
+    file.seek(SeekFrom::Start(0))?;
     let mut header = [0_u8; 64];
-    file.file_mut().read_exact(&mut header)?;
+    file.read_exact(&mut header)?;
     let native = match (env::consts::OS, env::consts::ARCH) {
         ("macos", arch) => {
             let cpu = match arch {
@@ -202,9 +224,9 @@ pub fn admit_native_program(file: &mut RetainedFile) -> io::Result<()> {
             if header[..2] != *b"MZ" || !(64..=1024 * 1024).contains(&offset) {
                 return Err(invalid("invalid native PE executable"));
             }
-            file.file_mut().seek(SeekFrom::Start(u64::from(offset)))?;
+            file.seek(SeekFrom::Start(u64::from(offset)))?;
             let mut pe = [0_u8; 26];
-            file.file_mut().read_exact(&mut pe)?;
+            file.read_exact(&mut pe)?;
             let flags =
                 u16::from_le_bytes(pe[22..24].try_into().expect("fixed native header field"));
             pe[..4] == *b"PE\0\0"
@@ -222,7 +244,6 @@ pub fn admit_native_program(file: &mut RetainedFile) -> io::Result<()> {
             "CLI artifact is not an executable for this native host",
         ));
     }
-    file.revalidate()?;
     Ok(())
 }
 
@@ -239,6 +260,28 @@ mod tests {
         std::fs::write(&path, b"ordinary text is not a native executable").unwrap();
         let mut text = RetainedFile::open_regular(&path).unwrap();
         assert!(admit_native_program(&mut text).is_err());
+    }
+
+    #[test]
+    fn native_build_input_admits_a_real_linked_harness_but_keeps_installed_sources_strict() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("cargo-program");
+        std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::hard_link(&path, temporary.path().join("dependency-program")).unwrap();
+        assert!(RetainedFile::open_regular(&path).is_err());
+        let mut input = RetainedBuildInput::open(&path).unwrap();
+        let before = input.snapshot().unwrap();
+        admit_native_build_input(&mut input).unwrap();
+        assert_eq!(input.snapshot().unwrap(), before);
+        drop(input);
+        std::fs::write(&path, b"not a native executable").unwrap();
+        let mut invalid = RetainedBuildInput::open(&path).unwrap();
+        assert!(admit_native_build_input(&mut invalid).is_err());
     }
 
     fn installed_pair() -> (tempfile::TempDir, super::super::InstalledRuntime) {

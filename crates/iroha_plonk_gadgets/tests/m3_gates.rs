@@ -54,9 +54,9 @@ use iroha_pasta::{
     poseidon::{PoseidonField, hash_with_domain},
 };
 use iroha_plonk::{
-    Expression, ProverConfig, ProverRandomness, Witness,
+    Expression, ProverConfig, ProverRandomness, QuotientWorkspace, Witness,
     check::{CheckMode, check_circuit},
-    create_proof_owned,
+    create_proof_owned_with_workspace,
     cs::{Advice, Column, ConstraintSystem, Fixed, Instance, InstanceType, Rotation, TableColumn},
     frontend::{Cell, Circuit, Error, Layouter, SimpleFloorPlanner, Value, configure, synthesize},
     keys::{CosetCachePolicy, KeygenConfigV2, keygen_pk_v2},
@@ -93,6 +93,8 @@ const PROVES: usize = 2;
 /// The local kernel ceiling; every kernel also reserves against the shared
 /// process-wide 64 MiB budget.
 const MSM_BUDGET: MemoryBudget = MemoryBudget::new(64 << 20);
+/// Explicit caller-owned quotient field-buffer ceiling, independent of MSM.
+const QUOTIENT_WORKSPACE_BYTES: usize = 256 << 20;
 
 /// Only the two declared qualification worker counts are accepted.
 fn worker_count(value: Option<&str>) -> Result<usize, &'static str> {
@@ -344,6 +346,7 @@ fn measure_in_pool<C, Ci>(
         .expect("compiled expressions");
     let instances = vec![public.to_vec()];
     let mut samples = Vec::with_capacity(PROVES);
+    let mut quotient_workspace = QuotientWorkspace::new(QUOTIENT_WORKSPACE_BYTES);
     let seed = std::env::var("M3_SEED")
         .map_or(Ok(7), |value| value.parse::<u64>())
         .expect("M3_SEED must be a u64");
@@ -352,6 +355,7 @@ fn measure_in_pool<C, Ci>(
         seed_bytes[..8].copy_from_slice(&seed.to_le_bytes());
         seed_bytes[8..16]
             .copy_from_slice(&u64::try_from(index).expect("proof index").to_le_bytes());
+        let workspace_before_bytes = quotient_workspace.allocated_bytes();
         let before = ProcessSnapshot::capture().expect("valid pre-proof resource probes");
         let started = Instant::now();
         let witness = Witness::from_circuit(&pk, circuit, &instances).expect("witness");
@@ -363,7 +367,7 @@ fn measure_in_pool<C, Ci>(
             Ok::<_, Infallible>(ChaCha20Rng::from_seed(seed_bytes))
         });
         let proving = Instant::now();
-        let proof = create_proof_owned(
+        let output = create_proof_owned_with_workspace(
             &params,
             &pk,
             witness,
@@ -371,8 +375,10 @@ fn measure_in_pool<C, Ci>(
             ProverConfig {
                 msm_budget: MSM_BUDGET,
             },
+            &mut quotient_workspace,
         )
         .expect("proof");
+        let proof = output.proof;
         let create_proof_ns = elapsed_ns(proving);
         // The consumed witness has already been released here.
         let total_ns = elapsed_ns(started);
@@ -403,6 +409,8 @@ fn measure_in_pool<C, Ci>(
         );
         samples.push(norito::json!({
             "index": index, "synthesis_ns": synthesis_ns,
+            "quotient_workspace_before_bytes": workspace_before_bytes,
+            "quotient_workspace_after_bytes": (quotient_workspace.allocated_bytes()),
             "create_proof_ns": create_proof_ns, "total_ns": total_ns,
             "cpu_ns": cpu_ns, "verify_ns": verify_ns,
             "proof_bytes": (proof.len()), "verified": true,
@@ -426,6 +434,9 @@ fn measure_in_pool<C, Ci>(
         "descriptor_hash": "blake2b256-pipa-v2-circdesc", "transcript_profile": "pipa-r",
         "binary_sha256": binary_sha256, "seed": seed,
         "witness_api": "owned", "coset_cache": "on_demand",
+        "quotient_workspace": "caller_owned",
+        "quotient_workspace_budget_bytes": QUOTIENT_WORKSPACE_BYTES,
+        "quotient_workspace_allocated_bytes": (quotient_workspace.allocated_bytes()),
         "commitment_tables": false, "msm_kernel_budget_bytes": (64_u64 << 20),
         "msm_process_budget_bytes": (iroha_pasta::msm::PROCESS_MSM_SCRATCH_BYTES),
         "msm_process_peak_bytes": (scratch.peak_bytes()),

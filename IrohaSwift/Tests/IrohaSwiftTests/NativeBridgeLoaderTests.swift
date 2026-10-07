@@ -98,10 +98,10 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertEqual(NativeBridgeError.fromStatus(-311), .unknown(-311))
     }
 
-    func testExpectedBridgeAbiVersionIsTwentyFiveForPackagedArtifacts() {
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64_x86_64"), 25)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 25)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 25)
+    func testExpectedBridgeAbiVersionIsTwentySixForPackagedArtifacts() {
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64_x86_64"), 26)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 26)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 26)
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(20, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64_x86_64"))
@@ -110,7 +110,8 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(22, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(23, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(24, for: "macos-arm64_x86_64"))
-        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(25, for: "macos-arm64_x86_64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(25, for: "macos-arm64_x86_64"))
+        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(26, for: "macos-arm64_x86_64"))
         XCTAssertEqual(
             NoritoBridgeLoader.parliamentTimedOvnWalletRequiredSymbols,
             [
@@ -416,7 +417,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
-          "native_bridge_abi_version": 25,
+          "native_bridge_abi_version": 26,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }
@@ -458,7 +459,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         )
         XCTAssertEqual(
             status,
-            .abiMismatch(path: bridgeURL.path, expected: 25, actual: 19)
+            .abiMismatch(path: bridgeURL.path, expected: 26, actual: 19)
         )
     }
 
@@ -486,7 +487,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
-          "native_bridge_abi_version": 25,
+          "native_bridge_abi_version": 26,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }

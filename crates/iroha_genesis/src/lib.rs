@@ -3110,7 +3110,13 @@ mod tests {
     fn source_template_materialization_requires_explicit_xor_selection() -> Result<()> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../defaults/genesis.template.json");
-        assert!(RawGenesisTransaction::from_path(&path).is_err());
+        let unbound = RawGenesisTransaction::from_path(&path)?;
+        assert_eq!(unbound.consensus_fingerprint(), None);
+        assert!(
+            unbound
+                .validate_mode_specific_consensus_parameters()
+                .is_err()
+        );
         let template = GenesisSourceTemplate::from_path(&path)?;
         let is_npos = template
             .value

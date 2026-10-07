@@ -525,7 +525,7 @@ fn wrapper(
 /// The fixed catalog currently contains Bootstrap only; full catalog and byte
 /// qualification remain open and changing that catalog requires rebinding.
 #[allow(dead_code)]
-pub(crate) struct RootedBootstrapOmega {
+pub struct RootedBootstrapOmega {
     pub(crate) source: bootstrap_chain::AuthenticatedBootstrap,
     pub(crate) key: iroha_plonk::VerifyingKey<Ep>,
     pub(crate) binding: iroha_plonk::DescriptorBinding,

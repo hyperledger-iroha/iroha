@@ -102,7 +102,7 @@ fn internal_word_context_has_exact_domain_count_tag_and_original_words() {
         assert!(c.accepts(&public));
         for i in [0, 1, 2, 255, 256, 511, 512, 575, 576, 577]
             .into_iter()
-            .filter(|i| *i < count as usize)
+            .filter(|i| *i < usize::try_from(count).unwrap())
         {
             let mut changed = c.clone();
             changed.words[i] += Fp::ONE;
@@ -310,5 +310,131 @@ fn receive_typed_q_encoding_has_witness_independent_layout() {
             unknown.tables.advice_assigned()
         );
         assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+    }
+}
+
+#[derive(Clone)]
+struct MessageEncoding {
+    bytes: [u8; 32],
+    known: bool,
+}
+impl Circuit<Fp> for MessageEncoding {
+    type Config = Config;
+    type Params = ();
+    type FloorPlanner = SimpleFloorPlanner;
+    fn without_witnesses(&self) -> Self {
+        Self {
+            known: false,
+            ..self.clone()
+        }
+    }
+    fn configure(meta: &mut ConstraintSystem<Fp>) -> Config {
+        let verifier = VerifierConfig::configure_serialized_foreign_tagged(meta, 3).unwrap();
+        let public = meta.instance_column(2);
+        meta.enable_equality(public);
+        Config { verifier, public }
+    }
+    fn synthesize(&self, config: Config, mut layouter: impl Layouter<Fp>) -> Result<(), Error> {
+        let mut chip = VerifierChip::new(config.verifier);
+        chip.load_tables(&mut layouter)?;
+        let words = layouter.assign_region(
+            || "two exact message halves",
+            |mut region| {
+                let message = iroha_plonk_gadgets::bytes::element::LeElement::assign(
+                    &mut chip.uint(),
+                    &mut region,
+                    if self.known {
+                        Value::known(self.bytes)
+                    } else {
+                        Value::unknown()
+                    },
+                )?;
+                let mut words = Vec::new();
+                push_message_context(&mut words, &mut chip, &mut region, &message)?;
+                Ok(words)
+            },
+        )?;
+        for (index, word) in words.iter().enumerate() {
+            layouter.constrain_instance(word.cell(), config.public, index)?;
+        }
+        Ok(())
+    }
+}
+impl MessageEncoding {
+    fn public(&self) -> Vec<Vec<Fp>> {
+        vec![
+            self.bytes
+                .chunks_exact(16)
+                .map(|half| Fp::from_u128(u128::from_le_bytes(half.try_into().unwrap())))
+                .collect(),
+        ]
+    }
+    fn accepts(&self, public: &[Vec<Fp>]) -> bool {
+        synthesize(self, 16, Some(public)).is_ok_and(|layout| {
+            check(&layout.cs, &layout.tables, CheckMode::Strict)
+                .unwrap()
+                .is_satisfied()
+        })
+    }
+}
+
+#[test]
+fn context_message_halves_preserve_all_bits_including_malformed_encodings() {
+    let patterns = [
+        [0; 32],
+        [255; 32],
+        core::array::from_fn(|i| u8::try_from(i * 7 + 19).unwrap()),
+        {
+            let mut bytes = [0; 32];
+            bytes[31] = 128;
+            bytes
+        },
+        {
+            let mut bytes = [0; 32];
+            bytes[15] = 128;
+            bytes[16] = 1;
+            bytes[31] = 64;
+            bytes
+        },
+    ];
+    let mut reference = None;
+    for bytes in patterns {
+        let source = MessageEncoding { bytes, known: true };
+        let public = source.public();
+        assert!(source.accepts(&public));
+        let known = synthesize(&source, 16, Some(&public)).unwrap();
+        let unknown = synthesize(&source.without_witnesses(), 16, None).unwrap();
+        assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+        assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+        assert_eq!(
+            known.tables.advice_assigned(),
+            unknown.tables.advice_assigned()
+        );
+        if let Some((fixed, permutation, advice)) = &reference {
+            assert_eq!(known.tables.fixed(), fixed);
+            assert_eq!(known.tables.permutation(), permutation);
+            assert_eq!(known.tables.advice_assigned(), advice);
+        } else {
+            reference = Some((
+                known.tables.fixed().to_vec(),
+                known.tables.permutation().clone(),
+                known.tables.advice_assigned().to_vec(),
+            ));
+        }
+        for half in 0..2 {
+            let mut wrong = public.clone();
+            wrong[0][half] += Fp::ONE;
+            assert!(!source.accepts(&wrong), "changed half{half}");
+        }
+    }
+    let source = MessageEncoding {
+        bytes: patterns[2],
+        known: true,
+    };
+    let original = source.public();
+    for index in 0..32 {
+        let mut changed = source.clone();
+        changed.bytes[index] ^= 128;
+        assert!(!changed.accepts(&original), "original byte{index}");
     }
 }

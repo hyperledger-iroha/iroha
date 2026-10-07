@@ -26,7 +26,8 @@ from typing import Callable
 from .native_time_interval import NativeTimeInterval
 from .attestation import (AttestationRejected, VerificationUnavailable, children, der_one,
                           oid, positive_integer, primitive, require)
-from .play_integrity import PlayIntegrityPolicy, PlayIntegrityUnavailable, _NoRedirect, _unique
+from .play_integrity import (PlayIntegrityPolicy, PlayIntegrityEnrollmentPolicy,
+                            PlayIntegrityUnavailable, _NoRedirect, _unique)
 from .openssl_private_rsa import acquire_crypto_originals, private_rsa_operation
 
 POLICY_SCHEMA = "iroha.kagemusha.play-integrity-verification-policy.v1"
@@ -64,7 +65,7 @@ class GoogleDecoderSelection:
 
 
 def select_google_decoder(public_original: bytes,
-                          native_policy: PlayIntegrityPolicy) -> GoogleDecoderSelection:
+                          native_policy: PlayIntegrityPolicy | PlayIntegrityEnrollmentPolicy) -> GoogleDecoderSelection:
     native_policy.validate()
     require(type(public_original) is bytes and 0 < len(public_original) <= MAX_POLICY_BYTES,
             "Google decoder policy outside bound")
@@ -139,7 +140,8 @@ class GoogleServiceAccountTokenProvider:
     policy or construct issuer authority.
     Use ``close`` at deployment shutdown. No credential path is accepted.
     """
-    def __init__(self, *, public_policy_original: bytes, native_policy: PlayIntegrityPolicy,
+    def __init__(self, *, public_policy_original: bytes,
+                 native_policy: PlayIntegrityPolicy | PlayIntegrityEnrollmentPolicy,
                  credential_fd: int, trusted_time_interval: Callable[[], NativeTimeInterval],
                  openssl_path: Path, credential_owner_uid: int | None = None) -> None:
         self.selection = select_google_decoder(public_policy_original, native_policy)

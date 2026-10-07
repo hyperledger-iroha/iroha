@@ -166,7 +166,7 @@ impl UnloadObjects {
         let key = core::array::from_fn(|i| predecessor.public.fields()[9 + i].clone());
         let valid = self.objects[2].bind_signature(region, &slots[0], &key)?;
         GlueChip::assert_constant(region, valid.word(), Fp::ONE)?;
-        let provider = policy.scope(chip, region)?.provider;
+        let provider = policy.provider(chip, region)?;
         let wallet = core::array::from_fn(|i| predecessor.public.fields()[6 + i].clone());
         let zero = chip.uint().glue().constant(region, Fp::ZERO)?;
         let lanes = chip.operation_lanes()?;

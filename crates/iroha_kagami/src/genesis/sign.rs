@@ -2010,9 +2010,17 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 Some(&norito::json::Value::Null),
                 "{path} must not advertise a fingerprint before materialization"
             );
+            let manifest = RawGenesisTransaction::from_path(&full_path)
+                .expect("bounded source JSON must remain parseable before materialization");
+            assert_eq!(
+                manifest.consensus_fingerprint(),
+                None,
+                "{path} must remain unbound"
+            );
+            let mode = manifest.consensus_mode();
             assert!(
-                RawGenesisTransaction::from_path(&full_path).is_err(),
-                "{path} must not be accepted by the signing path"
+                prepare_genesis_for_signing(manifest, None, mode, None, &[]).is_err(),
+                "{path} must not enter signing without its required NPoS XOR selection"
             );
         }
     }

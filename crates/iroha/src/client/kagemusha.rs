@@ -2,10 +2,12 @@
 
 use super::{AccountClient, ActivationEvidenceReadAuth, Client, dispatch};
 use crate::{Error, Result, http::StatusCode};
-use iroha_data_model::isi::kagemusha_wallet::load_finality::KagemushaWalletLoadReceiptV1;
+use iroha_data_model::isi::kagemusha_wallet::load_finality::{
+    KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1, KagemushaWalletLoadReceiptV1,
+};
 
-// Bound the original receipt, canonical account controller and Norito framing.
-pub(super) const MAX_RESPONSE_BYTES: usize = 16 * 1024;
+// The receipt contains a fixed payer digest and one bounded canonical frame.
+pub(super) const MAX_RESPONSE_BYTES: usize = KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1;
 const READ: &str = "kagemusha.wallet.load_issuance.read";
 
 /// Load issuance reads using one immutable payer and network context.
@@ -132,7 +134,10 @@ fn validate_response(
     if issuance.request_id != *request {
         return Err(mismatch("request_id"));
     }
-    if &issuance.payer != payer {
+    if issuance.payer_account_digest
+        != iroha_data_model::kagemusha::kagemusha_wallet_account_digest_v1(payer)
+            .map_err(|_| mismatch("payer"))?
+    {
         return Err(mismatch("payer"));
     }
     if issuance.scheme_id != *scheme || issuance.wallet_id != *wallet {

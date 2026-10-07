@@ -134,7 +134,7 @@ fn sample() -> Vec<u8> {
     let mut bytes = vec![0; LoadReceiptCells::BYTES];
     bytes[..2].copy_from_slice(&1_u16.to_le_bytes());
     for (value, offset) in [2, 34, 66, 98, 210, 250].into_iter().enumerate() {
-        bytes[offset..offset + 32].fill((value + 1) as u8);
+        bytes[offset..offset + 32].fill(u8::try_from(value + 1).unwrap());
     }
     bytes[130..146].copy_from_slice(&9_u128.to_le_bytes());
     bytes[146..162].copy_from_slice(&100_u128.to_le_bytes());

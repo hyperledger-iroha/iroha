@@ -123,9 +123,14 @@ fn fixture() -> (EventCircuit, Vec<Fp>) {
 fn native_event_hash_matches_exact_adaptive_codec_preimage() {
     let (circuit, public) = fixture();
     assert!(
-        check_circuit(&circuit, 14, &[public.clone()], CheckMode::Strict)
-            .unwrap()
-            .is_satisfied()
+        check_circuit(
+            &circuit,
+            14,
+            std::slice::from_ref(&public),
+            CheckMode::Strict
+        )
+        .unwrap()
+        .is_satisfied()
     );
     for index in [0, 1, 8, 13, 14, 45, 46, 77] {
         let mut forged = public.clone();
@@ -148,7 +153,7 @@ fn native_event_hash_matches_exact_adaptive_codec_preimage() {
 #[test]
 fn event_digest_and_hash_assignment_reject_cell_tampering() {
     let (circuit, public) = fixture();
-    let cells = assigned_advice_cells(&circuit, 14, &[public.clone()]).unwrap();
+    let cells = assigned_advice_cells(&circuit, 14, std::slice::from_ref(&public)).unwrap();
     let stride = (cells.len() / 24).max(1);
     for &(column, row) in cells.iter().step_by(stride) {
         let tamper = Tamper {
@@ -157,7 +162,7 @@ fn event_digest_and_hash_assignment_reject_cell_tampering() {
             delta: Fp::ONE,
         };
         assert!(
-            !check_tampered(&circuit, 14, &[public.clone()], Some(tamper))
+            !check_tampered(&circuit, 14, std::slice::from_ref(&public), Some(tamper))
                 .unwrap()
                 .is_satisfied()
         );

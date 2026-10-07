@@ -1142,9 +1142,22 @@ mod consensus_manifest_tests {
             "configs/soranexus/taira/genesis.template.json",
             "crates/iroha_kagami/tests/fixtures/taira_nevo_v2/unsigned-genesis.template.json",
         ] {
+            let path = repository_root.join(relative_path);
+            let unbound = RawGenesisTransaction::from_path(&path)
+                .expect("bounded source JSON must remain parseable before materialization");
+            assert_eq!(unbound.consensus_fingerprint(), None);
             assert!(
-                RawGenesisTransaction::from_path(repository_root.join(relative_path)).is_err(),
-                "{relative_path} must not deserialize as complete RawGenesisTransaction"
+                unbound
+                    .validate_mode_specific_consensus_parameters()
+                    .is_err(),
+                "{relative_path} must require its explicit NPoS XOR selection"
+            );
+            assert!(
+                iroha_genesis::GenesisSourceTemplate::from_path(&path)
+                    .expect("read the original unbound source template")
+                    .materialize(None)
+                    .is_err(),
+                "{relative_path} must not materialize without its NPoS XOR selection"
             );
             let manifest = load_genesis_source_template_for_test(&repository_root, relative_path);
             assert_first_release_hijiri_bootstrap(&manifest, relative_path);

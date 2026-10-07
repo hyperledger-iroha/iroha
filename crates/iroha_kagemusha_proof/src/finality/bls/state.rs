@@ -58,18 +58,71 @@ pub enum BlsStateWitness {
         /// Original cofactor-cleared message point.
         message_point: G2AffineWitness,
         /// Two running points used by the Miller loop.
-        points: [MillerG2Witness; 2],
+        points: Box<[MillerG2Witness; 2]>,
         /// Three line coefficients for each running point.
-        lines: [[Fp2; 3]; 2],
+        lines: Box<[[Fp2; 3]; 2]>,
         /// Product accumulated by the Miller loop.
-        accumulator: Fp12,
+        accumulator: Box<Fp12>,
     },
     /// All five final-exponent registers.
-    Final([Fp12; 5]),
+    Final(Box<[Fp12; 5]>),
     /// Unique terminal boundary after the final result equals one.
     Done,
 }
 impl BlsStateWitness {
+    /// Allocate only the fixed phase shape for witnessless source installation.
+    /// No arithmetic, point decoding or signature witness generation occurs.
+    pub(super) fn for_tag(tag: u64) -> Result<Self, Error> {
+        let g1 = G1AffineWitness {
+            x: [0; 6],
+            y: [0; 6],
+            infinity: true,
+        };
+        let zero = [[0; 6]; 2];
+        let g2 = G2AffineWitness {
+            x: zero,
+            y: zero,
+            infinity: true,
+        };
+        let fp12 = [[zero; 3]; 2];
+        Ok(match tag {
+            0 => Self::Empty,
+            1 => Self::Key([g1; 3]),
+            2 => Self::Signature([g2; 6]),
+            3 => Self::Fields([zero; 2]),
+            4 => Self::SwuFirst {
+                x: zero,
+                y: zero,
+                second: zero,
+            },
+            5 => Self::First {
+                point: g2,
+                second: zero,
+            },
+            6 => Self::SwuSecond {
+                first: g2,
+                x: zero,
+                y: zero,
+            },
+            7 => Self::Points([g2; 2]),
+            8 => Self::Cofactor([g2; 6]),
+            9 => Self::Miller {
+                message_point: g2,
+                points: Box::new(
+                    [MillerG2Witness {
+                        x: zero,
+                        y: zero,
+                        z: zero,
+                    }; 2],
+                ),
+                lines: Box::new([[zero; 3]; 2]),
+                accumulator: Box::new(fp12),
+            },
+            10 => Self::Final(Box::new([fp12; 5])),
+            11 => Self::Done,
+            _ => return Err(Error::Synthesis),
+        })
+    }
     pub(super) const fn tag(&self) -> u64 {
         match self {
             Self::Empty => 0,
@@ -131,12 +184,12 @@ impl BlsStateWitness {
                 accumulator,
             } => {
                 native_g2(&mut out, message_point);
-                for p in points {
+                for p in points.iter() {
                     for v in [&p.x, &p.y, &p.z] {
                         native_fp2(&mut out, v);
                     }
                 }
-                for line in lines {
+                for line in lines.iter() {
                     for v in line {
                         native_fp2(&mut out, v);
                     }
@@ -144,7 +197,7 @@ impl BlsStateWitness {
                 native_fp12(&mut out, accumulator);
             }
             Self::Final(values) => {
-                for v in values {
+                for v in values.iter() {
                     native_fp12(&mut out, v);
                 }
             }
@@ -211,7 +264,7 @@ impl BlsStateWitness {
                 accumulator,
             } => StateCells::Miller {
                 message_point: chip.assign_g2(region, v(*message_point, known))?,
-                state: MillerPairState::from_parts(
+                state: Box::new(MillerPairState::from_parts(
                     [
                         chip.assign_miller_g2(region, v(points[0], known))?,
                         chip.assign_miller_g2(region, v(points[1], known))?,
@@ -220,15 +273,15 @@ impl BlsStateWitness {
                         chip.assign_miller_line(region, v(lines[0], known))?,
                         chip.assign_miller_line(region, v(lines[1], known))?,
                     ],
-                    chip.assign_fp12(region, v(*accumulator, known))?,
-                ),
+                    chip.assign_fp12(region, v(**accumulator, known))?,
+                )),
             },
             Self::Final(a) => {
                 let mut values = Vec::with_capacity(5);
-                for x in a {
+                for x in a.iter() {
                     values.push(chip.assign_fp12(region, v(*x, known))?);
                 }
-                StateCells::Final(values.try_into().map_err(|_| Error::Synthesis)?)
+                StateCells::Final(Box::new(values.try_into().map_err(|_| Error::Synthesis)?))
             }
         })
     }
@@ -275,9 +328,9 @@ pub(super) enum StateCells {
     Cofactor([G2Value<Fp>; 6]),
     Miller {
         message_point: G2Value<Fp>,
-        state: MillerPairState<Fp>,
+        state: Box<MillerPairState<Fp>>,
     },
-    Final([Fp12Value<Fp>; 5]),
+    Final(Box<[Fp12Value<Fp>; 5]>),
     Done,
 }
 impl StateCells {
@@ -337,7 +390,7 @@ impl StateCells {
                 cells_fp12(&mut out, state.accumulator());
             }
             Self::Final(a) => {
-                for v in a {
+                for v in a.iter() {
                     cells_fp12(&mut out, v);
                 }
             }

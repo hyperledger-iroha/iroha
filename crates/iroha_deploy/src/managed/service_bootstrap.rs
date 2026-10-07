@@ -120,6 +120,37 @@ pub(super) enum ServiceBootstrapStep {
     Reputation,
 }
 
+/// Only original completed funding facts enter the opaque parent history. The unfinished
+/// reports and their optional current-state graphs stay with the separate progress branch.
+#[derive(Debug)]
+struct CompletedFunding {
+    request: Option<super::ManagedHistoricalReserveTopUp>,
+    approval: Option<super::ManagedHistoricalReserveTopUpApproval>,
+    credit: ManagedTransactionFinality,
+    capacity: ManagedTransactionFinality,
+}
+impl CompletedFunding {
+    // Called after the sole funding phase's existing completion and prerequisite checks,
+    // after releasing its native child owner. This moves facts and creates no evidence.
+    #[inline(never)]
+    fn from_progress(progress: ProviderFundingProgress) -> Result<Self> {
+        match progress {
+            ProviderFundingProgress::Complete {
+                request,
+                approval,
+                credit,
+                capacity,
+            } => Ok(Self {
+                request,
+                approval,
+                credit,
+                capacity,
+            }),
+            _ => Err(invalid("bootstrap funding history is not complete")),
+        }
+    }
+}
+
 /// Privately produced from each exact original child, not a public completion DTO.
 #[derive(Debug)]
 pub(super) struct HistoricalProviderBootstrap {
@@ -127,7 +158,7 @@ pub(super) struct HistoricalProviderBootstrap {
     custody_policy: ManagedTransactionFinality,
     custody_enrollment: ManagedTransactionFinality,
     reserve_account: ManagedTransactionFinality,
-    funding: ProviderFundingProgress,
+    funding: CompletedFunding,
     provider_ingest: ManagedTransactionFinality,
     gateway: ManagedTransactionFinality,
 }
@@ -168,15 +199,12 @@ impl HistoricalServiceBootstrap {
                 provider.custody_enrollment,
                 provider.reserve_account,
             ]);
-            let ProviderFundingProgress::Complete {
+            let CompletedFunding {
                 request,
                 approval,
                 credit,
                 capacity,
-            } = &provider.funding
-            else {
-                return Err(invalid("bootstrap funding history is not complete"));
-            };
+            } = &provider.funding;
             match (request, approval) {
                 (Some(request), Some(approval)) => {
                     if request.movement_id() != approval.request().movement_id()

@@ -139,8 +139,11 @@ separately, even if their bytes happen to be equal. Current construction
 metadata covers all 14 unsplit variants. The single-sigma forwarding path
 preserves its original source k; the two-sigma path includes its explicit
 full-length trivial slot. Every consumer must constrain all forwarding
-equalities and the mode instances across Q, A and Omega. TODO: bind the
-conditional A-split context schedule when a measured variant needs it.
+equalities and the mode instances across Q, A and Omega. Split operation
+sources bind their fixed task/Q partition and complete context through each
+preceding W key and continuation digest. Complete source execution and terminal
+catalog admission must still be established separately for every operation;
+the split metadata constructor alone is insufficient.
 
 The `kgwvkey1` digest binds curve, k, descriptor digest, representation and
 every fixed/permutation commitment in canonical order. One-hot allowlists
@@ -162,6 +165,22 @@ relation and artifact set. No additional privacy guarantee is inferred from
 the fact that the local fold protocol is non-hiding.
 
 ## Executable checks and remaining review
+
+Own-state policy fixes the independently selected provider and root key, while
+scheme identity comes from constrained state cells. Bootstrap binds those same
+scheme cells across state, statement, public lineage, signed certificate and
+credential. Other own-object owners use the authenticated predecessor's state
+scope. Native admission must still bind the carried scheme/relation to the
+installed inventory. Compiling the derived SchemeID into these source policies
+would instead make A keys depend cyclically on their finished Omega catalog.
+
+The corrected Bootstrap regression constructs two complete genuine
+sigma/Q/A1/W/A2 chains with different schemes and requires identical six source
+VK byte strings and known/unknown layouts. A third chain retains actual proofs
+and valid original signatures but rejects its foreign-scheme certificate at A2.
+It passes 1/1 in 289.24 s (`target/qualification/bootstrap-carried-scheme`).
+This establishes the tested source independence and authorization rejection,
+not a complete acyclic artifact inventory or full operation soundness review.
 
 The native PIPA-R tests pin both-curve transcript KATs, type boundaries,
 profile rejection and proof-byte invariance across worker counts. Native
@@ -325,16 +344,20 @@ rows. No spare-row or runtime margin is inferred from these constraint counts.
 
 The split map regression passes acceptance,
 burn insertion and burn no-op with known/unknown equality and mutations of the
-verdict, roots, authenticated paths, Payment and credit identity. The twelve-stage
-Receive component suite passes eleven checks, including the fixed task/Q-owner
-schema and original-byte context mutations. Acceptance and corrected-claim
-whole-chain closure still require their own actual proof results.
+verdict, roots, authenticated paths, Payment and credit identity. The Receive
+component suite passes eleven checks, including the fixed task/Q-owner
+schema and original-byte context mutations. Corrected-claim no-insertion
+closure now has its separate captured proof result, scoped below.
 
 The first distinct-wallet accepted-chain attempt reached actual A1–A4 proofs,
 then correctly rejected the fixture at Objects A5: its Payment encoded the
 receiver's key in the payer-key field. The fixture now copies that key from the
-retained payer credential and has a direct regression check. That failure is not
-an accepted credit result; the corrected chain must run again.
+retained payer credential and has a direct regression check. The repaired
+distinct-wallet chain passes all ten A and nine W proofs, native descriptor/VK
+and strict-constraint parity, checkpoint restores and terminal exports in
+5,078.85 seconds on the busy host. This captured run uses the earlier resident-PK
+test harness and superseded Load trust; it establishes neither final Omega
+admission nor the newer canonical serialized-custody checks.
 
 The native producer pins this full-envelope schedule, exact current internal
 Tagged4 and terminal Tagged3 descriptors, installed A/W keys, and both k16
@@ -349,11 +372,72 @@ mismatch before proving, and releases the borrow on return. Restoration and
 next-circuit preparation use no PK. Component tooling likewise releases each
 generated PK and retains verifier metadata; later native parity reconstructs
 one stage key at a time. This removes implicit simultaneous residency of nineteen
-PKs without changing circuits or proof formats. All ten native component checks
-pass, including same-descriptor foreign-key rejection, wrong descriptor/pair
-rejection and retained metadata after the PK is dropped. The full borrowed-key
-regression and deterministic proof-byte parity remain pending; memory gate
-qualification still requires actual peak measurements under the agreed harness.
+PKs without changing circuits or proof formats. Receive now uses the shared
+`native::artifact::KeyArtifact` directly, with no local type or compatibility
+alias. The focused native/shared suite passes all fifteen checks, including
+same-descriptor foreign-key rejection, wrong descriptor/pair rejection and
+both-curve metadata retained after the PK is dropped. Pair construction checks
+identity only; authenticated installation and exact original-source validation
+remain separate requirements. Receive's strict original-PK intake now reconstructs
+one fixed unknown A or W source from the installed plan, including the complete
+owner schedule, source capacities, preceding wrapper and internal Tagged4 versus
+terminal Tagged3 profile. It bounds the original, validates its compiled source
+tables, and checks the exact installed descriptor/VK before returning one PK.
+The factory never returns a checked witness or checkpoint. Its source-shape and
+intake-bound components pass for both Receive variants. The renewed variant
+also passes all nineteen sequential original-key imports, exact verifier identity,
+repeated unknown-layout equality and truncated/wrong-stage rejection in 719.11
+seconds. That sweep uses constructor-only Q metadata and does not qualify genuine
+proof workloads. The ordinary constructor-only sweep also passes in489.91 seconds.
+Both sweeps precede the constant-size continuation rekey described below; their
+original source keys do not qualify the new circuit.
+A separate current-source regression constructs only a genuinely authenticated
+zero-balance Bootstrap receiver. It alters the original incoming Send sigma before
+Q preparation, signs the exact altered proof digest and Payment, and requires
+Q's incoming verdict to be false with every incoming mode Trivial. The branch
+preserves the consumed root and records the burned credit while keeping adjusted
+spendable value zero. A locally generated Send witness supplies adversarial bytes
+only; no funded Load lineage is admitted. This regression includes every fixed
+owner, original-key import and canonical checkpoint. Its current constant-size
+context source passes complete10A/9W execution in2,045.12 seconds, including all
+nineteen strict original imports, borrowed-key exact proof parity and exact-byte
+canonical replays after creating a fresh native session. All ten source layouts
+fit k16, with maximum65,305 rows under65,529. Original/Q/context substitutions,
+changed current P/W obligations, foreign sessions and malformed custody reject.
+The captured executable, source and final log are retained in
+`target/qualification/kagemusha-receive/o1-current/`. The prior2,580.44-second
+history-hash capture remains historical evidence. A separate captured run
+closes the Bootstrap-only burn through actual final Omega in 1,949.62 seconds.
+It rebuilds the signed Bootstrap under the fresh immutable Bootstrap/Receive
+catalog, reproduces the exact planned Receive terminal VK, executes all ten A and
+nine W proofs with all nineteen original imports and exact native replay, and
+proves the canonical four-input outer fold. Every selected input decides;
+dropping the fourth is rejected. The genuine outer proof is 3,712 bytes and its
+transport is 4,800 bytes, with burned-credit membership retained and adjusted
+spendable value zero. The complete captured source, executable and final log are
+in `target/qualification/kagemusha-receive/bootstrap-burn-omega-o1/`.
+These captures predate the acyclic policy correction: signed scheme scope now
+uses carried state/lineage cells rather than compiled SchemeID constants. The
+changed source and all dependent A/W/catalog keys require fresh qualification.
+This captured malformed-source burn result cannot qualify accepted payment,
+corrected-claim closure, funded offline onward spending or the full catalog;
+neither captured runtime is a performance gate.
+The canonical Norito
+checkpoint codec derives its exact stage/key/proof length from those installed
+artifacts, bounds the original before decoding, and restores through the same
+native proof and full-claim verifier. Its layout/codec component tests reject
+changed role, stage, descriptor, VK, proof length and framing; the fresh integration
+test's ordinary full-envelope burn now passes all nineteen exact-byte
+encode/restore/re-encode checks in a fresh session, together with the complete
+ten-A/nine-W proofs, native VK/strict-constraint parity and changed-original,
+foreign-session, role/stage and framing rejection. The captured run completed
+in 4,560.08 seconds on the busy host; it predates the shared helper extraction
+and does not qualify the other branches or final Omega. The earlier captured full
+borrowed-key regression passes all ten A and nine W proofs and native restores,
+exact native VK/strict-constraint parity, pre-proving wrong-stage key rejection
+and identical deterministic A2 proof bytes in 3,403.65 seconds on the busy host.
+That duration is component evidence, not a latency gate; memory qualification
+still requires actual peak measurements under the agreed harness.
 Its sigma classes are pinned to the admitted k12 or k14 source descriptors. The
 installed descriptor-sized Omega transport (excluding public320) plus incoming
 sigma must fit the actual 8,277-byte proof budget; the full raw capacities remain
@@ -365,14 +449,41 @@ boundary splits and both one-byte-over variants under identical fixed/permutatio
 layouts; native admission tests reject the corresponding over-bound inputs and
 individual-capacity/overflow cases. This arithmetic component does not replace
 the original active-tape provenance and capacity checks.
-TODO: complete the borrowed-key regression, accepted native stage parity and
-checkpoint mutation tests, corrected-claim owner chains and final Omega admission.
+The separate renewed accepted-chain capture passes all ten A and nine W proofs,
+exact native key/strict-constraint parity, borrowed-stage proof equality and all
+nineteen canonical checkpoints with exact-byte replay in a fresh session. It also
+rejects changed originals, foreign sessions, wrong stages and framing mutations.
+The run took 8,181.79 seconds on the busy host and uses the superseded Load source;
+it predates shared-helper extraction and strict original-PK intake. It does not
+qualify current ordinary-finality Load, performance or final Omega.
+TODO: requalify current original-key import and complete final Omega admission.
 
-The completed distinct payer-Load/receiver-Bootstrap shared-key source fixture is
-component evidence under the superseded Load voucher trust construction. The
-human-selected ordinary-transaction/finality Load replacement must rebuild the
-source/catalog before release qualification or artifact freezing. No result here
-establishes the final catalog, phone performance or the durable-completion gate.
+The separate Receive outer consumer now plans every exact A/W verifier key,
+extends the common catalog, rebuilds the signed payer/receiver sources under the
+resulting immutable outer key, and requires the actual terminal VK to match the
+planned bytes. It calls the native `terminal_fold_inputs` selector and native
+outer producer, retaining all four obligations and the exact resulting credit
+membership path. The canonical selector is an encoding/selection API only;
+source-proof verification, complete decisions and artifact authority remain
+separate mandatory boundaries. The captured pinned-native test passes in7,069.43 seconds: common three-terminal
+Bootstrap/Load/Receive key continuity, actual accepted Receive outer proof3,712 B /
+transport4,800 B, all four selected obligations decided, droppedfourth rejection,
+original import/canonical checkpoint replay and exact credit membership. Its final
+log and binary provenance are retained in
+`target/qualification/kagemusha-receive/pinned-omega-accept/`. This capture predates
+the constant-size continuation rekey and uses superseded Load trust. It does not
+qualify the current source, corrected-burn outer closure, ordinary-finality Load,
+the full catalog or performance. Earlier witnessed-key results likewise do not
+qualify another compiled source.
+
+The captured distinct payer-Load/receiver-Bootstrap shared-key source fixture is
+component evidence under the superseded Load voucher trust construction. Current
+native and recursive Load producers consume ordinary transaction finality, and
+the integration helpers require explicit genuine finality evidence and original
+proving artifacts. The retired issuer fixture is removed. Installing the current
+fixture and rebuilding the source/catalog remain prerequisites for release
+qualification or artifact freezing. No result here establishes the final catalog,
+phone performance or the durable-completion gate.
 
 The adversarial test-only compact source helper uses a deliberately forged
 succinct PIPA-AS transcript, following the recursion mutation test. It requires
@@ -384,5 +495,216 @@ decide, and the distinct correction with identical challenges decides. Both
 signed source chains and the distinct receiver are rebuilt under that same key;
 the adversarial Omega keeps its source A unchanged. This test takes 1,984.25
 seconds on the busy host and is superseded-Load-trust component evidence, never
-a valid monetary head. Corrected Receive burn/no-op proof chains remain open. Production proving
-and complete-decide checks are unchanged, and this is never a valid monetary head.
+a valid monetary head. The corrected Receive burn with consumed-credit insertion
+also passes the complete ten-A/nine-W chain, all native fixed/permutation and
+strict-constraint parity, checkpoint restoration/mutations and exact terminal
+exports in 4,883.52 seconds. Both actual sigma proofs remain valid and all five
+result groups are true; the original non-deciding Vesta claim is the reason this
+cannot take the acceptance branch. The captured run uses the earlier resident-PK
+test harness, not the new serialized custody path. The separate corrected
+no-insertion run passes all ten A and nine W proofs, native key/strict-constraint
+parity, borrowed-stage proof equality, every canonical checkpoint with exact-byte
+fresh-session replay and the custody mutations in 8,299.91 seconds on the busy
+host. It retains the unchanged consumed root and exports the corrected incoming
+Vesta obligation. This captured source uses superseded Load ancestry and predates
+the shared helper extraction and strict original-PK importer; it is component
+evidence, not latency or memory qualification. Final Receive Omega admission
+remains open. Production proving and complete-decide checks are unchanged, and
+the adversarial source never qualifies as a valid monetary head.
+
+## Archive original sources and conditional terminal closure
+
+`ArchiveStagePlan` requires exactly one owner for each of OwnProof, retained
+Proofs, retained Payment, incoming Proofs, Evidence, Signatures, current
+Authorization, CorePending, LineagePending and Effects.
+Effects must be terminal, while Proofs must precede it. Q1 and Q2 execute at the
+Authorization and Signatures owners respectively. In the fixed ten-stage
+source, Q0 executes in its own stage: original-proof binding consumes the same
+committed Q public words, and later hard Q verification closes that exact
+opening. Every Q index occurs exactly once; index order need not match stage
+order. No earlier checkpoint grants a terminal operation verdict. Every stage commits the same
+original-object schema: seventeen slots for Receive evidence or nineteen for
+Status evidence. The result object commits the three predicate bits together
+with their fixed owner indices, plus the original Status verifier opening when
+present. The native/context proposal helpers grant no proof authority.
+
+Conditioned on collision resistance and authenticated execution of every fixed
+stage, a result proposal cannot change between its producer and Effects: each
+continuation binds the same context, and the unique producer equates its derived
+bit to that proposal. Omitting a producer or admitting its key without executing
+the complete prescribed source invalidates this argument. Full A/W and final
+Omega verification must also close each Q opening and each intermediate A/W
+opening; equal bytes do not permit merging distinct obligation slots.
+
+Both retained owners are unconditional. The Payment owner binds the held Request, payer
+Credential, original Send Receipt, quoted receiver Credential, exact Send
+statement and pending descriptor. The separate Proofs owner derives both active
+proof commitments and includes their original lengths in the combined consuming
+digest. The Payment owner reads those same context slots9/10, hard-equals their
+digests, and uses that digest in the signed receipt/package checks. Both owners
+are mandatory; a proposed commitment does not replace proof-owner execution. Separate capacity bounds do
+not imply the Payment bound: their exact UInt32 lengths are summed as UInt33
+and constrained to at most 8,597 bytes, comprising the 8,277-byte combined proof
+budget plus the 320-byte public transcript carried in the raw Omega source.
+Neither field wraparound nor a false incoming verdict releases this constraint.
+Historical proof bytes remain opaque in this owner; it does not verify an old
+Payment's proof or receipt signature. The hard predecessor and pending opening
+authenticate the seven-word Send descriptor, not the historical proof bytes or
+their lengths. The native durable archive must supply the exact retained Payment;
+the circuit then binds those supplied originals to the incoming evidence. Pending
+membership alone cannot justify limiting a historical sigma to 3,456 bytes.
+
+Receive evidence binds its original sigma to the incoming Q0 slot and uses the
+Request-recorded blacklist selector. Status instead binds the original active
+Omega carrier, decoded public fields and both transported claims; its verified
+key must hash to the current lineage's carried Omega-key identity. Its exact
+soft-verifier opening is committed even when verification returns false.
+Canonical content addresses bind their supplied preimages unconditionally;
+a different canonical component cannot be used merely to force a false verdict.
+Malformed originals retain their original digest and derive the corresponding
+false predicate. Q2 independently binds the incoming receipt signature to the
+receiver key quoted by the held Request.
+
+At Effects, the three predicate groups and all incoming modes use the same
+branch-uniqueness equations as Receive. For Status, terminal selection uses the
+committed original opening, original P/V claims and at most one distinct
+same-challenge correction. Both pending-map removal paths are authenticated. The separate CorePending
+owner unconditionally removes the core pending entry and clears its physical
+leaf. The separate LineagePending owner authenticates the adjusted path even on no-op; the adjusted
+lineage pending root removes the entry only on acceptance and retains it on
+no-op. It uses the same complete result/mode equations as terminal Effects,
+including the no-Corrected condition. Three true soft predicates alone cannot
+authorize adjusted removal. All unrelated monetary, credential and policy fields remain constrained.
+Consequently a discretionary no-op for entirely valid evidence would require
+breaking a producer binding, a mode equation or a deferred-claim decision.
+
+The shared owner/schema, source and map tests support these local implications.
+The joint-budget regression first reproduced acceptance of coherent oversized
+originals, then rejected cap+1 in either tape after re-signing/re-hashing, while
+accepting the inclusive bound. Complete seven-A/six-W ArchiveReceive runs remain
+in progress; their captured binaries predate that constraint. ArchiveStatus full
+composition, native installed production and complete common-key Omega admission
+remain open. Independent internal review of the source-bound argument found no
+binding gap, conditional on executing all fixed owners and deciding every
+obligation; it does not qualify those pending implementations. No theorem or
+release claim here assumes those checks have passed.
+
+The complete current source schema therefore reserves 8,597 raw Omega bytes and
+8,277 sigma bytes for the retained Payment, with the unconditional joint bound
+above. Incoming Receive evidence reserves 9,321 sigma bytes (10,000 minus the
+measured 679-byte Credited carrier); Status reserves 8,132 raw Omega bytes (the
+320-byte public transcript plus 10,000 minus 2,188 fixed carrier bytes). Installed
+descriptor equality remains a total proof-verdict check over those original
+lengths; it cannot erase tails or replace mismatched bytes. Artifact admission
+pins the allowed sigma classes and verifier identities. The Archive total-input
+path still accepts every original length within its complete envelope capacity;
+it cannot use descriptor length to exclude malformed tails from the no-op
+relation. A narrow component circuit does not establish that relation. The captured seven-stage jobs
+use the earlier 3,456-byte sigma capacities; the complete domains require fresh
+sequential source-key preflight, actual proofs and native parity. Additional
+independent capacity review established this retained/soft-input distinction and
+corrected the history wording above. The isolated full-capacity retained owner
+passes strict constraints and known/unknown layout equality at the inclusive
+joint bound. The shared full-domain constructor also passes both-variant owner,
+Q-placement and source-schema tests. Neither test verifies a recursive chain.
+
+Independent source review of the full-tail fixture confirms that Q receives its
+fixed descriptor-sized prefix and the original length9,321, producing a false
+incoming verdict and Trivial selection. A reconstructs that same safe view while
+hashing the entire original tail into its sigma and context digests. The incoming
+receipt and Credited transcript are recomputed over that full original. This
+review does not substitute for execution of the new complete no-op proof case.
+
+The shared native Archive producer preserves these same ten operation owners
+and separate Q0 stage. Its input
+preparation verifies the hard predecessor and three Q proofs, retains every
+original and selected claim, and grants no soft predicate by itself. Every A/W
+checkpoint is bound to its original context, fixed role/stage and installed key;
+a fresh session reconstructs current claims by verifying each previous checkpoint.
+Independent source review found no omitted Pallas or Vesta obligation: terminal
+Status folds both selected Pallas slots, while final Omega retains the original
+Vesta claim with its committed mode and correction. Five constructor tests and
+the checkpoint codec/import-bound tests pass, as does the Status safe-view sweep
+across all8,133 admitted lengths. These are intake and source components; genuine
+full-domain A/W replay and final Omega remain required before artifact admission.
+
+The original full-domain seven-stage source failed k16 before original-key import:
+constructor-only Q metadata overflowed Receive stage6 and Status stage1. The
+failure is retained, and no source or proof gate was marked passed. The nine-stage
+split isolates retained proof hashing and core pending removal without narrowing
+any raw capacity or dropping a constraint. Isolated depth32 Core/Lineage owners
+pass strict and known/unknown layout checks at16,983 rows each. Full native source
+key/import sweeps and genuine proof workloads must re-establish the complete gate.
+
+The subsequent nine-stage preflight uses actual Archive/Receive sigma and Q
+source keys, retaining only a constructor predecessor. Both variants overflowed
+k16 at the combined Proofs owner under tagged3. The candidate now fixes tagged4
+for internal A sources and tagged3 for terminal A, as Receive already does.
+Each W pins its exact preceding A key and descriptor; the common terminal catalog
+admits only the tagged3 terminal source. This is a layout change, not a relaxation
+of domain size, original-byte bounds, proof obligations or key authentication.
+The failed immutable source runs remain recorded; the changed sources require
+fresh capacity/import/proof evidence. A separate strict projection regression
+copies all six retained proof commitment words and rejects mismatched consuming
+digests, missing context slots and substituted slot schemas; it does not confer
+raw-byte authentication before the mandatory retained-proofs owner executes.
+The tagged4 attempt also exceeded k16 at the combined Proofs owner. Subsequent
+eleven-stage attempts overflowed the signatures or later core-removal stage.
+The current ten-stage source combines unconditional core removal with the first
+own-proof stage and keeps hard Q0 verification, raw incoming proof binding and
+adjusted removal separate. Each map owner receives its exact removal path.
+Its captured actual-Q preflight fits stages0 through5 but exceeds k16 at the
+hard Q0 owner:68,450 Status and73,001 Receive sponge rows. These source checks
+still use a constructor predecessor. The layout remains unqualified; neither
+a larger diagnostic synthesis domain nor an unexecuted original importer
+counts as passing the fixed k16 gate.
+
+## Fixed-stage continuation context
+
+The current shared split implementation replaces historical hash replay with
+`C = P(kgwctx_1, immutable context)` and
+`D_i = P(kgwlink1, [1, variant, i, C, encode(P_i)])`. C includes every compiled
+owner/Q/source schema, exact state/statement/object commitment, original proof
+projection, proposed result, mode and correction previously committed. Only the
+stage's carried P is separated into D_i. Every A computes C once; an internal
+continuation reuses those cells for its next digest.
+
+A_i hard-verifies its exact predecessor W key against recomputed D_(i-1) and
+V_(i-1). Hash binding gives equal C and P_(i-1) to the authenticated preceding
+A frame. That frame, through its exact source key, enforces the prior operation
+owners and hard fold. The current A fold still includes prior P plus the W
+opening, and every mandatory current Q/predecessor/incoming/source claim.
+W retains the A opening and original V part through the unchanged four-slot
+fold. Induction therefore retains every obligation without a history witness.
+Only the terminal A exports the final lineage frame; no internal digest is
+accepted as `kgwomg_1`. The compiled stage index is bounded and domain-separated.
+
+Independent local review found no omitted context or P/V obligation in this
+change. The old trace, its helper and private persisted copies are removed.
+This is a deliberate source re-key across all staged producers; captured earlier
+proofs establish their recorded sources only. Fresh layout, known/unknown parity,
+original-key import, context/current-P/W-V mutations, actual A/W proofs and final
+catalog qualification remain required for the new candidate.
+
+
+### Exact message halves in the immutable context
+
+Explicit Omega message projections now append low128 and
+`high127 + 2^127 * top1` to C. The private `LeElement` representation already
+constrains low128, high127 and Boolean top1. The combined high half is at most
+2^128−1, strictly below Fp; equality of the two native words therefore implies
+equality of every one of the256 original bits. No canonical-point or canonical-
+scalar assumption is needed, so malformed inputs retain total soft semantics.
+The fixed message count and original length remain bound, as do the independently
+owned active-tape commitment, decoded claims, result and opening. The native
+Archive Status preimage uses the same two little-endian16-byte halves. PIPA-R
+message decoding and terminal obligation selection still use their original
+constraints. This changes the Archive Status context source key; old three-word
+context proofs are not admitted as current evidence.
+
+Independent local review found no ambiguity in this encoding. The strict
+regression passes for zero, all-ones, mixed and limb-boundary bytes, every changed
+original byte and either changed public half, including bit255, with identical
+known/unknown fixed, permutation and advice layouts. Its captured executable and
+72.24s result are retained in `target/qualification/archive-two-half-context`;
+this is binding evidence, not a performance gate or complete Archive proof.

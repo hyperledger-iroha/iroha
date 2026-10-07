@@ -270,7 +270,7 @@ fn proving_key_artifact_rejects_source_encoding_allocation_and_commitment_change
         fn configure(_: &mut ConstraintSystem<F>) {
             panic!("invalid original reached configuration")
         }
-        fn synthesize(&self, _: (), _: impl Layouter<F>) -> Result<(), Error> {
+        fn synthesize(&self, (): (), _: impl Layouter<F>) -> Result<(), Error> {
             panic!("invalid original reached layout")
         }
     }

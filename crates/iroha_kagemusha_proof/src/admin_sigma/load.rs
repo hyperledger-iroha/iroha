@@ -1,18 +1,23 @@
-//! Load's private state transition, with voucher and map authentication in A.
+//! Load's private state transition, with ordinary receipt finality and map authentication in A.
 
 use iroha_plonk_gadgets::Word;
 
 use super::*;
 use crate::operation_relation::map_effects::{MapState, MapTransition};
 
-/// Canonical G1 state opening and associated public lineage prefix.
+/// Canonical G1 state opening and private 18-word sigma projection.
+///
+/// Load and Archive may use core burned/pending roots and an empty credit root
+/// in this projection before folding. This witness is not an authenticated Ω
+/// object. Their A relations independently authenticate the actual predecessor
+/// and adjusted state. Consuming sigma relations require that actual prefix.
 #[derive(Clone, Copy, Debug)]
 pub struct StateWitness {
     /// Exact 33-field state core.
     pub core: [Fp; CORE_FIELDS],
     /// Exact eight-field rest.
     pub rest: [Fp; REST_FIELDS],
-    /// Exact 18-field lineage prefix, authenticated by A's proof ownership.
+    /// Exact 18-field private projection for this operation's sigma relation.
     pub lineage: [Fp; 18],
 }
 impl From<&BootstrapWitness> for StateWitness {
@@ -28,7 +33,7 @@ impl From<&BootstrapWitness> for StateWitness {
 /// Load's original/successor openings and exact public statement preimage.
 #[derive(Clone, Copy, Debug)]
 pub struct LoadWitness {
-    /// State opened under the hard predecessor lineage proof.
+    /// Original core/rest opening; Load does not require a folded predecessor.
     pub predecessor: StateWitness,
     /// Newly committed state.
     pub successor: StateWitness,
@@ -38,7 +43,7 @@ pub struct LoadWitness {
 
 /// Load arithmetic, continuity and unchanged fields on the fixed k12 sigma class.
 ///
-/// A authenticates the finalized voucher and its issuer, binds its exact amount,
+/// A authenticates ordinary consensus finality for the receipt, binds its exact amount,
 /// ordinal and online charge, and proves the recovery-map insertion. The sigma
 /// opens both heads and binds the carried recovery root; it does not replace A.
 #[derive(Clone, Copy, Debug)]
@@ -141,8 +146,8 @@ impl Transition<'_> {
     ) -> Result<(), Error> {
         let (label, hash_rows) = match self.variant {
             Variant::Load => ("Load administrative sigma", BASE_HASH_ROWS),
-            Variant::Retiring => ("Retiring administrative sigma", BASE_HASH_ROWS),
             Variant::ArchiveReceive => ("ArchiveSent administrative sigma", BASE_HASH_ROWS),
+            Variant::Retiring => ("Retiring administrative sigma", BASE_HASH_ROWS),
             Variant::Unload => (
                 "Unload administrative sigma",
                 // Bootstrap's configuration does not fold the nullifier prefix.

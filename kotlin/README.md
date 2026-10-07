@@ -10,7 +10,7 @@ APIs using the JDK 21 toolchain. Run the Norito consumer suite with:
 ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.norito.*' --console=plain
 ```
 
-Account and public-key admission requires the ABI-25 `connect_norito_bridge`
+Account and public-key admission requires the ABI-26 `connect_norito_bridge`
 native library, including `nativeValidateAccountAddressCanonical`. Address
 construction and parsing use Rust to validate every key and complete multisig
 policy, then require identical canonical bytes. The V1 identity catalog includes
@@ -41,7 +41,7 @@ choice-free conviction update to Kotlin and Java callers. It emits the registere
 transaction encoding reject direction fields, noncanonical selectors, account
 addresses, quantities, durations, and malformed frames. The focused
 `UpdatePlainConviction*` Kotlin/Java-source tests compiled on 2026-09-24, but
-execution still requires a same-source ABI-25 native bridge for account
+execution still requires a same-source ABI-26 native bridge for account
 admission. This SDK slice does not establish Rust fixture parity or complete
 private standalone elections.
 
@@ -342,10 +342,12 @@ Android native artifacts, StrongBox, or physical devices.
 It covers the software key manager, explicit chain-context codecs, and shared
 SoraFS reference validators through the current canonical Kotlin/native API.
 
-The wallet module currently declares managed platform, payment-key and backup-rule
-unit tests. They check the private platform-upcall descriptors and direct adapter
-behavior. The Rust `KagemushaWalletPlatformV1` JNI adapter and native provider-open
-call remain TODO, so the module has no host-JNI test task or native execution claim.
+The wallet module has separate managed platform, payment-key and backup-rule tests
+and `:kagemusha-wallet-android:testDebugHostNative`, using the same explicit host
+library requirement. Its native checks cover malformed intake, closed handles,
+exact failure results and refusal to open without authenticated proof artifacts.
+They do not establish a working monetary provider, successful wallet operation,
+Android native artifact or physical-device qualification.
 
 ### Java transaction metadata
 
@@ -552,7 +554,7 @@ Lane observations do not confer finality.
 
 `KagemushaWalletWireV1` carries the KAGEMUSHA wallet V1 bounds, domain-separated
 20 SHA-256 digest roles, including the NEW unsigned app/enrollment policy identities,
-17 signing domains, envelope header validation and strict `kgm1:` text,
+16 signing domains, the unsigned ordinary Load receipt, envelope header validation and strict `kgm1:` text,
 matching the Rust owner `iroha_data_model::kagemusha::kagemusha_wallet_v1`. Every
 signature is ECDSA-P256-SHA256 over the 32-byte Poseidon message of its body, which
 the native core computes; the SDK checks it only as a canonical σ-field value.

@@ -7,6 +7,8 @@ mod bootstrap;
 #[allow(dead_code)] // Shared payer/receiver helpers are consumed by distinct test binaries.
 mod bootstrap_objects;
 mod common;
+#[path = "common/native_source_factory_checks.rs"]
+mod native_source_factory_checks;
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::{
     Mutation, SigmaRelation,
@@ -795,12 +797,14 @@ impl ContextCircuit {
                 hash_with_domain(u64::from_le_bytes(*b"kgwctap1"), &tape),
             ]);
         }
+        let base = hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words);
+        let mut words = vec![Fp::ONE, self.plan.schema()[1], Fp::ONE, base];
         let (x, y) = self.pallas.g().coordinates().unwrap();
         words.extend([Fp::from(16), x, y]);
         for u in self.pallas.challenges() {
             words.extend(foreign_limbs(u).map(Fp::from_u128));
         }
-        hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words)
+        hash_with_domain(u64::from_le_bytes(*b"kgwlink1"), &words)
     }
 }
 
@@ -938,7 +942,12 @@ impl ContextCircuit {
         };
 
         match action {
-            ContextAction::Digest => Ok(vec![self.plan.digest(chip, region, &input, &pallas)?]),
+            ContextAction::Digest => {
+                let base = self.plan.digest(chip, region, &input)?;
+                Ok(vec![
+                    self.plan.stage_digest(chip, region, 0, &base, &pallas)?,
+                ])
+            }
             ContextAction::First(source) => {
                 let proof = carrier(
                     chip,
@@ -1019,15 +1028,7 @@ impl ContextCircuit {
                     challenges.try_into().map_err(|_| Error::Synthesis)?,
                 )?;
                 let resumed = iroha_kagemusha_proof::a_relation::split::resume_context(
-                    chip,
-                    region,
-                    plan,
-                    &input,
-                    &[],
-                    &pallas,
-                    &vesta,
-                    &proof,
-                    &bindings,
+                    chip, region, plan, &input, &pallas, &vesta, &proof, &bindings,
                 )?;
                 if authentication.is_some() && source.signature_schema.is_none() {
                     return Err(Error::Synthesis);
@@ -1343,12 +1344,13 @@ impl SourceProfile {
     }
     /// Configure the exact named artifact profile.
     pub fn configure(self, meta: &mut ConstraintSystem<Fp>) -> VerifierConfig<Ep> {
+        let buses = self.range_buses();
         match self {
             Self::Generic => VerifierConfig::configure(meta),
-            Self::Serialized { buses } => {
+            Self::Serialized { .. } => {
                 VerifierConfig::configure_serialized_foreign(meta, buses).unwrap()
             }
-            Self::Tagged { buses } => {
+            Self::Tagged { .. } => {
                 VerifierConfig::configure_serialized_foreign_tagged(meta, buses).unwrap()
             }
         }
@@ -1440,6 +1442,8 @@ pub(crate) struct AuthenticatedBootstrap {
     pub(crate) pallas: AccumulatorT<Ep>,
     pub(crate) vesta_part: AccumulatorT<Eq>,
     pub(crate) state: iroha_kagemusha_proof::admin_sigma::BootstrapWitness,
+    /// σ, Q0, Q1, A1, W and A2 exact key bytes, for scheme-cycle regressions.
+    pub(crate) source_keys: [Vec<u8>; 6],
 }
 
 /// Build actual sigma/Q/A1/W/A2 proofs; optional tests do not alter the relation.
@@ -1506,6 +1510,27 @@ pub(crate) fn authenticated_bootstrap_with_identity(
     q_range_buses: Option<usize>,
     identity: BootstrapIdentity,
 ) -> AuthenticatedBootstrap {
+    authenticated_bootstrap_for_schemes(
+        adversarial,
+        omega_digest,
+        profile,
+        q_range_buses,
+        identity,
+        [1, 2],
+        [1, 2],
+    )
+    .expect("matching signed Bootstrap scheme")
+}
+
+fn authenticated_bootstrap_for_schemes(
+    adversarial: bool,
+    omega_digest: Fp,
+    profile: SourceProfile,
+    q_range_buses: Option<usize>,
+    identity: BootstrapIdentity,
+    scheme: [u128; 2],
+    certificate_scheme: [u128; 2],
+) -> Option<AuthenticatedBootstrap> {
     use iroha_kagemusha_proof::a_relation::{
         context::ContextPlan,
         split::{SplitPlan, WCircuit, WKey},
@@ -1513,7 +1538,8 @@ pub(crate) fn authenticated_bootstrap_with_identity(
     use iroha_kagemusha_proof::admin_sigma::{BOOTSTRAP_K, BootstrapCircuit};
     use iroha_kagemusha_proof::omega::OmegaWitness;
     eprintln!("BOOTSTRAP_SOURCE_PROFILE {profile:?} Q_buses={q_range_buses:?}");
-    let (mut initial, certificate, credential) = bootstrap_objects::enrollment_for(identity);
+    let (mut initial, certificate, credential) =
+        bootstrap_objects::enrollment_for_schemes(identity, scheme, certificate_scheme);
     initial.lineage[17] = omega_digest;
     let sigma = BootstrapCircuit::new(&initial);
     let sigma_params = common::vesta_params(BOOTSTRAP_K);
@@ -1808,6 +1834,16 @@ pub(crate) fn authenticated_bootstrap_with_identity(
                 .collect();
             panic!("A2 with signature leaf k16 capacity failure {error:?}: lanes{lanes:?}");
         });
+    if scheme != certificate_scheme {
+        assert!(
+            !last_check.is_satisfied(),
+            "valid signatures must not authorize a foreign certificate scheme"
+        );
+        eprintln!(
+            "BOOTSTRAP_FOREIGN_SCHEME_REJECTED signed_originals=true actual_sigma_q_a1_w=true terminal_proof=false"
+        );
+        return None;
+    }
     assert!(
         last_check.is_satisfied(),
         "{:?}",
@@ -1856,6 +1892,118 @@ pub(crate) fn authenticated_bootstrap_with_identity(
             vparams.clone(),
         )
         .unwrap();
+        native_source_factory_checks::assert_factories(
+            native_plan.context(),
+            &params,
+            &vparams,
+            &[&a1key, &a2key].map(|key| {
+                iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact::new(
+                    key.binding().clone(),
+                    key.vk().clone(),
+                )
+                .unwrap()
+            }),
+            &[
+                iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact::new(
+                    wprover.binding().clone(),
+                    wprover.vk().clone(),
+                )
+                .unwrap(),
+            ],
+            |stage, previous| native_plan.source_circuit(stage, previous),
+            |stage, binding, key| native_plan.wrapper_source(stage, binding, key),
+        );
+        // Installation has no operation input: fixed source, Q/root policy and
+        // authenticated verifier identities are selected before native prepare.
+        let originals = [
+            NativeBootstrapOriginal::from_key(&a1key),
+            NativeBootstrapOriginal::from_key(&wprover),
+            NativeBootstrapOriginal::from_key(&a2key),
+        ];
+        let config = native_bootstrap_read_config(&originals);
+        let install = install_native_bootstrap;
+        let installed = install(native_plan.clone(), &originals, config).unwrap();
+        assert_eq!(
+            installed.descriptors(),
+            [a1key.binding(), wprover.binding(), a2key.binding()]
+        );
+        for mutation in 0..8 {
+            let mut bad = originals.clone();
+            match mutation {
+                0 => bad[0].vk.clone_from(&originals[2].vk),
+                1 => bad[0].pk[44 + originals[0].vk.len()] ^= 1, // exact copy digest
+                2 => bad[0].pk[44 + originals[0].vk.len() + 32] ^= 1, // fixed table
+                3 => bad.swap(0, 2), // same descriptor, different installed stage source
+                4 => bad[1].descriptor.clone_from(&originals[0].descriptor),
+                5 => bad[0].pk.push(0),
+                6 => {
+                    bad[0].pk.pop();
+                }
+                _ => bad[2].vk.clone_from(&originals[0].vk),
+            }
+            assert!(
+                install(native_plan.clone(), &bad, config).is_err(),
+                "installed Bootstrap original mutation{mutation}"
+            );
+        }
+        for maximum_rows in [0, (1 << 16) - 1] {
+            assert!(
+                install(
+                    native_plan.clone(),
+                    &originals,
+                    iroha_plonk::keys::pk::artifact::ReadConfig {
+                        maximum_rows,
+                        ..config
+                    }
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            install(
+                native_plan.clone(),
+                &originals,
+                iroha_plonk::keys::pk::artifact::ReadConfig {
+                    maximum_bytes: 0,
+                    ..config
+                }
+            )
+            .is_err()
+        );
+        let descriptor =
+            iroha_plonk::cs::CircuitDescriptorV2::decode(&originals[0].descriptor).unwrap();
+        for mutation in 0..5 {
+            let mut wrong = descriptor.clone();
+            match mutation {
+                0 => wrong.instance_types[0] = InstanceType::Field,
+                1 => wrong.transcript = iroha_plonk::cs::TranscriptV2::KagemushaPoseidonRp57,
+                2 => wrong.instance_mode = iroha_plonk::cs::InstanceModeV1::Committed,
+                3 => wrong.proof_suffix = iroha_plonk::cs::ProofSuffixV1::None,
+                _ => wrong.instance_lengths[0] = 68,
+            }
+            let mut bad = originals.clone();
+            bad[0].descriptor = wrong.encode().unwrap();
+            assert!(
+                install(native_plan.clone(), &bad, config).is_err(),
+                "installed Bootstrap profile mutation{mutation}"
+            );
+        }
+        let changed_policy = native::Plan::new(
+            context.plan.operation().clone(),
+            iroha_kagemusha_proof::a_relation::bootstrap::BootstrapPolicy::new(
+                [31, 32],
+                bootstrap_objects::key(19),
+            )
+            .unwrap(),
+            signature.plan().clone(),
+            params.clone(),
+            vparams.clone(),
+        )
+        .unwrap();
+        assert!(
+            install(changed_policy, &originals, config).is_err(),
+            "installed policy constants must match A2's exact source"
+        );
         let input = native::Inputs {
             state: initial,
             sigma: first.source.sigma[4..].to_vec(),
@@ -1879,24 +2027,13 @@ pub(crate) fn authenticated_bootstrap_with_identity(
         let prepared = native_plan
             .prepare(input.clone(), MemoryBudget::DEFAULT)
             .unwrap();
+        let session = installed
+            .prepare(input.clone(), MemoryBudget::DEFAULT)
+            .unwrap();
         let actual_first = prepared.first_circuit();
-        // Import actual fixed recursive tables/VK originals, rather than regenerating a
-        // runtime key. Test key generation above is the offline artifact producer only.
-        let first_original = a1key.artifact_bytes_v2().unwrap();
-        let mounted_first = iroha_plonk::ProvingKey::from_artifact_v2(
-            &first_original,
-            a1key.binding(),
-            &vparams,
-            &actual_first,
-            iroha_plonk::keys::pk::artifact::ReadConfig {
-                maximum_bytes: first_original.len(),
-                maximum_rows: 1 << 16,
-                coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
-                msm_budget: MemoryBudget::DEFAULT,
-            },
-        )
-        .unwrap();
-        assert_eq!(mounted_first.artifact_bytes_v2().unwrap(), first_original);
+        // Offline fixture keys supply independent source/copy differentials;
+        // all native proofs below use keys mounted by the original-only owner.
+        let mounted_first = originals[0].metadata::<Eq>().unwrap();
         // Existing source artifacts must match the actual production fixed tables and copies.
         Witness::from_circuit(&a1key, &actual_first, &first_instances).unwrap();
         let first_check =
@@ -1905,52 +2042,64 @@ pub(crate) fn authenticated_bootstrap_with_identity(
             first_check.is_satisfied(),
             "production A1 retains all original constraints"
         );
-        let native_first = prepared
-            .prove_first(
-                &mounted_first,
-                common::recovery(189),
-                ProverConfig::default(),
-            )
+        assert!(matches!(
+            session.first(&a2key, common::recovery(76), ProverConfig::default()),
+            Err(native::Error::Artifact)
+        ));
+        let first_key = installed.import_first(&originals[0].pk, config).unwrap();
+        let native_first = session
+            .first(&first_key, common::recovery(76), ProverConfig::default())
             .unwrap();
+        drop(first_key);
+        assert_eq!(native_first.proof(), a1.proof);
         let (wrapper_circuit, _, _) = prepared
             .wrapper_circuit(
                 &native_first,
                 &mounted_first,
-                Fq::from(191),
+                Fq::from(31),
                 &FoldConfig::default(),
             )
             .unwrap();
-        let wrapper_original = wprover.artifact_bytes_v2().unwrap();
-        let mounted_wrapper = iroha_plonk::ProvingKey::from_artifact_v2(
-            &wrapper_original,
-            wprover.binding(),
-            &params,
-            &wrapper_circuit,
-            iroha_plonk::keys::pk::artifact::ReadConfig {
-                maximum_bytes: wrapper_original.len(),
-                maximum_rows: 1 << 16,
-                coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
-                msm_budget: MemoryBudget::DEFAULT,
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            mounted_wrapper.artifact_bytes_v2().unwrap(),
-            wrapper_original
-        );
-        let native_wrapper = prepared
-            .prove_wrapper(
+        let mounted_wrapper = &wprover;
+        assert!(matches!(
+            session.wrapper(
                 &native_first,
-                native::WrapperKeys {
-                    first: &mounted_first,
-                    wrapper: &mounted_wrapper,
-                },
-                Fq::from(191),
+                &signature_key,
+                Fq::from(31),
                 &FoldConfig::default(),
-                common::recovery(190),
+                common::recovery(77),
+                ProverConfig::default()
+            ),
+            Err(native::Error::Artifact)
+        ));
+        let wrapper_key = installed.import_wrapper(&originals[1].pk, config).unwrap();
+        let native_wrapper = session
+            .wrapper(
+                &native_first,
+                &wrapper_key,
+                Fq::from(31),
+                &FoldConfig::default(),
+                common::recovery(77),
                 ProverConfig::default(),
             )
             .unwrap();
+        drop(wrapper_key);
+        assert_eq!(native_wrapper.proof(), last.source.proof);
+        let wrapper_public = vec![
+            vec![Fq::from_repr(native_wrapper.context().to_repr()).unwrap()],
+            {
+                let (x, y) =
+                    Option::<(Fq, Fq)>::from(native_wrapper.vesta().g().coordinates()).unwrap();
+                vec![x, y]
+            },
+            native_wrapper
+                .vesta()
+                .challenges()
+                .iter()
+                .map(|value| Fq::from_repr(value.to_repr()).unwrap())
+                .collect(),
+        ];
+        Witness::from_circuit(mounted_wrapper, &wrapper_circuit, &wrapper_public).unwrap();
         let imported = WKey::from_artifact(
             &context.plan,
             0,
@@ -1993,49 +2142,39 @@ pub(crate) fn authenticated_bootstrap_with_identity(
             .terminal_circuit(
                 &native_wrapper,
                 &imported,
-                Fp::from(192),
+                Fp::from(32),
                 &FoldConfig::default(),
             )
             .unwrap();
         Witness::from_circuit(&a2key, &terminal_circuit, &[terminal_instances]).unwrap();
-        let terminal_original = a2key.artifact_bytes_v2().unwrap();
-        let mounted_terminal = iroha_plonk::ProvingKey::from_artifact_v2(
-            &terminal_original,
-            a2key.binding(),
-            &vparams,
-            &terminal_circuit,
-            iroha_plonk::keys::pk::artifact::ReadConfig {
-                maximum_bytes: terminal_original.len(),
-                maximum_rows: 1 << 16,
-                coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
-                msm_budget: MemoryBudget::DEFAULT,
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            mounted_terminal.artifact_bytes_v2().unwrap(),
-            terminal_original
-        );
-        let terminal = prepared
-            .prove_terminal(
+        assert!(matches!(
+            session.terminal(
                 &native_wrapper,
-                native::TerminalKeys {
-                    wrapper: &imported,
-                    terminal: &mounted_terminal,
-                },
-                Fp::from(192),
+                &a1key,
+                Fp::from(32),
                 &FoldConfig::default(),
-                common::recovery(193),
+                common::recovery(78),
+                ProverConfig::default()
+            ),
+            Err(native::Error::Artifact)
+        ));
+        let terminal_key = installed.import_terminal(&originals[2].pk, config).unwrap();
+        let terminal = session
+            .terminal(
+                &native_wrapper,
+                &terminal_key,
+                Fp::from(32),
+                &FoldConfig::default(),
+                common::recovery(78),
                 ProverConfig::default(),
             )
             .unwrap();
-        installed_native_source = Some((
-            native_plan.clone(),
-            input.clone(),
-            mounted_first,
-            mounted_wrapper,
-            mounted_terminal,
-        ));
+        drop(terminal_key);
+        assert_eq!(terminal.proof, a2.proof);
+        eprintln!(
+            "NATIVE_BOOTSTRAP_PARITY metadata_only_producer=true borrowed_stage_PK=true exact_original_proof_bytes=true"
+        );
+        installed_native_source = Some((installed, native_plan.clone(), input.clone()));
         terminal
             .pallas
             .decide(&params, MemoryBudget::DEFAULT)
@@ -2087,7 +2226,34 @@ pub(crate) fn authenticated_bootstrap_with_identity(
             witness,
         )
         .unwrap();
-        let (wrong_key, _) = WKey::keygen(&wrong_w, &params).unwrap();
+        let (wrong_key, wrong_prover) = WKey::keygen(&wrong_w, &params).unwrap();
+        if let Some((_, native_plan, _)) = &installed_native_source {
+            let originals = [
+                NativeBootstrapOriginal::from_key(&a1key),
+                NativeBootstrapOriginal::from_key(&wrong_prover),
+                NativeBootstrapOriginal::from_key(&a2key),
+            ];
+            assert!(
+                install_native_bootstrap(
+                    native_plan.clone(),
+                    &originals,
+                    native_bootstrap_read_config(&originals),
+                )
+                .is_err(),
+                "W0 original must retain the exact preceding A1 key digest"
+            );
+            let mut substituted_vk = originals.clone();
+            substituted_vk[1].pk = wprover.artifact_bytes_v2().unwrap();
+            assert!(
+                install_native_bootstrap(
+                    native_plan.clone(),
+                    &substituted_vk,
+                    native_bootstrap_read_config(&substituted_vk),
+                )
+                .is_err(),
+                "W0 PK must retain the independently installed W verifying key"
+            );
+        }
         for mutation in 0..15 {
             let mut bad = last.clone();
             match mutation {
@@ -2181,9 +2347,12 @@ pub(crate) fn authenticated_bootstrap_with_identity(
             .map(|column| column.iter().rposition(|v| *v).map_or(0, |row| row + 1))
             .collect();
         eprintln!("split A{stage} with 2V1F signature Q lanes={lanes:?}");
-        if adversarial {
+        {
             let unknown = synthesize(&circuit.without_witnesses(), 16, None).unwrap();
+            assert_eq!(known.cs, unknown.cs);
             assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+            assert_eq!(known.tables.selectors(), unknown.tables.selectors());
+            assert_eq!(known.tables.permutation(), unknown.tables.permutation());
             assert_eq!(
                 known.tables.advice_assigned(),
                 unknown.tables.advice_assigned()
@@ -2199,26 +2368,27 @@ pub(crate) fn authenticated_bootstrap_with_identity(
         pallas: pout,
         vesta_part: vout,
         state: initial,
+        source_keys: [
+            sigma_key.vk().to_bytes().to_vec(),
+            q.verifying_key().to_bytes().to_vec(),
+            signature_key.vk().to_bytes().to_vec(),
+            a1key.vk().to_bytes().to_vec(),
+            wprover.vk().to_bytes().to_vec(),
+            a2key.vk().to_bytes().to_vec(),
+        ],
     };
-    if let Some((plan, input, first_key, wrapper_key, terminal_key)) = installed_native_source {
-        use iroha_kagemusha_proof::a_relation::native::bootstrap::{CheckpointKind, Prover};
-        let first_key_digest = first_key
+    if let Some((prover, _, input)) = installed_native_source {
+        use iroha_kagemusha_proof::a_relation::native::bootstrap::CheckpointKind;
+        let first_key_digest = a1key
             .vk()
-            .kagemusha_digest(first_key.binding())
+            .kagemusha_digest(a1key.binding())
             .unwrap()
             .to_repr();
-        let wrapper_key_digest = wrapper_key
+        let wrapper_key_digest = wprover
             .vk()
-            .kagemusha_digest(wrapper_key.binding())
+            .kagemusha_digest(wprover.binding())
             .unwrap()
             .to_repr();
-        let prover = Prover::from_artifacts(
-            plan,
-            std::sync::Arc::new(first_key),
-            std::sync::Arc::new(wrapper_key),
-            std::sync::Arc::new(terminal_key),
-        )
-        .unwrap();
         assert_eq!(prover.descriptors().len(), 3);
         let session = prover.prepare(input, MemoryBudget::DEFAULT).unwrap();
         let first_checkpoint = session
@@ -2316,7 +2486,102 @@ pub(crate) fn authenticated_bootstrap_with_identity(
                 .is_err()
         );
     }
-    output
+    Some(output)
+}
+
+#[test]
+#[ignore = "two actual scheme-distinct Bootstrap chains plus signed foreign-scheme rejection"]
+fn bootstrap_keys_are_scheme_independent_and_signed_foreign_scope_rejects() {
+    let run = |scheme, certificate_scheme| {
+        authenticated_bootstrap_for_schemes(
+            false,
+            Fp::from(91),
+            SourceProfile::Tagged {
+                buses: iroha_kagemusha_proof::a_relation::native::bootstrap::SOURCE_RANGE_BUSES,
+            },
+            None,
+            BootstrapIdentity::Payer,
+            scheme,
+            certificate_scheme,
+        )
+    };
+    let first = run([1, 2], [1, 2]).unwrap();
+    let second = run([101, 102], [101, 102]).unwrap();
+    assert_ne!(first.state.core[1..3], second.state.core[1..3]);
+    assert_ne!(first.state.lineage[5], second.state.lineage[5]);
+    assert_eq!(first.binding, second.binding);
+    assert_eq!(
+        first.source_keys, second.source_keys,
+        "carried SchemeID must not change sigma/Q/A/W original keys"
+    );
+    assert!(run([1, 2], [101, 102]).is_none());
+    eprintln!(
+        "BOOTSTRAP_SCHEME_KEYS actual_chains=2 exact_source_keys=6 foreign_signed_scope_rejected=true full_catalog=false"
+    );
+}
+
+#[derive(Clone)]
+struct NativeBootstrapOriginal {
+    descriptor: Vec<u8>,
+    vk: Vec<u8>,
+    pk: Vec<u8>,
+}
+impl NativeBootstrapOriginal {
+    fn from_key<C: iroha_pasta::PastaCurve>(key: &iroha_plonk::ProvingKey<C>) -> Self {
+        Self {
+            descriptor: key.binding().encoded().to_vec(),
+            vk: key.vk().to_bytes().to_vec(),
+            pk: key.artifact_bytes_v2().unwrap(),
+        }
+    }
+    fn metadata<C: iroha_pasta::PastaCurve>(
+        &self,
+    ) -> Result<
+        iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact<C>,
+        iroha_kagemusha_proof::a_relation::native::bootstrap::Error,
+    > {
+        use iroha_kagemusha_proof::a_relation::native::{artifact::KeyArtifact, bootstrap::Error};
+        let binding = iroha_plonk::DescriptorBinding::decode_v2(&self.descriptor)
+            .map_err(|_| Error::Artifact)?;
+        let key =
+            iroha_plonk::VerifyingKey::read(&self.vk, &binding).map_err(|_| Error::Artifact)?;
+        KeyArtifact::new(binding, key).map_err(|_| Error::Artifact)
+    }
+}
+// The test owns original files, imports/releases each PK and returns only metadata.
+fn install_native_bootstrap(
+    plan: iroha_kagemusha_proof::a_relation::native::bootstrap::Plan,
+    originals: &[NativeBootstrapOriginal; 3],
+    config: iroha_plonk::keys::pk::artifact::ReadConfig,
+) -> Result<
+    iroha_kagemusha_proof::a_relation::native::bootstrap::Prover,
+    iroha_kagemusha_proof::a_relation::native::bootstrap::Error,
+> {
+    use iroha_kagemusha_proof::a_relation::native::bootstrap::Prover;
+    let prover = Prover::from_artifacts(
+        plan,
+        originals[0].metadata()?,
+        originals[1].metadata()?,
+        originals[2].metadata()?,
+    )?;
+    drop(prover.import_first(&originals[0].pk, config)?);
+    drop(prover.import_wrapper(&originals[1].pk, config)?);
+    drop(prover.import_terminal(&originals[2].pk, config)?);
+    Ok(prover)
+}
+fn native_bootstrap_read_config(
+    originals: &[NativeBootstrapOriginal; 3],
+) -> iroha_plonk::keys::pk::artifact::ReadConfig {
+    iroha_plonk::keys::pk::artifact::ReadConfig {
+        maximum_bytes: originals
+            .iter()
+            .map(|original| original.pk.len())
+            .max()
+            .unwrap(),
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    }
 }
 
 #[test]

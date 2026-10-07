@@ -65,6 +65,110 @@ pub struct ArchiveRetainedInputs<'a> {
     pub sigma: &'a ActiveBytes<Fp>,
 }
 
+/// Both exact retained proof commitments and their shared consuming digest.
+/// Authentication requires execution at the fixed retained-proofs owner.
+#[derive(Clone, Debug)]
+pub struct ArchiveRetainedProofs {
+    context: [ContextObjectCells; 2],
+    specs: [ContextObjectSpec; 2],
+}
+impl ArchiveRetainedProofs {
+    /// Hash every original byte and hard-enforce the complete Payment proof budget.
+    /// # Errors
+    /// Invalid capacities, oversized combined lengths or layout failure.
+    pub fn from_sources(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        omega: &ActiveBytes<Fp>,
+        sigma: &ActiveBytes<Fp>,
+    ) -> Result<Self, Error> {
+        let specs = ArchiveRetainedPayment::context_specs(omega.run().len(), sigma.run().len())?;
+        let specs = [specs[6], specs[7]];
+        let lanes = chip.operation_lanes()?;
+        let mut uint = UintChip::new(lanes.glue, lanes.range);
+        let within = crate::a_relation::receive::joint_length_valid(
+            &mut uint,
+            region,
+            omega.length(),
+            sigma.length(),
+        )?;
+        GlueChip::assert_constant(region, within.word(), Fp::ONE)?;
+        let left = omega.packed().length_prefixed(&mut uint, region)?;
+        let right = sigma.packed().length_prefixed(&mut uint, region)?;
+        let digest = left.concat(&mut uint, region, &right)?.digest(
+            &mut uint,
+            lanes.hash.sponge_mut()?,
+            region,
+            u64::from_le_bytes(*b"kgwprf_1"),
+        )?;
+        let mut context = Vec::new();
+        for (spec, carrier) in specs.into_iter().zip([omega, sigma]) {
+            context.push(ContextObjectCells::from_active(
+                chip, region, spec, &digest, carrier,
+            )?);
+        }
+        Ok(Self {
+            context: context.try_into().map_err(|_| Error::Synthesis)?,
+            specs,
+        })
+    }
+
+    fn from_context(
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        objects: &[ContextObjectCells],
+    ) -> Result<Self, Error> {
+        let specs: [ContextObjectSpec; 2] = plan
+            .object_specs()
+            .get(9..11)
+            .ok_or(Error::Synthesis)?
+            .try_into()
+            .map_err(|_| Error::Synthesis)?;
+        let expected = ArchiveRetainedPayment::context_specs(
+            specs[0].capacity as usize,
+            specs[1].capacity as usize,
+        )?;
+        if specs != [expected[6], expected[7]] {
+            return Err(Error::Synthesis);
+        }
+        let context: [ContextObjectCells; 2] = objects
+            .get(9..11)
+            .ok_or(Error::Synthesis)?
+            .to_vec()
+            .try_into()
+            .map_err(|_| Error::Synthesis)?;
+        GlueChip::assert_equal(
+            region,
+            context[0].authenticated_digest(),
+            context[1].authenticated_digest(),
+        )?;
+        Ok(Self { context, specs })
+    }
+
+    /// Bind both exact tapes at their mandatory owner, independent of soft evidence.
+    /// # Errors
+    /// Wrong owner/schema or any changed digest, original length or byte commitment.
+    pub fn bind_context(
+        &self,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        stage: u32,
+        input: &ContextInputs<'_>,
+    ) -> Result<(), Error> {
+        require_task(plan, stage, OperationTask::ArchiveRetainedProofs)?;
+        let expected = Self::from_context(region, plan, input.objects)?;
+        if self.specs != expected.specs {
+            return Err(Error::Synthesis);
+        }
+        for (a, b) in self.context.iter().zip(&expected.context) {
+            for (actual, expected) in a.commitment_words().iter().zip(b.commitment_words()) {
+                GlueChip::assert_equal(region, actual, &expected)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Hard original Payment binding shared by every evidence and removal owner.
 #[derive(Clone, Debug)]
 pub struct ArchiveRetainedPayment {
@@ -116,7 +220,8 @@ impl ArchiveRetainedPayment {
     /// No signature or proof verdict is inferred from these historical bytes.
     /// # Errors
     /// Wrong source size/schema, malformed retained objects, changed quoted
-    /// credential or inconsistent Payment/Send component addresses.
+    /// credential, oversized joint proof tape or inconsistent Payment/Send
+    /// component addresses.
     pub fn from_sources(
         chip: &mut VerifierChip<Ep>,
         bytes: &mut BytesChip<Fp>,
@@ -125,7 +230,49 @@ impl ArchiveRetainedPayment {
         sources: ArchiveRetainedSources<'_>,
         input: ArchiveRetainedInputs<'_>,
     ) -> Result<Self, Error> {
-        let specs = Self::context_specs(input.omega.run().len(), input.sigma.run().len())?;
+        let proofs = ArchiveRetainedProofs::from_sources(chip, region, input.omega, input.sigma)?;
+        Self::from_proof_cells(
+            chip,
+            bytes,
+            region,
+            policy,
+            sources,
+            input.statement,
+            &proofs,
+        )
+    }
+
+    /// Derive signed Payment semantics from the two fixed context proof commitments.
+    /// The mandatory `ArchiveRetainedProofs` owner must independently derive both
+    /// commitments and enforce the joint envelope bound before terminal closure.
+    /// # Errors
+    /// Wrong full source schema, unequal proof digests or inconsistent signed sources.
+    pub fn from_committed_proofs(
+        chip: &mut VerifierChip<Ep>,
+        bytes: &mut BytesChip<Fp>,
+        region: &mut Region<'_, Fp>,
+        policy: OwnPolicy,
+        sources: ArchiveRetainedSources<'_>,
+        statement: &[Word<Fp>; 26],
+        context: (&ContextPlan, &ContextInputs<'_>),
+    ) -> Result<Self, Error> {
+        let proofs = ArchiveRetainedProofs::from_context(region, context.0, context.1.objects)?;
+        Self::from_proof_cells(chip, bytes, region, policy, sources, statement, &proofs)
+    }
+
+    fn from_proof_cells(
+        chip: &mut VerifierChip<Ep>,
+        bytes: &mut BytesChip<Fp>,
+        region: &mut Region<'_, Fp>,
+        policy: OwnPolicy,
+        sources: ArchiveRetainedSources<'_>,
+        fields: &[Word<Fp>; 26],
+        proofs: &ArchiveRetainedProofs,
+    ) -> Result<Self, Error> {
+        let specs = Self::context_specs(
+            proofs.specs[0].capacity as usize,
+            proofs.specs[1].capacity as usize,
+        )?;
         let mut objects = Vec::new();
         let mut context = Vec::new();
         for ((kind, source), spec) in KINDS.into_iter().zip(sources.signed).zip(specs) {
@@ -152,7 +299,7 @@ impl ArchiveRetainedPayment {
             )?);
             objects.push(object);
         }
-        let scope = policy.scope(chip, region)?;
+        let provider = policy.provider(chip, region)?;
         let run = bytes.run(
             region,
             sources.payment,
@@ -161,20 +308,12 @@ impl ArchiveRetainedPayment {
         )?;
         let lanes = chip.operation_lanes()?;
         let mut uint = UintChip::new(lanes.glue, lanes.range);
-        let left = input.omega.packed().length_prefixed(&mut uint, region)?;
-        let right = input.sigma.packed().length_prefixed(&mut uint, region)?;
-        let proof_digest = left.concat(&mut uint, region, &right)?.digest(
-            &mut uint,
-            lanes.hash.sponge_mut()?,
-            region,
-            u64::from_le_bytes(*b"kgwprf_1"),
-        )?;
         let statement = IncomingStatementCells::constrain(
             &mut uint,
             lanes.hash,
             region,
             Variant::Send,
-            input.statement,
+            fields,
         )?;
         let request = RequestCells::check(&mut uint, lanes.hash, region, &objects[0])?;
         let payer = CredentialCells::check(&mut uint, region, &objects[1])?;
@@ -205,8 +344,8 @@ impl ArchiveRetainedPayment {
                 payer: &payer,
                 statement: &statement,
                 receipt: &objects[2],
-                provider: &scope.provider,
-                proof_digest: &proof_digest,
+                provider: &provider,
+                proof_digest: proofs.context[0].authenticated_digest(),
             },
         )?;
         GlueChip::assert_constant(region, payment.valid().word(), Fp::ONE)?;
@@ -223,15 +362,7 @@ impl ArchiveRetainedPayment {
             specs[5],
             statement.fields(),
         )?);
-        for (spec, carrier) in [(specs[6], input.omega), (specs[7], input.sigma)] {
-            context.push(ContextObjectCells::from_active(
-                chip,
-                region,
-                spec,
-                &proof_digest,
-                carrier,
-            )?);
-        }
+        context.extend(proofs.context.iter().cloned());
         context.push(ContextObjectCells::from_internal_words(
             chip,
             region,
@@ -269,8 +400,9 @@ impl ArchiveRetainedPayment {
     }
 
     /// Bind this hard owner to the common context, own wallet and credit.
-    /// The terminal Effects owner must authenticate both removals using the
-    /// descriptor committed at slot11. Incoming evidence may not gate this task.
+    /// The `CorePending` and terminal Effects owners must authenticate their
+    /// respective removals using the descriptor committed at slot11.
+    /// Incoming evidence may not gate this task.
     /// # Errors
     /// Wrong owner/schema, another wallet/credit or substituted retained source.
     pub fn bind_context(
@@ -320,3 +452,6 @@ impl ArchiveRetainedPayment {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

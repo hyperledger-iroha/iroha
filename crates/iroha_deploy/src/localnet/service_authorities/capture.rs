@@ -2,8 +2,11 @@
 
 use super::*;
 use iroha_config_base::file_source::{ConfigFileAccess, ConfigFileRequest, ConfigFileSource};
-use iroha_fs::PrivateDirectory;
-use std::{ffi::OsString, io};
+use iroha_fs::{PrivateDirectory, PrivateFileComparison};
+use std::{
+    ffi::{OsStr, OsString},
+    io,
+};
 
 const MAX_CONFIG: usize = 1024 * 1024;
 const MAX_IDENTITY: usize = 512;
@@ -95,14 +98,31 @@ impl CapturedDirectory {
         }
     }
 
-    // The sole caller brackets the complete image with native custody and closed-name checks.
-    // Each canonical read below still revalidates its retained directory before and after I/O.
+    // The sole caller still brackets all eleven directories with their original inventories.
+    // Borrow the already bounded inputs into one closed read transaction per nonempty directory;
+    // no plaintext is copied and every file keeps private native admission, including public
+    // config-loader inputs. This does not create an atomic whole-profile snapshot.
     fn compare_inputs(&self) -> crate::managed::Result<()> {
-        for input in &self.inputs {
-            let current = self.directory.read(input.name, input.maximum)?;
-            if current != input.bytes {
-                return Err(invalid());
-            }
+        if self.inputs.is_empty() {
+            return Ok(());
+        }
+        let mut comparisons = [PrivateFileComparison {
+            name: OsStr::new(""),
+            maximum: 0,
+            expected: &[],
+        }; INPUT_COUNT];
+        let selected = comparisons
+            .get_mut(..self.inputs.len())
+            .ok_or_else(invalid)?;
+        for (comparison, input) in selected.iter_mut().zip(&self.inputs) {
+            *comparison = PrivateFileComparison {
+                name: OsStr::new(input.name),
+                maximum: input.maximum,
+                expected: input.bytes.as_slice(),
+            };
+        }
+        if !self.directory.compare_files(selected)? {
+            return Err(invalid());
         }
         Ok(())
     }
@@ -417,3 +437,7 @@ pub(super) fn count_semantic_validations<T>(action: impl FnOnce() -> T) -> (T, u
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "capture/batch_comparison_tests.rs"]
+mod batch_comparison_tests;

@@ -126,7 +126,7 @@ impl Circuit<Fp> for Claims {
 impl Claims {
     fn fixture() -> Self {
         let variant = Variant::RefreshQuotaShare;
-        let policy = OwnPolicy::new([1, 2], [3, 4], Affine::GENERATOR).unwrap();
+        let policy = OwnPolicy::new([3, 4], Affine::GENERATOR).unwrap();
         let operation = operation(
             variant,
             &RefreshStagePlan::signature_schemas(policy).unwrap(),
@@ -266,7 +266,7 @@ fn quota_proposals_require_complete_owners_exact_schema_and_root_only_stage() {
     {
         let mut wrong = c.clone();
         wrong.originals.variant = variant;
-        let policy = OwnPolicy::new([1, 2], [3, 4], Affine::GENERATOR).unwrap();
+        let policy = OwnPolicy::new([3, 4], Affine::GENERATOR).unwrap();
         let op = super::operation(
             variant,
             &RefreshStagePlan::signature_schemas(policy).unwrap(),

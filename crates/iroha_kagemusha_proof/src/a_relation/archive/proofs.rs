@@ -2,8 +2,9 @@
 
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region};
-use iroha_plonk_gadgets::{GlueChip, UintChip};
+use iroha_plonk_gadgets::{Bit, GlueChip, UintChip};
 use iroha_plonk_recursion::{
+    accumulation_circuit::FoldInputCells,
     obligation::ledger::Variant,
     verifier::{VerifierChip, VerifierKeyCells},
 };
@@ -41,6 +42,16 @@ pub enum ArchiveProofInputs<'a> {
     Receive(&'a SigmaBindingCells),
     /// Status Omega key, whose identity must equal the current lineage's key.
     Status(&'a VerifierKeyCells<Ep>),
+}
+
+/// Constrained original proof result used to prepare Archive's committed claims.
+/// These cells do not replace the mandatory staged proof owner.
+#[derive(Clone, Debug)]
+pub(crate) struct ArchiveDerivedProofs {
+    /// Complete total-verifier verdict, including original decoder results.
+    pub valid: Bit<Fp>,
+    /// Original Status verifier opening, retained even for a false verdict.
+    pub opening: Option<FoldInputCells<Ep>>,
 }
 impl ArchiveProofSources {
     pub(super) fn require_context_slot(&self, index: usize) -> Result<(), Error> {
@@ -106,11 +117,35 @@ impl ArchiveProofSources {
             crate::a_relation::schedule::OperationTask::ArchiveProofs,
         )?;
         claims.bind_context(region, plan, input)?;
+        let derived = self.derive_proofs(chip, region, plan, input, proof)?;
+        if let Some(opening) = &derived.opening {
+            bind_claim(region, claims.opening()?, opening)?;
+        }
+        claims.bind_derived(
+            region,
+            plan,
+            stage,
+            input,
+            ArchiveResultTag::Proofs,
+            &derived.valid,
+        )
+    }
+
+    // Native witness preparation evaluates the same source-bound constraints.
+    // Only the fixed owner may authenticate the proposed result in a stage proof.
+    pub(crate) fn derive_proofs(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        input: &ContextInputs<'_>,
+        proof: ArchiveProofInputs<'_>,
+    ) -> Result<ArchiveDerivedProofs, Error> {
         let spec = *plan
             .object_specs()
             .get(self.raw_slot)
             .ok_or(Error::Synthesis)?;
-        let (context, valid) = match (&self.source, proof) {
+        let (context, valid, opening) = match (&self.source, proof) {
             (Source::Receive(sigma), ArchiveProofInputs::Receive(own)) => {
                 if plan.operation().frame().variant() != Variant::ArchiveReceive {
                     return Err(Error::Synthesis);
@@ -136,7 +171,11 @@ impl ArchiveProofSources {
                     sigma.step_digest()?,
                     sigma.active_carrier()?,
                 )?;
-                (context, result.incoming_valid.ok_or(Error::Synthesis)?)
+                (
+                    context,
+                    result.incoming_valid.ok_or(Error::Synthesis)?,
+                    None,
+                )
             }
             (Source::Status(transport), ArchiveProofInputs::Status(key)) => {
                 if plan.operation().frame().variant() != Variant::ArchiveStatus {
@@ -171,7 +210,6 @@ impl ArchiveProofSources {
                     key,
                     input.successor.public.omega_key_digest(),
                 )?;
-                bind_claim(region, claims.opening()?, &omega.opening)?;
                 let carrier = transport.active_carrier()?;
                 let lanes = chip.operation_lanes()?;
                 let digest = carrier.packed().digest(
@@ -182,7 +220,7 @@ impl ArchiveProofSources {
                 )?;
                 let context =
                     ContextObjectCells::from_active(chip, region, spec, &digest, carrier)?;
-                (context, omega.valid)
+                (context, omega.valid, Some(omega.opening))
             }
             _ => return Err(Error::Synthesis),
         };
@@ -194,6 +232,6 @@ impl ArchiveProofSources {
         {
             GlueChip::assert_equal(region, a, &b)?;
         }
-        claims.bind_derived(region, plan, stage, input, ArchiveResultTag::Proofs, &valid)
+        Ok(ArchiveDerivedProofs { valid, opening })
     }
 }

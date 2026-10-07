@@ -409,7 +409,7 @@ pub struct SendAuthorizationObjects {
 pub struct SendAuthorization<'a> {
     /// The same original certificate and receipt committed by context.
     pub objects: &'a SendAuthorizationObjects,
-    /// Fixed artifact's scheme/provider/root identity.
+    /// Fixed artifact's provider/root policy; the own state carries scheme identity.
     pub policy: OwnPolicy,
     /// Opaque Q1 exports, ordered receipt, current credential, fixed-root certificate.
     pub signature: super::SignatureQContext<'a>,
@@ -516,7 +516,7 @@ impl SendAuthorizationObjects {
                 statement,
             },
         )?;
-        let provider = auth.policy.scope(chip, region)?.provider;
+        let provider = auth.policy.provider(chip, region)?;
         let key = core::array::from_fn(|i| input.predecessor.lineage.fields()[9 + i].clone());
         let signature =
             self.objects[1].bind_signature(region, &auth.signature.bundle.slots()[0], &key)?;

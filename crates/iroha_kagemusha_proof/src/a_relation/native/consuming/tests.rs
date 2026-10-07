@@ -265,3 +265,86 @@ fn uniform_omega_transport_cap_rejects_generic_profiles_without_a_fallback() {
         );
     }
 }
+
+#[test]
+fn consuming_lineage_tape_preserves_exact_public_and_both_complete_claim_originals() {
+    let ep = iroha_plonk::transcript::decode_point::<Ep>(
+        &iroha_plonk_recursion::PALLAS_TRIVIAL_GENERATOR,
+    )
+    .unwrap();
+    let eq = iroha_plonk::transcript::decode_point::<Eq>(
+        &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
+    )
+    .unwrap();
+    // Encoding fixtures, not deciding accumulator witnesses or accepted financial proofs.
+    let p = AccumulatorT::new(ep, [Fq::ONE; K]).unwrap();
+    let v = AccumulatorT::new(eq, [Fp::ONE; K]).unwrap();
+    let mut fields = core::array::from_fn(|i| Fp::from(i as u64 + 1));
+    fields[0] = Fp::ONE;
+    let proof = (0..64).collect::<Vec<_>>();
+    let original = lineage_bytes(&fields, &proof, &p, &v).unwrap();
+    assert_eq!(original.len(), 320 + 64 + 2 * 544);
+    assert_eq!(&original[..2], &[1, 0]);
+    assert_eq!(&original[320..384], proof);
+    assert_eq!(&original[384..928], p.to_bytes());
+    assert_eq!(&original[928..], v.to_bytes());
+    // Exactly the original public transcript; the admitted VK digest is already
+    // constrained by the verified predecessor and is not a second copied field.
+    assert_eq!(original[162], 4);
+    assert_eq!(
+        &original[163..179],
+        fields[10].to_repr()[..16]
+            .iter()
+            .rev()
+            .copied()
+            .collect::<Vec<_>>()
+    );
+    for index in 1..17 {
+        let mut changed = fields;
+        changed[index] += Fp::ONE;
+        assert_ne!(
+            lineage_bytes(&changed, &proof, &p, &v).unwrap(),
+            original,
+            "public field {index}"
+        );
+    }
+    let mut changed = proof.clone();
+    changed[63] ^= 1;
+    assert_ne!(lineage_bytes(&fields, &changed, &p, &v).unwrap(), original);
+    let p2 = AccumulatorT::new(ep, [Fq::from(2); K]).unwrap();
+    assert_ne!(lineage_bytes(&fields, &proof, &p2, &v).unwrap(), original);
+    let v2 = AccumulatorT::new(eq, [Fp::from(2); K]).unwrap();
+    assert_ne!(lineage_bytes(&fields, &proof, &p, &v2).unwrap(), original);
+    for index in [1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 14] {
+        let mut changed = fields;
+        changed[index] = Fp::from(2).pow_vartime([128]);
+        assert_eq!(lineage_bytes(&changed, &proof, &p, &v), Err(Error::Input));
+    }
+    let mut bad = fields;
+    bad[13] = Fp::from(2).pow_vartime([104]);
+    assert_eq!(lineage_bytes(&bad, &proof, &p, &v), Err(Error::Input));
+    bad = fields;
+    bad[0] = Fp::from(2);
+    assert_eq!(lineage_bytes(&bad, &proof, &p, &v), Err(Error::Input));
+}
+
+#[test]
+fn original_bounds_reject_missing_oversized_and_over_domain_tables() {
+    let config = ReadConfig {
+        maximum_bytes: 16,
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    assert_eq!(original_bounds(&[], 1 << 16, config), Err(Error::Artifact));
+    assert_eq!(
+        original_bounds(&[0; 17], 1 << 16, config),
+        Err(Error::Artifact)
+    );
+    assert_eq!(
+        original_bounds(&[0; 16], (1 << 16) + 1, config),
+        Err(Error::Artifact)
+    );
+    assert_eq!(original_bounds(&[0; 16], 1 << 16, config), Ok(()));
+    // Passing these bounds alone never parses or admits an original proving key.
+}

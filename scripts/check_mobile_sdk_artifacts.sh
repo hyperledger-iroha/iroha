@@ -479,7 +479,8 @@ REQUIRED_PROTOCOL_C_SYMBOLS=(
   connect_norito_kagemusha_wallet_open_v1
   connect_norito_kagemusha_wallet_close_v1
   connect_norito_kagemusha_wallet_activity_v1
-  connect_norito_kagemusha_wallet_commit_v1
+  connect_norito_kagemusha_wallet_execute_v1
+  connect_norito_kagemusha_wallet_request_status_v1
   connect_norito_kagemusha_wallet_retry_v1
   connect_norito_kagemusha_wallet_resume_v1
   connect_norito_kagemusha_wallet_fold_v1
@@ -493,6 +494,10 @@ REQUIRED_WALLET_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_activity
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot
+)
+REQUIRED_AUTH_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_reserve
+  Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_restore
 )
 RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS=(
   connect_norito_private_settlement_auditor_capsule_response
@@ -530,7 +535,7 @@ check_binary_symbols() {
   [[ -n "$symbols" ]] || { fail "$label has no inspectable exported symbols"; return; }
   local symbol
   if [[ "$nm_mode" == "elf" ]]; then
-    for symbol in "${REQUIRED_WALLET_JNI_SYMBOLS[@]}"; do
+    for symbol in "${REQUIRED_WALLET_JNI_SYMBOLS[@]}" "${REQUIRED_AUTH_JNI_SYMBOLS[@]}"; do
       if ! grep -Fxq "$symbol" <<<"$symbols"; then
         fail "$label is missing $symbol"
       fi

@@ -1,15 +1,21 @@
 //! Genuine two-curve source composition and adversarial endpoint binding.
 
+use super::super::tree::{IntervalTree, NodeRandomness, TreeImportConfig};
 use super::*;
+use crate::finality::continuity::producer::{self, OriginalArtifact, SourceCircuit};
 use crate::omega::{OmegaCircuit, OmegaWitness};
+use iroha_pasta::Fq;
 use iroha_pasta::msm::MemoryBudget;
+use iroha_plonk::verifier::verify_full;
 use iroha_plonk::{
     ProverConfig, ProverRandomness, ProvingKey, Witness,
     check::{CheckMode, check_circuit},
     create_proof_owned_with_claim,
     cs::InstanceType,
-    keys::{KeygenConfigV2, keygen_pk_v2},
+    frontend::{Value, synthesize},
+    keys::{CosetCachePolicy, KeygenConfigV2, keygen_pk_v2, pk::artifact::ReadConfig},
 };
+use iroha_plonk_recursion::{FoldInput, create_fold};
 use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
 
 // This deliberately small source program increments both its cursor and state.
@@ -18,9 +24,21 @@ use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
 struct Increment {
     endpoints: [Fp; 6],
     known: bool,
+    step: u64,
 }
+impl producer::sealed::Source for Increment {
+    fn exports(
+        &self,
+        pallas: &PinnedParams<Ep>,
+        vesta: &PinnedParams<Eq>,
+        budget: MemoryBudget,
+    ) -> Result<producer::Exports, producer::Error> {
+        producer::leaf_exports(self.endpoints, pallas, vesta, budget)
+    }
+}
+impl SourceCircuit for Increment {}
 impl Circuit<Fp> for Increment {
-    type Config = SourceMergeConfig;
+    type Config = SourcePairConfig;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();
     fn without_witnesses(&self) -> Self {
@@ -59,7 +77,7 @@ impl Circuit<Fp> for Increment {
                     let plus_one = chip.uint().glue().linear(
                         &mut region,
                         &[(Fp::ONE, &words[before])],
-                        Fp::ONE,
+                        Fp::from(self.step),
                     )?;
                     GlueChip::assert_equal(&mut region, &plus_one, &words[after])?;
                 }
@@ -83,18 +101,24 @@ fn randomness(seed: u8) -> ProverRandomness<'static> {
 struct Wrapped {
     evidence: SourceNodeEvidence,
     key: ProvingKey<Ep>,
+    source: SourceVerifier,
+    originals: super::super::tree::OriginalPair,
 }
 
-fn wrap<C: Circuit<Fp>>(
+fn wrap<C: SourceCircuit>(
     circuit: &C,
-    frame: [Fp; 69],
-    endpoints: [Fp; 6],
-    pallas: AccumulatorT<Ep>,
-    parts: [AccumulatorT<Eq>; 2],
+    substitution: Option<&C>,
+    exports: producer::Exports,
     pparams: &PinnedParams<Ep>,
     vparams: &PinnedParams<Eq>,
     seed: u8,
 ) -> Wrapped {
+    let producer::Exports {
+        frame,
+        endpoints,
+        pallas,
+        parts,
+    } = exports;
     let budget = MemoryBudget::DEFAULT;
     let public = vec![frame.to_vec()];
     let report = check_circuit(circuit, 16, &public, CheckMode::Strict).unwrap();
@@ -153,7 +177,7 @@ fn wrap<C: Circuit<Fp>>(
         },
     )
     .unwrap();
-    let mut evidence = SourceNodeEvidence {
+    let evidence = SourceNodeEvidence {
         endpoints,
         proof: Vec::new(),
         pallas,
@@ -162,32 +186,108 @@ fn wrap<C: Circuit<Fp>>(
     let public = evidence.instances().unwrap();
     let report = check_circuit(&wrapper, 16, &public, CheckMode::Strict).unwrap();
     assert!(report.is_satisfied(), "{:?}", report.failures().first());
+    let source_descriptor = key.binding().encoded().to_vec();
+    let source_verifying = key.vk().to_bytes().to_vec();
+    let source_proving = key.artifact_bytes_v2().unwrap();
+    drop(key);
     let key = keygen_pk_v2(
         pparams,
         &wrapper,
         &KeygenConfigV2::pipa_r(OmegaPlan::instance_types().to_vec()),
     )
     .unwrap();
-    let output = create_proof_owned_with_claim(
-        pparams,
-        &key,
-        Witness::from_circuit(&key, &wrapper, &public).unwrap(),
-        randomness(seed + 1),
-        ProverConfig::default(),
+    let wrapper_pk = key.artifact_bytes_v2().unwrap();
+    let read = ReadConfig {
+        maximum_bytes: source_proving.len().max(wrapper_pk.len()),
+        maximum_rows: 1 << 16,
+        coset_cache: CosetCachePolicy::OnDemand,
+        msm_budget: budget,
+    };
+    let source = OriginalArtifact {
+        descriptor: &source_descriptor,
+        verifying_key: &source_verifying,
+        proving_key: &source_proving,
+    };
+    let outer = OriginalArtifact {
+        descriptor: key.binding().encoded(),
+        verifying_key: key.vk().to_bytes(),
+        proving_key: &wrapper_pk,
+    };
+    let imported = producer::Prover::from_original_artifacts(
+        circuit,
+        source,
+        outer,
+        pparams.clone(),
+        vparams.clone(),
+        read,
     )
     .unwrap();
-    output.opening.decide(pparams, budget).unwrap();
-    verify_full(
-        pparams,
-        key.binding(),
-        key.vk(),
-        &public,
-        &output.proof,
-        budget,
-    )
-    .unwrap();
-    evidence.proof = output.proof;
-    Wrapped { evidence, key }
+    assert_eq!(imported.binding(), key.binding());
+    assert_eq!(imported.verifying_key().to_bytes(), key.vk().to_bytes());
+    if let Some(substitution) = substitution {
+        assert!(
+            producer::Prover::from_original_artifacts(
+                substitution,
+                source,
+                outer,
+                pparams.clone(),
+                vparams.clone(),
+                read,
+            )
+            .is_err(),
+            "different fixed source must fail original-key import"
+        );
+        assert!(
+            imported
+                .prove(
+                    substitution,
+                    [seed; 32],
+                    randomness(seed),
+                    randomness(seed + 1),
+                    ProverConfig::default(),
+                )
+                .is_err(),
+            "a proof witness cannot replace the imported fixed source"
+        );
+    }
+    let evidence = imported
+        .prove(
+            circuit,
+            Fq::from(u64::from(seed)).to_repr(),
+            randomness(seed),
+            randomness(seed + 1),
+            ProverConfig::default(),
+        )
+        .unwrap();
+    assert_eq!(evidence.instances().unwrap(), public);
+    imported.verify_evidence(&evidence, budget).unwrap();
+    let mut changed = evidence.clone();
+    changed.endpoints[5] += Fp::ONE;
+    assert!(imported.verify_evidence(&changed, budget).is_err());
+    let mut changed = evidence.clone();
+    changed.proof[0] ^= 1;
+    assert!(imported.verify_evidence(&changed, budget).is_err());
+    let mut changed = evidence.clone();
+    changed.proof.push(0);
+    assert!(imported.verify_evidence(&changed, budget).is_err());
+    let source = imported.qualified_source().unwrap();
+    Wrapped {
+        evidence,
+        originals: super::super::tree::OriginalPair {
+            source: super::super::tree::OriginalBytes {
+                descriptor: source_descriptor,
+                verifying_key: source_verifying,
+                proving_key: source_proving,
+            },
+            wrapper: super::super::tree::OriginalBytes {
+                descriptor: key.binding().encoded().to_vec(),
+                verifying_key: key.vk().to_bytes().to_vec(),
+                proving_key: wrapper_pk,
+            },
+        },
+        key,
+        source,
+    }
 }
 
 #[test]
@@ -200,15 +300,24 @@ fn genuine_source_merge_retains_both_curves_and_rejects_substitution() {
     let v = AccumulatorT::trivial(&vparams, budget).unwrap();
     let wrapped = [0u64, 1].map(|cursor| {
         let endpoints = [901, 902, cursor, cursor + 1, 10 + cursor, 11 + cursor].map(Fp::from);
-        wrap(
-            &Increment {
-                endpoints,
-                known: true,
-            },
-            leaf_frame_native(endpoints).unwrap(),
+        let circuit = Increment {
             endpoints,
-            p.clone(),
-            [v.clone(), v.clone()],
+            known: true,
+            step: 1,
+        };
+        let wrong = Increment {
+            step: 2,
+            ..circuit.clone()
+        };
+        wrap(
+            &circuit,
+            Some(&wrong),
+            producer::Exports {
+                frame: leaf_frame_native(endpoints).unwrap(),
+                endpoints,
+                pallas: p.clone(),
+                parts: [v.clone(), v.clone()],
+            },
             &pparams,
             &vparams,
             10 + u8::try_from(cursor).unwrap() * 2,
@@ -220,16 +329,7 @@ fn genuine_source_merge_retains_both_curves_and_rejects_substitution() {
         wrapped[0].key.vk().to_bytes(),
         wrapped[1].key.vk().to_bytes()
     );
-    let plan = SourceMergePlan::new(
-        wrapped.each_ref().map(|w| {
-            (
-                VerifierPlan::new(w.key.binding().clone(), pparams.clone()).unwrap(),
-                w.key.vk().clone(),
-            )
-        }),
-        &pparams,
-    )
-    .unwrap();
+    let plan = SourcePairPlan::new(wrapped.each_ref().map(|w| w.source.clone()), &pparams).unwrap();
     let children = wrapped.each_ref().map(|w| w.evidence.clone());
     let circuit = SourceMergeCircuit::prepare(
         plan.clone(),
@@ -240,18 +340,27 @@ fn genuine_source_merge_retains_both_curves_and_rejects_substitution() {
     )
     .unwrap();
     let public = vec![circuit.instances().to_vec()];
+    let blank = SourceMergeCircuit::for_source(plan.clone()).unwrap();
+    let known = synthesize(&circuit, 16, Some(&public)).unwrap();
+    let unknown = synthesize(&blank, 16, None).unwrap();
+    assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+    assert_eq!(
+        known.tables.advice_assigned(),
+        unknown.tables.advice_assigned()
+    );
+    drop((known, unknown));
     let report = check_circuit(&circuit, 16, &public, CheckMode::Strict).unwrap();
     assert!(report.is_satisfied(), "{:?}", report.failures().first());
     for (side, field) in [(0, 0), (0, 1), (0, 4), (1, 3), (1, 5)] {
         let mut forged = circuit.clone();
-        forged.children[side].endpoints[field] += Fp::ONE;
+        forged.pair.children[side].endpoints[field] += Fp::ONE;
         assert!(
             !check_circuit(&forged, 16, &public, CheckMode::Strict).is_ok_and(|r| r.is_satisfied()),
             "substituted endpoint {side}/{field}"
         );
     }
     let mut forged = circuit.clone();
-    forged.fold[32] ^= 1;
+    forged.pair.fold[32] ^= 1;
     assert!(
         !check_circuit(&forged, 16, &public, CheckMode::Strict).is_ok_and(|r| r.is_satisfied()),
         "substituted four-obligation fold"
@@ -276,10 +385,13 @@ fn genuine_source_merge_retains_both_curves_and_rejects_substitution() {
     }
     let result = wrap(
         &circuit,
-        *circuit.instances(),
-        *circuit.endpoints(),
-        circuit.pallas().clone(),
-        children.each_ref().map(|c| c.vesta.clone()),
+        None,
+        producer::Exports {
+            frame: *circuit.instances(),
+            endpoints: *circuit.endpoints(),
+            pallas: circuit.pallas().clone(),
+            parts: children.each_ref().map(|c| c.vesta.clone()),
+        },
         &pparams,
         &vparams,
         20,
@@ -290,6 +402,94 @@ fn genuine_source_merge_retains_both_curves_and_rejects_substitution() {
     );
     result.evidence.pallas.decide(&pparams, budget).unwrap();
     result.evidence.vesta.decide(&vparams, budget).unwrap();
+    // Exercise the production tree owner with the same original merge artifacts.
+    // It must re-import the active tables and retain both curves; native topology
+    // alone cannot produce this complete interval evidence.
+    let originals = &result.originals;
+    let total_bytes: usize = [&originals.source, &originals.wrapper]
+        .into_iter()
+        .map(|a| a.descriptor.len() + a.verifying_key.len() + a.proving_key.len())
+        .sum();
+    let import = TreeImportConfig {
+        key: ReadConfig {
+            maximum_bytes: originals
+                .source
+                .proving_key
+                .len()
+                .max(originals.wrapper.proving_key.len()),
+            maximum_rows: 1 << 16,
+            coset_cache: CosetCachePolicy::OnDemand,
+            msm_budget: budget,
+        },
+        maximum_keys: 1,
+        maximum_original_bytes: total_bytes,
+    };
+    let leaf_sources = wrapped.each_ref().map(|w| w.source.clone()).to_vec();
+    for bounds in [
+        TreeImportConfig {
+            maximum_keys: 0,
+            ..import
+        },
+        TreeImportConfig {
+            maximum_original_bytes: total_bytes - 1,
+            ..import
+        },
+    ] {
+        assert!(
+            IntervalTree::from_original_artifacts(
+                leaf_sources.clone(),
+                |_| Ok(originals.clone()),
+                pparams.clone(),
+                vparams.clone(),
+                bounds
+            )
+            .is_err()
+        );
+    }
+    let tree = IntervalTree::from_original_artifacts(
+        leaf_sources,
+        |_| Ok(originals.clone()),
+        pparams.clone(),
+        vparams.clone(),
+        import,
+    )
+    .unwrap();
+    assert_eq!(tree.leaf_count(), 2);
+    assert_eq!(
+        tree.qualified_source().key.to_bytes(),
+        result.source.key.to_bytes()
+    );
+    assert!(
+        tree.prove(
+            Vec::new(),
+            |_| panic!("missing leaves cannot load keys"),
+            |_| panic!("missing leaves cannot draw entropy"),
+            ProverConfig::default(),
+            &FoldConfig::default(),
+            None,
+        )
+        .is_err()
+    );
+    let tree_result = tree
+        .prove(
+            children.to_vec(),
+            |_| Ok(originals.clone()),
+            |_| {
+                Ok(NodeRandomness {
+                    inner_salt: Fp::from(919),
+                    outer_salt: Fq::from(25).to_repr(),
+                    source: randomness(25),
+                    wrapper: randomness(26),
+                })
+            },
+            ProverConfig::default(),
+            &FoldConfig::default(),
+            None,
+        )
+        .unwrap();
+    assert_eq!(tree_result.endpoints, result.evidence.endpoints);
+    tree_result.pallas.decide(&pparams, budget).unwrap();
+    tree_result.vesta.decide(&vparams, budget).unwrap();
     eprintln!(
         "genuine source merge: k16, wrapper={} bytes, both carried claims decided",
         result.evidence.proof.len()

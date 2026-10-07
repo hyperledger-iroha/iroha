@@ -10,7 +10,7 @@ mod build_registry;
 mod bundle;
 mod contracts;
 mod program;
-pub use program::admit_native_program;
+pub use program::{admit_native_build_input, admit_native_program};
 mod deployment_report;
 pub(crate) mod gateway_compliance;
 mod generated_service_runtime;

@@ -111,6 +111,7 @@ macro_rules! schema_types {
             MerkleTree<SignedTransaction>,
             iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
             iroha_data_model::isi::kagemusha_wallet::load_finality::KagemushaWalletLoadReceiptV1,
+            iroha_data_model::kagemusha::KagemushaWalletLoadFinalityV1,
             iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1,
             iroha_data_model::kagemusha::KagemushaWalletPayoutKeyV1,
             iroha_data_model::kagemusha::KagemushaWalletPayoutRecordV1,

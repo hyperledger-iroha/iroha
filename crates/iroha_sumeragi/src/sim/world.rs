@@ -1841,7 +1841,7 @@ impl World {
         let hash = crate::preimage::payload_hash(&self.hasher, &payload);
         self.oracle.built.insert((inst, m, hash));
         self.replicas[r].pending_ready = payload.is_empty().then_some(req);
-        // The application flag of this payload (§3.7 A1).
+        // Deliver the build result after the selected application latency.
         let latency = self.rng.range(profile.build_min, profile.build_max);
         self.schedule(
             at + latency,

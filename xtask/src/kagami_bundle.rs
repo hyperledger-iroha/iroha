@@ -1,8 +1,12 @@
 //! Assemble the matching native client, developer worker and daemon without a desktop build dependency.
 
 use crate::{network_profiles, workspace_root};
-use iroha_deploy::managed::{InstalledRuntime, KagamiBundleLayout, admit_native_program};
-use iroha_fs::{FileIdentity, FileSnapshot, OwnerDirectory, PublishMode, RetainedFile};
+use iroha_deploy::managed::{
+    InstalledRuntime, KagamiBundleLayout, admit_native_build_input, admit_native_program,
+};
+use iroha_fs::{
+    FileIdentity, FileSnapshot, OwnerDirectory, PublishMode, RetainedBuildInput, RetainedFile,
+};
 use norito::json::{self, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -92,7 +96,7 @@ fn bundle_at(
     if !status.success() {
         return Err("building matching iroha, Kagami and iroha3d failed".into());
     }
-    publish(&records?, &package, profile, profiles.as_ref())?;
+    publish_cargo(&records?, &package, profile, profiles.as_ref())?;
     Ok(package)
 }
 
@@ -185,16 +189,133 @@ pub(crate) fn collect_native_programs(
     Ok(programs)
 }
 
-pub(crate) fn digest(file: &mut RetainedFile) -> Result<String, Box<dyn Error>> {
-    file.file_mut().seek(SeekFrom::Start(0))?;
+/// A bounded stream adapter, without transferring the native original descriptor.
+pub(crate) trait InputReader: Read + Seek {}
+impl<T: Read + Seek + ?Sized> InputReader for T {}
+
+/// The two explicit source roles share streaming; only their native owners grant custody.
+pub(crate) trait NativeInput {
+    fn reader(&mut self) -> &mut dyn InputReader;
+    fn length(&self) -> io::Result<u64>;
+    fn snapshot(&self) -> io::Result<FileSnapshot>;
+    fn revalidate(&self) -> io::Result<()>;
+}
+
+impl NativeInput for RetainedFile {
+    fn reader(&mut self) -> &mut dyn InputReader {
+        self.file_mut()
+    }
+    fn length(&self) -> io::Result<u64> {
+        Ok(self.file().metadata()?.len())
+    }
+    fn snapshot(&self) -> io::Result<FileSnapshot> {
+        RetainedFile::snapshot(self)
+    }
+    fn revalidate(&self) -> io::Result<()> {
+        RetainedFile::revalidate(self)
+    }
+}
+
+impl NativeInput for RetainedBuildInput {
+    fn reader(&mut self) -> &mut dyn InputReader {
+        self
+    }
+    fn length(&self) -> io::Result<u64> {
+        self.len()
+    }
+    fn snapshot(&self) -> io::Result<FileSnapshot> {
+        RetainedBuildInput::snapshot(self)
+    }
+    fn revalidate(&self) -> io::Result<()> {
+        RetainedBuildInput::revalidate(self)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ProgramKind {
+    #[cfg(test)]
+    Strict,
+    Cargo,
+}
+
+enum ProgramInput {
+    #[cfg(test)]
+    Strict(RetainedFile),
+    Cargo(RetainedBuildInput),
+}
+
+impl ProgramInput {
+    fn capture(path: &Path, kind: ProgramKind) -> io::Result<Self> {
+        match kind {
+            #[cfg(test)]
+            ProgramKind::Strict => RetainedFile::open_regular(path).map(Self::Strict),
+            ProgramKind::Cargo => RetainedBuildInput::open(path).map(Self::Cargo),
+        }
+    }
+    fn admit(&mut self) -> io::Result<()> {
+        match self {
+            #[cfg(test)]
+            Self::Strict(file) => admit_native_program(file),
+            Self::Cargo(file) => admit_native_build_input(file),
+        }
+    }
+}
+
+impl NativeInput for ProgramInput {
+    fn reader(&mut self) -> &mut dyn InputReader {
+        match self {
+            #[cfg(test)]
+            Self::Strict(file) => file.reader(),
+            Self::Cargo(file) => file.reader(),
+        }
+    }
+    fn length(&self) -> io::Result<u64> {
+        match self {
+            #[cfg(test)]
+            Self::Strict(file) => file.length(),
+            Self::Cargo(file) => file.length(),
+        }
+    }
+    fn snapshot(&self) -> io::Result<FileSnapshot> {
+        match self {
+            #[cfg(test)]
+            Self::Strict(file) => file.snapshot(),
+            Self::Cargo(file) => file.snapshot(),
+        }
+    }
+    fn revalidate(&self) -> io::Result<()> {
+        match self {
+            #[cfg(test)]
+            Self::Strict(file) => file.revalidate(),
+            Self::Cargo(file) => file.revalidate(),
+        }
+    }
+}
+
+pub(crate) fn digest(file: &mut impl NativeInput) -> Result<String, Box<dyn Error>> {
+    file.revalidate()?;
+    let length = file.length()?;
+    file.revalidate()?;
+    let limit = length
+        .checked_add(1)
+        .ok_or("CLI artifact extent is invalid")?;
+    file.reader().seek(SeekFrom::Start(0))?;
     let mut buffer = [0_u8; 64 * 1024];
     let mut hash = Sha256::new();
-    loop {
-        let count = file.file_mut().read(&mut buffer)?;
-        if count == 0 {
-            break;
+    let mut read = 0_u64;
+    {
+        let mut original = file.reader().take(limit);
+        loop {
+            let count = original.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            read += count as u64;
+            hash.update(&buffer[..count]);
         }
-        hash.update(&buffer[..count]);
+    }
+    if read != length {
+        return Err("CLI artifact extent changed during hashing".into());
     }
     file.revalidate()?;
     Ok(hex::encode(hash.finalize()))
@@ -268,21 +389,21 @@ pub(crate) fn retain_created_output(
 }
 
 pub(crate) fn copy_program(
-    source: &mut RetainedFile,
+    source: &mut impl NativeInput,
     source_snapshot: FileSnapshot,
     expected_hash: &str,
     destination: &Path,
 ) -> Result<(RetainedFile, FileSnapshot, String, Option<fs::File>), Box<dyn Error>> {
-    let expected_size = source.file().metadata()?.len();
+    let expected_size = source.length()?;
     if source.snapshot()? != source_snapshot {
         return Err("CLI artifact changed before copying".into());
     }
     let mut copied = RetainedFile::create_new_private(destination)?;
-    source.file_mut().seek(SeekFrom::Start(0))?;
+    source.reader().seek(SeekFrom::Start(0))?;
     let limit = expected_size
         .checked_add(1)
         .ok_or("CLI artifact extent is invalid")?;
-    let size = io::copy(&mut source.file_mut().take(limit), copied.file_mut())?;
+    let size = io::copy(&mut source.reader().take(limit), copied.file_mut())?;
     if size != expected_size {
         return Err("CLI artifact extent changed during copying".into());
     }
@@ -328,6 +449,33 @@ pub(crate) fn copy_program(
     Ok((copied, copied_snapshot, copied_hash, created))
 }
 
+// Only the successful exact Cargo artifact set enters the build-input role. The strict
+// publisher is test-only, preserving the original strict custody regressions.
+fn publish_cargo(
+    source: &BTreeMap<String, PathBuf>,
+    package: &Path,
+    profile: &str,
+    profiles: Option<&network_profiles::Selection>,
+) -> Result<(), Box<dyn Error>> {
+    if source.len() != PROGRAMS.len()
+        || PROGRAMS
+            .iter()
+            .any(|name| source.get(*name).is_none_or(|path| !path.is_absolute()))
+    {
+        return Err("CLI package requires the exact absolute Cargo executable set".into());
+    }
+    publish_inputs(
+        source,
+        package,
+        profile,
+        profiles,
+        ProgramKind::Cargo,
+        &mut || Ok(()),
+        &mut |_| Ok(()),
+    )
+}
+
+#[cfg(test)]
 fn publish(
     source: &BTreeMap<String, PathBuf>,
     package: &Path,
@@ -344,11 +492,32 @@ fn publish(
     )
 }
 
+#[cfg(test)]
 fn publish_checked(
     source: &BTreeMap<String, PathBuf>,
     package: &Path,
     profile: &str,
     profiles: Option<&network_profiles::Selection>,
+    before_publication: &mut dyn FnMut() -> Result<(), Box<dyn Error>>,
+    after_publication: &mut dyn FnMut(&Path) -> Result<(), Box<dyn Error>>,
+) -> Result<(), Box<dyn Error>> {
+    publish_inputs(
+        source,
+        package,
+        profile,
+        profiles,
+        ProgramKind::Strict,
+        before_publication,
+        after_publication,
+    )
+}
+
+fn publish_inputs(
+    source: &BTreeMap<String, PathBuf>,
+    package: &Path,
+    profile: &str,
+    profiles: Option<&network_profiles::Selection>,
+    kind: ProgramKind,
     before_publication: &mut dyn FnMut() -> Result<(), Box<dyn Error>>,
     after_publication: &mut dyn FnMut(&Path) -> Result<(), Box<dyn Error>>,
 ) -> Result<(), Box<dyn Error>> {
@@ -358,11 +527,12 @@ fn publish_checked(
         .into_iter()
         .map(|name| {
             let filename = format!("{name}{}", env::consts::EXE_SUFFIX);
-            let mut file = RetainedFile::open_regular(
+            let mut file = ProgramInput::capture(
                 source.get(name).ok_or("missing exact Cargo executable")?,
+                kind,
             )?;
             let snapshot = file.snapshot()?;
-            admit_native_program(&mut file)?;
+            file.admit()?;
             let hash = digest(&mut file)?;
             if file.snapshot()? != snapshot {
                 return Err("CLI artifact changed during admission".into());

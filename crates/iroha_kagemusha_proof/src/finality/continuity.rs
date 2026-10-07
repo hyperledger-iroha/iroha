@@ -30,6 +30,12 @@ use crate::{
 /// Domain for exact source endpoints and the complete carried Pallas obligation.
 pub const SOURCE_BINDING_DOMAIN: u64 = u64::from_le_bytes(*b"kgwfinb1");
 
+pub mod producer;
+
+pub mod tree;
+
+pub mod checkpoint;
+
 /// Native instance construction for a source leaf with explicit deciding fillers.
 /// This computes exactly [`SourceCheckpoint::leaf`] and [`SourceCheckpoint::frame`];
 /// it never verifies a source program or creates finality authority.
@@ -109,7 +115,7 @@ impl SourceEndpoints {
 
     /// Constrain an untrusted child's endpoint opening before verifying its wrapper.
     /// This constructor grants no authority. Every cell enters the child binding
-    /// digest recomputed by [`SourceMergePlan::merge`].
+    /// digest recomputed by [`SourcePairPlan::merge`].
     /// # Errors
     /// Layout errors; zero program or empty/reversed intervals are unsatisfiable.
     pub fn from_words(
@@ -207,6 +213,23 @@ pub struct SourceCheckpoint {
     vesta: [VestaClaimCells; 2],
 }
 impl SourceCheckpoint {
+    /// Retain the owner's already hard-folded Pallas claim and both original Vesta claims.
+    pub(crate) fn from_folded(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        endpoints: SourceEndpoints,
+        pallas: FoldInputCells<Ep>,
+        vesta: [VestaClaimCells; 2],
+    ) -> Result<Self, Error> {
+        let digest = binding_digest(chip, region, &endpoints, &pallas)?;
+        Ok(Self {
+            endpoints,
+            digest,
+            pallas,
+            vesta,
+        })
+    }
+
     /// Close a real arithmetic leaf using explicit deciding fillers only.
     /// This is a framing component, not a replacement for the leaf's constraints.
     /// # Errors
@@ -286,23 +309,33 @@ pub struct SourceChild<'a> {
     pub proof: &'a ProofMessageCells,
 }
 
+/// Exact wrapper key imported or rederived against a sealed source circuit. For a merge,
+/// this qualification includes its already-qualified children, closing source
+/// provenance inductively. It is neither proof evidence nor finality authority.
+#[derive(Clone, Debug)]
+pub struct SourceVerifier {
+    verifier: VerifierPlan<Ep>,
+    key: VerifyingKey<Ep>,
+}
+
 /// Fixed two-child verifier programs and complete hard Pallas fold schedule.
 #[derive(Clone, Debug)]
-pub struct SourceMergePlan {
-    children: [(VerifierPlan<Ep>, VerifyingKey<Ep>); 2],
+pub struct SourcePairPlan {
+    children: [SourceVerifier; 2],
     fold: FoldPlan<Ep>,
     params: PinnedParams<Ep>,
 }
-impl SourceMergePlan {
-    /// Pin both complete child keys. Their actual source semantics must be
-    /// qualified by installation; descriptor compatibility alone is insufficient.
+impl SourcePairPlan {
+    /// Pin both source-qualified child keys. The terminal still requires the
+    /// intended program, complete interval and exact initial/final boundaries.
     /// # Errors
     /// Wrong descriptor, wrapper shape/types, key binding or parameter length.
-    pub fn new(
-        children: [(VerifierPlan<Ep>, VerifyingKey<Ep>); 2],
-        params: &PinnedParams<Ep>,
-    ) -> Result<Self, Error> {
-        for (plan, key) in &children {
+    pub fn new(children: [SourceVerifier; 2], params: &PinnedParams<Ep>) -> Result<Self, Error> {
+        if params.k() != 16 {
+            return Err(Error::Synthesis);
+        }
+        for source in &children {
+            let (plan, key) = (&source.verifier, &source.key);
             let d = plan.binding().descriptor();
             if d.k != 16
                 || d.instance_lengths != [1, 2, 16]
@@ -323,6 +356,11 @@ impl SourceMergePlan {
         })
     }
 
+    /// Exact immutable child capability in the installed pair order.
+    pub fn source(&self, index: usize) -> Option<&SourceVerifier> {
+        self.children.get(index)
+    }
+
     /// Verify both children, prove exact continuity, and fold all four Pallas
     /// obligations in `[left carry, left opening, right carry, right opening]` order.
     /// Both Vesta claims enter the returned A frame for the mandatory wrapper fold.
@@ -335,33 +373,27 @@ impl SourceMergePlan {
         children: [SourceChild<'_>; 2],
         fold_proof: &ProofMessageCells,
     ) -> Result<SourceCheckpoint, Error> {
-        let mut claims = Vec::with_capacity(4);
-        for ((plan, key), child) in self.children.iter().zip(&children) {
-            if child.vesta.source_k() != 16 {
-                return Err(Error::Synthesis);
-            }
-            let digest = binding_digest(chip, region, child.endpoints, child.pallas)?;
-            let digest = ScalarCells::from_native_word(&mut chip.uint(), region, &digest)?;
-            let mut challenges = Vec::with_capacity(16);
-            for u in child.vesta.challenges() {
-                challenges.push(ScalarCells::from_native_word(&mut chip.uint(), region, u)?);
-            }
-            let instances = vec![vec![digest], child.vesta.coordinates().to_vec(), challenges];
-            let key = chip.constant_key(region, plan, key)?;
-            let verified = chip.verify(
-                region,
-                plan,
-                &key,
-                &instances,
-                child.proof.messages(),
-                child.proof.length(),
-                VerificationMode::Hard,
-            )?;
-            claims.push(child.pallas.clone());
-            claims.push(FoldInputCells::from_claim(chip, region, &verified.claim)?);
-        }
         let endpoints =
             SourceEndpoints::join(region, children[0].endpoints, children[1].endpoints)?;
+        self.bind(chip, region, children, fold_proof, endpoints)
+    }
+
+    // Only sealed source owners may choose an output relation. Each owner must
+    // constrain these endpoints from the exact verified child endpoint cells.
+    pub(crate) fn bind(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        children: [SourceChild<'_>; 2],
+        fold_proof: &ProofMessageCells,
+        endpoints: SourceEndpoints,
+    ) -> Result<SourceCheckpoint, Error> {
+        let mut claims = Vec::with_capacity(4);
+        for (source, child) in self.children.iter().zip(&children) {
+            let verified = source.verify_cells(chip, region, *child)?;
+            claims.push(verified.pallas().clone());
+            claims.push(verified.opening().clone());
+        }
         let folded = chip.verify_fold(
             region,
             &self.fold,
@@ -382,7 +414,12 @@ impl SourceMergePlan {
 }
 
 mod circuit;
-pub use circuit::{SourceMergeCircuit, SourceMergeConfig, SourceNodeEvidence};
+pub(crate) mod pair;
+pub(crate) mod single;
+pub use circuit::{SourceMergeCircuit, SourcePairConfig};
+pub use pair::SourceNodeEvidence;
 
+#[cfg(test)]
+pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;

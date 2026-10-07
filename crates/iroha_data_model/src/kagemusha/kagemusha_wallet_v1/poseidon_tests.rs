@@ -85,6 +85,7 @@ fn kagemusha_wallet_v1_poseidon_domains_are_distinct_ascii_words() {
             b"kgwpout1",
         ),
         (KAGEMUSHA_WALLET_LOAD_VALUE_DOMAIN_V1, b"kgwload1"),
+        (KAGEMUSHA_WALLET_LOAD_RECEIPT_DOMAIN_V1, b"kgwolod1"),
         (KAGEMUSHA_WALLET_REDEEM_VALUE_DOMAIN_V1, b"kgwrdm_1"),
         (KAGEMUSHA_WALLET_FEE_CLAIM_VALUE_DOMAIN_V1, b"kgwfee_1"),
         (KAGEMUSHA_WALLET_QUOTA_USAGE_LEAF_DOMAIN_V1, b"kgwquse1"),
@@ -120,7 +121,7 @@ fn kagemusha_wallet_v1_poseidon_domains_are_distinct_ascii_words() {
         );
     }
     assert_eq!(seen.len(), KAGEMUSHA_WALLET_POSEIDON_DOMAINS_V1.len());
-    assert_eq!(seen.len(), 32);
+    assert_eq!(seen.len(), 33);
     // The superseded sparse-tree domains are gone.
     for retired in [*b"kgwsmte1", *b"kgwsmtn1"] {
         assert!(!seen.contains(&u64::from_le_bytes(retired)));

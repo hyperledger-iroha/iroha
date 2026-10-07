@@ -7,7 +7,7 @@ use super::*;
 #[derive(Debug)]
 pub struct WalletResult {
     /// 0 unknown, 1 complete, 2 pending, 3 not performed, 4 archived, 5 delivery loss,
-    /// 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 CreditStatus; negative is failure.
+    /// 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 CreditStatus, 11 preparing; negative is failure.
     pub status: i32,
     /// Failure platform reason or -1. Never conflate `UNAVAILABLE` with unknown/absent.
     pub reason: i32,
@@ -153,17 +153,71 @@ pub extern "C" fn connect_norito_kagemusha_wallet_activity_v1(
     .err()
     .map_or(0, |error| error.status)
 }
-/// Commit canonical FrozenTransition bytes after native verification and durable custody.
+/// Typed lifecycle input. Unused original slots and amount limbs must be zero/empty.
+/// Selectors: Load0, Send1, Receive2, Credential3, SchemePolicy4, Blacklist5,
+/// TimeAnchor6, QuotaShare7, Unload8, Retire9. These never select proof keys.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WalletOperationRequest {
+    /// Exactly32 readable bytes; nonzero local retry identity, not a protocol operation ID.
+    pub request_id: *const u8,
+    /// One fixed lifecycle selector documented above.
+    pub selector: u32,
+    /// Requested Unload amount only; zero for all other operations.
+    pub amount: WalletU128,
+    /// First original: receipt/Request/Payment/update/charge quote, depending on selector.
+    pub first: *const u8,
+    /// Exact first-original length.
+    pub first_length: usize,
+    /// Second original: finality/payer credential/certificate set, depending on selector.
+    pub second: *const u8,
+    /// Exact second-original length.
+    pub second_length: usize,
+    /// Third original: Receive certificate set only.
+    pub third: *const u8,
+    /// Exact third-original length.
+    pub third_length: usize,
+}
+/// Execute typed intent under the exclusive native preparation/proof owner.
 /// # Safety
-/// Input is initialized for length; out is writable and its previous result already freed.
+/// Request and its pointers are initialized for their lengths; out is writable with no old result.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_wallet_commit_v1(
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_execute_v1(
     handle: u64,
-    bytes: *const u8,
-    length: usize,
+    request: *const WalletOperationRequest,
     out: *mut WalletResult,
 ) -> i32 {
-    unsafe { output(out, || commit(handle, input(bytes, length, FROZEN_MAX)?)) }
+    unsafe {
+        output(out, || {
+            if request.is_null() {
+                return Err(Failure::code(INVALID));
+            }
+            let request = &*request;
+            let bounds = requests::bounds(request.selector)?;
+            let value = requests::request(
+                input(request.request_id, 32, 32)?,
+                request.selector,
+                u128::from(request.amount.low) | (u128::from(request.amount.high) << 64),
+                [
+                    input(request.first, request.first_length, bounds[0])?,
+                    input(request.second, request.second_length, bounds[1])?,
+                    input(request.third, request.third_length, bounds[2])?,
+                ],
+            )?;
+            execute(handle, value)
+        })
+    }
+}
+/// Resolve exact request custody; preparing11 is not irreversible pending2 or completion1.
+/// # Safety
+/// Request identity is exactly32 readable bytes; out is writable with no old result.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_request_status_v1(
+    handle: u64,
+    request_id: *const u8,
+    out: *mut WalletResult,
+) -> i32 {
+    unsafe { output(out, || request_status(handle, input(request_id, 32, 32)?)) }
 }
 /// Return the exact source-retained output, without signing or proving again.
 /// # Safety

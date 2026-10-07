@@ -1,3 +1,5 @@
+//! Canonical Load events and independently signed native finality captures.
+
 use super::*;
 use crate::{
     account::AccountId,
@@ -7,6 +9,14 @@ use crate::{
     },
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+
+fn payer() -> AccountId {
+    AccountId::new(
+        KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    )
+}
 
 fn receipt() -> KagemushaWalletLoadReceiptV1 {
     KagemushaWalletLoadReceiptV1 {
@@ -21,11 +31,8 @@ fn receipt() -> KagemushaWalletLoadReceiptV1 {
         charge_quote: [0; 32],
         transaction_hash: [5; 32],
         block_height: 2,
-        payer: AccountId::new(
-            KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        ),
+        payer_account_digest: crate::kagemusha::kagemusha_wallet_account_digest_v1(&payer())
+            .unwrap(),
     }
 }
 
@@ -124,6 +131,46 @@ fn print_canonical_load_event_capture() {
 }
 
 fn native_capture() -> norito::json::Value {
+    native_capture_for("ordinary-load-receipt-v1", receipt())
+}
+
+/// Signed component fixture matching the recursive Bootstrap/first-Load tests.
+/// The Result is synthetic; the genesis, transaction and four-validator QC are
+/// actually signed and checked by the ordinary native finality verifier.
+fn first_load_capture() -> norito::json::Value {
+    let limbs = |low: u128, high: u128| {
+        let mut bytes = [0; 32];
+        bytes[..16].copy_from_slice(&low.to_le_bytes());
+        bytes[16..].copy_from_slice(&high.to_le_bytes());
+        bytes
+    };
+    let mut first = receipt();
+    first.scheme_id = limbs(1, 2);
+    first.asset_digest = limbs(3, 4);
+    first.wallet_id = limbs(5, 6);
+    first.ordinal = 0;
+    first.amount = 100;
+    let mut capture = native_capture_for("ordinary-first-load-receipt-v1", first);
+    capture.as_object_mut().unwrap().insert(
+        "scope".to_owned(),
+        "Genuine native genesis, transaction and four-validator CommitQC verification; synthetic execution Result, not funded World execution or finalized producer-catalog SchemeID evidence.".into(),
+    );
+    capture
+}
+
+#[test]
+#[ignore = "native capture for the independently pinned first-Load event fixture"]
+fn print_canonical_first_load_event_capture() {
+    println!(
+        "FIRST_LOAD_EVENT_CAPTURE {}",
+        norito::json::to_json(&first_load_capture()).unwrap()
+    );
+}
+
+fn native_capture_for(
+    chain_label: &str,
+    mut receipt: KagemushaWalletLoadReceiptV1,
+) -> norito::json::Value {
     use crate::{
         block::{BlockSignatures, builder::BlockBuilder},
         isi::kagemusha_wallet::load_finality::verify_finalized_kagemusha_wallet_load_v1,
@@ -133,9 +180,11 @@ fn native_capture() -> norito::json::Value {
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
-    let mut fixture = NativeFinalityFixture::start("ordinary-load-receipt-v1");
+    let mut fixture = NativeFinalityFixture::start_with_explicit_parameters(chain_label);
+    let verifier = fixture.verifier();
+    let initial_epoch = verifier.initial_epoch();
+    let initial_parameters = verifier.initial_chain_parameters().unwrap();
     let header = fixture.next_header();
-    let mut receipt = receipt();
     let instruction = KagemushaWalletLedgerV1::new(
         receipt.scheme_id,
         KagemushaWalletLedgerActionV1::IssueLoad {
@@ -149,7 +198,7 @@ fn native_capture() -> norito::json::Value {
     );
     let mut tx = TransactionBuilder::new(
         fixture.network_id(),
-        receipt.payer.clone(),
+        payer(),
         FeePaymentIntent::authority(vec![], None),
     );
     tx.set_creation_time(std::time::Duration::from_millis(
@@ -178,7 +227,7 @@ fn native_capture() -> norito::json::Value {
         fixture.chain_id(),
         0,
         &instruction,
-        &receipt.payer,
+        &payer(),
     )
     .unwrap();
     assert_eq!(exact.receipt(), &receipt);
@@ -213,10 +262,26 @@ fn native_capture() -> norito::json::Value {
     norito::codec::encode_adaptive_into(&boxed, &mut hash_preimage).unwrap();
     norito::json!({
         "version": 1,
+        "chain_id": (fixture.chain_id()),
+        "signed_genesis_wire_hex": (hex::encode(fixture.genesis().encode_wire().unwrap())),
+        "history_anchor": {
+            "network_hex": (hex::encode(initial_epoch.network_id.as_bytes())),
+            "instance_hex": (hex::encode(verifier.instance().0)),
+            "initial_context_hex": (hex::encode(initial_epoch.context_id().unwrap())),
+            "initial_epoch": (initial_epoch.authorization.epoch),
+            "parameters": (vec![
+                initial_parameters.block_time_ms,
+                initial_parameters.payload_retry_interval_ms,
+                initial_parameters.exec_budget_ms,
+                initial_parameters.apply_budget_ms,
+                u64::from(initial_parameters.max_block_bytes),
+                initial_parameters.epoch_length_blocks,
+            ]),
+        },
         "receipt_frame_hex": (hex::encode(norito::encode_canonical(&receipt).unwrap())),
         "receipt_transcript_hex": (hex::encode(receipt.transcript().unwrap())),
         "receipt_digest_hex": (hex::encode(event.receipt_digest)),
-        "payer_account_digest_hex": (hex::encode(crate::kagemusha::kagemusha_wallet_account_digest_v1(&receipt.payer).unwrap())),
+        "payer_account_digest_hex": (hex::encode(receipt.payer_account_digest)),
         "event_frame_hex": (hex::encode(norito::encode_canonical(&event).unwrap())),
         "data_event_frame_hex": (hex::encode(norito::encode_canonical(&data).unwrap())),
         "event_box_frame_hex": (hex::encode(norito::encode_canonical(&boxed).unwrap())),
@@ -402,5 +467,41 @@ fn canonical_receipt_and_event_proof_bytes_match_independent_native_capture() {
             .unwrap()
             .len(),
         282
+    );
+}
+
+#[test]
+fn first_load_receipt_and_event_match_independent_native_capture() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/kagemusha/ordinary_first_load_receipt_v1.json");
+    let saved: norito::json::Value =
+        norito::json::from_slice(&std::fs::read(path).expect("native first-Load capture")).unwrap();
+    assert_eq!(saved, first_load_capture());
+    let bytes = hex::decode(saved["receipt_frame_hex"].as_str().unwrap()).unwrap();
+    let receipt: KagemushaWalletLoadReceiptV1 = norito::decode_canonical(&bytes).unwrap();
+    let limbs = |bytes: [u8; 32]| {
+        [
+            u128::from_le_bytes(bytes[..16].try_into().unwrap()),
+            u128::from_le_bytes(bytes[16..].try_into().unwrap()),
+        ]
+    };
+    assert_eq!(limbs(receipt.scheme_id), [1, 2]);
+    assert_eq!(limbs(receipt.asset_digest), [3, 4]);
+    assert_eq!(limbs(receipt.wallet_id), [5, 6]);
+    assert_eq!(receipt.ordinal, 0);
+    assert_eq!(receipt.amount, 100);
+    assert_eq!(receipt.online_charge, 0);
+    assert_eq!(receipt.block_height, 2);
+    assert_eq!(
+        saved["committee_public_keys_hex"].as_array().unwrap().len(),
+        4
+    );
+    assert_eq!(
+        saved["receipt_transcript_hex"].as_str().unwrap(),
+        hex::encode(receipt.transcript().unwrap())
+    );
+    assert_eq!(
+        saved["receipt_digest_hex"].as_str().unwrap(),
+        hex::encode(receipt.receipt_digest().unwrap())
     );
 }

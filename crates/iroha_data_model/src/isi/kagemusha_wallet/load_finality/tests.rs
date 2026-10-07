@@ -190,13 +190,7 @@ fn native_event_inclusion_rejects_every_substituted_receipt_term_and_bad_geometr
         }),
         Box::new(|r| r.transaction_hash[0] ^= 1),
         Box::new(|r| r.block_height += 1),
-        Box::new(|r| {
-            r.payer = AccountId::new(
-                KeyPair::from_seed(vec![42; 32], Algorithm::Ed25519)
-                    .public_key()
-                    .clone(),
-            )
-        }),
+        Box::new(|r| r.payer_account_digest[0] ^= 1),
     ];
     for change in changes {
         let mut candidate = receipt.clone();
@@ -310,7 +304,10 @@ fn native_load_authenticates_exact_request_and_original_receipt() {
         *capability.transaction_hash().as_ref()
     );
     assert_eq!(receipt.block_height, capability.height());
-    assert_eq!(&receipt.payer, capability.payer());
+    assert_eq!(
+        receipt.payer_account_digest,
+        kagemusha_wallet_account_digest_v1(capability.payer()).unwrap()
+    );
     let bytes = receipt.to_canonical_bytes().unwrap();
     let decoded: KagemushaWalletLoadReceiptV1 =
         norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
@@ -509,10 +506,10 @@ fn receipt_shape_refuses_missing_terms_genesis_and_inconsistent_charges() {
         charge_quote: [0; 32],
         transaction_hash: [5; 32],
         block_height: 2,
-        payer: payer(),
+        payer_account_digest: kagemusha_wallet_account_digest_v1(&payer()).unwrap(),
     };
     good.validate().unwrap();
-    for field in 0..11 {
+    for field in 0..12 {
         let mut invalid = good.clone();
         match field {
             0 => invalid.version = 2,
@@ -525,7 +522,8 @@ fn receipt_shape_refuses_missing_terms_genesis_and_inconsistent_charges() {
             7 => invalid.block_height = 1,
             8 => invalid.online_charge = 1,
             9 => invalid.charge_quote = [1; 32],
-            _ => invalid.ordinal = u128::MAX,
+            10 => invalid.ordinal = u128::MAX,
+            _ => invalid.payer_account_digest = [0; 32],
         }
         assert!(invalid.validate().is_err());
         assert!(invalid.to_canonical_bytes().is_err());
@@ -629,12 +627,15 @@ fn receipt_and_load_json_reject_retired_or_missing_fields() {
         charge_quote: [0; 32],
         transaction_hash: [5; 32],
         block_height: 2,
-        payer: payer(),
+        payer_account_digest: kagemusha_wallet_account_digest_v1(&payer()).unwrap(),
     };
     let json = norito::json::to_json(&receipt).unwrap();
     let mut retired = json.clone();
     retired.insert_str(1, "\"authorizer_certificate\":null,");
     assert!(norito::json::from_str::<KagemushaWalletLoadReceiptV1>(&retired).is_err());
+    let mut retired_payer = json.clone();
+    retired_payer.insert_str(1, "\"payer\":null,");
+    assert!(norito::json::from_str::<KagemushaWalletLoadReceiptV1>(&retired_payer).is_err());
     let json = norito::json::to_json(&load()).unwrap();
     for field in ["asset", "ordinal"] {
         let mut object: norito::json::Value = norito::json::from_str(&json).unwrap();

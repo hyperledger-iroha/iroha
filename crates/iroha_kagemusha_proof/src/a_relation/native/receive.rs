@@ -13,7 +13,9 @@ mod session;
 mod tests;
 
 pub use circuit::StageCircuit;
-pub use session::{ACheckpoint, KeyArtifact, Prover, Session, Terminal, WCheckpoint};
+pub use session::{
+    ACheckpoint, CheckpointKind, CheckpointLayout, Prover, Session, Terminal, WCheckpoint,
+};
 
 use core::fmt;
 use std::sync::Arc;
@@ -23,20 +25,20 @@ use iroha_pasta::{
     Ep, EpAffine, Eq, EqAffine, Fp, Fq, PastaAffine, msm::MemoryBudget, poseidon::hash_with_domain,
 };
 use iroha_plonk::{
-    DescriptorBinding, VerifyingKey,
-    cs::InstanceType,
-    pcs::ipa::PinnedParams,
-    verifier::{accumulate_generator, verify_full},
+    DescriptorBinding, VerifyingKey, cs::InstanceType, pcs::ipa::PinnedParams,
+    verifier::verify_full,
 };
-use iroha_plonk_gadgets::{
-    bytes::{le_value, p_bytes_native},
-    statement::foreign_limbs,
-};
+use iroha_plonk_gadgets::{bytes::p_bytes_native, statement::foreign_limbs};
 use iroha_plonk_recursion::{
-    AccumulatorT, FoldConfig, FoldInput, K, create_fold, obligation::ledger::Variant,
+    AccumulatorT, FoldConfig, FoldInput, create_fold, obligation::ledger::Variant,
     verifier::VerifierPlan,
 };
 
+use super::support::{
+    self, active_context, exact_context, frame, internal_public, mode_words, object_digest,
+    omega_instances, opening_pallas, opening_vesta, push_pallas, q_sigma_part, select_pallas,
+    select_vesta, stage_digest, terminal_digest, vesta_words,
+};
 use crate::{
     a_relation::{
         AProofPlan, QProofPlan,
@@ -45,7 +47,6 @@ use crate::{
         receive::{
             MAX_OMEGA_RAW_BYTES, MAX_SIGMA_RAW_BYTES, PAYMENT_PROOF_BUDGET, ReceiveStagePlan,
         },
-        schedule::OperationTask,
     },
     admin_sigma::StateWitness,
     operation_relation::objects::ObjectKind,
@@ -60,6 +61,10 @@ pub const INTERNAL_RANGE_BUSES: usize = 4;
 pub const TERMINAL_RANGE_BUSES: usize = 3;
 /// Ten A stages separated by nine authenticated W continuations.
 pub const A_STAGE_COUNT: usize = 10;
+/// Exact internal wrapper count for the fixed Receive owner sequence.
+pub const W_STAGE_COUNT: usize = A_STAGE_COUNT - 1;
+/// Maximum combined original Omega/public and sigma bytes within Payment.
+pub const MAX_PAYMENT_ORIGINAL_BYTES: usize = 320 + PAYMENT_PROOF_BUDGET;
 
 /// Native source/artifact/proof error. No failure changes monetary state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +84,14 @@ impl fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+impl From<support::Error> for Error {
+    fn from(error: support::Error) -> Self {
+        match error {
+            support::Error::Input => Self::Input,
+            support::Error::Proof => Self::Proof,
+        }
+    }
+}
 
 /// Original verified Q proof and its exact descriptor-shaped public columns.
 #[derive(Clone, Debug)]
@@ -237,26 +250,18 @@ impl Plan {
         predecessor_key
             .kagemusha_digest(predecessor.binding())
             .map_err(|_| Error::Artifact)?;
-        let context = ContextPlan::with_schedule(
-            operation,
-            vec![
-                vec![],
-                vec![0],
-                vec![],
-                vec![],
-                vec![],
-                vec![1],
-                vec![2],
-                vec![],
-                vec![],
-                vec![],
-            ],
-            Some(0),
-            ReceiveStagePlan::context_specs(variant, MAX_OMEGA_RAW_BYTES, MAX_SIGMA_RAW_BYTES)
-                .map_err(|_| Error::Artifact)?,
-        )
-        .and_then(|p| p.with_operation_tasks(task_schedule()))
-        .map_err(|_| Error::Artifact)?;
+        let context =
+            crate::a_relation::schedule::compiled::OperationSchedule::for_variant(variant)
+                .bind(
+                    operation,
+                    ReceiveStagePlan::context_specs(
+                        variant,
+                        MAX_OMEGA_RAW_BYTES,
+                        MAX_SIGMA_RAW_BYTES,
+                    )
+                    .map_err(|_| Error::Artifact)?,
+                )
+                .map_err(|_| Error::Artifact)?;
         let stage = ReceiveStagePlan::new(context, policy).map_err(|_| Error::Artifact)?;
         Ok(Self {
             stage,
@@ -277,7 +282,7 @@ impl Plan {
         let program = self.context().operation();
         let omega = program.omega().ok_or(Error::Artifact)?;
         let sigma = &program.sigma;
-        validate_envelope_lengths(input.objects[4].len(), input.objects[5].len())?;
+        check_payment_original_sizes(input.objects[4].len(), input.objects[5].len())?;
         if input.sigma.len()
             != sigma
                 .class(0)
@@ -370,7 +375,7 @@ impl Plan {
                 opening,
             });
         }
-        let part = q_sigma_part(&q[0].instances)?;
+        let part = q_sigma_part(&q[0].instances, &program.sigma)?;
         part.decide(&self.vesta, budget).map_err(|_| Error::Proof)?;
         validate_modes(&input.incoming)?;
         let selected_pallas = [
@@ -447,25 +452,6 @@ impl Plan {
     }
 }
 
-fn task_schedule() -> Vec<Vec<OperationTask>> {
-    use OperationTask::*;
-    vec![
-        vec![
-            ReceiveOwnProof,
-            ReceiveConsumedEffects,
-            ReceiveCreditEffects,
-        ],
-        vec![],
-        vec![ReceiveProofs],
-        vec![ReceiveProofDigest],
-        vec![ReceiveObjects],
-        vec![ReceiveAuthorization],
-        vec![],
-        vec![ReceiveSignatures],
-        vec![ReceiveNonmembership, ReceiveBlacklist],
-        vec![ReceiveEffects],
-    ]
-}
 #[derive(Clone)]
 struct QSource {
     plan: QProofPlan,
@@ -520,13 +506,6 @@ impl Source {
         mode_words(self.modes[index])
     }
 }
-fn mode_words(mode: IncomingMode) -> [Fp; 3] {
-    match mode {
-        IncomingMode::Accept => [Fp::ONE, Fp::ZERO, Fp::ZERO],
-        IncomingMode::Trivial => [Fp::ZERO, Fp::ONE, Fp::ZERO],
-        IncomingMode::Corrected => [Fp::ZERO, Fp::ZERO, Fp::ONE],
-    }
-}
 
 /// Checked hard originals coupled to this exact full-envelope owner plan.
 #[derive(Clone)]
@@ -553,7 +532,6 @@ impl Prepared {
             source: self.source.clone(),
             continuation: None,
             pallas: pallas.clone(),
-            first: pallas,
             fold: fold.to_bytes().to_vec(),
             known: true,
         })
@@ -584,7 +562,10 @@ fn validate_transport_profile(omega: usize, sigma: usize) -> Result<(), Error> {
     Ok(())
 }
 
-fn validate_envelope_lengths(omega: usize, sigma: usize) -> Result<(), Error> {
+/// Check both carrier bounds and their exact joint Payment envelope before allocation.
+/// # Errors
+/// Oversized originals or an overflowing combined length.
+pub fn check_payment_original_sizes(omega: usize, sigma: usize) -> Result<(), Error> {
     if omega > MAX_OMEGA_RAW_BYTES
         || sigma > MAX_SIGMA_RAW_BYTES
         || omega
@@ -615,96 +596,7 @@ fn validate_modes(input: &IncomingWitness) -> Result<(), Error> {
     }
     Ok(())
 }
-fn select_pallas(
-    params: &PinnedParams<Ep>,
-    original: &FoldInput<Ep>,
-    mode: IncomingMode,
-    correction: EpAffine,
-    budget: MemoryBudget,
-) -> Result<FoldInput<Ep>, Error> {
-    let selected = match mode {
-        IncomingMode::Accept => original.clone(),
-        IncomingMode::Trivial => AccumulatorT::trivial(params, budget)
-            .map_err(|_| Error::Proof)?
-            .as_input(),
-        IncomingMode::Corrected => {
-            if correction == *original.g() {
-                return Err(Error::Input);
-            }
-            FoldInput::from_normalized(correction, original.source_k(), *original.challenges())
-                .map_err(|_| Error::Input)?
-        }
-    };
-    selected.decide(params, budget).map_err(|_| Error::Proof)?;
-    Ok(selected)
-}
-fn select_vesta(
-    params: &PinnedParams<Eq>,
-    original: &FoldInput<Eq>,
-    mode: IncomingMode,
-    correction: EqAffine,
-    budget: MemoryBudget,
-) -> Result<FoldInput<Eq>, Error> {
-    let selected = match mode {
-        IncomingMode::Accept => original.clone(),
-        IncomingMode::Trivial => AccumulatorT::trivial(params, budget)
-            .map_err(|_| Error::Proof)?
-            .as_input(),
-        IncomingMode::Corrected => {
-            if correction == *original.g() {
-                return Err(Error::Input);
-            }
-            FoldInput::from_normalized(correction, original.source_k(), *original.challenges())
-                .map_err(|_| Error::Input)?
-        }
-    };
-    selected.decide(params, budget).map_err(|_| Error::Proof)?;
-    Ok(selected)
-}
-fn q_sigma_part(columns: &[Vec<Fq>]) -> Result<FoldInput<Eq>, Error> {
-    let [bounded, point, indices, verdicts, source] = columns else {
-        return Err(Error::Input);
-    };
-    if point.len() != 2
-        || indices.len() != 2
-        || verdicts.len() != 5
-        || verdicts[0] != Fq::ONE
-        || source.as_slice() != [Fq::from(16)]
-        || bounded.len() < K
-    {
-        return Err(Error::Input);
-    }
-    let g = Option::<EqAffine>::from(EqAffine::from_xy(point[0], point[1])).ok_or(Error::Input)?;
-    let u = bounded[bounded.len() - K..]
-        .iter()
-        .map(|v| Option::<Fp>::from(Fp::from_repr(v.to_repr())).ok_or(Error::Input))
-        .collect::<Result<Vec<_>, _>>()?;
-    FoldInput::from_normalized(g, 16, u.try_into().map_err(|_| Error::Input)?)
-        .map_err(|_| Error::Input)
-}
-fn frame(raw: &[u8]) -> Result<Vec<u8>, Error> {
-    let mut out = u32::try_from(raw.len())
-        .map_err(|_| Error::Input)?
-        .to_le_bytes()
-        .to_vec();
-    out.extend(raw);
-    Ok(out)
-}
-fn object_digest(kind: ObjectKind, raw: &[u8]) -> Result<Fp, Error> {
-    let end = kind.body_len();
-    if raw.len() != end + 64 {
-        return Err(Error::Input);
-    }
-    let mut words = vec![p_bytes_native(kind.signing_domain(), &raw[..end])];
-    for offset in [16, 0, 48, 32] {
-        words.push(Fp::from_u128(u128::from_be_bytes(
-            raw[end + offset..end + offset + 16]
-                .try_into()
-                .map_err(|_| Error::Input)?,
-        )));
-    }
-    Ok(hash_with_domain(kind.object_domain(), &words))
-}
+
 fn object_commitments(
     specs: &[ContextObjectSpec],
     objects: &[Vec<u8>; 11],
@@ -741,49 +633,16 @@ fn object_commitments(
                     _ => return Err(Error::Input),
                 },
             };
-            let length = Fp::from(u64::try_from(objects[i].len()).map_err(|_| Error::Input)?);
-            let mut words = vec![
-                Fp::from(u64::from(spec.tag)),
-                Fp::from(u64::from(spec.capacity)),
-            ];
-            let raw = frame(&objects[i])?;
-            let domain = if matches!(i, 4 | 5) {
-                words.extend([
-                    length,
-                    p_bytes_native(u64::from_le_bytes(*b"kgwcact1"), &raw),
-                ]);
-                u64::from_le_bytes(*b"kgwcact1")
+            Ok(if matches!(i, 4 | 5) {
+                active_context(*spec, digest, &objects[i])?
             } else {
-                for chunk in raw.chunks(31) {
-                    words.push(le_value(chunk).ok_or(Error::Input)?);
-                }
-                u64::from_le_bytes(*b"kgwctap1")
-            };
-            Ok([digest, length, hash_with_domain(domain, &words)])
+                exact_context(*spec, digest, &objects[i])?
+            })
         })
         .collect()
 }
-fn push_pallas(words: &mut Vec<Fp>, claim: &FoldInput<Ep>) -> Result<(), Error> {
-    if claim.source_k() != 16 {
-        return Err(Error::Input);
-    }
-    let (x, y) = Option::<(Fp, Fp)>::from(claim.g().coordinates()).ok_or(Error::Input)?;
-    words.extend([Fp::from(16), x, y]);
-    for u in claim.challenges() {
-        words.extend(foreign_limbs(u).map(Fp::from_u128));
-    }
-    Ok(())
-}
-fn vesta_words(claim: &FoldInput<Eq>) -> Result<Vec<Fp>, Error> {
-    let (x, y) = Option::<(Fq, Fq)>::from(claim.g().coordinates()).ok_or(Error::Input)?;
-    let mut words = Vec::with_capacity(20);
-    for v in [x, y] {
-        words.extend(foreign_limbs(&v).map(Fp::from_u128));
-    }
-    words.extend(claim.challenges());
-    Ok(words)
-}
-fn context_digest(source: &Source, first: &AccumulatorT<Ep>) -> Result<Fp, Error> {
+
+fn context_digest(source: &Source) -> Result<Fp, Error> {
     let mut words = source.plan.context().schema().to_vec();
     words.extend(source.own.witness.statement);
     words.extend(source.own.send.statement);
@@ -840,69 +699,30 @@ fn context_digest(source: &Source, first: &AccumulatorT<Ep>) -> Result<Fp, Error
     for v in [x, y] {
         words.extend(foreign_limbs(&v).map(Fp::from_u128));
     }
-    push_pallas(&mut words, &first.as_input())?;
     Ok(hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words))
 }
-fn continued_digest(
-    plan: &ContextPlan,
-    stage: usize,
-    previous: Fp,
-    old: &AccumulatorT<Ep>,
-    vesta: &AccumulatorT<Eq>,
-    current: &AccumulatorT<Ep>,
-) -> Result<Fp, Error> {
-    let mut words = vec![
-        Fp::ONE,
-        plan.schema()[1],
-        Fp::from(u64::try_from(stage + 1).map_err(|_| Error::Input)?),
-        previous,
-    ];
-    push_pallas(&mut words, &old.as_input())?;
-    words.extend(vesta_words(&vesta.as_input())?);
-    push_pallas(&mut words, &current.as_input())?;
-    Ok(hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words))
-}
-fn internal_public(source: &Source, digest: Fp, part: &FoldInput<Eq>) -> Result<Vec<Fp>, Error> {
-    let mut words = vec![digest, Fp::from(u64::from(part.source_k()))];
-    words.extend(vesta_words(part)?);
-    let trivial =
-        AccumulatorT::trivial(&source.vparams, MemoryBudget::DEFAULT).map_err(|_| Error::Proof)?;
-    let trivial = vesta_words(&trivial.as_input())?;
-    words.extend(&trivial);
-    words.extend(&trivial);
-    words.extend([Fp::ZERO, Fp::ONE, Fp::ZERO]);
-    words.extend(&trivial[..4]);
-    if words.len() != 69 {
-        return Err(Error::Input);
-    }
-    Ok(words)
-}
+
 fn stage_public(c: &Stage) -> Result<Vec<Fp>, Error> {
-    let root = context_digest(&c.source, &c.first)?;
+    let root = context_digest(&c.source)?;
     let Some(continuation) = &c.continuation else {
-        return internal_public(&c.source, root, &c.source.own.part);
+        return Ok(internal_public(
+            &c.source.vparams,
+            stage_digest(c.source.plan.context(), 0, root, &c.pallas)?,
+            &c.source.own.part,
+        )?);
     };
-    if continuation.history.len() + 1 != continuation.plan.stage() {
-        return Err(Error::Input);
-    }
     if !continuation.plan.is_terminal() {
-        let mut digest = root;
-        for (i, (p, v)) in continuation.history.iter().enumerate() {
-            let next = continuation
-                .history
-                .get(i + 1)
-                .map_or(&continuation.carried, |(p, _)| p);
-            digest = continued_digest(c.source.plan.context(), i + 1, digest, p, v, next)?;
-        }
-        digest = continued_digest(
+        let digest = stage_digest(
             c.source.plan.context(),
             continuation.plan.stage(),
-            digest,
-            &continuation.carried,
-            &continuation.vesta,
+            root,
             &c.pallas,
         )?;
-        return internal_public(&c.source, digest, &continuation.vesta.as_input());
+        return Ok(internal_public(
+            &c.source.vparams,
+            digest,
+            &continuation.vesta.as_input(),
+        )?);
     }
     let mut words = vec![
         terminal_digest(&c.source.own.witness.after.lineage, &c.pallas.as_input())?,
@@ -921,53 +741,4 @@ fn stage_public(c: &Stage) -> Result<Vec<Fp>, Error> {
         return Err(Error::Input);
     }
     Ok(words)
-}
-fn terminal_digest(public: &[Fp; 18], pallas: &FoldInput<Ep>) -> Result<Fp, Error> {
-    let mut words = public.to_vec();
-    let mut claim = vec![];
-    push_pallas(&mut claim, pallas)?;
-    words.extend(&claim[1..]);
-    Ok(hash_with_domain(crate::a_relation::LINEAGE_DOMAIN, &words))
-}
-fn omega_instances(digest: Fp, vesta: &AccumulatorT<Eq>) -> Result<Vec<Vec<Fq>>, Error> {
-    let (x, y) = Option::<(Fq, Fq)>::from(vesta.g().coordinates()).ok_or(Error::Input)?;
-    Ok(vec![
-        vec![Option::<Fq>::from(Fq::from_repr(digest.to_repr())).ok_or(Error::Input)?],
-        vec![x, y],
-        vesta
-            .challenges()
-            .iter()
-            .map(|v| Option::<Fq>::from(Fq::from_repr(v.to_repr())).ok_or(Error::Input))
-            .collect::<Result<Vec<_>, _>>()?,
-    ])
-}
-fn opening_pallas(
-    params: &PinnedParams<Ep>,
-    binding: &DescriptorBinding,
-    key: &VerifyingKey<Ep>,
-    instances: &[Vec<Fq>],
-    proof: &[u8],
-    budget: MemoryBudget,
-) -> Result<FoldInput<Ep>, Error> {
-    let claim = accumulate_generator(params, binding, key, instances, proof, budget)
-        .map_err(|_| Error::Proof)?;
-    let input =
-        FoldInput::from_opening(*claim.g(), claim.challenges()).map_err(|_| Error::Proof)?;
-    input.decide(params, budget).map_err(|_| Error::Proof)?;
-    Ok(input)
-}
-fn opening_vesta(
-    params: &PinnedParams<Eq>,
-    binding: &DescriptorBinding,
-    key: &VerifyingKey<Eq>,
-    instances: &[Vec<Fp>],
-    proof: &[u8],
-    budget: MemoryBudget,
-) -> Result<FoldInput<Eq>, Error> {
-    let claim = accumulate_generator(params, binding, key, instances, proof, budget)
-        .map_err(|_| Error::Proof)?;
-    let input =
-        FoldInput::from_opening(*claim.g(), claim.challenges()).map_err(|_| Error::Proof)?;
-    input.decide(params, budget).map_err(|_| Error::Proof)?;
-    Ok(input)
 }

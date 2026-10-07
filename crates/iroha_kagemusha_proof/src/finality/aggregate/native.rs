@@ -7,6 +7,45 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{PrimeField, Zero};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
+/// Derive the proposed aggregate key from an exact bounded roster and bitmap.
+/// This native sum grants no authority; the complete aggregation source proves it.
+/// # Errors
+/// Noncanonical committee geometry, keys, signer bitmap, or identity aggregate.
+pub fn propose_aggregate_key(keys: &[[u8; 48]], bitmap: &[u8]) -> Result<[u8; 48], Error> {
+    let n = keys.len();
+    if !(4..=31).contains(&n)
+        || !(n - 1).is_multiple_of(3)
+        || bitmap.len() != n.div_ceil(8)
+        || (n..bitmap.len() * 8).any(|i| (bitmap[i / 8] >> (i % 8)) & 1 != 0)
+        || (0..n)
+            .filter(|&i| (bitmap[i / 8] >> (i % 8)) & 1 != 0)
+            .count()
+            != n - (n - 1) / 3
+    {
+        return Err(Error::Synthesis);
+    }
+    let mut sum = G1Projective::zero();
+    for (i, key) in keys.iter().enumerate() {
+        let point =
+            G1Affine::deserialize_compressed(key.as_slice()).map_err(|_| Error::Synthesis)?;
+        if point.is_zero() {
+            return Err(Error::Synthesis);
+        }
+        if (bitmap[i / 8] >> (i % 8)) & 1 != 0 {
+            sum += point;
+        }
+    }
+    let point = sum.into_affine();
+    if point.is_zero() {
+        return Err(Error::Synthesis);
+    }
+    let mut bytes = Vec::with_capacity(48);
+    point
+        .serialize_compressed(&mut bytes)
+        .map_err(|_| Error::Synthesis)?;
+    bytes.try_into().map_err(|_| Error::Synthesis)
+}
+
 fn point_witness(point: G1Affine) -> G1AffineWitness {
     if point.is_zero() {
         G1AffineWitness {
@@ -55,20 +94,20 @@ pub fn prepare_aggregation(
     }
     let context = AggregateContext {
         roster_root,
-        members: n as u8,
-        faults: f as u8,
+        members: u8::try_from(n).map_err(|_| Error::Synthesis)?,
+        faults: u8::try_from(f).map_err(|_| Error::Synthesis)?,
         bitmap: padded,
         aggregate_key,
     };
     let mut sum = G1Projective::zero();
     let mut leaves = vec![AggregateLeafCircuit::new(
         0,
-        context.clone(),
+        context,
         None,
         Some(point_witness(sum.into_affine())),
         None,
     )?];
-    for seat in 0..31 {
+    for (seat, path) in paths.iter().enumerate().take(31) {
         let before = point_witness(sum.into_affine());
         let point = points
             .get(seat)
@@ -78,13 +117,13 @@ pub fn prepare_aggregation(
             sum += point;
         }
         leaves.push(AggregateLeafCircuit::new(
-            seat as u32 + 1,
-            context.clone(),
+            u32::try_from(seat).map_err(|_| Error::Synthesis)? + 1,
+            context,
             Some(before),
             Some(point_witness(sum.into_affine())),
             Some(AggregateSeat {
                 key: *keys.get(seat).unwrap_or(&[0; 48]),
-                path: paths[seat],
+                path: *path,
                 point: point_witness(point),
             }),
         )?);

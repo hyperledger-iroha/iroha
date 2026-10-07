@@ -39,7 +39,7 @@ impl StatementCells {
         variant: Variant,
         fields: &[Word<Fp>; STATEMENT_FIELDS],
     ) -> Result<Self, Error> {
-        validate_fields(uint, region, variant, fields, false)?;
+        validate_fields(uint, region, variant, fields)?;
         let digest = sponge.hash_words(region, STATEMENT_DOMAIN, fields)?;
         Ok(Self {
             variant,
@@ -105,54 +105,73 @@ impl StatementCells {
         successor: &StateCells,
         lineage: &LineagePublicCells,
     ) -> Result<(), Error> {
-        if predecessor.is_none() != (self.variant == Variant::Bootstrap) {
-            return Err(Error::Synthesis);
-        }
-        successor.bind_lineage(uint, region, lineage)?;
-        let f = &self.fields;
-        for (index, core_index) in [
-            (3, core::SCHEME),
-            (4, core::SCHEME + 1),
-            (5, core::ASSET),
-            (6, core::ASSET + 1),
-            (7, core::CREDENTIAL),
-            (8, core::LIFECYCLE),
-            (9, core::SEQUENCE),
-            (10, core::NEXT_LOAD),
-        ] {
-            GlueChip::assert_equal(region, &f[index], &successor.core()[core_index])?;
-        }
-        GlueChip::assert_equal(region, &f[1], &lineage.fields()[3])?;
-        GlueChip::assert_equal(region, &f[2], &lineage.fields()[4])?;
-        GlueChip::assert_equal(region, &f[15], successor.commitment())?;
-        if let Some((predecessor, previous_lineage)) = predecessor {
-            predecessor.bind_lineage(uint, region, previous_lineage)?;
-            GlueChip::assert_equal(region, &f[14], predecessor.commitment())?;
-            GlueChip::assert_equal(region, &f[11], &predecessor.core()[core::ENABLED_CONTROLS])?;
-            for index in core::SCHEME..core::CREDENTIAL {
-                GlueChip::assert_equal(
-                    region,
-                    &predecessor.core()[index],
-                    &successor.core()[index],
-                )?;
-            }
-            let sequence = uint.range_check::<128>(region, &predecessor.core()[core::SEQUENCE])?;
-            let next = uint.checked_add_constant(region, &sequence, 1)?;
-            GlueChip::assert_equal(region, next.word(), &f[9])?;
-            for index in [3, 4, 9, 10, 11, 12, 17] {
-                GlueChip::assert_equal(
-                    region,
-                    &previous_lineage.fields()[index],
-                    &lineage.fields()[index],
-                )?;
-            }
-            if consumes_lineage(self.variant) {
-                GlueChip::assert_equal(region, &f[12], previous_lineage.burned_total())?;
-                GlueChip::assert_equal(region, &f[13], previous_lineage.pending_root())?;
-            }
-        }
-        Ok(())
+        bind_state_fields(
+            &self.fields,
+            (
+                self.variant == Variant::Bootstrap,
+                consumes_lineage(self.variant),
+            ),
+            uint,
+            region,
+            predecessor,
+            successor,
+            lineage,
+        )
     }
+}
+
+fn bind_state_fields(
+    fields: &[Word<Fp>; STATEMENT_FIELDS],
+    flags: (bool, bool),
+    uint: &mut UintChip<'_, Fp>,
+    region: &mut Region<'_, Fp>,
+    predecessor: Option<(&StateCells, &LineagePublicCells)>,
+    successor: &StateCells,
+    lineage: &LineagePublicCells,
+) -> Result<(), Error> {
+    if predecessor.is_none() != flags.0 {
+        return Err(Error::Synthesis);
+    }
+    successor.bind_lineage(uint, region, lineage)?;
+    let f = fields;
+    for (index, core_index) in [
+        (3, core::SCHEME),
+        (4, core::SCHEME + 1),
+        (5, core::ASSET),
+        (6, core::ASSET + 1),
+        (7, core::CREDENTIAL),
+        (8, core::LIFECYCLE),
+        (9, core::SEQUENCE),
+        (10, core::NEXT_LOAD),
+    ] {
+        GlueChip::assert_equal(region, &f[index], &successor.core()[core_index])?;
+    }
+    GlueChip::assert_equal(region, &f[1], &lineage.fields()[3])?;
+    GlueChip::assert_equal(region, &f[2], &lineage.fields()[4])?;
+    GlueChip::assert_equal(region, &f[15], successor.commitment())?;
+    if let Some((predecessor, previous_lineage)) = predecessor {
+        predecessor.bind_lineage(uint, region, previous_lineage)?;
+        GlueChip::assert_equal(region, &f[14], predecessor.commitment())?;
+        GlueChip::assert_equal(region, &f[11], &predecessor.core()[core::ENABLED_CONTROLS])?;
+        for index in core::SCHEME..core::CREDENTIAL {
+            GlueChip::assert_equal(region, &predecessor.core()[index], &successor.core()[index])?;
+        }
+        let sequence = uint.range_check::<128>(region, &predecessor.core()[core::SEQUENCE])?;
+        let next = uint.checked_add_constant(region, &sequence, 1)?;
+        GlueChip::assert_equal(region, next.word(), &f[9])?;
+        for index in [3, 4, 9, 10, 11, 12, 17] {
+            GlueChip::assert_equal(
+                region,
+                &previous_lineage.fields()[index],
+                &lineage.fields()[index],
+            )?;
+        }
+        if flags.1 {
+            GlueChip::assert_equal(region, &f[12], previous_lineage.burned_total())?;
+            GlueChip::assert_equal(region, &f[13], previous_lineage.pending_root())?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_fields(
@@ -160,39 +179,14 @@ fn validate_fields(
     region: &mut Region<'_, Fp>,
     variant: Variant,
     fields: &[Word<Fp>; STATEMENT_FIELDS],
-    refresh_class: bool,
 ) -> Result<(), Error> {
-    GlueChip::assert_constant(region, &fields[0], Fp::ONE)?;
-    for start in [1, 3, 5] {
-        digest_pair(uint, region, &fields[start..start + 2])?;
-    }
-    for index in [7, 15] {
-        uint.glue().assert_nonzero(region, &fields[index])?;
-    }
-    let lifecycle = uint.glue().add_constant(region, &fields[8], -Fp::ONE)?;
-    uint.glue().assert_bool(region, &lifecycle)?;
-    for index in [9, 10, 12] {
-        uint.range_check::<128>(region, &fields[index])?;
-    }
-    uint.range_check::<3>(region, &fields[11])?;
-    if consumes_lineage(variant) {
-        uint.glue().assert_nonzero(region, &fields[13])?;
-    } else {
-        for index in [12, 13] {
-            GlueChip::assert_constant(region, &fields[index], Fp::ZERO)?;
-        }
-    }
-    if variant == Variant::Bootstrap {
-        for index in [9, 10, 11, 14] {
-            GlueChip::assert_constant(region, &fields[index], Fp::ZERO)?;
-        }
-        GlueChip::assert_constant(region, &fields[8], Fp::ONE)?;
-    } else {
-        for index in [9, 14] {
-            uint.glue().assert_nonzero(region, &fields[index])?;
-        }
-    }
-    let (tag, count) = effect(uint, region, variant, &fields[17..], refresh_class)?;
+    validate_header(
+        uint,
+        region,
+        (variant == Variant::Bootstrap, consumes_lineage(variant)),
+        fields,
+    )?;
+    let (tag, count) = effect(uint, region, variant, &fields[17..])?;
     GlueChip::assert_constant(region, &fields[16], Fp::from(tag))?;
     for word in &fields[17 + count..] {
         GlueChip::assert_constant(region, word, Fp::ZERO)?;
@@ -207,6 +201,45 @@ fn validate_fields(
     }
     if variant == Variant::RefreshCredential {
         GlueChip::assert_equal(region, &fields[18], &fields[7])?;
+    }
+    Ok(())
+}
+
+fn validate_header(
+    uint: &mut UintChip<'_, Fp>,
+    region: &mut Region<'_, Fp>,
+    flags: (bool, bool),
+    fields: &[Word<Fp>; STATEMENT_FIELDS],
+) -> Result<(), Error> {
+    GlueChip::assert_constant(region, &fields[0], Fp::ONE)?;
+    for start in [1, 3, 5] {
+        digest_pair(uint, region, &fields[start..start + 2])?;
+    }
+    for index in [7, 15] {
+        uint.glue().assert_nonzero(region, &fields[index])?;
+    }
+    let lifecycle = uint.glue().add_constant(region, &fields[8], -Fp::ONE)?;
+    uint.glue().assert_bool(region, &lifecycle)?;
+    for index in [9, 10, 12] {
+        uint.range_check::<128>(region, &fields[index])?;
+    }
+    uint.range_check::<3>(region, &fields[11])?;
+    if flags.1 {
+        uint.glue().assert_nonzero(region, &fields[13])?;
+    } else {
+        for index in [12, 13] {
+            GlueChip::assert_constant(region, &fields[index], Fp::ZERO)?;
+        }
+    }
+    if flags.0 {
+        for index in [9, 10, 11, 14] {
+            GlueChip::assert_constant(region, &fields[index], Fp::ZERO)?;
+        }
+        GlueChip::assert_constant(region, &fields[8], Fp::ONE)?;
+    } else {
+        for index in [9, 14] {
+            uint.glue().assert_nonzero(region, &fields[index])?;
+        }
     }
     Ok(())
 }
@@ -232,7 +265,6 @@ fn effect(
     region: &mut Region<'_, Fp>,
     variant: Variant,
     e: &[Word<Fp>],
-    refresh_class: bool,
 ) -> Result<(u64, usize), Error> {
     match variant {
         Variant::Bootstrap => {
@@ -297,9 +329,7 @@ fn effect(
                 Variant::RefreshTimeAnchor => 5,
                 _ => return Err(Error::Synthesis),
             };
-            if !refresh_class {
-                GlueChip::assert_constant(region, &e[0], Fp::from(kind))?;
-            }
+            GlueChip::assert_constant(region, &e[0], Fp::from(kind))?;
             uint.glue().assert_nonzero(region, &e[1])?;
             uint.range_check::<64>(region, &e[2])?;
             Ok((7, 3))
@@ -307,51 +337,98 @@ fn effect(
     }
 }
 
-/// One shared tag7 sigma statement, with the update kind constrained in-circuit.
-/// The fixed A owner still selects its own exact `Variant` and authenticates
-/// the corresponding update. This wrapper never exposes a host-selected variant.
+/// One `RefreshPolicy` statement whose update kind is constrained inside one source.
+/// The five selectors are derived from field17; none is a caller's validity flag.
 #[derive(Clone, Debug)]
-pub(crate) struct RefreshClassStatementCells {
-    common: StatementCells,
+pub struct RefreshStatementCells {
+    fields: [Word<Fp>; STATEMENT_FIELDS],
+    digest: Word<Fp>,
     kinds: [Bit<Fp>; 5],
 }
-impl RefreshClassStatementCells {
-    /// Validate the common Refresh header and exact one-of-five kind selector.
-    pub(crate) fn constrain(
+impl RefreshStatementCells {
+    /// Constrain the common header, exactly one kind1..5, effect padding and digest.
+    ///
+    /// # Errors
+    /// Layout failure; invalid kinds, noncanonical statement fields, nonzero lineage
+    /// inputs, wrong tag/padding and a credential-update digest mismatch are unsatisfiable.
+    pub fn constrain(
         uint: &mut UintChip<'_, Fp>,
         sponge: &mut impl WordHasher<Fp>,
         region: &mut Region<'_, Fp>,
         fields: &[Word<Fp>; STATEMENT_FIELDS],
     ) -> Result<Self, Error> {
-        // All five kinds share this header and state-binding behavior. Only the
-        // effect kind and credential-renewal equality need a constrained union.
-        validate_fields(uint, region, Variant::RefreshTimeAnchor, fields, true)?;
+        validate_header(uint, region, (false, false), fields)?;
+        GlueChip::assert_constant(region, &fields[16], Fp::from(7))?;
+        uint.range_check::<3>(region, &fields[17])?;
         let mut kinds = Vec::with_capacity(5);
-        for kind in 1..=5 {
+        for kind in 1_u64..=5 {
             let difference = uint
                 .glue()
                 .add_constant(region, &fields[17], -Fp::from(kind))?;
             kinds.push(uint.glue().is_zero(region, &difference)?);
         }
-        let mut selected = kinds[0].word().clone();
-        for kind in &kinds[1..] {
-            selected = uint.glue().add(region, &selected, kind.word())?;
+        // The shared four-column glue accepts at most three input terms.
+        // Sum all five derived bits in two fixed rows without changing the source
+        // shape or permitting a host-selected subset of refresh kinds.
+        let first = uint.glue().linear(
+            region,
+            &[
+                (Fp::ONE, kinds[0].word()),
+                (Fp::ONE, kinds[1].word()),
+                (Fp::ONE, kinds[2].word()),
+            ],
+            Fp::ZERO,
+        )?;
+        let sum = uint.glue().linear(
+            region,
+            &[
+                (Fp::ONE, &first),
+                (Fp::ONE, kinds[3].word()),
+                (Fp::ONE, kinds[4].word()),
+            ],
+            Fp::ZERO,
+        )?;
+        GlueChip::assert_constant(region, &sum, Fp::ONE)?;
+        uint.glue().assert_nonzero(region, &fields[18])?;
+        uint.range_check::<64>(region, &fields[19])?;
+        for field in &fields[20..] {
+            GlueChip::assert_constant(region, field, Fp::ZERO)?;
         }
-        GlueChip::assert_constant(region, &selected, Fp::ONE)?;
-        let credential = uint.glue().sub(region, &fields[18], &fields[7])?;
-        let mismatch = uint.glue().mul(region, kinds[0].word(), &credential)?;
-        GlueChip::assert_constant(region, &mismatch, Fp::ZERO)?;
+        let difference = uint.glue().sub(region, &fields[18], &fields[7])?;
+        let selected = uint.glue().mul(region, kinds[0].word(), &difference)?;
+        GlueChip::assert_constant(region, &selected, Fp::ZERO)?;
+        let digest = sponge.hash_words(region, STATEMENT_DOMAIN, fields)?;
         Ok(Self {
-            common: StatementCells {
-                variant: Variant::RefreshTimeAnchor,
-                fields: fields.clone(),
-                digest: sponge.hash_words(region, STATEMENT_DOMAIN, fields)?,
-            },
+            fields: fields.clone(),
+            digest,
             kinds: kinds.try_into().map_err(|_| Error::Synthesis)?,
         })
     }
-    /// Bind the same non-consuming header for every refresh kind.
-    pub(crate) fn bind_states(
+
+    /// Complete canonical statement words.
+    #[must_use]
+    pub const fn fields(&self) -> &[Word<Fp>; STATEMENT_FIELDS] {
+        &self.fields
+    }
+
+    /// The single public sigma instance derived from the statement.
+    #[must_use]
+    pub const fn digest(&self) -> &Word<Fp> {
+        &self.digest
+    }
+
+    /// Derived one-hot selectors in Credential, Policy, Blacklist, Share, Anchor order.
+    #[must_use]
+    pub const fn kinds(&self) -> &[Bit<Fp>; 5] {
+        &self.kinds
+    }
+
+    /// Bind both complete openings and their identity/sequence continuity.
+    /// `RefreshPolicy` never consumes an Omega-adjusted monetary input.
+    ///
+    /// # Errors
+    /// Layout failure or inconsistent state, lineage, sequence and statement fields.
+    pub fn bind_states(
         &self,
         uint: &mut UintChip<'_, Fp>,
         region: &mut Region<'_, Fp>,
@@ -359,19 +436,14 @@ impl RefreshClassStatementCells {
         successor: &StateCells,
         lineage: &LineagePublicCells,
     ) -> Result<(), Error> {
-        self.common
-            .bind_states(uint, region, Some(predecessor), successor, lineage)
-    }
-    /// The constrained update kinds, Credential through `TimeAnchor`.
-    pub(crate) fn kinds(&self) -> &[Bit<Fp>; 5] {
-        &self.kinds
-    }
-    /// The validated public statement preimage.
-    pub(crate) fn fields(&self) -> &[Word<Fp>; STATEMENT_FIELDS] {
-        self.common.fields()
-    }
-    /// The digest bound to the public sigma input.
-    pub(crate) fn digest(&self) -> &Word<Fp> {
-        self.common.digest()
+        bind_state_fields(
+            &self.fields,
+            (false, false),
+            uint,
+            region,
+            Some(predecessor),
+            successor,
+            lineage,
+        )
     }
 }

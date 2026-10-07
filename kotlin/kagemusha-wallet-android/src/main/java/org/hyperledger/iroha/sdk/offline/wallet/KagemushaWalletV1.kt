@@ -15,6 +15,8 @@ class KagemushaWalletExceptionV1(
     companion object {
         /** There is deliberately no structural verifier or software-key fallback. */
         const val ARTIFACTS_UNAVAILABLE = -4
+        /** Native output violates the fixed status/payload contract. */
+        const val INVALID_NATIVE_OUTPUT = -100
         /** Missing, stale or unauthenticated native bridge library. */
         const val BRIDGE_UNAVAILABLE = -101
     }
@@ -30,6 +32,13 @@ class KagemushaWalletCallV1 internal constructor(
     @JvmField val detail: Int,
     bytes: ByteArray,
 ) {
+    init {
+        val carriesBytes = status == COMPLETE || status == CREDIT_STATUS
+        if ((status >= 0 && status !in UNKNOWN..PREPARING) || bytes.size > 10_000 ||
+            (if (carriesBytes) bytes.isEmpty() else bytes.isNotEmpty())) {
+            throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        }
+    }
     private val retainedBytes = bytes.copyOf()
     /** Exact canonical bytes returned by Rust; this accessor never assembles or signs again. */
     fun bytes(): ByteArray = retainedBytes.copyOf()
@@ -46,6 +55,8 @@ class KagemushaWalletCallV1 internal constructor(
         const val CHECKPOINT = 8
         const val FOLDED = 9
         const val CREDIT_STATUS = 10
+        /** Durable intent exists, but irreversible Advance has not selected it. */
+        const val PREPARING = 11
     }
 }
 
@@ -62,14 +73,39 @@ class KagemushaWalletV1 private constructor(handle: Long) : Closeable {
     private fun handle(): Long = owner.get().takeIf { it > 0 } ?: throw KagemushaWalletExceptionV1(-2)
     private fun call(operation: Int, first: ByteArray = byteArrayOf(), second: ByteArray = byteArrayOf()): KagemushaWalletCallV1 {
         val value = KagemushaWalletNativeV1.call(handle(), operation, first.copyOf(), second.copyOf())
-            ?: throw KagemushaWalletExceptionV1(-100)
+            ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         if (value.status < 0) throw KagemushaWalletExceptionV1(value.status, value.reason, value.platformCode)
         return value
     }
-    /** Commit canonical Norito FrozenTransition bytes. Rust verifies every relation and binding. */
-    fun commit(frozenTransition: ByteArray): KagemushaWalletCallV1 {
-        require(frozenTransition.size <= 264_192) { "FrozenTransition exceeds its capsule/credential envelope bound" }
-        return call(0, frozenTransition)
+    private fun execute(input: KagemushaWalletOperationInputV1): KagemushaWalletCallV1 {
+        val value = KagemushaWalletNativeV1.execute(handle(), input.requestId(), input.selector,
+            input.amount.low, input.amount.high, input.first(), input.second(), input.third())
+            ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        if (value.status < 0) throw KagemushaWalletExceptionV1(value.status, value.reason, value.platformCode)
+        return value
+    }
+    /** Load the exact ordinary-ledger receipt and compact finality evidence. */
+    fun load(requestId: ByteArray, receipt: ByteArray, finality: ByteArray): KagemushaWalletCallV1 =
+        execute(KagemushaWalletOperationInputV1(requestId, 0, first = receipt, second = finality))
+    /** Irreversible Send; Rust authenticates the exact receiver-signed Request. */
+    fun send(requestId: ByteArray, request: ByteArray): KagemushaWalletCallV1 =
+        execute(KagemushaWalletOperationInputV1(requestId, 1, first = request))
+    /** Receive selects the durably issued Request locally by the Payment's digest. */
+    fun receive(requestId: ByteArray, payment: ByteArray, payerCredential: ByteArray, certificates: ByteArray): KagemushaWalletCallV1 =
+        execute(KagemushaWalletOperationInputV1(requestId, 2, first = payment, second = payerCredential, third = certificates))
+    /** Refresh from exact signed originals; Native derives maps and all effective values. */
+    fun refresh(requestId: ByteArray, kind: KagemushaWalletRefreshKindV1, update: ByteArray, certificates: ByteArray): KagemushaWalletCallV1 =
+        execute(KagemushaWalletOperationInputV1(requestId, kind.selector, first = update, second = certificates))
+    /** Unload gross value to the credential account; an optional quote requires its certificates. */
+    fun unload(requestId: ByteArray, amount: KagemushaWalletUInt128V1, quote: ByteArray? = null, certificates: ByteArray? = null): KagemushaWalletCallV1 {
+        require((quote == null) == (certificates == null)) { "quote and certificates must be supplied together" }
+        return execute(KagemushaWalletOperationInputV1(requestId, 8, amount, quote ?: byteArrayOf(), certificates ?: byteArrayOf()))
+    }
+    /** Enter Retiring under native folded-state checks. */
+    fun retire(requestId: ByteArray): KagemushaWalletCallV1 = execute(KagemushaWalletOperationInputV1(requestId, 9))
+    /** Resolve the local request identity, including distinct Preparing and irreversible Pending. */
+    fun requestStatus(requestId: ByteArray): KagemushaWalletCallV1 {
+        word(requestId); require(requestId.any { it != 0.toByte() }); return call(5, requestId)
     }
     /** Retrieve exact retained bytes; unknown, pending and delivery loss remain distinct. */
     fun retry(operationId: ByteArray): KagemushaWalletCallV1 { word(operationId); return call(1, operationId) }
@@ -79,7 +115,7 @@ class KagemushaWalletV1 private constructor(handle: Long) : Closeable {
     fun foldOnce(): KagemushaWalletCallV1 = call(3)
     /** Native ownership and proof backlog, without operation readiness. Call on a worker. */
     fun snapshot(): KagemushaWalletSnapshotV1 {
-        val reply = KagemushaWalletNativeV1.snapshot(handle()) ?: throw KagemushaWalletExceptionV1(-100)
+        val reply = KagemushaWalletNativeV1.snapshot(handle()) ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         if (reply.status < 0) throw KagemushaWalletExceptionV1(reply.status, reply.reason, reply.platformCode)
         return KagemushaWalletSnapshotV1(reply)
     }
@@ -113,7 +149,7 @@ class KagemushaWalletV1 private constructor(handle: Long) : Closeable {
                 if (KagemushaWalletNativeV1.revision() != 1) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
                 KagemushaWalletNativeV1.open(platform, slot.copyOf(), scheme.copyOf(), wallet.copyOf(), artifact.copyOf())
             } catch (_: LinkageError) { throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE) }
-            if (handle <= 0) throw KagemushaWalletExceptionV1(if (handle < 0) handle.toInt() else -100)
+            if (handle <= 0) throw KagemushaWalletExceptionV1(if (handle < 0) handle.toInt() else KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
             return KagemushaWalletV1(handle)
         }
     }
@@ -126,5 +162,52 @@ internal object KagemushaWalletNativeV1 {
     @JvmStatic external fun close(handle: Long): Int
     @JvmStatic external fun activity(handle: Long, foreground: Int, charging: Int): Int
     @JvmStatic external fun call(handle: Long, operation: Int, first: ByteArray, second: ByteArray): KagemushaWalletCallV1?
+    @JvmStatic external fun execute(handle: Long, requestId: ByteArray, selector: Int, amountLow: Long, amountHigh: Long, first: ByteArray, second: ByteArray, third: ByteArray): KagemushaWalletCallV1?
     @JvmStatic external fun snapshot(handle: Long): KagemushaWalletSnapshotReplyV1?
+}
+
+/** Existing signed policy classes; these selectors never choose proof keys or state roots. */
+enum class KagemushaWalletRefreshKindV1(internal val selector: Int) {
+    CREDENTIAL(3), SCHEME_POLICY(4), BLACKLIST(5), TIME_ANCHOR(6), QUOTA_SHARE(7),
+}
+
+/** Allocation-bounded copies for the fixed JNI request. Validation is not monetary admission. */
+internal class KagemushaWalletOperationInputV1(
+    requestId: ByteArray,
+    val selector: Int,
+    val amount: KagemushaWalletUInt128V1 = KagemushaWalletUInt128V1(0, 0),
+    first: ByteArray = byteArrayOf(), second: ByteArray = byteArrayOf(), third: ByteArray = byteArrayOf(),
+) {
+    private val identity: ByteArray
+    private val originals: List<ByteArray>
+    init {
+        val limits = when (selector) {
+            0 -> intArrayOf(512, 16_384, 0)
+            1 -> intArrayOf(10_000, 0, 0)
+            2 -> intArrayOf(10_000, 1_024, 10_000)
+            3, 4 -> intArrayOf(1_024, 10_000, 0)
+            5 -> intArrayOf(65_536 * 34 + 512, 10_000, 0)
+            6 -> intArrayOf(512, 10_000, 0)
+            7 -> intArrayOf(8_192, 10_000, 0)
+            8 -> intArrayOf(1_024, 10_000, 0)
+            9 -> intArrayOf(0, 0, 0)
+            else -> throw IllegalArgumentException("unknown lifecycle operation")
+        }
+        require(requestId.size == 32 && requestId.any { it != 0.toByte() }) { "nonzero request identity must be exactly 32 bytes" }
+        val nonzero = amount.low != 0L || amount.high != 0L
+        require(if (selector == 8) nonzero else !nonzero) { "only Unload has a positive amount" }
+        val inputs = listOf(first, second, third)
+        for (index in inputs.indices) {
+            require(inputs[index].size <= limits[index]) { "original exceeds operation bound" }
+            if (selector < 8 && limits[index] != 0) require(inputs[index].isNotEmpty()) { "required original is empty" }
+        }
+        if (selector == 8) require(first.isEmpty() == second.isEmpty()) { "quote and certificates must be supplied together" }
+        identity = requestId.copyOf()
+        originals = inputs.map { it.copyOf() }
+    }
+    fun requestId(): ByteArray = identity.copyOf()
+    fun first(): ByteArray = originals[0].copyOf()
+    fun second(): ByteArray = originals[1].copyOf()
+    fun third(): ByteArray = originals[2].copyOf()
+    override fun toString(): String = "KagemushaWalletOperationInputV1(originals=[REDACTED])"
 }

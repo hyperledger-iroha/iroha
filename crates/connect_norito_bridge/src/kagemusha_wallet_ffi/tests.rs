@@ -40,9 +40,16 @@ impl Wallet for TestWallet {
             }),
         })
     }
-    fn commit(&mut self, _: state::FrozenTransition) -> Result<Response> {
+    fn execute(&mut self, _: state::OperationRequestV1) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Err(Failure::code(PROOF_REJECTED))
+    }
+    fn request_status(&mut self, _: &[u8; 32]) -> Result<Response> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(Response {
+            kind: 11,
+            ..Response::default()
+        })
     }
     fn retry(&mut self, op: &[u8; 32]) -> Result<Response> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -129,7 +136,12 @@ fn c_calls_preserve_exact_retry_unknown_pending_loss_and_platform_failure() {
         }
     );
     assert_eq!(retry(id, &[0; 31]).unwrap_err().status, INVALID);
-    assert_eq!(commit(id, &[0; 5]).unwrap_err().status, INVALID);
+    assert_eq!(
+        requests::request(&[0; 5], 9, 0, [&[]; 3])
+            .unwrap_err()
+            .status,
+        INVALID
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 6);
     let mut result = WalletResult::default();
     assert_eq!(
@@ -146,7 +158,7 @@ fn c_calls_preserve_exact_retry_unknown_pending_loss_and_platform_failure() {
         (8, 7, 1 << 29, 3)
     );
     assert_eq!(
-        unsafe { connect_norito_kagemusha_wallet_commit_v1(id, std::ptr::null(), 10, &mut result) },
+        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, std::ptr::null(), &mut result) },
         INVALID
     );
     assert_eq!(
@@ -541,4 +553,45 @@ fn snapshot_pod_has_explicit_presence_for_a_valid_zero_folded_balance() {
     );
     assert_eq!(fail.flags, 0);
     assert_eq!(fail.owned_balance, WalletU128::default());
+}
+
+#[test]
+fn c_typed_execute_preserves_intake_bounds_and_distinct_preparation_status() {
+    let (id, calls, _) = installed();
+    let identity = [1; 32];
+    let mut request = WalletOperationRequest {
+        request_id: identity.as_ptr(),
+        selector: 9,
+        amount: WalletU128::default(),
+        first: std::ptr::null(),
+        first_length: 0,
+        second: std::ptr::null(),
+        second_length: 0,
+        third: std::ptr::null(),
+        third_length: 0,
+    };
+    let mut result = WalletResult::default();
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        PROOF_REJECTED
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(result.status, PROOF_REJECTED);
+    assert!(result.bytes.is_null());
+    request.first_length = 1;
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_execute_v1(id, &request, &mut result) },
+        INVALID
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        unsafe {
+            connect_norito_kagemusha_wallet_request_status_v1(id, identity.as_ptr(), &mut result)
+        },
+        0
+    );
+    assert_eq!(result.status, 11);
+    assert_eq!(result.length, 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    close(id).unwrap();
 }

@@ -72,6 +72,7 @@ struct Retained {
     statement: [Fp; 26],
     omega: Vec<u8>,
     sigma: Vec<u8>,
+    capacities: [usize; 2],
     known: bool,
 }
 impl Retained {
@@ -139,8 +140,28 @@ impl Retained {
             statement: *f,
             omega,
             sigma,
+            capacities: [65; 2],
             known: true,
         }
+    }
+    fn rebind_proofs(&mut self) {
+        let proof: Fp = p_bytes_native(
+            u64::from_le_bytes(*b"kgwprf_1"),
+            &[frame(&self.omega), frame(&self.sigma)].concat(),
+        );
+        let mut body = self.signed[2][..ObjectKind::Receipt.body_len()].to_vec();
+        body[242..274].copy_from_slice(&proof.to_repr());
+        let receipt = bootstrap_objects::sign(ObjectKind::Receipt, body, 29, 73);
+        let package = hash_with_domain(
+            u64::from_le_bytes(*b"kgwpkg_1"),
+            &[
+                hash_with_domain(STATEMENT_DOMAIN, &self.statement),
+                proof,
+                receipt.digest(),
+            ],
+        );
+        self.signed[2] = receipt.bytes;
+        self.payment[131..163].copy_from_slice(&package.to_repr());
     }
     fn public(&self) -> Vec<Fp> {
         let proof = p_bytes_native(
@@ -213,7 +234,7 @@ impl Circuit<Fp> for Retained {
                     &mut chip.uint(),
                     &mut bytes,
                     &mut region,
-                    65,
+                    self.capacities[0],
                     &raw(&self.omega),
                     &[],
                 )?;
@@ -221,7 +242,7 @@ impl Circuit<Fp> for Retained {
                     &mut chip.uint(),
                     &mut bytes,
                     &mut region,
-                    65,
+                    self.capacities[1],
                     &raw(&self.sigma),
                     &[],
                 )?;
@@ -257,7 +278,7 @@ impl Circuit<Fp> for Retained {
                     &mut chip,
                     &mut bytes,
                     &mut region,
-                    OwnPolicy::new([1, 2], [31, 32], bootstrap_objects::key(23)).unwrap(),
+                    OwnPolicy::new([31, 32], bootstrap_objects::key(23)).unwrap(),
                     ArchiveRetainedSources {
                         signed: signed.each_ref().map(Vec::as_slice),
                         payment: &payment,
@@ -322,6 +343,89 @@ fn retained_payment_binds_original_bytes_lengths_credential_field_and_send_descr
     let unknown = synthesize(&c.without_witnesses(), 16, None).unwrap();
     assert_eq!(known.tables.fixed(), unknown.tables.fixed());
     assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+}
+
+#[test]
+fn retained_payment_joint_limit_rejects_resigned_and_rehashed_oversize() {
+    use iroha_kagemusha_proof::a_relation::receive::MAX_OMEGA_RAW_BYTES;
+    let mut exact = Retained::fixture();
+    exact.capacities = [5_000; 2];
+    exact.omega = vec![41; 4_000];
+    exact.sigma = vec![79; MAX_OMEGA_RAW_BYTES - exact.omega.len()];
+    exact.rebind_proofs();
+    assert!(exact.accepts(&exact.public()), "inclusive joint bound");
+    let known = synthesize(&exact, 16, None).unwrap();
+    let unknown = synthesize(&exact.without_witnesses(), 16, None).unwrap();
+    assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+    assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+    assert_eq!(
+        known.tables.advice_assigned(),
+        unknown.tables.advice_assigned()
+    );
+    for slot in 0..2 {
+        let mut oversized = exact.clone();
+        if slot == 0 {
+            oversized.omega.push(0);
+        } else {
+            oversized.sigma.push(0);
+        }
+        oversized.rebind_proofs();
+        assert!(
+            !oversized.accepts(&oversized.public()),
+            "joint cap+1 must reject after re-signing receipt and rehashing Payment; slot{slot}"
+        );
+    }
+}
+
+#[test]
+fn retained_full_payment_capacities_have_witness_independent_layout() {
+    use iroha_kagemusha_proof::a_relation::receive::{MAX_OMEGA_RAW_BYTES, MAX_SIGMA_RAW_BYTES};
+    let mut source = Retained::fixture();
+    source.capacities = [MAX_OMEGA_RAW_BYTES, MAX_SIGMA_RAW_BYTES];
+    source.sigma = vec![79; MAX_SIGMA_RAW_BYTES];
+    source.omega = vec![41; MAX_OMEGA_RAW_BYTES - MAX_SIGMA_RAW_BYTES];
+    source.rebind_proofs();
+    let public = vec![source.public()];
+    // Full carrier capacities are fixed by the admitted envelope domain, even
+    // when the original proof tapes are short or invalid. This checks this
+    // owner in isolation; recursive A/W composition needs its own layout gate.
+    let (known, k) = match synthesize(&source, 16, Some(&public)) {
+        Ok(layout) => (layout, 16),
+        Err(error) => {
+            eprintln!("full retained owner k16 error {error:?}; k18 diagnostic only");
+            (synthesize(&source, 18, Some(&public)).unwrap(), 18)
+        }
+    };
+    let rows: Vec<_> = known
+        .tables
+        .advice_assigned()
+        .iter()
+        .map(|column| {
+            column
+                .iter()
+                .rposition(|assigned| *assigned)
+                .map_or(0, |i| i + 1)
+        })
+        .collect();
+    eprintln!(
+        "full retained owner capacities={:?} max_rows={} lanes={rows:?} k16_fit={}",
+        source.capacities,
+        rows.iter().max().unwrap(),
+        k == 16
+    );
+    let report = iroha_plonk::check::check(&known.cs, &known.tables, CheckMode::Strict).unwrap();
+    assert!(report.is_satisfied(), "{:?}", report.failures().first());
+    let unknown = synthesize(&source.without_witnesses(), k, None).unwrap();
+    assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+    assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+    assert_eq!(
+        known.tables.advice_assigned(),
+        unknown.tables.advice_assigned()
+    );
+    assert_eq!(
+        k, 16,
+        "full retained owner exceeds the hard circuit capacity"
+    );
 }
 
 #[test]

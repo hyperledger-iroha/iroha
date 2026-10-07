@@ -34,7 +34,7 @@ pub const STATE_DOMAIN: u64 = u64::from_le_bytes(*b"kgwaggs1");
 
 /// Untrusted aggregate source context; the enclosing finality proof authenticates
 /// its root/count and binds its bitmap and output key to the same Commit proof.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct AggregateContext {
     /// Ordered authenticated roster's internal commitment.
     pub roster_root: Fp,
@@ -189,6 +189,37 @@ pub struct AggregateConfig {
     public: Column<Instance>,
 }
 impl AggregateLeafCircuit {
+    /// Exact untrusted source context, authenticated only by the complete program.
+    pub const fn context(&self) -> &AggregateContext {
+        &self.context
+    }
+    /// Build a witnessless source from its exact cursor without a live roster,
+    /// aggregate point, signature or native arithmetic witness. The original
+    /// compiled cursor still fixes every seat and both endpoint state shapes.
+    /// # Errors
+    /// Cursor outside the complete 33-leaf program.
+    pub fn for_source(cursor: u32) -> Result<Self, Error> {
+        let point = G1AffineWitness {
+            x: [0; 6],
+            y: [0; 6],
+            infinity: true,
+        };
+        let context = AggregateContext {
+            roster_root: Fp::ZERO,
+            members: 0,
+            faults: 0,
+            bitmap: [0; 4],
+            aggregate_key: [0; 48],
+        };
+        let before = (cursor > 0).then_some(point);
+        let after = (cursor < 32).then_some(point);
+        let seat = (1..32).contains(&cursor).then_some(AggregateSeat {
+            key: [0; 48],
+            path: [Fp::ZERO; 5],
+            point,
+        });
+        Ok(Self::new(cursor, context, before, after, seat)?.without_witnesses())
+    }
     /// Select an exact fixed transition and check witness shape only.
     /// Arithmetic, quorum, membership, and output equality are circuit constraints.
     /// # Errors
@@ -404,4 +435,4 @@ impl Circuit<Fp> for AggregateLeafCircuit {
 mod tests;
 
 mod native;
-pub use native::prepare_aggregation;
+pub use native::{prepare_aggregation, propose_aggregate_key};

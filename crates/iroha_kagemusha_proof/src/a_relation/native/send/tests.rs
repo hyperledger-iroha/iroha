@@ -325,3 +325,87 @@ fn both_source_classes_require_exact_challenge_normalization_and_hard_verdict() 
         assert!(q_sigma_part(&bad, k, 0).is_err());
     }
 }
+#[test]
+fn exact_five_object_context_preserves_signed_request_and_total_fee_slot() {
+    assert_eq!(
+        object_kinds(),
+        [
+            ObjectKind::Credential,
+            ObjectKind::Request,
+            ObjectKind::FeeSchedule,
+            ObjectKind::Certificate,
+            ObjectKind::Receipt
+        ]
+    );
+    for kind in object_kinds() {
+        let raw = (0..kind.body_len() + 64)
+            .map(|i| u8::try_from(i % 256).unwrap())
+            .collect::<Vec<_>>();
+        let digest = object_digest(kind, &raw).unwrap();
+        for i in [
+            0,
+            kind.body_len() - 1,
+            kind.body_len(),
+            kind.body_len() + 16,
+            kind.body_len() + 32,
+            kind.body_len() + 48,
+        ] {
+            let mut changed = raw.clone();
+            changed[i] ^= 1;
+            assert_ne!(object_digest(kind, &changed).unwrap(), digest);
+        }
+        assert!(object_digest(kind, &raw[..raw.len() - 1]).is_err());
+    }
+}
+#[test]
+fn consuming_lineage_has_exact320_original_public_bytes_and_both_claims() {
+    let ep = iroha_plonk::transcript::decode_point::<Ep>(
+        &iroha_plonk_recursion::PALLAS_TRIVIAL_GENERATOR,
+    )
+    .unwrap();
+    let eq = iroha_plonk::transcript::decode_point::<Eq>(
+        &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
+    )
+    .unwrap();
+    let p = AccumulatorT::new(ep, [Fq::ONE; K]).unwrap();
+    let v = AccumulatorT::new(eq, [Fp::ONE; K]).unwrap();
+    let mut fields = core::array::from_fn(|i| Fp::from(i as u64 + 1));
+    fields[0] = Fp::ONE;
+    let raw = lineage_bytes(&fields, &[13; 64], &p, &v).unwrap();
+    assert_eq!(raw.len(), 320 + 64 + 2 * 544);
+    assert_eq!(&raw[320..384], &[13; 64]);
+    assert_eq!(&raw[384..928], &p.to_bytes());
+    assert_eq!(&raw[928..], &v.to_bytes());
+    for i in [1, 6, 9, 13, 14] {
+        let mut bad = fields;
+        bad[i] = Fp::from(2).pow_vartime([200]);
+        assert!(lineage_bytes(&bad, &[13; 64], &p, &v).is_err());
+    }
+    let framed = frame(&raw).unwrap();
+    assert_eq!(
+        u32::from_le_bytes(framed[..4].try_into().unwrap()) as usize,
+        raw.len()
+    );
+    assert_eq!(&framed[4..], raw);
+}
+
+#[test]
+fn original_bounds_reject_missing_oversized_and_over_domain_tables() {
+    let config = ReadConfig {
+        maximum_bytes: 16,
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    assert_eq!(original_bounds(&[], 1 << 16, config), Err(Error::Artifact));
+    assert_eq!(
+        original_bounds(&[0; 17], 1 << 16, config),
+        Err(Error::Artifact)
+    );
+    assert_eq!(
+        original_bounds(&[0; 16], (1 << 16) + 1, config),
+        Err(Error::Artifact)
+    );
+    assert_eq!(original_bounds(&[0; 16], 1 << 16, config), Ok(()));
+    // Passing these bounds alone never parses or admits an original proving key.
+}

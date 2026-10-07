@@ -81,12 +81,12 @@ fn accepts(circuit: &Membership) -> bool {
 fn ordered_roster_paths_bind_full_keys_seats_siblings_and_zero_padding() {
     for n in [4, 31] {
         let keys = (0..n)
-            .map(|i| core::array::from_fn(|j| (i * 48 + j) as u8))
+            .map(|i| core::array::from_fn(|j| u8::try_from((i * 48 + j) % 256).unwrap()))
             .collect::<Vec<_>>();
         let (root, paths) = key_tree_native(&keys).unwrap();
         for seat in [0, n - 1, 30] {
             let circuit = Membership {
-                seat: seat as u8,
+                seat: u8::try_from(seat).unwrap(),
                 key: *keys.get(seat).unwrap_or(&[0; 48]),
                 path: paths[seat],
                 root,

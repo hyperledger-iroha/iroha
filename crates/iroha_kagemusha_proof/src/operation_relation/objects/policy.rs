@@ -1,4 +1,4 @@
-//! Signed policy/voucher body validity and fixed refresh-field projections.
+//! Signed policy body validity and fixed refresh-field projections.
 
 use iroha_pasta::Fp;
 use iroha_plonk::frontend::{Error, Region};
@@ -6,7 +6,7 @@ use iroha_plonk_gadgets::{Bit, UintChip, Word};
 
 use super::{
     ObjectKind, SignedObjectCells,
-    predicates::{all, bits32, equal, implies, is_constant, nonzero, sum_fits128},
+    predicates::{all, bits32, implies, is_constant, nonzero, sum_fits128},
 };
 use crate::operation_relation::refresh::RefreshUpdate;
 
@@ -52,7 +52,7 @@ pub struct PolicyCells {
 }
 impl PolicyCells {
     /// Validate one policy, fee schedule, quota share, blacklist, time anchor,
-    /// charge quote or load voucher against native self-contained body rules.
+    /// or charge quote against native self-contained body rules.
     ///
     /// Full windows/blacklist data, fee evaluation and operation/finality
     /// bindings are distinct relations; this method does not authenticate them.
@@ -71,7 +71,6 @@ impl PolicyCells {
             ObjectKind::QuotaShare => (&[1, 2, 3], &[4, 7, 8, 9]),
             ObjectKind::TimeAnchor => (&[1, 2, 3], &[5]),
             ObjectKind::ChargeQuote => (&[1, 2, 3, 8], &[7, 10]),
-            ObjectKind::Voucher => (&[1, 2, 3, 8], &[5, 9, 10]),
             _ => return Err(Error::Synthesis),
         };
         let mut checks = vec![object.structural_valid().clone()];
@@ -118,12 +117,6 @@ impl PolicyCells {
                 checks.push(implies(uint.glue(), region, &unload, &positive)?);
                 checks.push(implies(uint.glue(), region, &unload, &affordable)?);
             }
-            ObjectKind::Voucher => {
-                checks.push(sum_fits128(uint, region, object.word(5)?, object.word(6)?)?);
-                let charge = uint.glue().is_zero(region, object.word(6)?)?;
-                let quote = uint.glue().is_zero(region, object.word(7)?)?;
-                checks.push(uint.glue().is_equal(region, charge.word(), quote.word())?);
-            }
             ObjectKind::TimeAnchor => {}
             _ => return Err(Error::Synthesis),
         }
@@ -142,43 +135,6 @@ impl PolicyCells {
         &self.valid
     }
 
-    /// Bind a finalized `LoadAuthorization` voucher to its exact Load effect.
-    ///
-    /// Its direct-root certificate and object signature must be authenticated
-    /// with `issuer::authenticate`; that fixed role attests ledger finality.
-    /// The online signer obtains its body only from the certified ledger source.
-    /// Neither a caller's height nor an external boolean authorizes this load.
-    ///
-    /// # Errors
-    /// Wrong fixed object/operation class or layout failure.
-    pub fn bind_load_voucher(
-        &self,
-        uint: &mut UintChip<'_, Fp>,
-        region: &mut Region<'_, Fp>,
-        statement: &crate::operation_relation::statement::StatementCells,
-        wallet: &[Word<Fp>; 2],
-    ) -> Result<Bit<Fp>, Error> {
-        if self.object.kind() != ObjectKind::Voucher
-            || statement.variant() != iroha_plonk_recursion::obligation::ledger::Variant::Load
-        {
-            return Err(Error::Synthesis);
-        }
-        let o = &self.object;
-        let f = statement.fields();
-        let mut checks = vec![self.valid.clone()];
-        for (index, expected) in [(1, &f[3..5]), (2, &f[5..7]), (3, wallet.as_slice())] {
-            checks.push(equal(uint.glue(), region, o.identifier(index)?, expected)?);
-        }
-        for (actual, expected) in [
-            (o.digest(), &f[17]),
-            (o.word(4)?, &f[18]),
-            (o.word(5)?, &f[19]),
-            (o.word(6)?, &f[20]),
-        ] {
-            checks.push(uint.glue().is_equal(region, actual, expected)?);
-        }
-        all(uint.glue(), region, &checks)
-    }
     /// Project exact signed fields into the operation's refresh-state relation.
     /// The caller must require `valid` and authenticate the issuer. Quota refresh
     /// must also bind field8 to its exact real-window count and field5 to issue time.

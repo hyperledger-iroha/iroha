@@ -154,6 +154,28 @@ pub struct PathCells<F: PastaField> {
 }
 
 impl<F: PastaField> PathCells<F> {
+    /// Reopen a path continuation after the enclosing source authenticates all
+    /// three fields. This checks canonical geometry and hash bytes, but conveys
+    /// no inclusion authority without that original endpoint commitment.
+    /// # Errors
+    /// Layout errors; a zero width, out-of-range index or unmarked hash fails.
+    pub fn resume(
+        uint: &mut UintChip<'_, F>,
+        region: &mut Region<'_, F>,
+        index: &Uint<F, 32>,
+        width: &U64<F>,
+        digest: &[Word<F>; 32],
+    ) -> Result<Self, Error> {
+        let geometry = Geometry::new(uint, region, index, width)?;
+        let one = uint.glue().constant(region, F::ONE)?;
+        let one = uint.glue().assert_bool(region, &one)?;
+        canonical_sibling(uint, region, digest, &one)?;
+        Ok(Self {
+            geometry,
+            digest: digest.clone(),
+        })
+    }
+
     /// Domain-separate one typed Iroha hash and bind its exact index/count.
     ///
     /// # Errors
@@ -167,9 +189,8 @@ impl<F: PastaField> PathCells<F> {
         leaf: &[Word<F>; 32],
     ) -> Result<Self, Error> {
         let geometry = Geometry::new(uint, region, index, count)?;
-        let one = uint
-            .glue()
-            .boolean(region, iroha_plonk::frontend::Value::known(true))?;
+        let one = uint.glue().constant(region, F::ONE)?;
+        let one = uint.glue().assert_bool(region, &one)?;
         canonical_sibling(uint, region, leaf, &one)?;
         let mut message = domain(uint, region, LEAF_DOMAIN)?;
         message.extend_from_slice(leaf);
@@ -208,6 +229,78 @@ impl<F: PastaField> PathCells<F> {
         }
         Ok(Self {
             geometry: geometry.next,
+            digest: digest.try_into().map_err(|_| Error::Synthesis)?,
+        })
+    }
+
+    /// Advance one slot of a fixed-capacity path. An actual tree level uses
+    /// [`Self::step`]; after width one, the only allowed sibling is zero and
+    /// the complete path state is unchanged. Both cases have one fixed layout.
+    /// The owner must constrain the number of slots and call [`Self::finish`].
+    /// # Errors
+    /// Layout errors; nonzero terminal padding and malformed live siblings fail.
+    pub fn step_padded(
+        &self,
+        hash: &mut Blake2bChip<'_, F>,
+        uint: &mut UintChip<'_, F>,
+        region: &mut Region<'_, F>,
+        sibling: &[Word<F>; 32],
+    ) -> Result<Self, Error> {
+        let one = uint.constant::<64>(region, 1)?;
+        let active = uint.lt(region, &one, &self.geometry.width)?;
+        let zero = uint.glue().constant(region, F::ZERO)?;
+        let two = uint.glue().constant(region, F::from(2))?;
+        let index = uint
+            .glue()
+            .select(region, &active, self.geometry.index.word(), &zero)?;
+        let index = uint.range_check::<32>(region, &index)?;
+        let width = uint
+            .glue()
+            .select(region, &active, self.geometry.width.word(), &two)?;
+        let width = uint.range_check::<64>(region, &width)?;
+        // A fixed valid dummy pair keeps the ordinary step's constraints active
+        // above the root. Its digest is discarded, never used as an authority.
+        let mut selected = Vec::with_capacity(32);
+        for (i, byte) in sibling.iter().enumerate() {
+            uint.range_check::<8>(region, byte)?;
+            let retained = uint.glue().mul(region, active.word(), byte)?;
+            GlueChip::assert_equal(region, &retained, byte)?;
+            let dummy = uint
+                .glue()
+                .constant(region, if i == 31 { F::ONE } else { F::ZERO })?;
+            selected.push(uint.glue().select(region, &active, byte, &dummy)?);
+        }
+        let candidate = Self {
+            geometry: Geometry::new(uint, region, &index, &width)?,
+            digest: self.digest.clone(),
+        }
+        .step(
+            hash,
+            uint,
+            region,
+            &selected.try_into().map_err(|_| Error::Synthesis)?,
+        )?;
+        let index = uint.glue().select(
+            region,
+            &active,
+            candidate.geometry.index.word(),
+            self.geometry.index.word(),
+        )?;
+        let width = uint.glue().select(
+            region,
+            &active,
+            candidate.geometry.width.word(),
+            self.geometry.width.word(),
+        )?;
+        let mut digest = Vec::with_capacity(32);
+        for (next, current) in candidate.digest.iter().zip(&self.digest) {
+            digest.push(uint.glue().select(region, &active, next, current)?);
+        }
+        Ok(Self {
+            geometry: Geometry {
+                index: uint.range_check::<64>(region, &index)?,
+                width: uint.range_check::<64>(region, &width)?,
+            },
             digest: digest.try_into().map_err(|_| Error::Synthesis)?,
         })
     }

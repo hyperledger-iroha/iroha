@@ -6,9 +6,12 @@
 //! container bounds, tape root and length must share that recursive context.
 
 pub mod authorization;
+pub mod complete;
+pub mod context_hash;
 pub mod decode;
 pub mod epoch;
 pub mod graph;
+pub mod source;
 pub mod tape;
 
 #[cfg(test)]

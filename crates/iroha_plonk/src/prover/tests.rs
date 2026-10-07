@@ -301,6 +301,97 @@ fn owned_witness_prover_bytes_identical() {
 }
 
 #[test]
+fn reusable_workspace_proof_bytes_and_bound_both_curves() {
+    fn check<C: PastaCurve>()
+    where
+        C::ScalarExt: PoseidonField,
+        C::Base: PoseidonField,
+    {
+        let mut workspace = QuotientWorkspace::new(1 << 20);
+        for profile in 0..=CHOICES.len() {
+            for (policy, k) in [
+                (crate::keys::CosetCachePolicy::Eager, K),
+                (crate::keys::CosetCachePolicy::OnDemand, K + 1),
+                (crate::keys::CosetCachePolicy::Eager, K),
+            ] {
+                let params = PinnedParams::<C>::derive(k).unwrap();
+                let pk = CHOICES.get(profile).map_or_else(
+                    || {
+                        let mut config = crate::keys::KeygenConfigV2::pipa_r(Vec::new());
+                        config.coset_cache = policy;
+                        crate::keys::keygen_pk_v2(&params, &LOOKUPS, &config).unwrap()
+                    },
+                    |choice| {
+                        let mut config = crate::test_circuits::keygen_config(*choice);
+                        config.coset_cache = policy;
+                        crate::keys::keygen_pk(&params, &LOOKUPS, &config).unwrap()
+                    },
+                );
+                let setup = Setup { params, pk };
+                let witness = Witness::from_circuit(&setup.pk, &LOOKUPS, &[]).unwrap();
+                let reference = create_proof(
+                    &setup.params,
+                    &setup.pk,
+                    &witness,
+                    ProverRandomness::fixed_seed_for_tests([91; 32]),
+                    ProverConfig::default(),
+                )
+                .unwrap();
+                for workers in [1, 4, 1] {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(workers)
+                        .build()
+                        .unwrap();
+                    let owned = Witness::from_circuit(&setup.pk, &LOOKUPS, &[]).unwrap();
+                    let output = pool
+                        .install(|| {
+                            create_proof_owned_with_workspace(
+                                &setup.params,
+                                &setup.pk,
+                                owned,
+                                ProverRandomness::fixed_seed_for_tests([91; 32]),
+                                ProverConfig::default(),
+                                &mut workspace,
+                            )
+                        })
+                        .unwrap();
+                    assert_eq!(output.proof, reference);
+                    assert_eq!(output.opening.decide(&setup.params, BUDGET), Ok(()));
+                    assert_eq!(setup.verify(&[], &output.proof), Ok(()));
+                    assert!(workspace.is_zeroized());
+                    assert!(workspace.allocated_bytes() > 0);
+                    assert!(workspace.allocated_bytes() <= workspace.maximum_bytes());
+                }
+                let required = quotient::workspace_elements(
+                    &setup.pk,
+                    &Protocol::new(setup.pk.binding().descriptor()).unwrap(),
+                )
+                .unwrap()
+                    * size_of::<C::ScalarExt>();
+                let mut short = QuotientWorkspace::new(required - 1);
+                let owned = Witness::from_circuit(&setup.pk, &LOOKUPS, &[]).unwrap();
+                assert!(matches!(
+                    create_proof_owned_with_workspace(
+                        &setup.params,
+                        &setup.pk,
+                        owned,
+                        ProverRandomness::fixed_seed_for_tests([91; 32]),
+                        ProverConfig::default(),
+                        &mut short
+                    ),
+                    Err(ProverError::Workspace(WorkspaceError::Limit { .. }))
+                ));
+                assert_eq!(short.allocated_bytes(), 0);
+            }
+        }
+        workspace.clear();
+        assert_eq!(workspace.allocated_bytes(), 0);
+    }
+    check::<Ep>();
+    check::<Eq>();
+}
+
+#[test]
 fn owned_witness_buffers_are_transformed_in_place() {
     let setup = setup::<Ep, _>(&ARITHMETIC, CHOICES[1]);
     let witness = Witness::from_circuit(&setup.pk, &ARITHMETIC, &ARITHMETIC.instances::<Fq>())

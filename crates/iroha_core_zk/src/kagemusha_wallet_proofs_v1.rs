@@ -464,7 +464,7 @@ impl ArtifactSet {
 
     // Both receipt-bearing and pre-Advance paths use the same immutable admitted key,
     // canonical statement instance, exact layout and complete native sigma verifier.
-    fn verify_step_proof(
+    pub(super) fn verify_step_proof(
         &self,
         statement: &KagemushaWalletStatementV1,
         proof: &KagemushaWalletStepProofV1,
@@ -571,13 +571,15 @@ fn limbs(bytes: &[u8; 32]) -> [[u8; 32]; 2] {
     [low, high]
 }
 
-fn lineage_digest(
+/// The exact eighteen-field native Omega public prefix, including its independently
+/// installed verifying-key digest. Preparation and D_A verification share this encoding.
+/// This conversion supplies a witness only; it does not authenticate or accept a lineage.
+pub(crate) fn lineage_public_fields(
     public: &KagemushaWalletLineagePublicV1,
     omega_key_digest: [u8; 32],
-    pallas: &AccumulatorT<Ep>,
-) -> Result<[u8; 32], Error> {
+) -> Result<[Fp; 18], Error> {
     authority(public.validate())?;
-    let mut fields = Vec::with_capacity(52);
+    let mut fields = Vec::with_capacity(18);
     fields.push(Fp::from(u64::from(public.version)).to_repr());
     fields.extend(limbs(&public.scheme_id));
     fields.extend(limbs(&public.relation_id));
@@ -601,6 +603,21 @@ fn lineage_digest(
     fields.push(public.pending_outgoing_root);
     fields.push(public.credit_digest_root);
     fields.push(omega_key_digest);
+    fields
+        .into_iter()
+        .map(|field| Option::<Fp>::from(Fp::from_repr(field)).ok_or(Error::Authority))
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| Error::Authority)
+}
+
+fn lineage_digest(
+    public: &KagemushaWalletLineagePublicV1,
+    omega_key_digest: [u8; 32],
+    pallas: &AccumulatorT<Ep>,
+) -> Result<[u8; 32], Error> {
+    let mut fields = Vec::with_capacity(52);
+    fields.extend(lineage_public_fields(public, omega_key_digest)?.map(|field| field.to_repr()));
     let (x, y) = Option::<(Fp, Fp)>::from(pallas.g().coordinates()).ok_or(Error::Proof)?;
     fields.extend([x.to_repr(), y.to_repr()]);
     for challenge in pallas.challenges() {

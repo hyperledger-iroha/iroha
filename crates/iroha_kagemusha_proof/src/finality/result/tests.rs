@@ -179,14 +179,20 @@ fn length_cannot_skip_past_its_enclosing_payload_or_wrap_cursor() {
     );
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamMutation {
+    None,
+    Domain,
+    Padding,
+    OmitLast,
+    AppendBlock,
+}
+
 #[derive(Clone)]
 struct StreamCircuit {
     frame: Vec<u8>,
     declared: u128,
-    domain_tamper: bool,
-    padding_tamper: bool,
-    omit_last: bool,
-    append_block: bool,
+    mutation: StreamMutation,
     known: bool,
 }
 
@@ -246,15 +252,16 @@ impl Circuit<Fp> for StreamCircuit {
                 let mut stream = ResultHashStream::start(&mut uint, &mut blake, &mut region, &len)?;
                 let mut transcript = RESULT_TAG.to_vec();
                 transcript.extend_from_slice(&self.frame);
-                if self.domain_tamper {
+                if self.mutation == StreamMutation::Domain {
                     transcript[0] ^= 1;
                 }
                 let blocks = transcript.len().div_ceil(128);
                 transcript.resize(blocks * 128, 0);
-                if self.padding_tamper {
+                if self.mutation == StreamMutation::Padding {
                     transcript[blocks * 128 - 1] = 1;
                 }
-                let steps = blocks - usize::from(self.omit_last) + usize::from(self.append_block);
+                let steps = blocks - usize::from(self.mutation == StreamMutation::OmitLast)
+                    + usize::from(self.mutation == StreamMutation::AppendBlock);
                 transcript.resize(steps.max(blocks) * 128, 0);
                 for block in transcript.chunks_exact(128).take(steps) {
                     let values: Vec<_> = block
@@ -283,12 +290,9 @@ impl Circuit<Fp> for StreamCircuit {
 
 fn stream_case(len: usize, digest: &str) -> (StreamCircuit, Vec<Fp>) {
     let circuit = StreamCircuit {
-        frame: (0..len).map(|i| (i % 256) as u8).collect(),
+        frame: (0..len).map(|i| u8::try_from(i % 256).unwrap()).collect(),
         declared: len as u128,
-        domain_tamper: false,
-        padding_tamper: false,
-        omit_last: false,
-        append_block: false,
+        mutation: StreamMutation::None,
         known: true,
     };
     let mut public = vec![Fp::from(len as u64)];
@@ -348,10 +352,10 @@ fn result_stream_rejects_changed_domain_nonzero_padding_wrong_length_and_extra_b
         let mut forged = circuit.clone();
         let mut expected = public.clone();
         match attack {
-            0 => forged.domain_tamper = true,
-            1 => forged.padding_tamper = true,
-            2 => forged.omit_last = true,
-            3 => forged.append_block = true,
+            0 => forged.mutation = StreamMutation::Domain,
+            1 => forged.mutation = StreamMutation::Padding,
+            2 => forged.mutation = StreamMutation::OmitLast,
+            3 => forged.mutation = StreamMutation::AppendBlock,
             4 => {
                 forged.declared = 2;
                 expected[0] = Fp::from(2);
@@ -403,15 +407,20 @@ const SIGMA: [[usize; 16]; 10] = [
 ];
 
 fn native_compress(mut h: [u64; 8], block: &[u8; 128], counter: u128, last: bool) -> [u64; 8] {
-    fn g(v: &mut [u64; 16], [a, b, c, d]: [usize; 4], x: u64, y: u64) {
-        v[a] = v[a].wrapping_add(v[b]).wrapping_add(x);
-        v[d] = (v[d] ^ v[a]).rotate_right(32);
-        v[c] = v[c].wrapping_add(v[d]);
-        v[b] = (v[b] ^ v[c]).rotate_right(24);
-        v[a] = v[a].wrapping_add(v[b]).wrapping_add(y);
-        v[d] = (v[d] ^ v[a]).rotate_right(16);
-        v[c] = v[c].wrapping_add(v[d]);
-        v[b] = (v[b] ^ v[c]).rotate_right(63);
+    fn mix(
+        state: &mut [u64; 16],
+        [first, second, third, fourth]: [usize; 4],
+        left: u64,
+        right: u64,
+    ) {
+        state[first] = state[first].wrapping_add(state[second]).wrapping_add(left);
+        state[fourth] = (state[fourth] ^ state[first]).rotate_right(32);
+        state[third] = state[third].wrapping_add(state[fourth]);
+        state[second] = (state[second] ^ state[third]).rotate_right(24);
+        state[first] = state[first].wrapping_add(state[second]).wrapping_add(right);
+        state[fourth] = (state[fourth] ^ state[first]).rotate_right(16);
+        state[third] = state[third].wrapping_add(state[fourth]);
+        state[second] = (state[second] ^ state[third]).rotate_right(63);
     }
     let message: [u64; 16] = core::array::from_fn(|i| {
         u64::from_le_bytes(block[i * 8..i * 8 + 8].try_into().expect("word"))
@@ -419,21 +428,22 @@ fn native_compress(mut h: [u64; 8], block: &[u8; 128], counter: u128, last: bool
     let mut v = [0; 16];
     v[..8].copy_from_slice(&h);
     v[8..].copy_from_slice(&IV);
-    v[12] ^= counter as u64;
-    v[13] ^= (counter >> 64) as u64;
+    let counter_bytes = counter.to_le_bytes();
+    v[12] ^= u64::from_le_bytes(counter_bytes[..8].try_into().unwrap());
+    v[13] ^= u64::from_le_bytes(counter_bytes[8..].try_into().unwrap());
     if last {
         v[14] = !v[14];
     }
     for r in 0..12 {
         let s = SIGMA[r % 10];
-        g(&mut v, [0, 4, 8, 12], message[s[0]], message[s[1]]);
-        g(&mut v, [1, 5, 9, 13], message[s[2]], message[s[3]]);
-        g(&mut v, [2, 6, 10, 14], message[s[4]], message[s[5]]);
-        g(&mut v, [3, 7, 11, 15], message[s[6]], message[s[7]]);
-        g(&mut v, [0, 5, 10, 15], message[s[8]], message[s[9]]);
-        g(&mut v, [1, 6, 11, 12], message[s[10]], message[s[11]]);
-        g(&mut v, [2, 7, 8, 13], message[s[12]], message[s[13]]);
-        g(&mut v, [3, 4, 9, 14], message[s[14]], message[s[15]]);
+        mix(&mut v, [0, 4, 8, 12], message[s[0]], message[s[1]]);
+        mix(&mut v, [1, 5, 9, 13], message[s[2]], message[s[3]]);
+        mix(&mut v, [2, 6, 10, 14], message[s[4]], message[s[5]]);
+        mix(&mut v, [3, 7, 11, 15], message[s[6]], message[s[7]]);
+        mix(&mut v, [0, 5, 10, 15], message[s[8]], message[s[9]]);
+        mix(&mut v, [1, 6, 11, 12], message[s[10]], message[s[11]]);
+        mix(&mut v, [2, 7, 8, 13], message[s[12]], message[s[13]]);
+        mix(&mut v, [3, 4, 9, 14], message[s[14]], message[s[15]]);
     }
     for i in 0..8 {
         h[i] ^= v[i] ^ v[i + 8];

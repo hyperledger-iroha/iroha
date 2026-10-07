@@ -108,11 +108,11 @@ pub fn prepare_bls_witness(
 fn fp2(value: Fq2) -> Fp2 {
     [value.c0.into_bigint().0, value.c1.into_bigint().0]
 }
-fn fp6(value: Fq6) -> [Fp2; 3] {
+fn fp6(value: &Fq6) -> [Fp2; 3] {
     [fp2(value.c0), fp2(value.c1), fp2(value.c2)]
 }
-fn fp12(value: Fq12) -> Fp12 {
-    [fp6(value.c0), fp6(value.c1)]
+fn fp12(value: &Fq12) -> Fp12 {
+    [fp6(&value.c0), fp6(&value.c1)]
 }
 fn w1(point: G1Affine) -> G1AffineWitness {
     if point.infinity {
@@ -193,11 +193,11 @@ enum State {
     Cofactor([G2Affine; 6]),
     Miller {
         message_point: G2Affine,
-        points: [Homogeneous; 2],
-        lines: [[Fq2; 3]; 2],
-        accumulator: Fq12,
+        points: Box<[Homogeneous; 2]>,
+        lines: Box<[[Fq2; 3]; 2]>,
+        accumulator: Box<Fq12>,
     },
-    Final([Fq12; 5]),
+    Final(Box<[Fq12; 5]>),
     Done,
 }
 impl State {
@@ -232,11 +232,11 @@ impl State {
                 accumulator,
             } => W::Miller {
                 message_point: w2(*message_point),
-                points: points.map(Homogeneous::witness),
-                lines: lines.map(|line| line.map(fp2)),
-                accumulator: fp12(*accumulator),
+                points: Box::new(points.map(Homogeneous::witness)),
+                lines: Box::new(lines.map(|line| line.map(fp2))),
+                accumulator: Box::new(fp12(accumulator)),
             },
-            Self::Final(a) => W::Final(a.map(fp12)),
+            Self::Final(a) => W::Final(Box::new(a.map(|value| fp12(&value)))),
         }
     }
 }
@@ -250,7 +250,7 @@ fn psi(point: G2Affine) -> Result<G2Affine, BlsWitnessError> {
     let mut carry = 0_u128;
     for index in (0..6).rev() {
         let n = (carry << 64) + u128::from(exponent.0[index]);
-        third[index] = (n / 3) as u64;
+        third[index] = u64::try_from(n / 3).map_err(|_| BlsWitnessError::Arithmetic)?;
         carry = n % 3;
     }
     exponent.div2();
@@ -342,55 +342,58 @@ fn isogeny(x: Fq2, y: Fq2) -> Result<G2Affine, BlsWitnessError> {
         y * polynomial(map.y_map_numerator, x) * yd,
     ))
 }
-fn double(p: Homogeneous) -> Result<(Homogeneous, [Fq2; 3]), BlsWitnessError> {
-    let Homogeneous { x, y, z } = p;
+fn double(point: &Homogeneous) -> Result<(Homogeneous, [Fq2; 3]), BlsWitnessError> {
+    let Homogeneous { x, y, z } = *point;
     let half = Fq2::new(
         Fq::from(2_u64)
             .inverse()
             .ok_or(BlsWitnessError::Arithmetic)?,
         Fq::ZERO,
     );
-    let a = x * y * half;
-    let b = y.square();
-    let c = z.square();
-    let e = Fq2::new(Fq::from(4), Fq::from(4)) * (c + c + c);
-    let f = e + e + e;
-    let g = (b + f) * half;
-    let h = (y + z).square() - b - c;
-    let i = e - b;
-    let j = x.square();
+    let half_xy = x * y * half;
+    let y_squared = y.square();
+    let z_squared = z.square();
+    let curve_term = Fq2::new(Fq::from(4), Fq::from(4)) * (z_squared + z_squared + z_squared);
+    let triple_curve = curve_term + curve_term + curve_term;
+    let half_sum = (y_squared + triple_curve) * half;
+    let cross_yz = (y + z).square() - y_squared - z_squared;
+    let line_constant = curve_term - y_squared;
+    let x_squared = x.square();
     let out = Homogeneous {
-        x: a * (b - f),
-        y: g.square() - (e.square() + e.square() + e.square()),
-        z: b * h,
+        x: half_xy * (y_squared - triple_curve),
+        y: half_sum.square() - (curve_term.square() + curve_term.square() + curve_term.square()),
+        z: y_squared * cross_yz,
     };
     if out.z == Fq2::ZERO {
         return Err(BlsWitnessError::Arithmetic);
     }
-    Ok((out, [i, j + j + j, -h]))
+    Ok((
+        out,
+        [line_constant, x_squared + x_squared + x_squared, -cross_yz],
+    ))
 }
-fn add(p: Homogeneous, q: G2Affine) -> Result<(Homogeneous, [Fq2; 3]), BlsWitnessError> {
-    if q.infinity {
+fn add(point: &Homogeneous, addend: G2Affine) -> Result<(Homogeneous, [Fq2; 3]), BlsWitnessError> {
+    if addend.infinity {
         return Err(BlsWitnessError::Arithmetic);
     }
-    let Homogeneous { x, y, z } = p;
-    let theta = y - q.y * z;
-    let lambda = x - q.x * z;
-    let c = theta.square();
-    let d = lambda.square();
-    let e = lambda * d;
-    let f = z * c;
-    let g = x * d;
-    let h = e + f - g - g;
+    let Homogeneous { x, y, z } = *point;
+    let theta = y - addend.y * z;
+    let lambda = x - addend.x * z;
+    let theta_squared = theta.square();
+    let lambda_squared = lambda.square();
+    let lambda_cubed = lambda * lambda_squared;
+    let z_theta_squared = z * theta_squared;
+    let x_lambda_squared = x * lambda_squared;
+    let difference = lambda_cubed + z_theta_squared - x_lambda_squared - x_lambda_squared;
     let out = Homogeneous {
-        x: lambda * h,
-        y: theta * (g - h) - e * y,
-        z: z * e,
+        x: lambda * difference,
+        y: theta * (x_lambda_squared - difference) - lambda_cubed * y,
+        z: z * lambda_cubed,
     };
     if out.z == Fq2::ZERO {
         return Err(BlsWitnessError::Arithmetic);
     }
-    Ok((out, [theta * q.x - lambda * q.y, -theta, lambda]))
+    Ok((out, [theta * addend.x - lambda * addend.y, -theta, lambda]))
 }
 fn transition(
     step: Step,
@@ -477,12 +480,12 @@ fn transition(
             let h = registers[4];
             S::Miller {
                 message_point: h,
-                points: [
+                points: Box::new([
                     Homogeneous::from_affine(h)?,
                     Homogeneous::from_affine(signature)?,
-                ],
-                lines: [[Fq2::ZERO; 3]; 2],
-                accumulator: Fq12::ONE,
+                ]),
+                lines: Box::new([[Fq2::ZERO; 3]; 2]),
+                accumulator: Box::new(Fq12::ONE),
             }
         }
         (
@@ -497,13 +500,13 @@ fn transition(
             match *MILLER_STEPS.get(index).ok_or(BlsWitnessError::Program)? {
                 MillerStep::Square => accumulator.square_in_place(),
                 MillerStep::Double { pair } => {
-                    (points[pair], lines[pair]) = double(points[pair])?;
-                    &mut accumulator
+                    (points[pair], lines[pair]) = double(&points[pair])?;
+                    accumulator.as_mut()
                 }
                 MillerStep::Add { pair } => {
                     (points[pair], lines[pair]) =
-                        add(points[pair], [message_point, signature][pair])?;
-                    &mut accumulator
+                        add(&points[pair], [message_point, signature][pair])?;
+                    accumulator.as_mut()
                 }
                 MillerStep::Evaluate { pair } => {
                     let line = lines[pair];
@@ -513,11 +516,11 @@ fn transition(
                         &(line[1] * Fq2::new(p.x, Fq::ZERO)),
                         &(line[2] * Fq2::new(p.y, Fq::ZERO)),
                     );
-                    &mut accumulator
+                    accumulator.as_mut()
                 }
                 MillerStep::Conjugate => {
-                    accumulator = Fq12::new(accumulator.c0, -accumulator.c1);
-                    &mut accumulator
+                    *accumulator = Fq12::new(accumulator.c0, -accumulator.c1);
+                    accumulator.as_mut()
                 }
             };
             S::Miller {
@@ -529,8 +532,8 @@ fn transition(
         }
         (Step::StartFinal, S::Miller { accumulator, .. }) => {
             let mut r = [Fq12::ZERO; 5];
-            r[0] = accumulator;
-            S::Final(r)
+            r[0] = *accumulator;
+            S::Final(Box::new(r))
         }
         (Step::Final(index), S::Final(mut r)) => {
             match *FINAL_EXPONENT_STEPS

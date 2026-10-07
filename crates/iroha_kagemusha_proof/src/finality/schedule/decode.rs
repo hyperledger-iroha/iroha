@@ -26,6 +26,47 @@ pub struct FieldSpan {
 }
 
 impl FieldSpan {
+    /// Open a continuation span from a complete source-state commitment.
+    /// This checks shape only; the sealed parser program must authenticate the
+    /// previous state and its original derivation from the same result bytes.
+    pub(crate) fn from_source_words(
+        uint: &mut UintChip<'_, Fp>,
+        region: &mut Region<'_, Fp>,
+        tape: &ResultTape,
+        words: &[Word<Fp>; 3],
+    ) -> Result<Self, Error> {
+        let start = uint.range_check::<32>(region, &words[0])?;
+        let len = uint.range_check::<32>(region, &words[1])?;
+        let present = uint
+            .glue()
+            .boolean(region, words[2].value().map(|v| v == Fp::ONE))?;
+        GlueChip::assert_equal(region, present.word(), &words[2])?;
+        let end = uint.checked_add(region, &start, &len)?;
+        uint.assert_le(region, &end, tape.frame_len())?;
+        let absent = uint.glue().not(region, &present)?;
+        for value in [start.word(), len.word()] {
+            let hidden = uint.glue().mul(region, absent.word(), value)?;
+            GlueChip::assert_constant(region, &hidden, Fp::ZERO)?;
+        }
+        Ok(Self {
+            root: tape.root().clone(),
+            frame_len: tape.frame_len().clone(),
+            start,
+            len,
+            end,
+            present,
+        })
+    }
+
+    /// Full variable span state; root and frame length are retained in context.
+    pub(crate) fn source_words(&self) -> [Word<Fp>; 3] {
+        [
+            self.start.word().clone(),
+            self.len.word().clone(),
+            self.present.word().clone(),
+        ]
+    }
+
     /// Constrained payload start within original R (excluding hash domain).
     pub const fn start(&self) -> &Uint<Fp, 32> {
         &self.start
@@ -363,7 +404,11 @@ impl<H: WordHasher<Fp>> ScheduleReader<'_, '_, H> {
         if !(1..=8).contains(&N) {
             return Err(Error::Synthesis);
         }
-        self.exact_len(region, span, N as u32)?;
+        self.exact_len(
+            region,
+            span,
+            u32::try_from(N).map_err(|_| Error::Synthesis)?,
+        )?;
         let bytes = self.bytes::<N>(region, span, 0)?;
         self.pack_le(region, &bytes)
     }

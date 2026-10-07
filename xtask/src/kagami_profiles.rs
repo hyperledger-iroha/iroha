@@ -3293,9 +3293,39 @@ mod tests {
         let kagami_path = PathBuf::from(std::env::var("XTASK_TEST_KAGAMI_BIN").unwrap());
         let temp = tempdir().expect("temp dir");
         let genesis_path = temp.path().join("genesis.json");
-        let mut rendered = json::to_json_pretty(&stub_genesis()).expect("render stub genesis");
+        let profile = &PROFILES[0];
+        let defaults = iroha_deploy::genesis::profile::profile_defaults(
+            iroha_deploy::genesis::profile::GenesisProfile::Iroha3Dev,
+        );
+        let peers = build_peers(profile).expect("build four development-profile validators");
+        assert_eq!(peers.len(), 4);
+        let mut topology = peers
+            .iter()
+            .map(|peer| GenesisTopologyEntry::new(peer.peer_id.clone(), peer.pop.clone()))
+            .collect::<Vec<_>>();
+        topology.sort_by(|left, right| left.peer.cmp(&right.peer));
+        let genesis_key = deterministic_keypair("verify-dev-profile-genesis", Algorithm::Ed25519)
+            .expect("derive development genesis authority");
+        let builder = iroha_genesis::GenesisBuilder::new_without_executor(
+            defaults.chain_id.clone(),
+            ".",
+        )
+        .set_topology(topology)
+        .with_sumeragi_context_parameters(
+            iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended(),
+        );
+        let genesis = iroha_deploy::genesis::generate_default(
+            builder,
+            genesis_key.public_key(),
+            None,
+            SumeragiConsensusMode::Permissioned,
+            Some(&defaults),
+            None,
+        )
+        .expect("generate complete development-profile genesis");
+        let mut rendered = json::to_json_pretty(&genesis).expect("render development genesis");
         rendered.push('\n');
-        fs::write(&genesis_path, rendered).expect("write stub genesis");
+        fs::write(&genesis_path, rendered).expect("write development genesis");
         let out = run_verify(&PROFILES[0], &kagami_path, &genesis_path, None);
         assert!(
             out.is_ok(),

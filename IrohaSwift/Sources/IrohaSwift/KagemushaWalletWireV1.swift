@@ -126,8 +126,6 @@ public enum KagemushaWalletSigningDomainV1: String, CaseIterable, Sendable {
   case sessionControl = "kgwsctl1"
   /// Request body, signed by the receiver payment key.
   case request = "kgwrqst1"
-  /// Load voucher body, signed by a LoadAuthorization-role key.
-  case voucher = "kgwvchr1"
   /// Ledger control body, signed by the payment key.
   case ledgerControl = "kgwlctl1"
 
@@ -149,7 +147,6 @@ public enum KagemushaWalletSigningDomainV1: String, CaseIterable, Sendable {
     case .offer: 194
     case .sessionControl: 197
     case .request: 458
-    case .voucher: 250
     case .ledgerControl: 211
     }
   }
@@ -249,11 +246,16 @@ public enum KagemushaWalletWireV1 {
   public static let paymentFixedBytes = 1_723
   /// Joint budget of the Ω transport proof and the largest σ_send (R9): `10,000 − F_payment`.
   ///
-  /// σ and Ω carry no other byte caps than this budget and ``lineageProofCapBytes``: their exact
-  /// lengths come from the frozen verifying-key allowlist (owner answer Q6). Until the artifacts
+  /// Proof transport is bounded by this budget, ``creditedReceiveProofBudgetBytes`` and
+  /// ``lineageProofCapBytes``; exact lengths come from the frozen verifying-key allowlist
+  /// (owner answer Q6). Until the artifacts
   /// freeze (TODO(G3)) only the carrying frame bounds them, which is all the structural envelope
   /// check enforces.
   public static let paymentProofBudgetBytes = messageMaximumBytes - paymentFixedBytes
+  /// Bytes of a Credited::Receive envelope other than its σ proof.
+  public static let creditedReceiveFixedBytes = 679
+  /// Available σ bytes in a complete Credited::Receive envelope.
+  public static let creditedReceiveProofBudgetBytes = messageMaximumBytes - creditedReceiveFixedBytes
   /// `F_status`: the bytes of a Credited::Status envelope frame other than its Ω(h) transport
   /// proof, with the fixed 32-sibling credit opening.
   public static let creditedStatusFixedBytes = 2_188

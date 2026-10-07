@@ -2247,9 +2247,9 @@ impl KagemushaWalletChargeQuoteBodyV1 {
 
 /// Signed load or unload charge quote (§6.2, design C7).
 ///
-/// An Unload effect names it by digest ([`Self::require_unload_effect`]); a load voucher names
+/// An Unload effect names it by digest ([`Self::require_unload_effect`]); an ordinary Load receipt names
 /// it by digest and must carry its exact terms
-/// (`KagemushaWalletLoadVoucherV1::require_charge_quote`).
+/// (`KagemushaWalletLoadReceiptV1::require_charge_quote`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletChargeQuoteV1"

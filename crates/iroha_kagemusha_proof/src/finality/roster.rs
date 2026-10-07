@@ -7,7 +7,7 @@
 use ff::Field;
 use iroha_pasta::{Ep, Fp, poseidon::hash_with_domain};
 use iroha_plonk::frontend::{Error, Region};
-use iroha_plonk_gadgets::{GlueChip, Word};
+use iroha_plonk_gadgets::{GlueChip, Uint, Word};
 use iroha_plonk_recursion::verifier::VerifierChip;
 
 /// Domain of an indexed normal-validator compressed-key leaf.
@@ -27,11 +27,21 @@ pub fn key_leaf_cells(
     if seat >= 32 {
         return Err(Error::Synthesis);
     }
-    let mut words = vec![
-        chip.uint()
-            .glue()
-            .constant(region, Fp::from(u64::from(seat)))?,
-    ];
+    let seat = chip.uint().constant::<5>(region, u128::from(seat))?;
+    key_leaf_at_cells(chip, region, &seat, key)
+}
+
+/// Exact indexed key leaf for a constrained dynamic seat. The caller binds the
+/// seat to its ordered source-program cursor; the five-bit type bounds it to32.
+/// # Errors
+/// Circuit layout errors or a non-byte key cell.
+pub fn key_leaf_at_cells(
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    seat: &Uint<Fp, 5>,
+    key: &[Word<Fp>; 48],
+) -> Result<Word<Fp>, Error> {
+    let mut words = vec![seat.word().clone()];
     for chunk in key.chunks_exact(16) {
         let mut packed = chip.uint().glue().constant(region, Fp::ZERO)?;
         for byte in chunk.iter().rev() {
@@ -90,7 +100,13 @@ pub fn verify_key_path(
         } else {
             (sibling, &current)
         };
-        current = key_node_cells(chip, region, depth as u8, left, right)?;
+        current = key_node_cells(
+            chip,
+            region,
+            u8::try_from(depth).map_err(|_| Error::Synthesis)?,
+            left,
+            right,
+        )?;
     }
     GlueChip::assert_equal(region, &current, root)
 }
@@ -123,8 +139,8 @@ pub fn key_tree_native(keys: &[[u8; 48]]) -> Result<(Fp, Vec<[Fp; 5]>), Error> {
     if !(4..=31).contains(&keys.len()) || !(keys.len() - 1).is_multiple_of(3) {
         return Err(Error::Synthesis);
     }
-    let mut layer = (0..32)
-        .map(|index| key_leaf_native(index as u8, keys.get(index).unwrap_or(&[0; 48])))
+    let mut layer = (0_u8..32)
+        .map(|index| key_leaf_native(index, keys.get(usize::from(index)).unwrap_or(&[0; 48])))
         .collect::<Result<Vec<_>, _>>()?;
     let mut paths = vec![[Fp::ZERO; 5]; 31];
     for depth in 0..5 {

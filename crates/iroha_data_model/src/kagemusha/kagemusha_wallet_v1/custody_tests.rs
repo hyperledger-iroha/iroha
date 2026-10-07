@@ -255,7 +255,13 @@ fn kagemusha_wallet_v1_custody_layouts_and_tags() {
     );
     assert_eq!(
         required_retained_roles_v1(KagemushaWalletOperationKindV1::ArchiveSent),
-        &[R::Request, R::Payment, R::Credited]
+        &[
+            R::Request,
+            R::Payment,
+            R::Credited,
+            R::Credential,
+            R::CertificateSet,
+        ]
     );
     assert_eq!(
         required_retained_roles_v1(KagemushaWalletOperationKindV1::Send),
@@ -263,7 +269,7 @@ fn kagemusha_wallet_v1_custody_layouts_and_tags() {
     );
     assert_eq!(
         required_retained_roles_v1(KagemushaWalletOperationKindV1::Load),
-        &[R::LoadVoucher, R::CertificateSet]
+        &[R::LoadReceipt, R::LoadFinality]
     );
     assert_eq!(
         required_retained_roles_v1(KagemushaWalletOperationKindV1::RefreshPolicy),
@@ -502,7 +508,7 @@ fn kagemusha_wallet_v1_output_descriptors_are_receipt_free() {
     let nullifier = kagemusha_wallet_unload_nullifier_v1(&body.scheme_id, &body.wallet_id, 0);
     let effects = [
         KagemushaWalletEffectV1::Load {
-            voucher: field_value(0x51),
+            receipt_digest: field_value(0x51),
             load_ordinal: 0,
             amount: 10,
             online_charge: 0,

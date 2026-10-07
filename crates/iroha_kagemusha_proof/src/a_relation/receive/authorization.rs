@@ -3,7 +3,7 @@
 use ff::Field;
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region, Value};
-use iroha_plonk_gadgets::{GlueChip, UintChip, bytes::tape::BytesChip, p256::VerifyMode};
+use iroha_plonk_gadgets::{Bit, GlueChip, UintChip, bytes::tape::BytesChip, p256::VerifyMode};
 use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip};
 
 use super::{ReceiveSignedObjects, maps::require_task};
@@ -55,7 +55,7 @@ pub struct ReceiveAuthorizationObjects {
 /// Exact Q bundles and incoming objects consumed by the Signatures owner.
 #[derive(Clone, Copy)]
 pub struct ReceiveSignatureInputs<'a> {
-    /// Circuit-fixed scheme, provider and root key.
+    /// Circuit-fixed provider and root key; scheme is carried by the own state.
     pub policy: OwnPolicy,
     /// Same original incoming Request, payer credential and Send receipt.
     pub objects: &'a ReceiveSignedObjects,
@@ -368,7 +368,7 @@ impl ReceiveAuthorizationObjects {
         let payment_key = core::array::from_fn(|i| predecessor.public.fields()[9 + i].clone());
         let signature = self.objects[2].bind_signature(region, &slots[0], &payment_key)?;
         GlueChip::assert_constant(region, signature.word(), Fp::ONE)?;
-        let scope = policy.scope(chip, region)?;
+        let provider = policy.provider(chip, region)?;
         let wallet = core::array::from_fn(|i| predecessor.public.fields()[6 + i].clone());
         let lanes = chip.operation_lanes()?;
         let valid = receipt::bind(
@@ -378,7 +378,7 @@ impl ReceiveAuthorizationObjects {
             &self.objects[2],
             &ReceiptContext {
                 wallet: &wallet,
-                provider: &scope.provider,
+                provider: &provider,
                 statement: input.own_statement,
                 proof_digest: self.objects[2].word(9)?,
                 payment_digest: input
@@ -408,6 +408,27 @@ impl ReceiveAuthorizationObjects {
         input: &ContextInputs<'_>,
         proof: ReceiveSignatureInputs<'_>,
     ) -> Result<(), Error> {
+        let valid = self.derive_signatures(chip, region, plan, stage, input, proof)?;
+        input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
+            region,
+            plan.receive_results().ok_or(Error::Synthesis)?,
+            stage,
+            ReceiveResultTag::Signatures,
+            &valid,
+        )
+    }
+
+    // Same production predicate for native witness preparation. This returns assigned
+    // cells only; the fixed owning stage still binds and proves the result.
+    pub(crate) fn derive_signatures(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        stage: u32,
+        input: &ContextInputs<'_>,
+        proof: ReceiveSignatureInputs<'_>,
+    ) -> Result<Bit<Fp>, Error> {
         require_task(plan, stage, OperationTask::ReceiveSignatures)?;
         self.bind_context(region, plan, input)?;
         proof.objects.bind_context(region, plan, input)?;
@@ -422,8 +443,8 @@ impl ReceiveAuthorizationObjects {
         {
             return Err(Error::Synthesis);
         }
-        let scope = proof.policy.scope(chip, region)?;
         let predecessor = input.predecessor.ok_or(Error::Synthesis)?;
+        let scope = proof.policy.scope(chip, region, predecessor.state)?;
         let lanes = chip.operation_lanes()?;
         let mut uint = UintChip::new(lanes.glue, lanes.range);
         let receiver = CredentialCells::check(&mut uint, region, &self.objects[3])?;
@@ -471,12 +492,6 @@ impl ReceiveAuthorizationObjects {
             checks.push(self.objects[4].structural_valid().clone());
         }
         let valid = all(uint.glue(), region, &checks)?;
-        input.receive_results.ok_or(Error::Synthesis)?.bind_derived(
-            region,
-            plan.receive_results().ok_or(Error::Synthesis)?,
-            stage,
-            ReceiveResultTag::Signatures,
-            &valid,
-        )
+        Ok(valid)
     }
 }

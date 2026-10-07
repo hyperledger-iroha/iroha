@@ -1,6 +1,6 @@
-//! Bootstrap, Load, Unload, Retiring and `ArchiveSent` state effects.
+//! Bootstrap, Load, `ArchiveSent`, Unload and Retiring state effects.
 //!
-//! These effects compose with authenticated credential/voucher/quote inputs
+//! These effects compose with authenticated credentials, ordinary receipts and charge quotes
 //! and map transitions in A. They do not verify those signatures or finality.
 //! No stand-alone monetary acceptance API is exposed here.
 
@@ -204,14 +204,17 @@ pub fn monetary(
     Ok(())
 }
 
-/// Preserve every `ArchiveSent` state field except its next sequence, nonce and
-/// pending root. The evidence-specific A relation authenticates the retained
-/// descriptor, proves both removals and selects the adjusted pending root.
-/// This common state relation never treats archiving as a refund or renewal.
+/// Constrain `ArchiveSent`'s complete non-value state transition.
+///
+/// Only sequence, nonce and the committed pending root may change. The root's
+/// exact removal is authenticated by Native Advance and the map relation in A,
+/// which also owns the evidence-dependent adjusted pending removal/no-op. No
+/// evidence bit, refund, quota restoration or Payment deletion grant is supplied
+/// here. Adjusted burned value and permanent credit evidence remain unchanged.
 ///
 /// # Errors
-/// Wrong variant or layout failure; monetary, credential, counter, lifecycle
-/// and held-policy changes have no satisfying witness.
+/// Wrong fixed variant or layout failure; any unrelated state change, malformed
+/// opening or statement, sequence overflow or zero nonce is unsatisfiable.
 pub fn archive(
     uint: &mut UintChip<'_, Fp>,
     region: &mut Region<'_, Fp>,
@@ -230,27 +233,22 @@ pub fn archive(
         transition.successor.state,
         transition.successor.lineage,
     )?;
-    for index in 0..transition.predecessor.state.core().len() {
-        if matches!(
+    for (index, old) in transition.predecessor.state.core().iter().enumerate() {
+        if !matches!(
             index,
             core::SEQUENCE | core::STATE_NONCE | core::PENDING_OUTGOING_ROOT
         ) {
-            continue;
+            GlueChip::assert_equal(region, old, &transition.successor.state.core()[index])?;
         }
-        GlueChip::assert_equal(
-            region,
-            &transition.predecessor.state.core()[index],
-            &transition.successor.state.core()[index],
-        )?;
     }
-    for (before, after) in transition
+    for (old, new) in transition
         .predecessor
         .state
         .rest()
         .iter()
         .zip(transition.successor.state.rest())
     {
-        GlueChip::assert_equal(region, before, after)?;
+        GlueChip::assert_equal(region, old, new)?;
     }
     GlueChip::assert_equal(
         region,

@@ -244,7 +244,7 @@ fn fixture(
     insert: bool,
 ) -> (send_objects::SendFixture, receive_objects::ReceiveFixture) {
     let (payer, _, _) = bootstrap_objects::enrollment();
-    let (loaded, _, _, _) = load_objects::authorized(&payer);
+    let (loaded, _, _) = load_objects::funded(&payer);
     let send = send_objects::from_load(&loaded.successor);
     let (receiver, _, _) = receive_objects::receiver();
     let receive = receive_objects::from_send(
@@ -340,7 +340,7 @@ pub(crate) fn genuine_receive_source_for(
     mode: IncomingMode,
 ) -> ReceiveQ {
     let (payer, _, _) = bootstrap_objects::enrollment();
-    let (loaded, _, _, _) = load_objects::authorized(&payer);
+    let (loaded, _, _) = load_objects::funded(&payer);
     genuine_receive_source_for_heads(before, &loaded.successor, valid, insert, mode)
 }
 
@@ -354,7 +354,14 @@ pub(crate) fn genuine_receive_source_for_heads(
     insert: bool,
     mode: IncomingMode,
 ) -> ReceiveQ {
-    genuine_receive_source_for_send(before, send_objects::from_load(payer), valid, insert, mode)
+    genuine_receive_source_for_send(
+        before,
+        send_objects::from_load(payer),
+        valid,
+        insert,
+        mode,
+        true,
+    )
 }
 
 /// Generate real sources for an exact Request carrying a supplied quoted credential.
@@ -368,7 +375,7 @@ pub(crate) fn genuine_receive_source_for_quoted(
     mode: IncomingMode,
 ) -> ReceiveQ {
     let (enrolled, _, _) = bootstrap_objects::enrollment();
-    let (loaded, _, _, _) = load_objects::authorized(&enrolled);
+    let (loaded, _, _) = load_objects::funded(&enrolled);
     let payer = payer.unwrap_or(&loaded.successor);
     let quoted = bootstrap_objects::sign(
         iroha_kagemusha_proof::operation_relation::objects::ObjectKind::Credential,
@@ -385,6 +392,23 @@ pub(crate) fn genuine_receive_source_for_quoted(
         valid,
         insert,
         mode,
+        true,
+    )
+}
+
+/// Reject an altered incoming sigma with the actual total Q verifier. The local
+/// Send fixture supplies only adversarial bytes; no funded payer lineage is
+/// authenticated or admitted by this burn-only constructor.
+pub(crate) fn genuine_receive_source_with_invalid_sigma(before: &StateWitness) -> ReceiveQ {
+    let (payer, _, _) = bootstrap_objects::enrollment();
+    let (loaded, _, _) = load_objects::funded(&payer);
+    genuine_receive_source_for_send(
+        before,
+        send_objects::from_load(&loaded.successor),
+        false,
+        false,
+        IncomingMode::Trivial,
+        false,
     )
 }
 
@@ -394,6 +418,7 @@ fn genuine_receive_source_for_send(
     valid: bool,
     insert: bool,
     mode: IncomingMode,
+    incoming_valid: bool,
 ) -> ReceiveQ {
     let witness = receive_objects::from_send(&send, before, Fp::from(401), valid, insert);
     let params = PinnedParams::<Ep>::derive(16).unwrap();
@@ -410,6 +435,12 @@ fn genuine_receive_source_for_send(
     .unwrap();
     let own_proof = own.prove(&witness.step, common::recovery(241)).unwrap();
     let incoming_proof = incoming.prove(&send.step, common::recovery(242)).unwrap();
+    let mut incoming_sigma = incoming_proof.bytes;
+    if !incoming_valid {
+        // The first commitment encoding is noncanonical in either Pasta field;
+        // the total incoming verifier must export false, not a deferred claim.
+        incoming_sigma[..32].fill(0xff);
+    }
     let own_verifier = own.verifier();
     let incoming_verifier = incoming.verifier();
     let sigma_plan = QSigmaPlan::new(
@@ -433,8 +464,8 @@ fn genuine_receive_source_for_send(
                 sigma: SigmaSlotWitness {
                     key: incoming.proving_key().vk().clone(),
                     statement: incoming_proof.public.instance()[0],
-                    length: incoming_proof.bytes.len().try_into().unwrap(),
-                    proof: incoming_proof.bytes.clone(),
+                    length: incoming_sigma.len().try_into().unwrap(),
+                    proof: incoming_sigma.clone(),
                 },
                 mode,
             }),
@@ -462,10 +493,12 @@ fn genuine_receive_source_for_send(
         .decide(&vparams, MemoryBudget::DEFAULT)
         .unwrap();
     assert_eq!(proof.instances[2], [Fq::from(10), Fq::from(2)]);
+    assert_eq!(proof.instances[3][0], Fq::ONE);
+    assert_eq!(proof.instances[3][1], Fq::from(u64::from(incoming_valid)));
     eprintln!(
         "Receive genuine sigma={} incoming_sigma={} Q={} sourcek={} mode={mode:?}",
         own_proof.bytes.len(),
-        incoming_proof.bytes.len(),
+        incoming_sigma.len(),
         proof.bytes.len(),
         prepared.part().source_k()
     );
@@ -473,7 +506,7 @@ fn genuine_receive_source_for_send(
         witness,
         send,
         sigma: own_proof.bytes,
-        incoming_sigma: incoming_proof.bytes,
+        incoming_sigma,
         sigma_plan,
         key: q.verifying_key().clone(),
         q: QProofPlan::new(
@@ -500,6 +533,36 @@ impl ReceiveQ {
         assert_eq!(updated.after.rest, self.witness.after.rest);
         self.witness = updated;
     }
+}
+
+#[test]
+#[ignore = "actual own sigma and altered incoming Send sigma under the complete soft Q verifier"]
+fn altered_send_sigma_has_false_q_verdict_and_no_spendable_credit() {
+    let (receiver, _, _) = receive_objects::receiver();
+    let source = genuine_receive_source_with_invalid_sigma(&StateWitness::from(&receiver));
+    assert_eq!(
+        source.instances[3],
+        [Fq::ONE, Fq::ZERO, Fq::ZERO, Fq::ONE, Fq::ZERO]
+    );
+    assert_eq!(source.witness.before.core[8], Fp::ZERO);
+    assert_eq!(
+        source.witness.after.core[8] - source.witness.after.lineage[14],
+        Fp::ZERO
+    );
+    assert_eq!(
+        source.witness.after.core[16],
+        source.witness.before.core[16]
+    );
+    let maps = Maps {
+        witness: source.witness,
+        known: true,
+        verdict: false,
+    };
+    assert!(
+        check_circuit(&maps, 16, &public(&maps), CheckMode::Strict)
+            .unwrap()
+            .is_satisfied()
+    );
 }
 
 #[test]

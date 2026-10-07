@@ -72,10 +72,23 @@ fn validate_directory(file: &File, private: bool) -> io::Result<FileIdentity> {
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinkPolicy {
+    Single,
+    BuildInput,
+}
+
 fn validate_file(file: &File, private: bool) -> io::Result<fs::Metadata> {
+    validate_file_links(file, private, LinkPolicy::Single)
+}
+
+fn validate_file_links(file: &File, private: bool, links: LinkPolicy) -> io::Result<fs::Metadata> {
     let metadata = file.metadata()?;
     let uid = rustix::process::geteuid().as_raw();
-    if !metadata.is_file() || metadata.nlink() != 1 {
+    if !metadata.is_file()
+        || metadata.nlink() == 0
+        || (links == LinkPolicy::Single && metadata.nlink() != 1)
+    {
         return Err(denied("file must be regular with exactly one link"));
     }
     if private {
@@ -148,6 +161,19 @@ impl Directory {
 
     pub(super) fn entries(&self, maximum: usize) -> io::Result<Vec<std::ffi::OsString>> {
         self.revalidate()?;
+        self.entries_native(maximum, |mut names| {
+            self.revalidate()?;
+            names.sort();
+            Ok(names)
+        })
+    }
+
+    // Consume the original census while its directory metadata and native owner remain live.
+    pub(super) fn entries_native<T>(
+        &self,
+        maximum: usize,
+        consume: impl FnOnce(Vec<std::ffi::OsString>) -> io::Result<T>,
+    ) -> io::Result<T> {
         let before = self.current().file.metadata()?;
         let mut names = Vec::new();
         for entry in rustix::fs::Dir::read_from(&self.current().file)? {
@@ -165,9 +191,7 @@ impl Directory {
         if !unchanged(&before, &self.current().file.metadata()?) {
             return Err(changed());
         }
-        self.revalidate()?;
-        names.sort();
-        Ok(names)
+        consume(names)
     }
 
     fn open_with_policy(
@@ -270,7 +294,28 @@ impl Directory {
     }
 
     pub(super) fn revalidate(&self) -> io::Result<()> {
-        for (index, link) in self.links.iter().enumerate() {
+        self.revalidate_from(0)
+    }
+
+    // Only a strict descendant with this complete shared native chain omits the prefix.
+    // Independently opened or unrelated owners retain their original full validation.
+    pub(super) fn revalidate_in_tree(&self, anchor: &Self) -> io::Result<()> {
+        let first = if self.links.len() > anchor.links.len()
+            && self
+                .links
+                .iter()
+                .zip(&anchor.links)
+                .all(|(descendant, ancestor)| Arc::ptr_eq(descendant, ancestor))
+        {
+            anchor.links.len()
+        } else {
+            0
+        };
+        self.revalidate_from(first)
+    }
+
+    fn revalidate_from(&self, first: usize) -> io::Result<()> {
+        for (index, link) in self.links.iter().enumerate().skip(first) {
             let held_identity = validate_directory(&link.file, link.private)?;
             let named = if index == 0 {
                 open_directory(&link.path)?
@@ -396,6 +441,10 @@ impl Directory {
         RetainedFile::open(self.clone(), name.to_owned(), private, create_new)
     }
 
+    pub(super) fn open_build_input(&self, name: &OsStr) -> io::Result<RetainedFile> {
+        RetainedFile::open_build_input(self.clone(), name.to_owned())
+    }
+
     pub(super) fn read(
         &self,
         name: &OsStr,
@@ -403,6 +452,22 @@ impl Directory {
         private: bool,
     ) -> io::Result<Zeroizing<Vec<u8>>> {
         self.revalidate()?;
+        self.read_native(name, maximum, private, |bytes| {
+            self.revalidate()?;
+            Ok(bytes)
+        })
+    }
+
+    // Sole native per-file body. Its original file and snapshot owners remain live until
+    // the internal consumer returns; standalone success-exit therefore keeps native custody.
+    // No consumer or file descriptor is exposed by the closed public comparison API.
+    pub(super) fn read_native<T>(
+        &self,
+        name: &OsStr,
+        maximum: usize,
+        private: bool,
+        consume: impl FnOnce(Zeroizing<Vec<u8>>) -> io::Result<T>,
+    ) -> io::Result<T> {
         let mut file = self.open_read(name)?;
         let before = validate_file(&file, private)?;
         let bytes = bounded_read(&mut file, before.len(), maximum)?;
@@ -411,8 +476,7 @@ impl Directory {
         if !unchanged(&before, &after) || !unchanged(&after, &validate_file(&named, private)?) {
             return Err(changed());
         }
-        self.revalidate()?;
-        Ok(bytes)
+        consume(bytes)
     }
 
     pub(super) fn write_atomic(
@@ -746,6 +810,7 @@ pub struct RetainedFile<D = Directory, N = std::ffi::OsString> {
     name: N,
     file: File,
     before: fs::Metadata,
+    links: LinkPolicy,
     private: bool,
     writable: bool,
     read_only: bool,
@@ -823,6 +888,20 @@ pub fn snapshot_file(file: &File, private: bool) -> io::Result<FileSnapshot> {
 
 impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
     fn open(directory: D, name: N, private: bool, create_new: bool) -> io::Result<Self> {
+        Self::open_with_links(directory, name, private, create_new, LinkPolicy::Single)
+    }
+
+    fn open_build_input(directory: D, name: N) -> io::Result<Self> {
+        Self::open_with_links(directory, name, false, false, LinkPolicy::BuildInput)
+    }
+
+    fn open_with_links(
+        directory: D,
+        name: N,
+        private: bool,
+        create_new: bool,
+        links: LinkPolicy,
+    ) -> io::Result<Self> {
         let parent = directory.borrow();
         parent.revalidate()?;
         let file = if create_new {
@@ -835,12 +914,13 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
         } else {
             parent.open_read(name.as_ref())?
         };
-        let before = validate_file(&file, private || create_new)?;
+        let before = validate_file_links(&file, private || create_new, links)?;
         let retained = Self {
             directory,
             name,
             file,
             before,
+            links,
             private: private || create_new,
             writable: create_new,
             read_only: false,
@@ -860,7 +940,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
 
     pub(super) fn snapshot(&self) -> io::Result<FileSnapshot> {
         self.revalidate()?;
-        let value = validate_file(&self.file, self.private)?;
+        let value = validate_file_links(&self.file, self.private, self.links)?;
         let snapshot = FileSnapshot::from_metadata(&value);
         self.revalidate()?;
         Ok(snapshot)
@@ -868,7 +948,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
     pub(super) fn seal(mut self) -> io::Result<Self> {
         self.file.sync_all()?;
         self.revalidate()?;
-        self.before = validate_file(&self.file, self.private)?;
+        self.before = validate_file_links(&self.file, self.private, self.links)?;
         self.writable = false;
         self.directory.borrow().sync()?;
         Ok(self)
@@ -893,7 +973,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
     }
     pub(super) fn revalidate(&self) -> io::Result<()> {
         self.directory.borrow().revalidate()?;
-        let after = validate_file(&self.file, self.private)?;
+        let after = validate_file_links(&self.file, self.private, self.links)?;
         if self.read_only {
             private_files::validate_read_only(&self.file)?;
         }
@@ -903,7 +983,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
             return Err(changed());
         }
         let named = self.directory.borrow().open_read(self.name.as_ref())?;
-        let named_metadata = validate_file(&named, self.private)?;
+        let named_metadata = validate_file_links(&named, self.private, self.links)?;
         if !unchanged(&after, &named_metadata) {
             return Err(changed());
         }

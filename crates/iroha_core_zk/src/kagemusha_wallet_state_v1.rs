@@ -44,6 +44,8 @@ mod custody;
 mod fee_claims;
 mod folding;
 mod index;
+mod indexed_map;
+mod lifecycle;
 mod manifest;
 mod scheduling;
 mod snapshot;
@@ -54,6 +56,11 @@ pub use custody::{AdvanceHandle, Custody, ProviderArchive, TransitionOwner};
 pub use fee_claims::{FinalizedPayoutEvidence, RetainedFeeClaim};
 pub use folding::{FoldStatus, LineageCache};
 pub use index::{IndexRoot, ObjectStore};
+pub use indexed_map::PersistentIndexedMapV1;
+pub use lifecycle::{
+    ChargeOriginalsV1, NativePreparation, OperationActionV1, OperationRequestV1,
+    PREPARATION_MAX_BYTES, PreparationSourceV1, REQUEST_MAX_BYTES, RequestStatusV1,
+};
 pub use scheduling::{Cancellation, PaymentGuard, Scheduler};
 pub use snapshot::{Snapshot, SnapshotFold};
 
@@ -78,6 +85,9 @@ pub enum Error {
     /// A previously used credit identity names different canonical Payment bytes.
     #[error("conflicting Payment for an already consumed credit")]
     CreditConflict,
+    /// A lifecycle operation identity already retains different exact user input.
+    #[error("conflicting lifecycle request for an already retained operation")]
+    OperationConflict,
     /// The operation needs Ω of the current head.
     #[error("current head is not folded")]
     FoldRequired,
@@ -210,8 +220,11 @@ pub trait NativeProofs {
     /// Reject any invalid proof, binding, artifact or decide.
     fn verify_lineage(&self, lineage: &KagemushaWalletLineageV1) -> Result<(), Error>;
 
-    /// Compute exactly the next sub-proof of one released transition. Poll cancellation at
-    /// every parallel task boundary and release proof workspaces before returning.
+    /// Compute exactly the next sub-proof of one released transition. `checkpoints` holds
+    /// every prior original checkpoint in authenticated schedule order, after the coordinator
+    /// checked its exact layout and durable source chain. Genuine native restoration must
+    /// rederive each prior A/W source in order; the latest proof alone cannot supply that source.
+    /// Poll cancellation at every task boundary and release proof workspaces before returning.
     ///
     /// # Errors
     /// Return `Cancelled` on preemption; reject unavailable/invalid relation inputs.
@@ -219,7 +232,7 @@ pub trait NativeProofs {
         &self,
         witness: &ReleasedStep,
         predecessor: Option<&KagemushaWalletFoldRecordV1>,
-        checkpoint: Option<&[u8]>,
+        checkpoints: &[Vec<u8>],
         cancellation: &Cancellation,
     ) -> Result<FoldProgress, Error>;
 }

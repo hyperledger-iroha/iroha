@@ -3,7 +3,12 @@
 //! Only real State-pinned signed genesis starts this cursor. Neither callers nor disk DTOs
 //! can import a checkpoint. Partial progress is historical and never returned as current.
 
-use std::{alloc::Layout, io::Write as _, num::NonZeroU16, time::Instant};
+use std::{
+    alloc::Layout,
+    io::Write as _,
+    num::{NonZeroU16, NonZeroU64},
+    time::Instant,
+};
 
 use super::ProofError;
 use crate::{
@@ -55,14 +60,15 @@ pub struct NativeFinalityCursorV1 {
     original: Option<Original>,
 }
 
-/// One actual portable verification result retaining its complete local allocation envelope.
+/// One historical portable verification result retaining its original allocation envelope.
+/// It authenticates the selected height, without claiming that height is the current tip.
 /// No constructor, clone or unaccounted move-out is exposed.
-pub struct NativeCurrentFinalityV1 {
+pub struct NativeFinalityAtHeightV1 {
     block: ChargedBuffer<VerifiedSumeragiBlock>,
     native: ChargedBuffer<CommittedBlock>,
     _decode: DecodeCustody,
 }
-impl NativeCurrentFinalityV1 {
+impl NativeFinalityAtHeightV1 {
     /// Borrow the sole verifier output while its original allocation custody remains held.
     #[must_use]
     pub fn block(&self) -> &VerifiedSumeragiBlock {
@@ -73,6 +79,24 @@ impl NativeCurrentFinalityV1 {
     #[must_use]
     pub fn native_block(&self) -> &CommittedBlock {
         &self.native.as_slice()[0]
+    }
+}
+
+/// One verified result additionally bound to the exact current State and durable cut.
+/// No constructor, clone or unaccounted move-out is exposed.
+pub struct NativeCurrentFinalityV1 {
+    at: NativeFinalityAtHeightV1,
+}
+impl NativeCurrentFinalityV1 {
+    /// Borrow the sole verifier output under its original allocation custody.
+    #[must_use]
+    pub fn block(&self) -> &VerifiedSumeragiBlock {
+        self.at.block()
+    }
+    /// Borrow the same durable receipt authenticated by this current decision.
+    #[must_use]
+    pub fn native_block(&self) -> &CommittedBlock {
+        self.at.native_block()
     }
 }
 
@@ -114,11 +138,51 @@ impl NativeFinalityCursorV1 {
         deadline: Instant,
         maximum_steps: NonZeroU16,
     ) -> Result<Option<NativeCurrentFinalityV1>> {
+        Ok(self
+            .advance_at(view, budget, deadline, maximum_steps, None)?
+            .map(|at| NativeCurrentFinalityV1 { at }))
+    }
+
+    /// Advance the same original prefix toward one historical committed height.
+    ///
+    /// At most 64 steps execute per call; `None` retains incomplete local progress.
+    /// Targets must be non-genesis and within the current durable State cut. A
+    /// caller cannot rewind an existing prefix, import trust or bypass a pending
+    /// native step. The returned owner authenticates only this selected height.
+    /// # Errors
+    /// The same source, certificate, deadline and allocation failures as
+    /// [`Self::advance_current`], plus a genesis, future or regressed target.
+    pub fn advance_to_height(
+        &mut self,
+        view: &impl StateReadOnly,
+        height: NonZeroU64,
+        budget: &AllocationBudget,
+        deadline: Instant,
+        maximum_steps: NonZeroU16,
+    ) -> Result<Option<NativeFinalityAtHeightV1>> {
+        if height.get() < 2 {
+            return Err(Error::Source);
+        }
+        self.advance_at(view, budget, deadline, maximum_steps, Some(height.get()))
+    }
+
+    fn advance_at(
+        &mut self,
+        view: &impl StateReadOnly,
+        budget: &AllocationBudget,
+        deadline: Instant,
+        maximum_steps: NonZeroU16,
+        requested: Option<u64>,
+    ) -> Result<Option<NativeFinalityAtHeightV1>> {
         check(deadline)?;
         if maximum_steps.get() > 64 {
             return Err(Error::Source);
         }
-        let target = coherent_height(view)?;
+        let current = coherent_height(view)?;
+        let target = requested.unwrap_or(current);
+        if target > current {
+            return Err(Error::Source);
+        }
         if target == 0 {
             return Ok(None);
         }
@@ -246,26 +310,26 @@ impl NativeFinalityCursorV1 {
             )
             .map_err(ProofError::from)?;
             check(deadline)?;
-            let current = verifier
+            let verified = verifier
                 .verify_retained_decision(checkpoint.tip())
                 .map_err(ProofError::from)?;
             check(deadline)?;
             let receipt = read_frame(durable, target).map_err(ProofError::from)?;
-            if coherent_height(view)? != target
-                || current.height() != target
-                || current.block().hash() != original.native_hash
-                || receipt.block_hash() != current.block().hash()
-                || receipt.core_hash() != current.core_hash()
-                || receipt.result() != current.result()
-                || receipt.id().0.as_ref() != current.context_id().as_ref()
+            if coherent_height(view)? != current
+                || verified.height() != target
+                || verified.block().hash() != original.native_hash
+                || receipt.block_hash() != verified.block().hash()
+                || receipt.core_hash() != verified.core_hash()
+                || receipt.result() != verified.result()
+                || receipt.id().0.as_ref() != verified.context_id().as_ref()
             {
                 return Err(Error::Source);
             }
             native.push_reserved(receipt);
-            output.push_reserved(current);
+            output.push_reserved(verified);
             Ok(())
         })?;
-        Ok(Some(NativeCurrentFinalityV1 {
+        Ok(Some(NativeFinalityAtHeightV1 {
             block: output,
             native,
             _decode: custody,
@@ -489,7 +553,7 @@ fn check(deadline: Instant) -> Result<()> {
 
 // A real original-pool charge accompanies the canonical decoder allowance and bounded clone
 // workspace. Values constructed in run are destroyed before this custody, except the single
-// verified output which is physically coupled to it in NativeCurrentFinalityV1 above.
+// verified output which is physically coupled to it in NativeFinalityAtHeightV1 above.
 struct DecodeCustody {
     limits: norito::DecodeLimits,
     _charge: AllocationCharge,
@@ -662,6 +726,81 @@ mod tests {
             .unwrap();
         assert_eq!(again.block().height(), 3);
         drop(again);
+        drop(cursor);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn historical_cursor_authenticates_exact_target_without_rewinding_or_claiming_current() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000)).unwrap();
+        chain.commit(Vec::new());
+        chain.commit(Vec::new());
+        let budget = AllocationBudget::new(2 * 1024 * 1024 * 1024);
+        let mut cursor = NativeFinalityCursorV1::new();
+        for height in [1, 4] {
+            assert!(matches!(
+                cursor.advance_to_height(
+                    &chain.state().view(),
+                    NonZeroU64::new(height).unwrap(),
+                    &budget,
+                    deadline(),
+                    one(),
+                ),
+                Err(Error::Source)
+            ));
+            assert!(cursor.original.is_none());
+        }
+        assert!(
+            cursor
+                .advance_to_height(
+                    &chain.state().view(),
+                    NonZeroU64::new(2).unwrap(),
+                    &budget,
+                    deadline(),
+                    one(),
+                )
+                .unwrap()
+                .is_none()
+        );
+        let old = cursor
+            .advance_to_height(
+                &chain.state().view(),
+                NonZeroU64::new(2).unwrap(),
+                &budget,
+                deadline(),
+                one(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(old.block().height(), 2);
+        assert_eq!(
+            old.block().block().hash(),
+            *chain.state().view().block_hashes().get(1).unwrap()
+        );
+        assert_eq!(old.native_block().result(), old.block().result());
+        assert_ne!(
+            old.block().block().hash(),
+            *chain.state().view().block_hashes().last().unwrap()
+        );
+        drop(old);
+        let current = cursor
+            .advance_current(&chain.state().view(), &budget, deadline(), one())
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.block().height(), 3);
+        drop(current);
+        assert!(matches!(
+            cursor.advance_to_height(
+                &chain.state().view(),
+                NonZeroU64::new(2).unwrap(),
+                &budget,
+                deadline(),
+                one(),
+            ),
+            Err(Error::Source)
+        ));
+        assert_eq!(cursor.original.as_ref().unwrap().native_height, 3);
         drop(cursor);
         assert_eq!(budget.reserved_bytes(), 0);
     }

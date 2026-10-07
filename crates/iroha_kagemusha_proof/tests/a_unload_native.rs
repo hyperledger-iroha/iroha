@@ -4,13 +4,16 @@
 //! A complete native Unload proof/restoration positive must use an authenticated
 //! compact folded head with funds; no oversized or synthetic head is admitted here.
 
+#![allow(clippy::duplicate_mod)]
+
 #[path = "common/bootstrap.rs"]
 mod bootstrap;
 #[path = "common/bootstrap_objects.rs"]
 #[allow(dead_code)]
 mod bootstrap_objects;
+/// Genuine Bootstrap/Omega component fixtures shared with the Unload source.
 #[path = "bootstrap_omega.rs"]
-mod bootstrap_outer;
+pub mod bootstrap_outer;
 mod common;
 
 use ff::{Field, PrimeField};
@@ -42,7 +45,7 @@ fn rebind(w: &mut ConsumingWitness) {
         let mut preimage = state.core.to_vec();
         preimage.push(hash_with_domain(REST_DOMAIN, &state.rest));
         state.lineage[5] = hash_with_domain(CORE_DOMAIN, &preimage);
-        state.lineage[1..3].copy_from_slice(&state.core[core::SCHEME..core::SCHEME + 2]);
+        state.lineage[1..3].copy_from_slice(&state.core[core::SCHEME..=core::SCHEME + 1]);
         state.lineage[6..8].copy_from_slice(&state.core[core::WALLET..core::WALLET + 2]);
         state.lineage[8] = state.core[core::CREDENTIAL];
         state.lineage[13] = state.core[core::LIFECYCLE]
@@ -335,7 +338,7 @@ fn genuine_unload_sources_reject_an_oversized_predecessor() {
     body.extend(bootstrap_objects::small_id(101, 102));
     body.extend(Fp::ZERO.to_repr());
     let receipt = bootstrap_objects::sign(ObjectKind::Receipt, body, 29, 59);
-    let policy = OwnPolicy::new([1, 2], [31, 32], bootstrap_objects::key(23)).unwrap();
+    let policy = OwnPolicy::new([31, 32], bootstrap_objects::key(23)).unwrap();
     let schema =
         iroha_kagemusha_proof::a_relation::unload::UnloadStagePlan::signature_schema(policy)
             .unwrap();

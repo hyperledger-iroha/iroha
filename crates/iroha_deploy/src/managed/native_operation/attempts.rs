@@ -224,6 +224,19 @@ impl Attempt {
         }
         Ok(())
     }
+    fn verify_authorization_in_scope(
+        &self,
+        reader: &mut iroha_fs::PrivateReadScope<'_>,
+    ) -> Result<()> {
+        if read_record_in_scope::<Authorization>(reader, "authorization.nrt")?.as_ref()
+            != Some(&self.authorization)
+        {
+            return Err(invalid(
+                "original dispatch authorization was lost or changed",
+            ));
+        }
+        Ok(())
+    }
     fn validate_inventory(&self, names: &[std::ffi::OsString], reserved: bool) -> Result<()> {
         if reserved
             && (names.len() != 1 || names.first().is_none_or(|name| name != "authorization.nrt"))
@@ -500,41 +513,45 @@ impl History {
         if retained_operation.identity()? != operation.identity()? {
             return Err(invalid("dispatch operation custody changed"));
         }
-        let dispatch: Option<Dispatch> = read_record(operation, "dispatch.nrt")?;
-        if let Some(value) = &dispatch {
-            value.highest.terms.validate()?;
-            validate_origin(&value.highest.origin)?;
-            scope.require_fees(&value.highest.terms.fees)?;
-            if value.purpose != purpose
-                || value.semantic != semantic
-                || value.scope != scope.commitment()?
-                || value.highest.purpose != purpose
-                || value.highest.semantic != semantic
-                || value.highest.ordinal == 0
-                || scope
-                    .prior_total()
-                    .checked_add(usize::from(value.highest.ordinal))
-                    .is_none_or(|n| n > MAX_ATTEMPTS)
-                || value.first == [0; 32]
-                || (value.highest.ordinal == 1
-                    && (value.highest.previous.is_some() || value.first != digest(&value.highest)?))
-            {
-                return Err(invalid(
-                    "dispatch high-water differs from its original scope",
-                ));
+        let (dispatch, cumulative_reserved, closing, closed) = operation.read_scope(|reader| {
+            let dispatch: Option<Dispatch> = read_record_in_scope(reader, "dispatch.nrt")?;
+            if let Some(value) = &dispatch {
+                value.highest.terms.validate()?;
+                validate_origin(&value.highest.origin)?;
+                scope.require_fees(&value.highest.terms.fees)?;
+                if value.purpose != purpose
+                    || value.semantic != semantic
+                    || value.scope != scope.commitment()?
+                    || value.highest.purpose != purpose
+                    || value.highest.semantic != semantic
+                    || value.highest.ordinal == 0
+                    || scope
+                        .prior_total()
+                        .checked_add(usize::from(value.highest.ordinal))
+                        .is_none_or(|n| n > MAX_ATTEMPTS)
+                    || value.first == [0; 32]
+                    || (value.highest.ordinal == 1
+                        && (value.highest.previous.is_some()
+                            || value.first != digest(&value.highest)?))
+                {
+                    return Err(invalid(
+                        "dispatch high-water differs from its original scope",
+                    ));
+                }
             }
-        }
-        let cumulative_reserved = scope
-            .prior_total()
-            .checked_add(
-                dispatch
-                    .as_ref()
-                    .map_or(0, |value| usize::from(value.highest.ordinal)),
-            )
-            .filter(|count| *count <= MAX_ATTEMPTS)
-            .ok_or_else(|| invalid("body dispatch count exceeds its cumulative bound"))?;
-        let closing: Option<ClosurePlan> = read_record(operation, "closing.nrt")?;
-        let closed: Option<ClosureRecord> = read_record(operation, "closed.nrt")?;
+            let cumulative_reserved = scope
+                .prior_total()
+                .checked_add(
+                    dispatch
+                        .as_ref()
+                        .map_or(0, |value| usize::from(value.highest.ordinal)),
+                )
+                .filter(|count| *count <= MAX_ATTEMPTS)
+                .ok_or_else(|| invalid("body dispatch count exceeds its cumulative bound"))?;
+            let closing: Option<ClosurePlan> = read_record_in_scope(reader, "closing.nrt")?;
+            let closed: Option<ClosureRecord> = read_record_in_scope(reader, "closed.nrt")?;
+            Ok::<_, crate::managed::Error>((dispatch, cumulative_reserved, closing, closed))
+        })?;
         let root = match retained.and_then(|prior| prior.root.as_ref()) {
             Some(root) => root.retain(),
             None => operation.open_child("attempts"),
@@ -604,51 +621,57 @@ impl History {
                 None => root.open_child(name)?,
             };
             let inventory = attempt_inventory(&directory)?;
-            let Some(authorization): Option<Authorization> =
-                read_record(&directory, "authorization.nrt")?
-            else {
-                if index + 1 != names.len()
-                    || !inventory.is_empty()
-                    || !dispatch.as_ref().is_some_and(|value| {
-                        value.state == ReservationState::Reserved
-                            && usize::from(value.highest.ordinal) == index + 1
-                    })
+            let row = directory.read_scope(|reader| {
+                let Some(authorization): Option<Authorization> =
+                    read_record_in_scope(reader, "authorization.nrt")?
+                else {
+                    if index + 1 != names.len()
+                        || !inventory.is_empty()
+                        || !dispatch.as_ref().is_some_and(|value| {
+                            value.state == ReservationState::Reserved
+                                && usize::from(value.highest.ordinal) == index + 1
+                        })
+                    {
+                        return Err(invalid(
+                            "dispatch material exists without its authorization",
+                        ));
+                    }
+                    return Ok(None);
+                };
+                authorization.terms.validate()?;
+                scope.require_fees(&authorization.terms.fees)?;
+                validate_origin(&authorization.origin)?;
+                let previous = attempts
+                    .last()
+                    .map(|attempt| row_digest(attempt, &mut last_digest))
+                    .transpose()?;
+                if attempts.len() == 1 {
+                    first_digest = last_digest;
+                }
+                if usize::from(authorization.ordinal) != index + 1
+                    || authorization.purpose != purpose
+                    || authorization.semantic != semantic
+                    || authorization.previous != previous
                 {
                     return Err(invalid(
-                        "dispatch material exists without its authorization",
+                        "dispatch authorization changed its original purpose, intent or predecessor",
                     ));
                 }
+                if let Some(prior) = attempts.last() {
+                    validate_successor(&prior.authorization, &authorization)?;
+                }
+                let observation: Option<Observation> = read_record_in_scope(reader, "observation.nrt")?;
+                if let Some(observation) = observation {
+                    observation.validate(&authorization)?;
+                }
+                let commit: Option<Commit> = read_record_in_scope(reader, "committed.nrt")?;
+                let retirement: Option<Retirement> = read_record_in_scope(reader, "retired.nrt")?;
+                Ok::<_, crate::managed::Error>(Some((authorization, observation, commit, retirement)))
+            })?;
+            let Some((authorization, observation, commit, retirement)) = row else {
                 empty_tail = true;
                 continue;
             };
-            authorization.terms.validate()?;
-            scope.require_fees(&authorization.terms.fees)?;
-            validate_origin(&authorization.origin)?;
-            let previous = attempts
-                .last()
-                .map(|attempt| row_digest(attempt, &mut last_digest))
-                .transpose()?;
-            if attempts.len() == 1 {
-                first_digest = last_digest;
-            }
-            if usize::from(authorization.ordinal) != index + 1
-                || authorization.purpose != purpose
-                || authorization.semantic != semantic
-                || authorization.previous != previous
-            {
-                return Err(invalid(
-                    "dispatch authorization changed its original purpose, intent or predecessor",
-                ));
-            }
-            if let Some(prior) = attempts.last() {
-                validate_successor(&prior.authorization, &authorization)?;
-            }
-            let observation: Option<Observation> = read_record(&directory, "observation.nrt")?;
-            if let Some(observation) = observation {
-                observation.validate(&authorization)?;
-            }
-            let commit: Option<Commit> = read_record(&directory, "committed.nrt")?;
-            let retirement: Option<Retirement> = read_record(&directory, "retired.nrt")?;
             let attempt = Attempt {
                 directory,
                 authorization,
@@ -952,31 +975,44 @@ impl History {
                         "dispatch inventory changed during native operation",
                     ));
                 }
-                for attempt in &self.attempts {
-                    // The inventory preserves both native directory fences.
-                    let inventory = attempt_inventory(&attempt.directory)?;
-                    attempt.validate_inventory(
-                        &inventory,
-                        self.dispatch.as_ref().is_some_and(|value| {
-                            value.state == ReservationState::Reserved
-                                && value.highest.ordinal == attempt.ordinal()
-                        }),
-                    )?;
-                    attempt.verify_authorization()?;
-                    if read_record::<Observation>(&attempt.directory, "observation.nrt")?
-                        != attempt.observation
-                        || read_record::<Commit>(&attempt.directory, "committed.nrt")?
-                            != attempt.commit
-                        || read_record::<Retirement>(&attempt.directory, "retired.nrt")?
-                            != attempt.retirement
-                        || attempt_inventory(&attempt.directory)? != inventory
-                    {
-                        return Err(invalid(
-                            "retained dispatch metadata changed during native operation",
-                        ));
+                root.read_tree_scope(|tree| {
+                    for attempt in &self.attempts {
+                        tree.with_directory(&attempt.directory, |directory| {
+                            // The inventory preserves both native directory fences.
+                            let inventory = checked_attempt_inventory(directory.entries(7)?)?;
+                            attempt.validate_inventory(
+                                &inventory,
+                                self.dispatch.as_ref().is_some_and(|value| {
+                                    value.state == ReservationState::Reserved
+                                        && value.highest.ordinal == attempt.ordinal()
+                                }),
+                            )?;
+                            directory.read_scope(|reader| {
+                                attempt.verify_authorization_in_scope(reader)?;
+                                if read_record_in_scope::<Observation>(reader, "observation.nrt")?
+                                    != attempt.observation
+                                    || read_record_in_scope::<Commit>(reader, "committed.nrt")?
+                                        != attempt.commit
+                                    || read_record_in_scope::<Retirement>(reader, "retired.nrt")?
+                                        != attempt.retirement
+                                {
+                                    return Err(invalid(
+                                        "retained dispatch metadata changed during native operation",
+                                    ));
+                                }
+                                Ok::<_, crate::managed::Error>(())
+                            })?;
+                            if checked_attempt_inventory(directory.entries(7)?)? != inventory {
+                                return Err(invalid(
+                                    "retained dispatch metadata changed during native operation",
+                                ));
+                            }
+                            directory.revalidate()?;
+                            Ok::<_, crate::managed::Error>(())
+                        })?;
                     }
-                    attempt.directory.revalidate()?;
-                }
+                    Ok::<_, crate::managed::Error>(())
+                })?;
                 // A Reserved prefix may have its last empty directory but no authorization.
                 // It is inspected transiently; Published custody can never use this branch.
                 if names.len() > self.attempts.len() {
@@ -1017,15 +1053,17 @@ impl History {
     }
 
     fn require_metadata(&self) -> Result<()> {
-        if read_record::<Dispatch>(&self.operation, "dispatch.nrt")? != self.dispatch
-            || read_record::<ClosurePlan>(&self.operation, "closing.nrt")? != self.closing
-            || read_record::<ClosureRecord>(&self.operation, "closed.nrt")? != self.closed
-        {
-            return Err(invalid(
-                "dispatch inventory changed during native operation",
-            ));
-        }
-        Ok(())
+        self.operation.read_scope(|reader| {
+            if read_record_in_scope::<Dispatch>(reader, "dispatch.nrt")? != self.dispatch
+                || read_record_in_scope::<ClosurePlan>(reader, "closing.nrt")? != self.closing
+                || read_record_in_scope::<ClosureRecord>(reader, "closed.nrt")? != self.closed
+            {
+                return Err(invalid(
+                    "dispatch inventory changed during native operation",
+                ));
+            }
+            Ok(())
+        })
     }
 
     fn retain_root(&self, operation: &PrivateDirectory) -> Result<()> {
@@ -1264,7 +1302,10 @@ fn require_semantic_original(operation: &PrivateDirectory, semantic: [u8; 32]) -
 }
 
 fn attempt_inventory(directory: &PrivateDirectory) -> Result<Vec<std::ffi::OsString>> {
-    let names = directory.entries(7)?;
+    checked_attempt_inventory(directory.entries(7)?)
+}
+
+fn checked_attempt_inventory(names: Vec<std::ffi::OsString>) -> Result<Vec<std::ffi::OsString>> {
     if names.iter().any(|name| {
         ![
             "authorization.nrt",
@@ -1554,6 +1595,23 @@ pub(in crate::managed) fn read_record<
         return Ok(None);
     };
     let value = decode_record(&bytes)?;
+    #[cfg(test)]
+    tests::parse_digest_tests::record_decoded();
+    Ok(Some(value))
+}
+// The same canonical decoder and physical test counters, under a caller-owned closed
+// directory bracket. Missing leaves remain distinct from its unconditional custody exit.
+fn read_record_in_scope<T: norito::NoritoSerialize + for<'a> norito::NoritoDeserialize<'a>>(
+    reader: &mut iroha_fs::PrivateReadScope<'_>,
+    name: &str,
+) -> Result<Option<T>> {
+    #[cfg(test)]
+    tests::parse_digest_tests::record_read();
+    let value = match reader.read(name, MAX_RECORD_BYTES, decode_record::<T>) {
+        Ok(value) => value?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
     #[cfg(test)]
     tests::parse_digest_tests::record_decoded();
     Ok(Some(value))

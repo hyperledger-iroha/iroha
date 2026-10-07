@@ -106,6 +106,8 @@ pub mod pow5_fq;
 pub mod q_leaf;
 pub mod range;
 pub mod sha256;
+
+pub mod crc64;
 pub mod statement;
 pub mod table;
 pub mod tamper;

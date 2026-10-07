@@ -177,7 +177,10 @@ The current wallet module declares managed platform, payment-key and backup-rule
 unit tests. Its Rust `KagemushaWalletPlatformV1` JNI adapter exists, while wallet
 open still returns `ARTIFACTS_UNAVAILABLE` (`-4`). Complete installed prover and
 typed preparation integration plus authenticated owner intake remain unfinished;
-there is no wallet host-JNI test task or wallet execution qualification.
+the separate `:kagemusha-wallet-android:testDebugHostNative` task uses the explicit
+rebuilt host library to check native failure results, malformed intake, closed
+handles and artifact-unavailable open. It cannot qualify successful monetary
+operations, Android artifacts or physical devices.
 
 ## Version Catalog
 

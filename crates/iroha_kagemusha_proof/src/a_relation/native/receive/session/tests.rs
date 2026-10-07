@@ -1,6 +1,7 @@
 //! Exact stage-key identity checks retain only verifier metadata after PK release.
 
 use super::*;
+use crate::a_relation::native::artifact::ArtifactError;
 use iroha_plonk::{
     cs::{Column, ConstraintSystem, Instance, InstanceType},
     frontend::{Circuit, Error as CircuitError, Layouter, SimpleFloorPlanner},
@@ -49,7 +50,10 @@ fn metadata_rejects_same_descriptor_foreign_key_and_outlives_proving_buffers() {
     assert_ne!(original.vk().to_bytes(), foreign.vk().to_bytes());
     let artifact = KeyArtifact::new(original.binding().clone(), original.vk().clone()).unwrap();
     assert!(artifact.require_prover(&original).is_ok());
-    assert_eq!(artifact.require_prover(&foreign), Err(Error::Artifact));
+    assert_eq!(
+        artifact.require_prover(&foreign),
+        Err(ArtifactError::Identity)
+    );
     let digest = artifact.key().kagemusha_digest(artifact.binding()).unwrap();
     drop(original);
     assert_eq!(
@@ -62,9 +66,12 @@ fn metadata_rejects_same_descriptor_foreign_key_and_outlives_proving_buffers() {
         &config,
     )
     .unwrap();
-    assert_eq!(artifact.require_prover(&larger), Err(Error::Artifact));
+    assert_eq!(
+        artifact.require_prover(&larger),
+        Err(ArtifactError::Identity)
+    );
     assert!(matches!(
         KeyArtifact::new(larger.binding().clone(), foreign.vk().clone()),
-        Err(Error::Artifact),
+        Err(ArtifactError::Identity),
     ));
 }

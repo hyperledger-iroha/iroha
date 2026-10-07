@@ -43,12 +43,10 @@ pub enum ObjectKind {
     ChargeQuote,
     /// Receiver's exact payment Request.
     Request,
-    /// Finalized load authorization voucher.
-    Voucher,
 }
 impl ObjectKind {
     /// Every schema, in domain-table order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 10] = [
         Self::Certificate,
         Self::Credential,
         Self::Receipt,
@@ -59,7 +57,6 @@ impl ObjectKind {
         Self::TimeAnchor,
         Self::ChargeQuote,
         Self::Request,
-        Self::Voucher,
     ];
     pub(super) const fn schema(self) -> &'static [Atom] {
         match self {
@@ -123,7 +120,6 @@ impl ObjectKind {
                 P,
                 D,
             ],
-            Self::Voucher => &[U(2), D, D, D, U(16), U(16), U(16), P, D, U(8), P],
         }
     }
     /// Exact signed-body byte length, excluding its signature.
@@ -143,7 +139,6 @@ impl ObjectKind {
             Self::TimeAnchor => *b"kgwtanc1",
             Self::ChargeQuote => *b"kgwchgq1",
             Self::Request => *b"kgwrqst1",
-            Self::Voucher => *b"kgwvchr1",
         })
     }
     /// `P` domain of the message/signature object digest.
@@ -159,7 +154,6 @@ impl ObjectKind {
             Self::TimeAnchor => *b"kgwotim1",
             Self::ChargeQuote => *b"kgwochg1",
             Self::Request => *b"kgworeq1",
-            Self::Voucher => *b"kgwovch1",
         })
     }
     /// Primary chunk layout of body followed by its 64-byte raw signature.

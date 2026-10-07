@@ -22,6 +22,15 @@ pub struct AuthorizationRanges {
 }
 
 impl AuthorizationRanges {
+    /// Restore the full field split from a proved parser continuation.
+    pub(crate) fn from_source_parts(epoch_body: FieldSpan, fields: [FieldSpan; 11]) -> Self {
+        Self { epoch_body, fields }
+    }
+    /// Every original authorization range, in the sole native field order.
+    pub(crate) fn source_parts(&self) -> &[FieldSpan; 11] {
+        &self.fields
+    }
+
     /// Decode exactly11 fields within the original epoch authorization.
     /// # Errors
     /// Layout errors; omitted/trailing fields or source substitutions fail.
@@ -84,6 +93,17 @@ impl AuthorizationRanges {
     ) -> Result<AuthorizationIdentities, Error> {
         reader.same_span(region, &self.epoch_body, epoch.body())?;
         epoch.bind_header(reader, region, header)?;
+        self.identities_for_source_network(reader, region, header.network())
+    }
+
+    /// Continue from the network proved in this parser's earlier header stage.
+    /// The complete source context must bind that network across both stages.
+    pub(crate) fn identities_for_source_network<H: WordHasher<Fp>>(
+        &self,
+        reader: &mut ScheduleReader<'_, '_, H>,
+        region: &mut Region<'_, Fp>,
+        expected_network: &[Word<Fp>; 32],
+    ) -> Result<AuthorizationIdentities, Error> {
         let mut ids = Vec::with_capacity(4);
         for index in [1, 6, 8, 9] {
             reader.exact_len(region, &self.fields[index], 32)?;
@@ -91,7 +111,7 @@ impl AuthorizationRanges {
         }
         let [network, authority, previous, transition] =
             ids.try_into().map_err(|_| Error::Synthesis)?;
-        for (a, b) in network.iter().zip(header.network()) {
+        for (a, b) in network.iter().zip(expected_network) {
             reader.equal_when(region, self.epoch_body.present(), a, b)?;
         }
         Ok(AuthorizationIdentities {

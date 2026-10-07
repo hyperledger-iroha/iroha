@@ -1,6 +1,6 @@
 # Native prover migration inventory
 
-Status: M0 baseline with current consumer migration results (2026-10-06). This table lists every
+Status: M0 baseline with current consumer migration results (2026-10-07). This table lists every
 workspace crate, SDK and tool that uses the vendored halo2 stack or another
 Pasta/halo2 implementation. The Iroha-native crates (`iroha_pasta`,
 `iroha_plonk`, `iroha_plonk_gadgets`, `iroha_plonk_recursion`) replace the
@@ -80,7 +80,7 @@ the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 | Consumer | Stack (direct) | Use | Live exposure | Milestone |
 | --- | --- | --- | --- | --- |
 | `iroha_core_zk` verify dispatch: `lib.rs`, `verification.rs`, `native_pipa_r`, `ivm_proof_identity` | Native PIPA-R and separately selected STARK | V T | Source config uses `zk.pipa_r`/`zk.stark`; deployed stored proofs and registered keys remain unknown offline | M2(d) source retirement installed: generic Halo2 dispatch, `zkparse`/ZK1, old VK readers, five proof fixtures and backend configuration selectors are deleted. `BackendTag` has exactly Native PIPA-R=0 and STARK=1; seven closed registry profiles, no old decoder. Raw IVM hosts reject unqualified envelopes. The test-only `halo2_backend` adapter and its Core_zk vendored dev-dependencies are also deleted after native RAM-LFE migration. Combined runtime/config/consumer checks and packaged SDK rebuilds remain in progress. |
-| `iroha_core_zk::confidential_v2` (+tests): transfer v2, unshield v2/v3 circuits | Native PIPA-R; captured Poseidon vectors retain the independent oracle boundary | P V H | Taira `[confidential] enabled = true` (`config.toml:288`). Shielded notes and registered `CONFIDENTIAL_*_VK_DIGEST_V1`: unknown offline | Step 3 host hash uses the native RP57 implementation and passes all 35 hash/tree/proof regression tests, including both-field oracle, KAT and circuit parity. M2(c) production circuits and dispatch now use native PIPA-R with three new pinned keys, one native public column and consuming witnesses. The activated confidential suite passes 50 tests; ten independent host/relation/adversarial cases cover presence/public-input/layout/private-owner/path mutations and shared witness validation. All three depth-16 proof bodies are 3,680 B. Core/Torii/CLI test compilation passes before the final integration-fixture migration. The original 218-case both-field Poseidon parity corpus is captured in `confidential_poseidon_v1.json`; native replay and independent Python rederivation pass. Core_zk no longer imports the retired prover, even in tests. Final consumer execution and packaged SDK rebuilds remain open. |
+| `iroha_core_zk::confidential_v2` (+tests): transfer v2, unshield v2/v3 circuits | Native PIPA-R; captured Poseidon vectors retain the independent oracle boundary | P V H | Taira `[confidential] enabled = true` (`config.toml:288`). Shielded notes and registered `CONFIDENTIAL_*_VK_DIGEST_V1`: unknown offline | Step 3 host hash uses the native RP57 implementation and passes all 35 hash/tree/proof regression tests, including both-field oracle, KAT and circuit parity. M2(c) production circuits and dispatch now use native PIPA-R with three new pinned keys, one native public column and consuming witnesses. The activated confidential suite passes 50 tests; ten independent host/relation/adversarial cases cover presence/public-input/layout/private-owner/path mutations and shared witness validation. All three depth-16 proof bodies are 3,680 B. Core/Torii/CLI test compilation passes before the final integration-fixture migration. The original 218-case both-field Poseidon parity corpus is captured in `confidential_poseidon_v1.json`; native replay and independent Python rederivation pass. Core_zk no longer imports the retired prover, even in tests. Captured macOS ABI-25 confidential SDK integration now has the host coverage recorded below; JavaScript/Python, release packaging and network qualification remain open. |
 | Retired consensus Poseidon owner | — | — | None | Deleted with the mint-finality authority; the primitive KAT vectors stay in `kats_v1.json` and are checked by current native consumers. |
 | Old KAGEMUSHA owners: `iroha_core_zk::kagemusha_v1_state`, `kagemusha_v1_recursion`, the `pasta_*`, `kagemusha_p256_curve_gadget.rs` and `app_attest_der_gadget.rs` gadgets, `kagemusha_polynomial_store_v1`, `prover_golden_tests.rs`, `g3_proof_scaling_measurement_tests.rs`, and `iroha_core` `isi/kagemusha.rs` and `kagemusha_v1_reserve.rs` | — | — | None in source | Deleted, including the paired-Pasta mint-finality authority and its consumers. M5 rebuilds KAGEMUSHA natively in `iroha_kagemusha_proof`; the golden table stays pinned in `kats_v1.json` |
 | Retired paired-Pasta mint-finality authority | — | — | None | Deleted with its consensus, genesis, daemon and test-network integration. |
@@ -114,7 +114,7 @@ the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 | --- | --- | --- | --- |
 | `irohad`, `iroha_torii` (`zk_prover.rs`, routing), `iroha_cli` (`zk.rs`), `iroha_kagami` (genesis), `iroha_test_network` | Verify dispatch and confidential | All nodes and operators | M2 (dispatch) |
 | `iroha_deploy` (`localnet.rs` registers confidential VK records; `genesis/staging.rs`) | Confidential VKs | Localnet, staging | M2(c) fixtures |
-| `connect_norito_bridge` (`confidential_prover_ffi`, `confidential_note_ffi`) | Confidential prover and note hash | iOS and Android apps (staticlib/cdylib) | Step 3, M2(c); reseal and size report |
+| `connect_norito_bridge` (`confidential_prover_ffi`, `confidential_note_ffi`) | Confidential prover and note hash | iOS and Android apps (staticlib/cdylib) | Step 3, M2(c): captured ABI-25 macOS JNI and Swift host consumers pass as recorded below. Release artifacts, size reports and physical-device qualification remain open. |
 | `iroha_python_rs` (`confidential_wallet.rs`), `iroha_js_host` | Confidential wallet | PyPI wheels, npm | M2(c) |
 | `integration_tests` (dev) | Proof fixtures, `queries/proof.rs` | Test | M2 (4-peer cutover tests) |
 
@@ -129,10 +129,26 @@ the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 | C# (`Zk/VerifyingKeyBackendTag.cs`, `Privacy/ConfidentialProver.cs`, `Kaigi`) | Through the bridge; labels | M2(b)(c) fixtures |
 | JavaScript `iroha_js` (`kaigiScalarV1.js` Pasta Fp checks) | `iroha_js_host` napi | M2(b)(c) |
 | Python `iroha_python` | `iroha_python_rs` | M2(c) |
-| `fuzz/Cargo.toml`, `crates/fastpq_prover/fuzz/Cargo.toml` | Vendored path dependencies and the halo2-lib patch | Step 7 |
-| `scripts/cargo_fuzz_locked_cargo.sh`, `scripts/norito_bridge_source_seal.py`, `scripts/check_ivm_only.py`, `pytests/scripts/norito_bridge_source_seal_reviewed_vendor_test.py`, `pytests/scripts/workspace_release_gate_test.py` | Name vendored paths or packages | Step 7, M7 |
+| `fuzz/Cargo.toml`, `crates/fastpq_prover/fuzz/Cargo.toml`, `scripts/cargo_fuzz_locked_cargo.sh` | Native consumer dependencies; obsolete vendored Halo2 patches and proxy path requirements removed | Step 7 source cleanup complete. Locked/offline forwarding and fuzz-smoke inventory checks pass; this is not standalone sanitizer execution or a qualified locking proxy. Existing fuzz runtime/lock qualification remains open. |
+| `scripts/norito_bridge_source_seal.py`, `scripts/check_ivm_only.py`, `pytests/scripts/norito_bridge_source_seal_reviewed_vendor_test.py`, `pytests/scripts/workspace_release_gate_test.py` | Name vendored paths or packages | Step 7, M7 |
 | `ci/dependency_budget.json`, `scripts/check_release_feature_graph.py` (`proofs-halo2`, `zk-halo2`, `zk-halo2-ipa`), source-token guards in `pr.yml` | Pin the current graph and features. The reviewed native-consumer manifest baseline counts the native crates; shipping configurations forbid `iroha_plonk_oracle` | Update in each migrating change |
 | CI for the release-only oracle suites and `fixtures/native_prover/verify_kats_v1.py` | None yet. TODO: a nightly workflow running `cargo test --locked --release -p iroha_pasta -p iroha_plonk_oracle -- --include-ignored` on x86_64 and aarch64, and a `pytests/scripts` wrapper for the verifier | M0 exit (x86_64 run) |
+
+The captured ABI-25 macOS confidential host slice passes **15 Kotlin/Java tests**
+(10 actual native-prover/full-tree cases and five Java note consumers) and
+**26 Swift tests** (including five actual native-prover cases), with no skips or
+failures. The cases include full 65,536-leaf input, retained change followed by
+redemption, wrong roots, duplicate inputs and owner recovery. The Kotlin JVM's
+mapped library was observed at the exact admitted path and hash; Swift executed
+the exact XCTest bundle built by the ordinary source-admitted package. Native
+artifact, SDK and selected fixture hashes stayed unchanged during execution.
+The static archive and dylib came from one guarded ABI-25 build. Later KAGEMUSHA
+artifact-loader edits are recorded as source drift, so this is a **captured host
+component result**, not qualification of the latest checkout, release artifacts,
+network or physical devices. Logs, XML, loaded-image observation, original source
+checks and the separate path-kind audit correction are retained under
+`target/qualification/confidential-native-current/`. JavaScript/Python native
+confidential consumers remain open.
 
 ## Live networks
 

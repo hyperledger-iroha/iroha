@@ -517,8 +517,8 @@ require_signature_parity(
     | {"connect_norito_bridge_abi_version", "connect_norito_free", "connect_norito_domain_id_validate_v1"}
 )
 
-require(r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+25\b", header, "C bridge ABI version")
-require(r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1:\s*u32\s*=\s*25\s*;", privacy, "Rust bridge ABI version")
+require(r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+26\b", header, "C bridge ABI version")
+require(r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1:\s*u32\s*=\s*26\s*;", privacy, "Rust bridge ABI version")
 require(
     r"const\s+CONNECT_NORITO_BRIDGE_ABI_VERSION:\s*u32\s*=\s*PRIVACY_BRIDGE_ABI_VERSION_V1\s*;",
     rust,
@@ -601,7 +601,7 @@ if umbrella_contract(umbrella) != [
     raise SystemExit("[connect-norito-header] umbrella header drift")
 
 print(
-    "[connect-norito-header] ABI 25 synchronized: "
+    "[connect-norito-header] ABI 26 synchronized: "
     f"{len(PRIVACY_EXPORTS)} privacy, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS, {len(DETACHED_EXPORTS)} detached, "
     f"{len(PARLIAMENT_EXPORTS)} Parliament, {len(RETAIL_EXPORTS)} retail-fee, "
@@ -854,7 +854,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-abi)
       replace_once "${tmp_header}" \
-        "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 25" \
+        "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 26" \
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 22"
       ;;
     --self-test-missing-privacy-header-symbol)

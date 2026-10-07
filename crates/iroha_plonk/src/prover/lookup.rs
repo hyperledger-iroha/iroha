@@ -27,8 +27,6 @@
 //! permutation runs in time that depends on the (secret) values, like the
 //! vendored one.
 
-use std::collections::BTreeMap;
-
 use ff::Field;
 use iroha_pasta::{PastaCurve, PastaField, field::batch_invert, msm::MemoryBudget};
 use rand_core_06::RngCore;
@@ -128,49 +126,66 @@ pub(super) fn permute<F: PastaField, R: RngCore>(
     let missing = || ProverError::LookupInputMissing { lookup };
     let input = input.get(..usable_rows).ok_or_else(missing)?;
     let table = table.get(..usable_rows).ok_or_else(missing)?;
-    let mut counts: BTreeMap<F, usize> = BTreeMap::new();
-    for value in input {
-        *counts.entry(*value).or_insert(0) += 1;
+    let pad = n.checked_sub(usable_rows).ok_or_else(missing)?;
+    // Field ordering converts both operands out of Montgomery form on each
+    // comparison. Convert once, then sort compact integer keys in precisely
+    // the same canonical order, without a tree allocation for every group.
+    let mut sorted_input: Vec<_> = input.iter().map(canonical_key).collect();
+    sorted_input.sort_unstable();
+    let mut sorted_table: Vec<_> = table.iter().map(canonical_key).collect();
+    sorted_table.sort_unstable();
+    let mut groups = sorted_input
+        .chunk_by(|left, right| left == right)
+        .peekable();
+    let mut leftover = Vec::with_capacity(usable_rows);
+    for value in sorted_table {
+        if let Some(group) = groups.peek() {
+            if group[0] < value {
+                return Err(missing());
+            }
+            if group[0] == value {
+                // Consume exactly one table entry per input group. Later
+                // duplicates and values absent from the input stay ordered.
+                groups.next();
+                continue;
+            }
+        }
+        leftover.push(value);
     }
-    let mut sorted = table.to_vec();
-    sorted.sort_unstable();
-    if counts
-        .keys()
-        .any(|value| sorted.binary_search(value).is_err())
-    {
+    if groups.next().is_some() {
         return Err(missing());
     }
-    let leftover: Vec<F> = sorted
-        .iter()
-        .enumerate()
-        .filter(|(index, value)| {
-            (*index != 0 && sorted[index - 1] == **value) || !counts.contains_key(*value)
-        })
-        .map(|(_, value)| *value)
-        .collect();
     let mut permuted_input = Vec::with_capacity(n);
     let mut permuted_table = Vec::with_capacity(n);
-    let mut start = 0_usize;
-    for (group, (value, count)) in counts.iter().enumerate() {
-        permuted_input.push(*value);
-        permuted_table.push(*value);
-        // [start - g, end - g - 1) with end = start + count.
-        let from = start.checked_sub(group).ok_or_else(missing)?;
-        let to = (start + count).checked_sub(group + 1).ok_or_else(missing)?;
-        let extra = leftover.get(from..to).ok_or_else(missing)?;
-        for table_value in extra {
-            permuted_input.push(*value);
-            permuted_table.push(*table_value);
+    let mut leftover = leftover.into_iter();
+    for group in sorted_input.chunk_by(|left, right| left == right) {
+        let value = canonical_value::<F>(group[0]);
+        permuted_input.push(value);
+        permuted_table.push(value);
+        for _ in 1..group.len() {
+            permuted_input.push(value);
+            permuted_table.push(canonical_value(leftover.next().ok_or_else(missing)?));
         }
-        start += count;
     }
-    if permuted_input.len() != usable_rows {
+    if leftover.next().is_some() || permuted_input.len() != usable_rows {
         return Err(missing());
     }
-    let pad = n - usable_rows;
     permuted_input.extend(random_values::<F, _>(rng, pad));
     permuted_table.extend(random_values::<F, _>(rng, pad));
     Ok((permuted_input, permuted_table))
+}
+
+/// Most-significant limb first, so array ordering equals field ordering.
+fn canonical_key<F: PastaField>(value: &F) -> [u64; 4] {
+    let mut limbs = value.to_canonical_limbs();
+    limbs.reverse();
+    limbs
+}
+
+/// Reconstructs keys produced solely from already valid field elements.
+fn canonical_value<F: PastaField>(mut key: [u64; 4]) -> F {
+    key.reverse();
+    F::from_raw_reduced(key)
 }
 
 /// Compresses, permutes (with `permutation`), blinds, commits and writes
@@ -280,29 +295,34 @@ where
     let tables = pk.commitment_tables();
     let u = shape.usable_rows;
     let mut committed = Vec::with_capacity(permuted.len());
-    for lookup in permuted {
-        // Denominators (A'_i + beta)(S'_i + gamma) of the usable rows.
-        let mut fractions: Vec<C::ScalarExt> = lookup.input_values[..u]
-            .iter()
-            .zip(&lookup.table_values[..u])
-            .map(|(a, s)| (beta + a) * (gamma + s))
-            .collect();
-        batch_invert(&mut fractions);
-        for ((fraction, a), s) in fractions
+    for mut lookup in permuted {
+        // The compressed values have no consumer after these numerators are
+        // formed. Reuse their two allocations for the numerator and inverse
+        // denominator columns instead of allocating fractions and a product.
+        for ((numerator, denominator), (a, s)) in lookup.compressed_input[..u]
             .iter_mut()
-            .zip(&lookup.compressed_input[..u])
-            .zip(&lookup.compressed_table[..u])
+            .zip(&mut lookup.compressed_table[..u])
+            .zip(
+                lookup.input_values[..u]
+                    .iter()
+                    .zip(&lookup.table_values[..u]),
+            )
         {
-            *fraction *= (*a + beta) * (*s + gamma);
+            *numerator = (*numerator + beta) * (*denominator + gamma);
+            *denominator = (*a + beta) * (*s + gamma);
         }
-        let mut product = Vec::with_capacity(shape.n);
+        batch_invert(&mut lookup.compressed_table[..u]);
+        let mut product = lookup.compressed_input;
         let mut running = C::ScalarExt::ONE;
-        product.push(running);
-        for fraction in &fractions {
+        for (value, inverse) in product[..u].iter_mut().zip(&lookup.compressed_table[..u]) {
+            let fraction = *inverse * *value;
+            *value = running;
             running *= fraction;
-            product.push(running);
         }
-        product.extend(random_values::<C::ScalarExt, _>(
+        product[u] = running;
+        // No later phase needs this scratch, including the commitment MSM.
+        drop(lookup.compressed_table);
+        product[u + 1..].copy_from_slice(&random_values::<C::ScalarExt, _>(
             rng,
             shape.blinding_factors,
         ));
@@ -339,9 +359,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use iroha_pasta::{Ep, Eq, Fp};
+    use std::collections::BTreeMap;
+
+    use iroha_pasta::{Ep, Eq, Fp, Fq};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core_06::{RngCore, SeedableRng};
 
     use super::*;
     use crate::{
@@ -352,6 +374,114 @@ mod tests {
 
     fn values(raw: &[u64]) -> Vec<Fp> {
         raw.iter().map(|value| Fp::from(*value)).collect()
+    }
+
+    /// Independent field-ordered reference of the specified grouping and
+    /// leftover-table rule, including the original padding stream order.
+    fn reference_permutation<F: PastaField>(
+        input: &[F],
+        table: &[F],
+        n: usize,
+        rng: &mut ChaCha20Rng,
+    ) -> Option<(Vec<F>, Vec<F>)> {
+        let mut groups = BTreeMap::<F, usize>::new();
+        for value in input {
+            *groups.entry(*value).or_default() += 1;
+        }
+        let mut sorted = table.to_vec();
+        sorted.sort_unstable();
+        if groups
+            .keys()
+            .any(|value| sorted.binary_search(value).is_err())
+        {
+            return None;
+        }
+        let extra: Vec<F> = sorted
+            .iter()
+            .enumerate()
+            .filter(|(i, value)| {
+                (*i != 0 && sorted[i - 1] == **value) || !groups.contains_key(*value)
+            })
+            .map(|(_, value)| *value)
+            .collect();
+        let mut extra = extra.into_iter();
+        let mut a = Vec::with_capacity(n);
+        let mut s = Vec::with_capacity(n);
+        for (value, count) in groups {
+            a.push(value);
+            s.push(value);
+            for _ in 1..count {
+                a.push(value);
+                s.push(extra.next()?);
+            }
+        }
+        assert!(extra.next().is_none());
+        a.extend(random_values::<F, _>(rng, n - input.len()));
+        s.extend(random_values::<F, _>(rng, n - input.len()));
+        Some((a, s))
+    }
+
+    fn integer_key_parity<F: PastaField>() {
+        let mut data = ChaCha20Rng::seed_from_u64(817);
+        let mut edge = vec![F::ZERO, F::ONE, -F::ONE, F::from(1_u64 << 63)];
+        edge.extend((0..125).map(|_| F::random(&mut data)));
+        for value in &edge {
+            assert_eq!(canonical_value::<F>(canonical_key(value)), *value);
+            for other in &edge {
+                assert_eq!(
+                    canonical_key(value).cmp(&canonical_key(other)),
+                    value.cmp(other)
+                );
+            }
+        }
+        for len in [0, 1, 7, 32, 129] {
+            for seed in 0..12 {
+                let table: Vec<F> = (0..len).map(|i| edge[i % edge.len()]).collect();
+                let input: Vec<F> = (0..len)
+                    .map(|_| table[usize::try_from(data.next_u32()).unwrap() % len])
+                    .collect();
+                let n = len + 6;
+                let mut expected_rng = ChaCha20Rng::seed_from_u64(seed);
+                let expected = reference_permutation(&input, &table, n, &mut expected_rng).unwrap();
+                let mut actual_rng = ChaCha20Rng::seed_from_u64(seed);
+                let actual = permute(&input, &table, len, n, 4, &mut actual_rng).unwrap();
+                assert_eq!(actual, expected);
+                assert_eq!(actual_rng.next_u64(), expected_rng.next_u64());
+                if len > 0 {
+                    let mut missing = input.clone();
+                    missing[0] = F::from(19_337);
+                    assert!(
+                        reference_permutation(&missing, &table, n, &mut expected_rng).is_none()
+                    );
+                    assert!(matches!(
+                        permute(&missing, &table, len, n, 4, &mut actual_rng),
+                        Err(ProverError::LookupInputMissing { lookup: 4 })
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_integer_sort_preserves_both_field_permutations_and_padding() {
+        integer_key_parity::<Fp>();
+        integer_key_parity::<Fq>();
+    }
+
+    #[test]
+    fn malformed_lookup_extents_reject_without_underflow() {
+        let one = values(&[1]);
+        let mut rng = ChaCha20Rng::seed_from_u64(9);
+        for (input, table, usable, n) in [
+            (one.as_slice(), one.as_slice(), 1, 0),
+            (&[][..], one.as_slice(), 1, 2),
+            (one.as_slice(), &[][..], 1, 2),
+        ] {
+            assert!(matches!(
+                permute(input, table, usable, n, 7, &mut rng),
+                Err(ProverError::LookupInputMissing { lookup: 7 })
+            ));
+        }
     }
 
     #[test]
@@ -415,8 +545,13 @@ mod tests {
     }
 
     /// The consuming transition preserves the old interpolation, random
-    /// stream and commitment while reusing both evaluation allocations.
-    fn check_product_consumes_evaluation_buffers<C: PastaCurve>() {
+    /// stream and commitment while reusing the compressed-input and both
+    /// permuted-evaluation allocations. The reference uses independent scalar
+    /// inversions, including the specified zero-denominator behavior.
+    fn check_product_consumes_evaluation_buffers<C: PastaCurve>(
+        nontrivial: bool,
+        zero_denominator: bool,
+    ) {
         let circuit = Lookups {
             rows: 9,
             tamper: None,
@@ -441,9 +576,46 @@ mod tests {
         pk.domain().ifft(&mut expected_table).expect("table ifft");
         let input_blind = C::ScalarExt::from(13);
         let table_blind = C::ScalarExt::from(17);
+        let beta = if zero_denominator {
+            -input_values[2]
+        } else {
+            C::ScalarExt::from(19)
+        };
+        let gamma = C::ScalarExt::from(23);
+        let compressed_input: Vec<_> = input_values
+            .iter()
+            .enumerate()
+            .map(|(row, value)| {
+                if nontrivial {
+                    *value + C::ScalarExt::from((row % 11 + 29) as u64)
+                } else {
+                    *value
+                }
+            })
+            .collect();
+        let compressed_table: Vec<_> = table_values
+            .iter()
+            .map(|value| {
+                if nontrivial {
+                    *value + C::ScalarExt::from(31)
+                } else {
+                    *value
+                }
+            })
+            .collect();
+        let product_address = compressed_input.as_ptr();
+        let product_capacity = compressed_input.capacity();
+        let mut expected_product = vec![C::ScalarExt::ONE];
+        let mut running = C::ScalarExt::ONE;
+        for row in 0..shape.usable_rows {
+            let denominator = (input_values[row] + beta) * (table_values[row] + gamma);
+            let numerator = (compressed_input[row] + beta) * (compressed_table[row] + gamma);
+            running *= denominator.invert().unwrap_or(C::ScalarExt::ZERO) * numerator;
+            expected_product.push(running);
+        }
         let lookup = Permuted {
-            compressed_input: input_values.clone(),
-            compressed_table: table_values.clone(),
+            compressed_input,
+            compressed_table,
             input_values,
             table_values,
             input_blind,
@@ -451,8 +623,6 @@ mod tests {
         };
         let mut rng = ChaCha20Rng::seed_from_u64(47);
         let mut replay = rng.clone();
-        // A = A' and S = S', so every usable grand-product factor is one.
-        let mut expected_product = vec![C::ScalarExt::ONE; shape.usable_rows + 1];
         expected_product.extend(random_values::<C::ScalarExt, _>(
             &mut replay,
             shape.blinding_factors,
@@ -480,8 +650,8 @@ mod tests {
             pk,
             shape,
             vec![lookup],
-            C::ScalarExt::from(19),
-            C::ScalarExt::from(23),
+            beta,
+            gamma,
             &mut rng,
             &mut transcript,
             BUDGET,
@@ -491,6 +661,8 @@ mod tests {
         let committed = &committed[0];
         assert_eq!(committed.input_poly.as_ptr(), input_address);
         assert_eq!(committed.table_poly.as_ptr(), table_address);
+        assert_eq!(committed.product_poly.as_ptr(), product_address);
+        assert_eq!(committed.product_poly.capacity(), product_capacity);
         assert_eq!(committed.input_poly, expected_input);
         assert_eq!(committed.table_poly, expected_table);
         assert_eq!(committed.product_poly, expected_product);
@@ -503,7 +675,11 @@ mod tests {
 
     #[test]
     fn product_consumes_evaluation_buffers_on_both_curves() {
-        check_product_consumes_evaluation_buffers::<Ep>();
-        check_product_consumes_evaluation_buffers::<Eq>();
+        for nontrivial in [false, true] {
+            for zero_denominator in [false, true] {
+                check_product_consumes_evaluation_buffers::<Ep>(nontrivial, zero_denominator);
+                check_product_consumes_evaluation_buffers::<Eq>(nontrivial, zero_denominator);
+            }
+        }
     }
 }

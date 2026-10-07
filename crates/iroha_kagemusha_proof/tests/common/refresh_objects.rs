@@ -5,7 +5,9 @@ use bootstrap_objects::{Signed, id, key, sec1, sign, small_id};
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::{
     a_relation::own::OwnPolicy,
-    admin_sigma::{BootstrapWitness, RefreshWitness, StateWitness},
+    admin_sigma::{
+        BootstrapWitness, RefreshKind, RefreshUpdateWitness, RefreshWitness, StateWitness,
+    },
     operation_relation::{map_effects::BLACKLIST_HISTORY_DOMAIN, objects::ObjectKind},
     tree::{
         BlacklistTree, IndexedInsert, IndexedTree, QuotaUsageTree, QuotaWindow, QuotaWindowTree,
@@ -71,7 +73,7 @@ pub struct RefreshFixture {
 
 /// Same root/provider policy used by the genuine Bootstrap signing helpers.
 pub fn policy() -> OwnPolicy {
-    OwnPolicy::new([1, 2], [31, 32], key(23)).unwrap()
+    OwnPolicy::new([31, 32], key(23)).unwrap()
 }
 
 /// Seed an enrolled wallet without requiring any Load trust assumption.
@@ -229,12 +231,70 @@ pub fn authorized(
             predecessor: StateWitness::from(before),
             successor: StateWitness::from(&after),
             statement: after.statement,
-            issued,
-            policy_controls: Fp::from(if variant == Variant::RefreshSchemePolicy {
-                7
-            } else {
-                0
-            }),
+            update: RefreshUpdateWitness {
+                kind: match variant {
+                    Variant::RefreshCredential => RefreshKind::Credential,
+                    Variant::RefreshSchemePolicy => RefreshKind::SchemePolicy,
+                    Variant::RefreshBlacklist => RefreshKind::Blacklist,
+                    Variant::RefreshQuotaShare => RefreshKind::QuotaShare,
+                    Variant::RefreshTimeAnchor => RefreshKind::TimeAnchor,
+                    _ => unreachable!(),
+                },
+                digest: update.digest(),
+                scheme: if variant == Variant::RefreshCredential {
+                    [Fp::ZERO; 2]
+                } else {
+                    [before.core[1], before.core[2]]
+                },
+                asset: if matches!(
+                    variant,
+                    Variant::RefreshSchemePolicy | Variant::RefreshQuotaShare
+                ) {
+                    [before.core[3], before.core[4]]
+                } else {
+                    [Fp::ZERO; 2]
+                },
+                wallet: if matches!(
+                    variant,
+                    Variant::RefreshQuotaShare | Variant::RefreshTimeAnchor
+                ) {
+                    [before.core[5], before.core[6]]
+                } else {
+                    [Fp::ZERO; 2]
+                },
+                counter: match variant {
+                    Variant::RefreshSchemePolicy => after.core[core::POLICY_EPOCH],
+                    Variant::RefreshBlacklist => after.core[core::BLACKLIST_VERSION],
+                    Variant::RefreshQuotaShare => after.rest[5],
+                    _ => Fp::ZERO,
+                },
+                issued_at_ms: if variant == Variant::RefreshSchemePolicy {
+                    Fp::ZERO
+                } else {
+                    issued
+                },
+                expires_at_ms: match variant {
+                    Variant::RefreshCredential => {
+                        let end = ObjectKind::Credential.body_len();
+                        Fp::from(u64::from_le_bytes(
+                            update.bytes[end - 40..end - 32].try_into().unwrap(),
+                        ))
+                    }
+                    Variant::RefreshQuotaShare => Fp::from(500),
+                    _ => Fp::ZERO,
+                },
+                root: match variant {
+                    Variant::RefreshBlacklist => after.core[core::BLACKLIST_ROOT],
+                    Variant::RefreshQuotaShare => after.core[core::QUOTA_WINDOWS_ROOT],
+                    _ => Fp::ZERO,
+                },
+                controls: Fp::from(if variant == Variant::RefreshSchemePolicy {
+                    7
+                } else {
+                    0
+                }),
+                fee_schedule: Fp::ZERO,
+            },
         },
         update_certificate: certificate,
         update,

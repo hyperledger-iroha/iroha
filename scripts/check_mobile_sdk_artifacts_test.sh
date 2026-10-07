@@ -58,7 +58,8 @@ wallet_symbols=(
   connect_norito_kagemusha_wallet_open_v1
   connect_norito_kagemusha_wallet_close_v1
   connect_norito_kagemusha_wallet_activity_v1
-  connect_norito_kagemusha_wallet_commit_v1
+  connect_norito_kagemusha_wallet_execute_v1
+  connect_norito_kagemusha_wallet_request_status_v1
   connect_norito_kagemusha_wallet_retry_v1
   connect_norito_kagemusha_wallet_resume_v1
   connect_norito_kagemusha_wallet_fold_v1

@@ -591,14 +591,7 @@ impl ManagedReserveTopUpRequest {
 
     fn validate_original(&self, original: &Original) -> Result<()> {
         original.validate()?;
-        let intent = original.intent();
-        if encode(&original.selection, journal::MAX_SELECTION_BYTES)?
-            != encode(&self.selection(&intent)?, journal::MAX_SELECTION_BYTES)?
-        {
-            return Err(invalid(
-                "original reserve top-up differs from authenticated generation",
-            ));
-        }
+        self.validate_original_selection(original)?;
         self.authority
             .decode_checkpoint(&original.checkpoint)?
             .verified_tip_ref()
@@ -608,6 +601,22 @@ impl ManagedReserveTopUpRequest {
                 &self.authority.config.chain.to_string(),
             )
             .map_err(|_| invalid("original reserve checkpoint is not the selected Global root"))?;
+        Ok(())
+    }
+
+    // Complete the original canonical claim comparison in its own lexical frame. The
+    // policy/partition/amount clone and both selection encodes drop before native import;
+    // the authenticated original and its directory remain held by the caller unchanged.
+    #[inline(never)]
+    fn validate_original_selection(&self, original: &Original) -> Result<()> {
+        let intent = original.intent();
+        if encode(&original.selection, journal::MAX_SELECTION_BYTES)?
+            != encode(&self.selection(&intent)?, journal::MAX_SELECTION_BYTES)?
+        {
+            return Err(invalid(
+                "original reserve top-up differs from authenticated generation",
+            ));
+        }
         Ok(())
     }
 

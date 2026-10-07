@@ -41,7 +41,10 @@ fn original(payer: iroha_data_model::account::AccountId) -> KagemushaWalletLoadR
         charge_quote: [0; 32],
         transaction_hash: [5; 32],
         block_height: 2,
-        payer,
+        payer_account_digest: iroha_data_model::kagemusha::kagemusha_wallet_account_digest_v1(
+            &payer,
+        )
+        .unwrap(),
     }
 }
 
@@ -254,14 +257,10 @@ async fn load_read_rejects_foreign_payer_request_wallet_and_invalid_receipt_fiel
     let initial = client_with_base_url(base_url());
     let expected = original(initial.account.clone());
     for mutation in 0..10 {
-        let mut changed = expected.clone();
+        let mut changed = expected;
         match mutation {
             0 => changed.request_id[0] ^= 1,
-            1 => {
-                changed.payer = iroha_data_model::account::AccountId::new(
-                    super::checked_random_keypair().public_key().clone(),
-                )
-            }
+            1 => changed.payer_account_digest[0] ^= 1,
             2 => changed.scheme_id[0] ^= 1,
             3 => changed.wallet_id[0] ^= 1,
             4 => changed.amount = 0,

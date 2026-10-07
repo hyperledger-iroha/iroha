@@ -20,7 +20,25 @@ impl NativeFinalityFixture {
     /// Certify H1 genesis, H2 preboundary, H3 retention and H4 successor.
     /// The explicit short NPoS policy and exact quorum are valid for every
     /// supported seat count; the beacon output is synthetic execution data.
+    #[cfg(test)]
     pub(crate) fn short_npos_boundary_chain(seats: usize) -> (Self, Vec<SumeragiFinalityProof>) {
+        Self::short_npos_boundary_chain_parameters(seats, false)
+    }
+
+    /// Certify the short retention boundary from an explicitly parameterized signed genesis.
+    /// Native adapters can derive their complete selected anchor from this same root;
+    /// execution roots and beacon output remain synthetic fixture data.
+    #[must_use]
+    pub fn short_npos_boundary_chain_with_explicit_parameters(
+        seats: usize,
+    ) -> (Self, Vec<SumeragiFinalityProof>) {
+        Self::short_npos_boundary_chain_parameters(seats, true)
+    }
+
+    fn short_npos_boundary_chain_parameters(
+        seats: usize,
+        explicit_parameters: bool,
+    ) -> (Self, Vec<SumeragiFinalityProof>) {
         let parameters = crate::parameter::system::SumeragiNposParameters {
             epoch_length_blocks: NonZeroU64::new(3).unwrap(),
             finality_margin_blocks: 1,
@@ -34,7 +52,7 @@ impl NativeFinalityFixture {
             &format!("ordinary-load-npos-schedule-{seats}"),
             SumeragiConsensusMode::Npos,
             crate::block::consensus::SumeragiRootScope::Global,
-            false,
+            explicit_parameters,
             parameters,
             seats,
         );

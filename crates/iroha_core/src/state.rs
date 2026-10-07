@@ -5703,6 +5703,10 @@ impl WorldBlock<'_> {
             self.governance_locks.insert(referendum_id, locks);
         }
     }
+    /// Borrow the original block-local event cut before publication adds its delivery event.
+    pub(crate) fn pending_external_events(&self) -> &[EventBox] {
+        &self.external_event_buf
+    }
     /// Drain and return any events that were emitted into the external buffer during
     /// the current block application. Intended for tests and block-assembly paths.
     pub fn take_external_events(&mut self) -> Vec<EventBox> {
@@ -34711,9 +34715,9 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
                 config_path.display()
             )
         });
-    // These constructors need the fixture's canonical identities, not a running
-    // node's custody or services. Validate its syntax without opening publisher
-    // custody files or applying unrelated production configuration requirements.
+    // Read fixture identities through the canonical typed parser, then complete
+    // the user schema. Operational startup supplies its explicitly configured
+    // chain and network to these constructors.
     let chain = reader
         .read_parameter::<iroha_model_base::chain::ChainId>(["chain"])
         .value_required()

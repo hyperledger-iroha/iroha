@@ -11,7 +11,9 @@ fn fixed_refresh_schedules_require_each_owner_exactly_once() {
         (Variant::RefreshQuotaShare, 7),
         (Variant::RefreshTimeAnchor, 4),
     ] {
-        let (partition, tasks) = schedule(v).unwrap();
+        let schedule = crate::a_relation::schedule::compiled::OperationSchedule::for_variant(v);
+        let partition = schedule.q_partitions().to_vec();
+        let tasks = schedule.tasks().to_vec();
         assert_eq!(partition.len(), n);
         assert_eq!(tasks.len(), n);
         if v == Variant::RefreshQuotaShare {
@@ -41,7 +43,7 @@ fn fixed_refresh_schedules_require_each_owner_exactly_once() {
             }
         }
     }
-    assert!(schedule(Variant::Load).is_err());
+    assert!(object_kinds(Variant::Load).is_err());
 }
 
 fn original() -> Inputs {
@@ -54,8 +56,19 @@ fn original() -> Inputs {
         predecessor: state,
         successor: state,
         statement: [Fp::ZERO; 26],
-        issued: Fp::ZERO,
-        policy_controls: Fp::ZERO,
+        update: crate::admin_sigma::RefreshUpdateWitness {
+            kind: crate::admin_sigma::RefreshKind::Credential,
+            digest: Fp::ZERO,
+            scheme: [Fp::ZERO; 2],
+            asset: [Fp::ZERO; 2],
+            wallet: [Fp::ZERO; 2],
+            counter: Fp::ZERO,
+            issued_at_ms: Fp::ZERO,
+            expires_at_ms: Fp::ZERO,
+            root: Fp::ZERO,
+            controls: Fp::ZERO,
+            fee_schedule: Fp::ZERO,
+        },
     };
     let sigma = (0..64).collect::<Vec<u8>>();
     let mut raw = u32::try_from(sigma.len()).unwrap().to_le_bytes().to_vec();
@@ -304,4 +317,90 @@ fn quota_native_proposals_commit_all_array_boundaries_and_signed_fields() {
     value.issued += Fp::ONE;
     value.window_count += Fp::ONE;
     assert_ne!(&value.commitments()[3..], &original[3..]);
+}
+
+#[test]
+fn fixed_union_projection_rejects_wrong_kind_each_field_and_original_signature() {
+    use crate::admin_sigma::{RefreshKind, RefreshUpdateWitness};
+    for (variant, kind, typed) in [
+        (
+            Variant::RefreshCredential,
+            ObjectKind::Credential,
+            RefreshKind::Credential,
+        ),
+        (
+            Variant::RefreshSchemePolicy,
+            ObjectKind::SchemePolicy,
+            RefreshKind::SchemePolicy,
+        ),
+        (
+            Variant::RefreshBlacklist,
+            ObjectKind::Blacklist,
+            RefreshKind::Blacklist,
+        ),
+        (
+            Variant::RefreshQuotaShare,
+            ObjectKind::QuotaShare,
+            RefreshKind::QuotaShare,
+        ),
+        (
+            Variant::RefreshTimeAnchor,
+            ObjectKind::TimeAnchor,
+            RefreshKind::TimeAnchor,
+        ),
+    ] {
+        // Projection parsing only: this counting specimen is never authenticated,
+        // passed to native Advance, proved, or treated as an admitted signed object.
+        let mut raw = vec![0; kind.body_len() + 64];
+        raw[0] = 1;
+        let expected = RefreshUpdateWitness {
+            kind: typed,
+            digest: object_digest(kind, &raw).unwrap(),
+            scheme: [Fp::ZERO; 2],
+            asset: [Fp::ZERO; 2],
+            wallet: [Fp::ZERO; 2],
+            counter: Fp::ZERO,
+            issued_at_ms: Fp::ZERO,
+            expires_at_ms: Fp::ZERO,
+            root: Fp::ZERO,
+            controls: Fp::ZERO,
+            fee_schedule: Fp::ZERO,
+        };
+        assert_eq!(check_update_projection(variant, &expected, &raw), Ok(()));
+        for changed in 0..14 {
+            let mut altered = expected;
+            match changed {
+                0 => {
+                    altered.kind = if typed == RefreshKind::Credential {
+                        RefreshKind::TimeAnchor
+                    } else {
+                        RefreshKind::Credential
+                    }
+                }
+                1 => altered.digest += Fp::ONE,
+                2..=3 => altered.scheme[changed - 2] += Fp::ONE,
+                4..=5 => altered.asset[changed - 4] += Fp::ONE,
+                6..=7 => altered.wallet[changed - 6] += Fp::ONE,
+                8 => altered.counter += Fp::ONE,
+                9 => altered.issued_at_ms += Fp::ONE,
+                10 => altered.expires_at_ms += Fp::ONE,
+                11 => altered.root += Fp::ONE,
+                12 => altered.controls += Fp::ONE,
+                _ => altered.fee_schedule += Fp::ONE,
+            }
+            assert_eq!(
+                check_update_projection(variant, &altered, &raw),
+                Err(Error::Input)
+            );
+        }
+        raw[kind.body_len() + 48] ^= 1;
+        assert_eq!(
+            check_update_projection(variant, &expected, &raw),
+            Err(Error::Input)
+        );
+        assert_eq!(
+            check_update_projection(variant, &expected, &raw[..raw.len() - 1]),
+            Err(Error::Input)
+        );
+    }
 }

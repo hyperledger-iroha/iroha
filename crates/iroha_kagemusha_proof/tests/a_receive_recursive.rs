@@ -18,6 +18,8 @@ mod common;
 /// Genuine distinct payer/receiver heads rebuilt under one compact outer key.
 #[path = "compact_catalog.rs"]
 pub mod compact_catalog;
+#[path = "common/native_source_factory_checks.rs"]
+mod native_source_factory_checks;
 /// Real Receive/Send source proofs and exact depth32 map witnesses.
 #[path = "a_receive.rs"]
 pub mod receive_components;
@@ -45,9 +47,7 @@ use iroha_kagemusha_proof::{
         },
         results::ReceiveResultClaims,
         schedule::OperationTask,
-        split::{
-            ContextLinkCells, SplitPlan, WCircuit, WKey, close_first, close_stage, resume_context,
-        },
+        split::{SplitPlan, WCircuit, WKey, close_first, close_stage, resume_context},
         verify_predecessor, verify_q,
     },
     admin_sigma::StateWitness,
@@ -71,7 +71,7 @@ use iroha_plonk::{
     create_proof_owned_with_claim,
     cs::{Column, ConstraintSystem, Instance, InstanceType},
     frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner, Value, synthesize},
-    keys::{KeygenConfigV2, keygen_pk_v2},
+    keys::{KeygenConfigV2, keygen_pk_v2, keygen_vk_with_binding_v2},
     pcs::ipa::PinnedParams,
     verifier::verify_full,
 };
@@ -142,6 +142,11 @@ struct Source {
     params: PinnedParams<Ep>,
 }
 impl Source {
+    fn proofs_valid(&self) -> bool {
+        // Every fixture Omega is an actual succinct proof. The combined proof
+        // result therefore follows the already verified Q0 incoming verdict.
+        self.own.instances[3][1] == Fq::ONE
+    }
     fn variant(&self) -> Variant {
         self.plan.context().operation().frame().variant()
     }
@@ -186,7 +191,7 @@ fn frame(bytes: &[u8]) -> Vec<u8> {
     out.extend(bytes);
     out
 }
-fn public_bytes(fields: &[Fp; 18]) -> Vec<u8> {
+pub(crate) fn public_bytes(fields: &[Fp; 18]) -> Vec<u8> {
     let mut out = 1u16.to_le_bytes().to_vec();
     for i in [1, 2, 3, 4] {
         out.extend(&fields[i].to_repr()[..16]);
@@ -362,7 +367,15 @@ fn source_variant(
     variant: Variant,
     insert_override: Option<bool>,
 ) -> Source {
-    source_with_correction(predecessor, payer, capacity, variant, insert_override, None)
+    source_with_correction(
+        predecessor,
+        payer,
+        capacity,
+        variant,
+        insert_override,
+        None,
+        true,
+    )
 }
 fn source_with_correction(
     predecessor: Head,
@@ -371,6 +384,7 @@ fn source_with_correction(
     variant: Variant,
     insert_override: Option<bool>,
     correction: Option<EqAffine>,
+    incoming_sigma_valid: bool,
 ) -> Source {
     use OperationTask::*;
     let params = PinnedParams::<Ep>::derive(16).unwrap();
@@ -402,7 +416,11 @@ fn source_with_correction(
         quoted.digest() == credential.digest(),
         variant == Variant::Receive
     );
-    let mut own = if variant == Variant::ReceiveRenewed {
+    let mut own = if !incoming_sigma_valid {
+        assert!(!objects_valid && !insert && correction.is_none());
+        assert_eq!(variant, Variant::Receive);
+        receive_components::genuine_receive_source_with_invalid_sigma(&before)
+    } else if variant == Variant::ReceiveRenewed {
         receive_components::genuine_receive_source_for_quoted(
             &before,
             objects_valid.then_some(&incoming_head.state),
@@ -472,7 +490,7 @@ fn source_with_correction(
         43,
         73,
     );
-    let policy = OwnPolicy::new([1, 2], [31, 32], bootstrap_objects::key(23)).unwrap();
+    let policy = OwnPolicy::new([31, 32], bootstrap_objects::key(23)).unwrap();
     let schemas = ReceiveStagePlan::signature_schemas(variant, policy).unwrap();
     let q_own = signature_q(
         &params,
@@ -836,14 +854,12 @@ struct Continuation {
     proof: Vec<u8>,
     carried: AccumulatorT<Ep>,
     vesta: AccumulatorT<Eq>,
-    history: Vec<(AccumulatorT<Ep>, AccumulatorT<Eq>)>,
 }
 #[derive(Clone)]
 struct Stage {
     source: Arc<Source>,
     continuation: Option<Continuation>,
     pallas: AccumulatorT<Ep>,
-    first: AccumulatorT<Ep>,
     fold: Vec<u8>,
     known: bool,
     mutation: Option<ContinuationMutation>,
@@ -858,8 +874,8 @@ enum ContinuationMutation {
     IncomingStatement,
     QChunk,
     Q2Verdict,
-    DropHistory,
-    ReverseHistory,
+    CarriedP,
+    WPart,
 }
 #[derive(Clone, Debug)]
 struct Config {
@@ -1054,7 +1070,13 @@ impl Circuit<Fp> for Stage {
                     source.incoming_head.opening.clone()
                 };
                 let opening = cells.pallas(&mut chip, &mut region, &exported)?;
-                let mut verdicts = [true, source.objects_valid, true, true, true];
+                let mut verdicts = [
+                    source.proofs_valid(),
+                    source.objects_valid,
+                    true,
+                    true,
+                    true,
+                ];
                 if let Some(ContinuationMutation::Result(index)) = self.mutation {
                     verdicts[index] = !verdicts[index];
                 }
@@ -1234,7 +1256,7 @@ impl Circuit<Fp> for Stage {
                         &mut chip,
                         &mut bytes,
                         &mut region,
-                        OwnPolicy::new([1, 2], [31, 32], bootstrap_objects::key(23))?,
+                        OwnPolicy::new([31, 32], bootstrap_objects::key(23))?,
                         ReceiveObjectSources {
                             request: &values[0],
                             payer: &values[1],
@@ -1438,7 +1460,7 @@ impl Circuit<Fp> for Stage {
                         &mut region,
                         plan,
                         u32::try_from(stage).map_err(|_| Error::BoundsFailure)?,
-                        OwnPolicy::new([1, 2], [31, 32], bootstrap_objects::key(23))?,
+                        OwnPolicy::new([31, 32], bootstrap_objects::key(23))?,
                         &input,
                     )?)
                 } else {
@@ -1473,33 +1495,25 @@ impl Circuit<Fp> for Stage {
                 )?;
                 let fold = cells.proof(&mut chip, &mut region, &self.fold)?;
                 if let Some(continuation) = &self.continuation {
-                    let pallas =
-                        cells.pallas(&mut chip, &mut region, &continuation.carried.as_input())?;
-                    let vesta = cells.vesta(&mut chip, &mut region, &continuation.vesta)?;
-                    let mut retained_history = continuation.history.clone();
-                    match self.mutation {
-                        Some(ContinuationMutation::DropHistory) => {
-                            retained_history.pop();
-                        }
-                        Some(ContinuationMutation::ReverseHistory) => retained_history.reverse(),
-                        _ => {}
-                    }
-                    let history = retained_history
-                        .iter()
-                        .map(|(p, v)| {
-                            Ok(ContextLinkCells {
-                                pallas: cells.pallas(&mut chip, &mut region, &p.as_input())?,
-                                vesta: cells.vesta(&mut chip, &mut region, v)?,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, Error>>()?;
+                    let carried = if matches!(self.mutation, Some(ContinuationMutation::CarriedP)) {
+                        AccumulatorT::trivial(&source.params, MemoryBudget::DEFAULT).unwrap()
+                    } else {
+                        continuation.carried.clone()
+                    };
+                    let pallas = cells.pallas(&mut chip, &mut region, &carried.as_input())?;
+                    let part = if matches!(self.mutation, Some(ContinuationMutation::WPart)) {
+                        AccumulatorT::trivial(&common::vesta_params(16), MemoryBudget::DEFAULT)
+                            .unwrap()
+                    } else {
+                        continuation.vesta.clone()
+                    };
+                    let vesta = cells.vesta(&mut chip, &mut region, &part)?;
                     let proof = cells.proof(&mut chip, &mut region, &continuation.proof)?;
                     let resumed = resume_context(
                         &mut chip,
                         &mut region,
                         &continuation.plan,
                         &input,
-                        &history,
                         &pallas,
                         &vesta,
                         &proof,
@@ -1569,7 +1583,7 @@ fn vesta_words(claim: &FoldInput<Eq>) -> Vec<Fp> {
     out.extend(claim.challenges());
     out
 }
-fn context_digest(source: &Source, first: &AccumulatorT<Ep>) -> Fp {
+fn context_digest(source: &Source) -> Fp {
     let mut words = source.plan.context().schema().to_vec();
     words.extend(source.own.witness.statement);
     words.extend(source.own.send.statement);
@@ -1608,7 +1622,7 @@ fn context_digest(source: &Source, first: &AccumulatorT<Ep>) -> Fp {
     }
     words.extend(source.commitments.iter().flatten().copied());
     words.extend([
-        Fp::ONE,
+        Fp::from(u64::from(source.proofs_valid())),
         Fp::from(u64::from(source.objects_valid)),
         Fp::ONE,
         Fp::ONE,
@@ -1622,27 +1636,18 @@ fn context_digest(source: &Source, first: &AccumulatorT<Ep>) -> Fp {
     let (x, y) = trivial.g().coordinates().unwrap();
     words.extend([x, y, x, y]);
     words.extend(source.vesta_correction_words());
-    push_pallas(&mut words, &first.as_input());
     hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words)
 }
-fn continued_digest(
-    plan: &ContextPlan,
-    stage: usize,
-    previous: Fp,
-    old: &AccumulatorT<Ep>,
-    vesta: &AccumulatorT<Eq>,
-    current: &AccumulatorT<Ep>,
-) -> Fp {
+fn stage_digest(plan: &ContextPlan, stage: usize, base: Fp, current: &AccumulatorT<Ep>) -> Fp {
+    assert!(stage + 1 < plan.stage_count());
     let mut words = vec![
         Fp::ONE,
         plan.schema()[1],
         Fp::from(u64::try_from(stage + 1).unwrap()),
-        previous,
+        base,
     ];
-    push_pallas(&mut words, &old.as_input());
-    words.extend(vesta_words(&vesta.as_input()));
     push_pallas(&mut words, &current.as_input());
-    hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words)
+    hash_with_domain(u64::from_le_bytes(*b"kgwlink1"), &words)
 }
 fn internal_public(digest: Fp, part: &FoldInput<Eq>) -> Vec<Vec<Fp>> {
     let mut words = vec![digest, Fp::from(u64::from(part.source_k()))];
@@ -1658,25 +1663,18 @@ fn internal_public(digest: Fp, part: &FoldInput<Eq>) -> Vec<Vec<Fp>> {
 }
 impl Stage {
     fn public(&self) -> Vec<Vec<Fp>> {
-        let root = context_digest(&self.source, &self.first);
+        let root = context_digest(&self.source);
         let Some(continuation) = &self.continuation else {
-            return internal_public(root, &self.source.own.part);
+            return internal_public(
+                stage_digest(self.source.plan.context(), 0, root, &self.pallas),
+                &self.source.own.part,
+            );
         };
         if !continuation.plan.is_terminal() {
-            let mut digest = root;
-            for (i, (p, v)) in continuation.history.iter().enumerate() {
-                let next = continuation
-                    .history
-                    .get(i + 1)
-                    .map_or(&continuation.carried, |(p, _)| p);
-                digest = continued_digest(self.source.plan.context(), i + 1, digest, p, v, next);
-            }
-            digest = continued_digest(
+            let digest = stage_digest(
                 self.source.plan.context(),
                 continuation.plan.stage(),
-                digest,
-                &continuation.carried,
-                &continuation.vesta,
+                root,
                 &self.pallas,
             );
             return internal_public(digest, &continuation.vesta.as_input());
@@ -1817,6 +1815,48 @@ fn canonical_envelope_receive_burn_owner_chain() {
 }
 
 #[test]
+#[ignore = "current genuine Bootstrap, invalid original sigma, full10A9W and strict original-import/custody replay"]
+fn bootstrap_only_invalid_sigma_burn_imports_all_native_sources_and_checkpoints() {
+    let receiver = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap_with_identity(
+        bootstrap_outer::bootstrap_chain::BootstrapIdentity::Receiver,
+    );
+    let source = source_with_correction(
+        receiver.into(),
+        None,
+        IngestionCapacity::CanonicalEnvelope,
+        Variant::Receive,
+        Some(false),
+        None,
+        false,
+    );
+    let _ = prove_bootstrap_invalid_sigma_source(source);
+    eprintln!(
+        "BOOTSTRAP_ONLY_INVALID_SIGMA_RECEIVE full10A9W=true incoming_Q_soft_false=true exact_resigned_originals=true all_modes_Trivial=true consumed_root_unchanged=true adjusted_spendable_balance_zero=true no_Load_trust=true strict_original_import_and_canonical_custody_all19=true terminal_omega=false"
+    );
+}
+
+fn prove_bootstrap_invalid_sigma_source(source: Source) -> AuthenticatedReceive {
+    assert!(!source.accept && !source.objects_valid && !source.proofs_valid());
+    assert!(!source.own.witness.insert);
+    assert_eq!(
+        source.own.instances[3],
+        [Fq::ONE, Fq::ZERO, Fq::ZERO, Fq::ONE, Fq::ZERO]
+    );
+    for index in 0..4 {
+        assert_eq!(source.mode(index), IncomingMode::Trivial);
+    }
+    let before = &source.own.witness.before;
+    let after = &source.own.witness.after;
+    assert_eq!(before.core[8], Fp::ZERO);
+    assert_eq!(before.lineage[14], Fp::ZERO);
+    assert_eq!(after.core[8] - after.lineage[14], Fp::ZERO);
+    assert_eq!(after.core[16], before.core[16]);
+    assert_ne!(after.lineage[16], before.lineage[16]);
+    prove_receive_owner_chain(source)
+        .expect("complete native Receive terminal and canonical custody")
+}
+
+#[test]
 #[ignore = "real full-envelope Receive burn with authenticated consumed-credit insertion"]
 fn canonical_envelope_receive_burn_inserts_consumed_credit() {
     let receiver = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap_with_identity(
@@ -1838,7 +1878,7 @@ fn canonical_envelope_receive_burn_inserts_consumed_credit() {
         source.own.witness.after.lineage[14] - source.own.witness.before.lineage[14],
         source.own.witness.statement[20]
     );
-    prove_receive_owner_chain(source);
+    let _ = prove_receive_owner_chain(source);
 }
 
 #[test]
@@ -1847,7 +1887,7 @@ fn canonical_envelope_receive_renewed_burn_owner_chain() {
     let receiver = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap_with_identity(
         bootstrap_outer::bootstrap_chain::BootstrapIdentity::Receiver,
     );
-    prove_receive_owner_chain(source_variant(
+    let _ = prove_receive_owner_chain(source_variant(
         receiver.into(),
         None,
         IngestionCapacity::CanonicalEnvelope,
@@ -1856,37 +1896,62 @@ fn canonical_envelope_receive_renewed_burn_owner_chain() {
     ));
 }
 
-#[test]
-#[ignore = "genuine payer Load and receiver Bootstrap, real Send/Receive sigmas, all fixed Receive owners at maximum capacity"]
-fn canonical_envelope_receive_accepts_exact_payer_and_receiver_heads() {
-    let wallets = compact_catalog::compact_payer_load_and_receiver();
-    let (receiver, payer) = shared_wallet_heads(wallets);
+/// Run the retained composition assertions with genuine native Load originals.
+#[allow(dead_code)] // Called by the full-finality qualification fixture once installed.
+pub fn canonical_envelope_receive_accepts_exact_payer_and_receiver_heads(
+    fixture: &compact_catalog::LoadFixture,
+) {
+    let wallets = compact_catalog::compact_payer_load_and_receiver(fixture);
+    let (receiver, payer) = shared_wallet_heads(&wallets);
     let source = source(receiver, Some(payer), IngestionCapacity::CanonicalEnvelope);
     assert_exact_payer_source(&source);
     assert_eq!(
         source.own.witness.after.lineage[14], source.own.witness.before.lineage[14],
         "accepted value never enters the burn accumulator"
     );
-    prove_receive_owner_chain(source);
+    let _ = prove_receive_owner_chain(source);
 }
-fn shared_wallet_heads(wallets: compact_catalog::SharedKeyWallets) -> (Head, Head) {
+
+/// Run the retained composition assertions with genuine native Load originals.
+#[allow(dead_code)] // Called by the full-finality qualification fixture once installed.
+pub fn canonical_envelope_receive_renewed_accepts_exact_payer_and_receiver_heads(
+    fixture: &compact_catalog::LoadFixture,
+) {
+    let wallets = compact_catalog::compact_payer_load_and_receiver(fixture);
+    let (receiver, payer) = shared_wallet_heads(&wallets);
+    let source = source_variant(
+        receiver,
+        Some(payer),
+        IngestionCapacity::CanonicalEnvelope,
+        Variant::ReceiveRenewed,
+        None,
+    );
+    assert_exact_payer_source(&source);
+    assert_eq!(
+        source.own.witness.after.lineage[14], source.own.witness.before.lineage[14],
+        "renewed accepted value never enters the burn accumulator"
+    );
+    let _ = prove_receive_owner_chain(source);
+}
+
+fn shared_wallet_heads(wallets: &compact_catalog::SharedKeyWallets) -> (Head, Head) {
     let receiver = Head {
         state: StateWitness::from(&wallets.receiver.source.state),
-        key: wallets.receiver.key,
-        binding: wallets.receiver.binding,
-        proof: wallets.receiver.proof,
-        pallas: wallets.receiver.source.pallas,
-        vesta: wallets.receiver.vesta,
-        opening: wallets.receiver.opening,
+        key: wallets.receiver.key.clone(),
+        binding: wallets.receiver.binding.clone(),
+        proof: wallets.receiver.proof.clone(),
+        pallas: wallets.receiver.source.pallas.clone(),
+        vesta: wallets.receiver.vesta.clone(),
+        opening: wallets.receiver.opening.clone(),
     };
     let payer = Head {
         state: wallets.payer.source.state,
-        key: wallets.payer.key,
-        binding: wallets.payer.binding,
-        proof: wallets.payer.proof,
-        pallas: wallets.payer.source.pallas,
-        vesta: wallets.payer.vesta,
-        opening: wallets.payer.opening,
+        key: wallets.payer.key.clone(),
+        binding: wallets.payer.binding.clone(),
+        proof: wallets.payer.proof.clone(),
+        pallas: wallets.payer.source.pallas.clone(),
+        vesta: wallets.payer.vesta.clone(),
+        opening: wallets.payer.opening.clone(),
     };
     assert_ne!(receiver.state.core[5..7], payer.state.core[5..7]);
     (receiver, payer)
@@ -1905,11 +1970,14 @@ fn assert_exact_payer_source(source: &Source) {
     );
 }
 
-#[test]
-#[ignore = "genuine common-key source catalog plus adversarial deferred-V Omega component; superseded Load trust"]
-fn genuine_omega_can_carry_a_succinct_but_nondeciding_vesta_claim() {
-    let (wallets, correction) = compact_catalog::compact_payer_load_and_receiver_with_bad_vesta();
-    let (receiver, payer) = shared_wallet_heads(wallets);
+/// Run the retained composition assertions with genuine native Load originals.
+#[allow(dead_code)] // Called by the full-finality qualification fixture once installed.
+pub fn genuine_omega_can_carry_a_succinct_but_nondeciding_vesta_claim(
+    fixture: &compact_catalog::LoadFixture,
+) {
+    let (wallets, correction) =
+        compact_catalog::compact_payer_load_and_receiver_with_bad_vesta(fixture);
+    let (receiver, payer) = shared_wallet_heads(&wallets);
     assert_eq!(receiver.key.to_bytes(), payer.key.to_bytes());
     assert_eq!(payer.proof.len(), 3712);
     let params = common::vesta_params(16);
@@ -1919,23 +1987,28 @@ fn genuine_omega_can_carry_a_succinct_but_nondeciding_vesta_claim() {
         FoldInput::<Eq>::from_normalized(correction, 16, *payer.vesta.challenges()).unwrap();
     corrected.decide(&params, MemoryBudget::DEFAULT).unwrap();
     eprintln!(
-        "GENUINE_NONDECIDING_VESTA_OMEGA actual_proof=3712 original_V_fails_decide=true distinct_same_challenges_correction_decides=true superseded_Load_trust=true full_Receive=false"
+        "GENUINE_NONDECIDING_VESTA_OMEGA actual_proof=3712 original_V_fails_decide=true distinct_same_challenges_correction_decides=true explicit_native_Load_originals=true full_Receive=false"
     );
 }
 
-#[test]
-#[ignore = "genuine common-key payer/receiver and Omega proof carrying a false Vesta claim; full corrected burn chain"]
-fn canonical_envelope_receive_corrected_vesta_burn_inserts_credit() {
-    receive_corrected_vesta_chain(true);
+/// Run the corrected-claim assertions using explicit genuine native Load originals.
+#[allow(dead_code)] // Not registered as a test until the complete finality fixture is supplied.
+pub fn canonical_envelope_receive_corrected_vesta_burn_inserts_credit(
+    fixture: &compact_catalog::LoadFixture,
+) {
+    receive_corrected_vesta_chain(true, fixture);
 }
-#[test]
-#[ignore = "genuine common-key payer/receiver and Omega proof carrying a false Vesta claim; full corrected no-op chain"]
-fn canonical_envelope_receive_corrected_vesta_burn_without_consumed_insert() {
-    receive_corrected_vesta_chain(false);
+/// Run the corrected-claim assertions using explicit genuine native Load originals.
+#[allow(dead_code)] // Not registered as a test until the complete finality fixture is supplied.
+pub fn canonical_envelope_receive_corrected_vesta_burn_without_consumed_insert(
+    fixture: &compact_catalog::LoadFixture,
+) {
+    receive_corrected_vesta_chain(false, fixture);
 }
-fn receive_corrected_vesta_chain(insert: bool) {
-    let (wallets, correction) = compact_catalog::compact_payer_load_and_receiver_with_bad_vesta();
-    let (receiver, payer) = shared_wallet_heads(wallets);
+fn receive_corrected_vesta_chain(insert: bool, fixture: &compact_catalog::LoadFixture) {
+    let (wallets, correction) =
+        compact_catalog::compact_payer_load_and_receiver_with_bad_vesta(fixture);
+    let (receiver, payer) = shared_wallet_heads(&wallets);
     assert!(
         payer
             .vesta
@@ -1949,6 +2022,7 @@ fn receive_corrected_vesta_chain(insert: bool) {
         Variant::Receive,
         Some(insert),
         Some(correction),
+        true,
     );
     assert_exact_payer_source(&source);
     assert!(source.objects_valid && !source.accept);
@@ -1958,14 +2032,14 @@ fn receive_corrected_vesta_chain(insert: bool) {
         source.own.witness.statement[20]
     );
     assert_eq!(source.own.witness.insert, insert);
-    prove_receive_owner_chain(source);
+    let _ = prove_receive_owner_chain(source);
 }
 
 fn receive_owner_chain(capacity: IngestionCapacity) {
     let receiver = bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap_with_identity(
         bootstrap_outer::bootstrap_chain::BootstrapIdentity::Receiver,
     );
-    prove_receive_owner_chain(source(receiver.into(), None, capacity));
+    let _ = prove_receive_owner_chain(source(receiver.into(), None, capacity));
 }
 
 /// Check every fixed owner shape before expensive proof production. Unknown
@@ -1986,7 +2060,7 @@ fn preflight_owner_shapes(source: &Arc<Source>) {
         source: source.clone(),
         continuation: None,
         pallas: pallas.clone(),
-        first: pallas.clone(),
+
         fold: first_fold.to_bytes().to_vec(),
         known: false,
         mutation: None,
@@ -2094,10 +2168,9 @@ fn preflight_owner_shapes(source: &Arc<Source>) {
                 proof: vec![0; wrapper_length],
                 carried: pallas.clone(),
                 vesta: vesta.clone(),
-                history: vec![(pallas.clone(), vesta.clone()); index],
             }),
             pallas: pallas.clone(),
-            first: pallas.clone(),
+
             fold: fold.to_bytes().to_vec(),
             known: false,
             mutation: None,
@@ -2116,7 +2189,7 @@ fn native_inputs(
     iroha_kagemusha_proof::a_relation::native::receive::Inputs,
 ) {
     use iroha_kagemusha_proof::a_relation::native::receive as native;
-    let policy = OwnPolicy::new([1, 2], [31, 32], bootstrap_objects::key(23)).unwrap();
+    let policy = OwnPolicy::new([31, 32], bootstrap_objects::key(23)).unwrap();
     let plan = native::Plan::new(
         source.plan.context().operation().clone(),
         policy,
@@ -2155,7 +2228,13 @@ fn native_inputs(
             pallas: source.incoming_head.pallas.clone(),
             vesta: source.incoming_head.vesta.clone(),
             opening: source.incoming_head.opening.clone(),
-            results: [true, source.objects_valid, true, true, true],
+            results: [
+                source.proofs_valid(),
+                source.objects_valid,
+                true,
+                true,
+                true,
+            ],
             modes: core::array::from_fn(|i| source.mode(i)),
             pallas_corrections: [*trivial_p.g(); 2],
             vesta_correction: source.vesta_correction,
@@ -2194,25 +2273,51 @@ fn assert_native_first_relation(source: &Source, first: &Stage) {
 /// These component checks remain separate from mobile or M3 memory qualification.
 #[derive(Default)]
 struct NativeCheckpoints {
-    a: Vec<iroha_kagemusha_proof::a_relation::native::receive::KeyArtifact<Eq>>,
-    w: Vec<iroha_kagemusha_proof::a_relation::native::receive::KeyArtifact<Ep>>,
+    a: Vec<iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact<Eq>>,
+    w: Vec<iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact<Ep>>,
     a_proofs: Vec<Vec<u8>>,
     w_proofs: Vec<Vec<u8>>,
     pallas: Vec<[u8; 544]>,
     vesta: Vec<[u8; 544]>,
 }
 impl NativeCheckpoints {
-    fn check(self, source: &Source, terminal_public: &[Fp]) {
+    fn check(
+        self,
+        source: &Source,
+        terminal_public: &[Fp],
+    ) -> iroha_kagemusha_proof::a_relation::native::receive::Terminal {
         use iroha_kagemusha_proof::a_relation::native::receive as native;
         let (plan, inputs) = native_inputs(source);
         let a: [_; native::A_STAGE_COUNT] = self.a.try_into().ok().unwrap();
         let w: [_; native::A_STAGE_COUNT - 1] = self.w.try_into().ok().unwrap();
         let parity_keys = a.clone();
-        let prover = native::Prover::from_artifacts(plan, a, w).unwrap();
+        native_source_factory_checks::assert_factories(
+            plan.context(),
+            &PinnedParams::<Ep>::derive(16).unwrap(),
+            &common::vesta_params(16),
+            &a,
+            &w,
+            |stage, previous| plan.source_circuit(stage, previous),
+            |stage, binding, key| plan.wrapper_source(stage, binding, key),
+        );
+        let prover = native::Prover::from_artifacts(plan.clone(), a, w).unwrap();
+        let prepared = plan.prepare(inputs.clone(), MemoryBudget::DEFAULT).unwrap();
+        let (first_circuit, _) = prepared
+            .first_circuit(Fp::from(247), &FoldConfig::default())
+            .unwrap();
+        // Validate the actual known source against the metadata-only unknown
+        // factory before any subsequent one-stage native proving call.
+        drop(import_native_a(&prover, 0, &first_circuit, &parity_keys[0]));
+        drop((prepared, first_circuit));
         let session = prover
             .prepare(inputs.clone(), MemoryBudget::DEFAULT)
             .unwrap();
         assert_eq!(prover.descriptors().len(), 2 * native::A_STAGE_COUNT - 1);
+        let layouts = prover.checkpoint_layouts().unwrap();
+        assert_eq!(layouts.len(), prover.descriptors().len());
+        for (layout, descriptor) in layouts.iter().zip(prover.descriptors()) {
+            assert_eq!(layout.descriptor_digest(), descriptor.digest());
+        }
         let mut checkpoint = session
             .restore_first(
                 self.a_proofs[0].clone(),
@@ -2221,6 +2326,32 @@ impl NativeCheckpoints {
             )
             .unwrap();
         assert_eq!(checkpoint.stage(), 0);
+        let first_original = session
+            .encode_a_checkpoint(&checkpoint, MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(first_original.len(), layouts[0].payload_bytes());
+        checkpoint = session
+            .restore_first_checkpoint(&first_original, MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(checkpoint.proof(), self.a_proofs[0]);
+        assert_eq!(checkpoint.pallas_bytes(), self.pallas[0]);
+        assert_eq!(
+            session
+                .encode_a_checkpoint(&checkpoint, MemoryBudget::DEFAULT)
+                .unwrap(),
+            first_original,
+            "restoration must retain the canonical original checkpoint bytes"
+        );
+        let mut extra = first_original.clone();
+        extra.push(0);
+        for original in [&first_original[..first_original.len() - 1], &extra] {
+            assert!(
+                session
+                    .restore_first_checkpoint(original, MemoryBudget::DEFAULT)
+                    .is_err(),
+                "checkpoint framing must reject truncation and trailing bytes"
+            );
+        }
         assert!(
             session
                 .terminal(&checkpoint, MemoryBudget::DEFAULT)
@@ -2248,7 +2379,7 @@ impl NativeCheckpoints {
                 )
                 .is_err()
         );
-        let mut changed = inputs;
+        let mut changed = inputs.clone();
         changed.objects[3][0] ^= 1;
         if let Ok(rebound) = prover.prepare(changed, MemoryBudget::DEFAULT) {
             assert!(
@@ -2261,8 +2392,22 @@ impl NativeCheckpoints {
                     .is_err(),
                 "changed original Payment cannot restore original A1"
             );
+            assert!(
+                rebound
+                    .restore_first_checkpoint(&first_original, MemoryBudget::DEFAULT)
+                    .is_err(),
+                "canonical custody cannot rebind the original Payment"
+            );
         }
+        // Restart has no surviving opaque checkpoint capability. Recreate a
+        // checked session from retained originals and recover the entire chain
+        // through canonical bytes under that new session's source identity.
+        let session = prover.prepare(inputs, MemoryBudget::DEFAULT).unwrap();
+        checkpoint = session
+            .restore_first_checkpoint(&first_original, MemoryBudget::DEFAULT)
+            .unwrap();
         for stage in 0..native::A_STAGE_COUNT - 1 {
+            check_native_w_import(&prover, &plan, stage, &parity_keys[stage]);
             let wrapper = session
                 .restore_wrapper(
                     &checkpoint,
@@ -2271,6 +2416,28 @@ impl NativeCheckpoints {
                     MemoryBudget::DEFAULT,
                 )
                 .unwrap();
+            let wrapper_original = session
+                .encode_wrapper_checkpoint(&wrapper, MemoryBudget::DEFAULT)
+                .unwrap();
+            assert_eq!(
+                wrapper_original.len(),
+                layouts[2 * stage + 1].payload_bytes()
+            );
+            let wrapper = session
+                .restore_wrapper_checkpoint(&checkpoint, &wrapper_original, MemoryBudget::DEFAULT)
+                .unwrap();
+            assert_eq!(
+                session
+                    .encode_wrapper_checkpoint(&wrapper, MemoryBudget::DEFAULT)
+                    .unwrap(),
+                wrapper_original
+            );
+            assert!(
+                session
+                    .restore_wrapper_checkpoint(&checkpoint, &first_original, MemoryBudget::DEFAULT)
+                    .is_err(),
+                "A custody bytes cannot select a W stage"
+            );
             assert_eq!(wrapper.stage(), stage);
             assert_eq!(wrapper.proof(), self.w_proofs[stage]);
             assert_eq!(wrapper.vesta_bytes(), self.vesta[stage]);
@@ -2284,10 +2451,8 @@ impl NativeCheckpoints {
             // Reconstruct only this native stage PK and compare its exact VK
             // commitments with the independent A proof's installed metadata.
             // This checks fixed/permutation commitments without retaining ten PKs.
-            let mut key_config = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded]);
-            key_config.compress_selectors = false;
             let native_key =
-                keygen_pk_v2(&common::vesta_params(16), &native_circuit, &key_config).unwrap();
+                import_native_a(&prover, stage + 1, &native_circuit, &parity_keys[stage + 1]);
             assert_eq!(native_key.binding(), parity_keys[stage + 1].binding());
             assert_eq!(
                 native_key.vk().to_bytes(),
@@ -2375,7 +2540,7 @@ impl NativeCheckpoints {
                     "cannot drop an A checkpoint"
                 );
             }
-            checkpoint = session
+            let next = session
                 .restore_a(
                     &wrapper,
                     self.a_proofs[stage + 1].clone(),
@@ -2383,6 +2548,25 @@ impl NativeCheckpoints {
                     MemoryBudget::DEFAULT,
                 )
                 .unwrap();
+            let next_original = session
+                .encode_a_checkpoint(&next, MemoryBudget::DEFAULT)
+                .unwrap();
+            assert_eq!(next_original.len(), layouts[2 * stage + 2].payload_bytes());
+            checkpoint = session
+                .restore_a_checkpoint(&wrapper, &next_original, MemoryBudget::DEFAULT)
+                .unwrap();
+            assert_eq!(
+                session
+                    .encode_a_checkpoint(&checkpoint, MemoryBudget::DEFAULT)
+                    .unwrap(),
+                next_original
+            );
+            assert!(
+                session
+                    .restore_a_checkpoint(&wrapper, &first_original, MemoryBudget::DEFAULT)
+                    .is_err(),
+                "custody cannot replay A1 as a later A"
+            );
             assert_eq!(checkpoint.stage(), stage + 1);
             assert_eq!(checkpoint.proof(), self.a_proofs[stage + 1]);
             assert_eq!(checkpoint.pallas_bytes(), self.pallas[stage + 1]);
@@ -2397,12 +2581,323 @@ impl NativeCheckpoints {
         assert_eq!(terminal.incoming_vesta, source.incoming_head.vesta);
         assert_eq!(terminal.predecessor_vesta, source.predecessor.vesta);
         eprintln!(
-            "NATIVE_RECEIVE_RESTORE all10A_all9W=true all_native_A_verifier_commitments_and_constraints_equal=true native_producer_retains_no_PK=true borrowed_PK_proof_bytes_equal=true wrong_stage_truncated_foreign_session_original_substitution_rejected=true terminal_exports_equal=true final_catalog=false"
+            "NATIVE_RECEIVE_RESTORE all10A_all9W=true all_native_A_verifier_commitments_and_constraints_equal=true strict_original_import_all19=true native_producer_retains_no_PK=true borrowed_PK_proof_bytes_equal=true canonical_custody_all19_exact_bytes=true fresh_session_from_originals=true wrong_stage_truncated_foreign_session_original_substitution_rejected=true terminal_exports_equal=true final_catalog=false"
         );
+        terminal
     }
 }
 
-fn prove_receive_owner_chain(source: Source) {
+fn import_native_a(
+    prover: &iroha_kagemusha_proof::a_relation::native::receive::Prover,
+    stage: usize,
+    source: &iroha_kagemusha_proof::a_relation::native::receive::StageCircuit,
+    expected: &iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact<Eq>,
+) -> ProvingKey<Eq> {
+    let mut config = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded]);
+    config.compress_selectors = false;
+    let key = keygen_pk_v2(&common::vesta_params(16), source, &config).unwrap();
+    assert_eq!(key.binding(), expected.binding());
+    assert_eq!(key.vk().to_bytes(), expected.key().to_bytes());
+    let original = key.artifact_bytes_v2().unwrap();
+    drop(key);
+    let read = iroha_plonk::keys::pk::artifact::ReadConfig {
+        maximum_bytes: original.len(),
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    assert!(
+        prover
+            .import_a(stage, &original[..original.len() - 1], read)
+            .is_err()
+    );
+    let imported = prover.import_a(stage, &original, read).unwrap();
+    assert_eq!(imported.vk().to_bytes(), expected.key().to_bytes());
+    imported
+}
+
+fn check_native_w_import(
+    prover: &iroha_kagemusha_proof::a_relation::native::receive::Prover,
+    plan: &iroha_kagemusha_proof::a_relation::native::receive::Plan,
+    stage: usize,
+    source_a: &iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact<Eq>,
+) {
+    let length = iroha_plonk::Protocol::new(source_a.binding().descriptor())
+        .unwrap()
+        .proof_length();
+    let source = WCircuit::new(
+        plan.context(),
+        stage,
+        source_a.binding().clone(),
+        common::vesta_params(16),
+        vec![source_a.key().kagemusha_digest(source_a.binding()).unwrap()],
+        iroha_kagemusha_proof::omega::OmegaWitness {
+            key: source_a.key().clone(),
+            instances: vec![Fp::ZERO; 69],
+            proof: vec![0; length],
+            length: u32::try_from(length).unwrap(),
+            fold: [0; 1120],
+        },
+    )
+    .unwrap()
+    .without_witnesses();
+    let mut config =
+        KeygenConfigV2::pipa_r(iroha_kagemusha_proof::omega::OmegaPlan::instance_types().to_vec());
+    config.compress_selectors = false;
+    let key = keygen_pk_v2(&PinnedParams::<Ep>::derive(16).unwrap(), &source, &config).unwrap();
+    let original = key.artifact_bytes_v2().unwrap();
+    let expected = key.vk().to_bytes().to_vec();
+    drop(key);
+    let read = iroha_plonk::keys::pk::artifact::ReadConfig {
+        maximum_bytes: original.len(),
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    assert!(
+        prover
+            .import_w(stage, &original[..original.len() - 1], read)
+            .is_err()
+    );
+    let imported = prover.import_w(stage, &original, read).unwrap();
+    assert_eq!(imported.vk().to_bytes(), expected);
+}
+
+/// Complete genuine Receive terminal after all source owners and native restores.
+/// It is an input to a separately authenticated outer program, not an admitted head.
+#[allow(
+    dead_code,
+    reason = "shared exact-source export for Receive Omega and ArchiveStatus consumers"
+)]
+pub(crate) struct AuthenticatedReceive {
+    /// Exact native terminal descriptor.
+    pub(crate) binding: iroha_plonk::DescriptorBinding,
+    /// Exact measured terminal key.
+    pub(crate) key: VerifyingKey<Eq>,
+    /// Fully restored original terminal proof and every carried obligation.
+    pub(crate) terminal: iroha_kagemusha_proof::a_relation::native::receive::Terminal,
+    /// Complete resulting state, including its source-bound public lineage.
+    pub(crate) state: StateWitness,
+    /// Exact Receive statement, retained for subsequent `ArchiveStatus` evidence.
+    pub(crate) statement: [Fp; 26],
+    /// Exact authenticated Payment digest committed by the credit record.
+    pub(crate) payment_digest: Fp,
+    /// Exact accepted-credit verdict constrained by all result and mode owners.
+    pub(crate) accepted_credit: bool,
+    /// Actual own sigma proof whose original digest is signed by the receipt.
+    pub(crate) sigma: Vec<u8>,
+    /// Original Request, payer credential, Send receipt, Payment, incoming Omega,
+    /// incoming sigma, own credential/certificate/receipt and quoted credential/certificate.
+    pub(crate) objects: [Vec<u8>; 11],
+    /// Authenticated consumed map update (including the original free-slot path).
+    pub(crate) consumed: IndexedInsert<Fp>,
+    /// Authenticated resulting credit record and its membership path.
+    pub(crate) credit: IndexedInsert<Fp>,
+}
+
+/// Derive the exact terminal identity using every fixed A and W source key.
+/// Unknown advice is only for key planning; no fabricated proof is admitted.
+/// The genuine rebuilt chain must match this descriptor and complete VK bytes.
+#[allow(
+    dead_code,
+    reason = "used by the separate Receive Omega integration target"
+)]
+pub(crate) fn receive_terminal_identity(
+    wallets: &compact_catalog::SharedKeyWallets,
+) -> (iroha_plonk::DescriptorBinding, VerifyingKey<Eq>) {
+    let (receiver, payer) = shared_wallet_heads(wallets);
+    terminal_identity_from_source(source(
+        receiver,
+        Some(payer),
+        IngestionCapacity::CanonicalEnvelope,
+    ))
+}
+
+type CatalogBootstrap =
+    compact_catalog::send_chain::load_outer::load_chain::bootstrap_outer::RootedBootstrapOmega;
+
+fn catalog_bootstrap_head(receiver: &CatalogBootstrap) -> Head {
+    Head {
+        state: StateWitness::from(&receiver.source.state),
+        key: receiver.key.clone(),
+        binding: receiver.binding.clone(),
+        proof: receiver.proof.clone(),
+        pallas: receiver.source.pallas.clone(),
+        vesta: receiver.vesta.clone(),
+        opening: receiver.opening.clone(),
+    }
+}
+
+fn bootstrap_invalid_sigma_source(receiver: &CatalogBootstrap) -> Source {
+    source_with_correction(
+        catalog_bootstrap_head(receiver),
+        None,
+        IngestionCapacity::CanonicalEnvelope,
+        Variant::Receive,
+        Some(false),
+        None,
+        false,
+    )
+}
+
+/// Plan the fixed terminal source for a Bootstrap-only invalid-sigma burn.
+/// This constructs exact original Q sources but does not admit an A proof.
+#[allow(
+    dead_code,
+    reason = "used by the separate Receive Omega integration target"
+)]
+pub(crate) fn bootstrap_burn_terminal_identity(
+    receiver: &CatalogBootstrap,
+) -> (iroha_plonk::DescriptorBinding, VerifyingKey<Eq>) {
+    terminal_identity_from_source(bootstrap_invalid_sigma_source(receiver))
+}
+
+/// Prove all original owners and native custody under the rebuilt common key.
+/// The original invalid sigma must soft-fail and cannot create spendable value.
+#[allow(
+    dead_code,
+    reason = "used by the separate Receive Omega integration target"
+)]
+pub(crate) fn authenticated_bootstrap_burn(receiver: CatalogBootstrap) -> AuthenticatedReceive {
+    let source = bootstrap_invalid_sigma_source(&receiver);
+    drop(receiver);
+    prove_bootstrap_invalid_sigma_source(source)
+}
+
+fn terminal_identity_from_source(
+    source: Source,
+) -> (iroha_plonk::DescriptorBinding, VerifyingKey<Eq>) {
+    let source = Arc::new(source);
+    let pallas = AccumulatorT::trivial(&source.params, MemoryBudget::DEFAULT).unwrap();
+    let vparams = common::vesta_params(16);
+    let vesta = AccumulatorT::trivial(&vparams, MemoryBudget::DEFAULT).unwrap();
+    let (first_fold, _) = create_fold(
+        &source.params,
+        &[pallas.as_input(), pallas.as_input()],
+        Fp::from(907).to_repr(),
+        &FoldConfig::default(),
+    )
+    .unwrap();
+    let mut stage = Stage {
+        source: source.clone(),
+        continuation: None,
+        pallas: pallas.clone(),
+
+        fold: first_fold.to_bytes().to_vec(),
+        known: false,
+        mutation: None,
+    };
+    let mut a_config = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded]);
+    a_config.compress_selectors = false;
+    let mut w_config =
+        KeygenConfigV2::pipa_r(iroha_kagemusha_proof::omega::OmegaPlan::instance_types().to_vec());
+    w_config.compress_selectors = false;
+    for index in 0..source.plan.context().stage_count() {
+        let (binding, key) = keygen_vk_with_binding_v2(&vparams, &stage, &a_config).unwrap();
+        eprintln!("RECEIVE_EXACT_KEY_PLAN A{} actual_proof=false", index + 1);
+        if index + 1 == source.plan.context().stage_count() {
+            return (binding, key);
+        }
+        let proof_length = VerifierPlan::new(binding.clone(), vparams.clone())
+            .unwrap()
+            .proof_length();
+        let (fold, _) = create_fold(
+            &vparams,
+            &vec![vesta.as_input(); 4],
+            Fq::from(908).to_repr(),
+            &FoldConfig::default(),
+        )
+        .unwrap();
+        let wrapper = WCircuit::new(
+            source.plan.context(),
+            index,
+            binding.clone(),
+            vparams.clone(),
+            vec![key.kagemusha_digest(&binding).unwrap()],
+            iroha_kagemusha_proof::omega::OmegaWitness {
+                key,
+                instances: stage.public()[0].clone(),
+                length: u32::try_from(proof_length).unwrap(),
+                proof: vec![0; proof_length],
+                fold: fold.to_bytes(),
+            },
+        )
+        .unwrap()
+        .without_witnesses();
+        let (w_binding, w_key) =
+            keygen_vk_with_binding_v2(&source.params, &wrapper, &w_config).unwrap();
+        let w_key = WKey::from_artifact(
+            source.plan.context(),
+            index,
+            w_binding,
+            source.params.clone(),
+            w_key,
+        )
+        .unwrap();
+        let wrapper_length = w_key.verifier().proof_length();
+        let split = SplitPlan::new(
+            source.plan.context().clone(),
+            index + 1,
+            w_key,
+            &source.params,
+        )
+        .unwrap();
+        let count = 2
+            + if split.is_terminal() { 2 } else { 0 }
+            + source.plan.context().q_partition(index + 1).unwrap().len();
+        let (fold, _) = create_fold(
+            &source.params,
+            &vec![pallas.as_input(); count],
+            Fp::from(909).to_repr(),
+            &FoldConfig::default(),
+        )
+        .unwrap();
+        stage = Stage {
+            source: source.clone(),
+            continuation: Some(Continuation {
+                plan: split,
+                proof: vec![0; wrapper_length],
+                carried: pallas.clone(),
+                vesta: vesta.clone(),
+            }),
+            pallas: pallas.clone(),
+
+            fold: fold.to_bytes().to_vec(),
+            known: false,
+            mutation: None,
+        };
+    }
+    unreachable!("Receive has a fixed nonempty terminal schedule")
+}
+
+/// Prove Receive from these original same-key wallets, including an optional
+/// adversarial original Vesta claim with its distinct same-challenges correction.
+#[allow(
+    dead_code,
+    reason = "used by the separate Receive Omega integration target"
+)]
+pub(crate) fn authenticated_receive_from_wallets(
+    wallets: compact_catalog::SharedKeyWallets,
+    correction: Option<EqAffine>,
+) -> AuthenticatedReceive {
+    let (receiver, payer) = shared_wallet_heads(&wallets);
+    drop(wallets); // Release the superseded source packages before proving the Receive chain.
+    let source = source_with_correction(
+        receiver,
+        Some(payer),
+        IngestionCapacity::CanonicalEnvelope,
+        Variant::Receive,
+        Some(true),
+        correction,
+        true,
+    );
+    assert_exact_payer_source(&source);
+    assert!(source.objects_valid);
+    assert_eq!(source.corrected_vesta, correction.is_some());
+    prove_receive_owner_chain(source).unwrap()
+}
+
+fn prove_receive_owner_chain(source: Source) -> Option<AuthenticatedReceive> {
     let source = Arc::new(source);
     preflight_owner_shapes(&source);
     let (first_fold, pallas) = create_fold(
@@ -2419,7 +2914,7 @@ fn prove_receive_owner_chain(source: Source) {
         source: source.clone(),
         continuation: None,
         pallas: pallas.clone(),
-        first: pallas.clone(),
+
         fold: first_fold.to_bytes().to_vec(),
         known: true,
         mutation: None,
@@ -2435,7 +2930,6 @@ fn prove_receive_owner_chain(source: Source) {
     native.pallas.push(pallas.to_bytes());
     let mut carried = pallas;
     let mut part = source.own.part.clone();
-    let mut history = Vec::new();
     let mut previous_wrapper: Option<Vec<u8>> = None;
     let vparams = common::vesta_params(16);
     for stage in 1..source.plan.context().stage_count() {
@@ -2468,7 +2962,7 @@ fn prove_receive_owner_chain(source: Source) {
         )
         .unwrap();
         native.a.push(
-            iroha_kagemusha_proof::a_relation::native::receive::KeyArtifact::new(
+            iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact::new(
                 key.binding().clone(),
                 key.vk().clone(),
             )
@@ -2508,7 +3002,7 @@ fn prove_receive_owner_chain(source: Source) {
         )
         .unwrap();
         native.w.push(
-            iroha_kagemusha_proof::a_relation::native::receive::KeyArtifact::new(
+            iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact::new(
                 wprover.binding().clone(),
                 wprover.vk().clone(),
             )
@@ -2557,10 +3051,9 @@ fn prove_receive_owner_chain(source: Source) {
                 proof: wproof.proof,
                 carried: carried.clone(),
                 vesta: vesta.clone(),
-                history: history.clone(),
             }),
             pallas: pallas.clone(),
-            first: first.first.clone(),
+
             fold: fold.to_bytes().to_vec(),
             known: true,
             mutation: None,
@@ -2607,17 +3100,14 @@ fn prove_receive_owner_chain(source: Source) {
             .contains(&OperationTask::ReceiveSignatures)
         {
             assert_continuation_rejects(&continuation, ContinuationMutation::Q2Verdict);
-            assert_continuation_rejects(&continuation, ContinuationMutation::DropHistory);
+            assert_continuation_rejects(&continuation, ContinuationMutation::CarriedP);
             eprintln!(
-                "Receive projected Signatures owner rejects changed Q2 verdict and dropped Q2/W history"
+                "Receive projected Signatures owner rejects changed Q2 verdict and substituted carried P obligation"
             );
         }
         if stage == 3 {
-            assert_continuation_rejects(&continuation, ContinuationMutation::DropHistory);
-            assert_continuation_rejects(&continuation, ContinuationMutation::ReverseHistory);
-        }
-        if stage + 1 < source.plan.context().stage_count() {
-            history.push((carried, vesta.clone()));
+            assert_continuation_rejects(&continuation, ContinuationMutation::CarriedP);
+            assert_continuation_rejects(&continuation, ContinuationMutation::WPart);
         }
         carried = pallas;
         part = vesta.as_input();
@@ -2626,19 +3116,32 @@ fn prove_receive_owner_chain(source: Source) {
         .decide(&source.params, MemoryBudget::DEFAULT)
         .unwrap();
     native.a.push(
-        iroha_kagemusha_proof::a_relation::native::receive::KeyArtifact::new(
+        iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact::new(
             key.binding().clone(),
             key.vk().clone(),
         )
         .unwrap(),
     );
+    let artifact = (key.binding().clone(), key.vk().clone());
     drop(key);
-    if native_capacity {
-        native.check(&source, &public[0]);
-    }
+    let (binding, key) = artifact;
+    let terminal = native_capacity.then(|| native.check(&source, &public[0]));
     eprintln!(
         "RECEIVE_OWNER_CHAIN stages={} accepted_credit={} original_sources_bound=true final_catalog=false release_qualified=false",
         source.plan.context().stage_count(),
         source.accept,
     );
+    terminal.map(|terminal| AuthenticatedReceive {
+        binding,
+        key,
+        terminal,
+        state: source.own.witness.after,
+        statement: source.own.witness.statement,
+        payment_digest: source.own.witness.payment,
+        accepted_credit: source.accept,
+        sigma: source.own.sigma.clone(),
+        objects: source.objects.clone(),
+        consumed: source.own.witness.consumed,
+        credit: source.own.witness.credit,
+    })
 }

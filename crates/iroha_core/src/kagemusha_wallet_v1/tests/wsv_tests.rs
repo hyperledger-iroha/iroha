@@ -18,6 +18,9 @@ use iroha_executor_data_model::permission::asset_definition::CanManageKagemushaW
 use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
 use mv::storage::StorageReadOnly as _;
 
+#[path = "load_event_evidence_tests.rs"]
+mod load_event_evidence_tests;
+
 fn load_event_digests(events: &[iroha_data_model::events::EventBox]) -> Vec<[u8; 32]> {
     use iroha_data_model::events::{EventBox, data::DataEvent};
     events
@@ -99,6 +102,12 @@ fn transact<T>(
     tx.current_network_entrypoint_hash = Some(HashOf::from_untyped_unchecked(invocation));
     let result = action(&mut tx)?;
     tx.apply();
+    event_evidence::retain(
+        &mut block.world,
+        height,
+        &iroha_allocation::AllocationBudget::new(2_000_000),
+    )
+    .map_err(|_| Error::Unavailable)?;
     block.commit_world_overlay_for_testing().unwrap();
     state.push_block_hash_for_testing(header.hash());
     Ok(result)
@@ -396,7 +405,10 @@ fn real_asset_batch_loads_once_and_failed_debit_rolls_back_ordinal() {
             0 => altered.body.asset_digest = [0x88; 32],
             1 => altered.body.ordinal += 1,
             2 => altered.body.request_id = [0x89; 32],
-            3 => altered.body.payer = memory.registration.reserve.clone(),
+            3 => {
+                altered.body.payer_account_digest =
+                    kagemusha_wallet_account_digest_v1(&memory.registration.reserve).unwrap()
+            }
             4 => altered.body.amount += 1,
             _ => altered.command.wallet = [0x90; 32],
         }
@@ -1524,7 +1536,10 @@ fn ordinary_load_receipt_is_recovered_after_growth_and_local_qc_loss() {
         assert_eq!(original.block_height, 2);
         assert_eq!(original.ordinal, 0);
         assert_eq!(original.request_id, request);
-        assert_eq!(original.payer, memory.authority);
+        assert_eq!(
+            original.payer_account_digest,
+            kagemusha_wallet_account_digest_v1(&memory.authority).unwrap()
+        );
         assert!(
             source
                 .receipt_for(&memory.registration.reserve, &scheme, &wallet, &request)
@@ -1678,6 +1693,7 @@ fn ordinary_load_receipt_is_recovered_after_growth_and_local_qc_loss() {
         let rows = view.world.kagemusha_wallet_ledger();
         storage::validate_snapshot(rows.iter(), |key| rows.get(key).map(Vec::as_slice)).unwrap();
     }
+    load_event_evidence_tests::check_retained_load_event(&chain, &memory, &original);
     // Local certificate availability cannot prevent receipt recovery. The returned DTO
     // remains data; the independent native finality verifier still owns proof admission.
     chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);

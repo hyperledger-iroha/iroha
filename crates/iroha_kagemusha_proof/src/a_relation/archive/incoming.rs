@@ -3,7 +3,7 @@
 use ff::Field;
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region, Value};
-use iroha_plonk_gadgets::{GlueChip, UintChip, bytes::tape::BytesChip, p256::VerifyMode};
+use iroha_plonk_gadgets::{Bit, GlueChip, UintChip, bytes::tape::BytesChip, p256::VerifyMode};
 use iroha_plonk_recursion::verifier::VerifierChip;
 
 use super::{
@@ -180,27 +180,13 @@ impl ArchiveIncomingObjects {
         bundle: &SignatureQCells,
     ) -> Result<(), Error> {
         require_task(plan, stage, OperationTask::ArchiveSignatures)?;
-        self.bind_context(region, plan, input)?;
-        let [slot] = bundle.slots() else {
-            return Err(Error::Synthesis);
-        };
-        if slot.mode() != VerifyMode::Soft
-            || slot.key_policy() != SignatureKey::Variable
-            || !plan
-                .q_partition(usize::try_from(stage).map_err(|_| Error::BoundsFailure)?)
-                .is_some_and(|q| q.contains(&2))
+        if !plan
+            .q_partition(usize::try_from(stage).map_err(|_| Error::BoundsFailure)?)
+            .is_some_and(|q| q.contains(&2))
         {
             return Err(Error::Synthesis);
         }
-        bundle.bind_context(
-            region,
-            plan.operation(),
-            2,
-            input.q_instances.get(2).ok_or(Error::Synthesis)?,
-        )?;
-        let valid = self
-            .receipt
-            .bind_signature(region, slot, self.receiver.payment_key()?)?;
+        let valid = self.derive_signature(region, plan, input, bundle)?;
         claims.bind_derived(
             region,
             plan,
@@ -209,5 +195,31 @@ impl ArchiveIncomingObjects {
             ArchiveResultTag::Signatures,
             &valid,
         )
+    }
+
+    // Native preparation shares the exact receipt, held key and Q2 bindings.
+    // The owning stage separately hard-verifies Q2 and binds the proposed bit.
+    pub(crate) fn derive_signature(
+        &self,
+        region: &mut Region<'_, Fp>,
+        plan: &ContextPlan,
+        input: &ContextInputs<'_>,
+        bundle: &SignatureQCells,
+    ) -> Result<Bit<Fp>, Error> {
+        self.bind_context(region, plan, input)?;
+        let [slot] = bundle.slots() else {
+            return Err(Error::Synthesis);
+        };
+        if slot.mode() != VerifyMode::Soft || slot.key_policy() != SignatureKey::Variable {
+            return Err(Error::Synthesis);
+        }
+        bundle.bind_context(
+            region,
+            plan.operation(),
+            2,
+            input.q_instances.get(2).ok_or(Error::Synthesis)?,
+        )?;
+        self.receipt
+            .bind_signature(region, slot, self.receiver.payment_key()?)
     }
 }

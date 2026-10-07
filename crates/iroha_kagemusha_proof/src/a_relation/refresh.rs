@@ -386,8 +386,8 @@ impl RefreshObjects {
     ) -> Result<(), Error> {
         let slots = signatures.slots();
         require_slots(&RefreshStagePlan::signature_schemas(policy)?[0], signatures)?;
-        let scope = policy.scope(chip, region)?;
         let predecessor = input.predecessor.ok_or(Error::Synthesis)?;
+        let scope = policy.scope(chip, region, predecessor.state)?;
         let mut uint = chip.uint();
         let auth = IssuerAuthorization {
             certificate: &self.originals()?[0],
@@ -467,7 +467,7 @@ impl RefreshObjects {
         // A renewal statement names the successor credential. C4 still verifies
         // the predecessor's exact current credential; Effects separately proves
         // replacement continuity and binds the new credential to the successor.
-        let scope = policy.scope(chip, region)?;
+        let scope = policy.scope(chip, region, current.state)?;
         let mut uint = chip.uint();
         current
             .state

@@ -347,7 +347,7 @@ impl Run<'_> {
         &self,
         provider_id: ProviderId,
         account_height: u64,
-    ) -> Result<Phase<(ProviderFundingProgress, u64)>> {
+    ) -> Result<Phase<(CompletedFunding, u64)>> {
         let policies = &self.original.policies;
         let fees = &self.original.fees;
         let deadline = self.deadline;
@@ -397,7 +397,8 @@ impl Run<'_> {
         require_after(capacity, credit.height)?;
         let funding_height = capacity.height;
         drop(funding);
-        Ok(Phase::Complete((funding_result, funding_height)))
+        let completed = CompletedFunding::from_progress(funding_result)?;
+        Ok(Phase::Complete((completed, funding_height)))
     }
 
     #[inline(never)]

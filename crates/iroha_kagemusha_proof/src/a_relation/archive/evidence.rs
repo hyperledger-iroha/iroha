@@ -2,7 +2,7 @@
 
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region, Value};
-use iroha_plonk_gadgets::{GlueChip, UintChip, Word, bytes::tape::BytesChip};
+use iroha_plonk_gadgets::{Bit, GlueChip, UintChip, Word, bytes::tape::BytesChip};
 use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip};
 
 use super::{
@@ -120,8 +120,35 @@ pub fn constrain_evidence(
     source: ArchiveEvidenceSource<'_>,
 ) -> Result<(), Error> {
     require_task(plan, stage, OperationTask::ArchiveEvidence)?;
-    objects.bind_context(region, plan, input)?;
     claims.bind_context(region, plan, input)?;
+    let valid = derive_evidence(chip, bytes, region, plan, input, policy, objects, source)?;
+    claims.bind_derived(
+        region,
+        plan,
+        stage,
+        input,
+        ArchiveResultTag::Evidence,
+        &valid,
+    )
+}
+
+// Return the exact circuit-derived proposal for native witness preparation.
+// The staged Evidence owner still binds this predicate to its committed claim.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the same predicate retains every original evidence source and context"
+)]
+pub(crate) fn derive_evidence(
+    chip: &mut VerifierChip<Ep>,
+    bytes: &mut BytesChip<Fp>,
+    region: &mut Region<'_, Fp>,
+    plan: &ContextPlan,
+    input: &ContextInputs<'_>,
+    policy: OwnPolicy,
+    objects: &ArchiveIncomingObjects,
+    source: ArchiveEvidenceSource<'_>,
+) -> Result<Bit<Fp>, Error> {
+    objects.bind_context(region, plan, input)?;
     let variant = plan.operation().frame().variant();
     let specs = evidence_specs(variant)?;
     let payment = input
@@ -140,7 +167,7 @@ pub fn constrain_evidence(
         &input.own_statement.fields()[17],
     )?;
     let relation = core::array::from_fn(|i| input.own_statement.fields()[1 + i].clone());
-    let scope = policy.scope(chip, region)?;
+    let provider = policy.provider(chip, region)?;
     let (credited_bytes, kind, digest, valid, statement) = match source {
         ArchiveEvidenceSource::Receive { credited } => {
             if variant != Variant::ArchiveReceive {
@@ -175,7 +202,7 @@ pub fn constrain_evidence(
                     request: objects.request(),
                     receiver: objects.receiver(),
                     relation: &relation,
-                    provider: &scope.provider,
+                    provider: &provider,
                     payment_digest: payment,
                     proof_digest: raw_digest,
                 },
@@ -236,7 +263,7 @@ pub fn constrain_evidence(
                     lineage_digest: raw_digest,
                     proof_digest: &carried,
                     opening: &opening,
-                    provider: &scope.provider,
+                    provider: &provider,
                     relation: &relation,
                     request: objects.request(),
                     receiver: objects.receiver(),
@@ -286,12 +313,5 @@ pub fn constrain_evidence(
     let actual =
         ContextObjectCells::from_exact_run(chip, region, specs[1], credited.digest(), &run)?;
     bind_object(region, plan, input, 15, specs[1], &actual)?;
-    claims.bind_derived(
-        region,
-        plan,
-        stage,
-        input,
-        ArchiveResultTag::Evidence,
-        &valid,
-    )
+    Ok(valid)
 }

@@ -22,9 +22,9 @@ impl QuorumCircuit {
     fn valid(f: u64, offset: u64) -> Self {
         let n = 3 * f + 1;
         let mut bitmap = [0; 4];
-        for i in 0..2 * f + 1 {
+        for i in 0..=(2 * f) {
             let index = (i + offset) % n;
-            bitmap[index as usize / 8] |= 1 << (index % 8);
+            bitmap[usize::try_from(index).unwrap() / 8] |= 1 << (index % 8);
         }
         Self {
             n,

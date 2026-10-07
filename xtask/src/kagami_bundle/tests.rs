@@ -694,3 +694,255 @@ fn cli_development_preserves_exact_selected_image_and_shared_provenance() {
     assert!(selected.verify_installed(&path).is_err());
     assert!(!path.exists());
 }
+
+#[test]
+fn exact_cargo_hardlink_inputs_publish_private_single_link_runtime_copies() {
+    let temporary = tempfile::tempdir().unwrap();
+    let programs = source(temporary.path());
+    let mut records = Vec::new();
+    for (name, path) in &programs {
+        let alias = path.with_extension("cargo-dependency-link");
+        fs::hard_link(path, &alias).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(fs::metadata(path).unwrap().nlink(), 2);
+        }
+        assert!(RetainedFile::open_regular(path).is_err());
+        let record = Value::Object(Map::from([
+            ("reason".into(), Value::String("compiler-artifact".into())),
+            (
+                "target".into(),
+                Value::Object(Map::from([
+                    ("name".into(), Value::String(name.clone())),
+                    (
+                        "kind".into(),
+                        Value::Array(vec![Value::String("bin".into())]),
+                    ),
+                ])),
+            ),
+            (
+                "executable".into(),
+                Value::String(path.to_str().unwrap().into()),
+            ),
+        ]));
+        records.extend(json::to_vec(&record).unwrap());
+        records.push(b'\n');
+    }
+    let actual = collect_programs(io::Cursor::new(records)).unwrap();
+    assert_eq!(actual, programs);
+    let package = temporary.path().join("cargo-cli");
+    // The existing ordinary input route continues to refuse shared source custody.
+    assert!(publish(&actual, &package, "debug", None).is_err());
+    assert!(!package.exists());
+    publish_cargo(&actual, &package, "debug", None).unwrap();
+    for (name, path) in &programs {
+        let output = package
+            .join("bin")
+            .join(format!("{name}{}", env::consts::EXE_SUFFIX));
+        assert_eq!(fs::read(&output).unwrap(), fs::read(path).unwrap());
+        let mut strict_output = RetainedFile::open_regular(&output).unwrap();
+        assert_eq!(
+            digest(&mut strict_output).unwrap(),
+            hex::encode(Sha256::digest(fs::read(path).unwrap()))
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(fs::metadata(&output).unwrap().nlink(), 1);
+            assert_eq!(fs::metadata(path).unwrap().nlink(), 2);
+        }
+        assert!(path.with_extension("cargo-dependency-link").is_file());
+    }
+    assert!(InstalledRuntime::from_directory(&package.join("bin")).is_ok());
+    let manifest: Value =
+        json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["files"].as_array().unwrap().len(), PROGRAMS.len());
+}
+
+#[test]
+fn cargo_input_role_requires_exact_absolute_three_program_geometry() {
+    let temporary = tempfile::tempdir().unwrap();
+    let programs = source(temporary.path());
+    for attack in ["missing", "extra", "relative"] {
+        let mut malformed = programs.clone();
+        match attack {
+            "missing" => {
+                malformed.remove("kagami");
+            }
+            "extra" => {
+                malformed.insert("other".into(), programs["kagami"].clone());
+            }
+            "relative" => {
+                malformed.insert("kagami".into(), PathBuf::from("kagami"));
+            }
+            _ => unreachable!(),
+        }
+        let package = temporary.path().join(attack);
+        assert!(publish_cargo(&malformed, &package, "debug", None).is_err());
+        assert!(!package.exists());
+    }
+    publish_cargo(&programs, &temporary.path().join("retry"), "debug", None).unwrap();
+}
+
+#[cfg(unix)]
+struct AliasMutationInput {
+    original: RetainedBuildInput,
+    alias: PathBuf,
+    replacement: Vec<u8>,
+    read_bytes: usize,
+    mutated: bool,
+}
+
+#[cfg(unix)]
+impl Read for AliasMutationInput {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let count = self.original.read(bytes)?;
+        self.read_bytes += count;
+        if count > 0 && !self.mutated {
+            fs::write(&self.alias, &self.replacement)?;
+            self.mutated = true;
+        }
+        Ok(count)
+    }
+}
+
+#[cfg(unix)]
+impl Seek for AliasMutationInput {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.original.seek(position)
+    }
+}
+
+#[cfg(unix)]
+impl NativeInput for AliasMutationInput {
+    fn reader(&mut self) -> &mut dyn InputReader {
+        self
+    }
+    fn length(&self) -> io::Result<u64> {
+        self.original.len()
+    }
+    fn snapshot(&self) -> io::Result<FileSnapshot> {
+        self.original.snapshot()
+    }
+    fn revalidate(&self) -> io::Result<()> {
+        self.original.revalidate()
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn real_alias_mutation_during_private_copy_refuses_the_original_and_restored_capture_retries() {
+    use std::os::unix::fs::MetadataExt;
+    let temporary = tempfile::tempdir().unwrap();
+    let programs = source(temporary.path());
+    let path = &programs["kagami"];
+    let identity = fs::metadata(path).unwrap().ino();
+    let bytes = fs::read(path).unwrap();
+    let alias = path.with_extension("cargo-dependency-link");
+    fs::hard_link(path, &alias).unwrap();
+    let mut changed = bytes.clone();
+    *changed.last_mut().unwrap() ^= 1;
+    let mut input = AliasMutationInput {
+        original: RetainedBuildInput::open(path).unwrap(),
+        alias: alias.clone(),
+        replacement: changed.clone(),
+        read_bytes: 0,
+        mutated: false,
+    };
+    let before = input.snapshot().unwrap();
+    let hash = hex::encode(Sha256::digest(&bytes));
+    let destination = temporary.path().join("private-copy");
+    assert!(copy_program(&mut input, before, &hash, &destination).is_err());
+    assert!(input.mutated);
+    assert_eq!(input.read_bytes, bytes.len());
+    assert_eq!(fs::read(&alias).unwrap(), changed);
+    assert!(input.original.revalidate().is_err());
+    assert_eq!(fs::metadata(path).unwrap().ino(), identity);
+    drop(input);
+    fs::write(&alias, &bytes).unwrap();
+    let mut retry = RetainedBuildInput::open(path).unwrap();
+    let before = retry.snapshot().unwrap();
+    let output = temporary.path().join("retry-copy");
+    let (file, _, copied_hash, _) = copy_program(&mut retry, before, &hash, &output).unwrap();
+    assert_eq!(copied_hash, hash);
+    assert_eq!(fs::read(&output).unwrap(), bytes);
+    file.revalidate().unwrap();
+    assert_eq!(fs::metadata(&output).unwrap().nlink(), 1);
+    assert_eq!(fs::metadata(path).unwrap().nlink(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_input_hashing_is_bounded_when_real_alias_growth_occurs_after_read() {
+    let temporary = tempfile::tempdir().unwrap();
+    let programs = source(temporary.path());
+    let path = &programs["kagami"];
+    let bytes = fs::read(path).unwrap();
+    let alias = path.with_extension("cargo-dependency-link");
+    fs::hard_link(path, &alias).unwrap();
+    let mut grown = bytes.clone();
+    grown.extend_from_slice(&[0; 1024]);
+    let mut input = AliasMutationInput {
+        original: RetainedBuildInput::open(path).unwrap(),
+        alias: alias.clone(),
+        replacement: grown,
+        read_bytes: 0,
+        mutated: false,
+    };
+    let error = digest(&mut input).unwrap_err();
+    assert!(error.to_string().contains("extent changed during hashing"));
+    assert!(input.mutated);
+    assert_eq!(input.read_bytes, bytes.len() + 1);
+    assert!(input.original.revalidate().is_err());
+    drop(input);
+    fs::write(alias, &bytes).unwrap();
+    let mut retry = RetainedBuildInput::open(path).unwrap();
+    assert_eq!(
+        digest(&mut retry).unwrap(),
+        hex::encode(Sha256::digest(bytes))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cargo_source_owner_survives_private_copy_until_atomic_publication_checks() {
+    use std::os::unix::fs::MetadataExt;
+    let temporary = tempfile::tempdir().unwrap();
+    let programs = source(temporary.path());
+    let path = &programs["kagami"];
+    let original = fs::read(path).unwrap();
+    let identity = fs::metadata(path).unwrap().ino();
+    let alias = path.with_extension("cargo-dependency-link");
+    fs::hard_link(path, &alias).unwrap();
+    let package = temporary.path().join("cargo-cli");
+    let mut mutated_after_copy = false;
+    assert!(
+        publish_inputs(
+            &programs,
+            &package,
+            "debug",
+            None,
+            ProgramKind::Cargo,
+            &mut || {
+                assert!(!package.exists());
+                fs::write(&alias, b"changed after complete private copying")?;
+                mutated_after_copy = true;
+                Ok(())
+            },
+            &mut |_| panic!("changed source must not reach atomic visibility"),
+        )
+        .is_err()
+    );
+    assert!(mutated_after_copy);
+    assert!(!package.exists());
+    assert_eq!(
+        fs::read(&alias).unwrap(),
+        b"changed after complete private copying"
+    );
+    assert_eq!(fs::metadata(path).unwrap().ino(), identity);
+    fs::write(&alias, original).unwrap();
+    publish_cargo(&programs, &package, "debug", None).unwrap();
+    assert_eq!(fs::metadata(path).unwrap().ino(), identity);
+    assert_eq!(fs::metadata(path).unwrap().nlink(), 2);
+}

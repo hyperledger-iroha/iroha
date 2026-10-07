@@ -64,7 +64,7 @@ use iroha_plonk_recursion::{
 use std::sync::Arc;
 
 fn policy() -> OwnPolicy {
-    OwnPolicy::new([1, 2], [31, 32], bootstrap_objects::key(23)).unwrap()
+    OwnPolicy::new([31, 32], bootstrap_objects::key(23)).unwrap()
 }
 fn transition() -> (ArchiveWitness, [bootstrap_objects::Signed; 2]) {
     let (before, certificate, credential) = bootstrap_objects::enrollment();
@@ -279,6 +279,9 @@ fn sources() -> Sources {
             OperationTask::ArchiveProofs,
             OperationTask::ArchiveSignatures,
             OperationTask::ArchiveEffects,
+            OperationTask::ArchiveRetainedProofs,
+            OperationTask::ArchiveCorePending,
+            OperationTask::ArchiveLineagePending,
         ],
     ])
     .unwrap();
@@ -571,7 +574,7 @@ impl Circuit<Fp> for Owner {
                         &q,
                     )?;
                     let policy = if self.mutation == 11 {
-                        OwnPolicy::new([1, 2], [31, 32], bootstrap_objects::key(19)).unwrap()
+                        OwnPolicy::new([31, 32], bootstrap_objects::key(19)).unwrap()
                     } else {
                         policy()
                     };
@@ -785,7 +788,12 @@ fn incoming_signature_sources(own: Arc<Sources>, valid: bool) -> IncomingSignatu
                     OperationTask::ArchiveOwnProof,
                 ],
                 vec![OperationTask::ArchiveSignatures],
-                vec![OperationTask::ArchiveEffects],
+                vec![
+                    OperationTask::ArchiveEffects,
+                    OperationTask::ArchiveRetainedProofs,
+                    OperationTask::ArchiveCorePending,
+                    OperationTask::ArchiveLineagePending,
+                ],
             ])
             .unwrap();
     IncomingSignatureSources {
