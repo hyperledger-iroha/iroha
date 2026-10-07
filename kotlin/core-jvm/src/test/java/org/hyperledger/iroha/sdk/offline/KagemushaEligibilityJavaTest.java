@@ -21,7 +21,7 @@ public class KagemushaEligibilityJavaTest {
         for (int i = 0; i < bytes.length; i++) bytes[i] = (byte) Integer.parseInt(text.substring(2*i, 2*i+2), 16);
         return bytes;
     }
-    @Test public void bankCanInjectCurrentLookupAndExistingSignerFromJava() throws Exception {
+    @Test public void eachProviderCanInjectCurrentLookupAndExistingSignerFromJava() throws Exception {
         File root = new File(".").getCanonicalFile();
         File fixture;
         do {
@@ -31,14 +31,19 @@ public class KagemushaEligibilityJavaTest {
             assertNotNull(root, "Rust eligibility fixture required");
         } while (true);
         Map<?, ?> vectors = (Map<?, ?>) JsonParser.parse(new String(Files.readAllBytes(fixture.toPath()), StandardCharsets.UTF_8));
-        Map<?, ?> row = (Map<?, ?>) ((List<?>) vectors.get("cases")).get(0);
+        for (String authority : new String[] {"bank", "scheme-operator"}) {
+        Map<?, ?> row = ((List<?>) vectors.get("cases")).stream().map(value -> (Map<?, ?>) value)
+            .filter(value -> authority.equals(value.get("authority")) && "approved-unfrozen".equals(value.get("decision")))
+            .findFirst().orElseThrow(() -> new AssertionError("provider vector required"));
         KagemushaEnrollmentEligibilityV1.Policy policy = KagemushaEnrollmentEligibilityV1.decodePolicy(hex(row.get("policy_hex")));
         AtomicInteger reads = new AtomicInteger();
         byte[] response = KagemushaEnrollmentEligibilityV1.answer(policy, hex(row.get("request_hex")),
             () -> BigInteger.valueOf(1100),
             (selected, request) -> {
                 reads.incrementAndGet();
-                assertEquals(KagemushaEnrollmentEligibilityV1.Authority.BANK, selected.getAuthority());
+                assertEquals(authority.equals("bank") ? KagemushaEnrollmentEligibilityV1.Authority.BANK :
+                    KagemushaEnrollmentEligibilityV1.Authority.SCHEME_OPERATOR, selected.getAuthority());
+                assertEquals(32, selected.scopeDigest().length);
                 assertEquals(32, request.accountDigest().length);
                 return new KagemushaEnrollmentEligibilityV1.Current(true, false, BigInteger.valueOf(6), BigInteger.valueOf(1100));
             }, message -> {
@@ -47,5 +52,6 @@ public class KagemushaEligibilityJavaTest {
             });
         assertArrayEquals(hex(row.get("response_hex")), response);
         assertEquals(1, reads.get());
+        }
     }
 }

@@ -51,6 +51,7 @@ impl std::fmt::Debug for KagemushaEnrollmentWorker {
 }
 impl std::fmt::Debug for KagemushaEnrollmentGoogle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KagemushaEnrollmentGoogle").finish_non_exhaustive()
+        f.debug_struct("KagemushaEnrollmentGoogle")
+            .finish_non_exhaustive()
     }
 }

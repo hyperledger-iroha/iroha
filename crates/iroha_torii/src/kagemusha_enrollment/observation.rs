@@ -35,7 +35,10 @@ pub(super) struct EligibilityObservationTransport {
 impl EligibilityObservationTransport {
     /// Open an existing required credential. Call from the service's blocking runtime owner.
     pub(super) fn open(provider: &KagemushaEnrollmentProvider) -> Result<Self> {
-        provider.eligibility.validate().map_err(|_| Error::Invalid)?;
+        provider
+            .eligibility
+            .validate()
+            .map_err(|_| Error::Invalid)?;
         Ok(Self {
             selected: provider.clone(),
             http: ObservationHttp::open(

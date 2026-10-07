@@ -1,12 +1,17 @@
 //! Bind the exact independently selected native A originals to the executed receipt.
 use super::*;
 
+pub(super) struct Target {
+    pub(super) frame: Vec<u8>,
+    pub(super) originals: BTreeMap<String, Vec<u8>>,
+}
+
 pub(super) fn validate(
     selection: &Selection<'_>,
     setup: &source_only::Setup,
     native: &SumeragiFinalityVerifier,
     receipt: &KagemushaWalletLoadReceiptV1,
-) -> Result<(Vec<u8>, BTreeMap<String, Vec<u8>>), Error> {
+) -> Result<Target, Error> {
     let frame = pinned(selection.target, 16 << 10, selection.target_sha256)?;
     let json: Value = norito::json::from_slice(&frame).map_err(|_| Error::Input)?;
     need(
@@ -98,5 +103,5 @@ pub(super) fn validate(
             && value(&json, "online_charge")?.as_str() == Some("0"),
     )?;
     need(pinned(selection.target, 16 << 10, selection.target_sha256)? == frame)?;
-    Ok((frame, originals))
+    Ok(Target { frame, originals })
 }

@@ -207,8 +207,12 @@ impl PreKeyDispatchV1 {
             || body.actor_digest != self.actor_digest
             || body.client_nonce != self.client_nonce
             || body.originals_digest != self.originals_digest(&body.challenge)?
-            || body.expires_at_ms.checked_sub(body.created_at_ms)
-                != Some(self.policy.challenge_lifetime_ms)
+            || body
+                .expires_at_ms
+                .checked_sub(body.created_at_ms)
+                .is_none_or(|duration| {
+                    duration == 0 || duration > self.policy.challenge_lifetime_ms
+                })
         {
             return Err("pre-key permit selection");
         }
@@ -283,6 +287,7 @@ impl GenerationAuthorizationV1 {
         generation_policy: crate::kagemusha_wallet_advance_v1::KagemushaWalletKeyGenerationPolicyV1,
         fresh: bool,
         started: KagemushaWalletMonotonicReadingV1,
+        session_expires_at_ms: u64,
     ) -> Self {
         Self {
             root,
@@ -297,7 +302,7 @@ impl GenerationAuthorizationV1 {
             },
             started,
             observed_at_ms: permit.body.observed_at_ms,
-            expires_at_ms: permit.body.expires_at_ms,
+            expires_at_ms: permit.body.expires_at_ms.min(session_expires_at_ms),
         }
     }
     pub(crate) fn check<F, P, C, R>(
@@ -345,6 +350,9 @@ pub(super) fn require_elapsed(
         .ok_or("pre-key clock decreased")?;
     if observed
         .checked_add(elapsed)
+        // Both monotonic readings are floor-quantized milliseconds: round their
+        // difference upward before comparing a strict exclusive deadline.
+        .and_then(|upper| upper.checked_add(1))
         .is_none_or(|upper| upper >= expires)
     {
         return Err("pre-key permit elapsed deadline");
@@ -362,9 +370,9 @@ mod tests {
             monotonic_ms: 100,
         };
         let mut now = start;
-        now.monotonic_ms = 109;
+        now.monotonic_ms = 108;
         assert!(require_elapsed(&start, &now, 10, 20).is_ok());
-        now.monotonic_ms = 110;
+        now.monotonic_ms = 109;
         assert!(require_elapsed(&start, &now, 10, 20).is_err());
         now.monotonic_ms = 101;
         assert!(require_elapsed(&start, &now, u64::MAX, u64::MAX).is_err());

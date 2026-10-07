@@ -96,9 +96,9 @@ fn canonical_executed_setup_compiles_complete_finality_sources_without_load() {
     );
 }
 
-fn executed_load_selection<'a>(
-    paths: &'a [std::path::PathBuf; 3],
-) -> driver::executed_load::Selection<'a> {
+fn executed_load_selection(
+    paths: &[std::path::PathBuf; 3],
+) -> driver::executed_load::Selection<'_> {
     driver::executed_load::Selection {
         setup_root: &paths[0],
         setup_sha256: environment_pin("KAGEMUSHA_EXECUTED_LEDGER_SETUP_SHA256"),

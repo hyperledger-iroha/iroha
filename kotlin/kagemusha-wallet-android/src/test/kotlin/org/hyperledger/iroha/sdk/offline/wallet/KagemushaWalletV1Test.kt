@@ -83,7 +83,7 @@ class KagemushaWalletV1Test {
         assertEquals(1, value.frames()[0][0].toInt())
         value.frames()[0][0] = 3
         assertEquals(1, value.frames()[0][0].toInt())
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletRuntimeV1(0) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletRuntimeV1(0, Any()) }
     }
     @Test fun `account challenge and opened handle keep fixed reply shapes`() {
         KagemushaWalletCallV1(15, -1, 0, 1, 0, 0, ByteArray(32))

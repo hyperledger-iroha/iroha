@@ -22,7 +22,7 @@ class KagemushaEnrollmentEligibilityV1Test {
             File(it, "fixtures/kagemusha/enrollment_eligibility_v1_vectors.json") }.first(File::isFile)
         val root = JsonParser.parse(file.readText()) as Map<*, *>
         assertEquals(1, (root["version"] as Number).toInt())
-        return (root["cases"] as List<*>).map { it as Map<*, *> }.also { assertEquals(36, it.size) }
+        return (root["cases"] as List<*>).map { it as Map<*, *> }.also { assertEquals(24, it.size) }
     }
     private fun hex(value: Any?): ByteArray = (value as String).chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     private fun n(value: Long) = BigInteger.valueOf(value)
@@ -31,7 +31,7 @@ class KagemushaEnrollmentEligibilityV1Test {
         E.CurrentLookup { _, _ -> E.Current(approved, frozen, n(revision), n(observed)) }
     private fun failure(code: E.FailureCode, run: () -> Unit) { assertEquals(code, assertFailsWith<E.Failure>(block = run).code) }
 
-    @Test fun all36RustFramesDigestsSignaturesAndExactResponses() {
+    @Test fun all24RustFramesDigestsSignaturesAndExactResponses() {
         for (row in rows()) {
             val p = hex(row["policy_hex"]); val q = hex(row["request_hex"]); val r = hex(row["response_hex"])
             val policy = E.decodePolicy(p); val request = E.decodeRequest(policy, q)
@@ -39,6 +39,7 @@ class KagemushaEnrollmentEligibilityV1Test {
             assertContentEquals(p, policy.originalBytes()); assertContentEquals(q, request.originalBytes()); assertContentEquals(r, response.originalBytes())
             assertContentEquals(hex(row["policy_digest_hex"]), policy.digest()); assertContentEquals(hex(row["request_digest_hex"]), request.digest())
             assertContentEquals(hex(row["signing_message_hex"]), response.signingMessage()); assertContentEquals(hex(row["signature_hex"]), response.signature())
+            assertEquals((row["authority"] as String).replace('-', '_').uppercase(), policy.authority.name)
             assertEquals((row["decision"] as String).replace('-', '_').uppercase(), response.decision.name)
             assertEquals((row["purpose"] as String).replace('-', '_').uppercase(), request.purpose.name)
             var reads = 0; var signs = 0; var times = 0
@@ -52,7 +53,7 @@ class KagemushaEnrollmentEligibilityV1Test {
     @Test fun ordinaryEd25519CustodySignsExactMessageWithoutTransactionPrehash() {
         val row = rows().first()
         val privateKey = Ed25519PrivateKeyParameters(ByteArray(32) { 42 }, 0)
-        val policy = E.decodePolicy(mutate(hex(row["policy_hex"])) { this[7] = privateKey.generatePublicKey().encoded })
+        val policy = E.decodePolicy(mutate(hex(row["policy_hex"])) { this[6] = privateKey.generatePublicKey().encoded })
         val requestOriginal = mutate(hex(row["request_hex"])) { this[1] = policy.digest() }
         val request = E.decodeRequest(policy, requestOriginal)
         fun sign(message: ByteArray): ByteArray = Ed25519Signer().run {
@@ -98,15 +99,22 @@ class KagemushaEnrollmentEligibilityV1Test {
                 assertFailsWith<E.Failure> { decode(bad) }
         }
     }
-    @Test fun foreignAuthorityRegulatedParliamentUnknownArmsAndWeakKeysReject() {
+    @Test fun providerIdentityUnknownArmsRemovedLayoutAndWeakKeysReject() {
         val row = rows().first(); val original = hex(row["policy_hex"]); val policy = E.decodePolicy(original)
-        for (index in listOf(1, 2, 3, 4, 7, 8)) assertFailsWith<E.Failure> { E.decodePolicy(mutate(original) { this[index] = ByteArray(this[index].size) }) }
-        val parliament = hex(rows().first { it["authority"] == "parliament-non-regulated" }["policy_hex"])
-        assertFailsWith<E.Failure> { E.decodePolicy(mutate(parliament) { this[5] = byteArrayOf(1, 0, 0, 0) }) }
-        for (tag in listOf(0, 3, 255)) assertFailsWith<E.Failure> { E.decodePolicy(mutate(original) { this[6][0] = tag.toByte() }) }
+        for (index in listOf(1, 2, 3, 4, 6, 7)) assertFailsWith<E.Failure> { E.decodePolicy(mutate(original) { this[index] = ByteArray(this[index].size) }) }
+        for (tag in listOf(0, 3, 255)) assertFailsWith<E.Failure> { E.decodePolicy(mutate(original) { this[5][0] = tag.toByte() }) }
+        // The retired ninth classification field has no decoder or compatibility fallback.
+        assertFailsWith<E.Failure> { E.decodePolicy(mutate(original) { add(5, byteArrayOf(1, 0, 0, 0)) }) }
+        for (authority in listOf("bank", "scheme-operator")) {
+            val selected = hex(rows().first { it["authority"] == authority }["policy_hex"])
+            assertFailsWith<E.Failure> { E.decodePolicy(mutate(selected) { this[5].fill(0, this[5].size - 32) }) }
+        }
         for (index in 1..6) assertFailsWith<E.Failure> { E.decodeRequest(policy, mutate(hex(row["request_hex"])) { this[index] = ByteArray(this[index].size) }) }
-        val foreign = E.decodePolicy(hex(rows().first { it["authority"] == "bank-non-regulated" }["policy_hex"]))
+        val foreign = E.decodePolicy(hex(rows().first { it["authority"] == "scheme-operator" }["policy_hex"]))
         assertFailsWith<E.Failure> { E.decodeRequest(foreign, hex(row["request_hex"])) }
+        val sameScopeOtherAuthority = E.decodePolicy(mutate(original) { this[5][0] = 2 })
+        assertContentEquals(policy.scopeDigest(), sameScopeOtherAuthority.scopeDigest())
+        assertFailsWith<E.Failure> { E.decodeRequest(sameScopeOtherAuthority, hex(row["request_hex"])) }
     }
     @Test fun strictSignaturePointScalarAndFreshRequestBindingReject() {
         val row = rows().first(); val policy = E.decodePolicy(hex(row["policy_hex"])); val request = E.decodeRequest(policy, hex(row["request_hex"]))
@@ -120,9 +128,9 @@ class KagemushaEnrollmentEligibilityV1Test {
     }
     @Test fun unsignedMaximumsAndDefensiveCopiesPreserveOriginals() {
         val row = rows().first(); val input = hex(row["policy_hex"]); val policy = E.decodePolicy(input); val before = policy.originalBytes()
-        input.fill(0); policy.publicKey().fill(0); policy.networkId().fill(0); policy.authorityDigest().fill(0); policy.originalBytes().fill(0)
+        input.fill(0); policy.publicKey().fill(0); policy.networkId().fill(0); policy.scopeDigest().fill(0); policy.originalBytes().fill(0)
         assertContentEquals(before, policy.originalBytes())
-        val huge = E.decodePolicy(mutate(before) { this[4] = ByteArray(8) { 0xff.toByte() }; this[8] = ByteArray(8) { 0xff.toByte() } })
+        val huge = E.decodePolicy(mutate(before) { this[4] = ByteArray(8) { 0xff.toByte() }; this[7] = ByteArray(8) { 0xff.toByte() } })
         assertEquals(BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE), huge.maximumResponseMs)
         val original = hex(row["request_hex"]); val request = E.decodeRequest(policy, original)
         original.fill(0); request.nonce().fill(0); request.actorDigest().fill(0); request.operationDigest().fill(0)

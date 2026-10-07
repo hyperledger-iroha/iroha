@@ -44,6 +44,36 @@ pub(super) fn check_retained_load_event(
             )
             .unwrap();
         assert_eq!(evidence.verified().receipt(), original);
+        let raw = source
+            .event_path_for(
+                &memory.authority,
+                &original.scheme_id,
+                &original.wallet_id,
+                &original.request_id,
+            )
+            .unwrap();
+        assert_eq!(&raw, evidence.path());
+        assert!(
+            source
+                .event_path_for(
+                    &memory.registration.reserve,
+                    &original.scheme_id,
+                    &original.wallet_id,
+                    &original.request_id
+                )
+                .is_err()
+        );
+        assert!(
+            source
+                .event_path_for(
+                    &memory.authority,
+                    &original.scheme_id,
+                    &original.wallet_id,
+                    &[0xff; 32]
+                )
+                .is_err()
+        );
+
         assert_eq!(evidence.path().height(), original.block_height);
         assert_eq!(
             evidence.path().receipt_digest(),

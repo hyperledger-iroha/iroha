@@ -66,6 +66,9 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
   static func adoptRegistered(handle: UInt64, driver: KagemushaWalletNativeDriverV1, platform: KagemushaWalletApplePlatformV1) throws -> KagemushaWalletInstalledRuntimeV1 {
     .init(runtime:try KagemushaWalletRuntimeV1(nativeRuntimeHandle:handle,driver:driver,platformOwner:platform))
   }
+  static func adoptEnrolled(_ runtime: KagemushaWalletRuntimeV1) -> KagemushaWalletInstalledRuntimeV1 {
+    .init(runtime: runtime)
+  }
   public static func requireNoUnreleasedAdmissions() throws {
     failuresLock.lock(); defer{failuresLock.unlock()}
     failedCleanup.removeAll { $0.resourceReleased }
@@ -77,10 +80,10 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
   private func fenceCancellation() {
     condition.lock(); fenced=true; condition.unlock()
   }
-  private func startOpen(_ originals: KagemushaWalletOpenOriginalsV1) throws {
+  private func startOpen(_ frames: [Data]) throws {
     condition.lock(); defer { condition.unlock() }
     guard !fenced else { throw closeFailure ?? KagemushaWalletErrorV1.closed }
-    try admission.start(originals.originals)
+    try admission.start(frames)
   }
   private func failedOpen() {
     condition.lock(); defer { condition.unlock() }; admission.failed()
@@ -89,7 +92,7 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
     condition.lock(); defer { condition.unlock() }
     try admission.completed(); pendingOriginal=nil
   }
-  private func pendingForOpen(_ originals: KagemushaWalletOpenOriginalsV1) throws -> KagemushaWalletPendingOpenV1 {
+  private func pendingForOpen(_ begin: () throws -> KagemushaWalletPendingOpenV1) throws -> KagemushaWalletPendingOpenV1 {
     condition.lock()
     guard !fenced else {
       let failure=closeFailure ?? KagemushaWalletErrorV1.closed
@@ -98,7 +101,7 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
     if let retained=pendingOriginal { condition.unlock(); return retained }
     condition.unlock()
     // No InstalledRuntime condition is held across Native I/O or another owner's close lock.
-    let selected=try runtime.begin(originals)
+    let selected=try begin()
     condition.lock(); defer { condition.unlock() }
     guard !fenced else { throw closeFailure ?? KagemushaWalletErrorV1.closed }
     pendingOriginal=selected
@@ -114,18 +117,45 @@ public final class KagemushaWalletInstalledRuntimeV1: KagemushaWalletCleanupReso
     guard !fenced else { throw closeFailure ?? KagemushaWalletErrorV1.closed }
     return try admission.retainSignature(original)
   }
+  /// Worker-only. Native authenticates the signed FI session and transfers this same installed lease.
+  /// On refusal this owner remains retained for retry with the exact original session.
+  public func startEnrollment(session: KagemushaWalletEnrollmentSessionOriginalsV1) throws -> KagemushaWalletEnrollmentV1 {
+    condition.lock(); defer { condition.unlock() }
+    guard !fenced, admission.canTransferToEnrollment else { throw closeFailure ?? KagemushaWalletErrorV1.closed }
+    let enrollment = try runtime.startEnrollment(session)
+    fenced = true; closed = true
+    return enrollment
+  }
   /// Retry ordinary refusal with the same original frames, Native Pending and exact signature.
   /// Explicit Task cancellation retires custody; successful admission transfers it once.
   public func open(originals: KagemushaWalletOpenOriginalsV1,
+    signExistingAccount: @escaping @Sendable (Data) async throws -> Data,
+    requireCurrent: @escaping @Sendable () throws -> Void) async throws -> KagemushaWalletV1 {
+    try await openFrames(originals.originals, begin: { try self.runtime.begin(originals) },
+      signExistingAccount: signExistingAccount, requireCurrent: requireCurrent)
+  }
+  /// Reopen an exact persisted E6 result. Native selects the installed asset and authenticates
+  /// its credential/certificates with the original account and existing hardware/journal custody.
+  /// The expired enrollment session is neither replayed nor required for this fresh account open.
+  public func openEnrolledResult(resultOriginal: Data, accountOriginal: Data,
+    signExistingAccount: @escaping @Sendable (Data) async throws -> Data,
+    requireCurrent: @escaping @Sendable () throws -> Void) async throws -> KagemushaWalletV1 {
+    guard (1...KagemushaWalletEnrollmentV1.RESULT_MAX_BYTES).contains(resultOriginal.count),
+      (1...4096).contains(accountOriginal.count) else { throw KagemushaWalletErrorV1.invalidInput }
+    let result = Data([UInt8](resultOriginal)), account = Data([UInt8](accountOriginal))
+    return try await openFrames([result, account], begin: { try self.runtime.beginEnrolledResult(result, account: account) },
+      signExistingAccount: signExistingAccount, requireCurrent: requireCurrent)
+  }
+  private func openFrames(_ frames: [Data], begin: @escaping @Sendable () throws -> KagemushaWalletPendingOpenV1,
     signExistingAccount: @escaping @Sendable (Data) async throws -> Data,
     requireCurrent: @escaping @Sendable () throws -> Void) async throws -> KagemushaWalletV1 {
     try await withTaskCancellationHandler(operation:{
       var wallet: KagemushaWalletV1?
       var started=false
       do {
-        try Task.checkCancellation(); try Self.requireNoUnreleasedAdmissions(); try requireCurrent(); try startOpen(originals)
+        try Task.checkCancellation(); try Self.requireNoUnreleasedAdmissions(); try requireCurrent(); try startOpen(frames)
         started=true
-        let pending=try await walletAdmissionWorkerV1 { try requireCurrent(); return try self.pendingForOpen(originals) }
+        let pending=try await walletAdmissionWorkerV1 { try requireCurrent(); return try self.pendingForOpen(begin) }
         try Task.checkCancellation(); try requireCurrent(); try requireLive()
         guard pending.challenge.count==32 && pending.challenge.contains(where:{$0 != 0}) else { throw KagemushaWalletErrorV1.invalidNativeOutput }
         let signature: Data
@@ -188,6 +218,7 @@ internal final class KagemushaWalletInstalledAdmissionV1 {
   private var originalFrames: [Data]?
   private var retainedSignature: Data?
   private var active=false, transferred=false
+  var canTransferToEnrollment: Bool { !active && !transferred && originalFrames == nil }
   func start(_ frames: [Data]) throws {
     guard !active && !transferred else { throw KagemushaWalletErrorV1.closed }
     if let retained=originalFrames {

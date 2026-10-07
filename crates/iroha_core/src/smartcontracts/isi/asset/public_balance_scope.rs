@@ -181,14 +181,16 @@ mod direct_dataspace_home_tests {
         state::{State, World},
     };
     use iroha_data_model::block::BlockHeader;
+    use iroha_model_base::domain::DomainId;
     use iroha_test_samples::ALICE_ID;
 
     #[test]
     fn direct_home_resolves_bare_restricted_balance_without_rewriting_explicit_bucket() {
         let home = DataSpaceId::new(10);
         let foreign_bucket = DataSpaceId::new(12);
+        let domain = DomainId::try_new("cash", "universal").expect("id seed");
         let id = AssetDefinitionId::derive_from_components(
-            iroha_model_base::domain::DomainId::try_new("cash", "universal").expect("id seed"),
+            domain.clone(),
             "kina".parse().expect("name"),
         );
         let definition = AssetDefinition::numeric(
@@ -198,9 +200,9 @@ mod direct_dataspace_home_tests {
             None,
         )
         .build(&ALICE_ID);
-        let mut world = World::with([], [], [definition.clone()]);
+        let mut world = World::default();
         world
-            .set_asset_definition_dataspace_for_testing(id.clone(), home)
+            .insert_direct_asset_definition_with_assets_for_testing(definition.clone(), home, [])
             .expect("direct home fixture");
         let state = State::new(
             world,

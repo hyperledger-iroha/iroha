@@ -158,9 +158,15 @@ mod identifier_owner_routes {
         .unwrap();
         let replay = post(&router, &uri, headers, body).await;
         assert_eq!(replay.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            replay.headers()[axum::http::header::CONTENT_TYPE],
+            utils::NORITO_MIME_TYPE
+        );
+        let replay_error: ErrorEnvelope =
+            norito::decode_from_bytes(&response_bytes(replay).await).expect("Norito replay error");
         assert!(
-            String::from_utf8(response_bytes(replay).await.to_vec())
-                .unwrap()
+            replay_error
+                .message()
                 .contains("request nonce already used")
         );
 
@@ -404,9 +410,15 @@ mod identifier_owner_routes {
         assert!(execution.receipt.attestation.proof_b64.is_none());
         let replay = post(&router, &uri, headers, body).await;
         assert_eq!(replay.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            replay.headers()[axum::http::header::CONTENT_TYPE],
+            utils::NORITO_MIME_TYPE
+        );
+        let replay_error: ErrorEnvelope =
+            norito::decode_from_bytes(&response_bytes(replay).await).expect("Norito replay error");
         assert!(
-            String::from_utf8(response_bytes(replay).await.to_vec())
-                .unwrap()
+            replay_error
+                .message()
                 .contains("request nonce already used")
         );
     }

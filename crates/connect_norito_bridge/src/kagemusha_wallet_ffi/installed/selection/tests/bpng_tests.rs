@@ -69,6 +69,11 @@ impl BpngFixture {
             "schema",
             Value::String("bpng.current-wallet-core-runtime.v1".into()),
         );
+        mutate(
+            &mut base.runtime,
+            "enrollment_session",
+            bpng_session_selection(),
+        );
         for (name, value) in [
             ("python_path", "/usr/bin/python3"),
             ("openssl_path", "/usr/bin/openssl"),
@@ -79,6 +84,11 @@ impl BpngFixture {
             mutate(&mut base.runtime, name, Value::String("55".repeat(32)));
         }
         for name in ["android", "apple"] {
+            mutate(
+                object_mut(&mut base.runtime).get_mut(name).unwrap(),
+                "attestation_root_der_base64",
+                Value::String(STANDARD.encode(SESSION_ROOT)),
+            );
             mutate(
                 object_mut(&mut base.runtime).get_mut(name).unwrap(),
                 "verifier_configuration_path",
@@ -134,6 +144,206 @@ impl BpngFixture {
             key: self.0.key.public_key().clone(),
         }
     }
+}
+fn bpng_session_selection() -> Value {
+    let key = session_key(7);
+    let (_, public) = key.public_key().to_bytes();
+    norito::json!({"schema":("bpng.wallet-enrollment-session-selection.v1"),
+        "jwt_issuer":("https://bpng-core.soramitsu.io/mibank"),
+        "jwt_audience":("mibank.bpng"), "fi_id":("mibank.bpng"),
+        "jwt_public_key_hex":(hex::encode(public))})
+}
+fn bpng_claims() -> Value {
+    norito::json!({"sub":("owner@example.test"), "dataspace_id":("mibank.bpng"),
+        "roles":["RETAIL_USER"], "iat":(1000), "nbf":(1000), "exp":(2000),
+        "iss":("https://bpng-core.soramitsu.io/mibank"), "aud":("mibank.bpng")})
+}
+fn bpng_token(claims: &Value, key: &KeyPair) -> Vec<u8> {
+    let header = URL_SAFE_NO_PAD.encode(br#"{"typ":"JWT","alg":"EdDSA"}"#);
+    let claims = URL_SAFE_NO_PAD.encode(norito::json::to_json(claims).unwrap().as_bytes());
+    let message = format!("{header}.{claims}");
+    let signature = Signature::try_new(key.private_key(), message.as_bytes()).unwrap();
+    format!("{message}.{}", URL_SAFE_NO_PAD.encode(signature.payload())).into_bytes()
+}
+
+#[test]
+fn bpng_session_authenticates_actual_retail_claims_and_exact_signed_release() {
+    let fixture = BpngFixture::new();
+    let selected = fixture.load().unwrap();
+    let token = bpng_token(&bpng_claims(), &session_key(7));
+    for android in [true, false] {
+        let originals = [token.as_slice(), b"", SESSION_ROOT];
+        let session = selected.enrollment_session(android, originals).unwrap();
+        assert!(session.matches(originals));
+        assert_eq!(session.config.actor, b"owner@example.test");
+        assert_eq!(session.config.fi, b"mibank.bpng");
+        assert_eq!(
+            session.config.service_origin,
+            b"https://bpng-core.soramitsu.io/mibank"
+        );
+        assert_eq!(
+            session.config.release,
+            BlobV1::of(&fixture.originals().0).sha256
+        );
+        assert_eq!(session.config.session_valid_from_ms, 1_000_000);
+        assert_eq!(session.config.session_expires_at_ms, 2_000_000);
+    }
+    // Re-signing a changed public selection produces a different release preimage.
+    let mut other = BpngFixture::new();
+    mutate(
+        &mut other.0.app,
+        "generatedAt",
+        Value::String("2026-09-13T00:00:00Z".into()),
+    );
+    let other = other.load().unwrap();
+    assert_ne!(
+        selected
+            .enrollment_session(true, [&token, b"", SESSION_ROOT])
+            .unwrap()
+            .config
+            .release,
+        other
+            .enrollment_session(true, [&token, b"", SESSION_ROOT])
+            .unwrap()
+            .config
+            .release,
+    );
+}
+
+#[test]
+fn bpng_session_rejects_wrong_signer_modified_token_root_and_foreign_proof() {
+    let selected = BpngFixture::new().load().unwrap();
+    let token = bpng_token(&bpng_claims(), &session_key(7));
+    let mut tampered = token.clone();
+    tampered[10] ^= 1;
+    for bad in [
+        bpng_token(&bpng_claims(), &session_key(8)),
+        tampered,
+        vec![b'x'; 16_385],
+    ] {
+        assert!(
+            selected
+                .enrollment_session(true, [&bad, b"", SESSION_ROOT])
+                .is_err()
+        );
+    }
+    assert!(
+        selected
+            .enrollment_session(true, [&token, b"", b"wrong root"])
+            .is_err()
+    );
+    assert!(
+        selected
+            .enrollment_session(true, [&token, b"offered DPoP", SESSION_ROOT])
+            .is_err()
+    );
+    // Product selection, not an empty frame supplied by managed code, selects BPNG.
+    let cbsi = BaseFixture::new().load().unwrap();
+    assert!(
+        cbsi.enrollment_session(true, [&token, b"", SESSION_ROOT])
+            .is_err()
+    );
+}
+
+#[test]
+fn bpng_session_rejects_resigned_foreign_incomplete_and_invalid_claims() {
+    let selected = BpngFixture::new().load().unwrap();
+    let claims = bpng_claims();
+    let mut mutations = Vec::new();
+    for (name, value) in [
+        ("iss", Value::String("cbsi-fi-core-anz".into())),
+        ("aud", Value::String("anz.cbsi".into())),
+        ("dataspace_id", Value::String("bpng".into())),
+        ("sub", Value::String(" owner@example.test".into())),
+        ("roles", norito::json!(["FI_ADMIN"])),
+        ("roles", norito::json!(["RETAIL_USER", "FI_ADMIN"])),
+        ("nbf", norito::json!(1001)),
+        ("exp", norito::json!(1000)),
+        ("iat", norito::json!(0)),
+        ("cnf", norito::json!({"jkt":("unselected")})),
+    ] {
+        let mut changed = claims.clone();
+        mutate(&mut changed, name, value);
+        mutations.push(changed);
+    }
+    for name in claims.as_object().unwrap().keys() {
+        let mut changed = claims.clone();
+        object_mut(&mut changed).remove(name);
+        mutations.push(changed);
+    }
+    for changed in mutations {
+        let token = bpng_token(&changed, &session_key(7));
+        assert!(
+            selected
+                .enrollment_session(true, [&token, b"", SESSION_ROOT])
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn bpng_public_session_selection_has_no_unsigned_or_unknown_field_fallback() {
+    let selection = bpng_session_selection();
+    for name in selection.as_object().unwrap().keys() {
+        let mut fixture = BpngFixture::new();
+        let offered = object_mut(&mut fixture.0.runtime)
+            .get_mut("enrollment_session")
+            .unwrap();
+        object_mut(offered).remove(name);
+        assert!(fixture.load().is_err());
+    }
+    for (name, value) in [
+        ("jwt_public_key_hex", Value::String("00".repeat(32))),
+        ("fi_id", Value::String("anz.cbsi".into())),
+        (
+            "jwt_issuer",
+            Value::String("https://unselected.example".into()),
+        ),
+        ("jwt_audience", Value::String("bpng".into())),
+        (
+            "schema",
+            Value::String("cbsi.fi-session-enrollment-selection.v1".into()),
+        ),
+        ("caller_authorized", Value::Bool(true)),
+    ] {
+        let mut fixture = BpngFixture::new();
+        let offered = object_mut(&mut fixture.0.runtime)
+            .get_mut("enrollment_session")
+            .unwrap();
+        mutate(offered, name, value);
+        assert!(fixture.load().is_err());
+    }
+    let mut fixture = BpngFixture::new();
+    object_mut(&mut fixture.0.runtime).remove("enrollment_session");
+    assert!(fixture.load().is_err());
+}
+
+#[test]
+fn bpng_public_roots_must_match_the_actual_signed_enrollment_policy() {
+    for name in ["android", "apple"] {
+        for replacement in [None, Some(""), Some("YQ=="), Some("YQ"), Some(" YQ==")] {
+            let mut fixture = BpngFixture::new();
+            let platform = object_mut(object_mut(&mut fixture.0.runtime).get_mut(name).unwrap());
+            if let Some(value) = replacement {
+                platform.insert(
+                    "attestation_root_der_base64".into(),
+                    Value::String(value.into()),
+                );
+            } else {
+                platform.remove("attestation_root_der_base64");
+            }
+            assert!(fixture.load().is_err());
+        }
+    }
+    let selected = BpngFixture::new().load().unwrap();
+    let mut claims = bpng_claims();
+    mutate(&mut claims, "sub", Value::String("a".repeat(257)));
+    let token = bpng_token(&claims, &session_key(7));
+    assert!(
+        selected
+            .enrollment_session(true, [&token, b"", SESSION_ROOT])
+            .is_err()
+    );
 }
 fn bpng_sign(key: &KeyPair, app: &[u8]) -> Vec<u8> {
     let mut message = b"bpng:taira-app-runtime-manifest:v7\0".to_vec();
@@ -297,6 +507,11 @@ fn bpng_signed_projection_refuses_foreign_network_asset_routes_and_service() {
         ("digitalKina", "scale", Value::from(3u64)),
         ("digitalKina", "physicalLaneId", Value::from(8u64)),
         ("routing", "physicalLaneId", Value::from(42u64)),
+        (
+            "routing",
+            "mibankAliasScope",
+            Value::String("mibank".into()),
+        ),
         (
             "services",
             "coreApiUrl",
@@ -611,6 +826,51 @@ fn bpng_full_financial_record_is_closed_and_binds_actual_whole_originals() {
     assert!(fixture.load().is_err());
 }
 #[test]
+fn bpng_v7_rejects_obsolete_retail_policy_even_with_authentic_signature() {
+    for offered in [0, 7] {
+        let mut baseline = BpngFixture::new();
+        if offered == 0 {
+            baseline.1 = Value::Null;
+        }
+        assert!(
+            !object(&baseline.0.app)
+                .unwrap()
+                .contains_key("retailPolicy")
+        );
+        let (app, envelope, runtime) = baseline.originals();
+        baseline
+            .load_offered(&app, &envelope, &runtime, offered)
+            .unwrap();
+        for obsolete in [
+            Value::Null,
+            norito::json!({}),
+            norito::json!({
+                "dataspaceAlias": ("mibank.bpng"),
+                "identityDailyLimitKina": ("1000"),
+                "nativePolicySelection": (norito::json!({
+                    "activationEntryHash": ("bb".repeat(32)),
+                    "activationOwnerAccountId": ("obsolete-policy-owner"),
+                    "policySha256": ("cc".repeat(32))
+                }))
+            }),
+        ] {
+            let mut document = json(&app, APP_MANIFEST_MAX, true).unwrap();
+            object_mut(&mut document).insert("retailPolicy".into(), obsolete);
+            let document = canonical(&document);
+            // Re-sign every obsolete offer with the exact selected v7 authority.
+            let signature = bpng_sign(&baseline.0.key, &document);
+            assert!(matches!(
+                baseline.load_offered(&document, &signature, &runtime, offered),
+                Err(Failure {
+                    status: INVALID,
+                    ..
+                })
+            ));
+        }
+    }
+}
+
+#[test]
 fn bpng_asset_is_bound_to_signed_current_native_original_not_a_retired_identifier() {
     let fixture = BpngFixture::with_asset("7ZepsJTHCVLKsrFFNZGSRGZgvBhv");
     assert_eq!(
@@ -706,4 +966,162 @@ fn bpng_v7_rejects_retired_v6_application_and_signature_domains() {
             .load_originals(&app, &canonical(&previous), &runtime)
             .is_err()
     );
+}
+
+fn first_device_authentication_selection() -> Value {
+    // Public metadata fixtures confer no authenticated-original or wallet authority.
+    norito::json!({"schema":("bpng.first-device-auth-runtime-selection.v1"),"googleOAuthClientId":("fixture-client.apps.googleusercontent.com"),"googleOAuthIssuer":("https://accounts.google.com"),"integrityCloudProjectNumber":(123456789),"originalAuthPolicySha256":("11".repeat(32)),"verifierConfigurationSha256":("22".repeat(32)),"googlePolicySha256":("33".repeat(32))})
+}
+fn accepts_signed_authentication_selection(selection: Value) -> bool {
+    let key = KeyPair::from_seed(vec![15; 32], Algorithm::Ed25519);
+    let trust = RuntimeTrust {
+        authority: RuntimeAuthority::BpngTairaV7,
+        key: key.public_key().clone(),
+    };
+    let mut app: Value = norito::json::from_slice(include_bytes!("bpng_app_v6.json")).unwrap();
+    mutate(&mut app, "firstDeviceAuthentication", selection);
+    let bytes = canonical(&app);
+    signed_app(&trust, &bytes, &bpng_sign(&key, &bytes)).is_ok()
+}
+#[test]
+fn signed_authentication_selection_requires_exact_current_fields_and_types() {
+    let selection = first_device_authentication_selection();
+    assert!(accepts_signed_authentication_selection(selection.clone()));
+    let Value::Object(map) = &selection else {
+        panic!("fixture object")
+    };
+    for field in map.keys() {
+        let mut changed = map.clone();
+        changed.remove(field);
+        assert!(!accepts_signed_authentication_selection(Value::Object(
+            changed
+        )));
+    }
+    let mut changed = selection.clone();
+    mutate(&mut changed, "authorized", Value::Bool(true));
+    assert!(!accepts_signed_authentication_selection(changed));
+    for invalid in [
+        Value::Null,
+        Value::Bool(true),
+        Value::String("selection".into()),
+        Value::Array(vec![]),
+    ] {
+        assert!(!accepts_signed_authentication_selection(invalid));
+    }
+    for invalid in [
+        Value::String("bpng.first-device-auth-runtime-selection.v2".into()),
+        Value::from(1_u64),
+        Value::Null,
+    ] {
+        let mut changed = selection.clone();
+        mutate(&mut changed, "schema", invalid);
+        assert!(!accepts_signed_authentication_selection(changed));
+    }
+    let key = KeyPair::from_seed(vec![15; 32], Algorithm::Ed25519);
+    let mut missing: Value = norito::json::from_slice(include_bytes!("bpng_app_v6.json")).unwrap();
+    object_mut(&mut missing).remove("firstDeviceAuthentication");
+    let bytes = canonical(&missing);
+    assert!(
+        signed_app(
+            &RuntimeTrust {
+                authority: RuntimeAuthority::BpngTairaV7,
+                key: key.public_key().clone()
+            },
+            &bytes,
+            &bpng_sign(&key, &bytes)
+        )
+        .is_err()
+    );
+}
+#[test]
+fn signed_authentication_oauth_strings_enforce_exact_issuer_and_ascii_client_bounds() {
+    for (field, valid) in [
+        ("googleOAuthClientId", "!".into()),
+        ("googleOAuthClientId", "~".repeat(1024)),
+        ("googleOAuthIssuer", "accounts.google.com".into()),
+        ("googleOAuthIssuer", "https://accounts.google.com".into()),
+    ] {
+        let mut selection = first_device_authentication_selection();
+        mutate(&mut selection, field, Value::String(valid));
+        assert!(accepts_signed_authentication_selection(selection));
+    }
+    for (field, invalid) in [
+        ("googleOAuthClientId", "".into()),
+        ("googleOAuthClientId", "x".repeat(1025)),
+        ("googleOAuthClientId", "client id".into()),
+        ("googleOAuthClientId", "client\n".into()),
+        ("googleOAuthClientId", "\u{7f}".into()),
+        ("googleOAuthClientId", "é".into()),
+        ("googleOAuthIssuer", "http://accounts.google.com".into()),
+        ("googleOAuthIssuer", "https://accounts.google.com/".into()),
+        (
+            "googleOAuthIssuer",
+            "https://accounts.google.com.evil".into(),
+        ),
+        ("googleOAuthIssuer", " accounts.google.com".into()),
+    ] {
+        let mut selection = first_device_authentication_selection();
+        mutate(&mut selection, field, Value::String(invalid));
+        assert!(!accepts_signed_authentication_selection(selection));
+    }
+    for field in ["googleOAuthClientId", "googleOAuthIssuer"] {
+        for invalid in [
+            Value::from(123_u64),
+            Value::Bool(true),
+            Value::Null,
+            Value::Array(vec![]),
+        ] {
+            let mut selection = first_device_authentication_selection();
+            mutate(&mut selection, field, invalid);
+            assert!(!accepts_signed_authentication_selection(selection));
+        }
+    }
+}
+#[test]
+fn signed_authentication_project_requires_a_positive_safe_json_integer() {
+    for valid in [1_u64, 9_007_199_254_740_991] {
+        let mut selection = first_device_authentication_selection();
+        mutate(
+            &mut selection,
+            "integrityCloudProjectNumber",
+            Value::from(valid),
+        );
+        assert!(accepts_signed_authentication_selection(selection));
+    }
+    for invalid in [
+        Value::from(-1_i64),
+        Value::from(0_u64),
+        Value::from(1.5_f64),
+        Value::from(9_007_199_254_740_992_u64),
+        Value::String("1".into()),
+        Value::Bool(true),
+        Value::Null,
+    ] {
+        let mut selection = first_device_authentication_selection();
+        mutate(&mut selection, "integrityCloudProjectNumber", invalid);
+        assert!(!accepts_signed_authentication_selection(selection));
+    }
+}
+#[test]
+fn signed_authentication_original_pins_require_typed_nonzero_lowercase_digests() {
+    for field in [
+        "originalAuthPolicySha256",
+        "verifierConfigurationSha256",
+        "googlePolicySha256",
+    ] {
+        for invalid in [
+            Value::String("0".repeat(64)),
+            Value::String("A".repeat(64)),
+            Value::String("g".repeat(64)),
+            Value::String("a".repeat(63)),
+            Value::String("a".repeat(65)),
+            Value::from(123_u64),
+            Value::Bool(false),
+            Value::Null,
+        ] {
+            let mut selection = first_device_authentication_selection();
+            mutate(&mut selection, field, invalid);
+            assert!(!accepts_signed_authentication_selection(selection));
+        }
+    }
 }

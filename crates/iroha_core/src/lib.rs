@@ -551,7 +551,7 @@ pub(crate) mod execution_output_test_support;
 mod frame_identity_tests;
 #[cfg(test)]
 pub(crate) mod ivm_test_support;
-#[cfg(test)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) mod manifest_signing_test_support;
 #[cfg(test)]
 pub(crate) mod unit_test_support;

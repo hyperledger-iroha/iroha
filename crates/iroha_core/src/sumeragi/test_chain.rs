@@ -25,6 +25,12 @@ mod genesis_policy;
 #[cfg(test)]
 pub(crate) mod kagemusha_setup;
 mod local_certificate;
+#[path = "test_chain/retail_multisig.rs"]
+mod retail_multisig;
+/// Genuine monthly-fee multisig transfer evidence for downstream integration tests.
+pub use retail_multisig::{
+    NativeRetailMultisigTransferFixture, native_retail_multisig_transfer_fixture,
+};
 #[cfg(test)]
 pub(crate) use genesis_policy::{signed_genesis_fixture_for_state, staged_genesis_policies};
 

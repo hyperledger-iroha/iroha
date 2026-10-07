@@ -3,7 +3,9 @@
 use super::*;
 use crate::kagemusha_wallet_v1::enrollment_journal::{permit_tests, tests::initialized};
 use iroha_crypto::{Algorithm, KeyPair, Signature};
-use iroha_data_model::kagemusha::KagemushaEligibilityResponseBodyV1;
+use iroha_data_model::kagemusha::{
+    KagemushaEligibilityAuthorityV1, KagemushaEligibilityResponseBodyV1,
+};
 
 fn signer() -> KeyPair {
     KeyPair::from_seed(vec![32; 32], Algorithm::Ed25519)

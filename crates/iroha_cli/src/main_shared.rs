@@ -41,6 +41,7 @@ mod sumeragi;
 mod taira;
 mod taira_dataspace_deploy;
 mod taira_public_reset;
+mod transaction_journal;
 mod transaction_load;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
@@ -1516,6 +1517,7 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     };
     let args = Args::from_arg_matches(&matches)
         .map_err(|err| Report::new(MainError::CliArgs(err.render().to_string())))?;
+    transaction_journal::validate_globals(&args).map_err(|error| command_error_report(&error))?;
     if let Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(command))) =
         &args.command
         && command.is_artifact_tool()
@@ -3417,8 +3419,9 @@ mod asset {
                 assert!(global.registration.global_home);
                 let domain = DomainId::try_new("issuer", "public").expect("canonical domain");
                 let literal = domain.to_string();
-                let parsed = Parser::try_parse_from(base.into_iter().chain(["--domain", literal.as_str()]))
-                    .expect("canonical fully-qualified domain home");
+                let parsed =
+                    Parser::try_parse_from(base.into_iter().chain(["--domain", literal.as_str()]))
+                        .expect("canonical fully-qualified domain home");
                 assert_eq!(parsed.registration.domain, Some(domain));
                 assert!(parsed.registration.dataspace.is_none());
                 assert!(!parsed.registration.global_home);
@@ -3430,8 +3433,11 @@ mod asset {
                     " issuer.public",
                     "issuer.public ",
                 ] {
-                    let error = Parser::try_parse_from(base.into_iter().chain(["--domain", literal]))
-                        .expect_err("bare or invalid domain home must fail during argument parsing");
+                    let error =
+                        Parser::try_parse_from(base.into_iter().chain(["--domain", literal]))
+                            .expect_err(
+                                "bare or invalid domain home must fail during argument parsing",
+                            );
                     assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
                 }
             }
@@ -4940,6 +4946,12 @@ mod transaction {
     };
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
+        /// Quote and sign stdin instructions into a new private journal without submitting.
+        Prepare(crate::transaction_journal::JournalArgs),
+        /// Dispatch the retained transaction once, or recover an earlier attempt read-only.
+        Submit(crate::transaction_journal::JournalArgs),
+        /// Read-only recovery of the exact retained transaction and committed envelope.
+        Resume(crate::transaction_journal::JournalArgs),
         /// Read the typed pipeline status of a submitted transaction
         Status(Status),
         /// Retrieve details of a specific transaction
@@ -4961,6 +4973,9 @@ mod transaction {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
             match self {
+                Prepare(args) => crate::transaction_journal::prepare(args, context),
+                Submit(args) => crate::transaction_journal::submit(args, context),
+                Resume(args) => crate::transaction_journal::resume(args, context),
                 Status(cmd) => cmd.run(context),
                 Get(cmd) => cmd.run(context),
                 List(cmd) => cmd.run(context),

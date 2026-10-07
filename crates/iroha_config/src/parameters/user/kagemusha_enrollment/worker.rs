@@ -40,14 +40,20 @@ pub struct KagemushaEnrollmentGoogle {
 }
 
 impl KagemushaEnrollmentWorker {
-    pub(super) fn checked(self, platform: KagemushaWalletEnrollmentPlatformV1)
-        -> Result<actual::KagemushaEnrollmentWorker, &'static str>
-    {
+    pub(super) fn checked(
+        self,
+        platform: KagemushaWalletEnrollmentPlatformV1,
+    ) -> Result<actual::KagemushaEnrollmentWorker, &'static str> {
         if !(1..=300_000).contains(&self.exchange_timeout_ms) {
             return Err("private verifier exchange timeout is outside its bound");
         }
-        for path in [&self.python_executable, &self.verifier_archive, &self.openssl_executable,
-            &self.attestation_root, &self.store_directory] {
+        for path in [
+            &self.python_executable,
+            &self.verifier_archive,
+            &self.openssl_executable,
+            &self.attestation_root,
+            &self.store_directory,
+        ] {
             absolute_path(path)?;
         }
         let google = match (platform, self.google) {
@@ -87,6 +93,7 @@ impl std::fmt::Debug for KagemushaEnrollmentWorker {
 }
 impl std::fmt::Debug for KagemushaEnrollmentGoogle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KagemushaEnrollmentGoogle").finish_non_exhaustive()
+        f.debug_struct("KagemushaEnrollmentGoogle")
+            .finish_non_exhaustive()
     }
 }

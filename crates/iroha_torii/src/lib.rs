@@ -69,6 +69,8 @@ mod identifier_resolution;
 mod iso_profile;
 #[cfg(feature = "app_api")]
 mod kagemusha_wallet;
+#[cfg(feature = "app_api")]
+mod kagemusha_enrollment;
 mod ledger_state_finality;
 mod multisig_execution_evidence;
 mod native_projection_response;
@@ -2486,6 +2488,8 @@ struct AppState {
     musubi_search: Arc<RwLock<iroha_core::musubi_search::MusubiSearchIndexV1>>,
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_enrollment: Option<Arc<kagemusha_enrollment::EnrollmentService>>,
     kiso: KisoHandle,
     query_service: LiveQueryStoreHandle,
     query_inflight: Arc<tokio::sync::Semaphore>,
@@ -16681,9 +16685,8 @@ mod direct_dataspace_definition_query_scope_tests {
             None,
         )
         .build(&iroha_test_samples::ALICE_ID);
-        world = iroha_core::state::World::with([], [], [definition]);
         world
-            .set_asset_definition_dataspace_for_testing(id.clone(), home)
+            .insert_direct_asset_definition_with_assets_for_testing(definition, home, [])
             .expect("direct home fixture");
         assert_eq!(
             resolve_asset_definition_scope_in_world(&world.view(), &id),
@@ -34876,6 +34879,8 @@ pub struct Torii {
     private_settlement_runtime: private_settlement::PrivateSettlementToriiRuntimeV1,
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_enrollment: Option<Arc<kagemusha_enrollment::EnrollmentService>>,
     telemetry: routing::MaybeTelemetry,
     online_peers: OnlinePeersProvider,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -37508,6 +37513,8 @@ impl Torii {
             SORAFS_RESERVE_POLICY_PROOF_GET => canonical_signature_get(reserve_policy_proof::handler);
             SORAFS_RESERVE_ACCOUNT_PROOF_GET => canonical_signature_get(reserve_account_proof::handler);
             KAGEMUSHA_LOAD_ISSUANCE_GET => canonical_signature_get(kagemusha_wallet::handler);
+            KAGEMUSHA_ENROLLMENT_POST => limited_canonical_signature_post(kagemusha_enrollment::handler, iroha_torii_shared::kagemusha_enrollment::ENROLLMENT_SERVICE_REQUEST_MAX_BYTES_V1);
+            KAGEMUSHA_LOAD_EVENT_PROOF_GET => canonical_signature_get(kagemusha_wallet::event_handler);
             SORAFS_RESERVE_PROVIDERS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers);
             SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider);
             SORAFS_RESERVE_TOP_UP_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up, contracts_body_limit);
@@ -38687,6 +38694,7 @@ impl Torii {
             // the next Strict restart; Fast never opens their journals or
             // starts their mutation workers.
             config.privacy_bootle_lantern_issuer = None;
+            config.kagemusha_enrollment = None;
             config.webhooks_enabled = false;
             config.zk_attachments_enabled = false;
             config.zk_prover_enabled = false;
@@ -40133,6 +40141,21 @@ impl Torii {
                     "request body limit does not fit the platform address space",
                 )
             })?;
+        #[cfg(not(feature = "app_api"))]
+        if config.kagemusha_enrollment.is_some() {
+            return Err(ToriiBuildError::invalid_configuration(
+                "kagemusha_enrollment",
+                "enrollment requires the shipping app_api surface",
+            ));
+        }
+        #[cfg(feature = "app_api")]
+        let kagemusha_enrollment = config
+            .kagemusha_enrollment
+            .clone()
+            .map(|selected| kagemusha_enrollment::EnrollmentService::open(state.clone(), selected))
+            .transpose()
+            .map_err(|error| ToriiBuildError::component_initialization("kagemusha_enrollment", error))?
+            .map(Arc::new);
         let torii = Self {
             build_identity,
             chain_id: Arc::new(chain_id),
@@ -40151,6 +40174,8 @@ impl Torii {
             #[cfg(feature = "app_api")]
             private_settlement_runtime,
             bootle_lantern_issuance_runtime,
+            #[cfg(feature = "app_api")]
+            kagemusha_enrollment,
             online_peers,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_telemetry_urls,
@@ -41080,6 +41105,8 @@ impl Torii {
             #[cfg(feature = "app_api")]
             musubi_search: self.musubi_search.clone(),
             bootle_lantern_issuance_runtime: self.bootle_lantern_issuance_runtime.clone(),
+            #[cfg(feature = "app_api")]
+            kagemusha_enrollment: self.kagemusha_enrollment.clone(),
             kiso: self.kiso.clone(),
             query_service: self.query_service.clone(),
             query_inflight,
@@ -41593,6 +41620,9 @@ impl Torii {
         #[cfg(feature = "app_api")]
         sorafs::stream_token_cleanup::register_worker(app_state.as_ref(), &mut workers)
             .expect("prepared test stream-token cleanup must retain its worker handle");
+        #[cfg(feature = "app_api")]
+        kagemusha_enrollment::register_worker(app_state.as_ref(), shutdown_signal.clone(), &mut workers)
+            .expect("prepared test enrollment service must retain its worker handle");
         Ok(TestApiRouterRuntime {
             router,
             shutdown_signal,
@@ -41707,6 +41737,19 @@ impl Torii {
                 failure,
             )
             .await);
+        }
+        #[cfg(feature = "app_api")]
+        if let Err(reason) = kagemusha_enrollment::register_worker(
+            app_state.as_ref(),
+            shutdown_signal.clone(),
+            &mut critical_workers,
+        ) {
+            let failure = Report::new(Error::StartServer).attach(reason);
+            return Err(rollback_torii_startup_workers(
+                &shutdown_signal,
+                critical_workers,
+                failure,
+            ).await);
         }
         if !emergency_fast && let Some(runtime) = self.iso_bridge.clone() {
             let task = match start_iso_bridge_projection_worker(

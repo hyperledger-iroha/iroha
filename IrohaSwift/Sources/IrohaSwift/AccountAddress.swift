@@ -1344,6 +1344,18 @@ extension AccountAddress {
         return writer.data
     }
 
+    // Full AccountId frame callers still perform framing, checksum and byte-for-byte checks.
+    static func fromCanonicalCompactAccountPayload(_ payload: Data) throws -> AccountAddress {
+        let (controller, addressClass) = try decodeCompactNoritoAccountControllerPayload(payload)
+        let address = AccountAddress(header: try AddressHeader.new(version: 0,
+            classId: addressClass, normVersion: 1), controller: controller, rawCanonicalBytes: nil)
+        let validated = try fromCanonicalBytes(address.canonicalBytes())
+        guard try validated.compactNoritoAccountControllerPayload() == payload else {
+            throw AccountAddressError.invalidLength
+        }
+        return validated
+    }
+
     /// Returns whether `payload` is one exact compact-Norito `AccountId`
     /// controller encoding supported by this SDK build.
     static func isCanonicalCompactNoritoAccountControllerPayload(_ payload: Data) -> Bool {

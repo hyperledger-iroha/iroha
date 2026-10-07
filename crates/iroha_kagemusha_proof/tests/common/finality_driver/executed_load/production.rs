@@ -2,6 +2,7 @@
 use super::*;
 
 /// Independently selected completed canonical source graph, never a live producer.
+#[derive(Clone, Copy)]
 pub struct SourceSelection<'a> {
     /// Existing completed source-only compiler directory, held exclusively while proving.
     pub root: &'a Path,

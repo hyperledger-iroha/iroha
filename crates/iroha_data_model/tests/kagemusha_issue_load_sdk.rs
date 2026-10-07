@@ -1,4 +1,4 @@
-//! Production IssueLoad codec and SDK-frame parity through public model/registry APIs.
+//! Production `IssueLoad` codec and SDK-frame parity through public model/registry APIs.
 //!
 //! These checks cover canonical framing, typed fields and dispatch only. They do not
 //! establish issuer authority, ledger execution/finality, Native wallet readiness or

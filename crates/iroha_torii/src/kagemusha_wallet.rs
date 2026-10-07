@@ -14,6 +14,7 @@ impl AsRef<[u8]> for IssuanceBody {
     }
 }
 const ROUTE: &str = "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}";
+const EVENT_ROUTE: &str = "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/event-proof";
 fn selector(value: &str) -> Result<[u8; 32], Error> {
     let mut bytes = [0; 32];
     if value.len() != 64
@@ -43,6 +44,36 @@ pub(crate) async fn handler(
     uri: axum::http::Uri,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    read(
+        app, scheme, wallet, request, headers, method, uri, remote, false,
+    )
+    .await
+}
+pub(crate) async fn event_handler(
+    State(app): State<SharedAppState>,
+    axum::extract::Path((scheme, wallet, request)): axum::extract::Path<(String, String, String)>,
+    headers: HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    read(
+        app, scheme, wallet, request, headers, method, uri, remote, true,
+    )
+    .await
+}
+async fn read(
+    app: SharedAppState,
+    scheme: String,
+    wallet: String,
+    request: String,
+    headers: HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    remote: std::net::SocketAddr,
+    event: bool,
+) -> Result<AxResponse, Error> {
+    let route = if event { EVENT_ROUTE } else { ROUTE };
     let scheme = selector(&scheme)?;
     let wallet = selector(&wallet)?;
     let request = selector(&request)?;
@@ -75,7 +106,7 @@ pub(crate) async fn handler(
     ) {
         return Ok((StatusCode::NOT_ACCEPTABLE, "Accept application/x-norito").into_response());
     }
-    let key = rate_limit_key(&headers, Some(remote.ip()), ROUTE, principal);
+    let key = rate_limit_key(&headers, Some(remote.ip()), route, principal);
     rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     let bytes = app.query_fanout_working_set_bytes;
@@ -96,17 +127,32 @@ pub(crate) async fn handler(
                 .try_reserve_bytes(maximum * 4)
                 .map_err(|_| crate::native_projection_response::capacity())?;
             let view = state.view();
-            let receipt = CommittedLoadReceipts::new(&view, maximum, limits)
-                .map_err(|_| unavailable())?
-                .receipt_for(&payer, &scheme, &wallet, &request)
-                .map_err(|_| unavailable())?;
-            let body = IssuanceBody {
-                bytes: crate::native_projection_response::encode_canonical(
-                    &receipt,
-                    maximum,
+            let source =
+                CommittedLoadReceipts::new(&view, maximum, limits).map_err(|_| unavailable())?;
+            let bytes = if event {
+                let path = source
+                    .event_path_for(&payer, &scheme, &wallet, &request)
+                    .map_err(|_| unavailable())?;
+                let proof = path.proof().map_err(|_| unavailable())?;
+                crate::native_projection_response::encode_canonical(
+                    &proof,
+                    maximum.min(8192),
                     &budget,
                     unavailable,
-                )?,
+                )?
+            } else {
+                let receipt = source
+                    .receipt_for(&payer, &scheme, &wallet, &request)
+                    .map_err(|_| unavailable())?;
+                crate::native_projection_response::encode_canonical(
+                    &receipt,
+                    maximum.min(512),
+                    &budget,
+                    unavailable,
+                )?
+            };
+            let body = IssuanceBody {
+                bytes,
                 _memory: memory,
             };
             let mut response = AxResponse::new(Body::from(Bytes::from_owner(body)));
@@ -121,7 +167,7 @@ pub(crate) async fn handler(
         app.as_ref(),
         &headers,
         Some(remote.ip()),
-        ROUTE,
+        route,
         response,
         true,
     )

@@ -9,14 +9,21 @@ use super::*;
 /// must fail closed on missing/replaced runtime handles, revoked policy and unknown outcomes.
 /// A test implementation proves orchestration only, never real provider/platform qualification.
 pub trait EnrollmentIssuerRuntimeV1 {
+    /// Actual transport original consumed by this deployment verifier, never an account verdict.
+    type Call: ?Sized;
     /// Fresh authenticated operator selection, including explicit revocation/removal.
     fn current_configuration(&mut self) -> Result<Arc<KagemushaEnrollmentIssuer>>;
     /// Admit the actual current transport, prepared worker and rooted signer owners.
     /// Checking strings or hashes alone does not satisfy this requirement.
     fn require_dependencies(&mut self, config: &KagemushaEnrollmentIssuer) -> Result<()>;
     /// Verify the actual Torii signature/witness, exact network/method/path/body, freshness and
-    /// replay. The body must be exactly `expected_body`; a bare account header is insufficient.
-    fn authenticate_call(&mut self, call: &[u8], expected_body: &[u8]) -> Result<AccountId>;
+    /// replay. The signature must cover the entire operation envelope and its exact `expected_dispatch`;
+    /// a bare account header or unsigned extracted dispatch is insufficient.
+    fn authenticate_call(
+        &mut self,
+        call: &Self::Call,
+        expected_dispatch: &[u8],
+    ) -> Result<AccountId>;
     /// Actual UTC clock observation; failures and rollback abort the operation.
     fn now_ms(&mut self) -> Result<u64>;
     /// Exchange one bounded canonical eligibility request through this exact configured HTTPS

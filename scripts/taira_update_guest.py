@@ -851,6 +851,15 @@ def checkpoint_barrier(observation, *, stopped=False, prior=None):
             'standalone_native_manifest_verification': False}
 
 
+def native_log_words(message):
+    """Match Rust str::split_whitespace (Unicode White_Space), not Python's C0 extras."""
+    return re.findall(r'[^\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+', message)
+
+
+def native_replay_required_error(message):
+    return native_log_words(message)[-1:] == ['error=NativeExecutionReplayRequired']
+
+
 def authenticated_kura_replay_height(events):
     """Recognize only the native policy-required, completed certified replay path.
 
@@ -863,7 +872,7 @@ def authenticated_kura_replay_height(events):
     begun = [e for e in events if 'Kura retains the configured-primary replay floor; rebuilding state from blocks' in e['message']]
     completed = [e for e in events if 'Sumeragi rebuilt the state from genesis and Kura' in e['message']]
     need(len(failed) == len(begun) == len(completed) == 1
-         and re.search(r'\berror=NativeExecutionReplayRequired\s*$', failed[0]['message'])
+         and native_replay_required_error(failed[0]['message'])
          and all(type(e.get('time_us')) is int and e['time_us'] > 0 for e in (failed[0], begun[0], completed[0]))
          and failed[0]['time_us'] <= begun[0]['time_us'] <= completed[0]['time_us'],
          'native authenticated Kura replay sequence is missing or differs')
@@ -871,7 +880,7 @@ def authenticated_kura_replay_height(events):
                  'Successfully loaded the state from a snapshot', 'Validated snapshot block hashes against Kura')
     need(not any(any(text in e['message'] for text in forbidden) for e in events),
          'native replay has a foreign or mixed startup mode')
-    heights = [word.removeprefix('height=') for word in completed[0]['message'].split()
+    heights = [word.removeprefix('height=') for word in native_log_words(completed[0]['message'])
                if word.startswith('height=')]
     need(len(heights) == 1 and heights[0] and all('0' <= digit <= '9' for digit in heights[0])
          and int(heights[0]) > 0, 'native replay completion height is absent or malformed')
@@ -880,7 +889,7 @@ def authenticated_kura_replay_height(events):
 
 def verify_restored_checkpoint(observation, checkpoint, *, allow_authenticated_replay=False):
     events = snapshot_events(observation['role'], observation['systemd']['InvocationID'])
-    replay = allow_authenticated_replay and any('error=NativeExecutionReplayRequired' in e['message'] for e in events)
+    replay = allow_authenticated_replay and any(native_replay_required_error(e['message']) for e in events)
     if replay:
         height = authenticated_kura_replay_height(events)
     else:

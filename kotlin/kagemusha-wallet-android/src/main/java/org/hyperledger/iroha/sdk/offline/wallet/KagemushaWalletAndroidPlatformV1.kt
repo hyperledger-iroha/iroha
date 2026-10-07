@@ -131,6 +131,12 @@ class KagemushaWalletAndroidPlatformV1 private constructor(
                 KagemushaWalletAndroidAttestationChainV1.Absent -> KagemushaWalletNativeReplyV1(1)
                 is KagemushaWalletAndroidAttestationChainV1.Unavailable -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
             }
+            13 -> when (val result = adapter.keyGenerationRecovery(slot, input, auxiliary)) {
+                null -> KagemushaWalletNativeReplyV1(3) // No actual return held; never an absence verdict.
+                is KagemushaWalletAndroidKeyGenerationV1.Generated -> KagemushaWalletNativeReplyV1(0, bytes = result.publicKeySec1())
+                is KagemushaWalletAndroidKeyGenerationV1.Unavailable -> KagemushaWalletNativeReplyV1.unavailable(result.reason)
+                KagemushaWalletAndroidKeyGenerationV1.AlreadyPresent -> KagemushaWalletNativeReplyV1(2)
+            }
             else -> KagemushaWalletNativeReplyV1(2)
         }
 
@@ -188,6 +194,12 @@ internal class KagemushaWalletAndroidPlatformAdapterV1(
     fun keyGenerate(slot: ByteArray, challengeDigest: ByteArray, profileTag: Int): KagemushaWalletAndroidKeyGenerationV1 {
         val profile = requireNotNull(KagemushaWalletAndroidKeyProfileV1.fromTag(profileTag)) { "unknown key profile tag" }
         return paymentKey.generate(slot, challengeDigest, profile)
+    }
+
+    /** Recover only a positive generate return held by this same platform owner; never generates. */
+    fun keyGenerationRecovery(slot: ByteArray, challengeDigest: ByteArray, profileTag: Int): KagemushaWalletAndroidKeyGenerationV1? {
+        val profile = requireNotNull(KagemushaWalletAndroidKeyProfileV1.fromTag(profileTag)) { "unknown key profile tag" }
+        return paymentKey.recoverGeneration(slot, challengeDigest, profile)
     }
 
     /** Actual JNI generation mode: 1 needs Native fresh provenance; 0 has definitive absence. */

@@ -2190,6 +2190,15 @@ pub(super) fn validate_ram_lfe_program_policies(
     policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
 ) -> Result<(), json::Error> {
     for (program_id, policy) in policies.view().iter() {
+        if program_id != &policy.program_id {
+            return Err(json::Error::InvalidField {
+                field: format!("world.ram_lfe_program_policies.{program_id}"),
+                message: format!(
+                    "RAM-LFE program policy key {program_id} does not match embedded program id {}",
+                    policy.program_id
+                ),
+            });
+        }
         crate::smartcontracts::isi::ram_lfe::validate_program_policy(policy).map_err(|err| {
             json::Error::InvalidField {
                 field: format!("world.ram_lfe_program_policies.{program_id}"),

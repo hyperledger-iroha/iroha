@@ -12,7 +12,8 @@ use iroha_data_model::{
     events::EventBox,
     isi::kagemusha_wallet::{
         KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1,
-        KagemushaWalletLoadReceiptV1, verify_finalized_kagemusha_wallet_load_event_v1,
+        KagemushaWalletLoadReceiptV1,
+        load_finality::verify_finalized_kagemusha_wallet_load_event_v1,
     },
     kagemusha::{
         KagemushaWalletActivationV1, KagemushaWalletAssetScopeV1, KagemushaWalletLoadFinalityV1,
@@ -37,6 +38,7 @@ const CAPTURE_MAX: usize = 16 << 20;
 const ORIGINAL_MAX: usize = 16 << 20;
 
 /// Independently retained selections; none is selected from a proof or candidate receipt.
+#[derive(Clone, Copy)]
 pub struct Selection<'a> {
     /// Canonically executed setup directory.
     pub setup_root: &'a Path,
@@ -173,7 +175,7 @@ fn block_input(row: &Value, block: &VerifiedSumeragiBlock) -> Result<BlockWitnes
     }
     Ok(BlockWitnessInput {
         result_frame: frame,
-        message: qc.preimage(),
+        message: qc.preimage().try_into().map_err(|_| Error::Input)?,
         roster,
         bitmap: qc.signers.as_bytes().to_vec(),
         signature: qc.agg_sig.0,
@@ -346,15 +348,15 @@ fn validate(selection: &Selection<'_>) -> Result<Executed, Error> {
     let receipt = KagemushaWalletLoadReceiptV1::decode_canonical(&originals["receipt.norito"])
         .map_err(|_| Error::Input)?;
     let mut native = native(&setup)?;
-    let (target, target_originals) = target::validate(selection, &setup, &native, &receipt)?;
+    let target = target::validate(selection, &setup, &native, &receipt)?;
     let (blocks, load) = history(&setup, &json, &originals, &receipt, &mut native)?;
     need(pinned(selection.capture, CAPTURE_MAX, selection.capture_sha256)? == capture)?;
     Ok(Executed {
         setup,
         capture,
-        target,
+        target: target.frame,
         originals,
-        target_originals,
+        target_originals: target.originals,
         blocks,
         load,
         receipt,

@@ -77,6 +77,32 @@ class KagemushaWalletAndroidPlatformV1Test {
         assertFailsWith<IllegalArgumentException> { platform.keyGenerateFreshFromNative(slot, challenge, 0) }
     }
 
+    @Test fun `readback recovery preserves storage refusal and does not grant generation`() {
+        val environment = TestEnvironmentV1(directory).apply { apiLevel = 26 }
+        val keyStore = TestKeyStoreV1().apply { apiLevel = 26 }
+        val platform = adapter(environment, keyStore)
+        val slot = ByteArray(32) { 7 }
+        val challenge = ByteArray(32) { 8 }
+        assertNull(platform.keyGenerationRecovery(slot, challenge, 2))
+        assertTrue(keyStore.generated.isEmpty())
+        keyStore.factsFailure = java.security.ProviderException("KeyInfo unavailable")
+        assertIs<KagemushaWalletAndroidKeyGenerationV1.Unavailable>(platform.keyGenerateFreshFromNative(slot, challenge, 2))
+        val original = keyStore.entries.getValue(kagemushaWalletAndroidAliasV1(slot))
+        keyStore.factsFailure = null
+        environment.unlocked = false
+        val reads = keyStore.getKeyCalls
+        assertSame(KagemushaWalletAndroidUnavailableV1.BEFORE_FIRST_UNLOCK,
+            assertIs<KagemushaWalletAndroidKeyGenerationV1.Unavailable>(platform.keyGenerationRecovery(slot, challenge, 2)).reason)
+        assertEquals(reads, keyStore.getKeyCalls)
+        assertFailsWith<IllegalArgumentException> { platform.keyGenerationRecovery(slot, challenge, 0) }
+        environment.unlocked = true
+        val recovered = assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(platform.keyGenerationRecovery(slot, challenge, 2))
+        assertContentEquals(testSec1V1(original.pair.public), recovered.publicKeySec1())
+        assertEquals(1, keyStore.generated.size)
+        assertEquals(0, keyStore.deleteCalls)
+        assertEquals(0, keyStore.signCalls)
+    }
+
     @Test fun `storage is available only after the first unlock`() {
         val environment = TestEnvironmentV1(directory)
         val adapter = adapter(environment)

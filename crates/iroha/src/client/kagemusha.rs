@@ -1,4 +1,9 @@
-//! Account-authenticated retrieval of canonical wallet load issuance originals.
+//! Account-authenticated wallet enrollment and canonical load issuance originals.
+
+mod enrollment;
+pub use iroha_torii_shared::kagemusha_enrollment::{
+    EnrollmentServiceActionV1, EnrollmentServiceRequestV1, EnrollmentServiceResponseV1,
+};
 
 use super::{AccountClient, ActivationEvidenceReadAuth, Client, dispatch};
 use crate::{Error, Result, http::StatusCode};
@@ -10,7 +15,7 @@ use iroha_data_model::isi::kagemusha_wallet::load_finality::{
 pub(super) const MAX_RESPONSE_BYTES: usize = KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1;
 const READ: &str = "kagemusha.wallet.load_issuance.read";
 
-/// Load issuance reads using one immutable payer and network context.
+/// Wallet service operations using one immutable account and network context.
 ///
 /// These records are transport data. Monetary authorization requires independently verified
 /// ordinary block finality and the successful transaction with these exact load terms.
@@ -31,7 +36,7 @@ pub struct Kagemusha<'a> {
 }
 
 impl AccountClient {
-    /// Retrieve retained wallet load records using this account's exact network signature.
+    /// Access wallet enrollment and load records using this account's exact network signature.
     #[must_use]
     pub const fn kagemusha(&self) -> Kagemusha<'_> {
         Kagemusha { account: self }

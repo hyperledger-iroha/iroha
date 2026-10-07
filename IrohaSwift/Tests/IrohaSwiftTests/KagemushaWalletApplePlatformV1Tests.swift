@@ -31,8 +31,10 @@ private final class FakeWalletKeychain: KagemushaWalletAppleKeychainV1, @uncheck
   private var log: [String] = []
   private var queryLog: [[String: Any]] = []
   private var generations: [[String: Any]] = []
+  private var returnedKeys: [SecKey] = []
 
   var copyStatus: OSStatus?
+  var copyStatusAfterGeneration: OSStatus?
   var copyResultOverride: CFTypeRef??
   var addStatus: OSStatus?
   var updateStatus: OSStatus?
@@ -43,6 +45,7 @@ private final class FakeWalletKeychain: KagemushaWalletAppleKeychainV1, @uncheck
   var operations: [String] { locked { log } }
   var queries: [[String: Any]] { locked { queryLog } }
   var generationAttributes: [[String: Any]] { locked { generations } }
+  var generationReturns: [SecKey] { locked { returnedKeys } }
 
   static func softwareKey() -> SecKey {
     var error: Unmanaged<CFError>?
@@ -64,6 +67,7 @@ private final class FakeWalletKeychain: KagemushaWalletAppleKeychainV1, @uncheck
       log.append("copy")
       queryLog.append(query)
       if let copyStatus { return (copyStatus, copyResultOverride ?? nil) }
+      if !returnedKeys.isEmpty, let status = copyStatusAfterGeneration { return (status, nil) }
       if let override = copyResultOverride { return (errSecSuccess, override) }
       if Self.isKey(query) {
         let tag = query[kSecAttrApplicationTag as String] as? Data
@@ -135,6 +139,7 @@ private final class FakeWalletKeychain: KagemushaWalletAppleKeychainV1, @uncheck
         case .differentKey: keys.append(StoredKey(tag: tag, label: label, key: Self.softwareKey()))
         }
       }
+      returnedKeys.append(key)
       return (key, nil)
     }
   }
@@ -818,6 +823,90 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
       diagnostics.all.map(\.event), ["generated payment key differs from the stored key"])
   }
 
+  func testActualGenerationReturnSurvivesReadbackFailureWithoutRegeneration() throws {
+    let keychain = FakeWalletKeychain()
+    keychain.copyStatusAfterGeneration = errSecInteractionNotAllowed
+    let platform = try makePlatform(keychain: keychain)
+    XCTAssertEqual(platform.keyGenerate(slot, request()), .unavailable(.locked))
+    let actual = try XCTUnwrap(keychain.generationReturns.first)
+    let expected = try XCTUnwrap(Platform.x963PublicKey(of: actual))
+    XCTAssertEqual(platform.recoverGenerationReply(slot, request()), KagemushaWalletAppleKeyGenerationV1.unavailable(.locked))
+    XCTAssertEqual(platform.keyGenerate(slot, request()), .alreadyPresent)
+    XCTAssertEqual(keychain.generationAttributes.count, 1)
+    keychain.copyStatusAfterGeneration = nil
+    for _ in 0..<2 {
+      XCTAssertEqual(platform.recoverGenerationReply(slot, request()), KagemushaWalletAppleKeyGenerationV1.generated(publicKey: expected))
+    }
+    XCTAssertEqual(keychain.generationAttributes.count, 1)
+    XCTAssertFalse(keychain.operations.contains("delete"))
+  }
+
+  func testGenerationRecoveryBindsActualKeyRequestAndProtectedStorage() throws {
+    let keychain = FakeWalletKeychain()
+    let probe = FakeProtectedData()
+    let platform = try makePlatform(keychain: keychain, probe: probe)
+    let expected = try generatedKey(platform)
+    let actual = try XCTUnwrap(keychain.generationReturns.first)
+    let changed = try XCTUnwrap(KagemushaWalletAppleKeyGenerationRequestV1(
+      challengeDigest: Data(repeating: 0xf1, count: 32), profile: request().profile))
+    XCTAssertEqual(platform.recoverGenerationReply(slot, changed), KagemushaWalletAppleKeyGenerationV1.unavailable(.keyUnusable))
+    XCTAssertEqual(platform.recoverGenerationReply(slot, request(.secureElementOrTee)), KagemushaWalletAppleKeyGenerationV1.unavailable(.keyUnusable))
+    let other = try XCTUnwrap(KagemushaWalletAppleSlotV1(Data(repeating: 0xaa, count: 32)))
+    XCTAssertNil(platform.recoverGenerationReply(other, request()))
+    let before = keychain.operations.count
+    probe.push(EPERM)
+    XCTAssertEqual(platform.recoverGenerationReply(slot, request()), KagemushaWalletAppleKeyGenerationV1.unavailable(.locked))
+    XCTAssertEqual(keychain.operations.count, before)
+    let changedLabel: [[String: Any]] = [
+      [kSecValueRef as String: actual, kSecAttrLabel as String: changed.label]
+    ]
+    keychain.copyResultOverride = .some(changedLabel as NSArray)
+    XCTAssertEqual(platform.recoverGenerationReply(slot, request()), KagemushaWalletAppleKeyGenerationV1.unavailable(.platform(Status.ambiguousPaymentKey)))
+    let replacement: [[String: Any]] = [
+      [kSecValueRef as String: FakeWalletKeychain.softwareKey(), kSecAttrLabel as String: request().label]
+    ]
+    keychain.copyResultOverride = .some(replacement as NSArray)
+    XCTAssertEqual(platform.recoverGenerationReply(slot, request()), KagemushaWalletAppleKeyGenerationV1.unavailable(.platform(Status.ambiguousPaymentKey)))
+    keychain.copyResultOverride = nil
+    XCTAssertEqual(platform.recoverGenerationReply(slot, request()), KagemushaWalletAppleKeyGenerationV1.generated(publicKey: expected))
+    XCTAssertEqual(keychain.generationAttributes.count, 1)
+    XCTAssertFalse(keychain.operations.contains("delete"))
+  }
+
+  func testNoHeldReturnNeverAdoptsAFoundKeyOrFailedGeneration() throws {
+    let keychain = FakeWalletKeychain()
+    keychain.storeKey(tag: slot.applicationTag, label: request().label)
+    let platform = try makePlatform(keychain: keychain)
+    XCTAssertNil(platform.recoverGenerationReply(slot, request()))
+    XCTAssertEqual(platform.keyGenerate(slot, request()), .alreadyPresent)
+    XCTAssertNil(platform.recoverGenerationReply(slot, request()))
+    XCTAssertTrue(keychain.generationAttributes.isEmpty)
+    let failed = FakeWalletKeychain()
+    failed.createError = SecurityError(status: errSecIO)
+    let failedPlatform = try makePlatform(keychain: failed)
+    XCTAssertEqual(failedPlatform.keyGenerate(slot, request()), .unavailable(.platform(errSecIO)))
+    XCTAssertNil(failedPlatform.recoverGenerationReply(slot, request()))
+    XCTAssertTrue(failed.generationReturns.isEmpty)
+    let returned = FakeWalletKeychain()
+    let original = try makePlatform(keychain: returned)
+    _ = try generatedKey(original)
+    let newOwner = try makePlatform(keychain: returned)
+    XCTAssertNil(newOwner.recoverGenerationReply(slot, request()))
+    XCTAssertEqual(returned.generationAttributes.count, 1)
+  }
+
+  func testHeldSecKeyNeverAuthorizesAnotherGenerationWhenItsTagLooksAbsent() throws {
+    let keychain = FakeWalletKeychain()
+    keychain.persistence = .nothing
+    let platform = try makePlatform(keychain: keychain)
+    XCTAssertEqual(platform.keyGenerate(slot, request()), .unavailable(.platform(Status.paymentKeyNotPersisted)))
+    XCTAssertEqual(platform.recoverGenerationReply(slot, request()), KagemushaWalletAppleKeyGenerationV1.unavailable(.platform(Status.paymentKeyNotPersisted)))
+    XCTAssertEqual(platform.keyGenerate(slot, request()), .alreadyPresent)
+    XCTAssertEqual(keychain.generationAttributes.count, 1)
+    XCTAssertEqual(keychain.generationReturns.count, 1)
+    XCTAssertFalse(keychain.operations.contains("delete"))
+  }
+
   func testCustodyItemsAreNeverBackedUpOrBoundToUserAuthentication() throws {
     XCTAssertEqual(
       Platform.custodyAccessibility as String,
@@ -1085,6 +1174,54 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
       try runtime.close()
       XCTAssertEqual(cleanup.ids, [UInt64(Int64.max)])
       XCTAssertNoThrow(try KagemushaWalletInstalledRuntimeV1.requireNoUnreleasedAdmissions())
+    }
+
+    func testNativeGenerationReplySurvivesCallbackCapacityFailureAndReadbackRefusal() throws {
+      let keychain = FakeWalletKeychain()
+      let platform = try makePlatform(keychain: keychain)
+      let table = kagemushaWalletCallbacksV1(platform)
+      let invoke = try XCTUnwrap(table.invoke)
+      func call(_ operation: UInt32, _ input: Data, profile: UInt32, capacity: Int)
+        -> (connect_norito_kagemusha_platform_reply_v1, Data)
+      {
+        var output = [UInt8](repeating: 0x5a, count: capacity)
+        var reply = connect_norito_kagemusha_platform_reply_v1()
+        slot.bytes.withUnsafeBytes { slotBytes in
+          input.withUnsafeBytes { inputBytes in
+            output.withUnsafeMutableBufferPointer { buffer in
+              invoke(table.context, operation, slotBytes.bindMemory(to: UInt8.self).baseAddress,
+                inputBytes.bindMemory(to: UInt8.self).baseAddress, input.count, profile,
+                buffer.baseAddress, buffer.count, &reply)
+            }
+          }
+        }
+        return (reply, Data(output))
+      }
+      XCTAssertEqual(call(13, challenge, profile: 1, capacity: 65).0.tag, 3)
+      XCTAssertTrue(keychain.generationAttributes.isEmpty)
+      let lost = call(1, challenge, profile: 1, capacity: 0)
+      XCTAssertEqual(lost.0.tag, UInt32.max)
+      XCTAssertEqual(lost.0.length, 0)
+      XCTAssertEqual(keychain.generationAttributes.count, 1)
+      let actual = try XCTUnwrap(keychain.generationReturns.first)
+      let expected = try XCTUnwrap(Platform.x963PublicKey(of: actual))
+      let small = call(13, challenge, profile: 1, capacity: 64)
+      XCTAssertEqual(small.0.tag, UInt32.max)
+      XCTAssertEqual(small.1, Data(repeating: 0x5a, count: 64))
+      keychain.copyStatusAfterGeneration = errSecIO
+      let unavailable = call(13, challenge, profile: 1, capacity: 65).0
+      XCTAssertEqual(unavailable.tag, 2)
+      XCTAssertEqual(unavailable.reason, 4)
+      XCTAssertEqual(unavailable.code, errSecIO)
+      keychain.copyStatusAfterGeneration = nil
+      XCTAssertEqual(call(13, challenge, profile: 2, capacity: 65).0.tag, 2)
+      XCTAssertEqual(call(13, Data(repeating: 0, count: 31), profile: 1, capacity: 65).0.tag, 2)
+      let recovered = call(13, challenge, profile: 1, capacity: 65)
+      XCTAssertEqual(recovered.0.tag, 0)
+      XCTAssertEqual(recovered.0.length, 65)
+      XCTAssertEqual(recovered.1, expected)
+      XCTAssertEqual(keychain.generationAttributes.count, 1)
+      XCTAssertFalse(keychain.operations.contains("delete"))
     }
 
     func testNativeKeyEnumerationCallbackReturnsExactOriginalSlotBytesAndNoWrite() throws {
@@ -1497,7 +1634,7 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
       keyBinding,
       KagemushaWalletWireV1.digest(role: .enrollmentKeyBinding, body: challenge + publicKey))
 
-    let evidence = try await platform.attestEnrollment(
+    let evidence = try await platform.collectEvidenceDataForTest(
       slot: slot, paymentPublicKey: publicKey, challengeDigest: challenge)
     let firstKey = FakeWalletAppAttest.keyID(1)
     XCTAssertEqual(evidence.appAttestKeyID, firstKey)
@@ -1519,14 +1656,33 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
       await expectAttestationError(
         .appAttestFailed(stage: stage, domain: "com.apple.devicecheck.error", code: 4)
       ) {
-        try await platform.attestEnrollment(
+        try await platform.collectEvidenceDataForTest(
           slot: slot, paymentPublicKey: publicKey, challengeDigest: challenge)
       }
     }
     appAttest.failingStage = nil
-    let retried = try await platform.attestEnrollment(
+    let retried = try await platform.collectEvidenceDataForTest(
       slot: slot, paymentPublicKey: publicKey, challengeDigest: challenge)
-    XCTAssertEqual(retried.appAttestKeyID, FakeWalletAppAttest.keyID(5), "every attempt uses a fresh key")
+    XCTAssertEqual(retried.appAttestKeyID, FakeWalletAppAttest.keyID(5), "independent DATA fixtures do not reuse a journal")
+  }
+
+  func testSameJournalNeverRepeatsAnUncertainVendorEffectOrRegeneratesKnownKey() async throws {
+    let appAttest = FakeWalletAppAttest()
+    let platform = try makePlatform(appAttest: appAttest)
+    let publicKey = try generatedKey(platform)
+    let journal = AppleCollectionDataJournal()
+    appAttest.failingStage = .attestKey
+    await expectAttestationError(.appAttestFailed(stage: .attestKey, domain: "com.apple.devicecheck.error", code: 4)) {
+      try await platform.collectEvidenceDataForTest(slot: slot, paymentPublicKey: publicKey, challengeDigest: challenge, journal: journal)
+    }
+    XCTAssertEqual(String(data: journal.values[0], encoding: .utf8), FakeWalletAppAttest.keyID(1))
+    let calls = appAttest.calls
+    appAttest.failingStage = nil
+    do {
+      _ = try await platform.collectEvidenceDataForTest(slot: slot, paymentPublicKey: publicKey, challengeDigest: challenge, journal: journal)
+      XCTFail("uncertain attestation dispatch must not repeat")
+    } catch { XCTAssertEqual(error as? KagemushaWalletErrorV1, .invalidInput) }
+    XCTAssertEqual(appAttest.calls, calls)
   }
 
   func testEnrollmentAttestationRefusesUnboundOrMissingKeys() async throws {
@@ -1534,28 +1690,28 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     let keychain = FakeWalletKeychain()
     let platform = try makePlatform(keychain: keychain, appAttest: appAttest)
     await expectAttestationError(.paymentKeyAbsent) {
-      try await platform.attestEnrollment(
+      try await platform.collectEvidenceDataForTest(
         slot: slot, paymentPublicKey: Data(), challengeDigest: challenge)
     }
     keychain.copyStatus = errSecInteractionNotAllowed
     await expectAttestationError(.paymentKeyUnavailable(.locked)) {
-      try await platform.attestEnrollment(
+      try await platform.collectEvidenceDataForTest(
         slot: slot, paymentPublicKey: Data(), challengeDigest: challenge)
     }
     keychain.copyStatus = nil
     let publicKey = try generatedKey(platform)
     await expectAttestationError(.bindingMismatch) {
-      try await platform.attestEnrollment(
+      try await platform.collectEvidenceDataForTest(
         slot: slot, paymentPublicKey: publicKey, challengeDigest: Data(repeating: 0xc5, count: 32))
     }
     var otherKey = publicKey
     otherKey[64] ^= 1
     await expectAttestationError(.bindingMismatch) {
-      try await platform.attestEnrollment(
+      try await platform.collectEvidenceDataForTest(
         slot: slot, paymentPublicKey: otherKey, challengeDigest: challenge)
     }
     await expectAttestationError(.invalidDigest) {
-      try await platform.attestEnrollment(
+      try await platform.collectEvidenceDataForTest(
         slot: slot, paymentPublicKey: publicKey, challengeDigest: Data(repeating: 1, count: 31))
     }
 
@@ -1565,7 +1721,7 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
       let key = unlabeled.storeKey(tag: slot.applicationTag, label: label)
       let unlabeledPlatform = try makePlatform(keychain: unlabeled, appAttest: appAttest)
       await expectAttestationError(.bindingMismatch) {
-        try await unlabeledPlatform.attestEnrollment(
+        try await unlabeledPlatform.collectEvidenceDataForTest(
           slot: slot, paymentPublicKey: Platform.x963PublicKey(of: key)!, challengeDigest: challenge)
       }
     }
@@ -1573,15 +1729,34 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
 
     appAttest.malformedKeyIDs = true
     await expectAttestationError(.malformedAppAttestKeyID) {
-      try await platform.attestEnrollment(
+      try await platform.collectEvidenceDataForTest(
         slot: slot, paymentPublicKey: publicKey, challengeDigest: challenge)
     }
     XCTAssertEqual(appAttest.calls, ["generateKey"], "a malformed key identifier is never attested")
 
     appAttest.supported = false
     await expectAttestationError(.appAttestUnsupported) {
-      try await platform.attestEnrollment(
+      try await platform.collectEvidenceDataForTest(
         slot: slot, paymentPublicKey: publicKey, challengeDigest: challenge)
     }
+  }
+}
+
+// Component-only vendor sequencing fixture. It cannot construct a Native owner, issuer permit,
+// production journal or payment authority. The real app path only accepts EnrollmentV1.
+private final class AppleCollectionDataJournal: KagemushaWalletAppleEvidenceJournalV1, @unchecked Sendable {
+  var values = [Data(), Data(), Data()]
+  var dispatched = Set<UInt8>()
+  func originals() throws -> [Data] { values }
+  func begin(_ stage: UInt8) throws {
+    guard dispatched.insert(stage).inserted else { throw KagemushaWalletErrorV1.invalidInput }
+  }
+  func retain(_ stage: UInt8, _ original: Data) throws { values[Int(stage) - 1] = Data([UInt8](original)) }
+  func complete() throws { guard values.allSatisfy({ !$0.isEmpty }) else { throw KagemushaWalletErrorV1.invalidInput } }
+}
+private extension KagemushaWalletApplePlatformV1 {
+  func collectEvidenceDataForTest(slot: KagemushaWalletAppleSlotV1, paymentPublicKey: Data, challengeDigest: Data,
+    journal: AppleCollectionDataJournal = AppleCollectionDataJournal()) async throws -> KagemushaWalletAppleEnrollmentEvidenceV1 {
+    try await collectEnrollmentEvidence(slot: slot, paymentPublicKey: paymentPublicKey, challengeDigest: challengeDigest, journal: journal)
   }
 }

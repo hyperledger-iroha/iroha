@@ -14,10 +14,10 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 
 /**
- * Bank middleware eligibility protocol and callback adapter. Authenticate the issuer transport,
- * select current authority policy independently, and resolve actor/account/bank binding in the
- * lookup. A Parliament arm requires an enacted mandate for this non-regulated token; missing
- * bank data never selects it. Decoding policy DATA does not establish any such authority.
+ * Eligibility middleware protocol and callback adapter. Authenticate the issuer transport,
+ * select current authority policy independently, and resolve actor/account/provider binding in
+ * the lookup. Bank approval includes required KYC. Scheme operators require authenticated
+ * asset/scheme-owner selection; missing bank data never selects one. Policy DATA grants no authority.
  *
  * The adapter generates no key, persists no secret or customer document, caches no decision,
  * and grants no enrollment/monetary capability. All u64 values are exact positive BigIntegers.
@@ -29,8 +29,7 @@ object KagemushaEnrollmentEligibilityV1 {
     private val MAX_U64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
     private val ORDER = BigInteger.ONE.shiftLeft(252).add(BigInteger("27742317777372353535851937790883648493"))
 
-    enum class AssetClass { REGULATED, NON_REGULATED }
-    enum class Authority { BANK, PARLIAMENT }
+    enum class Authority { BANK, SCHEME_OPERATOR }
     enum class Purpose { PRE_KEY_PERMIT, VERIFY_EVIDENCE, ISSUE_CREDENTIAL, DELIVER_CREDENTIAL }
     enum class Decision { APPROVED_UNFROZEN, NOT_APPROVED, FROZEN }
     enum class FailureCode { INVALID_REQUEST, UNAVAILABLE, CLOCK, INVALID_OBSERVATION, SIGNING, SIGNATURE }
@@ -42,7 +41,7 @@ object KagemushaEnrollmentEligibilityV1 {
     /** One authenticated atomic current-source read. Unknown/unavailable subjects must throw. */
     fun interface CurrentLookup { fun read(policy: Policy, request: Request): Current }
     /**
-     * Sign the exact 32-byte message with ordinary Ed25519 using existing bank-owned custody.
+     * Sign the exact 32-byte message with ordinary Ed25519 using existing provider-owned custody.
      * Do not apply the transaction signer's additional IrohaHash prehash or Ed25519ph mode.
      */
     fun interface Signer { fun sign(message: ByteArray): ByteArray }
@@ -54,28 +53,26 @@ object KagemushaEnrollmentEligibilityV1 {
     class Policy private constructor(original: ByteArray, fields: List<ByteArray>) {
         private val original = original.copyOf()
         private val network = identity(fields[1]); private val scheme = identity(fields[2])
-        private val asset = identity(fields[3]); private val key = fixed(fields[7], 32)
+        private val asset = identity(fields[3]); private val key = fixed(fields[6], 32)
         val revision: BigInteger = positive(fields[4])
-        val assetClass: AssetClass = enum(fields[5], AssetClass.values())
-        private val authorityFields = variant(fields[6])
-        val authority: Authority = when (authorityFields.first) { 1 -> Authority.BANK; 2 -> Authority.PARLIAMENT; else -> invalid() }
+        private val authorityFields = variant(fields[5])
+        val authority: Authority = when (authorityFields.first) { 1 -> Authority.BANK; 2 -> Authority.SCHEME_OPERATOR; else -> invalid() }
         private val authorityId = identity(parseFields(authorityFields.second, 1)[0])
-        val maximumResponseMs: BigInteger = positive(fields[8])
+        val maximumResponseMs: BigInteger = positive(fields[7])
         init {
             version(fields[0])
-            require(authority != Authority.PARLIAMENT || assetClass == AssetClass.NON_REGULATED)
             require(Ed25519PublicKeyAdmission.isValid(key))
         }
         fun originalBytes(): ByteArray = original.copyOf()
         fun networkId(): ByteArray = network.copyOf()
         fun schemeId(): ByteArray = scheme.copyOf()
         fun assetDigest(): ByteArray = asset.copyOf()
-        /** FI digest for Bank, enacted mandate digest for Parliament. */
-        fun authorityDigest(): ByteArray = authorityId.copyOf()
+        /** Exact selected Bank FI or SchemeOperator identity. */
+        fun scopeDigest(): ByteArray = authorityId.copyOf()
         fun publicKey(): ByteArray = key.copyOf()
         fun digest(): ByteArray = hash("policy", original)
         companion object {
-            internal fun parse(original: ByteArray): Policy = Policy(original, unframe(original, "policy", 9))
+            internal fun parse(original: ByteArray): Policy = Policy(original, unframe(original, "policy", 8))
         }
     }
 

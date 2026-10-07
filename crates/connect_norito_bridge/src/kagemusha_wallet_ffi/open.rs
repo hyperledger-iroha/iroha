@@ -23,6 +23,9 @@ pub(super) trait Admission: Send {
     fn enrollment(&mut self, _action: super::enrollment::Action<'_>) -> Result<Response> {
         Err(Failure::code(INVALID))
     }
+    fn prepare_close(&mut self) -> Result<()> {
+        Ok(())
+    }
     fn begin(&mut self, originals: [&[u8]; 4]) -> Result<Vec<u8>>;
     fn finish(&mut self, signature: &[u8]) -> Result<(Box<dyn Wallet>, state::Scheduler)>;
     fn cancel(&mut self) -> Result<()>;
@@ -34,6 +37,8 @@ enum Phase<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
 pub(super) struct Runtime<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
     phase: Option<Phase<P, S>>,
     binding: Option<super::installed::BoundOriginals>,
+    enrollment_session: Option<super::installed::Session>,
+    enrolled_originals: Option<[Vec<u8>; 4]>,
 }
 impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Runtime<P, S> {
     pub(super) fn new(
@@ -42,12 +47,123 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Runtime<
         Self {
             phase: Some(Phase::Ready(Box::new(runtime))),
             binding: None,
+            enrollment_session: None,
+            enrolled_originals: None,
         }
     }
 }
 impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send + 'static>
     Admission for Runtime<P, S>
 {
+    fn enrollment(&mut self, action: super::enrollment::Action<'_>) -> Result<Response> {
+        use super::enrollment::Action;
+        if let Action::Start(originals) = action {
+            let binding = self.binding.as_ref().ok_or(Failure::code(INVALID))?;
+            if let Some(session) = &self.enrollment_session {
+                return if session.matches(originals) {
+                    Ok(Response {
+                        kind: 37,
+                        bytes: binding.enrollment_projection(),
+                        ..Response::default()
+                    })
+                } else {
+                    Err(Failure::code(CONFLICT))
+                };
+            }
+            let session = binding.enrollment_session(originals)?;
+            let phase = self.phase.take().ok_or(Failure::code(CLOSED))?;
+            let Phase::Ready(runtime) = phase else {
+                self.phase = Some(phase);
+                return Err(Failure::code(CONFLICT));
+            };
+            return match runtime.start_enrollment(session.config.clone()) {
+                Ok(runtime) => {
+                    self.phase = Some(Phase::Ready(Box::new(runtime)));
+                    self.enrollment_session = Some(session);
+                    Ok(Response {
+                        kind: 37,
+                        bytes: binding.enrollment_projection(),
+                        ..Response::default()
+                    })
+                }
+                Err((runtime, error)) => {
+                    self.phase = Some(Phase::Ready(Box::new(runtime)));
+                    Err(error.into())
+                }
+            };
+        }
+        if let Action::BeginResult([original, account]) = action {
+            // This is bounded DATA projection, not enrollment authorization. The ordinary
+            // original intake below verifies the credential/certificates, account and actual
+            // retained hardware/journal state. A prior FI session/permit is not reused.
+            let result = iroha_core_zk::kagemusha_wallet_enrollment_v1::ResultV1::decode(original)
+                .map_err(|_| Failure::code(INVALID))?;
+            let asset = self
+                .binding
+                .as_ref()
+                .ok_or(Failure::code(INVALID))?
+                .asset_original()
+                .to_vec();
+            return Ok(Response {
+                kind: 15,
+                bytes: self.begin([&result.credential, &result.certificates, account, &asset])?,
+                ..Response::default()
+            });
+        }
+        if matches!(action, Action::BeginOpen) {
+            let originals = self
+                .enrolled_originals
+                .clone()
+                .ok_or(Failure::code(CONFLICT))?;
+            return Ok(Response {
+                kind: 15,
+                bytes: self.begin(originals.each_ref().map(Vec::as_slice))?,
+                ..Response::default()
+            });
+        }
+        if matches!(action, Action::Load) {
+            if self.enrolled_originals.is_none() {
+                let phase = self.phase.take().ok_or(Failure::code(CLOSED))?;
+                let Phase::Ready(runtime) = phase else {
+                    self.phase = Some(phase);
+                    return Err(Failure::code(CONFLICT));
+                };
+                match runtime.finish_enrollment() {
+                    Ok((runtime, originals)) => {
+                        self.phase = Some(Phase::Ready(Box::new(runtime)));
+                        self.enrolled_originals = Some(originals);
+                    }
+                    Err((runtime, error)) => {
+                        self.phase = Some(Phase::Ready(Box::new(runtime)));
+                        return Err(error.into());
+                    }
+                }
+            }
+            return Ok(Response {
+                kind: 26,
+                ..Response::default()
+            });
+        }
+        if let Action::Begin([_, _, asset]) = &action {
+            if self
+                .binding
+                .as_ref()
+                .is_none_or(|binding| binding.asset_original() != *asset)
+            {
+                return Err(Failure::code(INVALID));
+            }
+        }
+        let Some(Phase::Ready(runtime)) = self.phase.as_mut() else {
+            return Err(Failure::code(CONFLICT));
+        };
+        super::enrollment::perform(runtime.enrollment()?, action)
+    }
+    fn prepare_close(&mut self) -> Result<()> {
+        if let Some(Phase::Ready(runtime)) = self.phase.as_mut() {
+            runtime.prepare_close()?;
+        }
+        Ok(())
+    }
     fn begin(&mut self, originals: [&[u8]; 4]) -> Result<Vec<u8>> {
         validate(originals)?;
         if let Some(binding) = &self.binding {
@@ -305,6 +421,9 @@ pub(super) fn close(owner: Arc<RuntimeOwner>) -> Result<()> {
             scheduler.set_activity(false, false);
             scheduler.payment()
         });
+        if let Some(admission) = admission.as_mut() {
+            admission.prepare_close()?;
+        }
         drop(admission.take());
         drop(finished.take());
         Ok(())
@@ -418,6 +537,8 @@ where
         admission: Mutex::new(Some(Box::new(Runtime {
             phase: Some(Phase::Ready(runtime)),
             binding,
+            enrollment_session: None,
+            enrolled_originals: None,
         }))),
         finished: Mutex::new(None),
     }

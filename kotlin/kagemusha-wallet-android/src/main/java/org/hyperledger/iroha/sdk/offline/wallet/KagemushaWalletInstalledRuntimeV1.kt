@@ -73,8 +73,8 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
     private val admission = KagemushaWalletInstalledAdmissionV1 { requireLive() }
     private var pendingOriginal: KagemushaWalletPendingOpenV1? = null
     private var accountSignatureOriginal: ByteArray? = null
-    private fun startOpen(originals: KagemushaWalletOpenOriginalsV1) = synchronized(gate) {
-        admission.start(originals.frames())
+    private fun startOpen(frames: List<ByteArray>) = synchronized(gate) {
+        admission.start(frames)
     }
     private fun failedOpen() = synchronized(gate) { admission.failed() }
     private fun completedOpen() = synchronized(gate) {
@@ -83,10 +83,32 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
         accountSignatureOriginal?.fill(0)
         accountSignatureOriginal = null
     }
+    /** Worker-only. Authenticate the FI session and transfer the SAME installed Native owner. */
+    fun startEnrollment(session: KagemushaWalletEnrollmentSessionOriginalsV1): KagemushaWalletEnrollmentV1 = synchronized(gate) {
+        requireLive()
+        check(admission.canTransferToEnrollment()) { "account admission already started" }
+        val enrollment = runtime.startEnrollment(session)
+        closing = CompletableFuture.completedFuture(null)
+        enrollment
+    }
     /** Retry ordinary refusal using the same originals, Native challenge and account signature.
      * Explicit future cancellation retires custody; successful admission transfers it once.
      */
     fun openAsync(originals: KagemushaWalletOpenOriginalsV1,
+        signExistingAccount: (ByteArray) -> CompletableFuture<ByteArray>,
+        requireCurrent: () -> Unit): CompletableFuture<KagemushaWalletV1> =
+        openFrames(originals.frames(), { runtime.begin(originals) }, signExistingAccount, requireCurrent)
+
+    /** Reopen exact persisted E6 DATA using Native-selected asset and ordinary account/journal
+     * admission. It does not replay or require the expired enrollment session/permit. */
+    fun openEnrolledResult(resultOriginal: ByteArray, accountOriginal: ByteArray,
+        signExistingAccount: (ByteArray) -> CompletableFuture<ByteArray>,
+        requireCurrent: () -> Unit): CompletableFuture<KagemushaWalletV1> {
+        require(resultOriginal.size in 1..KagemushaWalletEnrollmentV1.RESULT_MAX_BYTES && accountOriginal.size in 1..4096)
+        val original = resultOriginal.copyOf(); val account = accountOriginal.copyOf()
+        return openFrames(listOf(original, account), { runtime.beginEnrolledResult(original, account) }, signExistingAccount, requireCurrent)
+    }
+    private fun openFrames(frames: List<ByteArray>, begin: () -> KagemushaWalletPendingOpenV1,
         signExistingAccount: (ByteArray) -> CompletableFuture<ByteArray>,
         requireCurrent: () -> Unit): CompletableFuture<KagemushaWalletV1> {
         val result = CompletableFuture<KagemushaWalletV1>()
@@ -97,9 +119,9 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
             var started = false
             try {
                 if (result.isCancelled) return@execute
-                requireNoUnreleasedAdmissions(); requireCurrent(); startOpen(originals)
+                requireNoUnreleasedAdmissions(); requireCurrent(); startOpen(frames)
                 started = true
-                val pending = pendingOriginal ?: runtime.begin(originals).also { pendingOriginal = it }
+                val pending = pendingOriginal ?: begin().also { pendingOriginal = it }
                 requireCurrent(); requireLive()
                 if (result.isCancelled) throw java.util.concurrent.CancellationException()
                 val challenge = pending.challenge()
@@ -193,7 +215,7 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
             return KagemushaWalletInstallationAttemptV1.begin(platform,originals)
         }
         internal fun adoptRegistered(handle:Long,platform:KagemushaWalletAndroidPlatformV1):KagemushaWalletInstalledRuntimeV1 =
-            KagemushaWalletInstalledRuntimeV1(KagemushaWalletRuntimeV1(handle),platform)
+            KagemushaWalletInstalledRuntimeV1(KagemushaWalletRuntimeV1(handle,platform),platform)
 
     }
 }
@@ -208,6 +230,7 @@ internal fun <T> completeInstalledOpenFailureV1(result: CompletableFuture<T>, fa
 /** Managed sequencing only; callbacks retain all Native authority. Caller serializes its gate. */
 internal class KagemushaWalletInstalledAdmissionV1(private val requireLive: () -> Unit) {
     private var originalFrames: List<ByteArray>? = null
+    fun canTransferToEnrollment(): Boolean = originalFrames == null
     private var active = false
     private var transferred = false
     fun start(frames: List<ByteArray>) {

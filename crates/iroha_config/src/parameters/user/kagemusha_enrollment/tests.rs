@@ -86,7 +86,18 @@ fn fixture() -> KagemushaEnrollmentIssuer {
             service_origin_digest_hex: "13".repeat(32),
             observation_endpoint: "https://provider.example/eligibility".into(),
             observation_credential: "/var/lib/iroha/private/provider-credential".into(),
-            worker_handle: "platform-worker:current".into(),
+            worker: KagemushaEnrollmentWorker {
+                python_executable: "/opt/issuer/python".into(),
+                python_sha256_hex: "41".repeat(32),
+                verifier_archive: "/opt/issuer/verifier.pyz".into(),
+                verifier_sha256_hex: "42".repeat(32),
+                openssl_executable: "/opt/issuer/openssl".into(),
+                openssl_sha256_hex: "43".repeat(32),
+                attestation_root: "/opt/issuer/root.pem".into(),
+                store_directory: "/var/lib/issuer/worker".into(),
+                exchange_timeout_ms: 60_000,
+                google: None,
+            },
             signer_private_key: "/var/lib/iroha/private/enrollment-signer".into(),
         }],
     }
@@ -104,11 +115,7 @@ fn canonical_boundaries_reject_aliases_and_excessive_input_before_decode() {
 }
 
 #[test]
-fn handles_paths_and_endpoints_do_not_accept_credentials_or_ambiguous_routing() {
-    assert!(handle("worker:approved/one").is_ok());
-    for value in ["", "https://host", "user@host", "a b", "a/../b"] {
-        assert!(handle(value).is_err());
-    }
+fn paths_and_endpoints_do_not_accept_credentials_or_ambiguous_routing() {
     assert!(absolute_path(Path::new("/private/issuer")).is_ok());
     for value in ["relative", "/private/../issuer"] {
         assert!(absolute_path(Path::new(value)).is_err());
@@ -154,7 +161,11 @@ fn complete_bank_route_preserves_exact_originals_and_runtime_selection() {
         hex::encode(provider.certificate.to_canonical_bytes().unwrap()),
         expected.certificate_hex
     );
-    assert_eq!(provider.worker_handle, expected.worker_handle);
+    assert_eq!(
+        provider.worker.python_executable,
+        expected.worker.python_executable
+    );
+    assert_eq!(provider.worker.python_sha256, [0x41; 32]);
     assert_eq!(actual.request_timeout, Duration::from_millis(5000));
 }
 
@@ -215,7 +226,7 @@ fn absent_trust_and_unbounded_limits_never_fall_back() {
         |c| c.request_timeout_ms = 60_001,
         |c| c.max_inflight = 0,
         |c| c.max_inflight = 1025,
-        |c| c.providers[0].worker_handle.clear(),
+        |c| c.providers[0].worker.python_executable.clear(),
         |c| c.providers[0].signer_private_key.clear(),
         |c| c.scope_hex = "00".repeat(32),
     ];
@@ -245,5 +256,45 @@ fn debug_omits_custody_paths_handles_and_endpoints() {
         ] {
             assert!(!text.contains(private));
         }
+    }
+}
+
+#[test]
+fn worker_original_paths_pins_timeouts_and_platform_are_required() {
+    let base = fixture().providers.remove(0).worker;
+    let platform = KagemushaWalletEnrollmentPlatformV1::Apple {
+        attestation_root_sha256: [9; 32],
+    };
+    let edits: [fn(&mut KagemushaEnrollmentWorker); 10] = [
+        |worker| worker.python_executable = "relative".into(),
+        |worker| worker.verifier_archive = "/private/../archive".into(),
+        |worker| worker.openssl_executable.clear(),
+        |worker| worker.attestation_root.clear(),
+        |worker| worker.store_directory.clear(),
+        |worker| worker.python_sha256_hex = "00".repeat(32),
+        |worker| worker.verifier_sha256_hex = "FF".repeat(32),
+        |worker| worker.openssl_sha256_hex = "01".into(),
+        |worker| worker.exchange_timeout_ms = 0,
+        |worker| worker.exchange_timeout_ms = 300_001,
+    ];
+    for edit in edits {
+        let mut invalid = base.clone();
+        edit(&mut invalid);
+        assert!(invalid.checked(platform).is_err());
+    }
+    let mut with_google = base.clone();
+    with_google.google = Some(KagemushaEnrollmentGoogle {
+        policy_original: "/private/google.json".into(),
+        policy_sha256_hex: "44".repeat(32),
+        oauth_credential: "/private/oauth".into(),
+    });
+    assert!(with_google.checked(platform).is_err());
+    for millis in [1, 300_000] {
+        let mut valid = base.clone();
+        valid.exchange_timeout_ms = millis;
+        assert_eq!(
+            valid.checked(platform).unwrap().exchange_timeout,
+            Duration::from_millis(millis)
+        );
     }
 }

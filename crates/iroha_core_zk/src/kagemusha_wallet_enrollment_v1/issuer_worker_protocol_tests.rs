@@ -484,3 +484,29 @@ fn regenerate_private_prepared_exchange_shared_vectors() {
         .join("../../fixtures/kagemusha/wallet_enrollment_worker_exchange_v1.json");
     std::fs::write(path, json::to_vec(&vectors()).unwrap()).unwrap();
 }
+
+#[test]
+fn bounded_preparation_preserves_shortened_session_deadline_and_rejects_extensions() {
+    for apple in [false, true] {
+        let request = fixture(apple);
+        let selected = dispatch(&request.request);
+        let challenge = request.request.body.challenge;
+        let maximum = 1_000 + selected.policy.challenge_lifetime_ms;
+        for expires in [1_001, 2_000, maximum] {
+            let prepared = VerifierPreparationV1::from_selected_bounded(
+                &selected, challenge, 1_000, expires, [7; 32],
+            )
+            .unwrap();
+            let value = decode(prepared.original(), 16 * 1024).unwrap();
+            assert_eq!(integer(&value, "expires_at_ms").unwrap(), expires);
+        }
+        for expires in [0, 999, 1_000, maximum + 1, u64::MAX] {
+            assert!(
+                VerifierPreparationV1::from_selected_bounded(
+                    &selected, challenge, 1_000, expires, [7; 32]
+                )
+                .is_err()
+            );
+        }
+    }
+}

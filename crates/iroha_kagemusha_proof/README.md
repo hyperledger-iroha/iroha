@@ -238,8 +238,19 @@ funding and incarnation provenance; this compiler does not execute ledger state.
 a complete source graph into a fresh exclusive output. Its completion record is
 published only after the graph's strict original imports succeed. Neither entry
 point manufactures a Load, creates a finality proof, or grants wallet installation
-authority. Both require explicit setup and source pins; their full canonical-setup
-runtime qualification remains pending the executed setup export.
+authority. Both require explicit setup and source pins. The genuine canonical
+setup intake and seven semantic mutations pass; complete source compilation is
+still running. These are engineering component results, not release qualification.
+
+The separate executed-Load entry point selects independently pinned setup, native
+wallet target, execution capture and receipt originals. It verifies the complete
+native H1–H5 prefix and compares each captured Result/CommitQC/committee field,
+then authenticates the exact counted Load event with its recorded index and path.
+It reconstructs the completed source-only catalog under exclusive custody and
+feeds every H2–H5 block to the same recursive history prover. Only a fully verified
+terminal receipt with both decided claims can publish `finality.norito` and its
+completion record. No historical fixture fallback exists. The actual funded Load
+runtime remains pending the matching canonical catalog and native A target.
 
 A separate bounded receipt loader pins the producer binary, source manifest,
 original fixture and completed inventory, then reconstructs the receipt verifier

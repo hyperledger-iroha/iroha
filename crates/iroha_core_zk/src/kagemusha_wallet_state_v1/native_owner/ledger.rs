@@ -18,13 +18,13 @@ pub struct LedgerProgressV1 {
     /// Exact certified block header hash at that height.
     pub block_hash: [u8; 32],
 }
-fn progress(checkpoint: &SumeragiFinalityCheckpoint) -> LedgerProgressV1 {
+pub(super) fn progress(checkpoint: &SumeragiFinalityCheckpoint) -> LedgerProgressV1 {
     LedgerProgressV1 {
         height: checkpoint.height(),
         block_hash: *checkpoint.block_hash().as_ref(),
     }
 }
-fn proof_original(bytes: &[u8]) -> Result<SumeragiFinalityProof, Error> {
+pub(super) fn proof_original(bytes: &[u8]) -> Result<SumeragiFinalityProof, Error> {
     if bytes.is_empty() || bytes.len() > LEDGER_PROOF_MAX_BYTES_V1 {
         return Err(Error::Invalid("ledger proof original bound"));
     }
@@ -42,7 +42,7 @@ fn payout_original(bytes: &[u8]) -> Result<KagemushaWalletPayoutRecordV1, Error>
     archive::decode(bytes).map_err(|_| Error::Invalid("payout canonical original"))
 }
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
-    fn selected_ledger(
+    pub(super) fn selected_ledger(
         &mut self,
         manifest: &manifest::Manifest,
         genesis: &SumeragiFinalityVerifier,
@@ -87,7 +87,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }
         Ok((verifier, Some(checkpoint)))
     }
-    fn clean_retired_ledger(&mut self) -> Result<(), Error> {
+    pub(super) fn clean_retired_ledger(&mut self) -> Result<(), Error> {
         let (root, mut manifest) = self.sync_manifest()?;
         let Some(address) = manifest.ledger_retired else {
             return Ok(());
@@ -198,8 +198,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Bounded canonical decoding, certificate/continuity, custody and publication failures.
     pub fn ingest_ledger_finality(&mut self, original: &[u8]) -> Result<LedgerProgressV1, Error> {
         let _payment = self.scheduler.payment();
-        let genesis = Arc::clone(&self.proofs.genesis);
-        self.ingest_ledger_original(&genesis, original)
+        self.ingest_recursive_ledger(original)
     }
     /// Read only the authoritative selected native prefix, not an uncommitted in-memory tip.
     /// # Errors

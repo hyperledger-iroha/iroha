@@ -44,14 +44,22 @@ or repeats a consumed assertion. `wallet_enrollment_worker.py` implements the cu
 verification/recovery channel. Before exposing E1, Native retains the worker's actual journal
 incarnation, selects its immutable preparation and durably retains the worker acknowledgement.
 Complete or Recover can atomically claim that prepared row once. A delayed first claim uses
-fresh trusted Native dispatch time without changing its original request. Once claimed, an
-unknown result stays `outcome_unknown`; no action repeats external verification. Inspect
-reads an exact retained result without claiming a prepared row, even while E1 is live.
-An unclaimed Inspect returns `unavailable`; an already claimed row without a result returns
-`outcome_unknown`. The issuer uses Inspect for passive recovery after E1 expiry and requires
-fresh bank eligibility before any live Complete/Recover that could claim a row. Missing
-prepared custody remains `unavailable`, never a definitive evidence rejection or permission
-to recreate a row. Native prohibits Prepare after E5 selection, including during recovery.
+fresh trusted Native dispatch time without changing its original request. Before claiming,
+the Linux worker samples OS realtime and retains `CLOCK_BOOTTIME`. Fresh readings include
+suspend and are checked around KeyMint, revocation, OAuth/Google and Apple verification,
+and before the durable result commits. Realtime regression or missing boottime is unavailable;
+there is no suspend-excluding clock fallback. Google evidence age is checked again after
+decode. The evidence timestamp retains the selected Core dispatch time; the local clock
+only narrows whether the operation may still finish.
+
+Once claimed, an unknown result stays `outcome_unknown`; no action repeats external
+verification. Inspect reads an exact retained result without claiming a prepared row,
+even while E1 is live. An unclaimed Inspect returns `unavailable`; an already claimed row
+without a result returns `outcome_unknown`. The issuer uses Inspect for passive recovery
+after E1 expiry and requires fresh bank eligibility before any live Complete/Recover that
+could claim a row. Missing prepared custody remains `unavailable`, never a definitive
+evidence rejection or permission to recreate a row. Native prohibits Prepare after E5
+selection, including during recovery.
 The journal retains exact request/result originals and their configuration pin. Apple assertion
 counter/challenge consumption and the recoverable evidence result commit in one FULL-synchronous
 transaction. Changed retained originals are rejected. The inherited configuration, crypto

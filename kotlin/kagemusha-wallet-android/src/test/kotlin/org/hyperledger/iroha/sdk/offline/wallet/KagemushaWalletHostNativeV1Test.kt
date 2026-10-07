@@ -28,7 +28,7 @@ class KagemushaWalletHostNativeV1Test {
     fun unloadSetupUsesActualJniAndNeverInventsACompletedClaim() {
         val id = ByteArray(32) { 9 }
         fun call(identity: ByteArray = id, beneficiary: ByteArray = byteArrayOf(), token: Long = 0) =
-            assertNotNull(KagemushaWalletNativeV1.setup(0, identity, 27, 0, 0, token,
+            assertNotNull(KagemushaWalletNativeV1.setup(0, identity, 33, 0, 0, token,
                 beneficiary, byteArrayOf(), byteArrayOf()))
         val unknown = call()
         assertEquals(-2, unknown.status)
@@ -52,7 +52,7 @@ class KagemushaWalletHostNativeV1Test {
         val id = ByteArray(32) { 1 }
         repeat(2) {
             val error = assertFailsWith<KagemushaWalletExceptionV1> {
-                KagemushaWalletRuntimeV1(Long.MAX_VALUE).begin(KagemushaWalletOpenOriginalsV1(id, id, id, id))
+                KagemushaWalletRuntimeV1(Long.MAX_VALUE, Any()).begin(KagemushaWalletOpenOriginalsV1(id, id, id, id))
             }
             assertEquals(KagemushaWalletExceptionV1.ARTIFACTS_UNAVAILABLE, error.status)
         }

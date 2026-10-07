@@ -9,9 +9,8 @@ use super::*;
 use iroha_core_zk::kagemusha_wallet_enrollment_v1::PreKeyDispatchV1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_ELIGIBILITY_MAX_BYTES_V1, KAGEMUSHA_WALLET_SCHEME_MAX_BYTES_V1,
-    KagemushaEligibilityAuthorityV1, KagemushaEligibilityDecisionV1, KagemushaEligibilityPolicyV1,
-    KagemushaEligibilityPurposeV1, KagemushaEligibilityRequestV1, KagemushaEligibilityResponseV1,
-    KagemushaWalletSchemeV1,
+    KagemushaEligibilityDecisionV1, KagemushaEligibilityPolicyV1, KagemushaEligibilityPurposeV1,
+    KagemushaEligibilityRequestV1, KagemushaEligibilityResponseV1, KagemushaWalletSchemeV1,
 };
 
 const MAX_EXCHANGE: usize = 8 * 1024;

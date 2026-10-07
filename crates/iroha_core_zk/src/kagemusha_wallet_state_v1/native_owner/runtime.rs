@@ -1,6 +1,7 @@
 //! Move-only native installation and account-admission ownership.
 
 use super::*;
+use crate::kagemusha_wallet_enrollment_v1 as enrollment;
 use crate::kagemusha_wallet_intake_v1::{
     self as intake, PendingWalletOpenV1, WalletOpenBeginFailureV1,
 };
@@ -19,6 +20,8 @@ pub struct NativeWalletRuntimeV1<F: KagemushaWalletFsV1, P, S> {
 
 pub(super) enum RuntimeCustodyV1<F: KagemushaWalletFsV1, P> {
     Exclusive(crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderV1<F, P>),
+    // Enrollment retains the same installed proof graph and original source owner.
+    Enrollment(Box<enrollment::EnrollmentOwnerV1<F, P>>),
     // Unexpected native references retain custody and cannot confer admission.
     Shared(AdvanceHandle<F, P>),
     // An ordinary begin refusal owns the exact bounded originals and selected-source pin.
@@ -101,6 +104,90 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         }
     }
 
+    /// Move exclusive custody into authenticated enrollment without rebuilding installed sources.
+    /// Refusal returns the same runtime, including every provider and original-source owner.
+    pub fn start_enrollment(
+        self,
+        config: enrollment::EnrollmentConfigV1,
+    ) -> Result<Self, (Self, enrollment::Error)> {
+        let Self {
+            custody,
+            installed,
+            sources,
+            genesis,
+            originals,
+            read,
+            budget,
+        } = self;
+        let restore = |custody| Self {
+            custody,
+            installed,
+            sources,
+            genesis,
+            originals,
+            read,
+            budget,
+        };
+        let RuntimeCustodyV1::Exclusive(provider) = custody else {
+            return Err((restore(custody), enrollment::Error::Phase));
+        };
+        match enrollment::EnrollmentOwnerV1::new(provider, config) {
+            Ok(owner) => Ok(restore(RuntimeCustodyV1::Enrollment(Box::new(owner)))),
+            Err((provider, error)) => Err((restore(RuntimeCustodyV1::Exclusive(provider)), error)),
+        }
+    }
+
+    /// Borrow only the actual retained enrollment phase; no handle or DATA creates this owner.
+    pub fn enrollment(
+        &mut self,
+    ) -> Result<&mut enrollment::EnrollmentOwnerV1<F, P>, enrollment::Error> {
+        match &mut self.custody {
+            RuntimeCustodyV1::Enrollment(owner) => Ok(owner),
+            _ => Err(enrollment::Error::Phase),
+        }
+    }
+
+    /// Preserve an actual returned enrollment effect before releasing this provider.
+    /// Cleanup refusal retains the same runtime and pending original bytes.
+    pub fn prepare_close(&mut self) -> Result<(), enrollment::Error> {
+        if let RuntimeCustodyV1::Enrollment(owner) = &mut self.custody {
+            owner.flush_apple_returned()?;
+        }
+        Ok(())
+    }
+    /// Complete a genuine retained E6 and restore the same installed runtime for account open.
+    /// Missing or unavailable originals retain the entire enrollment phase for an exact retry.
+    pub fn finish_enrollment(mut self) -> Result<(Self, [Vec<u8>; 4]), (Self, enrollment::Error)> {
+        let selected = match self.enrollment().and_then(|owner| owner.open_originals()) {
+            Ok(originals) => originals,
+            Err(error) => return Err((self, error)),
+        };
+        let Self {
+            custody,
+            installed,
+            sources,
+            genesis,
+            originals,
+            read,
+            budget,
+        } = self;
+        let RuntimeCustodyV1::Enrollment(owner) = custody else {
+            unreachable!("enrollment phase was borrowed above")
+        };
+        Ok((
+            Self {
+                custody: RuntimeCustodyV1::Exclusive(owner.into_provider()),
+                installed,
+                sources,
+                genesis,
+                originals,
+                read,
+                budget,
+            },
+            selected,
+        ))
+    }
+
     /// Admit originals or recover the SAME retained original intake/account challenge.
     /// A new nonce is sampled only for an actual first successful begin. Retained failed
     /// begin and pending phases accept exactly their original DATA, never a replacement.
@@ -160,6 +247,23 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                         });
                     }
                     Ok(pending)
+                }
+                custody @ RuntimeCustodyV1::Enrollment(_) => {
+                    return Err(NativeOpenFailureV1 {
+                        runtime: Self {
+                            custody,
+                            installed,
+                            sources,
+                            genesis,
+                            originals,
+                            read,
+                            budget,
+                        },
+                        error: intake::Error::Authority(
+                            "enrollment has not handed off verified originals",
+                        )
+                        .into(),
+                    });
                 }
                 RuntimeCustodyV1::Exclusive(provider) => PendingWalletOpenV1::begin(
                     provider,

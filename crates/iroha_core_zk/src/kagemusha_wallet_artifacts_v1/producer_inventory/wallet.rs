@@ -26,6 +26,9 @@ pub enum WalletSourcesErrorV1 {
     /// The complete ordinary receipt graph differs from native genesis or its sources.
     #[error(transparent)]
     Finality(#[from] FinalityQualificationErrorV1),
+    /// The actual full finality producer or one of its original proving tables failed.
+    #[error(transparent)]
+    FinalityProducer(#[from] FinalityProducerErrorV1),
     /// A Q source or exact signature policy did not qualify.
     #[error(transparent)]
     Q(#[from] QQualificationErrorV1),
@@ -56,6 +59,10 @@ impl WalletSourcesErrorV1 {
                 FinalityQualificationErrorV1::Source(error) => error.is_cancelled(),
                 FinalityQualificationErrorV1::Anchor(_)
                 | FinalityQualificationErrorV1::AnchorMismatch => false,
+            },
+            Self::FinalityProducer(error) => match error {
+                FinalityProducerErrorV1::Original(error) => error.is_cancelled(),
+                FinalityProducerErrorV1::Source(error) => error.is_cancelled(),
             },
             Self::Q(error) => match error {
                 QQualificationErrorV1::Original(error) => error.is_cancelled(),
@@ -91,6 +98,7 @@ impl WalletSourcesErrorV1 {
             Self::Original(Error::Unavailable)
                 | Self::Sigma(SigmaQualificationErrorV1::Original(Error::Unavailable))
                 | Self::Finality(FinalityQualificationErrorV1::Original(Error::Unavailable))
+                | Self::FinalityProducer(FinalityProducerErrorV1::Original(Error::Unavailable))
                 | Self::Q(QQualificationErrorV1::Original(Error::Unavailable))
                 | Self::Operation(OperationQualificationErrorV1::Original(Error::Unavailable))
                 | Self::Operation(OperationQualificationErrorV1::Bootstrap(
@@ -110,6 +118,7 @@ pub struct QualifiedWalletSourcesV1 {
     scope: SourceScopeV1,
     sigmas: QualifiedSigmasV1,
     finality: QualifiedReceiptSourceV1,
+    finality_producer: QualifiedFinalityProducerV1,
     q: Vec<QualifiedQProgramV1>,
     routes: Vec<QualifiedOperationRouteV1>,
     omega: QualifiedOmegaProgramV1,
@@ -167,8 +176,19 @@ impl AuthenticatedProducerInventoryV1 {
         ];
         let q_parameters = Arc::clone(installed.verifier().pallas_parameters());
         // Native genesis binding happens before any source-original read.
-        let finality =
-            self.qualify_finality(native_finality, originals, finality_params, finality_limits)?;
+        let finality = self.qualify_finality(
+            native_finality,
+            originals,
+            finality_params.clone(),
+            finality_limits,
+        )?;
+        let finality_producer = QualifiedFinalityProducerV1::mount(
+            &self,
+            *finality.anchor(),
+            originals,
+            finality_params,
+            config,
+        )?;
         let sigmas = self.qualify_sigmas(originals, config)?;
         let mut q = Vec::with_capacity(self.inventory.operations.len());
         for program in 0..self.inventory.operations.len() {
@@ -200,6 +220,7 @@ impl AuthenticatedProducerInventoryV1 {
             scope,
             sigmas,
             finality,
+            finality_producer,
             q,
             routes,
             omega,
@@ -229,6 +250,10 @@ impl QualifiedWalletSourcesV1 {
     /// Complete receipt source bound to independently authenticated native genesis.
     pub const fn finality(&self) -> &QualifiedReceiptSourceV1 {
         &self.finality
+    }
+    /// Complete actual finality producer selected by the same authenticated catalog.
+    pub const fn finality_producer(&self) -> &QualifiedFinalityProducerV1 {
+        &self.finality_producer
     }
     /// Complete sole Omega source; partial owners cannot construct this grant.
     pub const fn omega(&self) -> &QualifiedOmegaProgramV1 {

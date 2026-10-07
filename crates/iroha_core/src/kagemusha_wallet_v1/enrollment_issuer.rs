@@ -153,13 +153,14 @@ impl<R: EnrollmentIssuerRuntimeV1> EnrollmentIssuerV1<R> {
     ///
     /// `call` is transport-original authentication material consumed by the mandatory trusted
     /// runtime. It is never an account/actor verdict. The runtime must authenticate exactly
-    /// `dispatch_original` as the expected request body and enforce network, freshness and replay.
+    /// the entire action envelope containing exact `dispatch_original`, including network, freshness
+    /// and replay. The associated call type cannot supply a decoded authority verdict.
     /// # Errors
     /// Rejects unsigned/foreign calls, unregistered accounts/assets, current routing changes,
     /// invalid originals, missing Resume attempts or journal uncertainty.
     pub fn authenticate(
         &mut self,
-        call: &[u8],
+        call: &R::Call,
         dispatch_original: &[u8],
     ) -> Result<EnrollmentIssuerSessionV1> {
         let dispatch = PreKeyDispatchV1::decode(dispatch_original).map_err(|_| Invalid)?;

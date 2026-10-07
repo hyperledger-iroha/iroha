@@ -43,6 +43,7 @@ struct Runtime {
     fixture_evidence: Option<RequestV1>,
 }
 impl EnrollmentIssuerRuntimeV1 for Runtime {
+    type Call = [u8];
     fn current_configuration(&mut self) -> Result<Arc<KagemushaEnrollmentIssuer>> {
         if let Some(left) = self.config_countdown.as_mut() {
             if *left == 0 {
@@ -264,7 +265,18 @@ fn fixture() -> (
             service_origin_digest: dispatch.service_origin_digest,
             observation_endpoint: "https://provider.example/eligibility".parse().unwrap(),
             observation_credential: "/private/provider-credential".into(),
-            worker_handle: "worker:current".into(),
+            worker: iroha_config::parameters::actual::KagemushaEnrollmentWorker {
+                python_executable: "/opt/issuer/python".into(),
+                python_sha256: [41; 32],
+                verifier_archive: "/opt/issuer/verifier.pyz".into(),
+                verifier_sha256: [42; 32],
+                openssl_executable: "/opt/issuer/openssl".into(),
+                openssl_sha256: [43; 32],
+                attestation_root: "/opt/issuer/root.pem".into(),
+                store_directory: "/private/issuer/worker".into(),
+                exchange_timeout: std::time::Duration::from_secs(60),
+                google: None,
+            },
             signer_private_key: "/private/enrollment-signer".into(),
         }],
     });

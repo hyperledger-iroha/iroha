@@ -71,6 +71,8 @@ class AndroidArmv7DiagnosticConfigurationTests(unittest.TestCase):
             "CARGO_HOME": str(self.cache), "CARGO_INCREMENTAL": "0",
             "CARGO_NET_OFFLINE": "true", "CARGO_TARGET_DIR": str(self.target),
             "HOME": str(self.account), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+            runner.WALLET_RUNTIME_AUTHORITY_INPUT: "bpng-taira-v7",
+            runner.WALLET_RUNTIME_TRUST_INPUT: "3" * 64,
             "NORITO_SKIP_BINDINGS_SYNC": "1", "PATH": "/usr/bin:/bin",
             "RUSTC": str(self.tools / "rustc"), "RUSTDOC": str(self.tools / "rustdoc"),
             "RUSTUP_HOME": str(self.account / ".rustup"), "TMPDIR": str(self.base),
@@ -135,7 +137,8 @@ class AndroidArmv7DiagnosticConfigurationTests(unittest.TestCase):
         self.assertEqual(observed["cache"], str(self.cache))
         self.assertEqual(observed["target"], str(self.target))
         self.assertEqual(observed["argv"], self.arguments)
-        self.assertEqual(set(observed["keys"]), runner.ANDROID_CARGO_ENVIRONMENT)
+        self.assertEqual(set(observed["keys"]),
+                         runner.PROFILES["android-armv7-diagnostic-cargo"])
         self.assertEqual(global_config.read_bytes(), original)
         self.assertEqual(self.retained.read_bytes(), b"keep warm target original")
         rejected = self.launch(environment=dict(self.environment, CARGO_TARGET_DIR=str(self.cwd)))

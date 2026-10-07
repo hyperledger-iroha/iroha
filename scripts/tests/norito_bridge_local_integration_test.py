@@ -148,6 +148,8 @@ class LocalAppleIntegrationTests(unittest.TestCase):
             'MOBILE_RUSTUP_HOME=/fixture/rustup', 'MOBILE_TMPDIR=/fixture/tmp',
             'XCODE_DEVELOPER_DIR=/fixture/Xcode', 'MACOSX_DEPLOYMENT_TARGET=15.0',
             'CARGO_BUILD_JOBS=1',
+            'WALLET_RUNTIME_AUTHORITY=bpng-taira-v7',
+            'WALLET_RUNTIME_TRUST_PUBLIC_HEX=' + '3' * 64,
         ])
         command = setup + '\n' + function.group(0) + '\n' + (
             'run_hermetic_apple_cargo apple-macos /fixture/sdk build '
