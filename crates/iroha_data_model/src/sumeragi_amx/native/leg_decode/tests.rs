@@ -596,3 +596,41 @@ fn funded_native_leg_destination_reset_retains_backing_and_refuses_replacement()
     drop(workspace);
     assert_eq!(pool.reserved_bytes(), 0);
 }
+
+#[test]
+fn completed_native_leg_retains_original_graph_counter_controls_and_last_owner_refund() {
+    let original = leg(multisig(1), multisig(5), Quantity::from(u128::MAX));
+    let frame = norito::encode_canonical(&original).unwrap();
+    let graph = exact_retained(&original);
+    let pool = AllocationBudget::new(
+        graph + controls() + Layout::array::<SequenceSpan>(2).unwrap().size(),
+    );
+    let foreign = AllocationBudget::new(pool.limit_bytes());
+    let pending = PendingAmxTransferLegDecodeV1::new(&frame, &pool);
+    let owner = pending.try_decode_retained().unwrap();
+    assert_eq!(owner.canonical(), &original);
+    assert!(owner.belongs_to(&pool));
+    assert!(!owner.belongs_to(&foreign));
+    assert_eq!(owner.allocation_bytes(), Some(graph + controls()));
+    assert_eq!(pool.reserved_bytes(), graph + controls());
+    let AccountController::Multisig(source) = owner.canonical().source.account().controller()
+    else {
+        panic!("original multisig source");
+    };
+    let members = source.members().as_ptr();
+    let key = source.members()[0].public_key().to_bytes().1.as_ptr();
+    let scope = DecodeBudgetContext::new(DecodeLimits::new(usize::MAX, 0, 0, 0, 0));
+    scope.with(|| {
+        let borrowed = owner.canonical();
+        assert_eq!(borrowed, &original);
+        let AccountController::Multisig(source) = borrowed.source.account().controller() else {
+            panic!("same completed controller");
+        };
+        assert_eq!(source.members().as_ptr(), members);
+        assert_eq!(source.members()[0].public_key().to_bytes().1.as_ptr(), key);
+    });
+    assert_eq!(pool.reserved_bytes(), graph + controls());
+    assert_eq!(pending.original_source().as_ptr(), frame.as_ptr());
+    drop(owner);
+    assert_eq!(pool.reserved_bytes(), 0);
+}

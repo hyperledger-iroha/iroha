@@ -283,5 +283,6 @@ impl NativeAmxParticipantStateV1 {
 
 mod leg_decode;
 pub use leg_decode::{
-    AllocatedAmxTransferLegV1, AmxLegDecodeErrorV1, PendingAmxTransferLegDecodeV1,
+    AllocatedAmxTransferLegV1, AmxLegDecodeErrorV1, CompletedAmxTransferLegDecodeV1,
+    PendingAmxTransferLegDecodeV1,
 };

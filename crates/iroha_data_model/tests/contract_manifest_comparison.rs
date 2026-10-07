@@ -65,7 +65,7 @@ fn record() {
 }
 
 fn refuse(layout: Layout) -> bool {
-    ENABLED.try_with(|enabled| enabled.get()).unwrap_or(false)
+    ENABLED.try_with(Cell::get).unwrap_or(false)
         && FAIL_SIZE
             .try_with(|size| {
                 if size.get() == Some(layout.size()) {

@@ -817,3 +817,35 @@ fn native_amx_paid_owned_queue_and_payload_clones_retain_original_proof_graph_an
         std::panic::resume_unwind(original);
     }
 }
+
+pub(super) fn with_paid_prepare_retry_fixture(
+    test: impl FnOnce(&CertifiedTestChain, InstructionBox, KeyPair),
+) {
+    let mut roots = paid_roots();
+    let transaction = roots.transaction(100, 0x64);
+    let tx = transaction.id().unwrap();
+    let signed = paid_global_sign(
+        &roots.global,
+        [BeginAmxV1 {
+            transaction: transaction.clone(),
+        }
+        .into()],
+        2_999,
+    );
+    assert_eq!(roots.global.commit_at(3_000, vec![signed]), vec![true]);
+    global_paid_images(&roots.global, 3);
+    let begin = super::super::super::amx_record_proof(
+        &roots.global.state().view(),
+        roots.global.height(),
+        AmxRecordKind::Begin,
+        tx,
+    )
+    .complete()
+    .unwrap()
+    .unwrap();
+    let instruction = begin
+        .into_prepare(FIRST, &transaction)
+        .complete(&roots.global.state().ivm_execution_budget())
+        .unwrap();
+    test(&roots.participants[0], instruction, payer());
+}

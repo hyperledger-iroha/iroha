@@ -21,6 +21,9 @@ use iroha_data_model::{
         RamLfeReceiptAttestation,
     },
 };
+pub(crate) use owner_prf::{
+    owner_prf_now_ms, validate_owner_prf_lease, validate_owner_prf_lease_at,
+};
 use std::{
     collections::BTreeMap,
     fmt,

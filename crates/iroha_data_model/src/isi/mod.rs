@@ -2757,6 +2757,7 @@ pub mod error {
             crate :: DeriveJsonSerialize,
             crate :: DeriveJsonDeserialize,
             thiserror::Error,
+            derive_more::Constructor,
         )]
         pub struct RepetitionError {
             /// Instruction type

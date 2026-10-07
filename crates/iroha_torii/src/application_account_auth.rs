@@ -131,10 +131,13 @@ fn add_authenticated_application_compute_routes(
         catalog_post(handler_authenticated_space_directory_manifest_revoke)
             .authenticated_canonical_account_body(app_state.clone(), max_body_bytes),
     );
+    // These owner-input handlers authenticate the exact raw request themselves.
+    // Installing canonical middleware as well would consume the same nonce twice.
     builder.route(
         &route_catalog::application_api::RAM_LFE_PROGRAMS_BY_PROGRAM_ID_EXECUTE_POST,
         catalog_post(handler_ram_lfe_execute)
-            .authenticated_canonical_account_body(app_state.clone(), max_body_bytes),
+            .layer(DefaultBodyLimit::max(max_body_bytes))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
     );
     builder.route(
         &route_catalog::application_api::RAM_LFE_RECEIPTS_VERIFY_POST,
@@ -143,13 +146,15 @@ fn add_authenticated_application_compute_routes(
     );
     builder.route(
         &route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_IDENTIFIERS_CLAIM_RECEIPT_POST,
-        catalog_post(handler_authenticated_identifier_claim_receipt)
-            .authenticated_canonical_account_body(app_state.clone(), max_body_bytes),
+        catalog_post(handler_identifier_claim_receipt)
+            .layer(DefaultBodyLimit::max(max_body_bytes))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
     );
     builder.route(
         &route_catalog::application_api::IDENTIFIERS_RESOLVE_POST,
         catalog_post(handler_identifier_resolve)
-            .authenticated_canonical_account_body(app_state, max_body_bytes),
+            .layer(DefaultBodyLimit::max(max_body_bytes))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
     );
 }
 #[cfg(feature = "app_api")]
@@ -185,32 +190,6 @@ async fn handler_authenticated_space_directory_manifest_revoke(
         "space-directory manifest revocation draft",
     )?;
     handler_space_directory_manifest_revoke(State(app), headers, remote, request).await
-}
-#[cfg(feature = "app_api")]
-async fn handler_authenticated_identifier_claim_receipt(
-    State(app): State<SharedAppState>,
-    axum::extract::Extension(verified): axum::extract::Extension<
-        crate::app_auth::VerifiedCanonicalRequest,
-    >,
-    headers: axum::http::HeaderMap,
-    remote: axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(account_literal): AxPath<String>,
-    request: NoritoJson<routing::IdentifierResolveRequestDto>,
-) -> Result<AxResponse, Error> {
-    let account_id = parse_account_id_for_endpoint(
-        &app,
-        &account_literal,
-        "/v1/accounts/{account_id}/identifiers/claim-receipt",
-    )?;
-    require_runtime_governance_account(&account_id, &verified.account, "identifier claim receipt")?;
-    handler_identifier_claim_receipt(
-        State(app),
-        headers,
-        remote,
-        AxPath(account_literal),
-        request,
-    )
-    .await
 }
 #[cfg(all(test, feature = "app_api"))]
 mod application_account_auth_tests {

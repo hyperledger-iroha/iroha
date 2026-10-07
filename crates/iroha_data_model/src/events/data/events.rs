@@ -796,6 +796,11 @@ impl RolePermissionChanged {
     pub fn permission(&self) -> &Permission {
         &self.permission
     }
+    /// Role whose permission changed.
+    #[must_use]
+    pub fn role(&self) -> &RoleId {
+        &self.role
+    }
 }
 mod account {
     //! This module contains `AccountEvent` and its impls
@@ -1077,6 +1082,11 @@ mod account {
         #[must_use]
         pub fn permission(&self) -> &Permission {
             &self.permission
+        }
+        /// Account whose permission changed.
+        #[must_use]
+        pub fn account(&self) -> &AccountId {
+            &self.account
         }
     }
     impl AccountCreated {
@@ -1666,6 +1676,26 @@ mod domain {
             pub reported_at_ms: u64,
         }
         impl KaigiRelayHealthSummary {
+            /// Domain containing the relay health record.
+            #[must_use]
+            pub fn domain(&self) -> &DomainId {
+                &self.domain
+            }
+            /// Call associated with this health report.
+            #[must_use]
+            pub fn call(&self) -> &KaigiId {
+                &self.call
+            }
+            /// Relay whose health was reported.
+            #[must_use]
+            pub fn relay(&self) -> &AccountId {
+                &self.relay
+            }
+            /// Reported relay health status.
+            #[must_use]
+            pub fn status(&self) -> &KaigiRelayHealthStatus {
+                &self.status
+            }
             /// Construct a new relay health summary payload.
             #[must_use]
             pub fn new(

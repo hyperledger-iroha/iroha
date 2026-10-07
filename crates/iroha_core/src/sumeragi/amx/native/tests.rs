@@ -1594,3 +1594,9 @@ fn native_leg_destination_and_scope_invariants_defer_without_protocol_rejection(
         );
     }
 }
+
+pub(super) fn with_paid_prepare_retry_fixture(
+    test: impl FnOnce(&CertifiedTestChain, InstructionBox, KeyPair),
+) {
+    paid_borrowed_custody::with_paid_prepare_retry_fixture(test);
+}

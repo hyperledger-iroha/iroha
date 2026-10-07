@@ -34,7 +34,18 @@ mod model {
     /// Transaction was rejected because of one of its instructions failing.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::transaction::error::model::InstructionExecutionFail")]
-    #[derive(Getters, Debug, Clone, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(
+        Getters,
+        Debug,
+        Clone,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        derive_more::Constructor,
+    )]
     pub struct InstructionExecutionFail {
         /// Instruction for which execution failed
         #[getset(get = "pub")]

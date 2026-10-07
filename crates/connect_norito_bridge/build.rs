@@ -50,9 +50,10 @@ fn wallet_runtime_trust() {
     let value = read(INPUT);
     let key = parse_wallet_runtime_trust(authority.as_deref(), value.as_deref())
         .unwrap_or_else(|error| panic!("{AUTHORITY}/{INPUT}: {error}"));
-    let source = key.map_or_else(|| "None".to_owned(), |(authority, key)| {
-        format!("Some((RuntimeAuthority::{authority}, {key:?}))")
-    });
+    let source = key.map_or_else(
+        || "None".to_owned(),
+        |(authority, key)| format!("Some((RuntimeAuthority::{authority}, {key:?}))"),
+    );
     let path = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo OUT_DIR"))
         .join("kagemusha_wallet_runtime_trust.rs");
     std::fs::write(path, format!("// Immutable public authority and key selected by the native artifact build owner.\nconst INSTALLED_RUNTIME_TRUST: Option<(RuntimeAuthority, [u8; 32])> = {source};\n"))
@@ -86,9 +87,14 @@ mod tests {
         let selected = (0u8..32)
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        for (authority, variant) in [("bpng-taira-v6", "BpngTairaV6"), ("cbsi-release-v1", "CbsiReleaseV1")] {
-            assert_eq!(parse_wallet_runtime_trust(Some(authority), Some(&selected)),
-                Ok(Some((variant, std::array::from_fn(|index| index as u8)))));
+        for (authority, variant) in [
+            ("bpng-taira-v6", "BpngTairaV6"),
+            ("cbsi-release-v1", "CbsiReleaseV1"),
+        ] {
+            assert_eq!(
+                parse_wallet_runtime_trust(Some(authority), Some(&selected)),
+                Ok(Some((variant, std::array::from_fn(|index| index as u8))))
+            );
         }
     }
     #[test]
@@ -98,7 +104,14 @@ mod tests {
         for authority in ["bpng-taira-v6", "cbsi-release-v1"] {
             assert!(parse_wallet_runtime_trust(Some(authority), None).is_err());
         }
-        for authority in ["", "bpng", "cbsi", "BPNG-TAIRA-V6", "bpng-taira-v6\n", " cbsi-release-v1"] {
+        for authority in [
+            "",
+            "bpng",
+            "cbsi",
+            "BPNG-TAIRA-V6",
+            "bpng-taira-v6\n",
+            " cbsi-release-v1",
+        ] {
             assert!(parse_wallet_runtime_trust(Some(authority), Some(&key)).is_err());
         }
     }

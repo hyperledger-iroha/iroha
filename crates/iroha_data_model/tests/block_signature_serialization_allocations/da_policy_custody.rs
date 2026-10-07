@@ -295,8 +295,7 @@ fn da_policy_original_source_pool_flags_and_incomplete_finish_fail_closed_withou
     ));
     let (_, error) = pending
         .finish(&source)
-        .err()
-        .expect("actual incomplete owner");
+        .expect_err("actual incomplete owner");
     assert!(matches!(error, DaProofPolicyCustodyError::Incomplete));
     let mut pending = PreparedDaProofPolicyBundle::from_source(&source, span, &pool).unwrap();
     {
@@ -310,8 +309,7 @@ fn da_policy_original_source_pool_flags_and_incomplete_finish_fail_closed_withou
     let before = pool.reserved_bytes();
     let (pending, error) = pending
         .finish(&copy)
-        .err()
-        .expect("actual original retained owner");
+        .expect_err("actual original retained owner");
     assert!(matches!(error, DaProofPolicyCustodyError::SourceChanged));
     assert_eq!(pool.reserved_bytes(), before);
     assert!(pending.belongs_to(&pool));
