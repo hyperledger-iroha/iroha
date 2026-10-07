@@ -82,6 +82,50 @@ pub struct MonetaryStepV1 {
 }
 
 impl MonetaryStepV1 {
+    /// Authenticated installation to recheck before capsule freezing and commit.
+    #[must_use]
+    pub const fn manifest_digest(&self) -> [u8; 32] {
+        self.manifest_digest
+    }
+
+    pub(super) fn capsule_inputs(&self) -> Result<Vec<KagemushaWalletRetainedInputV1>, Error> {
+        use KagemushaWalletRetainedInputRoleV1 as R;
+        let mut inputs = vec![KagemushaWalletRetainedInputV1 {
+            role: R::Request,
+            bytes: self.request_original.clone(),
+        }];
+        if self.statement.effect.kind() == KagemushaWalletOperationKindV1::Receive {
+            inputs.extend([
+                KagemushaWalletRetainedInputV1 {
+                    role: R::Payment,
+                    bytes: self.payment_original.clone().ok_or(Error::Authority)?,
+                },
+                KagemushaWalletRetainedInputV1 {
+                    role: R::CertificateSet,
+                    bytes: self
+                        .payer_certificate_set_original
+                        .clone()
+                        .ok_or(Error::Authority)?,
+                },
+                KagemushaWalletRetainedInputV1 {
+                    role: R::Credential,
+                    bytes: self
+                        .payer
+                        .as_ref()
+                        .ok_or(Error::Authority)?
+                        .credential_original
+                        .clone(),
+                },
+            ]);
+        } else if self.payment_original.is_some()
+            || self.payer.is_some()
+            || self.payer_certificate_set_original.is_some()
+        {
+            return Err(Error::Authority);
+        }
+        Ok(inputs)
+    }
+
     /// Exact witness of the installed selector; not a separate monetary relation.
     #[must_use]
     pub const fn witness(&self) -> &StepWitness<Fp> {

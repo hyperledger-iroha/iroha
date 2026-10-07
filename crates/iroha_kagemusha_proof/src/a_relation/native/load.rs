@@ -12,6 +12,10 @@
 //! checks each original PK against its independently authenticated descriptor/VK and
 //! fixed source. It creates no prepared operation, checkpoint or accepted claim.
 
+#[path = "load/checkpoint.rs"]
+mod checkpoint;
+pub use checkpoint::{CheckpointKind, CheckpointLayout};
+
 use core::fmt;
 use std::sync::Arc;
 
@@ -92,6 +96,8 @@ mod capacity;
 pub const SOURCE_RANGE_BUSES: usize = 3;
 /// Exact source schedule has five A stages and four W continuations.
 pub const A_STAGE_COUNT: usize = 5;
+/// Exact internal continuations between the five fixed source stages.
+pub const W_STAGE_COUNT: usize = A_STAGE_COUNT - 1;
 const DESCRIPTOR_MAX_BYTES: usize = 1 << 20;
 const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
 

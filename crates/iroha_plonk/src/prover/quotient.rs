@@ -47,7 +47,9 @@
 use std::{borrow::Cow, collections::BTreeMap};
 
 use ff::Field;
-use iroha_pasta::{PastaCurve, PastaField, fft::FftDomain};
+#[cfg(test)]
+use iroha_pasta::fft::FftDomain;
+use iroha_pasta::{PastaCurve, PastaField, fft::CosetFftPlan};
 use rayon::prelude::*;
 
 use super::{Challenges, ProverError};
@@ -522,7 +524,7 @@ fn initial_key_cosets<'a, C: PastaCurve>(
     polynomial: impl Fn(usize) -> CosetPolynomial,
     columns: &mut impl Iterator<Item = &'a mut [C::ScalarExt]>,
 ) -> Result<Vec<KeyCoset<'a, C::ScalarExt>>, KeyError> {
-    let mut values = coefficients
+    let values = coefficients
         .iter()
         .enumerate()
         .map(|(index, _)| {
@@ -536,7 +538,6 @@ fn initial_key_cosets<'a, C: PastaCurve>(
             }
         })
         .collect::<Result<Vec<_>, KeyError>>()?;
-    refresh_key_cosets(pk, coefficients, &mut values, polynomial, 0)?;
     Ok(values)
 }
 
@@ -554,19 +555,19 @@ pub(super) fn workspace_elements<C: PastaCurve>(
             .checked_add(shape.permutation_columns)
             .ok_or(ProtocolError::Overflow)?
     };
-    // One compressed numerator per lookup plus one reusable committed
-    // product/input/table triple. No lookup buffers are needed for L = 0.
-    // Compared with 3L columns this costs one extra column at L = 1 and
-    // saves 2L - 3 columns at L >= 2.
-    let lookup_columns = shape
-        .lookups
-        .checked_add(if shape.lookups == 0 { 0 } else { 3 })
-        .ok_or(ProtocolError::Overflow)?;
-    key_columns
+    // Every lookup owns its committed product/input/table triple, while
+    // compressed numerators are not FFT inputs. One powers column is retained
+    // exactly when at least one owned transform exists; eager fixed-only keys
+    // therefore retain zero workspace storage.
+    let transformed = key_columns
         .checked_add(shape.num_advice)
         .and_then(|v| v.checked_add(shape.num_instance))
         .and_then(|v| v.checked_add(shape.permutation_sets))
-        .and_then(|v| v.checked_add(lookup_columns))
+        .and_then(|v| v.checked_add(if shape.lookups == 0 { 0 } else { 3 }))
+        .ok_or(ProtocolError::Overflow)?;
+    transformed
+        .checked_add(shape.lookups)
+        .and_then(|v| v.checked_add(usize::from(transformed != 0)))
         .and_then(|v| v.checked_mul(shape.n))
         .ok_or(ProtocolError::Overflow)
 }
@@ -594,9 +595,8 @@ fn evaluate_into<F: PastaField>(
 /// Copies a complete coefficient batch before transforming disjoint columns.
 /// Only slice metadata is allocated; field storage belongs to the workspace.
 fn evaluate_many<F: PastaField>(
-    domain: &FftDomain<F>,
+    plan: Option<&CosetFftPlan<'_, '_, F>>,
     coefficients: &[impl AsRef<[F]>],
-    shift: F,
     values: &mut [&mut [F]],
 ) -> Result<(), KeyError> {
     if coefficients.len() != values.len() {
@@ -615,10 +615,15 @@ fn evaluate_many<F: PastaField>(
             });
         }
     }
+    if values.is_empty() {
+        return Ok(());
+    }
+    // An owned transform is never admitted without its accounted plan.
+    let plan = plan.ok_or(KeyError::CosetIndex)?;
     for (values, coefficients) in values.iter_mut().zip(coefficients) {
         values.copy_from_slice(coefficients.as_ref());
     }
-    domain.coset_fft_many(values, shift)?;
+    plan.fft_many(values)?;
     Ok(())
 }
 
@@ -630,11 +635,11 @@ fn refresh_key_cosets<'a, C: PastaCurve>(
     values: &mut [KeyCoset<'a, C::ScalarExt>],
     polynomial: impl Fn(usize) -> CosetPolynomial,
     coset: usize,
+    plan: Option<&CosetFftPlan<'_, '_, C::ScalarExt>>,
 ) -> Result<(), KeyError> {
-    let shift = pk
-        .quotient_domain()
-        .shift(coset)
-        .ok_or(KeyError::CosetIndex)?;
+    if coset >= pk.quotient_domain().pieces() {
+        return Err(KeyError::CosetIndex);
+    }
     let mut owned = Vec::with_capacity(values.len());
     let mut owned_coefficients = Vec::with_capacity(values.len());
     for (index, (values, coefficients)) in values.iter_mut().zip(coefficients).enumerate() {
@@ -651,7 +656,7 @@ fn refresh_key_cosets<'a, C: PastaCurve>(
             }
         }
     }
-    evaluate_many(pk.domain(), &owned_coefficients, shift, &mut owned)?;
+    evaluate_many(plan, &owned_coefficients, &mut owned)?;
     Ok(())
 }
 
@@ -717,6 +722,11 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
     let count = elements / n;
     let lease = workspace.lease(n, count).map_err(ProverError::Workspace)?;
     let mut columns = lease.columns.iter_mut().take(count).map(AsMut::as_mut);
+    let mut powers = if count == 0 {
+        None
+    } else {
+        Some(next_column(&mut columns)?)
+    };
     let mut fixed = initial_key_cosets(pk, pk.fixed_polys(), CosetPolynomial::Fixed, &mut columns)?;
     let mut sigma = initial_key_cosets(
         pk,
@@ -755,13 +765,19 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
     }
     for coset in 0..shape.quotient_pieces {
         let shift = quotient.shift(coset).ok_or(KeyError::CosetIndex)?;
-        if coset != 0 {
+        let plan = powers
+            .as_deref_mut()
+            .map(|powers| domain.coset_plan(powers, shift))
+            .transpose()?;
+        {
+            // Refresh coset zero too: allocation above performs no owned FFT.
             refresh_key_cosets(
                 pk,
                 pk.fixed_polys(),
                 &mut fixed,
                 CosetPolynomial::Fixed,
                 coset,
+                plan.as_ref(),
             )?;
             refresh_key_cosets(
                 pk,
@@ -769,6 +785,7 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
                 &mut sigma,
                 CosetPolynomial::Permutation,
                 coset,
+                plan.as_ref(),
             )?;
         }
         let masks = pk.coset_masks(coset)?;
@@ -777,9 +794,9 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
             masks.l_last.as_slice(),
             masks.l_active.as_slice(),
         );
-        evaluate_many(domain, inputs.advice, shift, &mut advice)?;
-        evaluate_many(domain, inputs.instance, shift, &mut instance)?;
-        evaluate_many(domain, &inputs.permutation_products, shift, &mut products)?;
+        evaluate_many(plan.as_ref(), inputs.advice, &mut advice)?;
+        evaluate_many(plan.as_ref(), inputs.instance, &mut instance)?;
+        evaluate_many(plan.as_ref(), &inputs.permutation_products, &mut products)?;
         let fixed_refs: Vec<&[C::ScalarExt]> = fixed.iter().map(AsRef::as_ref).collect();
         let advice_refs: Vec<&[C::ScalarExt]> = advice.iter().map(|values| &**values).collect();
         let instance_refs: Vec<&[C::ScalarExt]> = instance.iter().map(|values| &**values).collect();
@@ -904,9 +921,8 @@ pub(super) fn evaluate_with_workspace<C: PastaCurve>(
                 inputs.lookups.iter().zip(&lookup_numerators).enumerate()
             {
                 evaluate_many(
-                    domain,
+                    plan.as_ref(),
                     &[lookup.product, lookup.input, lookup.table],
-                    shift,
                     &mut [&mut **product, &mut **input, &mut **table],
                 )?;
                 values

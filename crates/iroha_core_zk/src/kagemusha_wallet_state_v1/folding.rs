@@ -213,7 +213,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             let fold = self
                 .read_fold(&step)?
                 .ok_or(Error::WitnessLost("fold predecessor"))?;
-            if fold.record.lineage.public.credit_digest_root != manifest.credit_tree.root {
+            if fold.record.lineage.public.credit_digest_root != manifest.credit_tree.root() {
                 return Err(Error::WitnessLost("credit tree root"));
             }
             Some(fold.record)
@@ -305,7 +305,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 }
                 self.proofs.verify_lineage(&lineage)?;
                 Self::record_credit(&mut manifest.credit_tree, &mut self.archive, &step, burned)?;
-                if lineage.public.credit_digest_root != manifest.credit_tree.root {
+                if lineage.public.credit_digest_root != manifest.credit_tree.root() {
                     return Err(Error::Proof("credit-digest root"));
                 }
                 let c = &step.frozen.capsule;
@@ -376,7 +376,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         let fold = self
             .read_fold(&step)?
             .ok_or(Error::WitnessLost("covering Ω"))?;
-        if fold.record.lineage.public.credit_digest_root != manifest.credit_tree.root {
+        if fold.record.lineage.public.credit_digest_root != manifest.credit_tree.root() {
             return Err(Error::WitnessLost("credit root"));
         }
         let (leaf, indexed, opening) =

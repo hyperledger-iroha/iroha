@@ -134,6 +134,11 @@ the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 | `ci/dependency_budget.json`, `scripts/check_release_feature_graph.py` (`proofs-halo2`, `zk-halo2`, `zk-halo2-ipa`), source-token guards in `pr.yml` | Pin the current graph and features. The reviewed native-consumer manifest baseline counts the native crates; shipping configurations forbid `iroha_plonk_oracle` | Update in each migrating change |
 | CI for the release-only oracle suites and `fixtures/native_prover/verify_kats_v1.py` | None yet. TODO: a nightly workflow running `cargo test --locked --release -p iroha_pasta -p iroha_plonk_oracle -- --include-ignored` on x86_64 and aarch64, and a `pytests/scripts` wrapper for the verifier | M0 exit (x86_64 run) |
 
+Current native source admission requires **ABI 26** after replacement of the
+generic wallet commit export with typed native preparation. ABI-25 artifacts
+are rejected; a fresh ABI-26 build and native consumer replay remain required.
+The component evidence below is retained without relabeling it.
+
 The captured ABI-25 macOS confidential host slice passes **15 Kotlin/Java tests**
 (10 actual native-prover/full-tree cases and five Java note consumers) and
 **26 Swift tests** (including five actual native-prover cases), with no skips or

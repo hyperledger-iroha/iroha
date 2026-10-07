@@ -59,12 +59,14 @@ fn coset_evaluation_reuses_storage_and_matches_the_allocating_reference() {
 fn batched_coset_coefficients_validate_before_copying() {
     fn check<F: PastaField>() {
         let domain = FftDomain::<F>::new(3).unwrap();
+        let mut powers = vec![F::ZERO; domain.n()];
+        let plan = domain.coset_plan(&mut powers, F::ONE).unwrap();
         let coefficients = vec![vec![F::ONE; 8], vec![F::from(2); 8]];
         let mut values = vec![vec![F::ZERO; 8]; 2];
         let before = values.clone();
         let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
         assert!(matches!(
-            evaluate_many(&domain, &coefficients[..1], F::ONE, &mut columns),
+            evaluate_many(Some(&plan), &coefficients[..1], &mut columns),
             Err(KeyError::Shape {
                 what: "coset columns",
                 ..
@@ -75,7 +77,7 @@ fn batched_coset_coefficients_validate_before_copying() {
         malformed[1].pop();
         let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
         assert!(matches!(
-            evaluate_many(&domain, &malformed, F::ONE, &mut columns),
+            evaluate_many(Some(&plan), &malformed, &mut columns),
             Err(KeyError::Shape {
                 what: "coset coefficients",
                 ..
@@ -83,7 +85,13 @@ fn batched_coset_coefficients_validate_before_copying() {
         ));
         assert_eq!(values, before);
         let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
-        evaluate_many(&domain, &coefficients, F::ONE, &mut columns).unwrap();
+        assert_eq!(
+            evaluate_many(None, &coefficients, &mut columns),
+            Err(KeyError::CosetIndex)
+        );
+        assert_eq!(values, before);
+        let mut columns: Vec<_> = values.iter_mut().map(Vec::as_mut_slice).collect();
+        evaluate_many(Some(&plan), &coefficients, &mut columns).unwrap();
         for (actual, mut expected) in values.into_iter().zip(coefficients) {
             domain.coset_fft(&mut expected, F::ONE).unwrap();
             assert_eq!(actual, expected);
@@ -130,9 +138,21 @@ fn key_cosets_keep_owned_allocations_or_borrow_each_cached_coset() {
                     .iter()
                     .map(|column| column.as_ref().as_ptr())
                     .collect();
-                for coset in 1..pk.quotient_domain().pieces() {
-                    refresh_key_cosets(&pk, coefficients, &mut values, polynomial, coset)
-                        .expect("refresh");
+                let mut powers = vec![C::ScalarExt::ZERO; pk.domain().n()];
+                for coset in 0..pk.quotient_domain().pieces() {
+                    let plan = pk
+                        .domain()
+                        .coset_plan(&mut powers, pk.quotient_domain().shift(coset).unwrap())
+                        .unwrap();
+                    refresh_key_cosets(
+                        &pk,
+                        coefficients,
+                        &mut values,
+                        polynomial,
+                        coset,
+                        Some(&plan),
+                    )
+                    .expect("refresh");
                     for (index, column) in values.iter().enumerate() {
                         let reference = pk
                             .coset_values(polynomial(index), coset)
@@ -156,7 +176,8 @@ fn key_cosets_keep_owned_allocations_or_borrow_each_cached_coset() {
                         coefficients,
                         &mut values,
                         polynomial,
-                        pk.quotient_domain().pieces()
+                        pk.quotient_domain().pieces(),
+                        None,
                     ),
                     Err(KeyError::CosetIndex)
                 );

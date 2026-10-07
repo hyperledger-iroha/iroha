@@ -44,9 +44,9 @@ mod custody;
 mod fee_claims;
 mod folding;
 mod index;
-mod indexed_map;
 mod lifecycle;
 mod manifest;
+mod map_tree;
 mod scheduling;
 mod snapshot;
 
@@ -56,7 +56,6 @@ pub use custody::{AdvanceHandle, Custody, ProviderArchive, TransitionOwner};
 pub use fee_claims::{FinalizedPayoutEvidence, RetainedFeeClaim};
 pub use folding::{FoldStatus, LineageCache};
 pub use index::{IndexRoot, ObjectStore};
-pub use indexed_map::PersistentIndexedMapV1;
 pub use lifecycle::{
     ChargeOriginalsV1, NativePreparation, OperationActionV1, OperationRequestV1,
     PREPARATION_MAX_BYTES, PreparationSourceV1, REQUEST_MAX_BYTES, RequestStatusV1,

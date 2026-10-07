@@ -447,6 +447,34 @@ fn installed_public_refresh_proves_all_five_updates_and_rejects_resigned_bad_sig
             )
             .unwrap();
         assert!(!proof.bytes.is_empty());
+        let frozen = preparation
+            .freeze_refresh(&next, &step, proof.clone(), MemoryBudget::DEFAULT)
+            .unwrap();
+        assert_eq!(frozen.credential, source.successor);
+        assert_eq!(frozen.capsule.successor_state, *step.state());
+        assert_eq!(frozen.capsule.statement, *step.statement());
+        assert_eq!(
+            frozen.capsule.predecessor_capsule_digest,
+            released.retained.capsule_digest
+        );
+        assert_eq!(frozen.capsule.retained_inputs, step.originals().0);
+        assert_eq!(frozen.capsule.map_openings, step.originals().1);
+        assert_eq!(frozen.capsule.step_proof, proof);
+        assert!(frozen.capsule.predecessor_lineage().is_none());
+        let mut invalid = proof.clone();
+        invalid.bytes[32] ^= 1;
+        assert!(
+            preparation
+                .freeze_refresh(&next, &step, invalid, MemoryBudget::DEFAULT)
+                .is_err()
+        );
+        if source.successor != credential {
+            assert!(
+                preparation
+                    .freeze_refresh(&owner, &step, proof.clone(), MemoryBudget::DEFAULT)
+                    .is_err()
+            );
+        }
         eprintln!(
             "INSTALLED_REFRESH kind={:?} sigma_bytes={} sequence=1 real_source_import=true real_retained_receipt=true recursive_admission=false",
             source.originals().kind,

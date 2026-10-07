@@ -28,7 +28,11 @@ sys.modules[SPEC.name] = validator
 SPEC.loader.exec_module(validator)
 WALLET_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
-    for method in ("revision", "open", "close", "activity", "call", "snapshot")
+    for method in ("revision", "open", "close", "activity", "call", "execute", "snapshot")
+]
+AUTH_JNI_SYMBOLS = [
+    "Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_" + method
+    for method in ("reserve", "restore")
 ]
 
 
@@ -269,6 +273,8 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         self, symbols: list[str], mode: str = "apple"
     ) -> subprocess.CompletedProcess[str]:
         """Exercise the packaging guard with an explicit exported symbol table."""
+        if mode == "elf":
+            symbols = [*symbols, *AUTH_JNI_SYMBOLS]
         checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
             encoding="utf-8"
         )
@@ -351,6 +357,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "connect_norito_kagemusha_unlisted_v1",
             "connect_norito_kagemusha_wallet_unlisted_v1",
             "connect_norito_kagemusha_wallet_commit_v2",
+            "connect_norito_kagemusha_wallet_commit_v1",
             "connect_norito_offline_cash_unlisted_v1",
         ):
             for mode in ("apple", "elf"):

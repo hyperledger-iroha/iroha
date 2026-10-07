@@ -382,3 +382,33 @@ mod tests {
         // Passing envelope checks alone does not parse or admit an original key.
     }
 }
+
+#[cfg(test)]
+mod original_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_original_metadata_rejects_before_source_or_prover_admission() {
+        // Raw codec refusals migrated from the superseded all-keys-at-once
+        // constructor. The current catalog bounds these originals before reading;
+        // metadata installation and one-key source imports remain separate owners.
+        for bytes in [vec![], vec![1], vec![0; DESCRIPTOR_MAX_BYTES + 1]] {
+            assert!(DescriptorBinding::decode_v2(&bytes).is_err());
+        }
+        let binding = super::super::super::artifact::source_descriptor::<StageCircuit>(()).unwrap();
+        for bytes in [vec![], vec![1], vec![0; VERIFYING_KEY_MAX_BYTES + 1]] {
+            assert!(VerifyingKey::<Eq>::read(&bytes, &binding).is_err());
+        }
+        let config = ReadConfig {
+            maximum_bytes: 16,
+            maximum_rows: 1 << 16,
+            coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+            msm_budget: MemoryBudget::DEFAULT,
+        };
+        assert_eq!(original_bounds(&[], 1 << 16, config), Err(Error::Artifact));
+        assert_eq!(
+            original_bounds(&[0; 17], 1 << 16, config),
+            Err(Error::Artifact)
+        );
+    }
+}

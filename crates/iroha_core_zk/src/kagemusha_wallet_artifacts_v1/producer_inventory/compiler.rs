@@ -692,6 +692,8 @@ mod classes;
 pub use classes::{QClassesV1, q_classes};
 #[path = "compiler/closure.rs"]
 mod closure;
+#[path = "compiler/complete.rs"]
+mod complete;
 
 #[cfg(test)]
 #[path = "compiler/tests.rs"]

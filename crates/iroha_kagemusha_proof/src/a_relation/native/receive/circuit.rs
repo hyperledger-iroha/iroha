@@ -53,11 +53,49 @@ use iroha_plonk_recursion::{
     accumulation_circuit::FoldInputCells,
     codec::ScalarCells,
     obligation::{ModeCells, ledger::Variant},
-    verifier::{VerifierChip, VerifierConfig, VerifierKeyCells},
+    verifier::{VerifierChip, VerifierConfig, VerifierKeyCells, VerifierPlan},
 };
 use std::sync::Arc;
 
 use super::Source;
+
+struct OmegaKeySource {
+    representation: Value<Fp>,
+    fixed: Vec<Value<Ep>>,
+    permutation: Vec<Value<Ep>>,
+}
+fn omega_key_source(
+    plan: &VerifierPlan<Ep>,
+    key: &VerifyingKey<Ep>,
+    known: bool,
+) -> Result<OmegaKeySource, Error> {
+    if key.descriptor_digest() != plan.binding().digest() {
+        return Err(Error::Synthesis);
+    }
+    let iroha_plonk::transcript::TranscriptRepr::Base(representation) = *key.transcript_repr()
+    else {
+        return Err(Error::Synthesis);
+    };
+    let value = |v| {
+        if known {
+            Value::known(v)
+        } else {
+            Value::unknown()
+        }
+    };
+    let points =
+        |values: &[iroha_pasta::EpAffine]| values.iter().map(|p| value(Ep::from(*p))).collect();
+    Ok(OmegaKeySource {
+        representation: if known {
+            Value::known(representation)
+        } else {
+            Value::unknown()
+        },
+        fixed: points(key.fixed_commitments()),
+        permutation: points(key.permutation_commitments()),
+    })
+}
+
 fn frame(bytes: &[u8]) -> Result<Vec<u8>, Error> {
     let mut framed = u32::try_from(bytes.len())
         .map_err(|_| Error::BoundsFailure)?
@@ -195,22 +233,16 @@ impl Cells {
         self,
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
+        plan: &VerifierPlan<Ep>,
         key: &VerifyingKey<Ep>,
     ) -> Result<VerifierKeyCells<Ep>, Error> {
-        let iroha_plonk::transcript::TranscriptRepr::Base(repr) = *key.transcript_repr() else {
-            return Err(Error::Synthesis);
-        };
-        let fixed = key
-            .fixed_commitments()
-            .iter()
-            .map(|p| self.value(Ep::from(*p)))
-            .collect::<Vec<_>>();
-        let permutation = key
-            .permutation_commitments()
-            .iter()
-            .map(|p| self.value(Ep::from(*p)))
-            .collect::<Vec<_>>();
-        chip.witness_key(region, self.value(repr), &fixed, &permutation)
+        let source = omega_key_source(plan, key, self.known)?;
+        chip.witness_key(
+            region,
+            source.representation,
+            &source.fixed,
+            &source.permutation,
+        )
     }
     fn active(
         self,
@@ -682,7 +714,12 @@ impl Circuit<Fp> for Stage {
                 };
                 let sigma = [own_sigma.clone(), incoming_sigma.clone()];
                 let pred = if stage == 0 {
-                    let key = cells.key(&mut chip, &mut region, &source.predecessor.key)?;
+                    let key = cells.key(
+                        &mut chip,
+                        &mut region,
+                        plan.operation().omega().ok_or(Error::Synthesis)?,
+                        &source.predecessor.key,
+                    )?;
                     let proof = cells.proof(&mut chip, &mut region, &source.predecessor.proof)?;
                     Some(verify_predecessor(
                         &mut chip,
@@ -733,7 +770,12 @@ impl Circuit<Fp> for Stage {
                     })
                     .transpose()?;
                 let proof_key = if tasks.contains(&OperationTask::ReceiveProofs) {
-                    Some(cells.key(&mut chip, &mut region, &source.incoming_head.key)?)
+                    Some(cells.key(
+                        &mut chip,
+                        &mut region,
+                        plan.operation().omega().ok_or(Error::Synthesis)?,
+                        &source.incoming_head.key,
+                    )?)
                 } else {
                     None
                 };
@@ -934,3 +976,7 @@ impl Circuit<Fp> for StageCircuit {
         self.inner.synthesize(config, layouter)
     }
 }
+
+#[cfg(test)]
+#[path = "circuit/key_source_tests.rs"]
+mod key_source_tests;

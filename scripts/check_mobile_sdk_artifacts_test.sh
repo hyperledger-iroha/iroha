@@ -67,9 +67,13 @@ wallet_symbols=(
   connect_norito_kagemusha_wallet_snapshot_v1
 )
 wallet_jni_symbols=()
-for method in revision open close activity call; do
+for method in revision open close activity call execute snapshot; do
   wallet_jni_symbols+=("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_${method}")
 done
+auth_jni_symbols=(
+  Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_reserve
+  Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_restore
+)
 required_protocol_symbols=(
   connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1
   "${wallet_symbols[@]}"
@@ -121,7 +125,7 @@ while IFS= read -r symbol; do
   required_fixture_symbols+=("$symbol")
 done < <(bash -c 'source "$1"; printf "%s\n" "${REQUIRED_PROTOCOL_C_SYMBOLS[@]}"' gate "$symbol_gate_dir/gate.sh")
 [[ "${#required_fixture_symbols[@]}" -gt 0 ]] || fail "required protocol symbols could not be read"
-required_jni_fixture_symbols=("${wallet_jni_symbols[@]}")
+required_jni_fixture_symbols=("${wallet_jni_symbols[@]}" "${auth_jni_symbols[@]}")
 retired_offline_prefix="$(bash -c 'source "$1"; printf "%s" "$RETIRED_KAGEMUSHA_C_PREFIX"' gate "$symbol_gate_dir/gate.sh")"
 [[ "$retired_offline_prefix" == connect_norito_*_ ]] || fail "retired offline prefix could not be read"
 
@@ -160,6 +164,7 @@ for retired in \
   "elf connect_norito_kagemusha_wallet_v1_validate" \
   "elf connect_norito_kagemusha_wallet_unknown_v1" \
   "apple _connect_norito_kagemusha_wallet_commit_v2" \
+  "apple _connect_norito_kagemusha_wallet_commit_v1" \
   "apple _connect_norito_kagemusha_core_coordinator_open_v1" \
   "elf ${retired_offline_prefix}payment_validate" \
   "apple _${retired_offline_prefix}payment_validate" \
@@ -194,7 +199,7 @@ for missing in "${wallet_jni_symbols[@]}"; do
   grep -Fq "missing $missing" <<<"$output" \
     || fail "binary-symbol gate did not identify missing wallet JNI export $missing"
 done
-required_jni_fixture_symbols=("${wallet_jni_symbols[@]}")
+required_jni_fixture_symbols=("${wallet_jni_symbols[@]}" "${auth_jni_symbols[@]}")
 complete_required_symbols=("${required_fixture_symbols[@]}")
 required_fixture_symbols=("${complete_required_symbols[@]:1}")
 if run_symbol_gate elf >/dev/null; then

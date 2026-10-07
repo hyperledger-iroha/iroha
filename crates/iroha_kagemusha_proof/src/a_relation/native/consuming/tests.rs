@@ -55,66 +55,72 @@ fn original() -> Inputs {
 
 #[test]
 fn exact_consuming_sigma_tape_statement_length_and_selector_are_bound() {
-    let source = original();
-    assert_eq!(check_sigma_tape(&source, Variant::Unload), Ok(()));
-    for mutation in 0..6 {
-        let mut bad = source.clone();
-        match mutation {
-            0 => bad.sigma[40] ^= 1,
-            1 => bad.sigma.push(7),
-            2 => bad.q[0].instances[0][1] += Fq::ONE,
-            3 => bad.q[0].instances[2][0] = Fq::ZERO,
-            4 => bad.q[0].instances[2][0] = Fq::from(2),
-            _ => bad.state.statement[20] += Fp::ONE,
+    for (variant, selector) in [(Variant::Unload, 13), (Variant::Retiring, 15)] {
+        let mut source = original();
+        source.q[0].instances[2][0] = Fq::from(selector);
+        assert_eq!(check_sigma_tape(&source, variant), Ok(()));
+        for mutation in 0..6 {
+            let mut bad = source.clone();
+            match mutation {
+                0 => bad.sigma[40] ^= 1,
+                1 => bad.sigma.push(7),
+                2 => bad.q[0].instances[0][1] += Fq::ONE,
+                3 => bad.q[0].instances[2][0] = Fq::ZERO,
+                4 => bad.q[0].instances[2][0] = Fq::from(2),
+                _ => bad.state.statement[20] += Fp::ONE,
+            }
+            assert_eq!(
+                check_sigma_tape(&bad, variant),
+                Err(Error::Input),
+                "mutation{mutation}"
+            );
         }
-        assert_eq!(
-            check_sigma_tape(&bad, Variant::Unload),
-            Err(Error::Input),
-            "mutation{mutation}"
-        );
     }
 }
 
 #[test]
 fn consuming_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
-    let mut input = original().q[0].clone();
-    let point = iroha_plonk::transcript::decode_point::<Eq>(
-        &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
-    )
-    .unwrap();
-    let (x, y) = Option::<(Fq, Fq)>::from(point.coordinates()).unwrap();
-    input.instances[1] = vec![x, y];
-    let n = input.instances[0].len();
-    input.instances[0][n - K..n - K + 4].fill(Fq::ZERO);
-    assert!(q_sigma_part(&input, 12, Variant::Unload).is_ok());
-    for mutation in 0..6 {
-        let mut bad = input.clone();
-        match mutation {
-            0 => bad.instances[0][n - K] = Fq::ONE,
-            1 => bad.instances[0][n - 1] = Fq::ZERO,
-            2 => bad.instances[1] = vec![Fq::ZERO, Fq::ZERO],
-            3 => bad.instances[3][0] = Fq::ZERO,
-            4 => bad.instances[4][0] = Fq::from(16),
-            _ => bad.instances[2][0] = Fq::ZERO,
+    for (variant, selector) in [(Variant::Unload, 13), (Variant::Retiring, 15)] {
+        let mut input = original().q[0].clone();
+        input.instances[2][0] = Fq::from(selector);
+        let point = iroha_plonk::transcript::decode_point::<Eq>(
+            &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
+        )
+        .unwrap();
+        let (x, y) = Option::<(Fq, Fq)>::from(point.coordinates()).unwrap();
+        input.instances[1] = vec![x, y];
+        let n = input.instances[0].len();
+        input.instances[0][n - K..n - K + 4].fill(Fq::ZERO);
+        assert!(q_sigma_part(&input, 12, variant).is_ok());
+        for mutation in 0..6 {
+            let mut bad = input.clone();
+            match mutation {
+                0 => bad.instances[0][n - K] = Fq::ONE,
+                1 => bad.instances[0][n - 1] = Fq::ZERO,
+                2 => bad.instances[1] = vec![Fq::ZERO, Fq::ZERO],
+                3 => bad.instances[3][0] = Fq::ZERO,
+                4 => bad.instances[4][0] = Fq::from(16),
+                _ => bad.instances[2][0] = Fq::ZERO,
+            }
+            assert!(
+                q_sigma_part(&bad, 12, variant).is_err(),
+                "mutation{mutation}"
+            );
         }
-        assert!(
-            q_sigma_part(&bad, 12, Variant::Unload).is_err(),
-            "mutation{mutation}"
-        );
+        let p = [
+            0x992d_30ed_0000_0001_u64,
+            0x2246_98fc_094c_f91b,
+            0,
+            0x4000_0000_0000_0000,
+        ];
+        let mut repr = [0; 32];
+        for (to, word) in repr.chunks_exact_mut(8).zip(p) {
+            to.copy_from_slice(&word.to_le_bytes());
+        }
+        let mut alias = input;
+        alias.instances[0][n - 1] = Fq::from_repr(repr).unwrap();
+        assert!(q_sigma_part(&alias, 12, variant).is_err());
     }
-    let p = [
-        0x992d_30ed_0000_0001_u64,
-        0x2246_98fc_094c_f91b,
-        0,
-        0x4000_0000_0000_0000,
-    ];
-    let mut repr = [0; 32];
-    for (to, word) in repr.chunks_exact_mut(8).zip(p) {
-        to.copy_from_slice(&word.to_le_bytes());
-    }
-    let mut alias = input;
-    alias.instances[0][n - 1] = Fq::from_repr(repr).unwrap();
-    assert!(q_sigma_part(&alias, 12, Variant::Unload).is_err());
 }
 
 #[test]

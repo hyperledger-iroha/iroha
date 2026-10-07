@@ -242,6 +242,70 @@ impl IndexRoot {
         Ok(Self(replacement))
     }
 
+    /// Remove one key and return a new immutable root, preserving all older roots.
+    /// Removing an absent key is idempotent. Every selected node remains authenticated;
+    /// unavailable or corrupt content is never treated as absence.
+    ///
+    /// # Errors
+    /// Corrupted/unavailable paths or uncertain publication.
+    pub fn remove(self, store: &mut impl ObjectStore, key: &[u8; 32]) -> Result<Self, Error> {
+        let mut path = Vec::new();
+        let mut root = self.0;
+        let mut minimum = 0;
+        let mut replacement;
+        loop {
+            if root == [0; 32] {
+                return Ok(self);
+            }
+            match load(store, root, minimum)? {
+                Node::Leaf { key: held, .. } => {
+                    if held != *key {
+                        return Ok(self);
+                    }
+                    replacement = [0; 32];
+                    break;
+                }
+                Node::Branch {
+                    bit: branch,
+                    prefix,
+                    left,
+                    right,
+                } => {
+                    if common(key, &prefix) < branch {
+                        return Ok(self);
+                    }
+                    let go_right = bit(key, branch);
+                    path.push((branch, prefix, left, right, go_right));
+                    root = if go_right { right } else { left };
+                    minimum = branch + 1;
+                }
+            }
+        }
+        for (branch, prefix, mut left, mut right, go_right) in path.into_iter().rev() {
+            if go_right {
+                right = replacement;
+            } else {
+                left = replacement;
+            }
+            replacement = if left == [0; 32] {
+                right
+            } else if right == [0; 32] {
+                left
+            } else {
+                save(
+                    store,
+                    &Node::Branch {
+                        bit: branch,
+                        prefix,
+                        left,
+                        right,
+                    },
+                )?
+            };
+        }
+        Ok(Self(replacement))
+    }
+
     /// Largest stored key strictly below `key`; useful for indexed-tree predecessor leaves.
     ///
     /// # Errors
@@ -296,59 +360,6 @@ impl IndexRoot {
                 }
             }
         }
-    }
-
-    /// Remove one key and return a new durable root, preserving the original snapshot.
-    /// An absent key leaves the root unchanged. Only its bounded Patricia path is retained;
-    /// collapsed branches keep their exact sibling subtree without rewriting its history.
-    ///
-    /// # Errors
-    /// Unavailable, corrupt or oversized nodes, or uncertain object publication.
-    pub fn remove(
-        self,
-        store: &mut impl ObjectStore,
-        key: &[u8; 32],
-    ) -> Result<Self, Error> {
-        let mut root = self.0;
-        let mut minimum = 0;
-        let mut path = Vec::new();
-        while root != [0; 32] {
-            match load(store, root, minimum)? {
-                Node::Leaf { key: held, .. } => {
-                    if held != *key {
-                        return Ok(self);
-                    }
-                    let Some((_, _, sibling, _)) = path.pop() else {
-                        return Ok(Self::default());
-                    };
-                    let mut replacement = sibling;
-                    while let Some((branch, prefix, sibling, right_side)) = path.pop() {
-                        let (left, right) = if right_side {
-                            (sibling, replacement)
-                        } else {
-                            (replacement, sibling)
-                        };
-                        replacement = save(store, &Node::Branch {
-                            bit: branch,
-                            prefix,
-                            left,
-                            right,
-                        })?;
-                    }
-                    return Ok(Self(replacement));
-                }
-                Node::Branch { bit: branch, prefix, left, right } => {
-                    if common(key, &prefix) < branch {
-                        return Ok(self);
-                    }
-                    let right_side = bit(key, branch);
-                    path.push((branch, prefix, if right_side { left } else { right }, right_side));
-                    root = if right_side { right } else { left };
-                    minimum = branch + 1;
-                }
-            }
-        }
-        Ok(self)
     }
 }
 

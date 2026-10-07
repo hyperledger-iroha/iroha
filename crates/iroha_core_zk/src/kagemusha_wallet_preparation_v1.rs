@@ -54,6 +54,9 @@ mod unfolded;
 #[path = "kagemusha_wallet_preparation_v1/admin_proving.rs"]
 mod admin_proving;
 
+#[path = "kagemusha_wallet_preparation_v1/freeze.rs"]
+mod freeze;
+
 #[cfg(test)]
 #[path = "kagemusha_wallet_preparation_v1/tests.rs"]
 mod tests;

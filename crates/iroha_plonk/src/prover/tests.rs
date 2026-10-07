@@ -1494,3 +1494,6 @@ fn measure_prove_and_verify() {
         }
     }
 }
+
+#[path = "fixed_only_tests.rs"]
+mod fixed_only;

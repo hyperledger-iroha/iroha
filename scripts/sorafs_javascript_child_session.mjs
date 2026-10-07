@@ -107,7 +107,7 @@ function symbols(binding) {
   for (const name of [...ABI_SYMBOLS, ...SORAFS_SYMBOLS])
     demand(typeof Object.getOwnPropertyDescriptor(binding, name)?.value === "function", `missing native capability ${name}`);
   const version = binding.connectNoritoBridgeAbiVersion();
-  demand(version === 26 && Number.isSafeInteger(version), "same-binding ABI is not25");
+  demand(version === 26 && Number.isSafeInteger(version), "same-binding ABI is not26");
   return Object.freeze({ bridgeAbiVersion: version, requiredSymbols: ABI_SYMBOLS, sorafsSymbols: SORAFS_SYMBOLS });
 }
 

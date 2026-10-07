@@ -322,8 +322,8 @@ fn genuine_retiring_sources_reject_an_oversized_predecessor() {
         &[
             witness.successor.core[5],
             witness.successor.core[6],
-            Fp::from(6),
-            witness.statement[17],
+            Fp::from(8),
+            Fp::ZERO,
         ],
     );
     for value in [

@@ -12,7 +12,7 @@ mod common;
 #[allow(dead_code)]
 mod load_objects;
 /// Genuine common-key Bootstrap/Load predecessor builder.
-#[path = "load_omega.rs"]
+#[path = "common/proof_fixtures/load_omega.rs"]
 pub mod load_outer;
 #[path = "common/native_source_factory_checks.rs"]
 mod native_source_factory_checks;

@@ -218,6 +218,48 @@ fn real_bootstrap_offline_construction_needs_no_signed_placeholder_or_qualified_
             .close_operation(&changed, &q, &omega, None)
             .is_err()
     );
+    let retiring_q = compiler.q(Variant::Retiring, &[15], &[], &sigmas).unwrap();
+    let retiring_route = compiled_routes()
+        .into_iter()
+        .find(|route| route.variant == Variant::Retiring)
+        .unwrap();
+    let retiring = compiler
+        .operation(retiring_route, &retiring_q, Some(omega.key()), None)
+        .unwrap();
+    assert_eq!(retiring.stages(), 4);
+    let final_omega = compiler
+        .omega(&[operation.terminal(), retiring.terminal()])
+        .unwrap();
+    assert_eq!(
+        omega.key.metadata.binding(),
+        final_omega.key.metadata.binding()
+    );
+    assert!(!equal(&omega.key.metadata, &final_omega.key.metadata));
+    let closed_retiring = compiler
+        .close_operation(&retiring, &retiring_q, &final_omega, None)
+        .unwrap();
+    assert!(equal(
+        closed_retiring.predecessor.as_ref().unwrap(),
+        &final_omega.key.metadata
+    ));
+    assert_eq!(closed_retiring.context, retiring.context);
+    assert_eq!(closed_retiring.a.len(), retiring.a.len());
+    assert_eq!(closed_retiring.w.len(), retiring.w.len());
+    for (old, new) in retiring.a.iter().zip(&closed_retiring.a) {
+        assert_eq!(old.original, new.original);
+        assert!(equal(&old.metadata, &new.metadata));
+    }
+    for (old, new) in retiring.w.iter().zip(&closed_retiring.w) {
+        assert_eq!(old.original, new.original);
+        assert!(equal(&old.metadata, &new.metadata));
+    }
+    let closed_bootstrap = compiler
+        .close_operation(&operation, &q, &final_omega, None)
+        .unwrap();
+    assert!(closed_bootstrap.predecessor.is_none());
+    eprintln!(
+        "OFFLINE_FINAL_OMEGA_REBIND terminals=2 RetiringA=4 RetiringW=3 exact_originals=true changed_omega_key=true context_unchanged=true complete_catalog=false"
+    );
     let finality = FinalityV1 {
         network: [1; 32],
         instance: [2; 32],

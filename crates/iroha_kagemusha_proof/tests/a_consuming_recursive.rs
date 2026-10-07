@@ -1735,7 +1735,10 @@ fn native_installed_consuming_differential(
     originals_a: &[(Vec<u8>, [u8; 544])],
     originals_w: &[(Vec<u8>, [u8; 544])],
 ) {
-    use iroha_kagemusha_proof::a_relation::native::consuming as native;
+    use iroha_kagemusha_proof::a_relation::{native::consuming as native, own::OwnPolicy};
+    use iroha_plonk::cs::{
+        CircuitDescriptorV2, CurveV1, InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV2,
+    };
     assert_eq!(
         first.profile,
         SourceProfile::Tagged {
@@ -1844,7 +1847,7 @@ fn native_installed_consuming_differential(
         Ok(prover)
     };
     let installed = install(plan.clone(), &a_originals, &w_originals, config).unwrap();
-    for mutation in 0..7 {
+    for mutation in 0..13 {
         let mut bad_a = a_originals.clone();
         let mut bad_w = w_originals.clone();
         match mutation {
@@ -1856,13 +1859,48 @@ fn native_installed_consuming_differential(
             5 => {
                 bad_a[0].pk.pop();
             }
-            _ => bad_w[0].descriptor.clone_from(&a_originals[0].descriptor),
+            6 => bad_w[0].descriptor.clone_from(&a_originals[0].descriptor),
+            7 => bad_a.swap(1, 2),
+            8 => bad_w[0].vk.clone_from(&w_originals[2].vk),
+            9 => bad_w[0].pk[44 + w_originals[0].vk.len()] ^= 1,
+            10 => bad_a[3].pk[44 + a_originals[3].vk.len()] ^= 1,
+            11 => bad_a[0].pk.push(0),
+            _ => bad_w[0].pk[44 + w_originals[0].vk.len() + 32] ^= 1,
         }
         assert!(
             install(plan.clone(), &bad_a, &bad_w, config).is_err(),
             "consuming original mutation{mutation}"
         );
     }
+    let descriptor = CircuitDescriptorV2::decode(&a_originals[0].descriptor).unwrap();
+    for mutation in 0..6 {
+        let mut wrong = descriptor.clone();
+        match mutation {
+            0 => wrong.instance_types[0] = InstanceType::Field,
+            1 => wrong.transcript = TranscriptV2::KagemushaPoseidonRp57,
+            2 => wrong.instance_mode = InstanceModeV1::Committed,
+            3 => wrong.proof_suffix = ProofSuffixV1::None,
+            4 => wrong.instance_lengths[0] = 68,
+            _ => wrong.curve = CurveV1::Pallas,
+        }
+        let mut bad_a = a_originals.clone();
+        bad_a[0].descriptor = wrong.encode().unwrap();
+        assert!(
+            install(plan.clone(), &bad_a, &w_originals, config).is_err(),
+            "consuming profile mutation{mutation}"
+        );
+    }
+    let changed_policy = OwnPolicy::new([33, 34], bootstrap_objects::key(23)).unwrap();
+    let changed = native::Plan::new(
+        source.plan.clone(),
+        changed_policy,
+        UnloadStagePlan::signature_schema(changed_policy).unwrap(),
+        source.predecessor.key.clone(),
+        source.params.clone(),
+        common::vesta_params(16),
+    )
+    .unwrap();
+    assert!(install(changed, &a_originals, &w_originals, config).is_err());
     assert!(installed.import_a(4, &a_originals[0].pk, config).is_err());
     assert!(installed.import_w(3, &w_originals[0].pk, config).is_err());
     assert!(
@@ -2133,14 +2171,14 @@ fn native_installed_consuming_differential(
             )
             .is_err()
     );
-    for mutation in 0..5 {
+    for mutation in 0..11 {
         let mut bad = input.clone();
         match mutation {
             0 => bad.sigma[0] ^= 1,
             1 => bad.predecessor.proof[0] ^= 1,
             2 => bad.q[1].proof[0] ^= 1,
             3 => bad.state.predecessor.lineage[17] += Fp::ONE,
-            _ => {
+            4 => {
                 bad.recovery = if bad.recovery.is_some() {
                     None
                 } else {
@@ -2153,10 +2191,18 @@ fn native_installed_consuming_differential(
                     })
                 }
             }
+            5 => bad.predecessor.pallas[0] ^= 1,
+            6 => bad.predecessor.vesta[0] ^= 1,
+            7 => bad.omega[321] ^= 1,
+            8 => bad.q[0].proof[0] ^= 1,
+            9 => bad.q[0].instances[2][0] += Fq::ONE,
+            _ => {
+                bad.objects[2].pop();
+            }
         }
         assert!(
             installed.prepare(bad, budget).is_err(),
-            "original mutation{mutation}"
+            "consuming input mutation{mutation}"
         );
     }
 }

@@ -77,15 +77,15 @@ fn row_wise_reference<C: PastaCurve>(
         .collect::<Result<_, KeyError>>()?;
     for coset in 0..shape.quotient_pieces {
         let shift = quotient.shift(coset).ok_or(KeyError::CosetIndex)?;
-        if coset != 0 {
-            refresh_key_cosets(
+        {
+            reference_refresh_key_cosets(
                 pk,
                 pk.fixed_polys(),
                 &mut fixed,
                 CosetPolynomial::Fixed,
                 coset,
             )?;
-            refresh_key_cosets(
+            reference_refresh_key_cosets(
                 pk,
                 pk.permutation_polys(),
                 &mut sigma,
@@ -390,11 +390,12 @@ fn streamed_parity<C: PastaCurve>() {
                 + shape.permutation_sets;
             assert_eq!(
                 elements / shape.n - base,
-                if lookup_count == 0 {
-                    0
-                } else {
-                    lookup_count + 3
-                }
+                usize::from(base != 0 || lookup_count != 0)
+                    + if lookup_count == 0 {
+                        0
+                    } else {
+                        lookup_count + 3
+                    }
             );
             let mut omissions = vec![
                 None,
@@ -521,4 +522,30 @@ fn streamed_parity<C: PastaCurve>() {
 fn streamed_lookup_cosets_match_row_wise_reference_on_both_fields() {
     streamed_parity::<Ep>();
     streamed_parity::<Eq>();
+}
+
+/// Independent key-coset oracle: one geometric transform per owned column.
+fn reference_refresh_key_cosets<'a, C: PastaCurve>(
+    pk: &'a ProvingKey<C>,
+    coefficients: &[Vec<C::ScalarExt>],
+    values: &mut [KeyCoset<'a, C::ScalarExt>],
+    polynomial: impl Fn(usize) -> CosetPolynomial,
+    coset: usize,
+) -> Result<(), KeyError> {
+    let shift = pk
+        .quotient_domain()
+        .shift(coset)
+        .ok_or(KeyError::CosetIndex)?;
+    for (index, (values, coefficients)) in values.iter_mut().zip(coefficients).enumerate() {
+        match values {
+            KeyCoset::Workspace(values) => evaluate_into(pk.domain(), coefficients, shift, values)?,
+            KeyCoset::Cached(values) => {
+                *values = match pk.coset_values(polynomial(index), coset)? {
+                    Cow::Borrowed(values) => values,
+                    Cow::Owned(_) => return Err(KeyError::CosetIndex),
+                };
+            }
+        }
+    }
+    Ok(())
 }

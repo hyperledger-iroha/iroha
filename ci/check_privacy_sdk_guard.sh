@@ -929,10 +929,10 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "5a14e04031945fc783715bf9bcb80df71f8b7b0d100c27fb54cd0c60d8148fff",
-        "privacy_jvm_sdk_tests": "c13ae0b599d0b239db3e99cb48ce6435b4fc69cde02340a577f38f1cabb5d593",
-        "privacy_csharp_sdk_tests": "47e765abe385d96b004bf5cecb507e2ec10e0c9cfd7edfb11ccdcca4002f1aee",
-        "privacy_javascript_sdk_tests": "dd983bb5147d763b8edecc420e7d02503b6a0095e10be32563c2a63c1381e33c",
+        "privacy_swift_sdk_parse": "99bdf54ed75b7cd8c4cda9cfe01daff1762f089c54bad94e86c2205d9147595c",
+        "privacy_jvm_sdk_tests": "118dfc65ce902ddfd4d7620a0f43c7c9f573d683be4d9181f529f4adccd19056",
+        "privacy_csharp_sdk_tests": "f879f96003756971328b59722eeabfef72b1e10120085419eda3d0b435f826f8",
+        "privacy_javascript_sdk_tests": "ba4f4067d082a055c2710df0c1b3f34cb17616e93a5f0b6caec610e0a28ddb86",
     }
 
     require(
@@ -2618,7 +2618,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
         and "verify_installed_wheel" in python_sdk_guard_source
         and "verify_privacy_python_wheel.py" in python_sdk_guard_source
         and python_sdk_guard_source.count(
-            '"${VENV_DIR}/bin/python" -I -B \\'
+            '"${SCRIPT_DIR}/verify_privacy_python_wheel.py" \\'
         )
         == 2
         and '"${VENV_DIR}/bin/python" -I -B -m pytest -q \\'

@@ -80,6 +80,44 @@ pub struct FftDomain<F: PastaField> {
     inverse: Vec<Vec<F>>,
 }
 
+/// A validated coset transform plan borrowing the exact domain and caller powers.
+#[derive(Clone, Copy, Debug)]
+pub struct CosetFftPlan<'domain, 'scratch, F: PastaField> {
+    domain: &'domain FftDomain<F>,
+    powers: &'scratch [F],
+}
+
+impl<F: PastaField> CosetFftPlan<'_, '_, F> {
+    /// Evaluates columns in place using the immutable validated powers.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any wrong column length before mutating any input.
+    pub fn fft_many(&self, columns: &mut [&mut [F]]) -> Result<(), FftError> {
+        for column in columns.iter() {
+            self.domain.check(column)?;
+        }
+        let shift = Some(CosetShift::Prepared(self.powers));
+        if let [column] = columns {
+            dif::<_, true>(column, &self.domain.forward, shift);
+            bit_reverse_scale::<_, true>(column, self.domain.k, None);
+        } else {
+            columns.par_iter_mut().for_each(|column| {
+                dif::<_, false>(column, &self.domain.forward, shift);
+                bit_reverse_scale::<_, false>(column, self.domain.k, None);
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Exact first-pass coset scaling; all later passes have no shift.
+#[derive(Clone, Copy)]
+enum CosetShift<'a, F> {
+    Geometric(F),
+    Prepared(&'a [F]),
+}
+
 impl<F: PastaField> FftDomain<F> {
     /// Builds the domain of size `2^k` and its twiddle caches.
     ///
@@ -196,7 +234,7 @@ impl<F: PastaField> FftDomain<F> {
     pub fn coset_fft(&self, a: &mut [F], shift: F) -> Result<(), FftError> {
         self.check(a)?;
         check_shift(&shift)?;
-        dif::<_, true>(a, &self.forward, Some(shift));
+        dif::<_, true>(a, &self.forward, Some(CosetShift::Geometric(shift)));
         bit_reverse_scale::<_, true>(a, self.k, None);
         Ok(())
     }
@@ -224,10 +262,47 @@ impl<F: PastaField> FftDomain<F> {
             return self.coset_fft(column, shift);
         }
         columns.par_iter_mut().for_each(|column| {
-            dif::<_, false>(column, &self.forward, Some(shift));
+            dif::<_, false>(column, &self.forward, Some(CosetShift::Geometric(shift)));
             bit_reverse_scale::<_, false>(column, self.k, None);
         });
         Ok(())
+    }
+
+    /// Fills caller-owned powers and binds them immutably to this domain.
+    ///
+    /// The plan and its transforms allocate no field scratch. The caller must
+    /// retain and account for exactly `n` field elements for the plan lifetime.
+    /// Powers use the same exact arithmetic for every caller worker count.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a wrong scratch length or zero shift before touching scratch.
+    pub fn coset_plan<'domain, 'scratch>(
+        &'domain self,
+        scratch: &'scratch mut [F],
+        shift: F,
+    ) -> Result<CosetFftPlan<'domain, 'scratch, F>, FftError> {
+        self.check(scratch)?;
+        check_shift(&shift)?;
+        let fill = |(index, chunk): (usize, &mut [F])| {
+            let mut power = shift.pow_vartime([(index * PARALLEL_MIN) as u64]);
+            for value in chunk {
+                *value = power;
+                power *= shift;
+            }
+        };
+        if self.n >= PARALLEL_MIN {
+            scratch
+                .par_chunks_mut(PARALLEL_MIN)
+                .enumerate()
+                .for_each(fill);
+        } else {
+            fill((0, scratch));
+        }
+        Ok(CosetFftPlan {
+            domain: self,
+            powers: scratch,
+        })
     }
 
     /// Interpolates evaluations at `shift * omega^i` back to coefficients, in
@@ -280,7 +355,11 @@ fn stage_twiddles<F: PastaField>(omega: F, k: u32) -> Vec<Vec<F>> {
 ///
 /// With `shift`, coefficient `i` is multiplied by `shift^i` while the first
 /// pass loads it.
-fn dif<F: PastaField, const PARALLEL: bool>(a: &mut [F], tw: &[Vec<F>], shift: Option<F>) {
+fn dif<F: PastaField, const PARALLEL: bool>(
+    a: &mut [F],
+    tw: &[Vec<F>],
+    shift: Option<CosetShift<'_, F>>,
+) {
     let n = a.len();
     if n <= 1 {
         // A single coefficient is its own evaluation; shift^0 = 1.
@@ -301,9 +380,12 @@ fn dif<F: PastaField, const PARALLEL: bool>(a: &mut [F], tw: &[Vec<F>], shift: O
     }
     if s == 1 {
         // Final radix-2 stage with half size 1: twiddle 1.
-        if let (true, Some(sh)) = (first, shift) {
+        if let (true, Some(shift)) = (first, shift) {
             // k == 1: apply the shift to coefficient 1 before the stage.
-            a[1] *= sh;
+            a[1] *= match shift {
+                CosetShift::Geometric(value) => value,
+                CosetShift::Prepared(powers) => powers[1],
+            };
         }
         let body = |chunk: &mut [F]| {
             for pair in chunk.chunks_exact_mut(2) {
@@ -326,17 +408,24 @@ fn dif_pass4<F: PastaField, const PARALLEL: bool>(
     m: usize,
     outer: &[F],
     inner: &[F],
-    shift: Option<F>,
+    shift: Option<CosetShift<'_, F>>,
 ) {
     let n = a.len();
     let block = 4 * m;
     // The shift only occurs in the first pass, where the block is the whole
     // array, so element j + q*m sits at original index j + q*m.
-    let quarter_shift = shift.map(|sh| {
-        let sm = sh.pow_vartime([m as u64]);
-        let s2m = sm.square();
-        (sh, [F::ONE, sm, s2m, s2m * sm])
-    });
+    let quarter_shift = match shift {
+        Some(CosetShift::Geometric(sh)) => {
+            let sm = sh.pow_vartime([m as u64]);
+            let s2m = sm.square();
+            Some((sh, [F::ONE, sm, s2m, s2m * sm]))
+        }
+        _ => None,
+    };
+    let powers = match shift {
+        Some(CosetShift::Prepared(powers)) => Some(powers),
+        _ => None,
+    };
     let butterfly = |q0: &mut [F], q1: &mut [F], q2: &mut [F], q3: &mut [F], j0: usize| {
         let mut sj = quarter_shift.map(|(sh, _)| sh.pow_vartime([j0 as u64]));
         for (off, (((x0, x1), x2), x3)) in q0
@@ -354,6 +443,12 @@ fn dif_pass4<F: PastaField, const PARALLEL: bool>(
                 a2 *= *s * c[2];
                 a3 *= *s * c[3];
                 *s *= sh;
+            }
+            if let Some(powers) = powers {
+                a0 *= powers[j];
+                a1 *= powers[j + m];
+                a2 *= powers[j + 2 * m];
+                a3 *= powers[j + 3 * m];
             }
             // Outer stage (half 2m): pairs (j, j+2m) and (j+m, j+3m).
             let y0 = a0 + a2;
@@ -675,3 +770,7 @@ mod tests {
         assert_eq!(b[0], Fp::from(8u64));
     }
 }
+
+#[cfg(test)]
+#[path = "fft_plan_tests.rs"]
+mod plan_tests;

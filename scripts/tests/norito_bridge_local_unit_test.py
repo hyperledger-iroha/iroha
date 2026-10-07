@@ -101,9 +101,9 @@ def test_wrong_stale_archive_emitter_source_tool_and_component_relationship_refu
 
 def test_current_repository_owned_c_jni_and_privacy_policy_is_exact():
     policy = unit.native_policy(ROOT)
-    assert len(policy['c_jni']) == 56
-    assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 10
-    assert sum('offline_wallet_KagemushaWalletNativeV1_' in symbol for symbol in policy['c_jni']) == 6
+    assert len(policy['c_jni']) == 60
+    assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 11
+    assert sum('offline_wallet_KagemushaWalletNativeV1_' in symbol for symbol in policy['c_jni']) == 7
     assert len(policy['privacy']) == 6
     assert 'connect_norito_kagemusha_wallet_snapshot_v1' in policy['required']
     assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot' in policy['required']

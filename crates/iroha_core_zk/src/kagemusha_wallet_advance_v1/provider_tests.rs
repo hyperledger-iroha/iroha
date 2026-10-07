@@ -16,6 +16,65 @@ fn device() -> DeviceV1 {
 }
 
 #[test]
+fn wallet_advance_v1_current_source_reads_preserve_custody_and_tri_state_keys() {
+    let (device, fixture, slot, capsule) =
+        crate::kagemusha_wallet_advance_v1::test_support::bootstrapped_device(
+            KagemushaWalletAnchorPolicyV1::NotRequired,
+            0x31,
+        );
+    let mut provider = device.open();
+    let status = provider.status(&slot).unwrap();
+    let calls = device
+        .platform
+        .with(|state| (state.generate_calls, state.sign_calls, state.delete_calls));
+    assert_eq!(provider.current_capsule(&slot).unwrap(), Some(capsule));
+    assert_eq!(provider.status(&slot).unwrap(), status);
+    assert_eq!(
+        provider.probe_payment_key(&slot).unwrap(),
+        KagemushaWalletProbeV1::Present(fixture.payment_key)
+    );
+    device.platform.with(|state| state.probe_unavailable = true);
+    assert!(matches!(
+        provider.probe_payment_key(&slot),
+        Ok(KagemushaWalletProbeV1::Unavailable(_))
+    ));
+    device.platform.with(|state| {
+        state.probe_unavailable = false;
+        state.storage = Err(KagemushaWalletUnavailableV1::Locked);
+    });
+    assert_eq!(
+        provider.probe_payment_key(&slot),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(
+            KagemushaWalletUnavailableV1::Locked
+        ))
+    );
+    assert_eq!(
+        provider.current_capsule(&slot),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(
+            KagemushaWalletUnavailableV1::Locked
+        ))
+    );
+    assert_eq!(
+        device
+            .platform
+            .with(|state| (state.generate_calls, state.sign_calls, state.delete_calls)),
+        calls
+    );
+}
+
+#[test]
+fn wallet_advance_v1_enrollment_source_has_no_fabricated_capsule() {
+    let (device, fixture, slot) = enrolled_device(KagemushaWalletAnchorPolicyV1::NotRequired, 0x32);
+    let mut provider = device.open();
+    assert_eq!(provider.current_capsule(&slot).unwrap(), None);
+    assert_eq!(
+        provider.probe_payment_key(&slot).unwrap(),
+        KagemushaWalletProbeV1::Present(fixture.payment_key)
+    );
+    assert_eq!(device.platform.with(|state| state.sign_calls), 0);
+}
+
+#[test]
 fn wallet_advance_v1_provider_options_default_to_the_worst_case_ballast() {
     assert_eq!(
         KagemushaWalletProviderOptionsV1::default().ballast_bytes,

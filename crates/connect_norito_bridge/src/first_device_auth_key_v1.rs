@@ -1069,16 +1069,28 @@ mod tests {
     }
     #[test]
     fn replaced_lock_is_detected() {
-        let p = fake(26);
-        let lease = RootLease::open(p.root.path(), true).unwrap();
-        std::fs::remove_file(p.root.path().join(ROOT).join("owner.lock")).unwrap();
-        std::fs::write(p.root.path().join(ROOT).join("owner.lock"), b"").unwrap();
-        std::fs::set_permissions(
-            p.root.path().join(ROOT).join("owner.lock"),
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-        assert_eq!(lease.recheck().err(), Some(Error::Changed));
+        {
+            let p = fake(26);
+            let lease = RootLease::open(p.root.path(), true).unwrap();
+            let lock_path = p.root.path().join(ROOT).join("owner.lock");
+            // Retain the held inode's single link so recheck reaches path identity.
+            std::fs::rename(&lock_path, lock_path.with_file_name("retained-owner.lock")).unwrap();
+            std::fs::write(&lock_path, b"").unwrap();
+            std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            assert_eq!(owned(&lease.lock, false), Ok(()));
+            assert_eq!(lease.recheck().err(), Some(Error::Changed));
+        }
+        {
+            let p = fake(26);
+            let lease = RootLease::open(p.root.path(), true).unwrap();
+            let lock_path = p.root.path().join(ROOT).join("owner.lock");
+            // Unlinking instead leaves the held inode with zero links; refuse it first.
+            std::fs::remove_file(&lock_path).unwrap();
+            std::fs::write(&lock_path, b"").unwrap();
+            std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            assert_eq!(owned(&lease.lock, false), Err(Error::Invalid));
+            assert_eq!(lease.recheck().err(), Some(Error::Invalid));
+        }
     }
     #[test]
     fn consumed_grant_cannot_be_consumed_twice() {

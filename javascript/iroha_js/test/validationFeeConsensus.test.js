@@ -210,7 +210,7 @@ function verifyProjectionFixture(projection) {
   return withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 25;
+        return 26;
       },
       validationFeeCurrentPolicyProofRequestV1() {},
       validationFeeVerifyCurrentPolicyProofV1() {
@@ -307,7 +307,7 @@ test("native verified projection remains bound to the release checkpoint", () =>
   withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 25;
+        return 26;
       },
       validationFeeCurrentPolicyProofRequestV1() {},
       validationFeeVerifyCurrentPolicyProofV1(

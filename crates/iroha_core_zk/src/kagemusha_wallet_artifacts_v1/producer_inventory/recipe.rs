@@ -83,6 +83,32 @@ impl<'a> ReceiptSourceRecipeV1<'a> {
 mod tests {
     use super::*;
     #[test]
+    fn scheme_scope_preserves_sec1_point_and_provider_limb_byte_order() {
+        let generator = Affine::GENERATOR;
+        let mut sec1 = vec![4];
+        for value in [generator.x, generator.y] {
+            for word in value.iter().rev() {
+                sec1.extend(word.to_be_bytes());
+            }
+        }
+        let provider_contract = core::array::from_fn(|i| i as u8);
+        let scheme = KagemushaWalletSchemeV1 {
+            version: 1,
+            network_id: [1; 32],
+            scheme_root_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(&sec1).unwrap(),
+            relation_id: [2; 32],
+            provider_contract,
+        };
+        let scope = SourceScopeV1::from_scheme(&scheme).unwrap();
+        assert_eq!(scope.root(), generator);
+        let mut restored = Vec::new();
+        for limb in scope.provider {
+            restored.extend(limb.to_le_bytes());
+        }
+        assert_eq!(restored, provider_contract);
+    }
+
+    #[test]
     fn raw_source_scope_checks_both_fixed_inputs_without_installation_identity() {
         assert!(SourceScopeV1::new([0; 2], Affine::GENERATOR).is_err());
         let invalid = Affine {

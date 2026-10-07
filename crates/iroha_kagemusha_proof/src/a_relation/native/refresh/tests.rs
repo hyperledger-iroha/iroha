@@ -404,3 +404,69 @@ fn fixed_union_projection_rejects_wrong_kind_each_field_and_original_signature()
         );
     }
 }
+
+#[test]
+fn typed_refresh_context_schema_rejects_foreign_operations_and_cross_kind_updates() {
+    for variant in [
+        Variant::RefreshCredential,
+        Variant::RefreshSchemePolicy,
+        Variant::RefreshBlacklist,
+        Variant::RefreshQuotaShare,
+        Variant::RefreshTimeAnchor,
+    ] {
+        let schema = RefreshObjects::context_specs(variant).unwrap();
+        assert_eq!(
+            schema[..5].iter().map(|spec| spec.tag).collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            schema.len(),
+            if variant == Variant::RefreshQuotaShare {
+                6
+            } else {
+                5
+            }
+        );
+        if variant == Variant::RefreshQuotaShare {
+            assert_eq!(schema[5].tag, 6);
+            assert_eq!(schema[5].capacity, 160);
+        }
+        let lengths = object_kinds(variant)
+            .unwrap()
+            .map(|kind| u32::try_from(kind.body_len() + 64).unwrap());
+        assert_eq!(
+            schema[..5]
+                .iter()
+                .map(|spec| spec.capacity)
+                .collect::<Vec<_>>(),
+            lengths
+        );
+    }
+    let renewal = RefreshObjects::context_specs(Variant::RefreshCredential).unwrap();
+    for variant in [
+        Variant::RefreshSchemePolicy,
+        Variant::RefreshBlacklist,
+        Variant::RefreshQuotaShare,
+        Variant::RefreshTimeAnchor,
+    ] {
+        assert_ne!(
+            RefreshObjects::context_specs(variant).unwrap()[1],
+            renewal[1]
+        );
+    }
+    for variant in [
+        Variant::Bootstrap,
+        Variant::Load,
+        Variant::Send,
+        Variant::Receive,
+        Variant::ArchiveReceive,
+        Variant::ArchiveStatus,
+        Variant::Unload,
+        Variant::Retiring,
+    ] {
+        assert_eq!(
+            RefreshObjects::context_specs(variant),
+            Err(LayoutError::Synthesis)
+        );
+    }
+}

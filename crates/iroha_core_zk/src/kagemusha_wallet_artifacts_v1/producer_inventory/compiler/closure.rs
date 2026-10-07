@@ -2,7 +2,10 @@
 
 use super::*;
 
-fn require_receipt(finality: &FinalityV1, expected: [BlobV1; 2]) -> Result<(), CompilationErrorV1> {
+pub(super) fn require_receipt(
+    finality: &FinalityV1,
+    expected: [BlobV1; 2],
+) -> Result<(), CompilationErrorV1> {
     use iroha_kagemusha_proof::finality::native::{ArtifactId, Composition, NodeId};
     let id = ArtifactId::Wrapper(NodeId::Composition(Composition::Receipt));
     let mut selected = None;
