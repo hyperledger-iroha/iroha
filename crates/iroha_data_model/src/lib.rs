@@ -13,6 +13,10 @@
     )
 )]
 #[cfg(test)]
+#[path = "../tests/fixtures/abi_v1_hash.rs"]
+mod abi_v1_fixture;
+mod model_mutation_guard;
+#[cfg(test)]
 extern crate self as iroha_data_model;
 // NOTE: Documentation coverage is enforced at the workspace level. If a
 // module lacks coverage, add targeted documentation at the module boundary

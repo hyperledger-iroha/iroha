@@ -431,43 +431,100 @@ fn actual_two_sigma_q_proof_verifies() {
     });
 }
 
-
 #[test]
 #[ignore = "genuine installed serialized Q PK and imported proof; run in release"]
 fn installed_serialized_q_originals_prove_and_reject_default_profile() {
     use iroha_kagemusha_proof::q_sigma::native::QSigmaProver;
     use iroha_pasta::Ep;
-    use iroha_plonk::{keys::{CosetCachePolicy, pk::artifact::ReadConfig}, pcs::ipa::PinnedParams};
+    use iroha_plonk::{
+        keys::{CosetCachePolicy, pk::artifact::ReadConfig},
+        pcs::ipa::PinnedParams,
+    };
     let inner = common::vesta_params(16);
     let (class, own, _) = slot(SigmaRelation::SEND, 12, 5);
     let plan = QSigmaPlan::new(class, None, &inner).unwrap();
-    let prepared = plan.prepare(own, None, &inner, Fq::from(97), &FoldConfig::default()).unwrap();
+    let prepared = plan
+        .prepare(own, None, &inner, Fq::from(97), &FoldConfig::default())
+        .unwrap();
     let params = PinnedParams::<Ep>::derive(16).unwrap();
     // Fixture production selects the explicit frozen profile; installation never keygens.
     let producer = QSigmaProver::keygen_serialized_foreign(&prepared, params.clone(), 2).unwrap();
     let original = producer.proving_key().artifact_bytes_v2().unwrap();
     let vk = producer.verifying_key().to_bytes();
-    let config = ReadConfig { maximum_bytes: original.len(), maximum_rows: 1 << 16,
-        coset_cache: CosetCachePolicy::OnDemand, msm_budget: MemoryBudget::DEFAULT };
+    let config = ReadConfig {
+        maximum_bytes: original.len(),
+        maximum_rows: 1 << 16,
+        coset_cache: CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
     let imported = QSigmaProver::from_original_artifact_serialized_foreign(
-        &prepared, params.clone(), producer.binding().encoded(), &vk, &original, config, 2,
-    ).expect("genuine installed serialized Q original");
-    assert_eq!(imported.proving_key().artifact_bytes_v2().unwrap(), original);
+        &prepared,
+        params.clone(),
+        producer.binding().encoded(),
+        &vk,
+        &original,
+        config,
+        2,
+    )
+    .expect("genuine installed serialized Q original");
+    assert_eq!(
+        imported.proving_key().artifact_bytes_v2().unwrap(),
+        original
+    );
     assert_eq!(imported.binding(), producer.binding());
     assert_eq!(imported.verifying_key().to_bytes(), vk);
     assert!(!imported.proving_key().has_coset_cache());
-    assert!(QSigmaProver::from_original_artifact(
-        &prepared, params.clone(), producer.binding().encoded(), &vk, &original, config,
-    ).is_err());
-    assert!(QSigmaProver::from_original_artifact_serialized_foreign(
-        &prepared, params, producer.binding().encoded(), &vk, &original, config, 3,
-    ).is_err());
-    let proof = imported.prove(&prepared, common::recovery(82), iroha_plonk::ProverConfig::default())
+    assert!(
+        QSigmaProver::from_original_artifact(
+            &prepared,
+            params.clone(),
+            producer.binding().encoded(),
+            &vk,
+            &original,
+            config,
+        )
+        .is_err()
+    );
+    assert!(
+        QSigmaProver::from_original_artifact_serialized_foreign(
+            &prepared,
+            params,
+            producer.binding().encoded(),
+            &vk,
+            &original,
+            config,
+            3,
+        )
+        .is_err()
+    );
+    let proof = imported
+        .prove(
+            &prepared,
+            common::recovery(82),
+            iroha_plonk::ProverConfig::default(),
+        )
         .expect("genuine imported serialized Q proof");
-    iroha_plonk::verify_full(producer.params(), producer.binding(), producer.verifying_key(),
-        &proof.instances, &proof.bytes, MemoryBudget::DEFAULT).expect("original installed Q key");
+    iroha_plonk::verify_full(
+        producer.params(),
+        producer.binding(),
+        producer.verifying_key(),
+        &proof.instances,
+        &proof.bytes,
+        MemoryBudget::DEFAULT,
+    )
+    .expect("original installed Q key");
     assert_eq!(proof.part, *prepared.part());
-    let mut wrong = proof.instances.clone(); wrong[0][0] += Fq::ONE;
-    assert!(iroha_plonk::verify_full(producer.params(), producer.binding(), producer.verifying_key(),
-        &wrong, &proof.bytes, MemoryBudget::DEFAULT).is_err());
+    let mut wrong = proof.instances.clone();
+    wrong[0][0] += Fq::ONE;
+    assert!(
+        iroha_plonk::verify_full(
+            producer.params(),
+            producer.binding(),
+            producer.verifying_key(),
+            &wrong,
+            &proof.bytes,
+            MemoryBudget::DEFAULT
+        )
+        .is_err()
+    );
 }

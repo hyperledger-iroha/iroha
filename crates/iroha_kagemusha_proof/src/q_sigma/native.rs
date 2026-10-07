@@ -418,7 +418,13 @@ impl QSigmaProver {
         config: iroha_plonk::keys::pk::artifact::ReadConfig,
     ) -> Result<Self, QSigmaError> {
         Self::from_original_profile(
-            prepared, params, descriptor, installed_vk, original, config, None,
+            prepared,
+            params,
+            descriptor,
+            installed_vk,
+            original,
+            config,
+            None,
         )
     }
 
@@ -476,9 +482,11 @@ impl QSigmaProver {
             || d.proof_suffix != ProofSuffixV1::FoldedGenerator
             || d.instance_types.as_deref() != Some(&QSigmaPlan::instance_types())
             || d.instance_lengths.len() != lengths.len()
-            || !d.instance_lengths.iter().zip(lengths).all(|(found, expected)| {
-                usize::try_from(*found).ok() == Some(expected)
-            })
+            || !d
+                .instance_lengths
+                .iter()
+                .zip(lengths)
+                .all(|(found, expected)| usize::try_from(*found).ok() == Some(expected))
         {
             return Err(QSigmaError::Profile);
         }
@@ -486,8 +494,9 @@ impl QSigmaProver {
         if original.len() > config.maximum_bytes || binding.n() > config.maximum_rows {
             return Err(QSigmaError::Artifact(ArtifactError::Length));
         }
-        VerifyingKey::<Ep>::read(installed_vk, &binding)
-            .map_err(|error| QSigmaError::Artifact(ArtifactError::Key(KeyError::VerifyingKey(error))))?;
+        VerifyingKey::<Ep>::read(installed_vk, &binding).map_err(|error| {
+            QSigmaError::Artifact(ArtifactError::Key(KeyError::VerifyingKey(error)))
+        })?;
         let key = if let Some(buses) = serialized_buses {
             let circuit = prepared
                 .circuit

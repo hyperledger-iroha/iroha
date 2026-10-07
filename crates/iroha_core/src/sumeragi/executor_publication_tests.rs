@@ -2220,7 +2220,26 @@ fn native_invalid_payloads_are_rejected_at_ordinary_and_boundary_heights() {
                 let applied = worker.applied;
                 let state_height = worker.state.view().height();
                 let block = proposal(chain, worker);
-                let flagged = chain.author_payload(block.header().clone(), vec![0xFF]);
+                let malformed = vec![0xFF];
+                let crypto = worker.context.crypto.as_ref().unwrap();
+                let mut header = block.header().clone();
+                // Genuine availability authenticates these exact malformed application bytes;
+                // retaining the valid proposal's declared digest would fail before execution.
+                header.payload_hash = payload_hash(&**crypto, &malformed);
+                header.payload_len = u32::try_from(malformed.len()).unwrap();
+                let flagged = chain.author_payload(header, malformed);
+                assert_eq!(flagged.source().config(), block.source().config());
+                assert_eq!(flagged.header().height, block.header().height);
+                assert_eq!(flagged.header().payload_len, 1);
+                assert_eq!(
+                    flagged.header().payload_hash,
+                    payload_hash(&**crypto, flagged.payload().as_slice())
+                );
+                assert!(flagged.admitted_to(&worker.state.ivm_execution_budget()));
+                assert!(matches!(
+                    payload::decode(flagged.payload().as_slice()),
+                    Err(payload::PayloadError::NotCanonical(_))
+                ));
                 let flagged_hash = flagged.hash(&**worker.context.crypto.as_ref().unwrap());
                 for _ in 0..2 {
                     assert!(matches!(

@@ -2,7 +2,12 @@
 
 use super::*;
 use iroha_config::{
-    base::{WithOrigin, read::ConfigReader},
+    base::{
+        WithOrigin,
+        file_source::{ConfigFileAccess, ConfigFileRequest, ConfigFileSource},
+        read::ConfigReader,
+        toml::TomlSource,
+    },
     parameters::user,
 };
 use iroha_futures::supervisor::Supervisor;
@@ -25,15 +30,155 @@ fn runtime() -> tokio::runtime::Runtime {
         .expect("real P2P test runtime")
 }
 
-fn network_config(replay_root: &std::path::Path) -> iroha_config::parameters::actual::Network {
+// This source satisfies configuration parsing only. Its keyring is deliberately not
+// canonical and cannot admit a publisher service; no operational credentials are produced.
+const PARSER_KEYRING_PATH: &str = "/__iroha_core_p2p_test__/unadmitted-publisher-keyring";
+const PARSER_SUBMITTER_PATH: &str = "/__iroha_core_p2p_test__/publisher-submitter";
+const UNADMITTED_KEYRING: &[u8] = b"configuration-parser-only; not an authenticated keyring";
+struct ParserOnlyPublisherFiles;
+impl ConfigFileSource for ParserOnlyPublisherFiles {
+    fn read(
+        &self,
+        path: &std::path::Path,
+        request: ConfigFileRequest,
+    ) -> std::io::Result<zeroize::Zeroizing<Vec<u8>>> {
+        if request.access != ConfigFileAccess::Private {
+            return Err(std::io::ErrorKind::PermissionDenied.into());
+        }
+        let bytes = if path == std::path::Path::new(PARSER_KEYRING_PATH) {
+            UNADMITTED_KEYRING.to_vec()
+        } else if path == std::path::Path::new(PARSER_SUBMITTER_PATH) {
+            let fixture = TomlSource::inline(
+                include_str!("../../../../../iroha_config/iroha_test_config.toml")
+                    .parse()
+                    .unwrap(),
+            );
+            fixture.table()["private_key"]
+                .as_str()
+                .unwrap()
+                .as_bytes()
+                .to_vec()
+        } else {
+            return Err(std::io::ErrorKind::NotFound.into());
+        };
+        if bytes.len() > request.maximum {
+            return Err(std::io::ErrorKind::InvalidData.into());
+        }
+        Ok(zeroize::Zeroizing::new(bytes))
+    }
+}
+fn parser_only_network_reader(path: &std::path::Path) -> ConfigReader {
+    let refs = TomlSource::inline(
+        format!(
+            "[kagemusha_load_authorizer]\nkeyring_file = {PARSER_KEYRING_PATH:?}\nsubmitter_key_file = {PARSER_SUBMITTER_PATH:?}\n",
+        ).parse().unwrap(),
+    );
+    ConfigReader::new()
+        .without_env()
+        .read_toml_with_extends(path)
+        .unwrap()
+        .with_toml_source(refs)
+}
+#[test]
+fn parser_only_publisher_source_preserves_required_private_bounded_custody_refusal() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../iroha_config/iroha_test_config.toml");
-    let user = ConfigReader::new()
+    let missing = ConfigReader::new()
+        .without_env()
         .read_toml_with_extends(&path)
         .unwrap()
         .read_and_complete::<user::Root>()
+        .unwrap()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
+        .unwrap_err();
+    assert!(
+        format!("{missing:?}").contains(
+            "kagemusha_load_authorizer requires both keyring_file and submitter_key_file"
+        )
+    );
+    let actual = parser_only_network_reader(&path)
+        .read_and_complete::<user::Root>()
+        .unwrap()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .unwrap();
-    let mut config = user.parse().unwrap().network;
+    assert_eq!(
+        actual.kagemusha_load_authorizer.custody.keyring.as_slice(),
+        UNADMITTED_KEYRING
+    );
+    assert!(
+        crate::kagemusha_wallet_v1::PublicationWorker::from_canonical_keyring(
+            &actual.kagemusha_load_authorizer.custody.keyring
+        )
+        .is_err()
+    );
+    assert_eq!(
+        actual.network.address.value(),
+        actual.network.public_address.value()
+    );
+    let private = ConfigFileRequest {
+        access: ConfigFileAccess::Private,
+        maximum: 65_536,
+    };
+    let files = ParserOnlyPublisherFiles;
+    assert_eq!(
+        files
+            .read(std::path::Path::new(PARSER_KEYRING_PATH), private)
+            .unwrap()
+            .as_slice(),
+        UNADMITTED_KEYRING
+    );
+    let submitter = files
+        .read(std::path::Path::new(PARSER_SUBMITTER_PATH), private)
+        .unwrap();
+    let canonical: iroha_crypto::PrivateKey =
+        std::str::from_utf8(&submitter).unwrap().parse().unwrap();
+    assert_eq!(
+        actual
+            .kagemusha_load_authorizer
+            .custody
+            .submitter
+            .private_key(),
+        &canonical
+    );
+    for (path, request, kind) in [
+        ("another-keyring", private, std::io::ErrorKind::NotFound),
+        (
+            PARSER_KEYRING_PATH,
+            ConfigFileRequest {
+                access: ConfigFileAccess::Public,
+                ..private
+            },
+            std::io::ErrorKind::PermissionDenied,
+        ),
+        (
+            PARSER_KEYRING_PATH,
+            ConfigFileRequest {
+                maximum: UNADMITTED_KEYRING.len() - 1,
+                ..private
+            },
+            std::io::ErrorKind::InvalidData,
+        ),
+    ] {
+        assert_eq!(
+            files
+                .read(std::path::Path::new(path), request)
+                .unwrap_err()
+                .kind(),
+            kind
+        );
+    }
+}
+
+fn network_config(replay_root: &std::path::Path) -> iroha_config::parameters::actual::Network {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../iroha_config/iroha_test_config.toml");
+    let user = parser_only_network_reader(&path)
+        .read_and_complete::<user::Root>()
+        .unwrap();
+    let mut config = user
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
+        .unwrap()
+        .network;
     // Bind a fresh loopback address; the production parser supplies all protocol and
     // byte-bound defaults. This test changes only local listening/dial timing settings.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

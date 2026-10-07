@@ -772,8 +772,8 @@ Security and DoS
   admission checks. Optionally fee‑gate large verifications based on scalar
   worst‑case cost to protect validator resources.
   - Configuration: `zk_preverify_budget_ms`, `zk_preverify_tickets_per_peer`,
-    `zk_preverify_max_bytes`, `zk_preverify_allowed_curves`.
-  - Reject codes: `ProofTooBig`, `CurveNotAllowed`, `PreverifyBudgetExceeded`,
+    `zk_preverify_max_bytes`.
+  - Reject codes: `ProofTooBig`, `PreverifyBudgetExceeded`,
     `MalformedProof`. Stateless pre‑verify ordering is deterministic and does
     not affect proposal ordering.
 

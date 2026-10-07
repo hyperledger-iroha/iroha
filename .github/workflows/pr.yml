@@ -143,7 +143,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
           cache: "false"
-          toolchain: "nightly-2025-05-08"
+          toolchain: 1.93.1
           components: "rustfmt"
       - name: Format
         run: cargo fmt --all -- --check
@@ -164,9 +164,9 @@ jobs:
         with:
           cache-on-failure: "true"
       - name: Core, simulator, specification traceability and quorums (default seeds)
-        run: cargo test --locked -p iroha_sumeragi --features sim
+        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS cargo test --locked -p iroha_sumeragi --features sim
       - name: Node driver, lanes and four-validator node tests
-        run: cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
+        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
 
   # The Rust lanes test default features only; this target needs the opt-in
   # `fastpq-replay-measurement` feature. `iroha_measurement` itself is tested by

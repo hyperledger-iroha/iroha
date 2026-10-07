@@ -420,6 +420,68 @@ fn routing_uses_permanent_scope_and_refuses_missing_wallet_records() {
 }
 
 #[test]
+fn verifier_pack_routing_requires_the_exact_registered_asset_and_permanent_scope() {
+    use iroha_data_model::isi::kagemusha_wallet::{
+        KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1,
+    };
+    use iroha_model_base::topology::DataSpaceId;
+
+    let memory = Memory::new();
+    let scheme = memory.registration.scheme.scheme_id();
+    let asset = memory.registration.asset.asset_digest();
+    let instruction = KagemushaWalletLedgerV1::new(
+        scheme,
+        KagemushaWalletLedgerActionV1::InstallVerifierPack {
+            asset,
+            manifest_digest: [0x51; 32],
+            // Routing selects the registered scope; execution authenticates the pack.
+            pack: Vec::new(),
+        },
+    );
+    let key = storage::key(storage::REGISTRATION, scheme, asset);
+    let mut world = World::new();
+    assert!(matches!(
+        routing::dataspace(&world.view(), &instruction),
+        Err(Error::Unavailable)
+    ));
+    for (scope, expected) in [
+        (AssetBalanceScope::Global, Some(DataSpaceId::UNIVERSAL)),
+        (
+            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+            Some(DataSpaceId::new(7)),
+        ),
+        (AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL), None),
+    ] {
+        let mut registration = memory.registration.clone();
+        registration.balance_scope = scope;
+        world
+            .kagemusha_wallet_ledger
+            .insert(key, storage::encode(&registration).unwrap());
+        match expected {
+            Some(expected) => {
+                assert_eq!(
+                    routing::dataspace(&world.view(), &instruction).unwrap(),
+                    expected
+                );
+            }
+            None => assert!(matches!(
+                routing::dataspace(&world.view(), &instruction),
+                Err(Error::Binding)
+            )),
+        }
+    }
+    let mut substituted = memory.registration.clone();
+    substituted.asset.asset_incarnation[0] ^= 1;
+    world
+        .kagemusha_wallet_ledger
+        .insert(key, storage::encode(&substituted).unwrap());
+    assert!(matches!(
+        routing::dataspace(&world.view(), &instruction),
+        Err(Error::Binding)
+    ));
+}
+
+#[test]
 fn unavailable_production_artifacts_retain_local_deferral_and_no_activation() {
     use iroha_data_model::isi::kagemusha_wallet::{
         KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1,

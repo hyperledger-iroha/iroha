@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -278,7 +279,9 @@ def test_package_mutation_environment_is_confined_to_its_actual_owner(monkeypatc
     code, _, _ = gate.cargo_test(args, tmp_path, mutation, ["named"], None, 0, tmp_path / "log")
     crate, features, environment = gate.package_options(args)
     assert code == 0
-    assert captured["command"][:10] == ["cargo", "test", "--locked", "-p", crate, "--release", "--features", features, "--lib", "--"]
+    profile_options = ["--profile", "test"] if core else ["--release"]
+    assert captured["command"] == ["cargo", "test", "--locked", "-p", crate,
+                                   *profile_options, "--features", features, "--lib", "--", "named"]
     assert captured["env"][environment] == mutation
     foreign = "SUMERAGI_MUTATION" if core else "SUMERAGI_CORE_MUTATION"
     assert foreign not in captured["env"]
@@ -317,7 +320,7 @@ def test_registered_core_rules_have_real_hooks_and_named_core_regressions():
 
 
 def test_mutation_ids_select_one_rule_across_all_implementation_owners():
-    mutations = [*gate.MUTATIONS, *gate.CORE_MUTATIONS, *gate.DAEMON_MUTATIONS]
+    mutations = [*gate.MUTATIONS, *gate.CORE_MUTATIONS, *gate.DAEMON_MUTATIONS, *gate.MODEL_MUTATIONS]
     assert len(gate.index_mutations(mutations)) == len(mutations)
     core_and_daemon = gate.index_mutations([*gate.CORE_MUTATIONS, *gate.DAEMON_MUTATIONS])
     rows = re.findall(
@@ -341,6 +344,8 @@ def test_core_custody_mutations_have_distinct_source_owners():
         "HC125": {"sumeragi/lanes/registry.rs"},
         "HC126": {"sumeragi/crypto.rs"},
         "HC127": {"snapshot.rs"},
+        "HC147": {"query/native_receipts/amx_read.rs"},
+        "HC148": {"query/native_receipts/amx_read.rs"},
     }
     registered = gate.index_mutations(gate.CORE_MUTATIONS)
     source = gate.REPO / "crates/iroha_core/src"
@@ -442,7 +447,7 @@ def test_core_profile_rejects_invalid_values_and_protocol_overrides(monkeypatch,
     assert error.value.code == 2
 
 
-@pytest.mark.parametrize("profile", ["release", "test"])
+@pytest.mark.parametrize("profile", [None, "release", "test"])
 def test_core_profile_is_identical_for_baseline_and_mutant_and_recorded(monkeypatch, tmp_path, profile):
     captured = []
     class Process:
@@ -459,14 +464,16 @@ def test_core_profile_is_identical_for_baseline_and_mutant_and_recorded(monkeypa
         assert gate.cargo_test(args, tmp_path, mutation, ["named"], None, 0,
                                tmp_path / f"{mutation}.log")[0] == 0
     assert captured[0] == captured[1]
-    assert captured[0][5:7] == ["--profile", profile]
-    monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", "--core", "--core-profile", profile,
+    expected_profile = profile or "test"
+    assert captured[0][5:7] == ["--profile", expected_profile]
+    profile_option = ["--core-profile", profile] if profile else []
+    monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", "--core", *profile_option,
                                      "--only", "HC1", "--strict", "--fast", "--target-dir", str(tmp_path)])
     monkeypatch.setattr(gate, "evaluate_baseline", lambda *_: {"id": "baseline", "verdict": "pass"})
     monkeypatch.setattr(gate, "evaluate", lambda *_: {"id": "HC1", "verdict": "killed_by_test"})
     assert gate.main() == 0
     import json
-    assert json.loads((tmp_path / "report.json").read_text())["profile"] == profile
+    assert json.loads((tmp_path / "report.json").read_text())["profile"] == expected_profile
 
 
 def test_hc10_selects_only_the_original_query_scratch_owner():
@@ -1513,21 +1520,23 @@ def test_daemon_mutation_environment_never_reaches_dependency_owners(
     def popen(command, **options):
         captured.update(command=command, environment=options["env"])
         return Process()
-    for name in ["SUMERAGI_MUTATION", "SUMERAGI_CORE_MUTATION", "SUMERAGI_DAEMON_MUTATION"]:
+    for name in ["SUMERAGI_MUTATION", "SUMERAGI_CORE_MUTATION", "SUMERAGI_DAEMON_MUTATION", "SUMERAGI_MODEL_MUTATION"]:
         monkeypatch.setenv(name, "inherited-foreign-rule")
     monkeypatch.setattr(gate.subprocess, "Popen", popen)
     args = SimpleNamespace(core=owner == "core", daemon=owner == "daemon")
     code, _, _ = gate.cargo_test(args, tmp_path, mutation, ["named"], None, 0, tmp_path / "log")
     assert code == 0
     package, features, selected_environment = gate.package_options(args)
-    assert captured["command"][:9] == [
-        "cargo", "test", "--locked", "-p", package, "--release", "--features", features, "--lib"
+    profile_options = ["--profile", "test"] if owner == "core" else ["--release"]
+    assert captured["command"] == [
+        "cargo", "test", "--locked", "-p", package, *profile_options,
+        "--features", features, "--lib", "--", "named"
     ]
     if owner == "daemon":
         assert (package, features, selected_environment) == (
             "irohad_lib", "mutation-testing", "SUMERAGI_DAEMON_MUTATION"
         )
-    for name in ["SUMERAGI_MUTATION", "SUMERAGI_CORE_MUTATION", "SUMERAGI_DAEMON_MUTATION"]:
+    for name in ["SUMERAGI_MUTATION", "SUMERAGI_CORE_MUTATION", "SUMERAGI_DAEMON_MUTATION", "SUMERAGI_MODEL_MUTATION"]:
         if mutation is not None and name == selected_environment:
             assert captured["environment"][name] == mutation
         else:
@@ -1739,6 +1748,7 @@ SUMERAGI_CI_JOBS = (
     ("nightly_sumeragi.yml", "mutation_gate"),
     ("nightly_sumeragi.yml", "core_mutation_gate"),
     ("nightly_sumeragi.yml", "daemon_mutation_gate"),
+    ("nightly_sumeragi.yml", "model_mutation_gate"),
     ("pr.yml", "sumeragi"),
 )
 
@@ -2319,21 +2329,463 @@ def test_mutation_cli_valid_counts_and_unique_selection_keep_exact_report(monkey
     assert report["fast"] is False
 
 
-def test_state_halo2_curve_mutation_binds_exact_admitted_engine_and_original_retry():
-    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC146"]
-    assert rule.tests == (
-        "state::state_preverify_backend_admission_tests::unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy",
-        "state::state_preverify_backend_admission_tests::canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry",
-    )
-    assert not rule.scenarios
-    assert gate.has_switch("HC146", core=True)
+def test_retired_halo2_curve_mutation_does_not_claim_current_native_admission():
+    assert "HC146" not in gate.index_mutations(gate.CORE_MUTATIONS)
+    assert not gate.has_switch("HC146", core=True)
     assert not gate.has_switch("HC146")
     assert not gate.has_switch("HC146", daemon=True)
     source = (gate.REPO / "crates/iroha_core/src/state.rs").read_text()
-    assert 'all(test, sumeragi_core_mutation = "HC146")' in source
-    assert 'production_verify_backend_tag(proof.backend.as_str())' in source
-    assert 'Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)' in source
-    owners = {path.relative_to(gate.REPO / "crates/iroha_core/src").as_posix()
-              for path in (gate.REPO / "crates/iroha_core/src").rglob("*.rs")
-              if 'sumeragi_core_mutation = "HC146"' in path.read_text()}
-    assert owners == {"state.rs"}
+    assert 'sumeragi_core_mutation = "HC146"' not in source
+    assert "self.zk.halo2" not in source
+    assert "crate::zk::preverify_with_budget(" in source
+    backend = (gate.REPO / "crates/iroha_data_model/src/zk.rs").read_text()
+    assert "pub const ALL: [Self; 2] = [Self::NativePipaRPasta, Self::Stark]" in backend
+    controls = (gate.REPO / "crates/iroha_core/src/state/state_preverify_backend_admission_tests.rs").read_text()
+    for name in (
+        "retired_and_unsupported_backends_fail_before_native_key_admission",
+        "stark_fri_profile_labels_require_enveloped_state_preverify_metadata",
+        "native_pipa_r_profile_labels_require_the_canonical_backend",
+        "native_backend_key_and_envelope_refusals_preserve_original_dedup_and_retry",
+    ):
+        assert f"fn {name}(" in controls
+    assert "ZK_BACKEND_NATIVE_PIPA_R" in controls
+    assert "ZK_BACKEND_STARK_FRI_V1" in controls
+    assert "PreverifyResult::Duplicate" in controls
+
+
+@pytest.mark.parametrize("failed_item", ["baseline", "mutation"])
+@pytest.mark.parametrize("error_type", [AssertionError, OSError])
+@pytest.mark.parametrize("jobs", [1, 3])
+@pytest.mark.parametrize("strict", [False, True])
+def test_worker_exception_retains_original_item_and_complete_failed_report(
+    monkeypatch, tmp_path, capsys, failed_item, error_type, jobs, strict
+):
+    """Mocked evaluators exercise real worker threads/reporting, never native kills."""
+    table = [gate.m(f"SYNTHETIC_{n}", "script exception fixture", ["tests::named"])
+             for n in range(3)]
+    monkeypatch.setattr(gate, "MUTATIONS", table)
+    calls = []
+    def baseline(*_):
+        calls.append("baseline")
+        if failed_item == "baseline":
+            raise error_type("original source guard refused")
+        return {"id": "baseline", "verdict": "pass"}
+    def mutant(args, target, mu):
+        calls.append(mu.id)
+        if failed_item == "mutation" and mu.id == table[1].id:
+            raise error_type("original source guard refused")
+        return {"id": mu.id, "verdict": "killed_by_test"}
+    monkeypatch.setattr(gate, "evaluate_baseline", baseline)
+    monkeypatch.setattr(gate, "evaluate", mutant)
+    monkeypatch.setattr(sys, "argv", ["gate", "--jobs", str(jobs), "--target-dir", str(tmp_path),
+                                     *(["--strict"] if strict else [])])
+    assert gate.main() == 1
+    report = gate.json.loads((tmp_path / "report.json").read_text())
+    assert sorted(calls) == sorted(["baseline", *(mu.id for mu in table)])
+    assert [row["id"] for row in report["mutations"]] == [mu.id for mu in table]
+    failed_id = "baseline" if failed_item == "baseline" else table[1].id
+    rows = {row["id"]: row for row in [report["baseline"], *report["mutations"]]}
+    assert rows[failed_id] == {"id": failed_id, "verdict": "error",
+                              "reason": f"worker evaluation raised {error_type.__name__}: original source guard refused"}
+    assert report["summary"]["baseline"] == ("error" if failed_item == "baseline" else "pass")
+    assert report["summary"]["error"] == ([] if failed_item == "baseline" else [failed_id])
+    assert report["summary"]["killed_by_test"] == [mu.id for mu in table if mu.id != failed_id]
+    assert report["summary"]["survived"] == report["summary"]["killed_by_scenario_only"] == []
+    assert "[4/4]" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit, GeneratorExit])
+def test_worker_does_not_catch_process_interrupts(monkeypatch, tmp_path, interrupt):
+    """Run the actual worker synchronously to observe its uncaught BaseException."""
+    class InlineThread:
+        def __init__(self, target, args, daemon):
+            self.target, self.args = target, args
+        def start(self):
+            self.target(*self.args)
+        def join(self):
+            pass
+    monkeypatch.setattr(gate.threading, "Thread", InlineThread)
+    monkeypatch.setattr(gate, "MUTATIONS", [gate.m("SYNTHETIC_A", "interrupt fixture", ["tests::named"])])
+    def baseline(*_):
+        raise interrupt("original process interrupt")
+    monkeypatch.setattr(gate, "evaluate_baseline", baseline)
+    monkeypatch.setattr(sys, "argv", ["gate", "--jobs", "1", "--target-dir", str(tmp_path)])
+    with pytest.raises(interrupt, match="original process interrupt"):
+        gate.main()
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_missing_required_baseline_cannot_be_relabelled_as_skipped(monkeypatch, tmp_path):
+    """Model Thread's isolated BaseException boundary without suppressing it in the gate."""
+    observed = []
+    class IsolatedInterruptThread:
+        def __init__(self, target, args, daemon):
+            self.target, self.args = target, args
+        def start(self):
+            try:
+                self.target(*self.args)
+            except SystemExit as error:
+                observed.append(error)
+        def join(self):
+            pass
+    monkeypatch.setattr(gate.threading, "Thread", IsolatedInterruptThread)
+    table = [gate.m("SYNTHETIC_A", "missing baseline fixture", ["tests::named"])]
+    monkeypatch.setattr(gate, "MUTATIONS", table)
+    def baseline(*_):
+        raise SystemExit("uncaught baseline worker interrupt")
+    monkeypatch.setattr(gate, "evaluate_baseline", baseline)
+    monkeypatch.setattr(gate, "evaluate", lambda args, target, mu: {"id": mu.id, "verdict": "killed_by_test"})
+    monkeypatch.setattr(sys, "argv", ["gate", "--strict", "--jobs", "2", "--target-dir", str(tmp_path)])
+    assert gate.main() == 1
+    assert len(observed) == 1 and str(observed[0]) == "uncaught baseline worker interrupt"
+    report = gate.json.loads((tmp_path / "report.json").read_text())
+    assert report["baseline"] is None
+    assert report["summary"]["baseline"] == "error"
+    assert report["summary"]["killed_by_test"] == [table[0].id]
+
+
+@pytest.mark.parametrize("workflow_name,step_name,expected_argv,explicit_count", (
+    ("nightly_sumeragi.yml", "Run every fault scenario at 10 000 seeds",
+     ["test", "--locked", "-p", "iroha_sumeragi", "--release", "--features", "sim", "--lib", "--", "sim::"], "10000"),
+    ("pr.yml", "Core, simulator, specification traceability and quorums (default seeds)",
+     ["test", "--locked", "-p", "iroha_sumeragi", "--features", "sim"], None),
+    ("pr.yml", "Node driver, lanes and four-validator node tests",
+     ["test", "--locked", "-p", "iroha_core", "--lib", "--", "sumeragi::lanes", "sumeragi::node", "sumeragi::driver", "sumeragi::executor"], None),
+))
+@pytest.mark.parametrize("inherited", (
+    {"SUMERAGI_SIM_SEED": "7"},
+    {"SUMERAGI_SIM_SEED_BASE": "18446744073709551615"},
+    {"SUMERAGI_SIM_SEEDS": "0"},
+    {"SUMERAGI_SIM_SEED": "7", "SUMERAGI_SIM_SEED_BASE": "18446744073709551615", "SUMERAGI_SIM_SEEDS": "0"},
+))
+def test_ci_sumeragi_sweeps_execute_with_their_declared_seed_environment(
+    tmp_path, workflow_name, step_name, expected_argv, explicit_count, inherited,
+):
+    """Execute the actual CI shell with a metadata-only Cargo substitute, never Rust."""
+    workflow = (ROOT / ".github/workflows" / workflow_name).read_text()
+    step = re.search(
+        r"(?ms)^      - name: " + re.escape(step_name) + r"\n(.*?)(?=^      - |^  [a-z_]+:|\Z)",
+        workflow,
+    )
+    assert step is not None
+    run = re.search(r"(?m)^        run: (.+)$", step.group(1))
+    assert run is not None
+    command = run.group(1)
+    if command.startswith('"'):
+        command = json.loads(command)
+    declared = re.search(r'(?m)^          SUMERAGI_SIM_SEEDS: "([0-9]+)"$', step.group(1))
+    assert (declared.group(1) if declared else None) == explicit_count
+    recorder = tmp_path / "cargo"
+    recorder.write_text(
+        "#!" + sys.executable + "\n"
+        "import json, os, sys\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'seeds': {key: os.environ.get(key) "
+        "for key in ('SUMERAGI_SIM_SEED', 'SUMERAGI_SIM_SEED_BASE', 'SUMERAGI_SIM_SEEDS')}}))\n"
+    )
+    recorder.chmod(0o700)
+    environment = dict(os.environ)
+    for key in ("SUMERAGI_SIM_SEED", "SUMERAGI_SIM_SEED_BASE", "SUMERAGI_SIM_SEEDS"):
+        environment.pop(key, None)
+    environment.update(inherited)
+    if explicit_count is not None:
+        environment["SUMERAGI_SIM_SEEDS"] = explicit_count
+    environment["PATH"] = str(tmp_path) + os.pathsep + environment.get("PATH", "")
+    result = subprocess.run(["/bin/sh", "-c", command], env=environment,
+                            cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout)
+    assert observed["argv"] == expected_argv
+    assert observed["seeds"] == {
+        "SUMERAGI_SIM_SEED": None,
+        "SUMERAGI_SIM_SEED_BASE": None,
+        "SUMERAGI_SIM_SEEDS": explicit_count,
+    }
+
+
+@pytest.mark.parametrize('code,status,passed,failed', [(0, 'ok', 2, 0), (101, 'FAILED', 1, 1)])
+@pytest.mark.parametrize('annotation', ['', ' - should panic'])
+def test_logger_split_terminals_preserve_actual_named_mutation_results(
+    monkeypatch, tmp_path, code, status, passed, failed, annotation
+):
+    """Native stdout logging can split libtest's selected name from its status."""
+    names = ('tests::named', 'tests::named_extra')
+    output = (
+        'running 2 tests\n'
+        f'test tests::named{annotation} ...   \x1b[2m2026-10-06T14:48:08Z\x1b[0m DEBUG native log\n'
+        '    at crates/iroha_core/src/sumeragi/node.rs:1508\n\n'
+        f'{status}\n'
+        'test tests::named_extra ... ok\n\n'
+        f'test result: {status}. {passed} passed; {failed} failed; 0 ignored; '
+        '0 measured; 11763 filtered out; finished in 3.72s\n'
+    )
+    selected_cargo_results(monkeypatch, code, output, names=names)
+    step = gate.run_step(SimpleNamespace(), tmp_path, 'HC23', ['named'], None, 5,
+                         tmp_path / 'named.log')
+    assert step.status == ('fail' if failed else 'pass')
+    assert step.ran == list(names)
+    assert step.failed == (['tests::named'] if failed else [])
+
+
+@pytest.mark.parametrize('status,code,passed,failed', [('ok', 0, 1, 0), ('FAILED', 101, 0, 1)])
+@pytest.mark.parametrize('annotation', ['', ' - should panic'])
+@pytest.mark.parametrize('damage', [
+    'missing_terminal', 'duplicate_terminal', 'opposite_terminal', 'orphan_terminal',
+    'duplicate_start', 'foreign_start', 'summary_before_terminal',
+    'ignored_terminal', 'trailing_start', 'trailing_terminal',
+])
+def test_logger_split_invalid_output_never_passes_or_kills(
+    monkeypatch, tmp_path, status, code, passed, failed, damage, annotation
+):
+    """Only an unambiguous serial test owner may consume a split terminal."""
+    start = f'test tests::named{annotation} ... DEBUG log\n'
+    terminal = status + '\n'
+    summary = (f'test result: {status}. {passed} passed; {failed} failed; 0 ignored; '
+               '0 measured; 11764 filtered out; finished in 3.72s\n')
+    output = 'running 1 test\n' + start + terminal + summary
+    if damage == 'missing_terminal':
+        output = output.replace(terminal, '', 1)
+    elif damage == 'duplicate_terminal':
+        output = output.replace(terminal, terminal * 2, 1)
+    elif damage == 'opposite_terminal':
+        output = output.replace(terminal, ('FAILED' if status == 'ok' else 'ok') + '\n', 1)
+    elif damage == 'orphan_terminal':
+        output = terminal + output
+    elif damage == 'duplicate_start':
+        output = output.replace(start, start * 2)
+    elif damage == 'foreign_start':
+        output = output.replace(start, 'test tests::foreign ... DEBUG log\n')
+    elif damage == 'summary_before_terminal':
+        output = 'running 1 test\n' + start + summary + terminal
+    elif damage == 'ignored_terminal':
+        output = output.replace(terminal, 'ignored\n', 1)
+    elif damage == 'trailing_start':
+        output += start + terminal
+    elif damage == 'trailing_terminal':
+        output += terminal
+    selected_cargo_results(monkeypatch, code, output)
+    step = gate.run_step(SimpleNamespace(), tmp_path, 'HC23', ['named'], None, 5,
+                         tmp_path / 'named.log')
+    assert step.status not in ('pass', 'fail')
+
+
+@pytest.mark.parametrize('status,code,passed,failed', [('ok', 0, 1, 0), ('FAILED', 101, 0, 1)])
+def test_should_panic_annotation_keeps_the_actual_test_identity_and_verdict(
+    monkeypatch, tmp_path, status, code, passed, failed
+):
+    """Libtest annotates expected panics; only its terminal result proves success."""
+    output = (
+        'running 1 test\n'
+        f'test tests::named - should panic ... {status}\n'
+        f'test result: {status}. {passed} passed; {failed} failed; 0 ignored; '
+        '0 measured; 11 filtered out; finished in 0.01s\n'
+    )
+    selected_cargo_results(monkeypatch, code, output)
+    step = gate.run_step(SimpleNamespace(), tmp_path, 'HC23', ['named'], None, 5,
+                         tmp_path / 'named.log')
+    assert step.status == ('fail' if failed else 'pass')
+    assert step.ran == ['tests::named']
+    assert step.failed == (['tests::named'] if failed else [])
+
+
+MODEL_NAMES = {
+    "DM1": "isi::amx_owner::tests::original_amx_instruction_clone_retains_exact_graph_and_pool_through_last_reader",
+    "DM2": "isi::amx_owner::tests::original_amx_instruction_admits_complete_actual_layouts_before_copy_and_retries_same_pool",
+    "DM3": "isi::amx_owner::tests::original_amx_instruction_last_owner_destroys_fields_and_refunds_exact_ledger",
+    "DM4": "sumeragi_amx::allocation::tests::original_begin_record_scan_preserves_canonical_depth_refusal_and_exact_retry",
+}
+
+
+def test_model_mutations_have_owning_source_hooks_named_controls_and_exact_spec_rows():
+    registered = gate.index_mutations(gate.MODEL_MUTATIONS)
+    assert set(registered) == set(MODEL_NAMES)
+    model = ROOT / "crates/iroha_data_model"
+    source = "\n".join(path.read_text() for path in (model / "src").rglob("*.rs"))
+    functions = set(re.findall(r"\bfn\s+(\w+)\s*\(", source))
+    rows = re.findall(r"^\| (DM\d+) \| (.+)$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == len(dict(rows)) == len(MODEL_NAMES)
+    assert set(dict(rows)) == set(MODEL_NAMES)
+    for identifier, name in MODEL_NAMES.items():
+        rule = registered[identifier]
+        assert rule.tests == (name,)
+        assert not rule.scenarios
+        assert name.rsplit("::", 1)[-1] in functions
+        assert name.rsplit("::", 1)[-1] in dict(rows)[identifier]
+        assert gate.has_switch(identifier, model=True)
+        assert not gate.has_switch(identifier)
+        assert not gate.has_switch(identifier, core=True)
+        assert not gate.has_switch(identifier, daemon=True)
+    assert "mutation-testing = []" in (model / "Cargo.toml").read_text()
+    assert "mod model_mutation_guard;" in (model / "src/lib.rs").read_text()
+    assert 'const IDS: &[&str] = &["DM1", "DM2", "DM3", "DM4"];' in (model / "build.rs").read_text()
+
+
+def test_original_begin_depth_mutation_bypasses_only_its_participant_payload_context():
+    """DM4 recreates one nested field defect without changing the pool or fixed leaves."""
+
+    source = (ROOT / "crates/iroha_data_model/src/sumeragi_amx/allocation.rs").read_text()
+    cfg = 'all(test, sumeragi_model_mutation = "DM4")'
+    assert source.count(cfg) == 2
+    start = source.index('                // DM4 skips only')
+    end = source.index('                let deadline =', start)
+    hook = source[start:end]
+    assert '#[cfg(' + cfg + ')]' in hook
+    assert '#[cfg(not(' + cfg + '))]' in hook
+    assert 'ncore::framed_field::<Vec<DataSpaceId>>(body, &mut field_offset)?' in hook
+    assert 'read_participants(field.bytes())?' in hook
+    assert 'fixed_field::<Vec<DataSpaceId>, _>(body, &mut field_offset, read_participants)?' in hook
+    assert not any(owner in hook for owner in ('AllocationBudget', 'ChargedBuffer', 'with_decode_limits', 'unsafe'))
+    assert source.index('let read_participants = |bytes: &[u8]|') < start
+    assert source[end:].startswith('                let deadline = fixed_field::<u64, _>')
+
+
+@pytest.mark.parametrize("selected", [None, "DM1", "DM4"])
+def test_model_actual_cargo_argv_profile_and_isolated_environment(monkeypatch, tmp_path, selected):
+    captured = {}
+    class Process:
+        returncode = 0
+        def communicate(self, *, timeout):
+            assert timeout == 900
+            return "isolated process result", None
+    def popen(command, **options):
+        captured.update(command=command, options=options)
+        return Process()
+    foreign = ("SUMERAGI_MUTATION", "SUMERAGI_CORE_MUTATION", "SUMERAGI_DAEMON_MUTATION", "SUMERAGI_MODEL_MUTATION")
+    for variable in foreign:
+        monkeypatch.setenv(variable, "inherited-foreign-rule")
+    for variable in ("SUMERAGI_SIM_SEED", "SUMERAGI_SIM_SEED_BASE", "SUMERAGI_SIM_SEEDS"):
+        monkeypatch.setenv(variable, "7")
+    monkeypatch.setattr(gate.subprocess, "Popen", popen)
+    code, output, elapsed = gate.cargo_test(SimpleNamespace(model=True), tmp_path, selected,
+        ["isi::amx_owner::tests::named"], None, 900, tmp_path / "model.log")
+    assert code == 0 and output == "isolated process result" and elapsed >= 0
+    assert captured["command"] == ["cargo", "test", "--locked", "-p", "iroha_data_model",
+        "--profile", "test", "--features", "mutation-testing", "--lib", "--", "isi::amx_owner::tests::named"]
+    environment = captured["options"]["env"]
+    assert captured["options"]["cwd"] == ROOT
+    assert captured["options"]["start_new_session"] is True
+    assert environment["CARGO_TARGET_DIR"] == str(tmp_path)
+    for variable in foreign:
+        assert environment.get(variable) == (selected if variable == "SUMERAGI_MODEL_MUTATION" else None)
+    assert all(variable not in environment for variable in ("SUMERAGI_SIM_SEED", "SUMERAGI_SIM_SEED_BASE", "SUMERAGI_SIM_SEEDS"))
+
+
+@pytest.mark.parametrize("status,verdict", [("fail", "killed_by_test"), ("pass", "survived"),
+    ("execution-error", "error"), ("missing-test", "error"), ("timeout", "error")])
+def test_model_gate_requires_actual_named_failure_classification(monkeypatch, tmp_path, status, verdict):
+    observed = []
+    monkeypatch.setattr(gate, "has_switch", lambda identifier, *, model: model and identifier == "DM1")
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    def run(*args):
+        observed.append(args)
+        return gate.Step(status=status)
+    monkeypatch.setattr(gate, "run_step", run)
+    args = SimpleNamespace(model=True, target_dir=tmp_path, timeout_test=900, fast=False)
+    result = gate.evaluate(args, tmp_path, gate.MODEL_MUTATIONS[0])
+    assert result["verdict"] == verdict
+    assert result["id"] == "DM1"
+    assert len(observed) == 1
+    assert observed[0][2:6] == ("DM1", gate.MODEL_MUTATIONS[0].tests, None, 900)
+    assert "scenario" not in result
+
+
+@pytest.mark.parametrize("baseline,expected", [("pass", 0), ("fail", 1), ("error", 1)])
+def test_model_main_keeps_positive_baseline_exact_report_and_default_caps(monkeypatch, tmp_path, baseline, expected):
+    target = tmp_path / "model"
+    captured = []
+    monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", "--model", "--jobs", "1", "--strict", "--target-dir", str(target)])
+    def unmutated(args, directory, rules):
+        captured.append((args, directory, tuple(rule.id for rule in rules)))
+        return {"id": "baseline", "verdict": baseline}
+    monkeypatch.setattr(gate, "evaluate_baseline", unmutated)
+    monkeypatch.setattr(gate, "evaluate", lambda args, directory, rule: {"id": rule.id, "verdict": "killed_by_test"})
+    assert gate.main() == expected
+    assert len(captured) == 1
+    args, directory, ids = captured[0]
+    assert ids == ("DM1", "DM2", "DM3", "DM4")
+    assert directory == target / "job0"
+    assert (args.timeout_build, args.timeout_test, args.timeout_scenario, args.seeds) == (1200, 900, 3600, 200)
+    assert not args.fast and not args.skip_baseline
+    report = json.loads((target / "report.json").read_text())
+    assert report["package"] == "iroha_data_model" and report["profile"] == "test"
+    assert report["summary"]["baseline"] == baseline
+    assert [result["id"] for result in report["mutations"]] == list(ids)
+    assert report["summary"]["mutations"] == 4
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--model", "--core"], ["--model", "--daemon"],
+    ["--model", "--core-profile", "test"], ["--model", "--only", "HC1"],
+    ["--core", "--only", "DM1"], ["--daemon", "--only", "DM1"],
+    ["--only", "DM1"], ["--model", "--strict", "--skip-baseline"],
+])
+def test_model_owner_cli_refuses_cross_owner_and_missing_baseline(monkeypatch, tmp_path, arguments):
+    target = tmp_path / "refused"
+    monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", *arguments, "--target-dir", str(target)])
+    with pytest.raises(SystemExit) as error:
+        gate.main()
+    assert error.value.code == 2
+    assert not target.exists(), "refusal must precede any build-lane or native child"
+
+
+@pytest.mark.parametrize("owners", [(True, True, False), (True, False, True), (False, True, True)])
+def test_model_source_census_refuses_multiple_owners(owners):
+    with pytest.raises(ValueError, match="exactly one implementation owner"):
+        gate.has_switch("DM1", core=owners[0], daemon=owners[1], model=owners[2])
+
+
+def test_nightly_model_mutations_keep_baseline_tools_profiles_and_full_inventory():
+    source = (ROOT / ".github/workflows/nightly_sumeragi.yml").read_text()
+    match = re.search(r"(?ms)^  model_mutation_gate:\n(.*?)(?=^  [a-z_]+:|\Z)", source)
+    assert match is not None
+    job = match.group(1)
+    assert "run: python3 scripts/sumeragi_mutation_gate.py --model --jobs 1 --strict\n" in job
+    assert not any(argument in job for argument in ("--only", "--skip-baseline", "--fast", "--timeout-build", "--timeout-test", "--timeout-scenario"))
+    assert "target/sumeragi-model-mutants/report.json" in job
+    assert "target/sumeragi-model-mutants/logs" in job
+    assert "if: always()" in job
+    assert "CARGO_BUILD_JOBS: \"2\"" in job
+    require_pinned_sumeragi_toolchain(job)
+
+
+@pytest.mark.parametrize("test_build,mutation_feature,accepted", [
+    (False, False, True), (True, False, True),
+    (True, True, True), (False, True, False),
+])
+def test_model_guard_rejects_mutation_feature_in_non_test_builds(tmp_path, test_build, mutation_feature, accepted):
+    guard = ROOT / "crates/iroha_data_model/src/model_mutation_guard.rs"
+    command = ["rustc", "--edition=2024", "--crate-type=lib", "--emit=metadata", str(guard), "-o", str(tmp_path / "model-guard.rmeta")]
+    if test_build: command += ["--cfg", "test"]
+    if mutation_feature: command += ["--cfg", 'feature="mutation-testing"']
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) == accepted, result.stderr
+    if not accepted: assert "mutation-testing is test-only" in result.stderr
+
+
+@pytest.fixture(scope="module")
+def model_build_script(tmp_path_factory):
+    executable = tmp_path_factory.mktemp("model-mutation-build") / "build-script"
+    result = subprocess.run(["rustc", "--edition=2024", str(ROOT / "crates/iroha_data_model/build.rs"), "-o", str(executable)], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    return executable
+
+
+@pytest.mark.parametrize("feature,mutation,flags,accepted,emitted", [
+    (False, "DM1", "", True, False), (True, None, "", True, False),
+    (True, "DM1", "", True, True), (True, "DM2", "", True, True), (True, "DM3", "", True, True),
+    (True, "DM4", "", True, True), (False, "DM4", "", True, False),
+    (True, "unknown_rule", "", False, False), (True, "HC1", "", False, False),
+    (False, None, '--cfg\x1fsumeragi_model_mutation="DM1"', False, False),
+    (True, "DM1", '--cfg\x1fsumeragi_model_mutation="DM2"', False, False),
+])
+def test_model_build_script_selects_only_registered_owned_test_cfg(model_build_script, feature, mutation, flags, accepted, emitted):
+    environment = dict(os.environ)
+    for key in ("CARGO_FEATURE_MUTATION_TESTING", "SUMERAGI_MODEL_MUTATION"):
+        environment.pop(key, None)
+    environment.update(SUMERAGI_MUTATION="MS1", SUMERAGI_CORE_MUTATION="HC1", SUMERAGI_DAEMON_MUTATION="HC93", CARGO_ENCODED_RUSTFLAGS=flags)
+    if feature: environment["CARGO_FEATURE_MUTATION_TESTING"] = "1"
+    if mutation is not None: environment["SUMERAGI_MODEL_MUTATION"] = mutation
+    result = subprocess.run([str(model_build_script)], cwd=ROOT / "crates/iroha_data_model", env=environment, capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) == accepted, result.stderr
+    assert (f'cargo:rustc-cfg=sumeragi_model_mutation="{mutation}"' in result.stdout) == emitted
+    for prefix in ("sumeragi_mutation", "sumeragi_core_mutation", "sumeragi_daemon_mutation"):
+        assert f"cargo:rustc-cfg={prefix}=" not in result.stdout

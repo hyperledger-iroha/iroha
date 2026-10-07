@@ -339,7 +339,9 @@ struct PrivateProfileStaging {
 }
 impl PrivateProfileStaging {
     fn directory(&self) -> &iroha_fs::PrivateDirectory {
-        self.directory.as_ref().expect("unpublished profile staging")
+        self.directory
+            .as_ref()
+            .expect("unpublished profile staging")
     }
     fn path(&self) -> &Path {
         self.directory().path()
@@ -2489,7 +2491,8 @@ mod tests {
             )
             .expect("write native publication DATA");
         let old_staging = staging.path().to_path_buf();
-        publish_profile_bundle(staging, &destination).expect("publish after native handles release");
+        publish_profile_bundle(staging, &destination)
+            .expect("publish after native handles release");
         assert!(!old_staging.exists());
         assert_eq!(
             fs::read(destination.join("published-data")).unwrap(),

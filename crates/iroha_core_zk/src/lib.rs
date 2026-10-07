@@ -691,12 +691,22 @@ fn verifying_key_content_uri_is_portable_v1(uri: &str) -> bool {
 include!("strict_verifying_key_preparation_tests.rs");
 #[cfg(test)]
 mod vk_cache_observer_tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        cell::Cell,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use super::*;
 
     static HITS: AtomicUsize = AtomicUsize::new(0);
     static MISSES: AtomicUsize = AtomicUsize::new(0);
+
+    std::thread_local! {
+        // Other native tests share the observer but cannot change this thread's counts.
+        static LOCAL_EVENTS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+        #[cfg(feature = "zk-stark")]
+        static CHECK_CACHE_UNLOCKED: Cell<bool> = const { Cell::new(false) };
+    }
 
     fn count_vk_cache_event(cache: &'static str, event: &'static str) {
         match (cache, event) {
@@ -704,6 +714,24 @@ mod vk_cache_observer_tests {
             ("vk", "miss") => MISSES.fetch_add(1, Ordering::SeqCst),
             _ => 0,
         };
+        LOCAL_EVENTS.with(|counts| {
+            let (hits, misses) = counts.get();
+            match (cache, event) {
+                ("vk", "hit") => counts.set((hits + 1, misses)),
+                ("vk", "miss") => counts.set((hits, misses + 1)),
+                _ => {}
+            }
+        });
+        #[cfg(feature = "zk-stark")]
+        if CHECK_CACHE_UNLOCKED.with(Cell::get) {
+            // Acquiring the real mutex in this synchronous observer proves the
+            // notifier has released its original guard. A concurrent validator
+            // may briefly own it, so use the lock rather than a racy try_lock.
+            let cache = STARK_VERIFYING_KEY_CACHE_V1
+                .get()
+                .expect("the genuine lookup initialized its cache");
+            drop(cache.lock().expect("observer can reenter the cache lock"));
+        }
     }
 
     #[test]
@@ -719,6 +747,86 @@ mod vk_cache_observer_tests {
         // Other tests share the process-wide cache, so counters only grow.
         assert!(MISSES.load(Ordering::SeqCst) > misses);
         assert!(HITS.load(Ordering::SeqCst) > hits);
+
+        #[cfg(feature = "zk-stark")]
+        {
+            let backend = ZK_BACKEND_STARK_FRI_V1;
+            // This identity is exclusive to this test; no cache row is cleared or fabricated.
+            let exact = format!("{backend}:cache-observer-native-validation");
+            let payload = crate::stark::StarkFriVerifyingKeyV1 {
+                version: 1,
+                circuit_id: exact.clone(),
+                n_log2: crate::stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                blowup_log2: crate::stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                fold_arity: 2,
+                queries: crate::stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+                merkle_arity: 2,
+            };
+            let bytes = norito::encode_canonical(&payload).expect("canonical verifier material");
+            let key = StarkVerifyingKeyCacheKeyV1 {
+                backend: backend.to_owned(),
+                circuit_id: exact.clone(),
+                vk_hash: hash_vk_bytes(backend, &bytes),
+            };
+            if let Some(cache) = STARK_VERIFYING_KEY_CACHE_V1.get() {
+                assert!(
+                    !cache.lock().expect("original cache").contains_key(&key),
+                    "the genuine first validation must be cold"
+                );
+            }
+            let (hits, misses) = LOCAL_EVENTS.with(Cell::get);
+            CHECK_CACHE_UNLOCKED.with(|check| check.set(true));
+            let cold = validate_stark_fri_verifying_key_v1(backend, &exact, &bytes)
+                .expect("canonical cold validation");
+            assert_eq!(norito::encode_canonical(&cold).unwrap(), bytes);
+            assert_eq!(LOCAL_EVENTS.with(Cell::get), (hits, misses + 1));
+            let warm = validate_stark_fri_verifying_key_v1(backend, &exact, &bytes)
+                .expect("canonical warm validation");
+            assert_eq!(norito::encode_canonical(&warm).unwrap(), bytes);
+            assert_eq!(LOCAL_EVENTS.with(Cell::get), (hits + 1, misses + 1));
+
+            let before_refusal = LOCAL_EVENTS.with(Cell::get);
+            assert!(
+                validate_stark_fri_verifying_key_v1(
+                    backend,
+                    "cache-observer-native-validation",
+                    &bytes
+                )
+                .is_err()
+            );
+            let oversized = vec![0; crate::stark::STARK_FRI_VERIFYING_KEY_V1_MAX_BYTES + 1];
+            assert!(validate_stark_fri_verifying_key_v1(backend, &exact, &oversized).is_err());
+            assert_eq!(LOCAL_EVENTS.with(Cell::get), before_refusal);
+
+            // A genuine lookup miss is observable even when decoding succeeds
+            // but canonical parameter admission refuses the key; refusal never warms it.
+            let weak = crate::stark::StarkFriVerifyingKeyV1 {
+                queries: crate::stark::STARK_FRI_CONSENSUS_MIN_QUERIES - 1,
+                ..payload
+            };
+            let weak_bytes = norito::encode_canonical(&weak).expect("canonical refused material");
+            for misses_added in 1..=2 {
+                assert!(validate_stark_fri_verifying_key_v1(backend, &exact, &weak_bytes).is_err());
+                assert_eq!(
+                    LOCAL_EVENTS.with(Cell::get),
+                    (before_refusal.0, before_refusal.1 + misses_added)
+                );
+            }
+            let weak_key = StarkVerifyingKeyCacheKeyV1 {
+                vk_hash: hash_vk_bytes(backend, &weak_bytes),
+                ..key
+            };
+            assert!(
+                !STARK_VERIFYING_KEY_CACHE_V1
+                    .get()
+                    .expect("genuine cache")
+                    .lock()
+                    .expect("original cache")
+                    .contains_key(&weak_key),
+                "refused material must not become a cache hit"
+            );
+            CHECK_CACHE_UNLOCKED.with(|check| check.set(false));
+        }
     }
 }
 /// Borrow the exact profile-qualified generic OpenVerify circuit identifier.
@@ -898,14 +1006,19 @@ pub fn validate_stark_fri_verifying_key_v1(
     };
     let cache = STARK_VERIFYING_KEY_CACHE_V1
         .get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
-    if let Some(cached) = cache
-        .lock()
-        .map_err(|_| "STARK/FRI verifier-key cache lock poisoned".to_owned())?
-        .get(&cache_key)
-        .cloned()
-    {
+    let cached = {
+        let guard = cache
+            .lock()
+            .map_err(|_| "STARK/FRI verifier-key cache lock poisoned".to_owned())?;
+        guard.get(&cache_key).cloned()
+    };
+    // Observers can acquire this cache or validate another key. Notify only
+    // after the original lookup guard has been released.
+    if let Some(cached) = cached {
+        record_vk_cache_event("vk", "hit");
         return Ok(cached);
     }
+    record_vk_cache_event("vk", "miss");
     let payload = crate::stark::decode_stark_fri_verifying_key_v1(bytes)?;
     crate::stark::validate_stark_fri_canonical_verifying_key_payload(
         &payload, circuit_id, "registry",
@@ -1463,6 +1576,7 @@ pub mod test_utils {
 /// Process-wide observer for verifier-key cache events (`cache`, `event` labels).
 static VK_CACHE_EVENT_OBSERVER: std::sync::OnceLock<fn(&'static str, &'static str)> =
     std::sync::OnceLock::new();
+#[cfg(any(test, feature = "zk-stark"))]
 #[inline]
 fn record_vk_cache_event(cache: &'static str, event: &'static str) {
     if let Some(observer) = VK_CACHE_EVENT_OBSERVER.get() {
@@ -1620,8 +1734,6 @@ pub enum PreverifyResult {
     Duplicate,
     /// Backend tag is empty or not recognized by the pre-verifier.
     UnsupportedBackend,
-    /// Backend curve is not allowed by node configuration/policy.
-    CurveNotAllowed,
     /// Proof payload exceeds the locally accepted maximum size for pre-verify.
     ProofTooBig,
     /// Malformed proof payload (e.g., empty bytes or structurally invalid header for the backend).
@@ -2508,7 +2620,10 @@ mod stark_backend_tag_tests {
                 format!("generic/namespace/{label}"),
             ] {
                 assert!(
-                    !pipa_r_open_verify_circuit_id_matches_backend(ZK_BACKEND_NATIVE_PIPA_R, &circuit_id),
+                    !pipa_r_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_NATIVE_PIPA_R,
+                        &circuit_id
+                    ),
                     "Halo2 generic admission must reject privacy circuit id {circuit_id:?}"
                 );
                 assert!(

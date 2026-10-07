@@ -1608,7 +1608,8 @@ mod tests {
             }
             let layers = vec![base];
             assert_eq!(crate::config_requires_sora_profile(&layers), sora_enabled);
-            let merged = crate::merged_sora_profile_detection_config(&layers);
+            let (_peer_directory, _peer, merged) =
+                crate::sora_profile_runtime_config_fixture(&layers);
             let actual = crate::parse_actual_config_for_genesis_result(merged, &layers)
                 .expect("test network storage config must parse");
             assert!(!actual.torii.sorafs_storage.enabled);
@@ -1651,7 +1652,7 @@ mod tests {
                 )
                 .write(["kura", "max_disk_usage_bytes"], 4_096_i64),
         ];
-        let merged = crate::merged_sora_profile_detection_config(&layers);
+        let (_peer_directory, _peer, merged) = crate::sora_profile_runtime_config_fixture(&layers);
         let actual = crate::parse_actual_config_for_genesis_result(merged, &layers)
             .expect("caller storage overrides must parse");
         assert_eq!(

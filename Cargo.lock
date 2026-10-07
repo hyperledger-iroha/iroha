@@ -5216,7 +5216,6 @@ dependencies = [
  "iroha_sumeragi",
  "iroha_version",
  "iroha_zkp_poseidon",
- "ivm_abi",
  "mv",
  "nonzero_ext",
  "norito",
@@ -6067,6 +6066,7 @@ dependencies = [
  "nix 0.30.1",
  "nonzero_ext",
  "norito",
+ "p256",
  "petname",
  "rand 0.9.4",
  "tempfile",
@@ -6492,6 +6492,7 @@ name = "ivm_abi"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "hex",
+ "hex-literal",
  "iroha_allocation",
  "iroha_crypto",
  "iroha_data_model",

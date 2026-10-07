@@ -121,7 +121,9 @@ impl fmt::Display for SigmaError {
             }
             Self::Key(error) => write!(f, "key generation: {error}"),
             Self::Artifact(error) => write!(f, "proving-key original: {error}"),
-            Self::ArtifactKeyMismatch => f.write_str("proving-key original differs from installed key"),
+            Self::ArtifactKeyMismatch => {
+                f.write_str("proving-key original differs from installed key")
+            }
             Self::VerifyingKey(error) => write!(f, "verifying key: {error}"),
             Self::WrongRelation { expected, found } => {
                 write!(f, "a {found:?} witness for a {expected:?} circuit")
@@ -268,7 +270,8 @@ where
             });
         }
         use iroha_plonk::keys::pk::artifact::Error as ArtifactError;
-        let rows = 1_usize.checked_shl(shape.k)
+        let rows = 1_usize
+            .checked_shl(shape.k)
             .ok_or(SigmaError::Artifact(ArtifactError::Length))?;
         if original.len() > config.maximum_bytes || rows > config.maximum_rows {
             return Err(SigmaError::Artifact(ArtifactError::Length));

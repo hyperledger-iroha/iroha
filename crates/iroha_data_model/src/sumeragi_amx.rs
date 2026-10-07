@@ -24,6 +24,8 @@
 //! Nothing in this module grants authority by decoding: a record is trusted only after a tracker
 //! verified its proof against an independently registered trust anchor.
 
+mod allocation;
+pub use allocation::{AllocatedAmxRecordProofV1, AmxProofAllocationErrorV1};
 mod participant;
 mod proof;
 mod state;
@@ -567,6 +569,8 @@ pub const fn amx_record_witness_key(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::allocated_amx_instruction_fixture;
 
 mod native;
 pub use native::{

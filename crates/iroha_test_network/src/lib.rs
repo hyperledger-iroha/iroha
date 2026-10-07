@@ -4,6 +4,7 @@ mod config;
 mod dedicated_read;
 #[cfg(unix)]
 mod disposable_runtime_provider_broker;
+mod kagemusha_load_authorizer_fixture;
 mod private_settlement_route_control;
 #[cfg(unix)]
 pub use disposable_runtime_provider_broker::{
@@ -3242,6 +3243,7 @@ set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 to disable timeout or provide an isolate
 #[derive(Clone)]
 struct PreparedPeerGenesis {
     bytes: Arc<[u8]>,
+    network_id: NetworkId,
 }
 impl PreparedPeerGenesis {
     async fn prepare(block: GenesisBlock) -> Result<Self> {
@@ -3264,8 +3266,10 @@ impl PreparedPeerGenesis {
     ) -> Result<Self> {
         spawn_blocking(move || {
             init_instruction_registry();
+            let network_id = NetworkId::from_genesis_hash(block.0.hash());
             encode(&block).map(|bytes| Self {
                 bytes: bytes.into(),
+                network_id,
             })
         })
         .await
@@ -6257,44 +6261,45 @@ fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
     ensure_sora_profile_trusted_peer_pop(&mut merged);
     merged
 }
-fn raw_nexus_overrides(table: &Table) -> bool {
-    let Some(nexus) = table.get("nexus").and_then(Value::as_table) else {
-        return false;
-    };
-    if nexus.contains_key("lane_catalog") || nexus.contains_key("dataspace_catalog") {
-        return true;
-    }
-    if let Some(policy) = nexus.get("routing_policy") {
-        let Some(policy) = policy.as_table() else {
-            return true;
-        };
-        let default_lane =
-            i64::from(iroha_config::parameters::defaults::nexus::DEFAULT_ROUTING_LANE_INDEX);
-        let default_lane_override = match policy.get("default_lane") {
-            None => false,
-            Some(value) => value.as_integer().map_or(true, |lane| lane != default_lane),
-        };
-        let default_dataspace_override = match policy.get("default_dataspace") {
-            None => false,
-            Some(value) => value.as_str().map_or(true, |alias| {
-                alias != iroha_config::parameters::defaults::nexus::DEFAULT_DATASPACE_ALIAS
-            }),
-        };
-        let rules_override = match policy.get("rules") {
-            None => false,
-            Some(value) => value.as_array().map_or(true, |rules| !rules.is_empty()),
-        };
-        if default_lane_override || default_dataspace_override || rules_override {
-            return true;
+fn typed_sora_profile_requirements(merged: &Table) -> Result<bool> {
+    // Keep the exact selected namespaces, including malformed values for their original reader.
+    let mut selected = Table::new();
+    for name in ["chain_discriminant", "nexus", "sorafs"] {
+        if let Some(value) = merged.get(name) {
+            selected.insert(name.to_string(), value.clone());
         }
     }
-    nexus
-        .get("lane_count")
-        .and_then(Value::as_integer)
-        .is_some_and(|value| value > 1)
+    let mut reader = ConfigReader::new()
+        .with_env(MockEnv::default())
+        .with_toml_source(TomlSource::inline(selected));
+    let chain_discriminant = reader
+        .read_parameter::<u16>(["chain_discriminant"])
+        .value_or_else(iroha_config::parameters::defaults::common::chain_discriminant)
+        .finish();
+    let nexus = reader.read_nested::<iroha_config::parameters::user::Nexus>("nexus");
+    let sorafs = reader.read_nested::<iroha_config::parameters::user::Sorafs>("sorafs");
+    reader
+        .into_result()
+        .map_err(|err| eyre!("failed to read Sora profile policy fields: {err:?}"))?;
+    let sorafs = sorafs.unwrap();
+    let services = sorafs.storage.enabled
+        || sorafs.discovery.discovery_enabled
+        || sorafs.repair.enabled
+        || sorafs.gc.enabled;
+    let _account_address_scope = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        chain_discriminant.unwrap(),
+    );
+    let mut emitter = iroha_config::base::util::Emitter::new();
+    let nexus = nexus.unwrap().parse(&mut emitter);
+    emitter
+        .into_result()
+        .map_err(|err| eyre!("failed to parse Sora profile Nexus policy: {err:?}"))?;
+    let nexus =
+        nexus.ok_or_else(|| eyre!("Sora profile Nexus policy did not produce a configuration"))?;
+    Ok(services || nexus.uses_multilane_catalogs() || nexus.has_lane_overrides())
 }
 fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
-    // Inject required fields so profile detection can parse without the base layer.
+    // Inspect the same typed Nexus geometry without admitting a runtime publisher.
     let merged = merged_sora_profile_detection_config(config_layers);
     let raw_sorafs_storage = read_bool(&merged, &["torii", "sorafs", "storage", "enabled"])
         .unwrap_or(false)
@@ -6310,49 +6315,51 @@ fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
         || read_bool(&merged, &["sorafs", "repair", "enabled"]).unwrap_or(false);
     let raw_sorafs_gc = read_bool(&merged, &["torii", "sorafs", "gc", "enabled"]).unwrap_or(false)
         || read_bool(&merged, &["sorafs", "gc", "enabled"]).unwrap_or(false);
-    let reader = ConfigReader::new()
-        .with_env(MockEnv::default())
-        .with_toml_source(TomlSource::inline(merged.clone()));
-    let config = match reader.read_and_complete::<iroha_config::parameters::user::Root>() {
-        Ok(user) => match user.parse() {
-            Ok(parsed) => Some(parsed),
-            Err(err) => {
-                warn!(
-                    ?err,
-                    "failed to parse merged config for Sora profile detection; falling back to raw scan"
-                );
-                None
-            }
-        },
+    match typed_sora_profile_requirements(&merged) {
+        Ok(required) => {
+            required
+                || raw_sorafs_storage
+                || raw_sorafs_discovery
+                || raw_sorafs_repair
+                || raw_sorafs_gc
+        }
         Err(err) => {
             warn!(
                 ?err,
-                "failed to parse merged config for Sora profile detection; falling back to raw scan"
+                "failed to read typed Sora profile fields; runtime parsing will reject invalid configuration"
             );
-            None
+            // Service flags remain observable, but field presence alone is never a Nexus override.
+            raw_sorafs_storage || raw_sorafs_discovery || raw_sorafs_repair || raw_sorafs_gc
         }
-    };
-    if let Some(config) = config {
-        let sorafs_storage = config.torii.sorafs_storage.enabled || raw_sorafs_storage;
-        let sorafs_discovery =
-            config.torii.sorafs_discovery.discovery_enabled || raw_sorafs_discovery;
-        let sorafs_repair = config.torii.sorafs_repair.enabled || raw_sorafs_repair;
-        let sorafs_gc = config.torii.sorafs_gc.enabled || raw_sorafs_gc;
-        let nexus_requires_router = config.nexus.uses_multilane_catalogs();
-        let nexus_lane_overrides = config.nexus.has_lane_overrides();
-        sorafs_storage
-            || sorafs_discovery
-            || sorafs_repair
-            || sorafs_gc
-            || nexus_requires_router
-            || nexus_lane_overrides
-    } else {
-        raw_sorafs_storage
-            || raw_sorafs_discovery
-            || raw_sorafs_repair
-            || raw_sorafs_gc
-            || raw_nexus_overrides(&merged)
     }
+}
+
+#[cfg(test)]
+fn sora_profile_runtime_config_fixture(
+    config_layers: &[Table],
+) -> (tempfile::TempDir, NetworkPeer, Table) {
+    let directory = tempfile::tempdir().expect("temporary private Sora-profile peer");
+    let environment = Environment {
+        dir: directory.path().to_path_buf(),
+    };
+    let peer = NetworkPeer::builder().build(&environment);
+    let mut merged = sora_profile_detection_defaults();
+    // Preserve the original detection identities/PoP roster; only the original peer-owned
+    // private publisher paths are added for these full-runtime parser controls.
+    let peer_base = peer.base_config_table();
+    merged.insert(
+        "kagemusha_load_authorizer".to_string(),
+        peer_base
+            .get("kagemusha_load_authorizer")
+            .expect("peer base publisher paths")
+            .clone(),
+    );
+    for layer in config_layers {
+        merge_tables(&mut merged, layer);
+    }
+    apply_identity_defaults_for_detection(&mut merged);
+    ensure_sora_profile_trusted_peer_pop(&mut merged);
+    (directory, peer, merged)
 }
 #[cfg(test)]
 fn resolve_actual_config(
@@ -8284,6 +8291,9 @@ impl NetworkBuilder {
             policy: PeerClientPolicy::from_env(),
         };
         for peer in network.all_peers() {
+            peer.load_authorizer
+                .bind(network_id)
+                .expect("bind test publisher custody to the exact signed genesis");
             peer.client_config
                 .set(client_config.clone())
                 .expect("test-network peer client identity must be initialized exactly once");
@@ -8500,6 +8510,7 @@ pub struct NetworkPeer {
     key_pair: KeyPair,
     client_config: Arc<OnceLock<PeerClientConfig>>,
     retained_client: Arc<OnceLock<Client>>,
+    load_authorizer: Arc<kagemusha_load_authorizer_fixture::Fixture>,
     streaming_key_pair: KeyPair,
     soranet_transport_key_pair: KeyPair,
     bls_key_pair: Option<KeyPair>,
@@ -8524,6 +8535,35 @@ pub struct NetworkPeer {
     port_api: Arc<AllocatedPort>,
 }
 impl NetworkPeer {
+    // Provision once from the original network identity. A joining peer without
+    // a local genesis must use the independently configured genesis anchor;
+    // configuration projection's synthetic hash is never runtime authority.
+    fn prepare_load_authorizer(
+        &self,
+        config_layers: &[Table],
+        genesis: Option<&PreparedPeerGenesis>,
+    ) -> Result<()> {
+        let network_id = if let Some(config) = self.client_config.get() {
+            config.network_id
+        } else if let Some(genesis) = genesis {
+            genesis.network_id
+        } else {
+            let mut merged = self.base_config_table();
+            for layer in config_layers {
+                merge_tables(&mut merged, layer);
+            }
+            if get_nested_value(&merged, &["genesis", "expected_hash"]).is_none() {
+                return Err(eyre!(
+                    "publisher runtime custody requires the exact genesis or its configured expected_hash"
+                ));
+            }
+            let config = parse_actual_config_for_genesis_result(merged, config_layers)?;
+            NetworkId::from_genesis_hash(config.genesis.expected_hash)
+        };
+        self.load_authorizer.bind(network_id)?;
+        self.load_authorizer.require_runtime()
+    }
+
     fn should_run_bind_preflight(&self) -> bool {
         should_run_bind_preflight_for_runs_started(self.runs_count.load(Ordering::Relaxed))
     }
@@ -8612,6 +8652,9 @@ impl NetworkPeer {
         config_layers: impl Iterator<Item = T>,
         genesis: Option<&PreparedPeerGenesis>,
     ) -> Result<()> {
+        let storage_layers: Vec<Table> =
+            config_layers.map(|layer| layer.as_ref().clone()).collect();
+        self.prepare_load_authorizer(&storage_layers, genesis)?;
         if self.should_run_bind_preflight() {
             let preflight = preflight_bind_addresses([self.p2p_address(), self.api_address()]);
             if let Err(err) = preflight {
@@ -8624,8 +8667,6 @@ impl NetworkPeer {
         let span = info_span!(parent: &self.span, "peer_run", run_num);
         let has_genesis = genesis.is_some();
         span.in_scope(|| info!(has_genesis, "Starting"));
-        let storage_layers: Vec<Table> =
-            config_layers.map(|layer| layer.as_ref().clone()).collect();
         let (storage_dir, storage_dir_key, storage_dir_value) =
             resolve_kura_store_dir(self, &storage_layers)?;
         let reset_for_bootstrap =
@@ -9874,7 +9915,16 @@ impl NetworkPeer {
     fn base_config_table(&self) -> Table {
         let p2p_literal = self.p2p_address().to_literal();
         let torii_literal = self.api_address().to_literal();
+        let (keyring, submitter_key) = self.load_authorizer.paths();
         let config = Table::new()
+            .write(
+                ["kagemusha_load_authorizer", "keyring_file"],
+                keyring.to_string_lossy().into_owned(),
+            )
+            .write(
+                ["kagemusha_load_authorizer", "submitter_key_file"],
+                submitter_key.to_string_lossy().into_owned(),
+            )
             .write("public_key", self.key_pair.public_key().to_string())
             .write(
                 "private_key",
@@ -10196,6 +10246,10 @@ impl NetworkPeerBuilder {
             key_pair,
             client_config: Arc::new(OnceLock::new()),
             retained_client: Arc::new(OnceLock::new()),
+            load_authorizer: Arc::new(
+                kagemusha_load_authorizer_fixture::Fixture::new(&dir)
+                    .expect("create private test publisher configuration custody"),
+            ),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair,
@@ -11047,6 +11101,11 @@ mod tests {
             OsString::from(ALICE_KEYPAIR.public_key().to_string()),
         );
         let _private_key_guard = EnvRestore::clear("PRIVATE_KEY");
+        let _fee_asset_guard = EnvRestore::set(
+            "NEXUS_FEE_ASSET_ID",
+            OsString::from("invalid-host-fee-selector"),
+        );
+        assert!(!config_requires_sora_profile(&[Table::new()]));
         let layer = Table::new().write(["torii", "sorafs", "storage", "enabled"], true);
         assert!(
             config_requires_sora_profile(&[layer]),
@@ -11072,6 +11131,10 @@ mod tests {
             key_pair: KeyPair::try_random().expect("generate once-block fallback peer key"),
             client_config: Arc::new(OnceLock::new()),
             retained_client: Arc::new(OnceLock::new()),
+            load_authorizer: Arc::new(
+                kagemusha_load_authorizer_fixture::Fixture::new(&storage_root)
+                    .expect("create private test publisher configuration custody"),
+            ),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11148,6 +11211,10 @@ mod tests {
             key_pair: KeyPair::try_random().expect("generate watchdog peer key"),
             client_config,
             retained_client: Arc::new(OnceLock::new()),
+            load_authorizer: Arc::new(
+                kagemusha_load_authorizer_fixture::Fixture::new(dir.path())
+                    .expect("create private test publisher configuration custody"),
+            ),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11744,6 +11811,84 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn publisher_runtime_requires_explicit_anchor_and_preserves_restart_custody() -> Result<()> {
+        let dir = tempdir()?;
+        let environment = Environment {
+            dir: dir.path().to_path_buf(),
+        };
+        let peer = NetworkPeer::builder().build(&environment);
+        let projection_paths = peer.load_authorizer.paths();
+        let base = config::base_iroha_config();
+        assert!(peer.prepare_load_authorizer(&[base.clone()], None).is_err());
+        assert!(peer.load_authorizer.require_runtime().is_err());
+        assert_eq!(peer.load_authorizer.paths(), projection_paths);
+
+        let anchor = CryptoHash::prehashed([0xA5; CryptoHash::LENGTH]);
+        let layers = [base.write(
+            ["genesis", "expected_hash"],
+            genesis_expected_hash_config_literal(&anchor.to_string()),
+        )];
+        peer.prepare_load_authorizer(&layers, None)?;
+        let runtime_paths = peer.load_authorizer.paths();
+        assert_ne!(runtime_paths, projection_paths);
+        let original = (fs::read(&runtime_paths.0)?, fs::read(&runtime_paths.1)?);
+        let cloned = peer.clone();
+        assert!(Arc::ptr_eq(&peer.load_authorizer, &cloned.load_authorizer));
+        cloned.prepare_load_authorizer(&layers, None)?;
+        assert_eq!(cloned.load_authorizer.paths(), runtime_paths);
+        assert!(
+            fs::read(&runtime_paths.0)? == original.0,
+            "original keyring changed"
+        );
+        assert!(
+            fs::read(&runtime_paths.1)? == original.1,
+            "original submitter changed"
+        );
+        let base = peer.base_config_table();
+        assert_eq!(
+            get_nested_value(&base, &["kagemusha_load_authorizer", "keyring_file"])
+                .and_then(Value::as_str),
+            runtime_paths.0.to_str()
+        );
+
+        let foreign_anchor = CryptoHash::prehashed([0xB5; CryptoHash::LENGTH]);
+        let foreign = [config::base_iroha_config().write(
+            ["genesis", "expected_hash"],
+            genesis_expected_hash_config_literal(&foreign_anchor.to_string()),
+        )];
+        assert!(cloned.prepare_load_authorizer(&foreign, None).is_err());
+        fs::remove_file(&runtime_paths.0)?;
+        assert!(cloned.prepare_load_authorizer(&layers, None).is_err());
+        assert!(
+            !runtime_paths.0.exists(),
+            "restart must not replace lost custody"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn publisher_configuration_preserves_explicit_caller_paths() -> Result<()> {
+        let dir = tempdir()?;
+        let environment = Environment {
+            dir: dir.path().to_path_buf(),
+        };
+        let peer = NetworkPeer::builder().build(&environment);
+        resolve_actual_config_result(&peer, &[config::base_iroha_config()])?;
+        let missing = dir.path().join("missing-caller-keyring.nrt");
+        let layer = config::base_iroha_config().write(
+            ["kagemusha_load_authorizer", "keyring_file"],
+            missing.to_string_lossy().into_owned(),
+        );
+        let error = resolve_actual_config_result(&peer, &[layer])
+            .expect_err("explicit malformed custody must not fall back to generated defaults");
+        assert!(format!("{error:#}").contains(
+            "kagemusha_load_authorizer private custody files are absent, unavailable, unsafe, empty or oversized"
+        ));
+        assert!(!missing.exists());
+        Ok(())
+    }
+
     #[test]
     fn write_base_config_uses_addr_literals() {
         let env = Environment::new();
@@ -16315,6 +16460,7 @@ mod tests {
         assert!(timer_progress.load(Ordering::SeqCst));
         assert_eq!(preparations.load(Ordering::SeqCst), 1);
         assert_eq!(prepared.bytes.as_ref(), expected.as_slice());
+        assert_eq!(prepared.network_id, network.network_id());
         let layers = network
             .config_layers()
             .map(Cow::into_owned)

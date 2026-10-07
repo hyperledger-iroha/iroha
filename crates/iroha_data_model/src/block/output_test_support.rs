@@ -1,7 +1,6 @@
 //! Structural fixtures for canonical output ownership; these grant no execution authority.
 use super::{BlockHeader, SignedBlock, execution_output::*, output_budget::ExecutionOutputLimits};
 use crate::{
-    account::AccountId,
     events::time::{TimeEvent, TimeInterval},
     transaction::signed::{ExecutionStep, TransactionResult, TransactionResultInner},
     trigger::{DataTriggerStep, TriggerId},
@@ -69,9 +68,11 @@ pub fn install_network(
     )
 }
 
+#[cfg(feature = "transparent_api")]
 pub fn proposal(count: usize) -> SignedBlock {
     use crate::{
         Level,
+        account::AccountId,
         isi::Log,
         transaction::{FeePaymentIntent, TransactionBuilder},
     };

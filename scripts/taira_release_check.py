@@ -3576,10 +3576,8 @@ def require_tests(listing: str, stages=None) -> None:
         raise CheckError("required regressions missing from native harness: " + ", ".join(missing))
 
 
-def require_one_pass(name: str, result: subprocess.CompletedProcess[str]) -> None:
-    if (result.returncode != 0
-            or f"test {name} ... ok" not in result.stdout.splitlines()
-            or "test result: ok. 1 passed; 0 failed; 0 ignored;" not in result.stdout):
+def require_one_pass(name: str, result: subprocess.CompletedProcess[str], filtered_out: int) -> None:
+    if native_test_batch_failures((name,), filtered_out, result):
         # These tests use disposable fixtures, never operator runtime inputs.
         sys.stderr.write(result.stdout)
         sys.stderr.write(result.stderr)
@@ -3639,7 +3637,7 @@ def native_test_batch_failures(names: tuple[str, ...], filtered_out: int,
             diagnostics = True
         if diagnostics:
             continue
-        match = re.fullmatch(r"test (\S+) \.\.\. (ok|FAILED|ignored(?:, .*)?|bench: .*)", line)
+        match = re.fullmatch(r"test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored(?:, .*)?|bench: .*)", line)
         if match is None:
             failures.append(f"CLI batch has malformed result output: {line}")
             continue
@@ -3750,6 +3748,7 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
     else:
         raise CheckError("native stage lacks the current artifact's preflight inventory")
     require_tests(listing, stages)
+    available = {line.removesuffix(": test") for line in listing.splitlines() if line.endswith(": test")}
     if batch:
         run_native_test_batch(harness, fixture_root, env, stages, lock_fds, names, listing)
         return
@@ -3765,7 +3764,7 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
                                     cwd=fixture_root, env=env, stdin=subprocess.DEVNULL,
                                     text=True, capture_output=True, check=False, pass_fds=lock_fds, umask=0o077)
             try:
-                require_one_pass(name, result)
+                require_one_pass(name, result, len(available) - 1)
             except CheckError as error:
                 failures.append(str(error))
                 print(f"[taira-check] failed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)

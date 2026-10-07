@@ -63,13 +63,16 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 371)
+        self.assertEqual(len(names), 396)
 
     def test_current_native_owner_additions_reject_same_count_selector_replacement(self):
         expected = {
-            'native State preverify backend and curve admission': (
+            'native KAGEMUSHA wallet State and verifier-pack routing': (
+                ('kagemusha_wallet_v1/tests.rs', 'kagemusha_wallet_v1/tests/wsv_tests.rs', 'wsv_tests', 'kagemusha_wallet_v1::tests::wsv_tests'),
+                ('registration_requires_dedicated_asset_permission_and_reserve_consent', 'registered_reserve_rejects_ordinary_transfer_burn_and_teardown', 'native_rejection_and_missing_source_anchor_cannot_activate', 'real_asset_batch_loads_once_and_failed_debit_rolls_back_ordinal', 'finalized_reader_requires_real_current_qc_and_bounded_history', 'routing_uses_permanent_scope_and_refuses_missing_wallet_records', 'verifier_pack_routing_requires_the_exact_registered_asset_and_permanent_scope', 'unavailable_production_artifacts_retain_local_deferral_and_no_activation', 'verifier_install_requires_actual_reserve_owner_before_artifact_parsing', 'verifier_install_rechecks_live_asset_permission_and_registered_scope', 'authorized_install_cannot_turn_missing_originals_into_a_verifier', 'package_quota_refuses_before_native_verifier_and_ledger_activation', 'real_reserve_pays_unload_once_and_online_controls_defer_without_consuming_it', 'real_fee_payout_requires_retained_history_and_never_requires_receive', 'corrupted_reserve_owner_and_mutated_registration_are_rejected', 'snapshot_requires_exact_reserve_indexes_and_reference_counts', 'publication_requires_exact_submission_scope_and_retains_historical_signer_after_rotation', 'certified_chain_issues_publishes_and_retrieves_original_voucher_after_growth', 'genuine_verifier_install_is_immutable_exact_retry_and_same_overlay_native_owner')),
+            'native State preverify backend admission': (
                 ('state.rs', 'state/state_preverify_backend_admission_tests.rs', 'state_preverify_backend_admission_tests', 'state::state_preverify_backend_admission_tests'),
-                ('unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy', 'stark_fri_profile_labels_require_enveloped_state_preverify_metadata', 'halo2_ipa_profile_labels_require_the_canonical_backend', 'canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry')),
+                ('retired_and_unsupported_backends_fail_before_native_key_admission', 'stark_fri_profile_labels_require_enveloped_state_preverify_metadata', 'native_pipa_r_profile_labels_require_the_canonical_backend', 'native_backend_key_and_envelope_refusals_preserve_original_dedup_and_retry')),
             'native original Queue payload lease custody': (
                 ('queue.rs', 'queue/payload_leases.rs', 'payload_leases', 'queue::payload_leases::tests'),
                 ('pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue', 'pending_payload_selection_cannot_adopt_clear_and_readmission_during_selection', 'pending_payload_lease_retires_on_actual_certified_state_publication', 'pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap')),
@@ -78,7 +81,10 @@ class NativeInventoryTests(unittest.TestCase):
                 ('removed_pending_owner_retains_original_resident_credit_until_last_reader', 'original_queue_shell_refusal_preserves_graph_and_exact_release_then_retries', 'first_queue_resident_ledger_refusal_keeps_original_input_and_retry_pool', 'every_queue_retirement_defers_original_refund_until_its_mutation_fence_releases', 'equal_limit_foreign_state_cannot_replace_original_queue_resident_pool', 'queue_drop_keeps_original_shell_and_ledger_charges_until_detached_last_owner', 'cold_queue_retirement_holds_original_fence_until_first_admission_can_publish')),
             'native borrowed paid AMX proof custody': (
                 ('sumeragi/amx/native/tests.rs', 'sumeragi/amx/native/tests/paid_borrowed_custody.rs', 'paid_borrowed_custody', 'sumeragi::amx::native::tests::paid_borrowed_custody'),
-                ('native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime',)),
+                ('native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime', 'native_amx_original_begin_instruction_refusal_preserves_same_pool_and_last_owner_ledger', 'native_amx_paid_owned_queue_and_payload_clones_retain_original_proof_graph_and_last_owner_charge')),
+            'native persisted AMX original proof custody': (
+                ('sumeragi/amx/mod.rs', 'sumeragi/amx/proof_tests.rs', 'proof_tests', 'sumeragi::amx::proof_tests'),
+                ('persisted_amx_records_survive_deadline_pruning_and_certified_replay', 'persisted_amx_proof_rejects_missing_corrupt_and_substituted_archives', 'persisted_amx_proof_refuses_original_pool_exhaustion_and_unverified_certificates', 'persisted_amx_original_read_retains_acquired_inode_and_exact_pool_through_decode_refusal')),
             'native driver scheduling': (
                 ('sumeragi/driver/tests/mod.rs', 'sumeragi/driver/tests/sched.rs', 'sched', 'sumeragi::driver::tests::sched'),
                 (
@@ -173,6 +179,7 @@ class NativeInventoryTests(unittest.TestCase):
                     'scoped_reverse_walk_reads_all_original_frames_and_rechecks_corrupt_ancestors',
                     'checked_prefix_finish_matches_original_complete_step_and_authority',
                     'checked_prefix_finish_preserves_refusal_rejection_and_same_source_retry',
+                    'admitted_prefix_initializes_every_field_like_the_owned_constructor',
                     'admitted_prefix_finish_matches_original_step_and_retains_original_slot_until_finish',
                     'admitted_prefix_finish_preserves_original_pool_refusal_and_certificate_error_order',
                 )),
@@ -290,6 +297,7 @@ class NativeInventoryTests(unittest.TestCase):
             'scoped_reverse_walk_reads_all_original_frames_and_rechecks_corrupt_ancestors',
             'checked_prefix_finish_matches_original_complete_step_and_authority',
             'checked_prefix_finish_preserves_refusal_rejection_and_same_source_retry',
+            'admitted_prefix_initializes_every_field_like_the_owned_constructor',
             'admitted_prefix_finish_matches_original_step_and_retains_original_slot_until_finish',
             'admitted_prefix_finish_preserves_original_pool_refusal_and_certificate_error_order',
         ))

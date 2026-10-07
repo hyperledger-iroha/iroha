@@ -337,7 +337,7 @@ fn concrete_stream_block_header_and_signature_match_capture() {
 }
 
 fn concrete_identity_frames() -> Vec<Value> {
-    let mut rows = vec![
+    let rows = vec![
         family("action-scheduled", scheduled_action(false)),
         family("action-scheduled-retry", scheduled_action(true)),
         family("action-execute-trigger", explicit_action()),
@@ -376,6 +376,8 @@ fn concrete_identity_frames() -> Vec<Value> {
             },
         ),
     ];
+    #[cfg(any(feature = "governance", feature = "http"))]
+    let mut rows = rows;
     #[cfg(feature = "governance")]
     rows.push(family(
         "data-governance-submitted",
