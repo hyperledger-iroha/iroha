@@ -4,7 +4,6 @@ mod config;
 mod dedicated_read;
 #[cfg(unix)]
 mod disposable_runtime_provider_broker;
-mod kagemusha_load_authorizer_fixture;
 mod private_settlement_route_control;
 #[cfg(unix)]
 pub use disposable_runtime_provider_broker::{
@@ -6299,7 +6298,7 @@ fn typed_sora_profile_requirements(merged: &Table) -> Result<bool> {
     Ok(services || nexus.uses_multilane_catalogs() || nexus.has_lane_overrides())
 }
 fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
-    // Inspect the same typed Nexus geometry without admitting a runtime publisher.
+    // Inspect the same typed Nexus geometry without requiring unrelated runtime services.
     let merged = merged_sora_profile_detection_config(config_layers);
     let raw_sorafs_storage = read_bool(&merged, &["torii", "sorafs", "storage", "enabled"])
         .unwrap_or(false)
@@ -6344,16 +6343,7 @@ fn sora_profile_runtime_config_fixture(
     };
     let peer = NetworkPeer::builder().build(&environment);
     let mut merged = sora_profile_detection_defaults();
-    // Preserve the original detection identities/PoP roster; only the original peer-owned
-    // private publisher paths are added for these full-runtime parser controls.
-    let peer_base = peer.base_config_table();
-    merged.insert(
-        "kagemusha_load_authorizer".to_string(),
-        peer_base
-            .get("kagemusha_load_authorizer")
-            .expect("peer base publisher paths")
-            .clone(),
-    );
+    // Preserve the original detection identities and PoP roster for full-runtime parsing.
     for layer in config_layers {
         merge_tables(&mut merged, layer);
     }
@@ -8291,9 +8281,6 @@ impl NetworkBuilder {
             policy: PeerClientPolicy::from_env(),
         };
         for peer in network.all_peers() {
-            peer.load_authorizer
-                .bind(network_id)
-                .expect("bind test publisher custody to the exact signed genesis");
             peer.client_config
                 .set(client_config.clone())
                 .expect("test-network peer client identity must be initialized exactly once");
@@ -8510,7 +8497,6 @@ pub struct NetworkPeer {
     key_pair: KeyPair,
     client_config: Arc<OnceLock<PeerClientConfig>>,
     retained_client: Arc<OnceLock<Client>>,
-    load_authorizer: Arc<kagemusha_load_authorizer_fixture::Fixture>,
     streaming_key_pair: KeyPair,
     soranet_transport_key_pair: KeyPair,
     bls_key_pair: Option<KeyPair>,
@@ -8535,35 +8521,6 @@ pub struct NetworkPeer {
     port_api: Arc<AllocatedPort>,
 }
 impl NetworkPeer {
-    // Provision once from the original network identity. A joining peer without
-    // a local genesis must use the independently configured genesis anchor;
-    // configuration projection's synthetic hash is never runtime authority.
-    fn prepare_load_authorizer(
-        &self,
-        config_layers: &[Table],
-        genesis: Option<&PreparedPeerGenesis>,
-    ) -> Result<()> {
-        let network_id = if let Some(config) = self.client_config.get() {
-            config.network_id
-        } else if let Some(genesis) = genesis {
-            genesis.network_id
-        } else {
-            let mut merged = self.base_config_table();
-            for layer in config_layers {
-                merge_tables(&mut merged, layer);
-            }
-            if get_nested_value(&merged, &["genesis", "expected_hash"]).is_none() {
-                return Err(eyre!(
-                    "publisher runtime custody requires the exact genesis or its configured expected_hash"
-                ));
-            }
-            let config = parse_actual_config_for_genesis_result(merged, config_layers)?;
-            NetworkId::from_genesis_hash(config.genesis.expected_hash)
-        };
-        self.load_authorizer.bind(network_id)?;
-        self.load_authorizer.require_runtime()
-    }
-
     fn should_run_bind_preflight(&self) -> bool {
         should_run_bind_preflight_for_runs_started(self.runs_count.load(Ordering::Relaxed))
     }
@@ -8654,7 +8611,6 @@ impl NetworkPeer {
     ) -> Result<()> {
         let storage_layers: Vec<Table> =
             config_layers.map(|layer| layer.as_ref().clone()).collect();
-        self.prepare_load_authorizer(&storage_layers, genesis)?;
         if self.should_run_bind_preflight() {
             let preflight = preflight_bind_addresses([self.p2p_address(), self.api_address()]);
             if let Err(err) = preflight {
@@ -9915,16 +9871,7 @@ impl NetworkPeer {
     fn base_config_table(&self) -> Table {
         let p2p_literal = self.p2p_address().to_literal();
         let torii_literal = self.api_address().to_literal();
-        let (keyring, submitter_key) = self.load_authorizer.paths();
         let config = Table::new()
-            .write(
-                ["kagemusha_load_authorizer", "keyring_file"],
-                keyring.to_string_lossy().into_owned(),
-            )
-            .write(
-                ["kagemusha_load_authorizer", "submitter_key_file"],
-                submitter_key.to_string_lossy().into_owned(),
-            )
             .write("public_key", self.key_pair.public_key().to_string())
             .write(
                 "private_key",
@@ -10246,10 +10193,6 @@ impl NetworkPeerBuilder {
             key_pair,
             client_config: Arc::new(OnceLock::new()),
             retained_client: Arc::new(OnceLock::new()),
-            load_authorizer: Arc::new(
-                kagemusha_load_authorizer_fixture::Fixture::new(&dir)
-                    .expect("create private test publisher configuration custody"),
-            ),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair,
@@ -11131,10 +11074,6 @@ mod tests {
             key_pair: KeyPair::try_random().expect("generate once-block fallback peer key"),
             client_config: Arc::new(OnceLock::new()),
             retained_client: Arc::new(OnceLock::new()),
-            load_authorizer: Arc::new(
-                kagemusha_load_authorizer_fixture::Fixture::new(&storage_root)
-                    .expect("create private test publisher configuration custody"),
-            ),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11211,10 +11150,6 @@ mod tests {
             key_pair: KeyPair::try_random().expect("generate watchdog peer key"),
             client_config,
             retained_client: Arc::new(OnceLock::new()),
-            load_authorizer: Arc::new(
-                kagemusha_load_authorizer_fixture::Fixture::new(dir.path())
-                    .expect("create private test publisher configuration custody"),
-            ),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11812,80 +11747,85 @@ mod tests {
         }
     }
     #[test]
-    fn publisher_runtime_requires_explicit_anchor_and_preserves_restart_custody() -> Result<()> {
-        let dir = tempdir()?;
-        let environment = Environment {
-            dir: dir.path().to_path_buf(),
-        };
-        let peer = NetworkPeer::builder().build(&environment);
-        let projection_paths = peer.load_authorizer.paths();
-        let base = config::base_iroha_config();
-        assert!(peer.prepare_load_authorizer(&[base.clone()], None).is_err());
-        assert!(peer.load_authorizer.require_runtime().is_err());
-        assert_eq!(peer.load_authorizer.paths(), projection_paths);
-
-        let anchor = CryptoHash::prehashed([0xA5; CryptoHash::LENGTH]);
-        let layers = [base.write(
-            ["genesis", "expected_hash"],
-            genesis_expected_hash_config_literal(&anchor.to_string()),
-        )];
-        peer.prepare_load_authorizer(&layers, None)?;
-        let runtime_paths = peer.load_authorizer.paths();
-        assert_ne!(runtime_paths, projection_paths);
-        let original = (fs::read(&runtime_paths.0)?, fs::read(&runtime_paths.1)?);
-        let cloned = peer.clone();
-        assert!(Arc::ptr_eq(&peer.load_authorizer, &cloned.load_authorizer));
-        cloned.prepare_load_authorizer(&layers, None)?;
-        assert_eq!(cloned.load_authorizer.paths(), runtime_paths);
+    fn ordinary_load_peers_keep_exact_signed_genesis_identity_without_publisher_custody()
+    -> Result<()> {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        let genesis = network.genesis();
+        let original_hash = genesis.0.hash();
+        let original_network = NetworkId::from_genesis_hash(original_hash);
+        let mut signatures = genesis.0.signatures();
+        let signature = signatures.next().expect("canonical genesis signature");
+        assert!(signatures.next().is_none());
         assert!(
-            fs::read(&runtime_paths.0)? == original.0,
-            "original keyring changed"
+            signature
+                .signature()
+                .verify_hash(network.genesis_key_pair.public_key(), original_hash,)
+                .is_ok()
         );
-        assert!(
-            fs::read(&runtime_paths.1)? == original.1,
-            "original submitter changed"
-        );
-        let base = peer.base_config_table();
-        assert_eq!(
-            get_nested_value(&base, &["kagemusha_load_authorizer", "keyring_file"])
-                .and_then(Value::as_str),
-            runtime_paths.0.to_str()
-        );
-
-        let foreign_anchor = CryptoHash::prehashed([0xB5; CryptoHash::LENGTH]);
-        let foreign = [config::base_iroha_config().write(
-            ["genesis", "expected_hash"],
-            genesis_expected_hash_config_literal(&foreign_anchor.to_string()),
-        )];
-        assert!(cloned.prepare_load_authorizer(&foreign, None).is_err());
-        fs::remove_file(&runtime_paths.0)?;
-        assert!(cloned.prepare_load_authorizer(&layers, None).is_err());
-        assert!(
-            !runtime_paths.0.exists(),
-            "restart must not replace lost custody"
-        );
+        assert_eq!(network.network_id(), original_network);
+        assert_eq!(network.validators().len(), 4);
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        for peer in network.all_peers() {
+            assert!(
+                peer.base_config_table()
+                    .get("kagemusha_load_authorizer")
+                    .is_none()
+            );
+            assert!(!peer.dir.join("kagemusha-load-authorizer").exists());
+            let actual = resolve_actual_config_result(peer, &layers)?;
+            assert_eq!(actual.genesis.expected_hash, original_hash);
+            assert_eq!(actual.common.chain, network.chain_id());
+            assert_eq!(
+                peer.client_config.get().unwrap().network_id,
+                original_network
+            );
+            assert_eq!(*peer.client().client().network_id(), original_network);
+            let cloned = peer.clone();
+            assert!(Arc::ptr_eq(&cloned.client_config, &peer.client_config));
+            assert_eq!(
+                resolve_actual_config_result(&cloned, &layers)?
+                    .genesis
+                    .expected_hash,
+                original_hash,
+            );
+        }
+        assert_eq!(network.genesis().0.hash(), original_hash);
         Ok(())
     }
 
     #[test]
-    fn publisher_configuration_preserves_explicit_caller_paths() -> Result<()> {
+    fn ordinary_load_peer_configuration_rejects_retired_publisher_overrides() -> Result<()> {
         let dir = tempdir()?;
         let environment = Environment {
             dir: dir.path().to_path_buf(),
         };
         let peer = NetworkPeer::builder().build(&environment);
-        resolve_actual_config_result(&peer, &[config::base_iroha_config()])?;
-        let missing = dir.path().join("missing-caller-keyring.nrt");
-        let layer = config::base_iroha_config().write(
-            ["kagemusha_load_authorizer", "keyring_file"],
-            missing.to_string_lossy().into_owned(),
+        let base = config::base_iroha_config();
+        resolve_actual_config_result(&peer, &[base.clone()])?;
+        assert!(
+            peer.base_config_table()
+                .get("kagemusha_load_authorizer")
+                .is_none()
         );
-        let error = resolve_actual_config_result(&peer, &[layer])
-            .expect_err("explicit malformed custody must not fall back to generated defaults");
-        assert!(format!("{error:#}").contains(
-            "kagemusha_load_authorizer private custody files are absent, unavailable, unsafe, empty or oversized"
-        ));
-        assert!(!missing.exists());
+        for publisher in [
+            Value::Boolean(false),
+            Value::Table(Table::new()),
+            Value::Table(Table::from_iter([
+                ("keyring_file".into(), "retired-keyring.nrt".into()),
+                ("submitter_key_file".into(), "retired-submitter.key".into()),
+            ])),
+        ] {
+            let mut layer = base.clone();
+            layer.insert("kagemusha_load_authorizer".into(), publisher);
+            let error = resolve_actual_config_result(&peer, &[layer])
+                .expect_err("retired publisher parameters must not be accepted");
+            assert!(format!("{error:#}").contains("kagemusha_load_authorizer"));
+            assert!(!peer.dir.join("kagemusha-load-authorizer").exists());
+        }
+        resolve_actual_config_result(&peer, &[base])?;
         Ok(())
     }
 

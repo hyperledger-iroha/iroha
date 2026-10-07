@@ -42,7 +42,6 @@ base64.workspace = true
 url.workspace = true
 
 color-eyre.workspace = true
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
 rand.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "process", "sync", "io-util", "net", "signal"] }

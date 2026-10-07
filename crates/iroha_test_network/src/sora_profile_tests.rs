@@ -1,4 +1,4 @@
-// Sora profile and signed-consensus tests share valid, role-separated software custody.
+// Sora profile and signed-consensus tests retain role-separated SoraFS software custody.
 
 fn sora_storage_profile_fixture() -> (tempfile::TempDir, Table) {
     let credentials = tempdir().expect("temporary SoraFS signer credentials");
@@ -192,7 +192,11 @@ fn sora_profile_detection_uses_typed_default_catalogs_without_publisher_custody(
         .with_toml_source(TomlSource::inline(merged))
         .read_and_complete::<iroha_config::parameters::user::Root>()
         .expect("ordinary typed fields still readable");
-    assert!(user.parse().is_err(), "runtime publisher custody remains mandatory");
+    let actual = user
+        .parse()
+        .expect("ordinary runtime config needs no retired Load publisher");
+    assert!(!actual.nexus.has_lane_overrides());
+    assert_eq!(actual.nexus.lane_config.entries().len(), 1);
 }
 
 #[test]
@@ -212,7 +216,8 @@ fn sora_profile_detection_requires_actual_multilane_geometry_and_exact_selected_
         dataspace = "universal"
         visibility = "public"
     }];
-    materialize_profile_account_defaults(&mut layers).expect("selected-chain literal materialization");
+    materialize_profile_account_defaults(&mut layers)
+        .expect("selected-chain literal materialization");
     let _ambient = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
     let merged = merged_sora_profile_detection_config(&layers);
     assert!(merged.get("kagemusha_load_authorizer").is_none());

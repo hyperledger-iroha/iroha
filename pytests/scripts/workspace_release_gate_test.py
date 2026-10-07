@@ -1355,14 +1355,15 @@ def test_release_gate_selects_every_basic_census_test_except_the_four_peer_fixtu
      "sumeragi_amx::allocation::tests"),
     ("iroha_data_model", "src/sumeragi_amx.rs", "native", "src/sumeragi_amx/native.rs",
      "sumeragi_amx::native::tests"),
-    ("iroha_test_network", "src/lib.rs", "kagemusha_load_authorizer_fixture",
-     "src/kagemusha_load_authorizer_fixture.rs",
-     "kagemusha_load_authorizer_fixture::platform::tests"),
+    ("iroha_data_model", "src/events/data/kagemusha.rs", "tests", "src/events/data/kagemusha/tests.rs",
+     "events::data::kagemusha::tests"),
+    ("iroha_data_model", "src/lib.rs", "concrete_identity_tests", "src/concrete_identity_tests.rs",
+     "concrete_identity_tests"),
 ))
-def test_release_gate_selects_current_amx_and_publisher_owner_controls(
+def test_release_gate_selects_current_amx_load_and_identity_owner_controls(
     package: str, parent: str, module: str, source: str, prefix: str
 ) -> None:
-    """Select complete current AMX and publisher owners without a frozen leaf count."""
+    """Select current AMX, Load and identity owners without a frozen leaf count."""
 
     directory = _workspace_packages()[package]
     assert re.search(rf"\bmod\s+{re.escape(module)}\s*[;{{]",
@@ -1380,6 +1381,27 @@ def test_release_gate_selects_current_amx_and_publisher_owner_controls(
         if not _filter_matches(tree, package, "lib", f"{prefix}::{name}")
     }
     assert not missing, (package, missing)
+
+
+def test_test_network_ordinary_load_has_no_retired_publisher_owner() -> None:
+    """Ordinary Load must not acquire a superseded keyring or publisher dependency."""
+
+    directory = _workspace_packages()["iroha_test_network"]
+    source = (directory / "src/lib.rs").read_text(encoding="utf-8")
+    assert "mod kagemusha_load_authorizer_fixture;" not in source
+    assert "prepare_load_authorizer" not in source
+    assert "load_authorizer: Arc" not in source
+    assert not (directory / "src/kagemusha_load_authorizer_fixture.rs").exists()
+    package = tomllib.loads((directory / "Cargo.toml").read_text(encoding="utf-8"))
+    assert "p256" not in package["dependencies"]
+    filter_text = tomllib.loads(NEXTEST_CONFIG.read_text(encoding="utf-8"))["profile"]["release-gate"]["default-filter"]
+    assert "kagemusha_load_authorizer_fixture" not in filter_text
+    for name in (
+        "ordinary_load_peers_keep_exact_signed_genesis_identity_without_publisher_custody",
+        "ordinary_load_peer_configuration_rejects_retired_publisher_overrides",
+    ):
+        assert re.search(rf"\bfn\s+{name}\s*\(", source)
+        assert _filter_matches(_parse_filter(filter_text), "iroha_test_network", "lib", f"tests::{name}")
 
 
 def test_pr_workflow_retains_locked_workspace_and_numeric_parity() -> None:
