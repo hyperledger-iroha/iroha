@@ -28,6 +28,10 @@ SELF_TESTS=(
   --self-test-unknown-wallet-rust-symbol
   --self-test-bad-wallet-header-width
   --self-test-bad-wallet-rust-width
+  --self-test-bad-wallet-setup-header-request
+  --self-test-bad-wallet-setup-rust-request
+  --self-test-bad-wallet-open-header-request
+  --self-test-bad-wallet-open-rust-request
   --self-test-retired-offline-cash-header-symbol
   --self-test-retired-offline-cash-rust-symbol
   --self-test-retired-pixel6-jni-symbol
@@ -164,7 +168,9 @@ PRIVATE_SETTLEMENT_EXPORTS = {
 }
 KAGEMUSHA_WALLET_EXPORTS = {
     "connect_norito_kagemusha_wallet_revision_v1",
-    "connect_norito_kagemusha_wallet_open_v1",
+    "connect_norito_kagemusha_wallet_open_begin_v1",
+    "connect_norito_kagemusha_wallet_open_finish_v1",
+    "connect_norito_kagemusha_wallet_open_cancel_v1",
     "connect_norito_kagemusha_wallet_close_v1",
     "connect_norito_kagemusha_wallet_activity_v1",
     "connect_norito_kagemusha_wallet_execute_v1",
@@ -179,7 +185,7 @@ KAGEMUSHA_WALLET_EXPORTS = {
 }
 KAGEMUSHA_WALLET_JNI_EXPORTS = {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
-    for method in ("revision", "open", "close", "activity", "call", "execute", "setup", "snapshot")
+    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "execute", "snapshot")
 }
 KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS = {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate",
@@ -320,6 +326,7 @@ def canonical_rust_type(value: str) -> str:
         "WalletSnapshot": "connect_norito_kagemusha_wallet_snapshot_v1_t",
         "WalletOperationRequest": "connect_norito_kagemusha_wallet_operation_request_v1",
         "WalletSetupRequest": "connect_norito_kagemusha_wallet_setup_request_v1",
+        "WalletOpenRequest": "connect_norito_kagemusha_wallet_open_request_v1",
         "ConnectNoritoSorafsReferenceBundlePayload": "ConnectNoritoSorafsReferenceBundlePayload",
         "ConnectNoritoSorafsReferenceInput": "ConnectNoritoSorafsReferenceInput",
         "u8": "uint8_t",
@@ -809,6 +816,30 @@ if [[ "${MODE}" == --self-test-* ]]; then
         $'connect_norito_kagemusha_wallet_execute_v1(\n    handle: u64,' \
         $'connect_norito_kagemusha_wallet_execute_v1(\n    handle: u32,'
       expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_execute_v1"
+      ;;
+    --self-test-bad-wallet-setup-header-request)
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_norito_kagemusha_wallet_setup_request_v1* request," \
+        "connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_norito_kagemusha_wallet_operation_request_v1* request,"
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_setup_v1"
+      ;;
+    --self-test-bad-wallet-setup-rust-request)
+      replace_once "${tmp}/kagemusha_wallet_ffi/exports.rs" \
+        'request: *const WalletSetupRequest,' \
+        'request: *const WalletOperationRequest,'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_setup_v1"
+      ;;
+    --self-test-bad-wallet-open-header-request)
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_wallet_open_begin_v1(uint64_t runtime, const connect_norito_kagemusha_wallet_open_request_v1* request," \
+        "connect_norito_kagemusha_wallet_open_begin_v1(uint64_t runtime, const connect_norito_kagemusha_wallet_setup_request_v1* request,"
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_open_begin_v1"
+      ;;
+    --self-test-bad-wallet-open-rust-request)
+      replace_once "${tmp}/kagemusha_wallet_ffi/exports.rs" \
+        'request: *const WalletOpenRequest,' \
+        'request: *const WalletSetupRequest,'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_open_begin_v1"
       ;;
     --self-test-retired-kagemusha-jni-symbol)
       printf '\npub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_RetiredBridge_nativeRetired() -> jint { 0 }\n' >> "${tmp}/platform_jni.rs"

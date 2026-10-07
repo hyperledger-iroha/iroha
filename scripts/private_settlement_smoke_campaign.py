@@ -36,6 +36,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 import private_settlement_release_runner as release_runner
+import sumeragi_mutation_gate as native_accounting
 
 
 def _load_source_manifest_tools() -> ModuleType:
@@ -58,6 +59,10 @@ EMPTY_PROTOCOL_HASH = "0" * 63 + "1"
 TEST_NAME = (
     "nexus::atomic_private_settlement_localnet::"
     "atomic_private_settlement_n3_real_process_smoke"
+)
+HAPPY_DAY_TEST_NAME = (
+    "nexus::atomic_private_settlement_localnet::"
+    "atomic_private_settlement_n3_happy_day"
 )
 RUN_COUNT = 10
 PEER_COUNT = 16
@@ -258,12 +263,21 @@ def new_request(commit: str, run: int, *, kind: str = "smoke") -> dict[str, Any]
 def terminal_success(output: str, *, kind: str = "smoke") -> None:
     """Require an executed exact test, excluding zero-test/ignored/skip successes."""
     require(kind in ("smoke", "happy_day"), "unknown experiment kind")
-    terminals = re.findall(r"^test result: .*?$", output, re.MULTILINE)
-    require(len(terminals) == 1 and re.fullmatch(
-        r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; \d+ filtered out; finished in .+",
-        terminals[0]) is not None, "smoke lacks exact terminal 1 passed / 0 failed / 0 ignored")
-    require(re.search(r"^running 1 test\s*$", output, re.MULTILINE) is not None,
-            "smoke test was not executed")
+    selected = TEST_NAME if kind == "smoke" else HAPPY_DAY_TEST_NAME
+    terminals, owners_valid = native_accounting.serial_test_terminals(output)
+    headers = list(native_accounting.TEST_RUNNING.finditer(output))
+    summaries = list(native_accounting.TEST_COMPLETION.finditer(output))
+    require(owners_valid and len(terminals) == 1
+            and terminals[0][:2] == (selected, "ok"),
+            "experiment lacks its exact successful native test terminal")
+    require(len(headers) == len(summaries) == 1
+            and len(re.findall(r"^test result:.*$", output, re.MULTILINE)) == 1
+            and headers[0].group(1) == "1"
+            and summaries[0].group(1) == "ok"
+            and tuple(map(int, summaries[0].group(2, 3, 4, 5))) == (1, 0, 0, 0)
+            and headers[0].end() < terminals[0][2]
+            and terminals[0][3] < summaries[0].start(),
+            "experiment lacks one ordered exact native header and success summary")
     require(re.search(r"\bskip(?:ped|ping)?\b|\bretrying\b|fresh startup attempt [2-9]", output,
                       re.IGNORECASE) is None, "smoke reported a skip or retry")
     require(output.count(f"APS {kind} completed:") == 1, "missing unique Rust experiment completion")

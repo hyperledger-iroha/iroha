@@ -1158,8 +1158,8 @@ impl PreparationV1<'_> {
             sigma: capsule.step_proof.bytes.clone(),
             objects: [
                 signed_tape(
-                    prepared.request.body.transcript(),
-                    &prepared.request.signature,
+                    incoming.payment.request.body.transcript(),
+                    &incoming.payment.request.signature,
                 ),
                 payer.credential_tape.clone(),
                 incoming.receipt,

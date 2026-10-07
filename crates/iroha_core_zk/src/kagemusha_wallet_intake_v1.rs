@@ -10,8 +10,9 @@
 //! Ed25519 account key to sign one fresh, source-bound Native challenge. Failed or abandoned
 //! admission never generates a key, selects a monetary head, signs a payment or erases custody.
 //!
-//! This is admission to the unfinished native operation owner. It does not implement
-//! NativeProofs or upgrade the foreign wallet-open ABI to availability by itself.
+//! Successful original admission feeds the concrete native operation owner. The embedding
+//! app must first provision the complete signed artifact graph under independently selected
+//! native configuration and authenticated genesis; no foreign input can substitute authority.
 
 use std::sync::Arc;
 
@@ -55,6 +56,33 @@ pub enum Error {
     /// The exact selected source changed while account authorization was pending.
     #[error("wallet source changed during original intake")]
     SourceChanged,
+}
+
+/// Failed account admission returning the same exclusive unadmitted custody owner.
+/// No authorization verdict or challenge is retained; retry must reconcile and begin afresh.
+pub struct CustodyFailureV1<F: KagemushaWalletFsV1, P> {
+    provider: KagemushaWalletProviderV1<F, P>,
+    error: Error,
+}
+impl<F: KagemushaWalletFsV1, P> std::fmt::Debug for CustodyFailureV1<F, P> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CustodyFailureV1")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+impl<F: KagemushaWalletFsV1, P> CustodyFailureV1<F, P> {
+    /// Preserve the exact failure category, including unavailable versus absent/lost custody.
+    #[must_use]
+    pub const fn error(&self) -> Error {
+        self.error
+    }
+    /// Recover only the unadmitted provider and error; no account authorization is returned.
+    #[must_use]
+    pub fn into_parts(self) -> (KagemushaWalletProviderV1<F, P>, Error) {
+        (self.provider, self.error)
+    }
 }
 
 fn require_installation(
@@ -286,7 +314,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
     /// No slot/wallet/scheme/manifest identity is accepted from the foreign caller.
     /// # Errors
     /// Invalid originals, another installed owner, no/ambiguous source, unknown storage/key
-    /// state or lost custody. This consumes the exclusive provider even when admission fails.
+    /// state or lost custody. Failure returns the same unadmitted exclusive provider.
     pub fn begin(
         mut provider: KagemushaWalletProviderV1<F, P>,
         installed: Arc<InstalledVerifierPackV1>,
@@ -295,55 +323,72 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
         certificate_set_original: &[u8],
         account_original: &[u8],
         asset_scope_original: &[u8],
-    ) -> Result<Self, Error> {
-        require_installation(
-            (
-                installed.verifier().scheme().scheme_id(),
-                installed.verifier().manifest_digest(),
-            ),
-            sources.installation(),
-            *provider.scheme_id(),
-        )?;
-        let preparation = PreparationV1::new(&installed)
-            .map_err(|_| Error::Authority("installed preparation source"))?;
-        let authenticated = preparation
-            .authenticate_credential_set(credential_original, certificate_set_original)
-            .map_err(|_| Error::Authority("issuer-authenticated originals"))?;
-        let credential = *authenticated.credential();
-        let account = account(account_original, &credential.body.account_digest)?;
-        let asset_scope = asset_scope(asset_scope_original, &credential.body.asset_digest)?;
-        let mut selected = None;
-        for slot in provider.slots()? {
-            let status = provider.status(&slot)?;
-            if status
-                .marker()
-                .is_some_and(|record| record.marker().wallet_id == credential.body.wallet_id)
-            {
-                let marker = source(&mut provider, &slot, &credential, credential_original)?;
-                if selected.is_some() {
-                    return Err(Error::Ambiguous);
+    ) -> Result<Self, CustodyFailureV1<F, P>> {
+        let selection = (|| -> Result<_, Error> {
+            require_installation(
+                (
+                    installed.verifier().scheme().scheme_id(),
+                    installed.verifier().manifest_digest(),
+                ),
+                sources.installation(),
+                *provider.scheme_id(),
+            )?;
+            let preparation = PreparationV1::new(&installed)
+                .map_err(|_| Error::Authority("installed preparation source"))?;
+            let authenticated = preparation
+                .authenticate_credential_set(credential_original, certificate_set_original)
+                .map_err(|_| Error::Authority("issuer-authenticated originals"))?;
+            let credential = *authenticated.credential();
+            let account = account(account_original, &credential.body.account_digest)?;
+            let asset_scope = asset_scope(asset_scope_original, &credential.body.asset_digest)?;
+            let mut selected = None;
+            for slot in provider.slots()? {
+                let status = provider.status(&slot)?;
+                if status
+                    .marker()
+                    .is_some_and(|record| record.marker().wallet_id == credential.body.wallet_id)
+                {
+                    let marker = source(&mut provider, &slot, &credential, credential_original)?;
+                    if selected.is_some() {
+                        return Err(Error::Ambiguous);
+                    }
+                    selected = Some((slot, *marker.marker_file_digest()));
                 }
-                selected = Some((slot, *marker.marker_file_digest()));
             }
-        }
-        let (slot, marker_file_digest) = selected.ok_or(Error::NotEnrolled)?;
-        let mut nonce = [0; 32];
-        rand::rngs::OsRng.try_fill_bytes(&mut nonce).map_err(|_| {
-            KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(0))
-        })?;
-        if nonce == [0; 32] {
-            return Err(Error::Authority("zero Native nonce"));
-        }
-        let challenge = open_message(
-            &nonce,
-            &installed.verifier().manifest_digest(),
-            &slot,
-            &marker_file_digest,
-            credential_original,
-            certificate_set_original,
-            account_original,
-            asset_scope_original,
-        );
+            let (slot, marker_file_digest) = selected.ok_or(Error::NotEnrolled)?;
+            let mut nonce = [0; 32];
+            rand::rngs::OsRng.try_fill_bytes(&mut nonce).map_err(|_| {
+                KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(
+                    0,
+                ))
+            })?;
+            if nonce == [0; 32] {
+                return Err(Error::Authority("zero Native nonce"));
+            }
+            let challenge = open_message(
+                &nonce,
+                &installed.verifier().manifest_digest(),
+                &slot,
+                &marker_file_digest,
+                credential_original,
+                certificate_set_original,
+                account_original,
+                asset_scope_original,
+            );
+            Ok((
+                slot,
+                marker_file_digest,
+                credential,
+                account,
+                asset_scope,
+                challenge,
+            ))
+        })();
+        let (slot, marker_file_digest, credential, account, asset_scope, challenge) =
+            match selection {
+                Ok(value) => value,
+                Err(error) => return Err(CustodyFailureV1 { provider, error }),
+            };
         Ok(Self {
             provider,
             installed,
@@ -367,20 +412,38 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
         &self.challenge
     }
 
+    /// Consume an abandoned challenge while preserving the unadmitted provider.
+    #[must_use]
+    pub fn abandon(self) -> KagemushaWalletProviderV1<F, P> {
+        self.provider
+    }
+
     /// Consume one authorization and recheck the exact source and actual payment key.
-    /// Failed signatures consume this pending owner; a new begin samples a fresh challenge.
+    /// Every failed finish consumes this challenge and returns unadmitted custody; a new begin samples a fresh challenge.
     /// # Errors
     /// Wrong account signature, stale/changed source, unknown key/storage or lost custody.
-    pub fn finish(mut self, account_signature: &[u8]) -> Result<AdmittedWalletV1<F, P>, Error> {
-        authorize_account(&self.account, &self.challenge, account_signature)?;
-        let marker = source(
-            &mut self.provider,
-            &self.slot,
-            &self.credential,
-            &self.credential_original,
-        )?;
-        if marker.marker_file_digest() != &self.marker_file_digest {
-            return Err(Error::SourceChanged);
+    pub fn finish(
+        mut self,
+        account_signature: &[u8],
+    ) -> Result<AdmittedWalletV1<F, P>, CustodyFailureV1<F, P>> {
+        let accepted = (|| -> Result<(), Error> {
+            authorize_account(&self.account, &self.challenge, account_signature)?;
+            let marker = source(
+                &mut self.provider,
+                &self.slot,
+                &self.credential,
+                &self.credential_original,
+            )?;
+            if marker.marker_file_digest() != &self.marker_file_digest {
+                return Err(Error::SourceChanged);
+            }
+            Ok(())
+        })();
+        if let Err(error) = accepted {
+            return Err(CustodyFailureV1 {
+                provider: self.provider,
+                error,
+            });
         }
         Ok(AdmittedWalletV1 {
             provider: self.provider,

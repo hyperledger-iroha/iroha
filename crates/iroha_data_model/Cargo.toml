@@ -206,3 +206,8 @@ path = "tests/resource_contract_v1.rs"
 [[test]]
 name = "fastpq_quantity_units_allocations"
 path = "tests/fastpq_quantity_units_allocations.rs"
+
+# Observe canonical AMX identity, borrowed Begin matching and monetary-effects allocations.
+[[test]]
+name = "amx_prepare_streaming_allocations"
+path = "tests/amx_prepare_streaming_allocations.rs"

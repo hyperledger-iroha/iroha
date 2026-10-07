@@ -234,6 +234,12 @@ impl OfflineCompilerV1<'_> {
 }
 
 impl WalletArtifactDraftV1 {
+    /// Exact unsigned inventory from the completed source compiler, for durable
+    /// retention before signing. This original is data and grants no installation.
+    pub fn producer_inventory(&self) -> &[u8] {
+        &self.catalog
+    }
+
     /// Exact generated Scheme body for the existing root/certificate authority workflow.
     pub const fn scheme(&self) -> &KagemushaWalletSchemeV1 {
         &self.scheme
@@ -349,6 +355,7 @@ mod tests {
     #[test]
     fn authentic_originals_keep_the_whole_exact_signed_pack() {
         let (draft, pack) = fixture();
+        assert_eq!(draft.producer_inventory(), b"engineering-verifier-only");
         let result = draft
             .finish(&pack.signer_certificate, &pack.manifest)
             .unwrap();
@@ -395,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn a_genuine_root_signature_cannot_substitute_an_enrollment_certificate() {
+    fn enrollment_certificates_cannot_authorize_artifact_manifests() {
         let (draft, pack) = fixture();
         let mut body = KagemushaWalletSignerCertificateV1::decode_canonical(
             &pack.signer_certificate,

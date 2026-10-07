@@ -1057,13 +1057,14 @@ cannot move or unload value; no online path unloads an unfolded lineage. The
 Keep the old wallet's key, private state, replay map and unresolved Payment and
 claim bytes. Zero spendable balance does not mean its custody data is disposable.
 
-Retirement closes new setup and funding, while preserving existing claims:
+Retirement closes new Request quotes and funding, while preserving existing claims:
 
 1. Commit a proven `Retiring` transition from a folded head (§3.1). It issues
    no new Request quotes, but
    continues to Receive valid Payments under previously signed quotes, including
    Sends that commit later. It may Ordinary Load receipts already issued, Send or Unload
-   remaining value and finish delivery, fee and redemption claims. The lifecycle
+   remaining value and finish delivery, fee and redemption claims. New Offers
+   remain available for those Sends. The lifecycle
    never reverts to Active.
 2. Submit a ledger-control instruction carrying the complete Retiring package,
    or a later complete Send or Unload package proving that lifecycle and its

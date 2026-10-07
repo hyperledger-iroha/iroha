@@ -18,17 +18,6 @@ fn read(env: &mut JNIEnv<'_>, bytes: &JByteArray<'_>, bound: usize) -> wallet::R
         .map_err(|_| wallet::Failure::code(wallet::INVALID))
 }
 fn response(env: &mut JNIEnv<'_>, result: wallet::Result<wallet::Response>) -> jobject {
-    response_class(
-        env,
-        result,
-        "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletCallV1",
-    )
-}
-fn response_class(
-    env: &mut JNIEnv<'_>,
-    result: wallet::Result<wallet::Response>,
-    class: &str,
-) -> jobject {
     let (status, reason, code, sequence, detail, bytes) = match result {
         Ok(value) => (value.kind, -1, 0, value.sequence, value.detail, value.bytes),
         Err(error) => (
@@ -43,7 +32,7 @@ fn response_class(
     let result = (|| -> jni::errors::Result<JObject<'_>> {
         let bytes = env.byte_array_from_slice(&bytes)?;
         env.new_object(
-            class,
+            "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletCallV1",
             "(IIIJJI[B)V",
             &[
                 JValue::Int(status),
@@ -69,30 +58,51 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
 ) -> jint {
     1
 }
-/// Admit an opaque Android platform and identities; fail closed until native artifacts exist.
+/// Begin account admission from exact originals under a native-provisioned runtime.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_open(
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_openBegin(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
-    platform: JObject<'_>,
-    slot: JByteArray<'_>,
-    scheme: JByteArray<'_>,
-    wallet_id: JByteArray<'_>,
-    artifact: JByteArray<'_>,
-) -> jlong {
-    wallet::run(|| {
-        for input in [&slot, &scheme, &wallet_id, &artifact] {
-            let bytes = read(&mut env, input, 32)?;
-            if bytes.len() != 32 || bytes == [0; 32] {
-                return Err(wallet::Failure::code(wallet::INVALID));
-            }
-        }
-        let _platform = wallet::AndroidPlatform::new(&mut env, &platform)?;
-        // TODO(G3/G4): construct and register an owner only after the native loader authenticates
-        // this artifact set. Retaining an upcall object never establishes monetary authority.
-        Err::<u64, _>(wallet::Failure::code(wallet::ARTIFACTS_UNAVAILABLE))
-    })
-    .map_or_else(|error| i64::from(error.status), |id| id as jlong)
+    runtime: jlong,
+    credential: JByteArray<'_>,
+    certificates: JByteArray<'_>,
+    account: JByteArray<'_>,
+    asset: JByteArray<'_>,
+) -> jobject {
+    let result = wallet::run(|| {
+        let a = read(&mut env, &credential, wallet::open::BOUNDS[0])?;
+        let b = read(&mut env, &certificates, wallet::open::BOUNDS[1])?;
+        let c = read(&mut env, &account, wallet::open::BOUNDS[2])?;
+        let d = read(&mut env, &asset, wallet::open::BOUNDS[3])?;
+        wallet::open::begin(runtime as u64, [&a, &b, &c, &d])
+    });
+    response(&mut env, result)
+}
+/// Consume one account challenge; failed signatures retain unadmitted native custody.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_openFinish(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    runtime: jlong,
+    signature: JByteArray<'_>,
+) -> jobject {
+    let result = wallet::run(|| {
+        // Failed/oversized input still consumes this pending challenge as an invalid signature.
+        let signature = read(&mut env, &signature, 64).unwrap_or_default();
+        wallet::open::finish(runtime as u64, &signature)
+    });
+    response(&mut env, result)
+}
+/// Abandon an account challenge without accepting any authority or deleting custody.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_openCancel(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    runtime: jlong,
+) -> jint {
+    wallet::run(|| wallet::open::cancel(runtime as u64))
+        .err()
+        .map_or(0, |error| error.status)
 }
 /// Close with cooperative proof cancellation; retained payments remain in source custody.
 #[unsafe(no_mangle)]
@@ -152,7 +162,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
 }
 
 /// Source-bound setup; all input array lengths are checked before any original is copied.
-/// Results use a separate setup reply, preserving the monetary call's strict status range.
+/// The canonical call reply preserves distinct setup and monetary status projections.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_setup(
     mut env: JNIEnv<'_>,
@@ -197,11 +207,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
         )?;
         wallet::setup(handle as u64, request)
     });
-    response_class(
-        &mut env,
-        result,
-        "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletSetupReplyV1",
-    )
+    response(&mut env, result)
 }
 
 /// Typed lifecycle request; bounds are checked before copying any original object.

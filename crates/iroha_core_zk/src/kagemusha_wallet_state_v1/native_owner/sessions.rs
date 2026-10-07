@@ -7,7 +7,7 @@ const ACTION_MAX: usize = KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + 4096;
 
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::SetupActionV1")]
-enum Action {
+pub(in crate::kagemusha_wallet_state_v1) enum Action {
     Offer {
         amount: u128,
     },
@@ -23,11 +23,11 @@ enum Action {
 }
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::SetupPlanV1")]
-struct Plan {
-    source: [u8; 32],
+pub(in crate::kagemusha_wallet_state_v1) struct Plan {
+    pub(in crate::kagemusha_wallet_state_v1) source: [u8; 32],
     action: [u8; 32],
-    nonce: [u8; 32],
-    output: Option<[u8; 32]>,
+    pub(in crate::kagemusha_wallet_state_v1) nonce: [u8; 32],
+    pub(in crate::kagemusha_wallet_state_v1) output: Option<[u8; 32]>,
 }
 impl Plan {
     fn require(&self) -> Result<(), Error> {
@@ -100,7 +100,11 @@ fn retain_plan<A: ObjectStore>(
 }
 
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
-    fn setup(&mut self, id: [u8; 32], action: &Action) -> Result<Plan, Error> {
+    pub(in crate::kagemusha_wallet_state_v1) fn setup(
+        &mut self,
+        id: [u8; 32],
+        action: &Action,
+    ) -> Result<Plan, Error> {
         if id == [0; 32] {
             return Err(Error::Invalid("setup identity"));
         }
@@ -115,10 +119,13 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }
         let source = self.indexed_step(&manifest, manifest.indexed.ok_or(Error::NoHead)?)?;
         self.source_custody(&manifest, &source)?;
-        if source.frozen.capsule.successor_state.core.lifecycle
-            != KagemushaWalletLifecycleV1::Active
+        // Retirement stops new receiving quotes. It preserves Send of remaining value,
+        // whose peer session still starts with an Offer (§6.3).
+        if matches!(action, Action::Request { .. })
+            && source.frozen.capsule.successor_state.core.lifecycle
+                != KagemushaWalletLifecycleV1::Active
         {
-            return Err(Error::Invalid("setup requires active wallet"));
+            return Err(Error::Invalid("new Request requires active wallet"));
         }
         let plan = Plan {
             source: manifest.capsule,
@@ -148,7 +155,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         let snapshot = self.source_custody(&manifest, &source)?;
         Ok((source, snapshot))
     }
-    fn finish_setup(
+    pub(in crate::kagemusha_wallet_state_v1) fn finish_setup(
         &mut self,
         id: [u8; 32],
         action: &Action,
@@ -174,6 +181,12 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         {
             return Err(Error::WitnessLost("changed setup plan"));
         }
+        match (action, issued) {
+            (Action::Request { .. }, Some((request, _)))
+                if request.body.nonce == plan.nonce && archive::encode(request)? == bytes => {}
+            (Action::Offer { .. }, None) => {}
+            _ => return Err(Error::WitnessLost("setup output binding")),
+        }
         plan.output = Some(
             self.archive
                 .write_object(bytes, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)?,
@@ -190,25 +203,9 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         self.publish_manifest(root, &manifest)?;
         Ok(())
     }
-    fn setup_certificates(
-        &mut self,
-        source: &ReleasedStep,
-        snapshot: &super::super::preparation_custody::SourceCustodyV1,
-    ) -> Result<KagemushaWalletCertificateSetV1, Error> {
-        archive::decode(
-            &snapshot
-                .original(
-                    &mut self.archive,
-                    &source.frozen.capsule.successor_state,
-                    PreparationOriginalV1::EnrollmentCertificates,
-                )?
-                .ok_or(Error::WitnessLost("setup issuer original"))?,
-        )
-    }
-    fn retained_request(
+    pub(in crate::kagemusha_wallet_state_v1) fn issued_setup_request(
         &mut self,
         request: &KagemushaWalletRequestV1,
-        bytes: &[u8],
     ) -> Result<Vec<u8>, Error> {
         // This read cannot recreate a missing recorded decision after a head change.
         // Fresh output and its issued Request/gap were selected by the same publication.
@@ -226,10 +223,26 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             &request.request_digest(),
         )?;
         record.gap(&mut self.archive, &original)?;
-        if retained != bytes {
+        if retained != archive::encode(request)? {
             return Err(Error::WitnessLost("setup Request original"));
         }
         Ok(retained)
+    }
+
+    fn setup_certificates(
+        &mut self,
+        source: &ReleasedStep,
+        snapshot: &super::super::preparation_custody::SourceCustodyV1,
+    ) -> Result<KagemushaWalletCertificateSetV1, Error> {
+        archive::decode(
+            &snapshot
+                .original(
+                    &mut self.archive,
+                    &source.frozen.capsule.successor_state,
+                    PreparationOriginalV1::EnrollmentCertificates,
+                )?
+                .ok_or(Error::WitnessLost("setup issuer original"))?,
+        )
     }
 }
 
@@ -256,7 +269,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         self.archive_credited(&credit, bytes.to_vec())
     }
 
-    /// Sign and durably retain a native Offer for the selected active head.
+    /// Sign and durably retain a native Offer for the selected Active or Retiring head.
     /// The caller identity is a retry key, never a signing message or monetary authority.
     ///
     /// # Errors
@@ -456,7 +469,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         {
             return Err(Error::WitnessLost("retained Request binding"));
         }
-        self.retained_request(&request, &bytes)
+        self.issued_setup_request(&request)
     }
 }
 
@@ -679,10 +692,7 @@ mod tests {
                     .finish_setup(id, &action, &mut resumed, &original, Some((&request, None)))
                     .unwrap();
             }
-            assert_eq!(
-                wallet.retained_request(&request, &original).unwrap(),
-                original
-            );
+            assert_eq!(wallet.issued_setup_request(&request).unwrap(), original);
             assert_eq!(wallet.custody.signatures, signatures);
             let load = frozen(
                 Some(&boot),
@@ -707,10 +717,7 @@ mod tests {
                     .unwrap(),
                 original,
             );
-            assert_eq!(
-                wallet.retained_request(&request, &original).unwrap(),
-                original
-            );
+            assert_eq!(wallet.issued_setup_request(&request).unwrap(), original);
             // A missing selected original cannot be reconstructed from transport input.
             let (_, manifest) = wallet.manifest().unwrap();
             let record: super::super::super::preparation_custody::IssuedRequestCustodyV1 =
@@ -727,7 +734,7 @@ mod tests {
                 .remove(ArchiveKey::Object(record.request))
                 .unwrap();
             assert!(matches!(
-                wallet.retained_request(&request, &original),
+                wallet.issued_setup_request(&request),
                 Err(Error::WitnessLost(_))
             ));
         }

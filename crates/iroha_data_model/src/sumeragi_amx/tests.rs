@@ -385,6 +385,62 @@ fn sumeragi_amx_transaction_id_binds_every_field_and_validates_shape() {
 }
 
 #[test]
+fn sumeragi_amx_begin_match_borrows_exact_fields_and_rejects_each_substitution() {
+    let original = transaction(&[DS1, DS2], 50, 1);
+    let begin = original.begin().unwrap();
+    let expected_frame = norito::encode_canonical(&original).unwrap();
+    let expected_id: [u8; 32] =
+        Hash::new_from_chunks(&[AMX_TRANSACTION_DOMAIN, &expected_frame]).into();
+    assert_eq!(original.id().unwrap(), expected_id);
+    let legs = original.legs.as_ptr();
+    let participants = begin.participants.as_ptr();
+    assert!(begin.matches(&original));
+    for altered in [
+        AmxBeginV1 {
+            tx: [0; 32],
+            ..begin.clone()
+        },
+        AmxBeginV1 {
+            deadline: 51,
+            ..begin.clone()
+        },
+        AmxBeginV1 {
+            participants: vec![DS1, DS3],
+            ..begin.clone()
+        },
+        AmxBeginV1 {
+            participants: vec![DS2, DS1],
+            ..begin.clone()
+        },
+        AmxBeginV1 {
+            participants: vec![DS1],
+            ..begin.clone()
+        },
+        AmxBeginV1 {
+            participants: vec![DS1, DS2, DS3],
+            ..begin.clone()
+        },
+    ] {
+        assert!(!altered.matches(&original));
+    }
+    for malformed in [
+        transaction(&[DS1], 50, 1),
+        transaction(&[DS1, DS1], 50, 1),
+        transaction(&[DS2, DS1], 50, 1),
+        transaction(&[DS1, DS2], 0, 1),
+    ] {
+        let mut altered = begin.clone();
+        altered.deadline = malformed.deadline;
+        altered.participants = malformed.legs.iter().map(|leg| leg.dataspace).collect();
+        assert!(!altered.matches(&malformed));
+        assert!(matches!(malformed.id(), Err(AmxError::Transaction(_))));
+    }
+    assert_eq!(original.legs.as_ptr(), legs);
+    assert_eq!(begin.participants.as_ptr(), participants);
+    assert_eq!(norito::encode_canonical(&original).unwrap(), expected_frame);
+}
+
+#[test]
 fn sumeragi_amx_records_round_trip_norito_and_json() {
     let tx = transaction(&[DS1, DS2], 50, 1);
     let x = tx.id().unwrap();

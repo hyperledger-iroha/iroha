@@ -759,7 +759,7 @@ class DriverBoundaryTests(unittest.TestCase):
         self.assertEqual(validator[validator.index("--features") + 1], "test-network-private-settlement-route-control")
 
     def test_exact_terminal_and_discovery_reject_zero_ignored_skipped_or_duplicate(self) -> None:
-        good = "running 1 test\nAPS smoke completed: synthetic fixture only\n" + (
+        good = f"running 1 test\ntest {M.TEST_NAME} ... APS smoke completed: synthetic fixture only\nok\n" + (
             "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 1.0s\n")
         M.terminal_success(good)
         for bad in (good.replace("1 passed", "0 passed"), good.replace("0 ignored", "1 ignored"),
@@ -770,6 +770,39 @@ class DriverBoundaryTests(unittest.TestCase):
         M.validate_discovery(listing)
         with self.assertRaises(M.CampaignError):
             M.validate_discovery(listing.replace(M.TEST_NAME, M.TEST_NAME + "_wrong"))
+
+    def test_terminal_accounting_keeps_exact_owners_with_interleaved_logs(self) -> None:
+        for kind, name in (("smoke", M.TEST_NAME), ("happy_day", M.HAPPY_DAY_TEST_NAME)):
+            marker = f"APS {kind} completed: synthetic fixture only"
+            summary = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 1.0s\n"
+            for terminal in (f"test {name} ... ok\n{marker}\n",
+                             f"test {name} ... {{\"logger\":\"interleaved\"}}\n{marker}\nok\n"):
+                with self.subTest(kind=kind, terminal=terminal):
+                    M.terminal_success("running 1 test\n" + terminal + summary, kind=kind)
+
+    def test_terminal_accounting_rejects_missing_foreign_duplicate_and_contradictory_owners(self) -> None:
+        for kind, name in (("smoke", M.TEST_NAME), ("happy_day", M.HAPPY_DAY_TEST_NAME)):
+            marker = f"APS {kind} completed: synthetic fixture only\n"
+            summary = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 1.0s\n"
+            good = f"running 1 test\ntest {name} ... " + marker + "ok\n" + summary
+            attacks = {
+                "missing owner and terminal": "running 1 test\n" + marker + summary,
+                "missing terminal": good.replace("ok\n", "", 1),
+                "foreign owner": good.replace(name, name + "_foreign"),
+                "duplicate header": "running 1 test\n" + good,
+                "contradictory failed terminal": good.replace("ok\n", "FAILED\n", 1),
+                "duplicate owner": good.replace(summary, f"test {name} ... ok\n" + summary),
+                "foreign additional owner": good.replace(summary, "test foreign::test ... ok\n" + summary),
+                "orphan terminal": good + "ok\n",
+                "duplicate terminal": good.replace(summary, "ok\n" + summary),
+                "missing header": good.replace("running 1 test\n", ""),
+                "duplicate summary": good + summary,
+                "malformed summary": good.replace("finished in 1.0s", "finished in invalid"),
+                "misordered summary": summary + good.removesuffix(summary),
+            }
+            for label, output in attacks.items():
+                with self.subTest(kind=kind, attack=label), self.assertRaises(M.CampaignError):
+                    M.terminal_success(output, kind=kind)
 
     def test_request_nonce_content_id_commit_range_and_bool_boundaries(self) -> None:
         M.validate_request(request(0), COMMIT, 0)
@@ -1020,7 +1053,7 @@ class SerialCampaignTests(unittest.TestCase):
                 exit_code = 101
                 output = "running 1 test\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 1.0s\n"
             else:
-                output = "running 1 test\nAPS smoke completed: synthetic test only\n"
+                output = f"running 1 test\ntest {M.TEST_NAME} ... APS smoke completed: synthetic test only\nok\n"
                 output += "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 1.0s\n"
             if req["run"] == self.drift_run:
                 self.validator.write_text("Synthetic mid-run substituted binary.\n")

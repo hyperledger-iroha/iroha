@@ -11,7 +11,7 @@ use ::jni::{
 /// any array copy. Zero means canonical DATA binding only, never financial proof acceptance.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate(
-    mut env: JNIEnv<'_>,
+    env: JNIEnv<'_>,
     _class: JClass<'_>,
     scheme: JByteArray<'_>,
     wallet_id: JByteArray<'_>,
@@ -32,7 +32,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
         ];
         for (index, (input, bound)) in inputs.iter().zip(bounds).enumerate() {
             let length = env
-                .get_array_length(input)
+                .get_array_length(*input)
                 .map_err(|_| Failure::code(INVALID))?;
             if length <= 0 || length as usize > bound || (index < 3 && length != 32) {
                 return Err(Failure::code(INVALID));

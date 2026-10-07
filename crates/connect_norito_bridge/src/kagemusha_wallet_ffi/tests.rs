@@ -7,10 +7,10 @@ use advance::{
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-struct TestWallet {
-    calls: Arc<AtomicUsize>,
-    drops: Arc<AtomicUsize>,
-    expected_request: Option<state::OperationRequestV1>,
+pub(super) struct TestWallet {
+    pub(super) calls: Arc<AtomicUsize>,
+    pub(super) drops: Arc<AtomicUsize>,
+    pub(super) expected_request: Option<state::OperationRequestV1>,
 }
 impl Drop for TestWallet {
     fn drop(&mut self) {
@@ -401,25 +401,61 @@ fn callback_anchor_bounds_forward_canonical_max_and_reject_oversized_inputs() {
     assert_eq!(state.calls.load(Ordering::SeqCst), 4);
 }
 #[test]
-fn foreign_open_has_no_custody_side_effect_or_proof_verdict_fallback() {
-    let state = CallbackState::default();
-    let mut id = 9;
+fn foreign_open_requires_native_runtime_and_never_accepts_digest_authority() {
+    let bytes = [1u8];
+    let request = WalletOpenRequest {
+        credential: bytes.as_ptr(),
+        credential_length: 1,
+        certificates: bytes.as_ptr(),
+        certificates_length: 1,
+        account: bytes.as_ptr(),
+        account_length: 1,
+        asset: bytes.as_ptr(),
+        asset_length: 1,
+    };
+    let mut result = WalletResult::default();
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_open_begin_v1(u64::MAX, &request, &mut result) },
+        ARTIFACTS_UNAVAILABLE
+    );
+    assert_eq!(result.status, ARTIFACTS_UNAVAILABLE);
+    assert_eq!(result.sequence_low, 0);
+    assert!(result.bytes.is_null());
     assert_eq!(
         unsafe {
-            connect_norito_kagemusha_wallet_open_v1(
-                &callbacks(&state),
-                [1; 32].as_ptr(),
-                [2; 32].as_ptr(),
-                [3; 32].as_ptr(),
-                [4; 32].as_ptr(),
-                &mut id,
+            connect_norito_kagemusha_wallet_open_begin_v1(u64::MAX, std::ptr::null(), &mut result)
+        },
+        INVALID
+    );
+    assert_eq!(
+        unsafe {
+            connect_norito_kagemusha_wallet_open_finish_v1(
+                u64::MAX,
+                std::ptr::null(),
+                0,
+                &mut result,
             )
         },
         ARTIFACTS_UNAVAILABLE
     );
-    assert_eq!(id, 0);
-    assert_eq!(state.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(state.retained.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        connect_norito_kagemusha_wallet_open_cancel_v1(u64::MAX),
+        ARTIFACTS_UNAVAILABLE
+    );
+}
+#[test]
+fn open_request_layout_has_exact_four_original_pointer_length_pairs() {
+    use std::mem::{offset_of, size_of};
+    let word = size_of::<usize>();
+    assert_eq!(size_of::<WalletOpenRequest>(), 8 * word);
+    assert_eq!(offset_of!(WalletOpenRequest, credential), 0);
+    assert_eq!(offset_of!(WalletOpenRequest, credential_length), word);
+    assert_eq!(offset_of!(WalletOpenRequest, certificates), 2 * word);
+    assert_eq!(offset_of!(WalletOpenRequest, certificates_length), 3 * word);
+    assert_eq!(offset_of!(WalletOpenRequest, account), 4 * word);
+    assert_eq!(offset_of!(WalletOpenRequest, account_length), 5 * word);
+    assert_eq!(offset_of!(WalletOpenRequest, asset), 6 * word);
+    assert_eq!(offset_of!(WalletOpenRequest, asset_length), 7 * word);
 }
 
 #[test]
@@ -702,4 +738,96 @@ fn c_operation_request_layout_and_unsigned_amount_reach_the_exact_typed_owner() 
     assert_eq!(result.status, PROOF_REJECTED);
     assert!(result.bytes.is_null());
     close(handle).unwrap();
+}
+
+#[test]
+fn setup_c_layout_and_bounds_preserve_exact_identity_amount_and_unused_slots() {
+    use std::mem::{align_of, offset_of, size_of};
+    let align = |n: usize, a: usize| (n + a - 1) & !(a - 1);
+    let pointer = size_of::<*const u8>();
+    let amount = align(pointer + 4, align_of::<WalletU128>());
+    let token = align(amount + size_of::<WalletU128>(), align_of::<u64>());
+    let first = align(token + 8, align_of::<*const u8>());
+    assert_eq!(offset_of!(WalletSetupRequest, setup_id), 0);
+    assert_eq!(offset_of!(WalletSetupRequest, selector), pointer);
+    assert_eq!(offset_of!(WalletSetupRequest, amount), amount);
+    assert_eq!(offset_of!(WalletSetupRequest, token), token);
+    assert_eq!(offset_of!(WalletSetupRequest, first), first);
+    assert_eq!(
+        offset_of!(WalletSetupRequest, first_length),
+        first + pointer
+    );
+    assert_eq!(offset_of!(WalletSetupRequest, second), first + 2 * pointer);
+    assert_eq!(
+        offset_of!(WalletSetupRequest, second_length),
+        first + 3 * pointer
+    );
+    assert_eq!(offset_of!(WalletSetupRequest, third), first + 4 * pointer);
+    assert_eq!(
+        offset_of!(WalletSetupRequest, third_length),
+        first + 5 * pointer
+    );
+    assert_eq!(
+        size_of::<WalletSetupRequest>(),
+        align(first + 6 * pointer, align_of::<WalletSetupRequest>())
+    );
+    let id = [4; 32];
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handle = install(
+        Box::new(TestWallet {
+            calls: calls.clone(),
+            drops: Arc::new(AtomicUsize::new(0)),
+            expected_request: None,
+        }),
+        state::Scheduler::new(),
+    )
+    .unwrap();
+    let mut request = WalletSetupRequest {
+        setup_id: id.as_ptr(),
+        selector: 1,
+        amount: WalletU128 {
+            low: u64::MAX,
+            high: u64::MAX,
+        },
+        token: 0,
+        first: std::ptr::null(),
+        first_length: 0,
+        second: std::ptr::null(),
+        second_length: 0,
+        third: std::ptr::null(),
+        third_length: 0,
+    };
+    let mut result = WalletResult::default();
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &request, &mut result) },
+        0
+    );
+    assert_eq!(result.status, 12);
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(result.bytes, result.length) },
+        &[0, 255, 7]
+    );
+    crate::connect_norito_free(result.bytes);
+    request.token = 1;
+    assert_eq!(
+        unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &request, &mut result) },
+        INVALID
+    );
+    assert!(result.bytes.is_null());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    close(handle).unwrap();
+}
+
+#[test]
+fn interrupted_open_response_recovers_same_live_handle_and_closed_is_final() {
+    let (id, calls, drops) = installed();
+    for _ in 0..2 {
+        let value = open::finish(id, &[]).unwrap();
+        assert_eq!((value.kind, value.sequence), (16, u128::from(id)));
+        assert!(value.bytes.is_empty());
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    close(id).unwrap();
+    assert_eq!(open::finish(id, &[]).unwrap_err().status, CLOSED);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }

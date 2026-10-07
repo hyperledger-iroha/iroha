@@ -262,71 +262,73 @@ impl Retained {
     }
     pub(super) fn read(journal: &Journal, config: &Config) -> Result<Self> {
         journal.verify_native_inventory()?;
-        let request: Request = journal
-            .read_native(NativeRecord::Request)?
-            .ok_or_else(|| eyre!("native journal requires its original preparation record"))?;
-        request.verify(config)?;
-        let payload: Option<Payload> = journal.read_native(NativeRecord::Payload)?;
-        let record: Option<TransactionJournal> = journal.read_native(NativeRecord::Operation)?;
-        let retirement: Option<Retirement> = journal.read_native(NativeRecord::Retired)?;
-        let has_dispatch = journal.has_dispatch_evidence()?;
-        if let Some(retirement) = &retirement {
-            eyre::ensure!(
-                retirement.schema == "iroha.wallet.native-retirement.v1"
-                    && retirement.request_sha256 == request.commitment()?
-                    && payload.is_none()
-                    && record.is_none()
-                    && !has_dispatch,
-                "retirement conflicts with native preparation history"
-            );
-        }
-        let decoded = payload
-            .as_ref()
-            .map(|value| value.verify(&request, config))
-            .transpose()?;
-        let signed = match &record {
-            Some(record) => {
-                let payload = payload
-                    .as_ref()
-                    .ok_or_else(|| eyre!("signed journal is missing its original payload"))?;
+        journal.read_native_scope(|reader| {
+            let request: Request = reader
+                .read_native(NativeRecord::Request)?
+                .ok_or_else(|| eyre!("native journal requires its original preparation record"))?;
+            request.verify(config)?;
+            let payload: Option<Payload> = reader.read_native(NativeRecord::Payload)?;
+            let record: Option<TransactionJournal> = reader.read_native(NativeRecord::Operation)?;
+            let retirement: Option<Retirement> = reader.read_native(NativeRecord::Retired)?;
+            let has_dispatch = reader.has_dispatch_evidence()?;
+            if let Some(retirement) = &retirement {
                 eyre::ensure!(
-                    canonical_bytes(&record.operation)? == canonical_bytes(&request.operation)?
-                        && record.requested_fee == request.requested_fee
-                        && record.deadline_ms <= request.deadline_ms
-                        && canonical_bytes(&record.quote)? == canonical_bytes(&payload.quote)?,
-                    "signed journal changed original request or quote"
+                    retirement.schema == "iroha.wallet.native-retirement.v1"
+                        && retirement.request_sha256 == request.commitment()?
+                        && payload.is_none()
+                        && record.is_none()
+                        && !has_dispatch,
+                    "retirement conflicts with native preparation history"
                 );
-                let signed = record.verify(config)?;
-                eyre::ensure!(
-                    Some(signed.payload()) == decoded.as_ref(),
-                    "signed journal changed original retained payload"
-                );
-                // A marker must identify this exact retained signed operation even during inspection.
-                let marked = journal.submission_recorded(record)?;
-                eyre::ensure!(
-                    !has_dispatch || marked,
-                    "applied evidence has no original submission marker"
-                );
-                Some(signed)
             }
-            None => {
-                eyre::ensure!(!has_dispatch, "dispatch evidence has no signed operation");
-                None
-            }
-        };
-        let authorization_deadline_ms = decoded
-            .as_ref()
-            .map(payload_deadline)
-            .transpose()?
-            .unwrap_or(request.deadline_ms)
-            .min(request.deadline_ms);
-        Ok(Self {
-            request,
-            payload,
-            record,
-            signed,
-            retired: retirement.is_some(),
-            authorization_deadline_ms,
+            let decoded = payload
+                .as_ref()
+                .map(|value| value.verify(&request, config))
+                .transpose()?;
+            let signed = match &record {
+                Some(record) => {
+                    let payload = payload
+                        .as_ref()
+                        .ok_or_else(|| eyre!("signed journal is missing its original payload"))?;
+                    eyre::ensure!(
+                        canonical_bytes(&record.operation)? == canonical_bytes(&request.operation)?
+                            && record.requested_fee == request.requested_fee
+                            && record.deadline_ms <= request.deadline_ms
+                            && canonical_bytes(&record.quote)? == canonical_bytes(&payload.quote)?,
+                        "signed journal changed original request or quote"
+                    );
+                    let signed = record.verify(config)?;
+                    eyre::ensure!(
+                        Some(signed.payload()) == decoded.as_ref(),
+                        "signed journal changed original retained payload"
+                    );
+                    // A marker must identify this exact retained signed operation even during inspection.
+                    let marked = reader.submission_recorded(record)?;
+                    eyre::ensure!(
+                        !has_dispatch || marked,
+                        "applied evidence has no original submission marker"
+                    );
+                    Some(signed)
+                }
+                None => {
+                    eyre::ensure!(!has_dispatch, "dispatch evidence has no signed operation");
+                    None
+                }
+            };
+            let authorization_deadline_ms = decoded
+                .as_ref()
+                .map(payload_deadline)
+                .transpose()?
+                .unwrap_or(request.deadline_ms)
+                .min(request.deadline_ms);
+            Ok(Self {
+                request,
+                payload,
+                record,
+                signed,
+                retired: retirement.is_some(),
+                authorization_deadline_ms,
+            })
         })
     }
     pub(super) fn verify_selection(
@@ -777,3 +779,7 @@ mod tests;
 #[cfg(test)]
 #[path = "operations_byte_frame_tests.rs"]
 mod byte_frame_tests;
+
+#[cfg(test)]
+#[path = "operations_preparation_scope_tests.rs"]
+mod scope_tests;

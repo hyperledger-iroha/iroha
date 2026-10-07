@@ -157,12 +157,29 @@ passcode-bound keychain rollback anchor, protected-data canary and custody root)
 Construct it with the app's App ID prefix, which names its own keychain access group.
 `attestEnrollment(slot:paymentPublicKey:challengeDigest:)` produces the App Attest
 evidence of enrollment step E5; key use and the anchor are reached only through the
-Rust provider. `KagemushaWalletV1` registers the platform callbacks with that provider
-and exposes `commit`, `retry`, `resume`, `foldOnce`, `creditStatus` and activity updates.
-Its declaration requires the Native bridge headers in every build. Every open also
-requires the actual authenticated native artifact identity; the current foreign open
-returns `artifactsUnavailable` until the operation/Λ/Ω artifact loader is connected.
-There is no software payment-key or structural-verification substitute.
+Rust provider. Trusted native application startup calls the bridge's
+`start_native_wallet` loader with independently provisioned installation pins,
+authenticated genesis and the complete signed producer graph. Swift receives only
+that opaque runtime handle. `KagemushaWalletRuntimeV1.begin` submits exact
+credential, Enrollment CertificateSet, account and asset-scope originals; the
+existing Ed25519 account signs the returned native challenge. A successful finish
+transfers custody to `KagemushaWalletV1`. Failed finish consumes the challenge and
+retains the runtime for a fresh begin. `cancelPendingOpen` recovers interrupted
+begin delivery; `retryOpenCompletion` recovers an interrupted finish response for
+the same live handle without repeating authorization.
+
+`KagemushaWalletV1` exposes typed setup, Load/Send/Receive/refresh/Unload/Retiring,
+retry/status, folding and activity. Request publication durably selects its exact
+original and recorded blacklist decision together. Offer/Request setup bytes are
+canonical object frames, while peer transports require an Envelope frame. Use
+`envelope(_:original:)` and `original(_:envelope:)` for native, bounded conversion
+with the expected kind and this wallet's scheme; conversion grants no authority.
+Direct-time challenges are bound to the issuing wallet and can be finished or
+cancelled exactly once; cancellation changes no anchor. Invalid local response
+bounds leave the challenge usable, while native dispatch consumes it even on failure.
+Headers and rebuilt authenticated native artifacts are mandatory. An unprovisioned
+runtime reports `artifactsUnavailable`; full real-wallet and phone qualification
+remain open.
 
 The current bridge does not yet export enrollment E2–E6. The Native enrollment owner
 must retain the exact E5 request together with the App Attest key identifier and its

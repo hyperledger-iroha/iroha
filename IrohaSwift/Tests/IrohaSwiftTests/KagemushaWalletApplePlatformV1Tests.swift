@@ -1041,7 +1041,7 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
 
   #if canImport(NoritoBridge)
     /// Requires the admitted native artifact; the fake platform cannot grant monetary authority.
-    func testNativeOpenRefusesMissingProofArtifactsWithoutCustodyMutation() throws {
+    func testNativeOpenRefusesUnprovisionedRuntimeWithoutCustodyMutation() throws {
       let keychain = FakeWalletKeychain()
       let base = try temporaryDirectory()
       let platform = try makePlatform(keychain: keychain, base: base)
@@ -1057,12 +1057,15 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
       }
       let before = keychain.operations
       let originalFiles = try files()
-      let id = Data(repeating: 1, count: 32)
-      for _ in 0..<2 {
-        XCTAssertThrowsError(
-          try KagemushaWalletV1(platform: platform, slot: id, scheme: id, wallet: id, artifact: id)
-        ) { error in
-          XCTAssertEqual(error as? KagemushaWalletErrorV1, .artifactsUnavailable)
+      let one = Data([1])
+      let originals = try KagemushaWalletOpenOriginalsV1(credential: one,
+        enrollmentCertificates: one, account: one, assetScope: one)
+      let runtime = try KagemushaWalletRuntimeV1(nativeRuntimeHandle: UInt64(Int64.max))
+      withExtendedLifetime(platform) {
+        for _ in 0..<2 {
+          XCTAssertThrowsError(try runtime.begin(originals)) { error in
+            XCTAssertEqual(error as? KagemushaWalletErrorV1, .artifactsUnavailable)
+          }
         }
       }
       XCTAssertEqual(keychain.operations, before)

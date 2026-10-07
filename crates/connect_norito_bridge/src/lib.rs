@@ -178,9 +178,7 @@ compile_error!(
 /// Native KAGEMUSHA custody callbacks and exclusive shared-wallet ownership.
 pub mod kagemusha_wallet_ffi;
 mod kagemusha_wallet_load_original;
-pub use kagemusha_wallet_load_original::{
-    connect_norito_kagemusha_wallet_load_original_validate_v1,
-};
+pub use kagemusha_wallet_load_original::connect_norito_kagemusha_wallet_load_original_validate_v1;
 mod private_settlement_ffi;
 pub use private_settlement_ffi::{
     CONNECT_NORITO_PRIVATE_SETTLEMENT_REQUEST_MAX_BYTES_V1,

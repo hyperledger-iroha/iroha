@@ -8,11 +8,11 @@ use std::{env, fs, path::Path};
 
 const CFG: &str = "sumeragi_model_mutation";
 const ENV: &str = "SUMERAGI_MODEL_MUTATION";
-const IDS: &[&str] = &["DM1", "DM2", "DM3", "DM4"];
+const IDS: &[&str] = &["DM1", "DM2", "DM3", "DM4", "DM5", "DM6", "DM7"];
 
 fn main() {
     println!(
-        "cargo:rustc-check-cfg=cfg(sumeragi_model_mutation, values(\"DM1\", \"DM2\", \"DM3\", \"DM4\"))"
+        "cargo:rustc-check-cfg=cfg(sumeragi_model_mutation, values(\"DM1\", \"DM2\", \"DM3\", \"DM4\", \"DM5\", \"DM6\", \"DM7\"))"
     );
     println!("cargo:rerun-if-env-changed={ENV}");
     println!("cargo:rerun-if-changed=build.rs");

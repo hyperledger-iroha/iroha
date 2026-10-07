@@ -1347,6 +1347,8 @@ def test_release_gate_selects_every_basic_census_test_except_the_four_peer_fixtu
 
 
 @pytest.mark.parametrize(("package", "parent", "module", "source", "prefix"), (
+    ("iroha_data_model", "src/lib.rs", "amx_prepare_streaming_allocations",
+     "tests/amx_prepare_streaming_allocations.rs", "amx_prepare_streaming_allocations"),
     ("iroha_data_model", "src/isi/mod.rs", "amx_owner", "src/isi/amx_owner.rs",
      "isi::amx_owner::tests"),
     ("iroha_data_model", "src/sumeragi_amx.rs", "tests", "src/sumeragi_amx/tests.rs",
@@ -1374,6 +1376,7 @@ def test_release_gate_selects_current_amx_load_and_identity_owner_controls(
     )
     assert declarations, (package, source)
     assert len(declarations) == len(set(declarations)), (package, source)
+    assert _module_path_matches(directory, ("lib",), prefix)
     config = tomllib.loads(NEXTEST_CONFIG.read_text(encoding="utf-8"))
     tree = _parse_filter(config["profile"]["release-gate"]["default-filter"])
     missing = {

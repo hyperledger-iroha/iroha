@@ -1802,7 +1802,7 @@ typedef struct {
 int32_t connect_norito_acceleration_state_get_v1(connect_norito_acceleration_state* out_state, size_t out_len);
 
 /* KAGEMUSHA wallet V1: opaque exclusive owner. No arbitrary-sign entry point.
- * Open returns -4 (ArtifactsUnavailable) until the authenticated native loader is complete.
+ * Open requires an authenticated native runtime; unprovisioned runtimes return -4 (ArtifactsUnavailable).
  * Callback contexts must be thread-safe and remain valid from retain through release.
  * Outputs own canonical Norito/exact retained bytes; free them with connect_norito_free.
  * Failure: -1 input, -2 closed, -3 capacity, -4 artifacts, -5 unavailable, -6 uncertain,
@@ -1837,7 +1837,8 @@ typedef struct {
     int32_t status; /* 0 unknown,1 complete,2 pending,3 not performed,4 archived,
                       5 delivery loss,6 idle,7 caught up,8 checkpoint,9 folded,
                       10 CreditStatus,11 preparing; setup only:12 original,
-                      13 owned time challenge,14 time exchange retained; negative failure. */
+                      13 owned time challenge,14 time exchange retained;
+                      open only:15 account challenge,16 admitted handle;17 activation transport; negative failure. */
     int32_t reason; /* failure platform reason, -1 if inapplicable */
     int32_t platform_code;
     uint64_t sequence_low;
@@ -1887,7 +1888,21 @@ int32_t connect_norito_kagemusha_wallet_load_original_validate_v1(
     const uint8_t *receipt, size_t receipt_length,
     const uint8_t *finality, size_t finality_length);
 
-int32_t connect_norito_kagemusha_wallet_open_v1(const connect_norito_kagemusha_platform_v1*, const uint8_t* slot32, const uint8_t* scheme32, const uint8_t* wallet32, const uint8_t* artifact32, uint64_t* out_handle);
+/* Native startup supplies the runtime handle. Foreign originals do not select trust pins. */
+typedef struct {
+    const uint8_t* credential;
+    size_t credential_length;
+    const uint8_t* certificates;
+    size_t certificates_length;
+    const uint8_t* account;
+    size_t account_length;
+    const uint8_t* asset;
+    size_t asset_length;
+} connect_norito_kagemusha_wallet_open_request_v1;
+/* Kind15: fresh account challenge32; kind16: admitted wallet handle in sequence_low. */
+int32_t connect_norito_kagemusha_wallet_open_begin_v1(uint64_t runtime, const connect_norito_kagemusha_wallet_open_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_wallet_open_finish_v1(uint64_t runtime, const uint8_t* signature, size_t length, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_wallet_open_cancel_v1(uint64_t runtime);
 int32_t connect_norito_kagemusha_wallet_close_v1(uint64_t handle);
 int32_t connect_norito_kagemusha_wallet_activity_v1(uint64_t handle, uint8_t foreground, uint8_t charging);
 // Native lifecycle intent; no caller state, roots, proof, time or nonce. Selector meanings:
@@ -1907,15 +1922,17 @@ typedef struct {
     const uint8_t* third;
     size_t third_length;
 } connect_norito_kagemusha_wallet_operation_request_v1;
-int32_t connect_norito_kagemusha_wallet_execute_v1(uint64_t handle, const connect_norito_kagemusha_wallet_operation_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 // Setup through the same exclusive Native owner. Selectors:
 // Bootstrap0(no originals), Offer1(positive amount), Request2(Offer, optional fee+certificate),
-// Credited3(Credited), BeginTime4(no originals), FinishTime5(TimeAnchor, certificate, owned token).
-// request_id is exactly32 bytes: nonzero only for Offer/Request and all zero otherwise.
+// Credited3(Credited), BeginTime4(no originals), FinishTime5(TimeAnchor, certificate, owned token),
+// CancelTime6(owned token); envelope wrap7..10 / unwrap11..14 in Offer,Request,Payment,Credited order.
+// Activation15(no inputs) returns kind17, exact durable Activate frame <=16,384 bytes.
+// setup_id is exactly32 bytes: nonzero only for Offer/Request and all zero otherwise.
 // Unused originals/amount/token are empty/zero. Original bounds are selected by Native;
 // signer certificate frames are <=512 bytes. No caller clock, nonce, proof or signing body.
+// Transport uses first only and returns canonical bytes; it grants no monetary verdict.
 typedef struct {
-    const uint8_t* request_id;
+    const uint8_t* setup_id;
     uint32_t selector;
     connect_norito_kagemusha_wallet_u128_v1 amount;
     uint64_t token;
@@ -1926,11 +1943,12 @@ typedef struct {
     const uint8_t* third;
     size_t third_length;
 } connect_norito_kagemusha_wallet_setup_request_v1;
-// Setup results: Bootstrap/Credited preserve completion statuses. 12=exact original bytes;
-// 13=Native-owned one-use time challenge (opaque token in sequence, challenge bytes);
+// Setup results: Bootstrap/Credited preserve completion statuses; CancelTime returns idle6.
+// 12=exact original bytes;13=Native-owned one-use time challenge (token in sequence_low);
 // 14=direct time exchange retained. Token is valid only for the same open Native owner.
-// Neither 12,13 nor14 is monetary completion. Result bytes use connect_norito_free.
+// Neither 12,13,14 nor17 is monetary completion;17 is not ledger activation confirmation. Result bytes use connect_norito_free.
 int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_norito_kagemusha_wallet_setup_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_wallet_execute_v1(uint64_t handle, const connect_norito_kagemusha_wallet_operation_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 // Result11=preparing (no Advance selected); result2=pending (irreversible Advance selected).
 int32_t connect_norito_kagemusha_wallet_request_status_v1(uint64_t handle, const uint8_t* request_id32, connect_norito_kagemusha_wallet_result_v1* out);
 int32_t connect_norito_kagemusha_wallet_retry_v1(uint64_t handle, const uint8_t* operation32, connect_norito_kagemusha_wallet_result_v1* out);

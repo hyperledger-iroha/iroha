@@ -1,8 +1,16 @@
-//! Bounded original Payment projection for post-Advance total Receive verification.
+//! Original Payment projection within the native Receive carrier's custody grammar.
 //!
-//! This conversion preserves signed values and computes their commitments without
-//! accepting the incoming objects, signatures, sigma, or lineage. The native A
-//! owners derive those predicates from the returned original tapes.
+//! The domain is one bounded canonical Norito `PaymentV1`, a V1 Send package,
+//! present lineage, canonical P-256 key/low-S signature encodings, and statement
+//! atoms representable in Fp. Bad framing, unsupported outer carriers, malformed
+//! SEC1/scalar encodings and noncanonical field atoms are custody errors. This is
+//! not a total decoder over arbitrary byte strings; it never fabricates a tape
+//! for an input the fixed carrier cannot represent.
+//!
+//! Within that domain, represented versions, signed values, mismatched identities,
+//! incorrect signatures and arbitrary sigma/lineage proof bytes are preserved.
+//! Computing their commitments grants no incoming acceptance. The native A owners
+//! derive the object, signature and proof predicates from the original tapes.
 
 use super::*;
 

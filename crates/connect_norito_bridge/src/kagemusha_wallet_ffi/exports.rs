@@ -9,7 +9,7 @@ pub struct WalletResult {
     /// 0 unknown, 1 complete, 2 pending, 3 not performed, 4 archived, 5 delivery loss,
     /// 6 idle, 7 caught up, 8 checkpoint, 9 folded, 10 CreditStatus, 11 preparing;
     /// setup only: 12 original, 13 owned time challenge, 14 time exchange retained.
-    /// Negative is failure.
+    /// Open only: 15 account challenge, 16 admitted wallet handle. Negative is failure.
     pub status: i32,
     /// Failure platform reason or -1. Never conflate `UNAVAILABLE` with unknown/absent.
     pub reason: i32,
@@ -95,44 +95,90 @@ unsafe fn input<'a>(pointer: *const u8, length: usize, bound: usize) -> Result<&
 pub extern "C" fn connect_norito_kagemusha_wallet_revision_v1() -> u32 {
     1
 }
-/// Open an Apple wallet with an authenticated artifact identity.
-///
-/// Currently returns `ARTIFACTS_UNAVAILABLE`, initializes handle to zero, and performs no
-/// callback or custody operation. This explicit unfinished dependency prevents a proof bypass.
+/// Original owner frames. Native selects slot, scheme, wallet and complete proof owners.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct WalletOpenRequest {
+    /// Original issuer-authenticated credential.
+    pub credential: *const u8,
+    /// Exact credential frame length.
+    pub credential_length: usize,
+    /// Original Enrollment CertificateSet.
+    pub certificates: *const u8,
+    /// Exact certificate-set frame length.
+    pub certificates_length: usize,
+    /// Existing canonical AccountId frame.
+    pub account: *const u8,
+    /// Exact account frame length.
+    pub account_length: usize,
+    /// Original issuer-bound asset scope and scale.
+    pub asset: *const u8,
+    /// Exact asset-scope frame length.
+    pub asset_length: usize,
+}
+/// Reconcile a native-provisioned runtime and return one fresh account challenge (kind15).
 /// # Safety
-/// Inputs must be initialized for their stated lengths and output must be writable. The
-/// callback context satisfies `PlatformCallbacks` if a later authenticated loader retains it.
+/// Request/input memory must be readable for its declared lengths and output writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_wallet_open_v1(
-    callbacks: *const PlatformCallbacks,
-    slot: *const u8,
-    scheme: *const u8,
-    wallet: *const u8,
-    artifact: *const u8,
-    handle: *mut u64,
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_open_begin_v1(
+    runtime: u64,
+    request: *const WalletOpenRequest,
+    result: *mut WalletResult,
 ) -> i32 {
-    if handle.is_null() {
-        return INVALID;
+    // SAFETY: caller supplies writable output; individual original bounds precede slices.
+    unsafe {
+        output(result, || {
+            let request = request.as_ref().ok_or(Failure::code(INVALID))?;
+            open::begin(
+                runtime,
+                [
+                    input(
+                        request.credential,
+                        request.credential_length,
+                        open::BOUNDS[0],
+                    )?,
+                    input(
+                        request.certificates,
+                        request.certificates_length,
+                        open::BOUNDS[1],
+                    )?,
+                    input(request.account, request.account_length, open::BOUNDS[2])?,
+                    input(request.asset, request.asset_length, open::BOUNDS[3])?,
+                ],
+            )
+        })
     }
-    // SAFETY: caller supplies writable handle.
-    unsafe { handle.write(0) };
-    run(|| {
-        if callbacks.is_null() {
-            return Err(Failure::code(INVALID));
-        }
-        // SAFETY: caller supplies initialized complete table and four exact 32-byte identities.
-        unsafe {
-            CallbackPlatform::validate(&*callbacks)?;
-            for value in [slot, scheme, wallet, artifact] {
-                if input(value, 32, 32)? == [0; 32] {
-                    return Err(Failure::code(INVALID));
-                }
-            }
-        }
-        Err::<(), _>(Failure::code(ARTIFACTS_UNAVAILABLE))
-    })
-    .err()
-    .map_or(0, |error| error.status)
+}
+/// Consume one account challenge and return the admitted wallet handle (kind16).
+/// Wrong signatures consume the challenge and retain unadmitted custody for a fresh begin.
+/// # Safety
+/// Signature must be readable for length and output writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_wallet_open_finish_v1(
+    runtime: u64,
+    signature: *const u8,
+    length: usize,
+    result: *mut WalletResult,
+) -> i32 {
+    // SAFETY: caller supplies writable result and readable signature. An invalid byte length
+    // reaches the native finish as an empty signature so its one-use challenge is consumed.
+    unsafe {
+        output(result, || {
+            let signature = if length != 64 || signature.is_null() {
+                &[]
+            } else {
+                input(signature, length, 64)?
+            };
+            open::finish(runtime, signature)
+        })
+    }
+}
+/// Abandon an account challenge without discarding native custody or accepting authority.
+#[unsafe(no_mangle)]
+pub extern "C" fn connect_norito_kagemusha_wallet_open_cancel_v1(runtime: u64) -> i32 {
+    run(|| open::cancel(runtime))
+        .err()
+        .map_or(0, |error| error.status)
 }
 /// Close an owner, cooperatively join a running fold, and release exclusive custody.
 #[unsafe(no_mangle)]
@@ -211,20 +257,21 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_execute_v1(
     }
 }
 /// Typed setup input for the same exclusive Native wallet owner.
-/// Selectors: Bootstrap0, Offer1, Request2, Credited3, BeginTime4, FinishTime5.
+/// Selectors: Bootstrap0, Offer1, Request2, Credited3, BeginTime4, FinishTime5, CancelTime6.
+/// Envelope wrap7..10/unwrap11..14 follows Offer, Request, Payment, Credited order.
 /// Unused fields must be zero/empty. No field supplies a clock, nonce or signature body.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct WalletSetupRequest {
     /// Exactly 32 readable bytes; nonzero local retry identity only for Offer/Request.
-    pub request_id: *const u8,
+    pub setup_id: *const u8,
     /// One fixed setup selector documented above.
     pub selector: u32,
     /// Positive Offer amount only; zero for every other selector.
     pub amount: WalletU128,
-    /// Native-owned one-use time token for FinishTime only; zero otherwise.
+    /// Native-owned one-use time token for FinishTime/CancelTime; zero otherwise.
     pub token: u64,
-    /// Complete Offer, Credited or TimeAnchor original according to selector.
+    /// Complete Offer, Credited, TimeAnchor or transport original according to selector.
     pub first: *const u8,
     /// Exact first-original length.
     pub first_length: usize,
@@ -240,9 +287,10 @@ pub struct WalletSetupRequest {
 /// Execute source-bound setup through the existing exclusive Native wallet owner.
 /// Bootstrap/Credited return existing completion statuses. Offer/Request return original12;
 /// BeginTime returns challenge13 with its opaque token in sequence; FinishTime returns retained14.
+/// CancelTime returns idle6; envelope conversion returns original12 without monetary authority.
 /// # Safety
 /// Request and its input pointers are initialized for their stated lengths; out is writable
-/// with no previously allocated result. request_id always points to exactly 32 readable bytes.
+/// with no previously allocated result. setup_id always points to exactly 32 readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_wallet_setup_v1(
     handle: u64,
@@ -269,7 +317,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_setup_v1(
                 return Err(Failure::code(INVALID));
             }
             let value = setup::request(
-                input(request.request_id, 32, 32)?,
+                input(request.setup_id, 32, 32)?,
                 request.selector,
                 u128::from(request.amount.low) | (u128::from(request.amount.high) << 64),
                 request.token,
@@ -298,6 +346,7 @@ mod setup_boundary_tests {
             assert!(!self.panic, "contained setup boundary panic");
             let (kind, sequence, bytes) = match input {
                 setup::Setup::Bootstrap => (1, 0, vec![0, 255, 1]),
+                setup::Setup::Activation => (17, 0, vec![0xa1; 16_384]),
                 setup::Setup::Offer { id, amount } => {
                     assert_eq!(id, [7; 32]);
                     assert_eq!(amount, u128::MAX);
@@ -314,6 +363,18 @@ mod setup_boundary_tests {
                     (4, 0, vec![])
                 }
                 setup::Setup::BeginTime => (13, 19, vec![0, 255, 4]),
+                setup::Setup::CancelTime { token } => {
+                    assert_eq!(token, 19);
+                    (6, 0, vec![])
+                }
+                setup::Setup::Transport {
+                    kind,
+                    wrap,
+                    original,
+                } => {
+                    assert_eq!(original, [0, 255, 7]);
+                    (12, 0, vec![kind, u8::from(wrap), 0, 255])
+                }
                 setup::Setup::FinishTime { .. } => panic!("unexpected unsigned time fixture"),
             };
             Ok(Response {
@@ -359,7 +420,7 @@ mod setup_boundary_tests {
     }
     fn request(id: &[u8; 32], selector: u32) -> WalletSetupRequest {
         WalletSetupRequest {
-            request_id: id.as_ptr(),
+            setup_id: id.as_ptr(),
             selector,
             amount: WalletU128::default(),
             token: 0,
@@ -408,6 +469,7 @@ mod setup_boundary_tests {
             (2, 12, 0, vec![0, 255, 3]),
             (3, 4, 0, vec![]),
             (4, 13, 19, vec![0, 255, 4]),
+            (15, 17, 0, vec![0xa1; 16_384]),
         ] {
             let mut request = request(
                 if (1..=2).contains(&selector) {
@@ -447,10 +509,51 @@ mod setup_boundary_tests {
                 crate::connect_norito_free(out.bytes);
             }
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 5);
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
         close(handle).unwrap();
         assert_failure(handle, &request(&zero, 0), CLOSED);
-        assert_eq!(calls.load(Ordering::SeqCst), 5);
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
+    }
+    #[test]
+    fn setup_c_routes_cancellation_and_every_envelope_form_to_the_same_owner() {
+        let (handle, calls) = installed(false);
+        let zero = [0; 32];
+        let original = [0, 255, 7];
+        for selector in 6..=14 {
+            let mut value = request(&zero, selector);
+            if selector == 6 {
+                value.token = 19;
+            } else {
+                value.first = original.as_ptr();
+                value.first_length = original.len();
+            }
+            let mut out = WalletResult::default();
+            assert_eq!(
+                unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &value, &mut out) },
+                0
+            );
+            assert_eq!((out.sequence_low, out.sequence_high, out.detail), (0, 0, 0));
+            if selector == 6 {
+                assert_eq!(out.status, 6);
+                assert_eq!(out.length, 0);
+                assert!(out.bytes.is_null());
+            } else {
+                assert_eq!(out.status, 12);
+                assert_eq!(out.length, 4);
+                assert_eq!(
+                    unsafe { std::slice::from_raw_parts(out.bytes, out.length) },
+                    [
+                        u8::try_from((selector - 7) % 4 + 1).unwrap(),
+                        u8::from(selector < 11),
+                        0,
+                        255
+                    ]
+                );
+                crate::connect_norito_free(out.bytes);
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 9);
+        close(handle).unwrap();
     }
     #[test]
     fn setup_c_checks_all_bounds_and_unused_fields_before_owner_or_pointer_reads() {
@@ -525,7 +628,7 @@ mod setup_boundary_tests {
         let amount = align(selector + size_of::<u32>(), align_of::<WalletU128>());
         let token = align(amount + size_of::<WalletU128>(), align_of::<u64>());
         let first = align(token + size_of::<u64>(), align_of::<*const u8>());
-        assert_eq!(offset_of!(WalletSetupRequest, request_id), 0);
+        assert_eq!(offset_of!(WalletSetupRequest, setup_id), 0);
         assert_eq!(offset_of!(WalletSetupRequest, selector), selector);
         assert_eq!(offset_of!(WalletSetupRequest, amount), amount);
         assert_eq!(offset_of!(WalletSetupRequest, token), token);

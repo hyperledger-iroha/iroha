@@ -52,7 +52,11 @@ mod map_tree;
 mod native_owner;
 mod native_worker;
 mod policy_custody;
-pub use native_owner::{NativeOperationReviewV1, NativeWalletProofsV1, ReviewedOperationV1};
+pub use native_owner::{
+    NativeInstallationConfigV1, NativeOpenErrorV1, NativeOpenFailureV1, NativeOperationReviewV1,
+    NativeStartupFailureV1, NativeWalletCoordinatorV1, NativeWalletProofsV1, NativeWalletRuntimeV1,
+    PendingNativeWalletOpenV1, ReviewedOperationV1,
+};
 mod preparation_custody;
 mod scheduling;
 mod session_custody;
@@ -397,29 +401,14 @@ pub struct Coordinator<C, A, N> {
 }
 
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
-    /// Bind a coordinator to one incarnation and a matching archive.
-    ///
-    /// # Errors
-    /// Reject a mismatched archive or a provider marker for another wallet.
-    pub fn new(
+    #[cfg(test)]
+    fn new(
         custody: C,
         archive: A,
         proofs: N,
         scheme_id: [u8; 32],
         wallet_id: [u8; 32],
     ) -> Result<Self, Error> {
-        let (scheme, chain) = proofs.ledger_scope()?;
-        valid(scheme.validate())?;
-        if scheme.scheme_id() != scheme_id
-            || chain.is_empty()
-            || chain.len() > 1024
-            || chain.chars().any(char::is_control)
-        {
-            return Err(Error::Invalid("native artifact ledger scope"));
-        }
-        if archive.binding() != (scheme_id, wallet_id) {
-            return Err(Error::Invalid("archive incarnation"));
-        }
         let mut this = Self {
             custody,
             archive,
@@ -429,15 +418,33 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             scheduler: Scheduler::new(),
             verified_folds: BTreeMap::new(),
         };
-        // Verify durable Ω once during open, before the payment critical path.
-        if !matches!(this.status()?, SlotStatus::Pending(_)) {
-            let (_, manifest) = this.sync_manifest()?;
+        this.initialize()?;
+        Ok(this)
+    }
+
+    // The sole production caller retains this draft until initialization succeeds.
+    // A failed read never consumes the provider or its original proving store.
+    fn initialize(&mut self) -> Result<(), Error> {
+        let (scheme, chain) = self.proofs.ledger_scope()?;
+        valid(scheme.validate())?;
+        if scheme.scheme_id() != self.scheme_id
+            || chain.is_empty()
+            || chain.len() > 1024
+            || chain.chars().any(char::is_control)
+        {
+            return Err(Error::Invalid("native artifact ledger scope"));
+        }
+        if self.archive.binding() != (self.scheme_id, self.wallet_id) {
+            return Err(Error::Invalid("archive incarnation"));
+        }
+        if !matches!(self.status()?, SlotStatus::Pending(_)) {
+            let (_, manifest) = self.sync_manifest()?;
             if let Some(sequence) = manifest.folded {
-                let step = this.indexed_step(&manifest, sequence)?;
-                this.read_fold(&step)?;
+                let step = self.indexed_step(&manifest, sequence)?;
+                self.read_fold(&step)?;
             }
         }
-        Ok(this)
+        Ok(())
     }
 
     /// Share the scheduler with the UI/transport so payment arrival can preempt proving.

@@ -246,6 +246,10 @@ pub(super) fn frozen(
             KagemushaWalletRetainedInputRoleV1::LoadReceipt,
             KagemushaWalletRetainedInputRoleV1::LoadFinality,
         ],
+        KagemushaWalletOperationKindV1::RefreshPolicy => vec![
+            KagemushaWalletRetainedInputRoleV1::PolicyUpdate,
+            KagemushaWalletRetainedInputRoleV1::CertificateSet,
+        ],
         _ => Vec::new(),
     }
     .into_iter()
@@ -847,6 +851,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         capsule_sources: IndexRoot::default(),
         issued_requests: IndexRoot::default(),
         sessions: IndexRoot::default(),
+        activation: None,
         direct_anchors: IndexRoot::default(),
         fold_pending: IndexRoot::default(),
         folded: None,

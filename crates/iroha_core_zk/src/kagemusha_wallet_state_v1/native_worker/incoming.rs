@@ -6,18 +6,11 @@
 
 use ff::Field;
 use iroha_kagemusha_proof::{
-    a_relation::native::artifact::KeyArtifact, q_sigma::native::IncomingMode,
+    a_relation::native::artifact::KeyArtifact,
+    q_sigma::native::{IncomingMode, incoming_proof_failure as invalid_proof},
 };
 use iroha_pasta::{Ep, Eq, PastaAffine, PastaCurve, poseidon::hash_with_domain};
-use iroha_plonk::{
-    Protocol, VerifyError,
-    pcs::{
-        ipa::{IpaError, PinnedParams},
-        multiopen::MultiopenError,
-    },
-    transcript::TranscriptError,
-    verifier::accumulate_generator,
-};
+use iroha_plonk::{Protocol, pcs::ipa::PinnedParams, verifier::accumulate_generator};
 use iroha_plonk_gadgets::statement::foreign_limbs;
 use iroha_plonk_recursion::{ACCUMULATOR_BYTES, AccumulatorT, FoldInput};
 
@@ -64,29 +57,6 @@ fn public(original: &[u8], expected: usize, key: Fp) -> ([Fp; 18], bool) {
     out[14] = u128_at(original, 240);
     out[17] = key;
     (out, valid)
-}
-
-fn invalid_proof(error: &VerifyError) -> bool {
-    match error {
-        VerifyError::Transcript(error) => !matches!(error, TranscriptError::ProfileMismatch),
-        VerifyError::DegenerateChallenge
-        | VerifyError::IdentityInstanceCommitment { .. }
-        | VerifyError::ProofLength { .. }
-        | VerifyError::Multiopen(
-            MultiopenError::PointCollision
-            | MultiopenError::ConflictingEvaluations { .. }
-            | MultiopenError::DegenerateChallenge,
-        ) => true,
-        VerifyError::Ipa(error) | VerifyError::Multiopen(MultiopenError::Ipa(error)) => match error
-        {
-            IpaError::Transcript(error) => !matches!(error, TranscriptError::ProfileMismatch),
-            IpaError::ZeroChallenge { .. }
-            | IpaError::OpeningFailed
-            | IpaError::FoldedGeneratorMismatch => true,
-            _ => false,
-        },
-        _ => false,
-    }
 }
 
 fn opening<C: PastaCurve>(
@@ -294,6 +264,12 @@ pub(super) fn sigma_mode(
 
 #[cfg(test)]
 mod tests {
+    use iroha_plonk::{
+        VerifyError,
+        pcs::{ipa::IpaError, multiopen::MultiopenError},
+        transcript::TranscriptError,
+    };
+
     use super::*;
     #[test]
     fn total_failure_classification_keeps_nested_proof_errors_soft_and_profiles_hard() {

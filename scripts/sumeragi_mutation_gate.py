@@ -783,6 +783,15 @@ MODEL_MUTATIONS = [
       ["isi::amx_owner::tests::original_amx_instruction_last_owner_destroys_fields_and_refunds_exact_ledger"]),
     m("DM4", "AMX Begin source scan: skip the canonical participant field payload context",
       ["sumeragi_amx::allocation::tests::original_begin_record_scan_preserves_canonical_depth_refusal_and_exact_retry"]),
+    m("DM5", "AMX transaction identity: reconstruct the canonical frame as heap scratch",
+      ["amx_prepare_streaming_allocations::observer_counts_all_three_allocation_routes_and_resets_after_unwind",
+       "amx_prepare_streaming_allocations::transaction_id_streaming_matches_canonical_frames_without_heap_allocations"]),
+    m("DM6", "AMX Begin matching: reconstruct a heap-owning Begin instead of borrowing its original fields",
+      ["amx_prepare_streaming_allocations::observer_counts_all_three_allocation_routes_and_resets_after_unwind",
+       "amx_prepare_streaming_allocations::begin_matches_borrows_original_graph_without_heap_allocations"]),
+    m("DM7", "Native AMX monetary effects: materialize the canonical leg frame as unfunded heap scratch",
+      ["amx_prepare_streaming_allocations::observer_counts_all_three_allocation_routes_and_resets_after_unwind",
+       "amx_prepare_streaming_allocations::native_transfer_effects_stream_exact_monetary_fields_without_heap_allocations"]),
 ]
 
 
