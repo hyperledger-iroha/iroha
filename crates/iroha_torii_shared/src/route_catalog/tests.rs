@@ -3,6 +3,23 @@
 mod tests {
     use super::*;
     #[test]
+    fn kagemusha_enrollment_is_an_account_authenticated_private_mutation() {
+        let route = contracts_and_verification_keys::KAGEMUSHA_ENROLLMENT_POST;
+        assert_eq!(
+            route.path(),
+            crate::kagemusha_enrollment::ENROLLMENT_SERVICE_ROUTE_V1
+        );
+        assert_eq!(route.method(), HttpMethod::Post);
+        assert_eq!(route.effect(), RouteEffect::Mutation);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.authentication().requires_private_no_store());
+        assert!(CATALOGED_ROUTES.contains(&route));
+    }
+    #[test]
     fn kagemusha_issuance_is_a_private_authenticated_read() {
         let route = contracts_and_verification_keys::KAGEMUSHA_LOAD_ISSUANCE_GET;
         assert_eq!(

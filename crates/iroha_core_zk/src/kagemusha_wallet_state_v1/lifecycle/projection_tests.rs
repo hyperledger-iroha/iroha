@@ -3,50 +3,158 @@
 
 use super::*;
 
+// Explicit selected custody, using the actual receiver credential and real receipt assembly.
+// Shared TestCustody keeps its payer-only Advance signer. This fixture does not call it:
+// selected head publication is a test probe; subsequent fold_once/projection are production.
+fn select_receiver_head(wallet: &mut Wallet, frozen: &FrozenTransition) {
+    use crate::kagemusha_wallet_state_v1::preparation_custody::SourceCustodyV1;
+    frozen.validate().unwrap();
+    let c = &frozen.capsule;
+    let capsule = c.capsule_digest().unwrap();
+    let owner = TransitionOwner::new(frozen.credential.clone());
+    let signature: Signature =
+        signer(&frozen.credential).sign(&kagemusha_wallet_signing_message_v1(
+            KagemushaWalletSigningDomainV1::Receipt,
+            &owner.receipt_body(c, &capsule).unwrap(),
+        ));
+    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
+    let record = owner.assemble(c, &capsule, &signature).unwrap();
+    record.verify(&frozen.credential, c).unwrap();
+    let selected_generation = wallet.custody.status.marker().unwrap().marker().generation + 1;
+    let retained = Retained {
+        operation_id: c.operation_id,
+        capsule_digest: capsule,
+        selected_generation,
+        completion_digest: record.completion_digest().unwrap(),
+        frame: record.to_canonical_bytes().unwrap(),
+        record,
+    };
+    let (selected, mut manifest) = wallet.manifest().unwrap();
+    let mut marker = enrollment();
+    marker.wallet_id = wallet.wallet_id;
+    marker.payment_key = frozen.credential.body.payment_key;
+    marker.generation = selected_generation + 1;
+    marker.state = c.head_marker_state().unwrap();
+    wallet.custody.status = SlotStatus::Released(marker_record(marker, retained.completion_digest));
+    wallet
+        .custody
+        .retained
+        .insert(c.operation_id, retained.clone());
+    wallet
+        .archive
+        .put(
+            ArchiveKey::Capsule(capsule),
+            &archive::encode(frozen).unwrap(),
+        )
+        .unwrap();
+    manifest.indexed = Some(c.statement.sequence);
+    manifest.capsule = capsule;
+    manifest.steps = manifest
+        .steps
+        .set(
+            &mut wallet.archive,
+            manifest::sequence_key(c.statement.sequence),
+            &archive::encode(&manifest::StepEntry {
+                capsule,
+                operation: c.operation_id,
+                selected_generation,
+                completion: retained.completion_digest,
+                kind: c.kind,
+                checkpoints: 0,
+                collected: false,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    if c.kind == KagemushaWalletOperationKindV1::Bootstrap {
+        let source = SourceCustodyV1::bootstrap(
+            &mut wallet.archive,
+            &c.successor_state,
+            &frozen.credential.to_canonical_bytes().unwrap(),
+            &archive::encode(
+                &KagemushaWalletCertificateSetV1::new(vec![enrollment_issuer(&frozen.credential)])
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let address = wallet
+            .archive
+            .write_object(&archive::encode(&source).unwrap(), 32 * 1024)
+            .unwrap();
+        manifest.capsule_sources = manifest
+            .capsule_sources
+            .set(&mut wallet.archive, capsule, &address)
+            .unwrap();
+    }
+    if let KagemushaWalletEffectV1::Receive {
+        credit_id, amount, ..
+    } = c.statement.effect
+    {
+        let credit = ConsumedCredit {
+            payment_digest: c.payment_digest,
+            amount,
+            sequence: c.statement.sequence,
+        };
+        manifest.credits = manifest
+            .credits
+            .set(
+                &mut wallet.archive,
+                credit_id,
+                &archive::encode(&credit).unwrap(),
+            )
+            .unwrap();
+    }
+    wallet.publish_manifest(selected, &manifest).unwrap();
+}
+
 fn receive_projection_wallet(burn: bool) -> (Wallet, FrozenTransition, [u8; 32]) {
+    let (payer, request, _) = originals();
     let payment: KagemushaWalletPaymentV1 = fixture("KagemushaWalletPaymentV1");
+    let receiver = request.receiver_credential.clone();
+    assert_ne!(
+        receiver.body.wallet_id,
+        payment.request.body.payer_wallet_id
+    );
     let mut wallet = wallet();
-    let boot = bootstrap();
-    wallet.commit(boot.clone()).unwrap();
+    wallet.wallet_id = receiver.body.wallet_id;
+    wallet.archive.wallet = wallet.wallet_id;
+    let mut boot = bootstrap();
+    boot.credential = receiver.clone();
+    boot.capsule.wallet_id = receiver.body.wallet_id;
+    boot.capsule.successor_state = KagemushaWalletStateV1::bootstrap(&receiver, field(92)).unwrap();
+    let KagemushaWalletEffectV1::Bootstrap { enrollment_id, .. } =
+        &mut boot.capsule.statement.effect
+    else {
+        panic!("bootstrap")
+    };
+    *enrollment_id = receiver.body.enrollment_id;
+    rebind_frozen_successor(&mut boot);
+    select_receiver_head(&mut wallet, &boot);
     snapshot_test_fold(&mut wallet);
     wallet.proofs.burn = burn;
-    let mut receive = frozen(
-        Some(&boot),
-        KagemushaWalletEffectV1::Receive {
-            credit_id: payment.request.body.credit_id(),
-            payer_wallet_id: payment.request.body.payer_wallet_id,
-            amount: payment.request.body.amount,
-        },
-    );
-    receive.capsule.successor_state.core.balance = payment.request.body.amount + 20;
+    let mut receive = FrozenTransition {
+        credential: receiver,
+        capsule: fixture("KagemushaWalletRecoveryCapsuleV1"),
+    };
+    receive.capsule.statement.sequence = 1;
+    receive.capsule.statement.predecessor = boot.capsule.statement.successor;
+    receive.capsule.predecessor_capsule_digest = boot.capsule.capsule_digest().unwrap();
+    receive.capsule.successor_state.core.sequence = 1;
+    let consumed = payment.consumed_credit_leaf(1).unwrap();
+    let mut consumed_tree = KagemushaWalletIndexedTreeV1::new();
+    let insertion = consumed_tree
+        .insert(consumed.key(), consumed.leaf_value().unwrap())
+        .unwrap();
+    receive.capsule.successor_state.core.consumed_credit_root = consumed_tree.root();
+    receive.capsule.map_openings = vec![
+        insertion.low_opening.leaf_transcript(&insertion.low),
+        insertion.slot_opening.empty_transcript(),
+    ];
     rebind_frozen_successor(&mut receive);
-    let mut payer = None;
-    let mut request = None;
-    for row in vectors()["envelopes"].as_array().unwrap() {
-        let envelope: KagemushaWalletEnvelopeV1 =
-            archive::decode(&hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap()).unwrap();
-        match envelope.message {
-            KagemushaWalletMessageV1::Offer { offer } => payer = Some(offer),
-            KagemushaWalletMessageV1::Request { request: original } => request = Some(original),
-            _ => {}
-        }
-    }
-    let payer = payer.unwrap();
-    let request = request.unwrap();
-    for input in &mut receive.capsule.retained_inputs {
-        input.bytes = match input.role {
-            KagemushaWalletRetainedInputRoleV1::Request => archive::encode(&request).unwrap(),
-            KagemushaWalletRetainedInputRoleV1::Payment => payment.to_canonical_bytes().unwrap(),
-            KagemushaWalletRetainedInputRoleV1::Credential => {
-                payer.payer_credential.to_canonical_bytes().unwrap()
-            }
-            KagemushaWalletRetainedInputRoleV1::CertificateSet => {
-                archive::encode(&payer.certificates).unwrap()
-            }
-            _ => input.bytes.clone(),
-        };
-    }
-    wallet.commit(receive.clone()).unwrap();
+    // These are the complete canonical Request/Payment and payer enrollment originals.
+    select_receiver_head(&mut wallet, &receive);
     let id = [0x97; 32];
     wallet
         .retain_collected_receive_test_request(
@@ -82,18 +190,34 @@ fn receiver_projection_updates_at_covering_fold_before_collection_and_new_unfold
             ),
             "Projection changes before historical Receive collection"
         );
-        let mut next = frozen(
-            Some(&receive),
-            KagemushaWalletEffectV1::Load {
-                receipt_digest: field(98),
-                load_ordinal: 0,
-                amount: 1,
-                online_charge: 0,
-            },
-        );
-        next.capsule.successor_state.core.balance = receive.capsule.successor_state.core.balance;
+        let mut next = receive.clone();
+        next.capsule.kind = KagemushaWalletOperationKindV1::Load;
+        next.capsule.statement.sequence += 1;
+        next.capsule.statement.next_load = 1;
+        next.capsule.statement.predecessor = receive.capsule.statement.successor;
+        next.capsule.statement.effect = KagemushaWalletEffectV1::Load {
+            receipt_digest: field(98),
+            load_ordinal: 0,
+            amount: 1,
+            online_charge: 0,
+        };
+        next.capsule.predecessor_capsule_digest = receive.capsule.capsule_digest().unwrap();
+        next.capsule.successor_state.core.sequence = next.capsule.statement.sequence;
+        next.capsule.successor_state.core.next_load = 1;
+        next.capsule.payment_digest = [0; 32];
+        next.capsule.map_openings.clear();
+        next.capsule.retained_inputs = [
+            KagemushaWalletRetainedInputRoleV1::LoadReceipt,
+            KagemushaWalletRetainedInputRoleV1::LoadFinality,
+        ]
+        .into_iter()
+        .map(|role| KagemushaWalletRetainedInputV1 {
+            role,
+            bytes: vec![1],
+        })
+        .collect();
         rebind_frozen_successor(&mut next);
-        wallet.commit(next).unwrap();
+        select_receiver_head(&mut wallet, &next);
         assert!(wallet.snapshot().unwrap().folded_balance.is_none());
         assert_eq!(
             wallet.receive_credit_projection(&id).unwrap().bytes()[2],

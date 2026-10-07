@@ -467,8 +467,7 @@ impl SumeragiFinalityVerifier {
             }
         }
         // Retain the capability produced by this complete single-witness verification.
-        let tip = verifier
-            .verify_retained_decision_with_validation(&selected.tip, validation)?;
+        let tip = verifier.verify_retained_decision_with_validation(&selected.tip, validation)?;
         drop(genesis);
         // End borrowed access before the consumer. Independent imports also release their
         // bounded pure workspace here; a borrowed workspace remains with its operation owner.

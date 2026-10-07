@@ -731,8 +731,8 @@ def test_compiled_privacy_contract_seals_nonprivacy_main_classes_too(tmp_path):
         GUARD.audit_privacy_classfiles(tmp_path)
 
 
-# First-release KAGEMUSHA wallet V1 wire, platform adapters, Native owner clients
-# and typed snapshots. Compiled declaration/export auditing requires exact
+# First-release KAGEMUSHA eligibility and wallet V1 wire, platform adapters,
+# Native owner clients and typed projections. Compiled declaration/export auditing requires exact
 # Native ownership for every wallet JNI declaration. These
 # source inventories do not execute wallet JNI or prove artifacts are available.
 # They need no JDK, native artifact, network or environment variable.
@@ -751,7 +751,7 @@ def kagemusha_named_files(root, directories):
 
 
 def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
-    """Pin the ledger instruction, wire, P-256 codec and Android/Native wallet owners."""
+    """Pin current eligibility, ledger wire, P-256 and Android/Native wallet owners."""
     kotlin = ROOT / "kotlin"
     offline = KOTLIN_OFFLINE_PACKAGE
     wallet = "kagemusha-wallet-android/src"
@@ -770,6 +770,11 @@ def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
         f"core-jvm/src/test/kotlin/{offline}/KagemushaWalletEnrollmentBindingV1Test.kt",
         f"core-jvm/src/main/java/{offline}/KagemushaWalletAccountOriginalV1.kt",
         f"core-jvm/src/test/kotlin/{offline}/KagemushaWalletAccountOriginalV1Test.kt",
+        f"core-jvm/src/main/java/{offline}/KagemushaEnrollmentEligibilityV1.kt",
+        f"core-jvm/src/test/kotlin/{offline}/KagemushaEnrollmentEligibilityV1Test.kt",
+        f"core-jvm/src/test/java/{offline}/KagemushaEligibilityJavaTest.java",
+        "core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/"
+        "KagemushaLedgerOriginalTransportV1Test.kt",
         f"core-jvm/src/test/kotlin/{offline}/KagemushaWalletVectorsV1Test.kt",
         f"{wallet}/androidTest/java/{offline}/wallet/KagemushaWalletAndroidPlatformDeviceV1Test.kt",
         f"{wallet}/main/res/xml/kagemusha_wallet_v1_data_extraction_rules.xml",
@@ -777,6 +782,9 @@ def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
         f"{wallet}/main/java/{offline}/wallet/KagemushaWalletV1.kt",
         f"{wallet}/main/java/{offline}/wallet/KagemushaWalletEnrollmentV1.kt",
         f"{wallet}/main/java/{offline}/wallet/KagemushaWalletLoadOriginalV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletLedgerV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletCreditProjectionV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletRequestFeeSelectionV1.kt",
         f"{wallet}/main/java/{offline}/wallet/KagemushaWalletInstalledRuntimeV1.kt",
         f"{wallet}/main/java/{offline}/wallet/KagemushaWalletInstallationAttemptV1.kt",
         f"{wallet}/main/java/{offline}/wallet/KagemushaWalletEnrollmentV1.kt",
@@ -798,6 +806,10 @@ def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
         f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletSetupV1Test.kt",
         f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletHostNativeV1Test.kt",
         f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletSnapshotV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletLedgerV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletCreditProjectionV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletRequestFeeSelectionV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletBoundDeliveryV1Test.kt",
         *(
             f"{wallet}/main/java/{offline}/wallet/KagemushaWalletAndroid{name}V1.kt"
             for name in ("Environment", "KeyStore", "PaymentKey", "Platform", "Results")
@@ -885,6 +897,7 @@ def test_swift_ships_no_old_kagemusha_surface():
         "Sources/IrohaSwift/KagemushaWalletInstallationAttemptV1.swift",
         "Sources/IrohaSwift/KagemushaWalletAccountOriginalV1.swift",
         "Sources/IrohaSwift/KagemushaWalletLoadOriginalV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletLedgerV1.swift",
         "Sources/IrohaSwift/KagemushaWalletOpenV1.swift",
         "Sources/IrohaSwift/KagemushaWalletSetupV1.swift",
         "Sources/IrohaSwift/KagemushaWalletSnapshotV1.swift",

@@ -2875,3 +2875,22 @@ def test_native_amx_leg_mutation_keeps_original_pool_rule_and_actual_allocator_c
     assert 'budget.try_reserve_layouts(controls)' in control
     assert 'no key, alignment, quantity or graph copy may precede original pool refusal' in control
     assert 'budget.set_limit_bytes(0)' in control
+
+
+@pytest.mark.parametrize("mutation,name", [
+    ("HC150", "original_paid_amx_post_decode_refusal_retains_worker_leg_and_exact_retry"),
+    ("HC151", "completed_amx_worker_bank_refuses_replaced_source_parent_and_foreign_pool"),
+    ("HC152", "completed_amx_worker_bank_preserves_equal_occurrences_and_metadata_refusal"),
+])
+def test_native_amx_worker_retry_rules_have_exact_owning_selectors(mutation, name):
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mutation]
+    assert rule.tests == ("sumeragi::executor::amx_retry_tests::" + name,)
+    assert not rule.scenarios
+    assert gate.has_switch(mutation, core=True)
+    assert not gate.has_switch(mutation)
+    assert not gate.has_switch(mutation, model=True)
+    assert not gate.has_switch(mutation, daemon=True)
+    control = (ROOT / "crates/iroha_core/src/sumeragi/executor_amx_retry_tests.rs").read_text()
+    assert "fn " + name + "(" in control
+    implementation = (ROOT / "crates/iroha_core/src/sumeragi/amx/native/retry.rs").read_text()
+    assert 'all(test, sumeragi_core_mutation = "' + mutation + '")' in implementation

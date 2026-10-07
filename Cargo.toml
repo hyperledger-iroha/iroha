@@ -433,6 +433,43 @@ debug = 0
 codegen-units = 256
 strip = "none"
 
+# Closed renewal profiling found per-byte zeroization and private-filesystem
+# helper overhead in unoptimized local builds. Keep the same volatile wipes,
+# native custody checks and assertion policy; optimize only their code generation.
+# Match both runnable profiles so node and test consumers share this policy.
+[profile.dev.package.zeroize]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
+
+[profile.test.package.zeroize]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
+
+[profile.dev.package.iroha_fs]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
+
+[profile.test.package.iroha_fs]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
+
+# Fresh finality profiling found unoptimized Ed25519 field arithmetic beneath
+# optimized iroha_crypto. Match the existing arithmetic dependency policy while
+# retaining every public-key, subgroup and signature check in local profiles.
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
+[profile.test.package.curve25519-dalek]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
 # Local validators execute the production memory-hard authentication puzzle.
 # Optimize only its arithmetic dependencies so debug builds can service the
 # same bounded authentication lifetime without weakening the puzzle policy.

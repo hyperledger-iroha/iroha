@@ -44,6 +44,12 @@ ark-serialize = { version = "0.4.2", default-features = false }
 sha2 = "0.10.9"
 
 [dev-dependencies]
+# Canonical executed-genesis admission for the source-only finality compiler.
+# These test-driver dependencies never enter the production native proof boundary.
+iroha_genesis = { workspace = true }
+iroha_data_model = { workspace = true }
+# Exact canonical CommitQC projection from independently verified captured blocks.
+iroha_sumeragi = { workspace = true }
 # Independent native normal-validator signature and BLS program oracles.
 iroha_crypto = { workspace = true, features = ["bls"] }
 # Deterministic recovery streams for reproducible test proofs.

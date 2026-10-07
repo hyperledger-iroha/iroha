@@ -39,10 +39,7 @@ fn main() {
     );
     record.vk_len = 1;
     record.status = ConfidentialStatus::Withdrawn;
-    let instruction = RegisterVerifyingKey {
-        id: VerifyingKeyId::new("pipa-r/pasta", "x"),
-        record,
-    };
+    let instruction = RegisterVerifyingKey::new(VerifyingKeyId::new("pipa-r/pasta", "x"), record);
     let bytes = norito::to_bytes(&instruction).expect("encode canonical instruction");
     let decoded: RegisterVerifyingKey =
         norito::decode_from_bytes(&bytes).expect("decode canonical instruction");
@@ -91,4 +88,14 @@ fn main() {
         "{}",
         json::to_json_pretty(&value).expect("encode fixture JSON")
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verifying_key_fixture_preserves_canonical_frame_and_field_boundaries() {
+        main();
+    }
 }

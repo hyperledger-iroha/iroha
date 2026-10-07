@@ -350,8 +350,8 @@ impl ProviderFundingBootstrap {
         }
         Ok(None)
     }
-    // Approval borrows the already verified request history. Its temporaries live in a separate
-    // frame while the caller keeps the original request owner and report through this return.
+    // Authenticate the approval selection before reserving its child-body scratch. The caller
+    // keeps the original request owner and report through both non-inlined phases.
     #[inline(never)]
     fn run_approval(
         &mut self,
@@ -363,10 +363,10 @@ impl ProviderFundingBootstrap {
         let FundingPhase {
             directory,
             original,
-            provider,
             deadline,
             mode,
             authorization,
+            ..
         } = phase;
         let approval_selection = match self.selected_stage(
             directory,
@@ -384,6 +384,33 @@ impl ProviderFundingBootstrap {
                     .map(|step| Some(RequestApprovalIncomplete::Unprepared(step)));
             }
         };
+        self.run_selected_approval(
+            phase,
+            minimum_height,
+            approval_history,
+            history,
+            &approval_selection,
+        )
+    }
+    // Only the selected child body owns approval scratch. The original request remains in
+    // run_request_approval while the prefix authenticates its retained selection first.
+    #[inline(never)]
+    fn run_selected_approval(
+        &mut self,
+        phase: FundingPhase<'_, '_>,
+        minimum_height: &mut u64,
+        approval_history: &mut Option<ManagedHistoricalReserveTopUpApproval>,
+        history: &ManagedHistoricalReserveTopUp,
+        approval_selection: &SelectedStage,
+    ) -> Result<Option<RequestApprovalIncomplete>> {
+        let FundingPhase {
+            original,
+            provider,
+            deadline,
+            mode,
+            authorization,
+            ..
+        } = phase;
         let intent = approval_selection.approval(original)?;
         let mut approval =
             match ManagedReserveTopUpApproval::open_existing(&self.authority.prepared, provider)? {

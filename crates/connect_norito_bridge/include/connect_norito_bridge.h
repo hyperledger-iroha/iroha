@@ -1952,7 +1952,9 @@ typedef struct {
 // LedgerFinality23 atomically retains the genuinely verified native checkpoint under the same manifest.
 // ConfirmUnload30(nonzero transaction entrypoint hash in setup_id, first exact Unload original <=65536)
 // verifies successful input/output inclusion and saves its confirmation before returning kind42 (same geometry as kind33).
-// UnloadProofProgress33(nonzero tx hash setup_id, first exact Unload <=65536) returns kind33 or34.
+// UnloadProofProgress33(nonzero tx hash setup_id, first exact Unload <=65536) returns kind42 for
+// retained authentic successful inclusion, kind33 for verified history, or kind34 when not started.
+// Missing inclusion is distinct from malformed/mismatched custody, which remains an error.
 // IngestUnloadProof34 adds second ordinary proof <=36MiB and returns kind33. Both use a separate
 // transaction+claim-bound cursor; ConfirmUnload30 consumes its selected block, independent of later global tips.
 // ConfirmActivation35(first exact signed Activate transaction <=65536) returns kind44 only after
@@ -1975,6 +1977,9 @@ typedef struct {
 // AcceptCreditedForSend41 and CreditedForSendStatus42 use nonzero selected Send request identity
 // and first exact Credited original <=10000; other inputs are zero. Both return ordinary Archive
 // outcomes. Native binds delivery evidence to that Send before issuing or recovering its intent.
+// UnloadClaim45(nonzero completed Unload request id in setup_id; optional first canonical charge beneficiary <=16,384;
+// no other inputs) returns kind48 canonical UnloadClaim <=16,384 from exact selected originals and native-admitted account.
+// Pending remains an error requiring the existing retry flow; this projection never signs, debits or acknowledges settlement.
 // CloseLoads19(nonzero setup_id retry identity, no originals) returns kind30, exact durable signed closure frame <=16,384 bytes;
 // Reuse an id for exact retries; a fresh id selects current native source after a preissued Load.
 // It does not confirm ledger closure or authorize key retirement.
@@ -1988,9 +1993,9 @@ typedef struct {
 // 1=awaiting fold/2=removed/3=retained; core-pending byte; three zeros; credit32;
 // Payment digest32; LE128amount; LE32original length; exact receiver Credited <=10000.
 // Payer original length is zero. Projection is display evidence, never permission to mutate.
-// setup_id is exactly32 bytes: nonzero only for selectors1/2/19/20/25/27/30/33/34/39/41/42/43/44; all zero otherwise.
+// setup_id is exactly32 bytes: nonzero only for selectors1/2/19/20/25/27/30/33/34/39/41/42/43/44/45; all zero otherwise.
 // Unused originals/amount/token are empty/zero. Original bounds are selected by Native;
-// signer certificate frames are <=512 bytes. No caller clock, nonce, proof or signing body.
+// signer certificate frames are <=512 bytes. No caller clock, nonce, proof verdict or arbitrary signing body.
 // Transport uses first only and returns canonical bytes; it grants no monetary verdict.
 typedef struct {
     const uint8_t* setup_id;
@@ -2056,8 +2061,12 @@ int32_t connect_norito_kagemusha_wallet_credit_status_v1(uint64_t handle, const 
  * Send: amount0, first signed Request1..10000, second canonical AccountId1..4096.
  * Native authenticates the complete Request, then canonical-decodes the singleEd25519
  * account original and binds its Role::Account digest to that signed destination.
- * Unload: nonzero amount, first optional quote1..1024 and second certificate1..10000;
- * both Unload originals must be present or both absent. */
+ * Unload: nonzero amount, first optional quote1..1024; second is the exact closed DATA
+ * carrier KWUCV1\0\0 || LE32 certificates_length || certificates1..10000 ||
+ * LE32 beneficiary_length || canonical beneficiary AccountId1..4096 (maximum14112).
+ * Both carriers are absent for uncharged Unload. Native verifies the quote/certificates,
+ * binds the beneficiary before review, and retains/rechecks it before execution.
+ * Raw certificate-only charged review is rejected; monetary intent/wire is unchanged. */
 typedef struct connect_norito_kagemusha_wallet_review_request_v1 {
   uint32_t selector;
   connect_norito_kagemusha_wallet_u128_v1 amount;

@@ -12,6 +12,9 @@ pub struct WalletResult {
     /// Open: 15 account challenge,16 admitted handle;17 retained Activation.
     /// Enrollment18..28 are typed challenge/evidence/retained-original/runtime statuses.
     /// CloseLoads30; FeeClaim31/absent32; selected ledger tip33/absent34; fee payout acknowledged35.
+    /// FeeClaim transport36; enrollment selection37/Apple originals38/custody acknowledgement39.
+    /// Ledger instruction40/Unload confirmation42; retired result kinds41/43 are rejected.
+    /// Activation confirmed44/verifying45/not started46; UnloadClaim48.
     /// Background29: phase/eligibility/backlog-known in detail; sequence is last observed backlog.
     /// CreditProjection47: exact typed header92 plus receiver original up to10000 bytes.
     /// Negative is failure.
@@ -276,23 +279,23 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_execute_v1(
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct WalletSetupRequest {
-    /// Exactly 32 readable bytes; nonzero local retry identity only for Offer/Request.
+    /// Exactly 32 readable bytes; nonzero only for selectors requiring a retained identity.
     pub setup_id: *const u8,
     /// One fixed setup selector documented above.
     pub selector: u32,
-    /// Positive Offer amount only; zero for every other selector.
+    /// Positive Offer or ledger Load amount; zero for every other selector.
     pub amount: WalletU128,
-    /// Native-owned one-use time token for FinishTime/CancelTime; zero otherwise.
+    /// Native time token or ledger instruction kind, as selected by the operation.
     pub token: u64,
-    /// Complete Offer, Credited, TimeAnchor or transport original according to selector.
+    /// Complete canonical original according to the selected operation.
     pub first: *const u8,
     /// Exact first-original length.
     pub first_length: usize,
-    /// Optional Request fee schedule or required FinishTime signer certificate.
+    /// Second canonical original according to the selected operation, empty when unused.
     pub second: *const u8,
     /// Exact second-original length.
     pub second_length: usize,
-    /// Optional Request fee signer certificate; empty for other selectors.
+    /// Optional Request fee signer certificate or Certificates envelope; empty when unused.
     pub third: *const u8,
     /// Exact third-original length.
     pub third_length: usize,
@@ -360,6 +363,18 @@ mod setup_boundary_tests {
             let (kind, sequence, bytes) = match input {
                 setup::Setup::BackgroundStatus => panic!("status bypasses wallet lock"),
                 setup::Setup::Bootstrap => (1, 0, vec![0, 255, 1]),
+                setup::Setup::UnloadClaim {
+                    request_id,
+                    beneficiary,
+                } => {
+                    assert_eq!(request_id, [7; 32]);
+                    assert_eq!(beneficiary, Some(vec![0, 255, 7]));
+                    (
+                        48,
+                        0,
+                        vec![0xf2; KAGEMUSHA_WALLET_UNLOAD_CLAIM_MAX_BYTES_V1],
+                    )
+                }
                 setup::Setup::FeeClaim { .. } => (31, 0, vec![1; state::FEE_CLAIM_MAX_BYTES_V1]),
                 setup::Setup::FeeOriginal { original, .. } => (12, 0, original),
                 setup::Setup::FeeClaimTransport { .. } => {
@@ -392,8 +407,11 @@ mod setup_boundary_tests {
                 }
                 setup::Setup::BeginTime => (13, 19, vec![0, 255, 4]),
                 setup::Setup::BoundCredited { .. } => panic!("unexpected bound Credited fixture"),
-                setup::Setup::CreditProjection { .. } => {
-                    panic!("unexpected credit projection fixture")
+                setup::Setup::CreditProjection { id, anchor, newer } => {
+                    assert_eq!(id, [7; 32]);
+                    assert!(anchor.is_empty());
+                    assert!(newer.is_empty());
+                    (47, 0, vec![0xc3; 92])
                 }
                 setup::Setup::CancelTime { token } => {
                     assert_eq!(token, 19);
@@ -407,30 +425,57 @@ mod setup_boundary_tests {
                     assert_eq!(original, [0, 255, 7]);
                     (12, 0, vec![kind, u8::from(wrap), 0, 255])
                 }
-                setup::Setup::LedgerLoad { .. } => panic!("unexpected ledger load fixture"),
-                setup::Setup::LedgerInstruction { .. } => {
-                    panic!("unexpected ledger instruction fixture")
+                setup::Setup::LedgerLoad { id, amount } => {
+                    assert_eq!(id, [7; 32]);
+                    assert_eq!(amount, u128::MAX);
+                    (40, 0, vec![0xa2])
                 }
-                setup::Setup::ConfirmUnload { .. } => {
-                    panic!("unexpected unload confirmation fixture")
+                setup::Setup::LedgerInstruction { kind, original } => {
+                    assert_eq!(kind, 2);
+                    assert_eq!(original, [0, 255, 7]);
+                    (40, 0, vec![0xc2])
                 }
-                setup::Setup::UnloadProofProgress { .. } => {
-                    panic!("unexpected unload proof progress fixture")
+                setup::Setup::ConfirmUnload {
+                    transaction,
+                    original,
+                } => {
+                    assert_eq!(transaction, [7; 32]);
+                    assert_eq!(original, [0, 255, 7]);
+                    (42, u128::from(u64::MAX), vec![8; 32])
                 }
-                setup::Setup::UnloadProofStep { .. } => {
-                    panic!("unexpected unload proof step fixture")
+                setup::Setup::UnloadProofProgress {
+                    transaction,
+                    original,
+                } => {
+                    assert_eq!(transaction, [7; 32]);
+                    assert_eq!(original, [0, 255, 7]);
+                    (34, 0, vec![])
                 }
-                setup::Setup::ConfirmActivation(_) => {
-                    panic!("unexpected activation confirmation fixture")
+                setup::Setup::UnloadProofStep {
+                    transaction,
+                    original,
+                    finality,
+                } => {
+                    assert_eq!(transaction, [7; 32]);
+                    assert_eq!(original, [0, 255, 7]);
+                    assert_eq!(finality, [0, 255, 7]);
+                    (33, u128::from(u64::MAX), vec![9; 32])
                 }
-                setup::Setup::ActivationProofProgress(_) => {
-                    panic!("unexpected activation progress fixture")
+                setup::Setup::ConfirmActivation(signed) => {
+                    assert_eq!(signed, [0, 255, 7]);
+                    (44, u128::from(u64::MAX), vec![10; 32])
                 }
-                setup::Setup::ActivationProofStep { .. } => {
-                    panic!("unexpected activation step fixture")
+                setup::Setup::ActivationProofProgress(signed) => {
+                    assert_eq!(signed, [0, 255, 7]);
+                    (46, 0, vec![])
+                }
+                setup::Setup::ActivationProofStep { signed, original } => {
+                    assert_eq!(signed, [0, 255, 7]);
+                    assert_eq!(original, [0, 255, 7]);
+                    (45, u128::from(u64::MAX), vec![11; 32])
                 }
                 setup::Setup::FinishTime { .. } => panic!("unexpected unsigned time fixture"),
-                setup::Setup::RequestFeeSelection => panic!("unexpected fee selection fixture"),
+                setup::Setup::RequestFeeSelection => (12, 0, vec![0xf3; 64]),
                 setup::Setup::ValidateRequestFeePolicy { .. } => {
                     panic!("unexpected fee validation fixture")
                 }
@@ -546,28 +591,47 @@ mod setup_boundary_tests {
                 0,
                 vec![0xf1; KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1],
             ),
+            (27, 40, 0, vec![0xa2]),
+            (29, 40, 0, vec![0xc2]),
+            (30, 42, u64::MAX, vec![8; 32]),
+            (33, 34, 0, vec![]),
+            (34, 33, u64::MAX, vec![9; 32]),
+            (35, 44, u64::MAX, vec![10; 32]),
+            (36, 45, u64::MAX, vec![11; 32]),
+            (37, 46, 0, vec![]),
+            (38, 12, 0, vec![0xf3; 64]),
+            (43, 47, 0, vec![0xc3; 92]),
+            (
+                45,
+                48,
+                0,
+                vec![0xf2; KAGEMUSHA_WALLET_UNLOAD_CLAIM_MAX_BYTES_V1],
+            ),
         ] {
             let mut request = request(
-                if matches!(selector, 1 | 2 | 19 | 20 | 25) {
+                if matches!(selector, 1 | 2 | 19 | 20 | 25 | 27 | 30 | 33 | 34 | 43 | 45) {
                     &id
                 } else {
                     &zero
                 },
                 selector,
             );
-            if selector == 1 {
+            if matches!(selector, 1 | 27) {
                 request.amount = WalletU128 {
                     low: u64::MAX,
                     high: u64::MAX,
                 };
             }
-            if matches!(selector, 2 | 3 | 16 | 17 | 21..=23 | 25 | 26) {
+            if matches!(selector, 2 | 3 | 16 | 17 | 21..=23 | 25 | 26 | 29 | 30 | 33..=37 | 45) {
                 request.first = original.as_ptr();
                 request.first_length = original.len();
             }
-            if matches!(selector, 25 | 26) {
+            if matches!(selector, 25 | 26 | 34 | 36) {
                 request.second = original.as_ptr();
                 request.second_length = original.len();
+            }
+            if selector == 29 {
+                request.token = 2;
             }
             let mut out = WalletResult::default();
             assert_eq!(
@@ -589,7 +653,7 @@ mod setup_boundary_tests {
                 crate::connect_norito_free(out.bytes);
             }
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 16);
+        assert_eq!(calls.load(Ordering::SeqCst), 27);
         let mut status = WalletResult::default();
         assert_eq!(
             unsafe {
@@ -600,13 +664,16 @@ mod setup_boundary_tests {
         assert_eq!((status.status, status.detail, status.length), (29, 0, 0));
         assert_eq!(
             calls.load(Ordering::SeqCst),
-            16,
+            27,
             "worker status does not acquire the wallet"
         );
         assert_failure(handle, &request(&zero, 19), INVALID);
+        for selector in [28, 31, 32] {
+            assert_failure(handle, &request(&zero, selector), INVALID);
+        }
         close(handle).unwrap();
         assert_failure(handle, &request(&zero, 0), CLOSED);
-        assert_eq!(calls.load(Ordering::SeqCst), 16);
+        assert_eq!(calls.load(Ordering::SeqCst), 27);
     }
     #[test]
     fn setup_c_routes_cancellation_and_every_envelope_form_to_the_same_owner() {

@@ -328,7 +328,7 @@ fn validate_rolled_back_inventory(
             "rolled-back validator is not the restored stopped release",
         )?;
     }
-    runtime.hosts.validate_physical_binding(&inventory.hosts)?;
+    inventory.validate_physical_binding(&runtime.hosts)?;
     need(
         inventory.edge.slug == "taira-edge"
             && json::to_vec(inventory.edge.admitted_release()?)?
@@ -379,9 +379,7 @@ impl PrepareDispatcherTransition {
                 &retained_inventory_bytes,
                 "transition retained inventory",
             )?;
-            runtime
-                .hosts
-                .validate_physical_binding(&retained_inventory.hosts)?;
+            retained_inventory.validate_physical_binding(&runtime.hosts)?;
             let lease_pin = observed.pin(
                 &coordination.join("lease.json"),
                 Some(0o600),

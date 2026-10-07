@@ -11,6 +11,10 @@ fn preparation_retains_exact_account_owner_and_rejects_changed_subjects() {
         let value = decode(preparation.original(), 16 * 1024).unwrap();
         assert_eq!(preparation.configuration(), [7; 32]);
         assert_eq!(
+            text(&value, "schema").unwrap(),
+            "iroha.kagemusha.wallet-e1-worker-preparation.v1"
+        );
+        assert_eq!(
             binary(text(&value, "account_original_base64").unwrap(), 4096).unwrap(),
             norito::encode_canonical(&selected.account).unwrap()
         );
@@ -127,7 +131,10 @@ fn completed_evidence_time_can_precede_recovery_but_not_original_or_future_dispa
     let recover = request
         .packet(ActionV1::Recover, [10; 32], [11; 32], 700_000)
         .unwrap();
-    for exchange in [&complete, &recover] {
+    let inspect = request
+        .packet(ActionV1::Inspect, [10; 32], [12; 32], 700_000)
+        .unwrap();
+    for exchange in [&complete, &recover, &inspect] {
         let response = reply(
             exchange,
             "evidence",
@@ -163,6 +170,74 @@ fn completed_evidence_time_can_precede_recovery_but_not_original_or_future_dispa
             .packet(ActionV1::Recover, [10; 32], [9; 32], 1_000)
             .is_err()
     );
+}
+
+#[test]
+fn inspect_preserves_exact_request_and_distinct_result_classes_after_expiry() {
+    for apple in [false, true] {
+        let request = fixture(apple);
+        let inspect = request
+            .packet(ActionV1::Inspect, [10; 32], [9; 32], 700_000)
+            .unwrap();
+        let packet = decode(&inspect.frame()[4..], MAX_PACKET).unwrap();
+        assert_eq!(text(&packet, "action").unwrap(), "inspect");
+        assert_eq!(integer(&packet, "dispatch_time_ms").unwrap(), 700_000);
+        assert_eq!(
+            binary(text(&packet, "original_base64").unwrap(), MAX_REQUEST).unwrap(),
+            request.original()
+        );
+        for outcome in ["unavailable", "outcome_unknown", "rejected"] {
+            let response = framed(&reply(&inspect, outcome, Value::Null));
+            let observed = request.response(&inspect, &response).unwrap();
+            assert!(matches!(
+                (outcome, observed),
+                ("unavailable", OutcomeV1::Unavailable)
+                    | ("outcome_unknown", OutcomeV1::OutcomeUnknown)
+                    | ("rejected", OutcomeV1::Rejected)
+            ));
+        }
+        let original = encode(&projection(&request), MAX_RESULT).unwrap();
+        let response = reply(
+            &inspect,
+            "evidence",
+            Value::from(STANDARD.encode(&original)),
+        );
+        let OutcomeV1::Evidence(observed) = request.response(&inspect, &framed(&response)).unwrap()
+        else {
+            panic!("retained evidence")
+        };
+        assert_eq!(observed.original_result, original);
+        for field in [
+            "exchange_id",
+            "request_sha256",
+            "journal_incarnation",
+            "config_sha256",
+        ] {
+            let mut wrong = response.clone();
+            change(&mut wrong, field, Value::from(hex::encode([3; 32])));
+            assert!(
+                request.response(&inspect, &framed(&wrong)).is_err(),
+                "{field}"
+            );
+        }
+        let changed =
+            VerifierRequestV1::from_prepared(request.request.clone(), &request.preparation, 1_001)
+                .unwrap();
+        assert!(changed.response(&inspect, &framed(&response)).is_err());
+        let retry = request
+            .packet(ActionV1::Inspect, [10; 32], [11; 32], 700_001)
+            .unwrap();
+        assert!(request.response(&retry, &framed(&response)).is_err());
+        let complete = request
+            .packet(ActionV1::Complete, [10; 32], [9; 32], 700_000)
+            .unwrap();
+        assert!(request.response(&complete, &framed(&response)).is_err());
+        assert!(
+            request
+                .packet(ActionV1::Inspect, [10; 32], [9; 32], 999)
+                .is_err()
+        );
+    }
 }
 
 #[test]
@@ -246,11 +321,23 @@ fn vectors() -> Value {
                 let recover = worker
                     .packet(ActionV1::Recover, [10; 32], [13; 32], 700_000)
                     .unwrap();
+                let inspect_missing = worker
+                    .packet(ActionV1::Inspect, [10; 32], [14; 32], 1_010)
+                    .unwrap();
+                let inspect_prepared = worker
+                    .packet(ActionV1::Inspect, [10; 32], [15; 32], 1_010)
+                    .unwrap();
+                let inspect_claimed = worker
+                    .packet(ActionV1::Inspect, [10; 32], [16; 32], 700_000)
+                    .unwrap();
                 let exchanges = [
                     (&journal, "journal"),
+                    (&inspect_missing, "unavailable"),
                     (&prepare, "prepared"),
+                    (&inspect_prepared, "unavailable"),
                     (&complete, "unavailable"),
                     (&recover, "outcome_unknown"),
+                    (&inspect_claimed, "outcome_unknown"),
                 ];
                 let packets = exchanges
                     .iter()
@@ -335,7 +422,7 @@ for vector in json.load(sys.stdin):
             output = io.BytesIO()
             with patch.object(w, 'verify_android_wallet_enrollment', unavailable), patch.object(w, 'verify_apple_wallet_attestation_raw', unavailable):
                 w.serve(owner, io.BytesIO(b''.join(packets)), output)
-            assert calls == [1], 'a claimed recovery repeated external verification'
+            assert calls == [1], 'inspection claimed an operation or recovery repeated verification'
             data = output.getvalue()
             frames = []
             while data:
@@ -416,12 +503,9 @@ fn bounded_preparation_preserves_shortened_session_deadline_and_rejects_extensio
             .unwrap();
             let value = decode(prepared.original(), 16 * 1024).unwrap();
             assert_eq!(integer(&value, "expires_at_ms").unwrap(), expires);
-            let captured = VerifierRequestV1::from_prepared(
-                request.request.clone(),
-                &prepared,
-                expires - 1,
-            )
-            .unwrap();
+            let captured =
+                VerifierRequestV1::from_prepared(request.request.clone(), &prepared, expires - 1)
+                    .unwrap();
             for time in [expires, expires + 1, u64::MAX] {
                 assert!(
                     VerifierRequestV1::from_prepared(request.request.clone(), &prepared, time)
@@ -429,12 +513,9 @@ fn bounded_preparation_preserves_shortened_session_deadline_and_rejects_extensio
                 );
             }
             // Recovery reconstructs the original captured time, never the later retry time.
-            let restored = VerifierRequestV1::from_prepared(
-                request.request.clone(),
-                &prepared,
-                expires - 1,
-            )
-            .unwrap();
+            let restored =
+                VerifierRequestV1::from_prepared(request.request.clone(), &prepared, expires - 1)
+                    .unwrap();
             assert_eq!(restored.original(), captured.original());
         }
         for expires in [0, 999, 1_000, maximum + 1, u64::MAX] {

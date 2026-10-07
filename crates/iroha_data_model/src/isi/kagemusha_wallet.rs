@@ -5,6 +5,8 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize, asset::AssetBalanceScope
 
 /// Authenticated successful Load transactions on the selected global chain.
 pub mod load_finality;
+/// Native-finality authentication of actual successful Global asset registration.
+pub mod registration_finality;
 
 pub use load_finality::KagemushaWalletLoadReceiptV1;
 

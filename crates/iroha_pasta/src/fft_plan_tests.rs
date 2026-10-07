@@ -122,3 +122,62 @@ fn prepared_coset_construction_and_batches_validate_before_mutation() {
     check::<Fp>();
     check::<Fq>();
 }
+
+/// Runs one explicitly selected FFT scheduling diagnostic; never a protocol gate.
+#[test]
+#[ignore = "explicit scheduling experiment; select curve, size, width, workers and mode"]
+fn batch_parallelism_diagnostic() {
+    use std::{hint::black_box, time::Instant};
+
+    fn run<F: PastaField>(curve: &str) {
+        let read = |name: &str| std::env::var(name).expect("explicit diagnostic selection");
+        let k: u32 = read("FFT_BATCH_K").parse().unwrap();
+        let count: usize = read("FFT_BATCH_COLUMNS").parse().unwrap();
+        let workers: usize = read("FFT_BATCH_WORKERS").parse().unwrap();
+        let mode = read("FFT_BATCH_MODE");
+        assert!((12..=16).contains(&k));
+        assert!((1..=17).contains(&count));
+        assert!([1, 4].contains(&workers));
+        assert!(["columns", "cooperative"].contains(&mode.as_str()));
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            assert_eq!(rayon::current_num_threads(), workers);
+            let domain = FftDomain::<F>::new(k).unwrap();
+            let mut powers = vec![F::ZERO; domain.n()];
+            let shift = F::from(7);
+            let plan = domain.coset_plan(&mut powers, shift).unwrap();
+            let original: Vec<_> = (0..count)
+                .map(|index| coefficients::<F>(domain.n(), 310 + u64::try_from(index).unwrap()))
+                .collect();
+            // Independent single-column API checks every output outside the timed interval.
+            let mut expected = original.clone();
+            for column in &mut expected {
+                domain.coset_fft(column, shift).unwrap();
+            }
+            for sample in 0..3 {
+                let mut actual = original.clone();
+                let mut columns: Vec<_> = actual.iter_mut().map(Vec::as_mut_slice).collect();
+                let started = Instant::now();
+                if mode == "columns" {
+                    plan.fft_many(black_box(&mut columns)).unwrap();
+                } else {
+                    columns.par_iter_mut().for_each(|column| {
+                        dif::<_, true>(column, &domain.forward, Some(CosetShift::Prepared(plan.powers)), None);
+                        bit_reverse_scale::<_, true>(column, domain.k, None, None);
+                    });
+                }
+                let elapsed = started.elapsed();
+                assert_eq!(actual, expected, "{curve}, {mode}, sample={sample}");
+                println!("FFT_BATCH curve={curve} k={k} columns={count} workers={workers} mode={mode} sample={sample} ns={}", elapsed.as_nanos());
+            }
+        });
+    }
+    match std::env::var("FFT_BATCH_CURVE").unwrap().as_str() {
+        "fp" => run::<Fp>("fp"),
+        "fq" => run::<Fq>("fq"),
+        _ => panic!("select fp or fq"),
+    }
+}

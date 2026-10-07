@@ -9,6 +9,8 @@ use iroha_data_model::{
 use sha2::Sha256;
 
 type Owner = EnrollmentOwnerV1<KagemushaWalletSimFsV1, FakePlatformV1>;
+#[path = "tests/native_exchange.rs"]
+mod native_exchange;
 struct Fixture {
     config: EnrollmentConfigV1,
     challenge: KagemushaWalletEnrollmentChallengeV1,

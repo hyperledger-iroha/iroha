@@ -346,7 +346,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
         if captured_native != routing {
             return Err("Network source changed its captured native route".into());
         }
-        let row = execute_network_attempt(
+        let row = execute_network_attempt_with_amx(
             self.state,
             &self.source,
             input,
@@ -360,6 +360,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             quarantine == QuarantineAdmission::Overflow,
             reservation,
             cache,
+            self.amx_legs.as_deref_mut(),
         )?;
         self.rows[index] = row;
         self.network_resolved[index] = true;
@@ -371,10 +372,10 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
 /// The caller owns the complete authenticated input projection and frozen route;
 /// this function never derives invocation authority from a supplied hash.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub(in crate::state) fn execute_network_attempt(
-    state: &mut StateBlock<'_>,
+fn execute_network_attempt_with_amx<'attempt>(
+    state: &'attempt mut StateBlock<'_>,
     inputs: &(impl iroha_data_model::block::execution_output::ExecutionInputs + ?Sized),
-    input: &TransactionEntrypoint,
+    input: &'attempt TransactionEntrypoint,
     input_index: u32,
     execution_index: u64,
     height: u64,
@@ -385,6 +386,7 @@ pub(in crate::state) fn execute_network_attempt(
     quarantine_overflow: bool,
     reservation: iroha_data_model::block::output_budget::ExecutionOutputReservation<'_>,
     cache: &mut IvmCache,
+    amx_legs: Option<&'attempt mut crate::sumeragi::amx::NativeAmxLegPreparations>,
 ) -> Result<ExecutionOutputV1, ExecutionAttemptError<String>> {
     if inputs.input_at(input_index as usize) != Some(input)
         || state._curr_block.height().get() != height
@@ -403,6 +405,9 @@ pub(in crate::state) fn execute_network_attempt(
         .as_mut()
         .ok_or("Network attempt is absent")?;
     bind_source(transaction, input, execution_index, routing)?;
+    transaction.native_amx_leg_execution = amx_legs.map(|bank| {
+        crate::sumeragi::amx::NativeAmxLegExecution::new(bank, input, input_index as usize)
+    });
     let mut result = match admitted {
         Ok(_) if quarantine_overflow => Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted("quarantine overflow".into()),

@@ -54,6 +54,10 @@ mod reduction_tests;
 #[path = "gap_tests.rs"]
 mod gap_tests;
 
+#[cfg(test)]
+#[path = "batch_cap_experiment.rs"]
+mod batch_cap_experiment;
+
 /// Largest supported window: digits must fit `i16` with magnitude `2^(c-1)`.
 pub(crate) const MAX_WINDOW: usize = 15;
 /// Smallest window considered by the planner.
@@ -221,6 +225,10 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
     /// Creates `count` empty buckets over the given base points.
     pub(crate) fn new(bases: &'a [C::AffineExt], count: usize) -> Self {
         let cap = (count / 4).clamp(16, MAX_BATCH);
+        // Diagnostic-only smaller batches retain the production planner's
+        // conservative reservation. Release libraries have no override or knob.
+        #[cfg(test)]
+        let cap = batch_cap_experiment::cap(count, cap);
         Self {
             bases,
             x: vec![C::Base::ZERO; count],

@@ -13886,6 +13886,11 @@ pub struct StateTransaction<'block, 'state> {
         Option<kagemusha_load_entrypoint::KagemushaLoadEntrypointBindingV1>,
     /// Currently executing direct instruction ordinal; nested frames receive no Load authority.
     pub(crate) current_direct_kagemusha_load_instruction_index: Option<usize>,
+    /// Storage-only ordinal of a directly signed AMX instruction; grants no authority.
+    pub(crate) current_direct_amx_instruction_index: Option<usize>,
+    /// Borrow of the actual native Worker attempt, confined to this transaction.
+    pub(crate) native_amx_leg_execution:
+        Option<crate::sumeragi::amx::NativeAmxLegExecution<'block>>,
     /// Penalties that must be replayed after this transaction overlay is rejected.
     deferred_governance_ballot_penalties: Vec<DeferredGovernanceBallotPenaltyV1>,
     /// One-shot binding to the exact direct privacy submission in the signed payload.
@@ -37538,6 +37543,8 @@ impl<'state> StateBlock<'state> {
             governance_ballot_entrypoint_binding: None,
             kagemusha_load_entrypoint_binding: None,
             current_direct_kagemusha_load_instruction_index: None,
+            current_direct_amx_instruction_index: None,
+            native_amx_leg_execution: None,
             deferred_governance_ballot_penalties: Vec::new(),
             privacy_transaction_intent_binding: None,
             private_settlement_carrier_binding: None,
@@ -44088,6 +44095,113 @@ pub(crate) fn validate_asset_definition_home_transition(
 
 #[cfg(any(test, feature = "iroha-core-tests"))]
 impl World {
+    /// Atomically seed a direct-dataspace definition and exact balances in an owned test world.
+    ///
+    /// This fixture does not authorize production registration. The instruction executor
+    /// remains responsible for SNS ownership, route and visibility checks. Supplied balance
+    /// buckets stay independent from the definition's immutable home.
+    ///
+    /// # Errors
+    /// Rejects invalid or duplicate homes/definitions/aliases, mismatched balance identities,
+    /// missing balance accounts, invalid quantities and supply overflow without publishing
+    /// any part of the fixture.
+    pub fn insert_direct_asset_definition_with_assets_for_testing(
+        &mut self,
+        mut definition: AssetDefinition,
+        dataspace_id: DataSpaceId,
+        assets: impl IntoIterator<Item = Asset>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::asset::{
+            AssetDefinitionDataspaceBindingV1, AssetDefinitionDataspaceRegistryV1,
+            AssetDefinitionHome,
+        };
+        let fixture_error = |error: ParseError| Error::InvariantViolation(error.to_string().into());
+        let id = definition.id().clone();
+        AssetDefinitionHome::from_definition(&definition, Some(dataspace_id))
+            .map_err(fixture_error)?;
+        if self.asset_definitions.view().get(&id).is_some() {
+            return Err(Error::InvariantViolation(
+                "direct-home fixture cannot replace an existing definition".into(),
+            ));
+        }
+        let incarnation =
+            AxtAssetIncarnationV1::try_from_bytes(*Hash::new(id.aid_bytes()).as_ref())
+                .map_err(|error| Error::InvariantViolation(error.to_string().into()))?;
+        let mut registry = asset_definition_registry_from_parameters(&self.parameters.view())
+            .map_err(fixture_error)?
+            .unwrap_or_else(|| AssetDefinitionDataspaceRegistryV1 {
+                version: AssetDefinitionDataspaceRegistryV1::VERSION,
+                bindings: BTreeMap::new(),
+            });
+        if registry.bindings.contains_key(&id) {
+            return Err(Error::InvariantViolation(
+                "direct-home fixture cannot replace an existing binding".into(),
+            ));
+        }
+        registry.bindings.insert(
+            id.clone(),
+            AssetDefinitionDataspaceBindingV1 {
+                asset_definition_id: id.clone(),
+                incarnation,
+                dataspace_id,
+                active: true,
+            },
+        );
+        let parameter = registry.into_custom_parameter().map_err(fixture_error)?;
+        let alias = definition.alias.take();
+        if let Some(alias) = alias.as_ref()
+            && let Some(domain) = alias.domain_segment()
+        {
+            let domain_id =
+                DomainId::try_new(domain, alias.dataspace_segment()).map_err(fixture_error)?;
+            if self.domains.view().get(&domain_id).is_none() {
+                return Err(Error::InvariantViolation(
+                    format!("fixture alias `{alias}` references missing domain {domain_id}").into(),
+                ));
+            }
+        }
+        definition.total_quantity = Quantity::zero();
+        // Match the ordinary constructor's last supplied balance per exact asset identity.
+        let balances: BTreeMap<_, _> = assets
+            .into_iter()
+            .map(IntoKeyValue::into_key_value)
+            .collect();
+        let mut block = self.block();
+        {
+            let mut transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
+            transaction.insert_asset_definition_entry(id.clone(), definition);
+            transaction
+                .axt_asset_incarnations
+                .insert(id.clone(), incarnation);
+            transaction
+                .parameters
+                .get_mut()
+                .set_parameter(iroha_data_model::parameter::Parameter::Custom(parameter));
+            if let Some(alias) = alias {
+                transaction.bind_asset_definition_alias(&id, alias, None, None, 0)?;
+            }
+            for (asset_id, value) in balances {
+                if asset_id.definition() != &id
+                    || transaction.resolve_asset_id_for_scope_hint(&asset_id, None)? != asset_id
+                {
+                    return Err(Error::InvariantViolation(
+                        "direct-home fixture requires its exact original balance identity".into(),
+                    ));
+                }
+                transaction.asset_or_insert_exact(&asset_id, value.as_ref().clone())?;
+                transaction.increase_asset_total_amount(&id, value.as_ref())?;
+            }
+            if transaction.execution_deferral.borrow().is_some() {
+                return Err(Error::InvariantViolation(
+                    "direct-home fixture execution was locally deferred".into(),
+                ));
+            }
+            transaction.apply();
+        }
+        block.commit();
+        Ok(())
+    }
+
     /// Install a direct home for an existing definition in an owned test world.
     pub fn set_asset_definition_dataspace_for_testing(
         &mut self,
@@ -44198,6 +44312,127 @@ mod direct_asset_home_tests {
     }
 
     #[test]
+    fn restricted_direct_fixture_preserves_home_bucket_alias_and_supply() {
+        let owner = (*ALICE_ID).clone();
+        let home = DataSpaceId::new(7);
+        let bucket = DataSpaceId::new(8);
+        let mut definition = AssetDefinition::numeric(
+            id(),
+            "Direct home",
+            AssetBalancePolicy::DataspaceRestricted,
+            None,
+        )
+        .build(&owner);
+        let alias: AssetDefinitionAlias = "coin#universal".parse().unwrap();
+        definition.alias = Some(alias.clone());
+        let asset_id =
+            AssetId::with_scope(id(), owner.clone(), AssetBalanceScope::Dataspace(bucket));
+        let mut world = World::with(
+            [],
+            [iroha_data_model::account::Account::new(owner.clone()).build(&owner)],
+            [],
+        );
+        world
+            .insert_direct_asset_definition_with_assets_for_testing(
+                definition.clone(),
+                home,
+                [Asset::new(asset_id.clone(), Quantity::from(3_u32))],
+            )
+            .unwrap();
+        let view = world.view();
+        let stored = view.asset_definition(&id()).unwrap();
+        assert!(stored.owning_domain().is_none());
+        assert_eq!(
+            stored.balance_scope_policy(),
+            AssetBalancePolicy::DataspaceRestricted
+        );
+        assert_eq!(stored.total_quantity(), &Quantity::from(3_u32));
+        assert_eq!(
+            view.asset_definition_home(&id()).unwrap(),
+            Some(AssetDefinitionHome::Dataspace(home))
+        );
+        assert_eq!(view.asset_definition_id_by_alias(&alias), Some(id()));
+        assert_eq!(
+            view.asset(&asset_id).unwrap().value().as_ref(),
+            &Quantity::from(3_u32)
+        );
+        drop(view);
+        world.validate_numeric_asset_invariants().unwrap();
+        world.validate_quantity_ledger_invariants().unwrap();
+        world.rebuild_asset_definition_indexes().unwrap();
+        let before = (*world.parameters.view()).clone();
+        assert!(
+            world
+                .insert_direct_asset_definition_with_assets_for_testing(
+                    definition,
+                    DataSpaceId::new(9),
+                    [],
+                )
+                .is_err()
+        );
+        assert_eq!(*world.parameters.view(), before);
+        assert_eq!(
+            world.view().asset_definition_dataspace(&id()).unwrap(),
+            Some(home)
+        );
+    }
+
+    #[test]
+    fn restricted_direct_fixture_rejects_invalid_home_and_rolls_back_partial_setup() {
+        let owner = (*ALICE_ID).clone();
+        let mut definition = AssetDefinition::numeric(
+            id(),
+            "Direct home",
+            AssetBalancePolicy::DataspaceRestricted,
+            None,
+        )
+        .build(&owner);
+        let alias: AssetDefinitionAlias = "coin#universal".parse().unwrap();
+        definition.alias = Some(alias.clone());
+        let mut world = World::default();
+        let before = (*world.parameters.view()).clone();
+        assert!(
+            world
+                .insert_direct_asset_definition_with_assets_for_testing(
+                    definition.clone(),
+                    DataSpaceId::UNIVERSAL,
+                    [],
+                )
+                .is_err()
+        );
+        // The absent holder fails after the new definition, alias and home are staged.
+        let asset_id = AssetId::with_scope(
+            id(),
+            owner.clone(),
+            AssetBalanceScope::Dataspace(DataSpaceId::new(8)),
+        );
+        assert!(
+            world
+                .insert_direct_asset_definition_with_assets_for_testing(
+                    definition.clone(),
+                    DataSpaceId::new(7),
+                    [Asset::new(asset_id, Quantity::from(1_u32))],
+                )
+                .is_err()
+        );
+        assert!(world.view().asset_definition(&id()).is_err());
+        assert_eq!(world.view().asset_definition_id_by_alias(&alias), None);
+        assert!(world.axt_asset_incarnations.view().get(&id()).is_none());
+        assert_eq!(*world.parameters.view(), before);
+        world
+            .insert_direct_asset_definition_with_assets_for_testing(
+                definition,
+                DataSpaceId::new(7),
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            world.view().asset_definition_dataspace(&id()).unwrap(),
+            Some(DataSpaceId::new(7))
+        );
+    }
+
+    #[test]
     fn absent_home_lookup_preserves_parameter_bytes_and_world_root() {
         use super::world_projection::world_state_accumulator::WorldStateAccumulator;
         use norito::codec::Encode;
@@ -44269,7 +44504,8 @@ mod direct_asset_home_tests {
             .set_parameter(iroha_data_model::parameter::Parameter::Custom(
                 iroha_data_model::parameter::custom::CustomParameter::new(
                     AssetDefinitionDataspaceRegistryV1::parameter_id(),
-                    iroha_primitives::json::Json::from_raw_json("{}".to_owned()).unwrap(),
+                    iroha_primitives::json::Json::from_norito_value_ref(&norito::json!({}))
+                        .unwrap(),
                 ),
             ));
         parameters.commit();

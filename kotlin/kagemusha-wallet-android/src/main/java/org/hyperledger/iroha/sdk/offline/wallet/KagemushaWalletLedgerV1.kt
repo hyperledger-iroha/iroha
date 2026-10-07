@@ -19,6 +19,34 @@ class KagemushaWalletUnloadConfirmationV1 internal constructor(result: Kagemusha
     fun blockHash(): ByteArray = block.copyOf()
 }
 
+/** Native-owned Unload history. Only a confirmation establishes successful settlement. */
+class KagemushaWalletUnloadFinalityV1 internal constructor(result: KagemushaWalletCallV1) {
+    val confirmation: KagemushaWalletUnloadConfirmationV1?
+    val verifiedHeightBits: Long?
+    private val block: ByteArray?
+    init {
+        when (result.status) {
+            KagemushaWalletCallV1.UNLOAD_CONFIRMATION -> {
+                confirmation = KagemushaWalletUnloadConfirmationV1(result)
+                verifiedHeightBits = result.sequenceLow
+                block = result.bytes()
+            }
+            33 -> {
+                confirmation = null
+                verifiedHeightBits = result.sequenceLow
+                block = result.bytes()
+            }
+            34 -> {
+                confirmation = null
+                verifiedHeightBits = null
+                block = null
+            }
+            else -> throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        }
+    }
+    fun blockHash(): ByteArray? = block?.copyOf()
+}
+
 /** Native-verified successful inclusion of the account's exact retained signed Activate. */
 class KagemushaWalletActivationConfirmationV1 internal constructor(result: KagemushaWalletCallV1) {
     val heightBits: Long

@@ -68,7 +68,11 @@ mod history_producer;
 mod identifier_resolution;
 mod iso_profile;
 #[cfg(feature = "app_api")]
+mod kagemusha_enrollment;
+#[cfg(feature = "app_api")]
 mod kagemusha_wallet;
+#[cfg(feature = "app_api")]
+mod kagemusha_wallet_finality;
 mod ledger_state_finality;
 mod multisig_execution_evidence;
 mod native_projection_response;
@@ -2486,6 +2490,10 @@ struct AppState {
     musubi_search: Arc<RwLock<iroha_core::musubi_search::MusubiSearchIndexV1>>,
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_enrollment: Option<Arc<kagemusha_enrollment::EnrollmentService>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_load_finality: Option<Arc<kagemusha_wallet_finality::FinalityService>>,
     kiso: KisoHandle,
     query_service: LiveQueryStoreHandle,
     query_inflight: Arc<tokio::sync::Semaphore>,
@@ -16666,7 +16674,7 @@ mod direct_dataspace_definition_query_scope_tests {
     fn direct_definition_query_uses_exact_home_and_unknown_id_stays_unclassified() {
         let mut world = iroha_core::state::World::default();
         let id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            "cash.universal".parse().expect("id seed"),
+            DomainId::try_new("cash", "universal").expect("id seed"),
             "kina".parse().expect("name"),
         );
         let home = DataSpaceId::new(8_648_377_547_929_788_715);
@@ -16681,9 +16689,8 @@ mod direct_dataspace_definition_query_scope_tests {
             None,
         )
         .build(&iroha_test_samples::ALICE_ID);
-        world = iroha_core::state::World::with([], [], [definition]);
         world
-            .set_asset_definition_dataspace_for_testing(id.clone(), home)
+            .insert_direct_asset_definition_with_assets_for_testing(definition, home, [])
             .expect("direct home fixture");
         assert_eq!(
             resolve_asset_definition_scope_in_world(&world.view(), &id),
@@ -32894,8 +32901,11 @@ async fn handler_ram_lfe_execute(
         .map_err(identifier_execution_error)?;
     let response = ram_lfe_execute_response(&receipt, &draft);
     let response = json_ok(response)?;
-    identifier_resolution::validate_owner_prf_lease(draft.executed_at_ms, draft.expires_at_ms)
-        .map_err(identifier_execution_error)?;
+    identifier_resolution::owner_prf::validate_owner_prf_lease(
+        draft.executed_at_ms,
+        draft.expires_at_ms,
+    )
+    .map_err(identifier_execution_error)?;
     Ok(response)
 }
 #[cfg(feature = "app_api")]
@@ -33072,7 +33082,8 @@ async fn handler_identifier_resolve(
     {
         return Ok(StatusCode::CONFLICT.into_response());
     }
-    let now_ms = identifier_resolution::owner_prf_now_ms().map_err(identifier_execution_error)?;
+    let now_ms =
+        identifier_resolution::owner_prf::owner_prf_now_ms().map_err(identifier_execution_error)?;
     if !identifier_claim_is_live_at(&claim, now_ms) {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
@@ -33084,8 +33095,8 @@ async fn handler_identifier_resolve(
         draft.backend.as_str(),
     )?)?;
     let delivery_now_ms =
-        identifier_resolution::owner_prf_now_ms().map_err(identifier_execution_error)?;
-    identifier_resolution::validate_owner_prf_lease_at(
+        identifier_resolution::owner_prf::owner_prf_now_ms().map_err(identifier_execution_error)?;
+    identifier_resolution::owner_prf::validate_owner_prf_lease_at(
         receipt.payload.opening.payload.opened_at_ms,
         receipt.payload.opening.payload.expires_at_ms,
         delivery_now_ms,
@@ -33124,9 +33135,9 @@ async fn handler_identifier_claim_receipt(
         &account_literal,
         "/v1/accounts/{account_id}/identifiers/claim-receipt",
     )?;
-    // The path identifies the enrolled receipt beneficiary, which may differ
-    // from the authenticated owner. The active identifier/program policies below
-    // authorize the caller; the ledger account and its UAID bind the beneficiary.
+    // The signed path selects the beneficiary; its ledger account and UAID bind
+    // the receipt. Both active ledger policies authorize the caller below,
+    // allowing the policy owner to act for a distinct beneficiary.
     let policy_id = iroha_data_model::identifier::IdentifierPolicyId::from_str(&request.policy_id)
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -33255,7 +33266,7 @@ async fn handler_identifier_claim_receipt(
             output_opening,
             phone_retail_canonicality_payload,
         })?;
-        identifier_resolution::validate_owner_prf_lease(
+        identifier_resolution::owner_prf::validate_owner_prf_lease(
             original_opened_at_ms,
             original_expires_at_ms,
         )
@@ -33276,7 +33287,7 @@ async fn handler_identifier_claim_receipt(
         &receipt,
         draft.backend.as_str(),
     )?)?;
-    identifier_resolution::validate_owner_prf_lease(
+    identifier_resolution::owner_prf::validate_owner_prf_lease(
         receipt.payload.opening.payload.opened_at_ms,
         receipt.payload.opening.payload.expires_at_ms,
     )
@@ -34875,6 +34886,10 @@ pub struct Torii {
     private_settlement_runtime: private_settlement::PrivateSettlementToriiRuntimeV1,
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_enrollment: Option<Arc<kagemusha_enrollment::EnrollmentService>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_load_finality: Option<Arc<kagemusha_wallet_finality::FinalityService>>,
     telemetry: routing::MaybeTelemetry,
     online_peers: OnlinePeersProvider,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -37507,7 +37522,9 @@ impl Torii {
             SORAFS_RESERVE_POLICY_PROOF_GET => canonical_signature_get(reserve_policy_proof::handler);
             SORAFS_RESERVE_ACCOUNT_PROOF_GET => canonical_signature_get(reserve_account_proof::handler);
             KAGEMUSHA_LOAD_ISSUANCE_GET => canonical_signature_get(kagemusha_wallet::handler);
+            KAGEMUSHA_ENROLLMENT_POST => limited_canonical_signature_post(kagemusha_enrollment::handler, iroha_torii_shared::kagemusha_enrollment::ENROLLMENT_SERVICE_REQUEST_MAX_BYTES_V1);
             KAGEMUSHA_LOAD_EVENT_PROOF_GET => canonical_signature_get(kagemusha_wallet::event_handler);
+            KAGEMUSHA_LOAD_FINALITY_PROOF_GET => canonical_signature_get(kagemusha_wallet::finality_handler);
             SORAFS_RESERVE_PROVIDERS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers);
             SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider);
             SORAFS_RESERVE_TOP_UP_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up, contracts_body_limit);
@@ -38687,6 +38704,8 @@ impl Torii {
             // the next Strict restart; Fast never opens their journals or
             // starts their mutation workers.
             config.privacy_bootle_lantern_issuer = None;
+            config.kagemusha_enrollment = None;
+            config.kagemusha_load_finality = None;
             config.webhooks_enabled = false;
             config.zk_attachments_enabled = false;
             config.zk_prover_enabled = false;
@@ -40133,6 +40152,34 @@ impl Torii {
                     "request body limit does not fit the platform address space",
                 )
             })?;
+        #[cfg(not(feature = "app_api"))]
+        if config.kagemusha_enrollment.is_some() {
+            return Err(ToriiBuildError::invalid_configuration(
+                "kagemusha_enrollment",
+                "enrollment requires the shipping app_api surface",
+            ));
+        }
+        #[cfg(feature = "app_api")]
+        let kagemusha_enrollment = config
+            .kagemusha_enrollment
+            .clone()
+            .map(|selected| kagemusha_enrollment::EnrollmentService::open(state.clone(), selected))
+            .transpose()
+            .map_err(|error| {
+                ToriiBuildError::component_initialization("kagemusha_enrollment", error)
+            })?
+            .map(Arc::new);
+        #[cfg(not(feature = "app_api"))]
+        if config.kagemusha_load_finality.is_some() {
+            return Err(ToriiBuildError::invalid_configuration(
+                "kagemusha_load_finality", "Load finality requires the shipping app_api surface"));
+        }
+        #[cfg(feature = "app_api")]
+        let kagemusha_load_finality = config.kagemusha_load_finality.clone()
+            .map(|selected| kagemusha_wallet_finality::FinalityService::open(state.clone(), selected))
+            .transpose()
+            .map_err(|error| ToriiBuildError::component_initialization("kagemusha_load_finality", error))?
+            .map(Arc::new);
         let torii = Self {
             build_identity,
             chain_id: Arc::new(chain_id),
@@ -40151,6 +40198,10 @@ impl Torii {
             #[cfg(feature = "app_api")]
             private_settlement_runtime,
             bootle_lantern_issuance_runtime,
+            #[cfg(feature = "app_api")]
+            kagemusha_enrollment,
+            #[cfg(feature = "app_api")]
+            kagemusha_load_finality,
             online_peers,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_telemetry_urls,
@@ -41080,6 +41131,10 @@ impl Torii {
             #[cfg(feature = "app_api")]
             musubi_search: self.musubi_search.clone(),
             bootle_lantern_issuance_runtime: self.bootle_lantern_issuance_runtime.clone(),
+            #[cfg(feature = "app_api")]
+            kagemusha_enrollment: self.kagemusha_enrollment.clone(),
+            #[cfg(feature = "app_api")]
+            kagemusha_load_finality: self.kagemusha_load_finality.clone(),
             kiso: self.kiso.clone(),
             query_service: self.query_service.clone(),
             query_inflight,
@@ -41593,6 +41648,13 @@ impl Torii {
         #[cfg(feature = "app_api")]
         sorafs::stream_token_cleanup::register_worker(app_state.as_ref(), &mut workers)
             .expect("prepared test stream-token cleanup must retain its worker handle");
+        #[cfg(feature = "app_api")]
+        kagemusha_enrollment::register_worker(
+            app_state.as_ref(),
+            shutdown_signal.clone(),
+            &mut workers,
+        )
+        .expect("prepared test enrollment service must retain its worker handle");
         Ok(TestApiRouterRuntime {
             router,
             shutdown_signal,
@@ -41700,6 +41762,20 @@ impl Torii {
         if let Err(reason) =
             sorafs::stream_token_cleanup::register_worker(app_state.as_ref(), &mut critical_workers)
         {
+            let failure = Report::new(Error::StartServer).attach(reason);
+            return Err(rollback_torii_startup_workers(
+                &shutdown_signal,
+                critical_workers,
+                failure,
+            )
+            .await);
+        }
+        #[cfg(feature = "app_api")]
+        if let Err(reason) = kagemusha_enrollment::register_worker(
+            app_state.as_ref(),
+            shutdown_signal.clone(),
+            &mut critical_workers,
+        ) {
             let failure = Report::new(Error::StartServer).attach(reason);
             return Err(rollback_torii_startup_workers(
                 &shutdown_signal,

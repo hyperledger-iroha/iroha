@@ -317,3 +317,6 @@ fn ordinary_receive_imports_every_fixed_original_source() {
 fn renewed_receive_imports_every_fixed_original_source() {
     sequential_imports(Variant::ReceiveRenewed);
 }
+
+#[path = "source_capacity.rs"]
+mod source_capacity;

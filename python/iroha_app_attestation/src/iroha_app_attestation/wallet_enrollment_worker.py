@@ -10,6 +10,8 @@ Before exposing E1, Core anchors this journal's incarnation and exact prepared o
 its protected challenge record. Complete and recover can claim only that prepared original.
 Claim commits before any external verification; a claimed row without a result stays unknown.
 Fresh Core dispatch time governs a delayed first claim without rewriting its captured request.
+Inspect reads only an exact retained outcome; it never claims a prepared operation, including
+before E1 expires. The issuer uses it for passive recovery after the verification window.
 """
 from __future__ import annotations
 
@@ -45,7 +47,7 @@ from .wallet_enrollment_store import E1CounterStore
 
 SCHEMA = "iroha.kagemusha.wallet-e1-verifier.v1"
 CONFIG_SCHEMA = "iroha.kagemusha.wallet-e1-verifier-config.v1"
-PREPARATION_SCHEMA = "bpng.wallet-e1-worker-preparation.v1"
+PREPARATION_SCHEMA = "iroha.kagemusha.wallet-e1-worker-preparation.v1"
 MAX_PACKET = 768 * 1024
 MAX_REQUEST = 320 * 1024
 MAX_ORIGINAL = 360 * 1024
@@ -285,7 +287,7 @@ class VerifierOwner:
                 self.oauth = GoogleServiceAccountTokenProvider(
                     public_policy_original=b64(config["policy"]["google_policy_base64"], 16384), native_policy=pi,
                     credential_fd=oauth_fd, trusted_time_interval=self._clock, openssl_path=self.openssl,
-                    credential_owner_uid=0)
+                    credential_owner_uid=os.geteuid())
                 self.google = GooglePlayIntegrityVerifier(self.oauth)
             self.counters = E1CounterStore(self.directory, self.directory_fd)
             self.recheck()
@@ -410,7 +412,7 @@ class VerifierOwner:
 
     def perform(self, original: bytes, action: str, *, incarnation: bytes,
                 preparation: bytes, account_signature: bytes, dispatch_time_ms: int) -> bytes | None:
-        require(action in ("complete", "recover"), "invalid private operation")
+        require(action in ("complete", "recover", "inspect"), "invalid private operation")
         self.recheck()
         prepared, operation = self.preparation(preparation)
         value, scope = self.request(original)
@@ -440,8 +442,10 @@ class VerifierOwner:
                             "private recovery scope differs")
                     self.recheck()
                     connection.execute("COMMIT")
-                    return row[6]  # Claimed NULL is unknown; neither action repeats verification.
+                    return row[6]  # Claimed NULL is unknown; no action repeats verification.
                 require(all(item is None for item in row[2:]), "invalid prepared journal state")
+                if action == "inspect":
+                    raise VerificationUnavailable("private operation has no claimed outcome")
                 require(dispatch_time_ms < value["expires_at_ms"], "private first dispatch expired")
                 clock = DispatchClock(dispatch_time_ms, value["issued_at_ms"], value["expires_at_ms"])
                 changed = connection.execute("""UPDATE wallet_e1_attempts SET request_sha256=?,

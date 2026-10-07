@@ -39,6 +39,14 @@ use std::{
 #[path = "finality_driver/restore.rs"]
 pub mod restore;
 
+/// Source-only compilation from an independently pinned, canonically executed setup.
+#[path = "finality_driver/source_only.rs"]
+pub mod source_only;
+
+/// Exact executed Load intake and ordered native history proof production.
+#[path = "finality_driver/executed_load.rs"]
+pub mod executed_load;
+
 const FIXTURE: &str = include_str!("../../../../fixtures/kagemusha/ordinary_load_receipt_v1.json");
 const CHECKPOINT_LIMIT: usize = 1 << 20;
 const CHECKPOINT_TOTAL: usize = 256 << 20;
@@ -516,39 +524,14 @@ pub fn run_capture(
         provenance,
     )
     .unwrap();
-    let mut checkpoints = Checkpoints::open(root.join("proofs")).unwrap();
-    // Independent OS entropy for every proof and both salts, including after restart
-    // or cache-skips. Invocation ordinals are progress labels, never entropy keys.
-    let mut entropy = |request| {
-        eprintln!("FINALITY_NODE {request:?}");
-        Ok(NodeRandomness {
-            inner_salt: Fp::random(OsRng),
-            outer_salt: Fq::random(OsRng).to_repr(),
-            source: ProverRandomness::hedged(),
-            wrapper: ProverRandomness::hedged(),
-        })
-    };
-    let fold = FoldConfig::default();
-    let mut context =
-        ProvingContext::new(&mut artifacts, &mut entropy, ProverConfig::default(), &fold)
-            .with_checkpoints(&mut checkpoints);
-    eprintln!("FINALITY_PHASE genesis");
-    let prefix = compilation.graph.genesis(&mut context).unwrap();
-    eprintln!("FINALITY_PHASE append_height2");
-    let prefix = compilation
-        .graph
-        .append_block(&prefix, &fixture.block, &mut context)
-        .unwrap();
-    assert_eq!(prefix.state().next_height, 3);
-    eprintln!("FINALITY_PHASE receipt");
-    let evidence = compilation
-        .graph
-        .prove_receipt(&prefix, &fixture.load, &mut context)
-        .unwrap();
-    compilation
-        .graph
-        .verify_receipt_evidence(fixture.receipt_digest, &evidence, MemoryBudget::DEFAULT)
-        .unwrap();
+    let evidence = prove_history(
+        &compilation.graph,
+        &mut artifacts,
+        root,
+        &[fixture.block],
+        &fixture.load,
+        fixture.receipt_digest,
+    );
     eprintln!(
         "FINALITY_COMPLETE genuine_receipt=true current_cold_proofs=8944 proof_bytes={} exact_originals=true ordinal={ordinal} full_wallet_catalog=false",
         evidence.proof.len()
@@ -559,6 +542,50 @@ pub fn run_capture(
         receipt: fixture.load.receipt,
         evidence,
     });
+}
+
+/// The single proof path for both historical fixtures and selected executed histories.
+/// Every retained checkpoint is authenticated by the installed graph before reuse.
+fn prove_history(
+    graph: &iroha_kagemusha_proof::finality::native::InstalledFinality,
+    artifacts: &mut Progress,
+    root: &Path,
+    blocks: &[BlockWitnessInput],
+    load: &LoadWitnessInput,
+    receipt_digest: Fp,
+) -> SourceNodeEvidence {
+    assert!(!blocks.is_empty());
+    let mut checkpoints = Checkpoints::open(root.join("proofs")).unwrap();
+    // OS entropy is fresh even after restart/checkpoint reuse; ordinals never seed it.
+    let mut entropy = |request| {
+        eprintln!("FINALITY_NODE {request:?}");
+        Ok(NodeRandomness {
+            inner_salt: Fp::random(OsRng),
+            outer_salt: Fq::random(OsRng).to_repr(),
+            source: ProverRandomness::hedged(),
+            wrapper: ProverRandomness::hedged(),
+        })
+    };
+    let fold = FoldConfig::default();
+    let mut context = ProvingContext::new(artifacts, &mut entropy, ProverConfig::default(), &fold)
+        .with_checkpoints(&mut checkpoints);
+    eprintln!("FINALITY_PHASE genesis");
+    let mut prefix = graph.genesis(&mut context).unwrap();
+    for (offset, block) in blocks.iter().enumerate() {
+        let height = u64::try_from(offset).unwrap() + 2;
+        assert_eq!(prefix.state().next_height, height);
+        eprintln!("FINALITY_PHASE append_height{height}");
+        prefix = graph.append_block(&prefix, block, &mut context).unwrap();
+        assert_eq!(prefix.state().next_height, height + 1);
+    }
+    let receipt_height = u64::from_le_bytes(load.receipt[242..250].try_into().unwrap());
+    assert_eq!(prefix.state().next_height, receipt_height + 1);
+    eprintln!("FINALITY_PHASE receipt");
+    let evidence = graph.prove_receipt(&prefix, load, &mut context).unwrap();
+    graph
+        .verify_receipt_evidence(receipt_digest, &evidence, MemoryBudget::DEFAULT)
+        .unwrap();
+    evidence
 }
 
 /// Check the original fixture structural inputs without granting finality.

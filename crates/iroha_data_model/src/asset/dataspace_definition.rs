@@ -240,13 +240,15 @@ impl<'a> AssetDefinitionDataspaceRegistryReadPlan<'a> {
         let mut version = None;
         let mut bindings = None;
         while let Some(key) = object.next_key()? {
-            match registry_read_key(key)? {
+            match registry_read_key(&key)? {
                 "version" if version.is_none() => {
-                    version = Some(object.parse_value_with_parser(|parser| parser.parse_u64())?);
+                    version =
+                        Some(object.parse_value_with_parser(norito::json::Parser::parse_u64)?);
                 }
                 "bindings" if bindings.is_none() => {
-                    bindings =
-                        Some(object.parse_value_with_parser(|parser| parser.raw_value_slice())?);
+                    bindings = Some(
+                        object.parse_value_with_parser(norito::json::Parser::raw_value_slice)?,
+                    );
                 }
                 _ => {
                     return Err(registry_read_error(
@@ -335,7 +337,7 @@ fn registry_read_error(msg: &'static str) -> norito::json::Error {
     }
 }
 
-fn registry_read_key(key: norito::json::KeyRef<'_>) -> Result<&str, norito::json::Error> {
+fn registry_read_key<'a>(key: &norito::json::KeyRef<'a>) -> Result<&'a str, norito::json::Error> {
     match key {
         norito::json::KeyRef::Borrowed(key) => Ok(key),
         norito::json::KeyRef::Owned(_) => Err(registry_read_error("escaped asset home field")),
@@ -395,7 +397,7 @@ fn read_registry_binding(
     let mut object = norito::json::MapVisitor::new(parser)?;
     let (mut id, mut incarnation, mut dataspace, mut active) = (None, None, None, None);
     while let Some(key) = object.next_key()? {
-        match registry_read_key(key)? {
+        match registry_read_key(&key)? {
             "asset_definition_id" if id.is_none() => {
                 id = Some(object.parse_value_with_parser(|parser| {
                     AssetDefinitionId::parse_address_literal(registry_read_string(parser)?)
@@ -406,10 +408,10 @@ fn read_registry_binding(
                 incarnation = Some(object.parse_value_with_parser(registry_read_incarnation)?);
             }
             "dataspace_id" if dataspace.is_none() => {
-                dataspace = Some(object.parse_value_with_parser(|parser| parser.parse_u64())?);
+                dataspace = Some(object.parse_value_with_parser(norito::json::Parser::parse_u64)?);
             }
             "active" if active.is_none() => {
-                active = Some(object.parse_value_with_parser(|parser| parser.parse_bool())?);
+                active = Some(object.parse_value_with_parser(norito::json::Parser::parse_bool)?);
             }
             _ => {
                 return Err(registry_read_error(
@@ -450,7 +452,7 @@ fn read_registry_bindings(
     let mut previous = None;
     let mut seen = 0;
     while let Some(key) = bindings.next_key()? {
-        let key = registry_read_key(key)?;
+        let key = registry_read_key(&key)?;
         // The authoritative Json wrapper stores lexically sorted object keys. Check that
         // original order without a key set; decoded IDs are sorted separately for callers.
         if previous.is_some_and(|previous| previous >= key) {
@@ -654,7 +656,8 @@ mod tests {
         ];
         for invalid in invalid {
             assert_ne!(
-                invalid.as_str(), raw.as_str(),
+                invalid.as_str(),
+                raw.as_str(),
                 "invalid fixture must change the retained JSON"
             );
             assert!(
@@ -689,10 +692,7 @@ mod tests {
             );
         }
         for bytes in [[0_u8; 32], [0xA0_u8; 32]] {
-            let body = bytes
-                .iter()
-                .map(|byte| format!("{byte:02X}"))
-                .collect::<String>();
+            let body = hex::encode_upper(bytes);
             let literal = norito::literal::format("hash", &body);
             let invalid = valid.replace(&incarnation, &format!("[\"{literal}\"]"));
             assert!(

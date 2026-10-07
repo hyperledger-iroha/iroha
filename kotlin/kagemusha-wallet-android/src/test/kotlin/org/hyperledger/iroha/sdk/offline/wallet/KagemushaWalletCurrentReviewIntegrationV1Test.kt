@@ -97,7 +97,8 @@ class KagemushaWalletCurrentReviewIntegrationV1Test {
         assertEquals(7.toByte(), send.first()[0])
         assertContentEquals(ByteArray(4_096){9},send.second())
         KagemushaWalletReviewInputV1(8, KagemushaWalletUInt128V1(-1, -1))
-        KagemushaWalletReviewInputV1(8, KagemushaWalletUInt128V1(1, 0), ByteArray(1_024), ByteArray(10_000))
+        KagemushaWalletReviewInputV1(8, KagemushaWalletUInt128V1(1, 0), ByteArray(1_024),
+            KagemushaWalletUnloadChargeReviewV1.encode(ByteArray(10_000), ByteArray(4_096)))
         for (make in listOf<() -> KagemushaWalletReviewInputV1>(
             { KagemushaWalletReviewInputV1(2, first = byteArrayOf(1)) },
             { KagemushaWalletReviewInputV1(1) },
@@ -122,6 +123,9 @@ class KagemushaWalletCurrentReviewIntegrationV1Test {
         assertFailsWith<IllegalArgumentException> { wallet.reviewSend(byteArrayOf(1),ByteArray(4_097)) }
         assertFailsWith<IllegalArgumentException> { wallet.reviewUnload(KagemushaWalletUInt128V1(0, 0)) }
         assertFailsWith<IllegalArgumentException> { wallet.reviewUnload(KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), null) }
+        assertFailsWith<IllegalArgumentException> { wallet.reviewUnload(KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), byteArrayOf(1)) }
+        assertFailsWith<IllegalArgumentException> { wallet.reviewUnload(KagemushaWalletUInt128V1(1, 0), null, null, byteArrayOf(1)) }
+        assertFailsWith<IllegalArgumentException> { wallet.reviewUnload(KagemushaWalletUInt128V1(1, 0), byteArrayOf(1), byteArrayOf(1), byteArrayOf()) }
         val origin = Any(); val review = reply().review(origin,KagemushaWalletReviewProjectionV1.Kind.SEND)
         assertFailsWith<IllegalArgumentException> { wallet.executeReviewed(review, ByteArray(31)) }
         assertFailsWith<IllegalArgumentException> { wallet.executeReviewed(review, ByteArray(32)) }

@@ -65,7 +65,7 @@ class OracleAdmissionTests(unittest.TestCase):
 
     def test_disabled_oracle_mode_or_missing_large_cases_fail(self):
         for name, required in ORACLE.REQUIRED_TESTS.items():
-            listing = "\n".join(f"{test}: test" for test in required) + f"\n{ORACLE.TIMING_TEST}: test\ntiming::parser: test\n"
+            listing = "\n".join(f"{test}: test" for test in required) + f"\n{ORACLE.TIMING_TEST}: test\n{ORACLE.MAINTENANCE_TEST}: test\ntiming::parser: test\n"
             self.assertEqual(ORACLE.test_inventory(name, listing), required | {"timing::parser"})
             for absent in required:
                 with self.subTest(name=name, absent=absent), self.assertRaises(ValueError):
@@ -87,7 +87,8 @@ class OracleAdmissionTests(unittest.TestCase):
         found = ORACLE.compiler_harnesses(encoded(messages()), TARGET)
         self.assertEqual(set(found), set(ORACLE.HARNESSES))
         for path in found.values():
-            self.assertEqual(ORACLE.test_command(path), [str(path), "--include-ignored", "--skip", ORACLE.TIMING_TEST, "--test-threads=2"])
+            self.assertEqual(ORACLE.test_command(path), [str(path), "--include-ignored", "--skip", ORACLE.TIMING_TEST,
+                                                        "--skip", ORACLE.MAINTENANCE_TEST, "--test-threads=2"])
 
     def test_missing_or_duplicate_target_is_not_partial_success(self):
         baseline = messages()

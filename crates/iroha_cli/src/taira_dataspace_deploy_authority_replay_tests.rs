@@ -93,11 +93,15 @@ impl Fixture {
                 }
             })
             .collect::<Vec<_>>();
+        let executed_genesis = chain.committed(1);
+        let executed_genesis = executed_genesis.block();
+        assert!(executed_genesis.has_results());
+        assert_eq!(executed_genesis.hash(), chain.genesis().hash());
         let trust = TrustV1 {
             chain: chain_id,
             account_chain_discriminant: 369,
             genesis_public_key: key.public_key().clone(),
-            genesis_signed_wire_hex: hex::encode(chain.genesis().encode_wire().unwrap()),
+            genesis_signed_wire_hex: hex::encode(executed_genesis.encode_wire().unwrap()),
             peers,
         };
         let mut plan = crate::taira_dataspace_deploy::tests::fixture_plan();
@@ -330,19 +334,10 @@ fn portable_replay_rejects_gaps_carrier_changes_and_forged_applied_observations(
             1 => peer.transactions[0].state = "completed".into(),
             2 => peer.transactions[0].committed.as_mut().unwrap().hash = "0".repeat(64),
             3 => {
-                peer.transactions[0]
-                    .committed
-                    .as_mut()
-                    .unwrap()
-                    .transaction
-                    .output_hash = HashOf::new(
-                    &peer.transactions[1]
-                        .committed
-                        .as_ref()
-                        .unwrap()
-                        .transaction
-                        .output,
-                )
+                let committed = &mut peer.transactions[0].committed.as_mut().unwrap().transaction;
+                let changed = HashOf::from_untyped_unchecked(Hash::new(b"tampered output commitment"));
+                assert_ne!(committed.output_hash, changed);
+                committed.output_hash = changed;
             }
             4 => peer.transactions[0].signed_transaction_wire_sha256 = "0".repeat(64),
             5 => peer.carriers[0].height = 3,
@@ -363,6 +358,7 @@ fn portable_replay_rejects_gaps_carrier_changes_and_forged_applied_observations(
                     .kind = "Rejected".into();
             }
         }
+        assert_ne!(json::to_vec(&fixture.completion.value).unwrap(), original, "mutation {mutation} must change the original");
         assert!(fixture.replay().is_err(), "mutation {mutation}");
     }
     fixture.completion.value = json::from_slice(&original).unwrap();

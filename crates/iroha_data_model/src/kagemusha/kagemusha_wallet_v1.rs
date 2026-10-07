@@ -112,8 +112,8 @@ pub use self::{
         KAGEMUSHA_WALLET_APP_IDENTIFIER_MAX_BYTES_V1,
         KAGEMUSHA_WALLET_ENROLLMENT_POLICY_MAX_BYTES_V1, KagemushaWalletAndroidHardwareV1,
         KagemushaWalletAppIdentityV1, KagemushaWalletAppPolicyV1,
-        KagemushaWalletEnrollmentPlatformV1, KagemushaWalletEnrollmentPolicyV1,
-        KagemushaWalletPlayIntegrityLevelV1,
+        KagemushaWalletEnrollmentPlatformV1, KagemushaWalletEnrollmentPolicyTemplateV1,
+        KagemushaWalletEnrollmentPolicyV1, KagemushaWalletPlayIntegrityLevelV1,
     },
     identity::{
         KAGEMUSHA_WALLET_ANDROID_FORBIDDEN_FACTS_V1, KAGEMUSHA_WALLET_ANDROID_REQUIRED_FACTS_V1,

@@ -15,6 +15,10 @@ pub(crate) enum Setup {
         schedule: Vec<u8>,
         certificates: Vec<u8>,
     },
+    UnloadClaim {
+        request_id: [u8; 32],
+        beneficiary: Option<Vec<u8>>,
+    },
     FeeClaim {
         credit: [u8; 32],
     },
@@ -119,6 +123,16 @@ fn activation_progress(value: state::ActivationFinalityProgressV1) -> Response {
     response.kind = kind;
     response
 }
+fn unload_progress(value: state::UnloadFinalityProgressV1) -> Response {
+    let (kind, progress) = match value {
+        state::UnloadFinalityProgressV1::Confirmed(progress) => (42, Some(progress)),
+        state::UnloadFinalityProgressV1::Verifying(progress) => (33, Some(progress)),
+        state::UnloadFinalityProgressV1::NotStarted => (34, None),
+    };
+    let mut response = ledger_progress(progress);
+    response.kind = kind;
+    response
+}
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
     Ok(match selector {
         43 => [0; 3],
@@ -148,6 +162,7 @@ pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
         29 | 30 | 33 => [state::LEDGER_INSTRUCTION_MAX_BYTES_V1, 0, 0],
         21 | 22 => [state::FEE_CLAIM_MAX_BYTES_V1, 0, 0],
         23 => [state::LEDGER_PROOF_MAX_BYTES_V1, 0, 0],
+        45 => [KAGEMUSHA_WALLET_UNLOAD_CLAIM_MAX_BYTES_V1, 0, 0],
         26 => [
             state::FEE_CLAIM_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1,
@@ -191,7 +206,7 @@ pub(crate) fn request(
     let bounds = bounds(selector)?;
     if (matches!(
         selector,
-        1 | 2 | 19 | 20 | 25 | 27 | 30 | 33 | 34 | 39 | 41 | 42 | 43 | 44
+        1 | 2 | 19 | 20 | 25 | 27 | 30 | 33 | 34 | 39 | 41 | 42 | 43 | 44 | 45
     ) != (id != [0; 32]))
         || (matches!(selector, 1 | 27) != (amount != 0))
         || (matches!(selector, 5 | 6 | 29) != (token != 0))
@@ -218,6 +233,10 @@ pub(crate) fn request(
         40 if !first.is_empty() && !second.is_empty() => Setup::ValidateRequestFeePolicy {
             schedule: first.to_vec(),
             certificates: second.to_vec(),
+        },
+        45 => Setup::UnloadClaim {
+            request_id: id,
+            beneficiary: (!first.is_empty()).then(|| first.to_vec()),
         },
         20 => Setup::FeeClaim { credit: id },
         21 | 22 if !first.is_empty() => Setup::FeeOriginal {
@@ -368,6 +387,18 @@ where
             } => self
                 .wallet
                 .request_with_fee_policy(id, &offer, &schedule, &certificates)?,
+            Setup::UnloadClaim {
+                request_id,
+                beneficiary,
+            } => {
+                return Ok(Response {
+                    kind: 48,
+                    bytes: self
+                        .wallet
+                        .unload_claim_bytes(&request_id, beneficiary.as_deref())?,
+                    ..Response::default()
+                });
+            }
             Setup::FeeClaim { credit } => {
                 let original = self.wallet.fee_claim(credit)?;
                 return Ok(match original {
@@ -433,7 +464,7 @@ where
                 transaction,
                 original,
             } => {
-                return Ok(ledger_progress(
+                return Ok(unload_progress(
                     self.wallet
                         .unload_finality_progress(transaction, &original)?,
                 ));
@@ -609,6 +640,23 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unload_settlement_union_preserves_native_confirmation_and_absence() {
+        let progress = state::LedgerProgressV1 {
+            height: 2,
+            block_hash: [7; 32],
+        };
+        let absent = unload_progress(state::UnloadFinalityProgressV1::NotStarted);
+        assert_eq!(absent.kind, 34);
+        assert!(absent.bytes.is_empty());
+        let verifying = unload_progress(state::UnloadFinalityProgressV1::Verifying(progress));
+        assert_eq!(verifying.kind, 33);
+        assert_eq!(verifying.bytes, [7; 32]);
+        let confirmed = unload_progress(state::UnloadFinalityProgressV1::Confirmed(progress));
+        assert_eq!(confirmed.kind, 42);
+        assert_eq!(confirmed.bytes, [7; 32]);
+    }
     #[test]
     fn credit_projection_intake_has_exact_role_bounds_and_no_foreign_authority() {
         let id = [7; 32];
@@ -663,7 +711,10 @@ mod tests {
         let id = [7; 32];
         let one: &[u8] = &[1];
         let empty: &[u8] = &[];
-        assert!(request(&zero, 38, 0, 0, [empty; 3]).is_ok());
+        assert!(matches!(
+            request(&zero, 38, 0, 0, [empty; 3]).unwrap(),
+            Setup::RequestFeeSelection
+        ));
         for selector in [38, 40] {
             let originals = if selector == 40 {
                 [one, one, empty]
@@ -718,7 +769,33 @@ mod tests {
             assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_ok());
             assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_err());
         }
-        assert!(bounds(45).is_err());
+        assert!(bounds(46).is_err());
+    }
+    #[test]
+    fn unload_projection_requires_request_identity_and_only_optional_beneficiary() {
+        let id = [7; 32];
+        assert_eq!(bounds(45).unwrap(), [16_384, 0, 0]);
+        assert!(matches!(
+            request(&id, 45, 0, 0, [&[]; 3]).unwrap(),
+            Setup::UnloadClaim { request_id, beneficiary: None } if request_id == id
+        ));
+        assert!(matches!(
+            request(&id, 45, 0, 0, [&[1, 2], &[], &[]]).unwrap(),
+            Setup::UnloadClaim { request_id, beneficiary: Some(original) }
+                if request_id == id && original == [1, 2]
+        ));
+        assert!(request(&id, 45, 0, 0, [&vec![1; 16_384], &[], &[]]).is_ok());
+        assert!(request(&[0; 32], 45, 0, 0, [&[]; 3]).is_err());
+        assert!(request(&id, 45, 1, 0, [&[]; 3]).is_err());
+        assert!(request(&id, 45, 0, 1, [&[]; 3]).is_err());
+        assert!(request(&id, 45, 0, 0, [&vec![1; 16_385], &[], &[]]).is_err());
+        assert!(request(&id, 45, 0, 0, [&[], &[1], &[]]).is_err());
+        assert!(request(&id, 45, 0, 0, [&[], &[], &[1]]).is_err());
+        assert!(request(&id, 33, 0, 0, [&[]; 3]).is_err());
+        assert!(matches!(
+            request(&id, 33, 0, 0, [&[1], &[], &[]]).unwrap(),
+            Setup::UnloadProofProgress { transaction, .. } if transaction == id
+        ));
     }
     #[test]
     fn activation_intake_and_progress_are_closed_and_exact() {
@@ -800,8 +877,29 @@ mod tests {
     fn ledger_producer_requests_keep_original_bounds_and_unused_authority_exact() {
         let id = [7; 32];
         let zero = [0; 32];
-        assert!(request(&id, 27, 1, 0, [&[]; 3]).is_ok());
+        assert!(matches!(
+            request(&id, 27, u128::MAX, 0, [&[]; 3]).unwrap(),
+            Setup::LedgerLoad { id: actual, amount: u128::MAX } if actual == id
+        ));
         assert!(request(&id, 27, 0, 0, [&[]; 3]).is_err());
+        assert!(request(&zero, 27, 1, 0, [&[]; 3]).is_err());
+        assert!(request(&id, 27, 1, 0, [&[1], &[], &[]]).is_err());
+        assert_eq!(bounds(29).unwrap(), [65_536, 0, 0]);
+        assert_eq!(bounds(30).unwrap(), [65_536, 0, 0]);
+        for token in [1, 2, 3] {
+            assert!(matches!(
+                request(&zero, 29, 0, token, [&[1], &[], &[]]).unwrap(),
+                Setup::LedgerInstruction { kind, .. } if kind == token
+            ));
+            assert!(request(&id, 29, 0, token, [&[1], &[], &[]]).is_err());
+            assert!(request(&zero, 29, 1, token, [&[1], &[], &[]]).is_err());
+            assert!(request(&zero, 29, 0, token, [&[]; 3]).is_err());
+            assert!(request(&zero, 29, 0, token, [&[1], &[2], &[]]).is_err());
+            assert!(request(&zero, 29, 0, token, [&[1], &[], &[3]]).is_err());
+        }
+        for token in [0, 4, u64::MAX] {
+            assert!(request(&zero, 29, 0, token, [&[1], &[], &[]]).is_err());
+        }
         for selector in [28, 31, 32] {
             assert!(bounds(selector).is_err());
             assert!(request(&zero, selector, 0, 0, [&[]; 3]).is_err());
@@ -812,8 +910,11 @@ mod tests {
         for selector in [30, 33] {
             assert!(request(&id, selector, 0, 0, [&[1], &[], &[]]).is_ok());
             assert!(request(&zero, selector, 0, 0, [&[1], &[], &[]]).is_err());
+            assert!(request(&id, selector, 1, 0, [&[1], &[], &[]]).is_err());
             assert!(request(&id, selector, 0, 1, [&[1], &[], &[]]).is_err());
+            assert!(request(&id, selector, 0, 0, [&[]; 3]).is_err());
             assert!(request(&id, selector, 0, 0, [&[1], &[2], &[]]).is_err());
+            assert!(request(&id, selector, 0, 0, [&[1], &[], &[3]]).is_err());
         }
         assert!(request(&id, 34, 0, 0, [&[1], &[2], &[]]).is_ok());
         assert!(request(&id, 34, 0, 0, [&[1], &[], &[]]).is_err());

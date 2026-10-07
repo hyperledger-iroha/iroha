@@ -20,6 +20,9 @@ pub use input::{FinalityInputError, block_witness, load_witness};
 mod output;
 pub use output::{FinalityRetentionError, retain_load_finality};
 
+/// Server-only authenticated proof production and immutable recovery custody.
+pub mod server;
+
 /// Failure to derive the exact global signed-genesis policy.
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryAnchorError {

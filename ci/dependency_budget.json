@@ -790,7 +790,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:08eaf1ca27b75943410a1591121036a4b018d0731fb75237cd6e1c0fc27c989a",
+    "manifest_fingerprint": "sha256:a1daa41ff2da1cd4bfb564b6fc3950d7b07901a092d23d107410ede85c0a8e83",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -817,13 +817,13 @@
     "iroha-cli-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1060,
+        "declared_dependency_edges": 1062,
         "declared_external_dependency_edges": 615,
         "declared_external_packages": 158,
         "declared_local_packages": 83,
         "declared_path_packages": 1,
         "declared_workspace_packages": 82,
-        "required_dependency_edges": 922,
+        "required_dependency_edges": 924,
         "required_external_dependency_edges": 504,
         "required_external_packages": 118,
         "required_local_packages": 80,
@@ -897,13 +897,13 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1059,
+        "declared_dependency_edges": 1060,
         "declared_external_dependency_edges": 623,
         "declared_external_packages": 167,
         "declared_local_packages": 81,
         "declared_path_packages": 1,
         "declared_workspace_packages": 80,
-        "required_dependency_edges": 893,
+        "required_dependency_edges": 894,
         "required_external_dependency_edges": 506,
         "required_external_packages": 127,
         "required_local_packages": 76,
@@ -917,13 +917,13 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 2165,
+        "declared_dependency_edges": 2170,
         "declared_external_dependency_edges": 1192,
         "declared_external_packages": 240,
         "declared_local_packages": 128,
         "declared_path_packages": 4,
         "declared_workspace_packages": 124,
-        "required_dependency_edges": 1987,
+        "required_dependency_edges": 1992,
         "required_external_dependency_edges": 1053,
         "required_external_packages": 193,
         "required_local_packages": 128,

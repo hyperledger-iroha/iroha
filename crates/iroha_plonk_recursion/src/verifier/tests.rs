@@ -1339,3 +1339,6 @@ fn pinned_catalog_rejects_cross_key_substitution_both_curves() {
     catalog_substitution_cases::<Ep>();
     catalog_substitution_cases::<Eq>();
 }
+
+#[path = "catalog_width_tests.rs"]
+mod catalog_width_tests;

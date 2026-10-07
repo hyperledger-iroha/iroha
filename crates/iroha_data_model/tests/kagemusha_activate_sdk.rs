@@ -53,7 +53,7 @@ fn kotlin_activate_frames_match_independent_rust_registry() {
         (
             "maximum_opaque",
             [1; 32],
-            (0..16_384).map(|i| i as u8).collect(),
+            (0u8..=u8::MAX).cycle().take(16_384).collect(),
         ),
     ] {
         let expected = KagemushaWalletLedgerV1::new(

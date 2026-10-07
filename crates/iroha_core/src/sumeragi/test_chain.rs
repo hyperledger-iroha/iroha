@@ -22,6 +22,8 @@ mod availability;
 mod committee_custody;
 #[cfg(test)]
 mod genesis_policy;
+#[cfg(test)]
+pub(crate) mod kagemusha_setup;
 mod local_certificate;
 #[path = "test_chain/retail_multisig.rs"]
 mod retail_multisig;

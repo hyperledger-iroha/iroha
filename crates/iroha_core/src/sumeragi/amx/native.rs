@@ -30,6 +30,10 @@ use mv::{
     storage::StorageReadOnly,
 };
 use retained::{Candidate, EscrowInput, GraphError};
+mod retry;
+#[cfg(test)]
+pub(crate) use retry::LegExecutionError as NativeLegExecutionError;
+pub(crate) use retry::{NativeAmxLegExecution, NativeAmxLegPreparations};
 
 fn cell_admission_error(
     error: mv::cell::CellInitializationError,
@@ -401,19 +405,59 @@ impl Intent {
     }
 }
 
+#[cfg(test)]
+mod retry_probe;
+
 fn decode_leg(
     bytes: &[u8],
     budget: &AllocationBudget,
 ) -> Result<AllocatedAmxTransferLegV1, AmxLegDecodeErrorV1> {
-    // HC149 substitutes only the original allocation source, preserving the
-    // same finite policy and canonical traversal. It is absent from node code.
+    let result = with_leg_decode_pool(budget, |budget| {
+        PendingAmxTransferLegDecodeV1::new(bytes, budget).try_decode()
+    });
+    #[cfg(test)]
+    if let Ok(owner) = &result {
+        retry_probe::decoded(
+            bytes,
+            owner.canonical(),
+            owner.allocation_bytes().unwrap(),
+            budget,
+        );
+    }
+    result
+}
+
+fn decode_retained_leg(
+    bytes: &[u8],
+    budget: &AllocationBudget,
+) -> Result<iroha_data_model::sumeragi_amx::CompletedAmxTransferLegDecodeV1, AmxLegDecodeErrorV1> {
+    let result = with_leg_decode_pool(budget, |budget| {
+        PendingAmxTransferLegDecodeV1::new(bytes, budget).try_decode_retained()
+    });
+    #[cfg(test)]
+    if let Ok(owner) = &result {
+        retry_probe::decoded(
+            bytes,
+            owner.canonical(),
+            owner.allocation_bytes().unwrap(),
+            budget,
+        );
+    }
+    result
+}
+
+fn with_leg_decode_pool<R>(
+    budget: &AllocationBudget,
+    decode: impl FnOnce(&AllocationBudget) -> R,
+) -> R {
+    // HC149 changes only the owning pool, in both canonical lifetime variants.
     #[cfg(all(test, sumeragi_core_mutation = "HC149"))]
     {
         let foreign = AllocationBudget::new(budget.limit_bytes());
-        PendingAmxTransferLegDecodeV1::new(bytes, &foreign).try_decode()
+        decode(&foreign)
     }
     #[cfg(not(all(test, sumeragi_core_mutation = "HC149")))]
-    PendingAmxTransferLegDecodeV1::new(bytes, budget).try_decode()
+    decode(budget)
 }
 
 fn leg_decode_bookkeeping_error(state: &mut StateTransaction<'_, '_>) -> Error {
@@ -485,9 +529,59 @@ pub(crate) fn execute_prepare_original(
         .leg(instruction.dataspace)
         .ok_or_else(|| invalid("native AMX transaction has no exact local leg"))?;
     let budget = state.pipeline_ivm_prepared_cache.execution_budget().clone();
-    let transfer_owner =
-        decode_leg(&leg.payload, &budget).map_err(|error| leg_decode_error(error, state))?;
-    let transfer = transfer_owner.canonical();
+    // The optional attempt borrow is installed only by the authenticated native
+    // block driver. Taking it separates its mutable bank from State, not authority.
+    let mut execution = state.native_amx_leg_execution.take();
+    let ordinal = state.current_direct_amx_instruction_index;
+    let result = if let (Some(execution), Some(ordinal)) = (execution.as_mut(), ordinal) {
+        execution
+            .with_leg(instruction, ordinal, &budget, |transfer| {
+                execute_prepare_with_transfer(
+                    instruction,
+                    authority,
+                    state,
+                    source,
+                    transfer,
+                    &budget,
+                )
+            })
+            .map_err(|error| match error {
+                retry::LegExecutionError::Decode(error) => leg_decode_error(error, state),
+                retry::LegExecutionError::Metadata(error) => graph_error(error.into(), state),
+                retry::LegExecutionError::Invariant => leg_decode_bookkeeping_error(state),
+                retry::LegExecutionError::Execution(error) => error,
+            })
+    } else {
+        // Contract/trigger/ad-hoc consumers retain the same canonical funded
+        // decoder and authority checks; this patch does not retain their attempts.
+        // TODO: carry completed owners across those enclosing invocation lifetimes.
+        decode_leg(&leg.payload, &budget)
+            .map_err(|error| leg_decode_error(error, state))
+            .and_then(|transfer| {
+                execute_prepare_with_transfer(
+                    instruction,
+                    authority,
+                    state,
+                    source,
+                    transfer.canonical(),
+                    &budget,
+                )
+            })
+    };
+    state.native_amx_leg_execution = execution;
+    result
+}
+
+fn execute_prepare_with_transfer(
+    instruction: &PrepareAmxV1,
+    authority: &AccountId,
+    state: &mut StateTransaction<'_, '_>,
+    source: &NativeAmxParticipantStateV1,
+    transfer: &iroha_data_model::sumeragi_amx::AmxTransferLegV1,
+    budget: &AllocationBudget,
+) -> Result<(), Error> {
+    #[cfg(test)]
+    retry_probe::borrowed(transfer);
     if (!cfg!(all(test, sumeragi_core_mutation = "HC95")) && transfer.source.account() != authority)
         || transfer.source.scope() != &AssetBalanceScope::Dataspace(instruction.dataspace)
         || transfer.source.account() == &transfer.destination
@@ -532,8 +626,11 @@ pub(crate) fn execute_prepare_original(
         custody: &source.custody,
         settled: None,
     });
-    let mut candidate = Candidate::copy(source, &budget, 1, 0, record, None)
-        .map_err(|error| graph_error(error, state))?;
+    let mut candidate = Candidate::copy(source, budget, 1, 0, record, None).map_err(|error| {
+        #[cfg(test)]
+        retry_probe::candidate_refused(&error);
+        graph_error(error, state)
+    })?;
     let mut intent = Intent {
         tx,
         effects: record.as_ref().map(|record| record.effects_hash),
@@ -753,3 +850,18 @@ impl Execute for RelayGlobalAmxHandoffV1 {
         Ok(())
     }
 }
+
+/// Reuse the existing genuine paid roots and signed Begin in the Worker retry control.
+#[cfg(test)]
+pub(crate) fn with_paid_prepare_retry_fixture(
+    test: impl FnOnce(
+        &crate::sumeragi::test_chain::CertifiedTestChain,
+        iroha_data_model::isi::InstructionBox,
+        iroha_crypto::KeyPair,
+    ),
+) {
+    tests::with_paid_prepare_retry_fixture(test);
+}
+
+#[cfg(test)]
+pub(crate) use retry_probe::Observation as NativeLegRetryObservation;

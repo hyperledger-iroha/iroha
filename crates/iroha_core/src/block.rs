@@ -4559,6 +4559,7 @@ pub(crate) mod valid {
                 ConsensusValidationProfile::SumeragiGenesis { consensus_mode },
                 false,
                 None,
+                None,
             )
         }
         /// Execute the exact original nonempty proposal bound by its native consensus header.
@@ -4577,6 +4578,34 @@ pub(crate) mod valid {
             native_payload: &[u8],
             state: &'state State,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
+            Self::validate_sumeragi_block_with_amx(
+                block,
+                topology,
+                genesis_account,
+                block_cadence,
+                consensus_mode,
+                expansion,
+                native_header,
+                native_payload,
+                state,
+                None,
+            )
+        }
+
+        /// The same validator borrowing only the original Worker's completed leg owners.
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn validate_sumeragi_block_with_amx<'state>(
+            block: SignedBlock,
+            topology: &Topology,
+            genesis_account: &AccountId,
+            block_cadence: Duration,
+            consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
+            expansion: crate::sumeragi::lanes::merge::Expansion<'state>,
+            native_header: &iroha_sumeragi::message::BlockHeader,
+            native_payload: &[u8],
+            state: &'state State,
+            amx_legs: Option<&mut crate::sumeragi::amx::NativeAmxLegPreparations>,
+        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             if let Err(error) = expansion.validate_publication(state) {
                 return WithEvents::new(Err((
                     Box::new(block),
@@ -4588,6 +4617,17 @@ pub(crate) mod valid {
                     Ok(source) => source,
                     Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
                 };
+            if amx_legs
+                .as_ref()
+                .is_some_and(|bank| !bank.parent_is_current(source.generation()))
+            {
+                return WithEvents::new(Err((
+                    Box::new(block),
+                    Box::new(BlockValidationError::ExecutionDeferred(
+                        ivm::error::ExecutionDeferral::LocalInvariantViolation.into(),
+                    )),
+                )));
+            }
             if !block.has_consensus_work() {
                 let header = source.header();
                 return WithEvents::new(Err((
@@ -4630,6 +4670,7 @@ pub(crate) mod valid {
                 },
                 true,
                 None,
+                amx_legs,
             )
             .with_authenticated_rejection(
                 authenticated_header,
@@ -4713,6 +4754,7 @@ pub(crate) mod valid {
             mut validation_profile: ConsensusValidationProfile,
             allow_empty_block: bool,
             mut send_events: Option<&mut dyn FnMut(PipelineEventBox)>,
+            amx_legs: Option<&mut crate::sumeragi::amx::NativeAmxLegPreparations>,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             let total_start = Instant::now();
             let stateless_start = Instant::now();
@@ -4929,6 +4971,7 @@ pub(crate) mod valid {
                 timings.as_deref_mut(),
                 genesis.as_ref(),
                 validation_profile.sccp_height_source(),
+                amx_legs,
             ) {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
@@ -6220,6 +6263,7 @@ pub(crate) mod valid {
                 timings,
                 genesis,
                 crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1::Unauthenticated,
+                None,
             )
         }
         /// Execute and seal ordinary outputs. `sccp_height` names the authenticated consensus
@@ -6232,6 +6276,7 @@ pub(crate) mod valid {
             timings: Option<&mut ValidationTimings>,
             genesis: Option<&AuthenticatedGenesisOutputSource>,
             sccp_height: crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1,
+            amx_legs: Option<&mut crate::sumeragi::amx::NativeAmxLegPreparations>,
         ) -> Result<(), BlockValidationError> {
             let start = Instant::now();
             let mut timings = timings;
@@ -6406,7 +6451,8 @@ pub(crate) mod valid {
             state_block
                 .require_original_execution_recorder()
                 .map_err(Self::execution_context_error)?;
-            let result = state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize);
+            let result = state_block
+                .execute_and_seal_ordinary_outputs_with_amx(block, genesis, finalize, amx_legs);
             result.map_err(|error| match error {
                 crate::state::ExecutionOutputSealError::Storage(error) => {
                     BlockValidationError::StateStorageAdmission(error)

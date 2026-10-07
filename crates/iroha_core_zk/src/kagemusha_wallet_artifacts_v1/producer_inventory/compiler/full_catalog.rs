@@ -30,6 +30,8 @@ use super::*;
 
 #[path = "full_catalog/acceptance.rs"]
 mod acceptance;
+#[path = "full_catalog/reuse.rs"]
+mod reuse;
 #[path = "full_catalog/transport.rs"]
 mod transport;
 pub(crate) use acceptance::open_pinned_engineering_wallet_sources;
@@ -411,8 +413,16 @@ fn complete_wallet_catalog_from_pinned_finality_metadata() {
     eprintln!(
         "WALLET_SOURCE_PHASE all52_route_compilation_started signed=false wallet_grant=false"
     );
-    let draft = OfflineCompilerV1::new(scope, &mut originals, config, OUTPUT_BYTES)
-        .unwrap()
+    let candidates = reuse::intake(&mut originals).unwrap();
+    let mut compiler = OfflineCompilerV1::new(scope, &mut originals, config, OUTPUT_BYTES).unwrap();
+    for (index, original) in candidates.into_iter().enumerate() {
+        compiler.index_original(original).unwrap();
+        eprintln!(
+            "WALLET_SOURCE_REUSE indexed={} selected_sources=0 grant=false",
+            index + 1
+        );
+    }
+    let draft = compiler
         .wallet_pack(
             ReceiptSourceRecipeV1::new(receipt.source(), &anchor),
             FinalityV1 {
@@ -521,3 +531,6 @@ fn native_finality_binds_each_supplied_signed_genesis_without_repository_substit
     }
     assert_ne!(anchors[0], anchors[1]);
 }
+
+#[path = "full_catalog/diagnostic.rs"]
+mod diagnostic;

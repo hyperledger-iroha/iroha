@@ -114,7 +114,10 @@ internal class KagemushaWalletReviewInputV1(
         when (selector) {
             1 -> require(!nonzero && first.isNotEmpty() && first.size <= 10_000 &&
                 second.isNotEmpty() && second.size <= 4_096)
-            8 -> require(nonzero && first.size <= 1_024 && second.size <= 10_000 && first.isEmpty() == second.isEmpty())
+            8 -> {
+                require(nonzero && first.size <= 1_024 && first.isEmpty() == second.isEmpty())
+                if (second.isNotEmpty()) KagemushaWalletUnloadChargeReviewV1.validate(second)
+            }
             else -> throw IllegalArgumentException("unknown review operation")
         }
         originals = listOf(first.copyOf(), second.copyOf())

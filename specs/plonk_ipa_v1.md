@@ -754,9 +754,17 @@ typed rejection.
 
 Open items:
 
-- TODO: a Python reference verifier in `pytests`, using only the standard library and covering
-  `k <= 10`, both transcripts and `decide`. Someone other than the Rust author writes it from this
-  spec, and it is kept after M7.
+- The independently derived standard-library Python reference lives in
+  `fixtures/native_prover/reference_verifier`, with adversarial tests in
+  `pytests/scripts/native_prover_reference_test.py`. It implements complete individual
+  proof verification and generator `decide` for the existing pins at k6 through k10,
+  both curves, Blake2b and scalar RP57, and the V2 base-field RP57 profile. The frozen
+  46-proof matrix is checked by an isolated standard-library command and regenerated
+  in memory by a genuine Rust oracle test. Parser/type/identity mutations and false
+  succinct claims that preserve the soft IPA equation exercise full rejection.
+  Keep this reference and its frozen inputs after M7. Its documented scope excludes
+  batch weights, encoded accumulators, k16 and recursive PIPA-AS; it is not a
+  production fallback decoder or full-release qualification.
 - TODO: production Poseidon and instance-frame KATs, and `PINNED_PARAMS_V1` beyond `k = 16`.
 - TODO: Fiat-Shamir soundness memos (target and hash-query bound) before any format option: LogUp,
   128-bit endoscalar challenges or a base-field transcript.

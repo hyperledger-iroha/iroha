@@ -69,7 +69,10 @@
 )]
 #![cfg_attr(test, allow(clippy::large_stack_arrays))]
 // Oracle-only transcript and randomness hooks must never enter a shipping consumer.
-const _: () = assert!(!iroha_plonk::ORACLE_BUILD, "iroha_plonk_oracle is test-only");
+const _: () = assert!(
+    !iroha_plonk::ORACLE_BUILD,
+    "iroha_plonk_oracle is test-only"
+);
 
 /// Native STARK/FRI verifier under `zk-stark` (`stark/fri/*`).
 #[cfg(feature = "zk-stark")]
@@ -92,15 +95,17 @@ pub(crate) mod frame_test_support;
 pub mod kagemusha_wallet_advance_v1;
 /// Complete installed wallet verifier inventory and native artifact identity owner.
 pub mod kagemusha_wallet_artifacts_v1;
-/// Native authenticated global genesis policy for ordinary Load history.
-pub mod kagemusha_wallet_finality_v1;
 /// Actual enrolled custody, issuer/account originals and fresh existing-account admission.
 pub mod kagemusha_wallet_enrollment_v1;
+/// Native authenticated global genesis policy for ordinary Load history.
+pub mod kagemusha_wallet_finality_v1;
 pub mod kagemusha_wallet_intake_v1;
 /// Canonical G1 preparation and typed real native sigma/A/W inputs.
 pub mod kagemusha_wallet_preparation_v1;
 /// Authenticated native wallet proof artifacts and full sigma/Omega verification.
 pub mod kagemusha_wallet_proofs_v1;
+/// Immutable arbitrary-asset registration transport verified against installed native genesis.
+pub mod kagemusha_wallet_registration_v1;
 pub mod kagemusha_wallet_state_v1;
 /// Exact native PIPA-R built-in relations and their canonical proof containers.
 pub mod native_pipa_r;

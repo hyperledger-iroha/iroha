@@ -2098,7 +2098,9 @@ public struct ToriiRamLfeOutputOpening: Codable, Sendable {
         try ToriiIdentifierOwnerContract.fields(decoder, required: ["payload", "signature"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
         payload = try container.decode(ToriiRamLfeOutputOpeningPayload.self, forKey: .payload)
-        signature = try ToriiIdentifierOwnerContract.signature(container.decode(String.self, forKey: .signature), field: "opening.signature")
+        signature = try ToriiIdentifierOwnerContract.string(from: container, forKey: .signature) {
+            try ToriiIdentifierOwnerContract.signature($0, field: "opening.signature")
+        }
     }
 }
 
@@ -2459,20 +2461,26 @@ public struct ToriiIdentifierReceiptAttestation: Codable, Sendable {
         kind = try c.decode(String.self, forKey: .kind)
         switch kind {
         case "signed":
-            try ToriiIdentifierOwnerContract.fields(decoder, required: ["kind", "signature"])
-            do {
-                signature = try ToriiIdentifierOwnerContract.modelSignature(c.decode(String.self, forKey: .signature), field: "attestation.signature")
-            } catch {
-                throw DecodingError.dataCorruptedError(forKey: .signature, in: c, debugDescription: String(describing: error))
+            try ToriiIdentifierOwnerContract.fields(decoder, required: ["kind", "signature"], debugDescription: "Signed attestations require only signature and kind.")
+            signature = try ToriiIdentifierOwnerContract.string(from: c, forKey: .signature) {
+                try ToriiIdentifierOwnerContract.modelSignature($0, field: "attestation.signature")
             }
             proofBackend = nil; proofB64 = nil
         case "proof":
             try ToriiIdentifierOwnerContract.fields(decoder, required: ["kind", "proof_backend", "proof_b64"])
-            signature = nil; proofBackend = try ToriiIdentifierOwnerContract.exact(c.decode(String.self, forKey: .proofBackend), "proof_backend")
-            let value = try ToriiIdentifierOwnerContract.exact(c.decode(String.self, forKey: .proofB64), "proof_b64")
-            guard Data(base64Encoded: value) != nil else { throw ToriiClientError.invalidPayload("proof_b64 must be valid base64.") }
-            proofB64 = value
-        default: throw ToriiClientError.invalidPayload("attestation.kind must be signed or proof.")
+            signature = nil
+            proofBackend = try ToriiIdentifierOwnerContract.string(from: c, forKey: .proofBackend) {
+                try ToriiIdentifierOwnerContract.exact($0, "proof_backend")
+            }
+            proofB64 = try ToriiIdentifierOwnerContract.string(from: c, forKey: .proofB64) {
+                let value = try ToriiIdentifierOwnerContract.exact($0, "proof_b64")
+                guard Data(base64Encoded: value) != nil else {
+                    throw ToriiClientError.invalidPayload("proof_b64 must be valid base64.")
+                }
+                return value
+            }
+        default:
+            throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "The attestation kind must be signed or proof.")
         }
     }
     public func encode(to encoder: Encoder) throws {

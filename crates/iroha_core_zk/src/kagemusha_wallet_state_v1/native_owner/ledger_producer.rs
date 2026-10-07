@@ -8,6 +8,17 @@ use iroha_data_model::{
 /// One complete current ledger instruction, including its original signed transport.
 pub const LEDGER_INSTRUCTION_MAX_BYTES_V1: usize = 64 * 1024;
 
+/// Exact transaction-and-claim-bound Unload settlement state selected by Native custody.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnloadFinalityProgressV1 {
+    /// No independently verified history has been retained for this transaction.
+    NotStarted,
+    /// A genuine prefix is retained, but successful inclusion is not yet established.
+    Verifying(LedgerProgressV1),
+    /// Exact successful inclusion was authenticated and durably retained.
+    Confirmed(LedgerProgressV1),
+}
+
 #[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::LedgerLoadPlanV1")]
 struct LoadPlan {
@@ -23,6 +34,31 @@ struct UnloadConfirmation {
     original_digest: [u8; 32],
     height: u64,
     block_hash: [u8; 32],
+}
+
+impl UnloadConfirmation {
+    fn progress(&self, original_digest: &[u8; 32]) -> Result<LedgerProgressV1, Error> {
+        if self.original_digest != *original_digest || self.height < 2 || self.block_hash == [0; 32]
+        {
+            return Err(Error::WitnessLost("retained Unload confirmation"));
+        }
+        Ok(LedgerProgressV1 {
+            height: self.height,
+            block_hash: self.block_hash,
+        })
+    }
+}
+
+fn retained_unload_confirmation(
+    archive: &mut impl index::ObjectStore,
+    confirmations: &index::IndexRoot,
+    transaction: &[u8; 32],
+    original_digest: &[u8; 32],
+) -> Result<Option<LedgerProgressV1>, Error> {
+    confirmations
+        .get(archive, transaction)?
+        .map(|bytes| archive::decode::<UnloadConfirmation>(&bytes)?.progress(original_digest))
+        .transpose()
 }
 
 // Inclusion is checked while each certified original is selected, before its cursor can move.
@@ -230,21 +266,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         }
         let original_digest = self.unload_original_digest(&transaction, original)?;
         let (selected, mut manifest) = self.sync_manifest()?;
-        if let Some(bytes) = manifest
-            .ledger_unload_confirmations
-            .get(&mut self.archive, &transaction)?
-        {
-            let confirmed: UnloadConfirmation = archive::decode(&bytes)?;
-            if confirmed.original_digest != original_digest
-                || confirmed.height < 2
-                || confirmed.block_hash == [0; 32]
-            {
-                return Err(Error::WitnessLost("retained Unload confirmation"));
-            }
-            return Ok(LedgerProgressV1 {
-                height: confirmed.height,
-                block_hash: confirmed.block_hash,
-            });
+        if let Some(confirmed) = retained_unload_confirmation(
+            &mut self.archive,
+            &manifest.ledger_unload_confirmations,
+            &transaction,
+            &original_digest,
+        )? {
+            return Ok(confirmed);
         }
         let genesis = Arc::clone(&self.proofs.genesis);
         let (verifier, checkpoint) =

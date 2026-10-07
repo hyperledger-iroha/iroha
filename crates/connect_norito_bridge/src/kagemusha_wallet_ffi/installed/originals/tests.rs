@@ -204,6 +204,8 @@ fn finality_data_fixture() -> (
     let metadata = PrivateDirectory::open_or_create(&root).unwrap();
     metadata.ensure_child("wallet-originals").unwrap();
     metadata.ensure_child("finality-originals").unwrap();
+    // Exact original readers reject OS aliases such as macOS /var -> /private/var.
+    let root = root.canonicalize().unwrap();
     let originals = [
         b"inert finality descriptor DATA".to_vec(),
         b"inert finality verifying key DATA".to_vec(),
@@ -299,11 +301,14 @@ fn finality_transport_requires_all_verifier_originals_and_excludes_server_pk() {
             .map(|&i| (record.sha256[i], record.lengths[i]))
             .collect();
         rows.sort();
+        let finality_originals: Vec<_> = rows
+            .into_iter()
+            .map(|(hash, bytes)| norito::json!({"bytes":bytes,"sha256":(hex::encode(hash))}))
+            .collect();
         norito::json::to_json(&norito::json!({
             "schema":"iroha.kagemusha.wallet-artifact-original-transport.v1",
             "walletOriginals":[],
-            "finalityOriginals": rows.into_iter().map(|(hash, bytes)|
-                norito::json!({"bytes":bytes,"sha256":hex::encode(hash)})).collect::<Vec<_>>()
+            "finalityOriginals": finality_originals
         }))
         .unwrap()
         .into_bytes()

@@ -6,7 +6,25 @@
 //! may reuse that digest without rehashing witness-controlled key material.
 
 use super::*;
-use iroha_pasta::PastaAffine;
+use iroha_pasta::{PastaAffine, PastaField};
+
+/// Preserve the original one-row source for up to three terms, then carry the
+/// constrained total through two further terms per row. Catalog width is fixed
+/// source metadata; no term is omitted or chosen by the witness.
+fn catalog_linear<F: PastaField>(
+    glue: &mut GlueChip<F>,
+    region: &mut Region<'_, F>,
+    terms: &[(F, &Word<F>)],
+) -> Result<Word<F>, Error> {
+    let (head, tail) = terms.split_at(terms.len().min(3));
+    let mut total = glue.linear(region, head, F::ZERO)?;
+    for next in tail.chunks(2) {
+        let mut row = vec![(F::ONE, &total)];
+        row.extend_from_slice(next);
+        total = glue.linear(region, &row, F::ZERO)?;
+    }
+    Ok(total)
+}
 
 /// An immutable, nonempty catalog of distinct complete PIPA-R keys.
 #[derive(Clone, Debug)]
@@ -95,14 +113,14 @@ impl<C: PastaCurve> VerifierChip<C> {
             .iter()
             .map(|bit| (C::Base::ONE, bit.word()))
             .collect();
-        let sum = self.glue.linear(region, &terms, C::Base::ZERO)?;
+        let sum = catalog_linear(&mut self.glue, region, &terms)?;
         self.glue.enforce_constant(region, &sum, C::Base::ONE)?;
         let mut selected = |values: Vec<C::Base>| -> Result<Word<C::Base>, Error> {
             let terms: Vec<_> = values
                 .into_iter()
                 .zip(choices.iter().map(Bit::word))
                 .collect();
-            self.glue.linear(region, &terms, C::Base::ZERO)
+            catalog_linear(&mut self.glue, region, &terms)
         };
         let representations = catalog
             .keys
@@ -148,3 +166,7 @@ impl<C: PastaCurve> VerifierChip<C> {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "catalog_linear_tests.rs"]
+mod linear_tests;
