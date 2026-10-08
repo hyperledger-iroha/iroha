@@ -315,7 +315,7 @@ fn down_requires_original_context_and_terminal_zero_peer_authenticated_reply() {
         });
         let result = store.down("local");
         worker.join().unwrap();
-        assert!(matches!(result, Err(Error::Invalid(_))));
+        assert!(matches!(result, Err(Error::Invalid(_))), "{result:?}");
         assert!(runtime_owned(&directory).unwrap());
         assert_eq!(
             &*directory.read(STATUS, MAX_METADATA).unwrap(),
@@ -355,4 +355,139 @@ fn down_requires_original_context_and_terminal_zero_peer_authenticated_reply() {
         generation::read(&directory).unwrap().prepared.context,
         prepared.context
     );
+}
+
+fn deadline_session(
+    root: &std::path::Path,
+) -> (ManagedStore, PrivateDirectory, ManagedStatus, String) {
+    let (store, directory, prepared) = crate::managed::tests::fixture(root, "local");
+    let terminal = ManagedStatus {
+        context: prepared.context.clone(),
+        phase: ManagedPhase::Stopped,
+        running_peers: 0,
+        failure: None,
+    };
+    directory
+        .write_atomic(
+            STATUS,
+            &encode(&starting(prepared.context)).unwrap(),
+            PublishMode::CreateNew,
+        )
+        .unwrap();
+    let token = "a".repeat(64);
+    directory
+        .write_atomic(
+            WORKER,
+            &encode(&WorkerRecord {
+                token: token.clone(),
+            })
+            .unwrap(),
+            PublishMode::CreateNew,
+        )
+        .unwrap();
+    (store, directory, terminal, token)
+}
+
+#[test]
+fn down_waits_for_delayed_terminal_reply_and_original_owner_release() {
+    let _resources = crate::managed::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, terminal, token) = deadline_session(&temporary.path().join("managed"));
+    let runtime = acquire(&directory, "runtime.lock", "local").unwrap();
+    let listener = transport::Listener::bind(&directory).unwrap();
+    let expected = terminal.clone();
+    let owned = directory.retain().unwrap();
+    let worker = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(mut connection) = listener.accept().unwrap() {
+                let request = connection.receive().unwrap();
+                assert_eq!(request.token, token);
+                assert_eq!(request.action, "down");
+                thread::sleep(Duration::from_secs(11));
+                owned
+                    .write_atomic(STATUS, &encode(&terminal).unwrap(), PublishMode::Replace)
+                    .unwrap();
+                connection.reply(&terminal).unwrap();
+                thread::sleep(Duration::from_millis(100));
+                drop(runtime);
+                return;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let started = Instant::now();
+    let result = store.down_until("local", started + Duration::from_secs(20));
+    worker.join().unwrap();
+    assert_eq!(result.unwrap(), expected);
+    assert!(started.elapsed() >= Duration::from_millis(11_100));
+    assert!(!runtime_owned(&directory).unwrap());
+}
+
+#[test]
+fn late_terminal_reply_cannot_extend_down_observation_or_prove_cleanup() {
+    let _resources = crate::managed::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, terminal, _) = deadline_session(&temporary.path().join("managed"));
+    let runtime = acquire(&directory, "runtime.lock", "local").unwrap();
+    let listener = transport::Listener::bind(&directory).unwrap();
+    let (release, held) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(mut connection) = listener.accept().unwrap() {
+                assert_eq!(connection.receive().unwrap().action, "down");
+                held.recv_timeout(Duration::from_secs(5)).unwrap();
+                let _ = connection.reply(&terminal);
+                drop(runtime);
+                return;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let started = Instant::now();
+    let result = store.down_until("local", started + Duration::from_millis(150));
+    let still_owned = runtime_owned(&directory).unwrap();
+    release.send(()).unwrap();
+    worker.join().unwrap();
+    assert!(result.is_err(), "deadline cannot create terminal evidence");
+    assert!(
+        still_owned,
+        "timeout must preserve original runtime ownership"
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn terminal_reply_does_not_restart_owner_observation_deadline() {
+    let _resources = crate::managed::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, terminal, _) = deadline_session(&temporary.path().join("managed"));
+    let runtime = acquire(&directory, "runtime.lock", "local").unwrap();
+    let listener = transport::Listener::bind(&directory).unwrap();
+    let (release, held) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(mut connection) = listener.accept().unwrap() {
+                assert_eq!(connection.receive().unwrap().action, "down");
+                connection.reply(&terminal).unwrap();
+                held.recv_timeout(Duration::from_secs(5)).unwrap();
+                drop(runtime);
+                return;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let started = Instant::now();
+    let result = store.down_until("local", started + Duration::from_millis(150));
+    let still_owned = runtime_owned(&directory).unwrap();
+    release.send(()).unwrap();
+    worker.join().unwrap();
+    assert!(matches!(result, Err(Error::Busy(_))));
+    assert!(still_owned);
+    assert!(started.elapsed() < Duration::from_secs(2));
 }

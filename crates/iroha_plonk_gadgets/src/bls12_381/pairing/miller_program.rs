@@ -131,16 +131,16 @@ impl<F: PastaField> Bls381Chip<'_, F> {
             let zero = self.constant_fp2(region, [native::ZERO; 2])?;
             let mut identity = [[[native::ZERO; 2]; 3]; 2];
             identity[0][0][0] = native::ONE;
-            let identity = self.constant_fp12(region, identity)?;
-            self.assert_equal_fp12(region, state.accumulator(), &identity)?;
+            let identity = self.constant_fp12(region, &identity)?;
+            Self::assert_equal_fp12(region, state.accumulator(), &identity)?;
             for pair in 0..2 {
                 self.assert_nonidentity_g1(region, &g1[pair])?;
                 self.assert_nonidentity_g2(region, &g2[pair])?;
-                self.assert_equal_fp2(region, state.points[pair].x(), g2[pair].x())?;
-                self.assert_equal_fp2(region, state.points[pair].y(), g2[pair].y())?;
-                self.assert_equal_fp2(region, state.points[pair].z(), &one)?;
+                Self::assert_equal_fp2(region, state.points[pair].x(), g2[pair].x())?;
+                Self::assert_equal_fp2(region, state.points[pair].y(), g2[pair].y())?;
+                Self::assert_equal_fp2(region, state.points[pair].z(), &one)?;
                 for coefficient in state.lines[pair].coefficients() {
-                    self.assert_equal_fp2(region, coefficient, &zero)?;
+                    Self::assert_equal_fp2(region, coefficient, &zero)?;
                 }
             }
         }

@@ -36,9 +36,13 @@ built daemon.
 Release packaging requires `defaults/developer/network-profiles.nrt` from the authenticated
 release source, containing the independently approved Taira release key, rollback floor and
 checkpoint URL. The packager requires its exact committed image and refuses an override,
-missing file or absent Taira entry before building or replacing a bundle. The approved public
-artifact and its production checkpoint publisher remain release-owner prerequisites; the
-packager generates no authority. Developers using an installed official bundle supply no file.
+missing file or absent Taira entry before building or replacing a bundle. The preset is sourced
+from the approved [Taira publication](https://taira.sora.org/bootstrap/network-profiles.nrt)
+and selects `https://taira.sora.org/bootstrap/checkpoint.nrt`. Its SHA-256 is
+`29a9d26dfb40293280bbfcde7b30f2d5f3f635c5e18bbc4e1a8878efd9acd18f`;
+the release owner must commit those exact bytes. Checkpoints remain fetched artifacts with
+bounded signed validity; recurring publication is an operator responsibility. The packager
+generates no authority. Developers using an installed official bundle supply no file.
 Debug/development bundles may omit profiles or use explicit fixture installation input.
 The same xtask selection owner gates the CLI-only `kagami-bundle` release path, which
 installs the identical original preset beside Kagami and the daemon and records its

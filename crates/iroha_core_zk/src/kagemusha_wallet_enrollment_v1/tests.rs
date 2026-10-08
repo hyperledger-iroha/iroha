@@ -1644,7 +1644,9 @@ fn selected_pre_e5_absence_requires_all_original_prekey_records() {
 #[test]
 fn session_renewal_reauthenticates_same_attempt_without_extending_its_permit_dates() {
     let mut f = fixture();
-    f.config.session_expires_at_ms = 2001;
+    // Allow the conservative one-millisecond ceiling at acceptance, then expire
+    // after the next monotonic tick before account authorization.
+    f.config.session_expires_at_ms = 2002;
     let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 201);
     let mut current = owner(&f, &d);
     let selected = dispatch(&f, &mut current);

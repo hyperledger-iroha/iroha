@@ -192,7 +192,7 @@ fn run<F: PastaField>() {
         let c = StepCircuit::<F>::new(index, G1Affine::generator());
         let public = c.public();
         assert!(
-            check_circuit(&c, 15, &[public.clone()], CheckMode::Strict)
+            check_circuit(&c, 15, core::slice::from_ref(&public), CheckMode::Strict)
                 .unwrap()
                 .is_satisfied(),
             "step {index}"

@@ -222,7 +222,7 @@ impl<F: PastaField> Bls381Chip<'_, F> {
         let step = *G2_SUBGROUP_STEPS.get(index).ok_or(Error::Synthesis)?;
         let out = self.g2_program_step(region, registers, step)?;
         if index + 1 == G2_SUBGROUP_STEPS.len() {
-            self.assert_equal_g2(region, &out[1], &out[2])?;
+            Self::assert_equal_g2(region, &out[1], &out[2])?;
         }
         Ok(out)
     }

@@ -34,6 +34,14 @@ fn preparation_recovery_and_native_finality_have_distinct_safe_codes() {
             ManagedAttachmentFailure::AwaitingCompletion,
         ),
         (
+            ProvisioningError::Cancelled,
+            ManagedAttachmentFailure::SupervisorStopped,
+        ),
+        (
+            ProvisioningError::Attachment(AttachmentError::Cancelled),
+            ManagedAttachmentFailure::SupervisorStopped,
+        ),
+        (
             ProvisioningError::Bootstrap(BootstrapError::Finality(FinalityError::CatchingUp {
                 verified: 7,
                 claimed: 9,

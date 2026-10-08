@@ -703,6 +703,13 @@ impl AttachmentWorker {
     pub(super) fn is_finished(&self) -> bool {
         self.thread.is_finished()
     }
+    /// Consume the actual relay task after its caller has cancelled the shared owner.
+    /// No detached timeout can release ownership while a finite relay turn still mutates.
+    pub(super) fn join(self) -> Result<()> {
+        self.thread
+            .join()
+            .map_err(|_| Error::Invalid("owned parent attachment task panicked".into()))
+    }
 }
 
 /// Report a bound but inactive owner without exposing its internal filesystem error.
@@ -743,7 +750,10 @@ fn relay_loop(
             &prepared,
             &mut service,
             &status,
-            refresh,
+            RelayControl {
+                refresh,
+                cancelled: &cancelled,
+            },
         );
         // Failed current observations may mean signed peer mappings rotated. Fetch one new
         // artifact next turn without clearing the monotonic release or child identity binding.
@@ -786,6 +796,11 @@ fn relay_loop(
         }
     }
 }
+struct RelayControl<'a> {
+    refresh: bool,
+    cancelled: &'a Arc<AtomicBool>,
+}
+
 fn relay_turn(
     directory: &PrivateDirectory,
     release_path: &Path,
@@ -793,8 +808,12 @@ fn relay_turn(
     prepared: &PreparedLocalnet,
     service: &mut Option<RemoteProvisioning>,
     status: &Mutex<ManagedAttachmentStatus>,
-    refresh: bool,
+    control: RelayControl<'_>,
 ) -> std::result::Result<(), ManagedAttachmentFailure> {
+    let RelayControl { refresh, cancelled } = control;
+    if cancelled.load(Ordering::Acquire) {
+        return Err(ManagedAttachmentFailure::SupervisorStopped);
+    }
     let runtime = InstalledRuntime::discover()?;
     let profiles = runtime.network_profiles()?;
     let profile = profiles
@@ -813,6 +832,9 @@ fn relay_turn(
     if bootstrap.release().network_id != binding.spec.parent_network_id {
         return Err(ManagedAttachmentFailure::ContextRejected);
     }
+    if cancelled.load(Ordering::Acquire) {
+        return Err(ManagedAttachmentFailure::SupervisorStopped);
+    }
     if service.is_none() {
         *service = Some(
             RemoteProvisioning::open(
@@ -821,6 +843,7 @@ fn relay_turn(
                 prepared,
                 &binding.account_alias,
             )
+            .and_then(|service| service.with_cancellation(Arc::clone(cancelled)))
             .map_err(ManagedAttachmentFailure::from)?,
         );
     }

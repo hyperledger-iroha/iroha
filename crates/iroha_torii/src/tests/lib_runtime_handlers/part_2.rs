@@ -2675,6 +2675,9 @@ fn delegated_account_assets_recheck_exact_grant_and_reject_sibling_and_scope_mis
     let sibling = checked_torii_test_account_id(0xa2, "delegated assets sibling");
     let caller = checked_torii_test_account_id(0xa3, "delegated assets caller");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"delegated-account-assets-subject"));
+    let sibling_uaid =
+        UniversalAccountId::from_hash(Hash::new(b"delegated-account-assets-sibling"));
+    assert_ne!(uaid, sibling_uaid);
     let restricted_dataspace = DataSpaceId::new(10);
     let domain =
         Domain::new(DomainId::try_new("wonderland", "universal").expect("domain")).build(&target);
@@ -2685,13 +2688,14 @@ fn delegated_account_assets_recheck_exact_grant_and_reject_sibling_and_scope_mis
                 .with_uaid(Some(uaid))
                 .build(&target),
             Account::new(sibling.clone())
-                .with_uaid(Some(uaid))
+                .with_uaid(Some(sibling_uaid))
                 .build(&sibling),
             Account::new(caller.clone()).build(&caller),
         ],
         [],
     );
     bind_uaid_to_dataspace_manifest_for_test(&mut world, uaid, restricted_dataspace);
+    bind_uaid_to_dataspace_manifest_for_test(&mut world, sibling_uaid, restricted_dataspace);
     let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
         world,
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
@@ -2715,7 +2719,7 @@ fn delegated_account_assets_recheck_exact_grant_and_reject_sibling_and_scope_mis
         .expect("target has private route");
     assert_eq!(
         super::torii_account_assets_read_routes(app.as_ref(), &sibling, Some(&caller))
-            .expect_err("same-subject sibling requires its own grant")
+            .expect_err("same-dataspace sibling requires its own grant")
             .status(),
         StatusCode::FORBIDDEN,
     );

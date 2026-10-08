@@ -1252,3 +1252,77 @@ fn attached_reply_preserves_terminal_failure_priority_and_exact_completion_gate(
     status.stage = ManagedAttachmentPhase::Attached;
     assert!(attachment_complete(&status, Instant::now() + MAX_ATTACH).unwrap());
 }
+
+#[test]
+fn attachment_join_waits_for_the_original_relay_thread_and_returns_its_panic() {
+    for panic in [false, true] {
+        let (release, held) = std::sync::mpsc::channel();
+        let completed = Arc::new(AtomicBool::new(false));
+        let task_completed = Arc::clone(&completed);
+        let task = AttachmentWorker {
+            status: Arc::new(Mutex::new(connecting("test-parent".into()))),
+            thread: thread::spawn(move || {
+                held.recv_timeout(Duration::from_secs(10)).unwrap();
+                task_completed.store(true, Ordering::Release);
+                assert!(!panic, "controlled relay panic");
+            }),
+        };
+        assert!(!task.is_finished());
+        let joiner = thread::spawn(move || task.join());
+        assert!(!joiner.is_finished());
+        assert!(!completed.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        let result = joiner.join().unwrap();
+        assert!(completed.load(Ordering::Acquire));
+        if panic {
+            assert!(
+                matches!(result, Err(Error::Invalid(message)) if message == "owned parent attachment task panicked")
+            );
+        } else {
+            result.unwrap();
+        }
+    }
+}
+
+#[test]
+fn cancelled_relay_turn_refuses_before_runtime_discovery_or_new_custody() {
+    let _guard = super::super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (_, directory, prepared) =
+        super::super::tests::fixture(&temporary.path().join("managed"), "local");
+    let binding = Binding {
+        profile: ProfileBinding::from_profile(&profile(
+            87,
+            1,
+            "https://fixture.example/checkpoint",
+        )),
+        spec: super::super::tests::private_spec(),
+        account_alias: "admin".into(),
+        context: None,
+    };
+    let cancelled = Arc::new(AtomicBool::new(true));
+    let status = Mutex::new(connecting("fixture".into()));
+    let mut service = None;
+    assert!(matches!(
+        relay_turn(
+            &directory,
+            &temporary.path().join("missing-release"),
+            &binding,
+            &prepared,
+            &mut service,
+            &status,
+            RelayControl {
+                refresh: false,
+                cancelled: &cancelled
+            }
+        ),
+        Err(ManagedAttachmentFailure::SupervisorStopped)
+    ));
+    assert!(service.is_none());
+    assert!(!directory.path().join("provisioning").exists());
+    assert!(!temporary.path().join("missing-release").exists());
+    assert_eq!(
+        status.lock().unwrap().stage,
+        ManagedAttachmentPhase::Connecting
+    );
+}

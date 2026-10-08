@@ -287,7 +287,7 @@ impl ManagedStore {
         }
         transport::supported()?;
         validate_name(&request.name)?;
-        if request.startup_timeout.is_zero() || request.startup_timeout > Duration::from_secs(600) {
+        if request.startup_timeout.is_zero() || request.startup_timeout > WORKER_STARTUP_MAXIMUM {
             return Err(Error::Invalid(
                 "startup timeout must be greater than zero and at most ten minutes".into(),
             ));
@@ -572,6 +572,12 @@ impl ManagedStore {
     /// # Errors
     /// Missing context, competing operation, failed custody or unreconciled process ownership.
     pub fn down(&self, name: &str) -> Result<ManagedStatus> {
+        self.down_until(name, Instant::now() + STOP_OBSERVATION_MAXIMUM)
+    }
+
+    // One observation deadline covers session admission, terminal reply and original-owner exit.
+    // Tests inject a short bound here; no user option or task authorization is introduced.
+    fn down_until(&self, name: &str, deadline: Instant) -> Result<ManagedStatus> {
         let directory = self.directory(name)?;
         let _operation = acquire(&directory, "operation.lock", name)?;
         let retained = generation::read(&directory)?;
@@ -582,9 +588,11 @@ impl ManagedStore {
             &retained.root_kind,
         )?;
         let context = retained.prepared.context.clone();
-        let started = Instant::now();
         let mut stopped = None;
         loop {
+            if Instant::now() >= deadline {
+                return Err(Error::Busy(name.into()));
+            }
             match acquire(&directory, "runtime.lock", name) {
                 Ok(_runtime) => {
                     // The inherited spawn gate prevents a delayed child from entering after
@@ -600,13 +608,16 @@ impl ManagedStore {
                         None => retained_status(&directory, context.clone(), false)?,
                     };
                     directory.revalidate()?;
+                    if Instant::now() >= deadline {
+                        return Err(Error::Busy(name.into()));
+                    }
                     return Ok(status);
                 }
                 Err(Error::Busy(_)) => {}
                 Err(error) => return Err(error),
             }
             if stopped.is_none() {
-                if let Some(status) = exchange_optional(&directory, "down", &retained)? {
+                if let Some(status) = exchange_optional(&directory, "down", &retained, deadline)? {
                     if status.context != context {
                         return Err(Error::Invalid(
                             "worker stop belongs to another managed identity".into(),
@@ -627,10 +638,11 @@ impl ManagedStore {
                     pre_session_tests::before_wait();
                 }
             }
-            if started.elapsed() > Duration::from_secs(15) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
                 return Err(Error::Busy(name.into()));
             }
-            thread::sleep(POLL);
+            thread::sleep(POLL.min(remaining));
         }
     }
 
@@ -995,6 +1007,7 @@ fn exchange_optional(
     directory: &PrivateDirectory,
     action: &str,
     retained: &RetainedLocalnet,
+    deadline: Instant,
 ) -> Result<Option<ManagedStatus>> {
     let context = &retained.prepared.context;
     let Some(bytes) = directory.read_optional(WORKER, MAX_METADATA)? else {
@@ -1012,12 +1025,13 @@ fn exchange_optional(
     }
     #[cfg(test)]
     pre_session_tests::before_request();
-    let observed = transport::request_observed(
+    let observed = transport::request_observed_until(
         directory,
         &ControlRequest {
             token: worker.token,
             action: action.into(),
         },
+        deadline,
     );
     match observed {
         Ok(status) => Ok(Some(status)),

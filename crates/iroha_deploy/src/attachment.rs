@@ -5,7 +5,14 @@
 //! parent anchoring. The wallet operation journal separately retains every exact fee-paying
 //! transaction and its pre-dispatch marker. No child body or owner credential enters this store.
 
-use std::{fs::File, path::Path};
+use std::{
+    fs::File,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use iroha_data_model::{
     NetworkId,
@@ -60,6 +67,9 @@ pub enum AttachmentError {
     /// An exact wallet or SDK operation could not be completed; details stay in its private journal.
     #[error("private attachment: {0}")]
     Operation(&'static str),
+    /// The original owner cancelled preparation of any new parent operation.
+    #[error("private attachment: operation cancelled")]
+    Cancelled,
 }
 
 type Result<T> = std::result::Result<T, AttachmentError>;
@@ -175,6 +185,7 @@ pub struct AttachmentStore {
     lock: File,
     record: Record,
     publication_uncertain: bool,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 impl AttachmentStore {
@@ -239,8 +250,35 @@ impl AttachmentStore {
             lock,
             record,
             publication_uncertain: false,
+            cancellation: None,
         };
         Ok(result)
+    }
+
+    /// Bind all parent wallet operations to the same original supervisor cancellation signal.
+    pub(crate) fn bind_cancellation(&mut self, cancellation: Arc<AtomicBool>) -> Result<()> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|original| !Arc::ptr_eq(original, &cancellation))
+        {
+            return Err(AttachmentError::Invalid(
+                "attachment cancellation owner changed",
+            ));
+        }
+        self.cancellation = Some(cancellation);
+        Ok(())
+    }
+
+    fn require_active(&self) -> Result<()> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|signal| signal.load(Ordering::Acquire))
+        {
+            return Err(AttachmentError::Cancelled);
+        }
+        Ok(())
     }
 
     /// Exact selected local child and parent lease.

@@ -123,13 +123,6 @@ impl<F: PastaField> Drop for SecretLookupColumns<F> {
     }
 }
 
-/// Wipes a borrowed field buffer through the sealed Pasta field trait.
-pub fn wipe<F: PastaField>(values: &mut [F]) {
-    for value in values {
-        value.zeroize();
-    }
-}
-
 /// Wipe one sealed field value without an additional trait dependency.
 pub fn wipe_one<F: PastaField>(value: &mut F) {
     value.zeroize();

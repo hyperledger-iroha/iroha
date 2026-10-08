@@ -157,7 +157,7 @@ impl<F: PastaField> TestCircuit<F> {
 
     fn public(&self) -> Vec<F> {
         let value = match self.op {
-            Op::Assign => self.a,
+            Op::Assign | Op::Select(true) => self.a,
             Op::Reduce => words(
                 &(BigUint::from_bytes_le(
                     &self
@@ -173,7 +173,6 @@ impl<F: PastaField> TestCircuit<F> {
             Op::Square => native::square(&self.a),
             Op::Neg => native::neg(&self.a),
             Op::Invert => native::invert(&self.a),
-            Op::Select(true) => self.a,
             Op::Select(false) => self.b,
             Op::Zero => return vec![F::from(u64::from(self.a == native::ZERO))],
             Op::Equal => return vec![F::from(u64::from(self.a == self.b))],

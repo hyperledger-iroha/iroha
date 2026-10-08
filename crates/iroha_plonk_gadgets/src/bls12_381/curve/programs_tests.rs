@@ -44,7 +44,7 @@ fn psi(p: G2Affine) -> G2Affine {
     let mut carry = 0_u128;
     for i in (0..6).rev() {
         let n = (carry << 64) + u128::from(e.0[i]);
-        third[i] = (n / 3) as u64;
+        third[i] = u64::try_from(n / 3).expect("quotient fits one limb");
         carry = n % 3;
     }
     let mut half = e;
@@ -87,10 +87,9 @@ fn execute(step: G2Step, r: &mut [G2Affine; 6]) {
 fn nonmember() -> G2Affine {
     for i in 0..100 {
         if let Some(p) = G2Affine::get_point_from_x_unchecked(Fq2::new(Fq::from(i), Fq::ONE), false)
+            && !p.is_in_correct_subgroup_assuming_on_curve()
         {
-            if !p.is_in_correct_subgroup_assuming_on_curve() {
-                return p;
-            }
+            return p;
         }
     }
     panic!("fixed nonmember fixture");
@@ -240,7 +239,7 @@ fn run<F: PastaField>() {
         let c = StepCircuit::<F>::new(index, false, G2Affine::generator());
         let public = c.public();
         assert!(
-            check_circuit(&c, 17, &[public.clone()], CheckMode::Strict)
+            check_circuit(&c, 17, core::slice::from_ref(&public), CheckMode::Strict)
                 .unwrap()
                 .is_satisfied(),
             "cofactor step {index}"

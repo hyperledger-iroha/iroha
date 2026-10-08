@@ -37,6 +37,10 @@ use std::{
 
 #[path = "native_exchange/load.rs"]
 mod load;
+#[path = "native_exchange/network_settlement.rs"]
+mod network_settlement;
+#[path = "native_exchange/proof_negative.rs"]
+mod proof_negative;
 #[path = "native_exchange/settlement.rs"]
 mod settlement;
 #[path = "native_exchange/setup.rs"]
@@ -881,6 +885,30 @@ fn actual_native_a_to_b_to_c_then_unload_with_restart_and_replay() {
         ))
         .is_err()
     );
+    // Adversarial DATA uses the existing simulated C payment key outside the provider.
+    // It never replaces the genuine released claim or performs another monetary operation.
+    let c_before_negative = c.snapshot().unwrap();
+    let c_sign_calls = device_c.platform.with(|state| state.sign_calls);
+    let bad_sigma_claim = proof_negative::claim(&sources, &device_c, &claim);
+    assert_eq!(c.snapshot().unwrap(), c_before_negative);
+    assert_eq!(
+        device_c.platform.with(|state| state.sign_calls),
+        c_sign_calls
+    );
+    assert_eq!(
+        c.unload_claim_bytes(&unload_id, None).unwrap(),
+        claim_original
+    );
+    let bad_sigma_original = norito::json!({
+        "name": "c-unload-bad-sigma-claim.norito",
+        "bytes": (bad_sigma_claim.len()), "sha256": (sha(&bad_sigma_claim)),
+        "mutation": "sigma_ipa_f_plus_one", "model_verified": true,
+        "native_proof_rejected": true, "adversarial_fixture_signatures": 1
+    });
+    publish(
+        &output.join("c-unload-bad-sigma-claim.norito"),
+        &bad_sigma_claim,
+    );
     for (name, bytes) in [
         ("a-b-payment.norito", payment_ab),
         ("b-c-payment.norito", payment_bc),
@@ -912,6 +940,7 @@ fn actual_native_a_to_b_to_c_then_unload_with_restart_and_replay() {
         "c_wallet_id": (hex::encode(claim.credential.body.wallet_id)),
         "c_unload_request_id": (hex::encode(unload_id)),
         "c_unload_claim_sha256": (sha(&claim_original)),
+        "c_unload_bad_sigma_claim": bad_sigma_original,
         "ledger_settlement_executed": false, "physical_device_qualified": false,
         "scope": "Real installed proof source, finalized receipt proof, native host custody, exact replay and local folds; simulated hardware. Exported Unload claim still requires actual ledger execution and replay qualification." });
     publish(

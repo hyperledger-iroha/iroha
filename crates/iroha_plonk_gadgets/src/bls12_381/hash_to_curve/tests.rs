@@ -208,7 +208,7 @@ fn run<F: PastaField>() {
             let c = TestCircuit::<F>::new(op, u);
             let public = c.public();
             assert!(
-                check_circuit(&c, c.k(), &[public.clone()], CheckMode::Strict)
+                check_circuit(&c, c.k(), core::slice::from_ref(&public), CheckMode::Strict)
                     .expect("SWU layout")
                     .is_satisfied(),
                 "{op:?} {u:?}"

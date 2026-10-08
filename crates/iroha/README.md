@@ -81,6 +81,12 @@ plan against that request, the account, the network, and its expiry. Synchronous
 callers use `iroha::blocking::Client::plan_alias_setup(&request)?`, which runs the
 same transport and verification through the facade's owned runtime.
 
+`account.kagemusha().load_issuance(...)` and `load_event_proof(...)` read bounded
+canonical Load receipt and event-path originals with the account’s exact network
+signature; the blocking account facade exposes the same methods. These reads do
+not grant balance authority: verify the event path against an independently
+finalized block’s counted event commitment and the exact retained receipt.
+
 Signed Iroha queries use `account.query_single(query).await?` for singular
 lookups such as `FindAccountById`. Iterable signed queries
 (`account.query(query)` with `iroha::query::AsyncQueryBuilderExt` imported)

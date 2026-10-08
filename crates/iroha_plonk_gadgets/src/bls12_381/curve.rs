@@ -228,13 +228,12 @@ macro_rules! affine_curve {
             /// # Errors
             /// Returns layout errors; unequal points are unsatisfiable.
             pub fn $assert_equal(
-                &mut self,
                 region: &mut Region<'_, F>,
                 a: &$point<F>,
                 b: &$point<F>,
             ) -> Result<(), Error> {
-                self.$fassert(region, &a.x, &b.x)?;
-                self.$fassert(region, &a.y, &b.y)?;
+                Self::$fassert(region, &a.x, &b.x)?;
+                Self::$fassert(region, &a.y, &b.y)?;
                 crate::arith::GlueChip::assert_equal(region, a.infinity.word(), b.infinity.word())
             }
             /// Exclude the group identity; this does not check subgroup membership.
@@ -333,8 +332,8 @@ impl<F: PastaField> Bls381Chip<'_, F> {
             .zip(infinity.value())
             .map(|((x, y), infinity)| G2AffineWitness { x, y, infinity });
         let result = self.assign_g2(region, witness)?;
-        self.assert_equal_fp2(region, x, result.x())?;
-        self.assert_equal_fp2(region, y, result.y())?;
+        Self::assert_equal_fp2(region, x, result.x())?;
+        Self::assert_equal_fp2(region, y, result.y())?;
         crate::arith::GlueChip::assert_equal(region, infinity.word(), result.infinity().word())?;
         Ok(result)
     }
@@ -356,20 +355,20 @@ impl<F: PastaField> Bls381Chip<'_, F> {
             region,
             [
                 [
-                    0x0000000000000000,
-                    0x0000000000000000,
-                    0x0000000000000000,
-                    0x0000000000000000,
-                    0x0000000000000000,
-                    0x0000000000000000,
+                    0x0000_0000_0000_0000,
+                    0x0000_0000_0000_0000,
+                    0x0000_0000_0000_0000,
+                    0x0000_0000_0000_0000,
+                    0x0000_0000_0000_0000,
+                    0x0000_0000_0000_0000,
                 ],
                 [
-                    0x8bfd00000000aaad,
-                    0x409427eb4f49fffd,
-                    0x897d29650fb85f9b,
-                    0xaa0d857d89759ad4,
-                    0xec02408663d4de85,
-                    0x1a0111ea397fe699,
+                    0x8bfd_0000_0000_aaad,
+                    0x4094_27eb_4f49_fffd,
+                    0x897d_2965_0fb8_5f9b,
+                    0xaa0d_857d_8975_9ad4,
+                    0xec02_4086_63d4_de85,
+                    0x1a01_11ea_397f_e699,
                 ],
             ],
         )?;
@@ -377,20 +376,20 @@ impl<F: PastaField> Bls381Chip<'_, F> {
             region,
             [
                 [
-                    0xf1ee7b04121bdea2,
-                    0x304466cf3e67fa0a,
-                    0xef396489f61eb45e,
-                    0x1c3dedd930b1cf60,
-                    0xe2e9c448d77a2cd9,
-                    0x135203e60180a68e,
+                    0xf1ee_7b04_121b_dea2,
+                    0x3044_66cf_3e67_fa0a,
+                    0xef39_6489_f61e_b45e,
+                    0x1c3d_edd9_30b1_cf60,
+                    0xe2e9_c448_d77a_2cd9,
+                    0x1352_03e6_0180_a68e,
                 ],
                 [
-                    0xc81084fbede3cc09,
-                    0xee67992f72ec05f4,
-                    0x77f76e17009241c5,
-                    0x48395dabc2d3435e,
-                    0x6831e36d6bd17ffe,
-                    0x06af0e0437ff400b,
+                    0xc810_84fb_ede3_cc09,
+                    0xee67_992f_72ec_05f4,
+                    0x77f7_6e17_0092_41c5,
+                    0x4839_5dab_c2d3_435e,
+                    0x6831_e36d_6bd1_7ffe,
+                    0x06af_0e04_37ff_400b,
                 ],
             ],
         )?;
@@ -409,12 +408,12 @@ impl<F: PastaField> Bls381Chip<'_, F> {
         let cx = self.constant(
             region,
             [
-                0x8bfd00000000aaac,
-                0x409427eb4f49fffd,
-                0x897d29650fb85f9b,
-                0xaa0d857d89759ad4,
-                0xec02408663d4de85,
-                0x1a0111ea397fe699,
+                0x8bfd_0000_0000_aaac,
+                0x4094_27eb_4f49_fffd,
+                0x897d_2965_0fb8_5f9b,
+                0xaa0d_857d_8975_9ad4,
+                0xec02_4086_63d4_de85,
+                0x1a01_11ea_397f_e699,
             ],
         )?;
         let x = self.mul_fp2_by_fp(region, p.x(), &cx)?;
@@ -440,12 +439,12 @@ impl<F: PastaField> Bls381Chip<'_, F> {
         let beta = self.constant(
             region,
             [
-                0x2e01fffffffefffe,
-                0xde17d813620a0002,
-                0xddb3a93be6f89688,
-                0xba69c6076a0f77ea,
-                0x5f19672fdf76ce51,
-                0x0000000000000000,
+                0x2e01_ffff_fffe_fffe,
+                0xde17_d813_620a_0002,
+                0xddb3_a93b_e6f8_9688,
+                0xba69_c607_6a0f_77ea,
+                0x5f19_672f_df76_ce51,
+                0x0000_0000_0000_0000,
             ],
         )?;
         Ok(G1Value {

@@ -98,7 +98,7 @@ impl<F: PastaField> Bls381Chip<'_, F> {
         let rhs = self.add_fp2(region, &xxx, &ax)?;
         let rhs = self.add_fp2(region, &rhs, &b)?;
         let yy = self.square_fp2(region, &y)?;
-        self.assert_equal_fp2(region, &rhs, &yy)?;
+        Self::assert_equal_fp2(region, &rhs, &yy)?;
         Ok(SwuG2Value { x, y })
     }
     /// Constrain the exact native SWU map, including exceptional denominator,
@@ -108,13 +108,13 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     pub fn map_to_swu_g2(
         &mut self,
         region: &mut Region<'_, F>,
-        u: &Fp2Value<F>,
+        input: &Fp2Value<F>,
     ) -> Result<SwuG2Value<F>, Error> {
         let a = self.constant_fp2(region, [base::ZERO, [240, 0, 0, 0, 0, 0]])?;
         let b = self.constant_fp2(region, [[1012, 0, 0, 0, 0, 0]; 2])?;
         let zeta = self.constant_fp2(region, ZETA)?;
         let one = self.constant_fp2(region, [base::ONE, base::ZERO])?;
-        let u_squared = self.square_fp2(region, u)?;
+        let u_squared = self.square_fp2(region, input)?;
         let zeta_u2 = self.mul_fp2(region, &zeta, &u_squared)?;
         let ta = self.square_fp2(region, &zeta_u2)?;
         let ta = self.add_fp2(region, &ta, &zeta_u2)?;
@@ -134,10 +134,10 @@ impl<F: PastaField> Bls381Chip<'_, F> {
         let sqrt_witness = gx1.value().map(|g| {
             // ark's Legendre::is_qr is false for zero. Both roots are zero then,
             // so explicitly preserve that branch in constraints below.
-            if g != [base::ZERO; 2] {
-                if let Some(root) = native::sqrt(&g) {
-                    return (true, root);
-                }
+            if g != [base::ZERO; 2]
+                && let Some(root) = native::sqrt(&g)
+            {
+                return (true, root);
             }
             (
                 false,
@@ -153,15 +153,15 @@ impl<F: PastaField> Bls381Chip<'_, F> {
         let zeta_gx1 = self.mul_fp2(region, &zeta, &gx1)?;
         let radicand = self.select_fp2(region, &square, &gx1, &zeta_gx1)?;
         let y1_squared = self.square_fp2(region, &y1)?;
-        self.assert_equal_fp2(region, &radicand, &y1_squared)?;
+        Self::assert_equal_fp2(region, &radicand, &y1_squared)?;
         // Since fixed ZETA is a nonsquare, the constrained root uniquely selects
         // the native residue branch for every nonzero gx1.
         let x2 = self.mul_fp2(region, &zeta_u2, &x1)?;
-        let y2_factor = self.mul_fp2(region, &zeta_u2, u)?;
+        let y2_factor = self.mul_fp2(region, &zeta_u2, input)?;
         let y2 = self.mul_fp2(region, &y2_factor, &y1)?;
         let x = self.select_fp2(region, &square, &x1, &x2)?;
         let y = self.select_fp2(region, &square, &y1, &y2)?;
-        let input_parity = self.parity_bls_fp2(region, u)?;
+        let input_parity = self.parity_bls_fp2(region, input)?;
         let y_parity = self.parity_bls_fp2(region, &y)?;
         let parity_equal = self
             .glue()

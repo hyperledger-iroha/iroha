@@ -167,7 +167,19 @@ pub(crate) fn request_observed_as<T: JsonDeserialize>(
     directory: &PrivateDirectory,
     request: &ControlRequest,
 ) -> std::result::Result<T, RequestFailure> {
+    let deadline = (request.action == "down").then(|| Instant::now() + STOP_OBSERVATION_MAXIMUM);
+    request_observed_with_deadline(directory, request, deadline)
+}
+
+pub(crate) fn request_observed_with_deadline<T: JsonDeserialize>(
+    directory: &PrivateDirectory,
+    request: &ControlRequest,
+    deadline: Option<Instant>,
+) -> std::result::Result<T, RequestFailure> {
     let result = (|| -> std::result::Result<T, RequestFailure> {
+        if let Some(deadline) = deadline {
+            remaining_io(deadline)?;
+        }
         let runtime = runtime()?;
         let address = address(directory)?;
         let mut stream = {
@@ -178,21 +190,28 @@ pub(crate) fn request_observed_as<T: JsonDeserialize>(
         };
         authenticate_peer(stream.as_raw_handle(), false)?;
         let bytes = encode(request)?;
-        let timeout = if request.action == "down" {
-            Duration::from_secs(10)
-        } else {
-            IO_TIMEOUT
-        };
+        let timeout = deadline
+            .map(remaining_io)
+            .transpose()?
+            .unwrap_or(IO_TIMEOUT);
         let reply = runtime
             .block_on(async {
-                tokio::time::timeout(timeout, async {
+                let exchange = async {
                     write_async(&mut stream, &bytes).await?;
                     read_async(&mut stream).await
-                })
-                .await
+                };
+                if let Some(deadline) = deadline {
+                    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), exchange)
+                        .await
+                } else {
+                    tokio::time::timeout(timeout, exchange).await
+                }
             })
             .map_err(|_| Error::Invalid("managed pipe control deadline expired".into()))?
             .map_err(RequestFailure::stream)?;
+        if let Some(deadline) = deadline {
+            remaining_io(deadline)?;
+        }
         decode(&reply).map_err(Into::into)
     })();
     directory.revalidate()?;
@@ -368,5 +387,45 @@ mod tests {
         listener.address = address;
         roundtrip(accepted(&listener), runtime, stream);
         drop(listener);
+    }
+
+    #[test]
+    fn fragmented_pipe_reply_keeps_the_original_down_deadline() {
+        let _resources = super::super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
+        let listener = Listener::bind(&directory).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut connection = accepted(&listener);
+            assert_eq!(connection.receive().unwrap().action, "down");
+            let runtime = Arc::clone(&connection.runtime);
+            runtime.block_on(async {
+                let _ = tokio::time::timeout(IO_TIMEOUT, async {
+                    connection.stream.write_all(&4_u32.to_be_bytes()).await?;
+                    connection.stream.write_all(b"a").await?;
+                    for byte in b"bcd" {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        connection.stream.write_all(&[*byte]).await?;
+                    }
+                    Ok::<_, io::Error>(())
+                })
+                .await;
+            });
+        });
+        let started = Instant::now();
+        let result: std::result::Result<ControlRequest, RequestFailure> =
+            request_observed_with_deadline(
+                &directory,
+                &ControlRequest {
+                    token: "c".repeat(64),
+                    action: "down".into(),
+                },
+                Some(started + Duration::from_millis(180)),
+            );
+        assert!(
+            matches!(result, Err(RequestFailure::Refused(Error::Invalid(message))) if message == "managed pipe control deadline expired")
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        server.join().unwrap();
     }
 }

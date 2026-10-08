@@ -3,6 +3,7 @@ use super::super::super::curve::{G1AffineWitness, G2AffineWitness};
 use super::*;
 use crate::{
     arith::{GlueChip, GlueConfig},
+    bls12_381::extension::{Fp2Value, Fp6Value},
     range::{LimbBits, RunningSumChip, RunningSumConfig},
 };
 use ark_bls12_381::{Bls12_381, Config as BlsConfig, Fq, Fq2, Fq12, G1Affine, G2Affine};
@@ -16,10 +17,10 @@ use iroha_plonk::{
     frontend::{Circuit, Layouter, SimpleFloorPlanner, Value},
 };
 
-fn native_miller(p: [G1Affine; 2], q: [G2Affine; 2]) -> Fq12 {
+fn native_miller(p: [G1Affine; 2], q: &[G2Affine; 2]) -> Fq12 {
     let prepared = q.map(G2Prepared::<BlsConfig>::from);
     let mut cursor = [0; 2];
-    let mut points = q;
+    let mut points = *q;
     let mut lines = [(Fq2::ZERO, Fq2::ZERO, Fq2::ZERO); 2];
     let mut acc = Fq12::ONE;
     for step in MILLER_STEPS {
@@ -58,10 +59,10 @@ fn native_miller(p: [G1Affine; 2], q: [G2Affine; 2]) -> Fq12 {
     }
     acc
 }
-fn native_final(value: Fq12) -> Fq12 {
+fn native_final(value: &Fq12) -> Fq12 {
     use super::super::final_exponent::{FINAL_EXPONENT_STEPS, FinalExponentStep as S};
     let mut r = [Fq12::ZERO; 5];
-    r[0] = value;
+    r[0] = *value;
     for step in FINAL_EXPONENT_STEPS {
         match step {
             S::Copy {
@@ -107,9 +108,9 @@ fn complete_miller_and_final_exponent_schedules_match_native_pairing() {
         ((signature + G2Affine::generator()).into_affine(), false),
     ] {
         let q = [message, candidate];
-        let miller = native_miller(p, q);
+        let miller = native_miller(p, &q);
         assert_eq!(miller, Bls12_381::multi_miller_loop(p, q).0);
-        let pairing = native_final(miller);
+        let pairing = native_final(&miller);
         assert_eq!(pairing, Bls12_381::multi_pairing(p, q).0);
         assert_eq!(pairing == Fq12::ONE, valid);
     }
@@ -203,10 +204,10 @@ impl<F: PastaField> Circuit<F> for StartCircuit<F> {
                 if self.forgery == 2 {
                     raw_line[0][0] = native::ONE;
                 }
-                let line = chip.assign_miller_line(&mut region, self.witness(raw_line))?;
+                let line = chip.assign_miller_line(&mut region, &self.witness(raw_line))?;
                 let mut raw_acc = [[[native::ZERO; 2]; 3]; 2];
                 raw_acc[0][0][0] = [if self.forgery == 1 { 2 } else { 1 }, 0, 0, 0, 0, 0];
-                let acc = chip.assign_fp12(&mut region, self.witness(raw_acc))?;
+                let acc = chip.assign_fp12(&mut region, &self.witness(raw_acc))?;
                 let state =
                     MillerPairState::from_parts([point.clone(), point], [line.clone(), line], acc);
                 let result = chip.miller_pair_step(
@@ -220,8 +221,8 @@ impl<F: PastaField> Circuit<F> for StartCircuit<F> {
                     .accumulator()
                     .coefficients()
                     .iter()
-                    .flat_map(|x| x.coefficients())
-                    .flat_map(|x| x.coefficients())
+                    .flat_map(Fp6Value::coefficients)
+                    .flat_map(Fp2Value::coefficients)
                     .flat_map(|x| x.limbs().iter().cloned())
                     .collect::<Vec<_>>())
             },
@@ -295,14 +296,14 @@ fn ordinary_iroha_bls_signatures_match_exact_w3f_hash_and_full_pairing_schedule(
         );
         let p = [public, -G1Affine::generator()];
         assert_eq!(
-            native_final(native_miller(p, [hash, signature_point])),
+            native_final(&native_miller(p, &[hash, signature_point])),
             Fq12::ONE
         );
         let mut changed = exact;
         changed.push(0);
         let wrong_hash = hasher.hash(&changed).unwrap();
         assert_ne!(
-            native_final(native_miller(p, [wrong_hash, signature_point])),
+            native_final(&native_miller(p, &[wrong_hash, signature_point])),
             Fq12::ONE
         );
         // The IETF/Ethereum ciphersuite-as-DST convention hashes a different point.

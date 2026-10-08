@@ -107,7 +107,7 @@ impl<F: PastaField> Bls381Chip<'_, F> {
         a: &Fp2Value<F>,
         power: usize,
     ) -> Result<Fp2Value<F>, Error> {
-        if power % 2 == 0 {
+        if power.is_multiple_of(2) {
             Ok(a.clone())
         } else {
             self.conjugate_fp2(region, a)
@@ -361,13 +361,12 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     /// # Errors
     /// Returns copy-constraint errors; unequal values are unsatisfiable.
     pub fn assert_equal_fp2(
-        &mut self,
         region: &mut Region<'_, F>,
         a: &Fp2Value<F>,
         b: &Fp2Value<F>,
     ) -> Result<(), Error> {
-        self.assert_equal(region, &a.coefficients[0], &b.coefficients[0])?;
-        self.assert_equal(region, &a.coefficients[1], &b.coefficients[1])
+        Self::assert_equal(region, &a.coefficients[0], &b.coefficients[0])?;
+        Self::assert_equal(region, &a.coefficients[1], &b.coefficients[1])
     }
     /// Assign all six canonical Fp6 base coefficients.
     /// # Errors
@@ -375,12 +374,12 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     pub fn assign_fp6(
         &mut self,
         region: &mut Region<'_, F>,
-        value: Value<Fp6>,
+        value: &Value<Fp6>,
     ) -> Result<Fp6Value<F>, Error> {
         Ok(Fp6Value::from_coefficients([
-            self.assign_fp2(region, value.map(|x| x[0]))?,
-            self.assign_fp2(region, value.map(|x| x[1]))?,
-            self.assign_fp2(region, value.map(|x| x[2]))?,
+            self.assign_fp2(region, value.as_ref().map(|x| x[0]))?,
+            self.assign_fp2(region, value.as_ref().map(|x| x[1]))?,
+            self.assign_fp2(region, value.as_ref().map(|x| x[2]))?,
         ]))
     }
     /// Bind a circuit-constant Fp6 element.
@@ -389,7 +388,7 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     pub fn constant_fp6(
         &mut self,
         region: &mut Region<'_, F>,
-        value: Fp6,
+        value: &Fp6,
     ) -> Result<Fp6Value<F>, Error> {
         Ok(Fp6Value::from_coefficients([
             self.constant_fp2(region, value[0])?,
@@ -552,13 +551,12 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     /// # Errors
     /// Returns copy-constraint errors; unequal values are unsatisfiable.
     pub fn assert_equal_fp6(
-        &mut self,
         region: &mut Region<'_, F>,
         a: &Fp6Value<F>,
         b: &Fp6Value<F>,
     ) -> Result<(), Error> {
         for (a, b) in a.coefficients.iter().zip(&b.coefficients) {
-            self.assert_equal_fp2(region, a, b)?;
+            Self::assert_equal_fp2(region, a, b)?;
         }
         Ok(())
     }
@@ -568,11 +566,11 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     pub fn assign_fp12(
         &mut self,
         region: &mut Region<'_, F>,
-        value: Value<Fp12>,
+        value: &Value<Fp12>,
     ) -> Result<Fp12Value<F>, Error> {
         Ok(Fp12Value::from_coefficients([
-            self.assign_fp6(region, value.map(|x| x[0]))?,
-            self.assign_fp6(region, value.map(|x| x[1]))?,
+            self.assign_fp6(region, &value.as_ref().map(|x| x[0]))?,
+            self.assign_fp6(region, &value.as_ref().map(|x| x[1]))?,
         ]))
     }
     /// Bind a circuit-constant Fp12 element.
@@ -581,11 +579,11 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     pub fn constant_fp12(
         &mut self,
         region: &mut Region<'_, F>,
-        value: Fp12,
+        value: &Fp12,
     ) -> Result<Fp12Value<F>, Error> {
         Ok(Fp12Value::from_coefficients([
-            self.constant_fp6(region, value[0])?,
-            self.constant_fp6(region, value[1])?,
+            self.constant_fp6(region, &value[0])?,
+            self.constant_fp6(region, &value[1])?,
         ]))
     }
     /// Constrain Fp12 multiplication using three Fp6 products.
@@ -664,13 +662,12 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     /// # Errors
     /// Returns copy-constraint errors; unequal values are unsatisfiable.
     pub fn assert_equal_fp12(
-        &mut self,
         region: &mut Region<'_, F>,
         a: &Fp12Value<F>,
         b: &Fp12Value<F>,
     ) -> Result<(), Error> {
-        self.assert_equal_fp6(region, &a.coefficients[0], &b.coefficients[0])?;
-        self.assert_equal_fp6(region, &a.coefficients[1], &b.coefficients[1])
+        Self::assert_equal_fp6(region, &a.coefficients[0], &b.coefficients[0])?;
+        Self::assert_equal_fp6(region, &a.coefficients[1], &b.coefficients[1])
     }
 }
 

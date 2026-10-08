@@ -102,8 +102,8 @@ its owner's `admin@privateapp` alias without adding a parent execution lane.
 `--account-alias LABEL` selects another canonical owner label before first
 provisioning; changing it on retry is refused. The original two-lease rent quote
 and fee allowance survive interrupted preparation. A timeout leaves that work
-available for status and retry. Official Taira profile publication and combined runtime
-qualification remain tracked acceptance gates; the CLI invents no release key.
+available for status and retry. Release installation, recurring Taira checkpoint publication
+and combined runtime qualification remain tracked acceptance gates; the CLI invents no release key.
 
 Views and calls use an existing selected context and the verified deployed alias.
 A call's positive `--max-fee` caps the combined self-grant and call in that private

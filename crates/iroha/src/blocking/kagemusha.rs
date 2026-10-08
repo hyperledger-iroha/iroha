@@ -48,4 +48,20 @@ impl Kagemusha<'_> {
         self.runtime
             .block_on(self.inner.load_issuance(scheme, wallet, request))?
     }
+
+    /// Retrieve bounded event inclusion DATA using this account's exact network signature.
+    ///
+    /// Independently verify the returned path against a finalized block's counted event
+    /// commitment and the exact original receipt before using it as Load evidence.
+    /// # Errors
+    /// Returns the asynchronous request/decode failure or a blocking-runtime rejection.
+    pub fn load_event_proof(
+        &self,
+        scheme: &[u8; 32],
+        wallet: &[u8; 32],
+        request: &[u8; 32],
+    ) -> Result<iroha_crypto::MerkleProof<iroha_data_model::events::EventBox>> {
+        self.runtime
+            .block_on(self.inner.load_event_proof(scheme, wallet, request))?
+    }
 }

@@ -195,6 +195,7 @@ impl From<ProvisioningError> for ManagedAttachmentFailure {
             ProvisioningError::NamespaceQuote => Self::QuoteUnavailable,
             ProvisioningError::NamespaceObservation => Self::NamespaceUnverified,
             ProvisioningError::Deadline => Self::AwaitingCompletion,
+            ProvisioningError::Cancelled => Self::SupervisorStopped,
             ProvisioningError::Io(_) => Self::CustodyUnavailable,
             ProvisioningError::Invalid(_) => Self::ContextRejected,
             ProvisioningError::Bootstrap(error) => error.into(),
@@ -222,6 +223,7 @@ impl From<AttachmentError> for ManagedAttachmentFailure {
             AttachmentError::Finality(error) => error.into(),
             AttachmentError::Bootstrap(error) => error.into(),
             AttachmentError::Operation(_) => Self::RelayIncomplete,
+            AttachmentError::Cancelled => Self::SupervisorStopped,
         }
     }
 }

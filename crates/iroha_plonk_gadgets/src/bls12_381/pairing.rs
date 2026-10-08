@@ -95,11 +95,11 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     pub fn assign_miller_g2(
         &mut self,
         region: &mut Region<'_, F>,
-        value: Value<MillerG2Witness>,
+        value: &Value<MillerG2Witness>,
     ) -> Result<MillerG2Value<F>, Error> {
-        let x = self.assign_fp2(region, value.map(|p| p.x))?;
-        let y = self.assign_fp2(region, value.map(|p| p.y))?;
-        let z = self.assign_fp2(region, value.map(|p| p.z))?;
+        let x = self.assign_fp2(region, value.as_ref().map(|p| p.x))?;
+        let y = self.assign_fp2(region, value.as_ref().map(|p| p.y))?;
+        let z = self.assign_fp2(region, value.as_ref().map(|p| p.z))?;
         self.require_miller_z(region, &z)?;
         let yy = self.square_fp2(region, &y)?;
         let lhs = self.mul_fp2(region, &yy, &z)?;
@@ -110,7 +110,7 @@ impl<F: PastaField> Bls381Chip<'_, F> {
         let b = self.constant_fp2(region, [[4, 0, 0, 0, 0, 0]; 2])?;
         let bz = self.mul_fp2(region, &b, &zzz)?;
         let rhs = self.add_fp2(region, &xxx, &bz)?;
-        self.assert_equal_fp2(region, &lhs, &rhs)?;
+        Self::assert_equal_fp2(region, &lhs, &rhs)?;
         Ok(MillerG2Value { x, y, z })
     }
     /// Start a Miller loop at a nonidentity affine point with fixed `z=1`.
@@ -136,13 +136,13 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     pub fn assign_miller_line(
         &mut self,
         region: &mut Region<'_, F>,
-        value: Value<[Fp2; 3]>,
+        value: &Value<[Fp2; 3]>,
     ) -> Result<MillerLine<F>, Error> {
         Ok(MillerLine {
             coefficients: [
-                self.assign_fp2(region, value.map(|x| x[0]))?,
-                self.assign_fp2(region, value.map(|x| x[1]))?,
-                self.assign_fp2(region, value.map(|x| x[2]))?,
+                self.assign_fp2(region, value.as_ref().map(|x| x[0]))?,
+                self.assign_fp2(region, value.as_ref().map(|x| x[1]))?,
+                self.assign_fp2(region, value.as_ref().map(|x| x[2]))?,
             ],
         })
     }
@@ -154,53 +154,53 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     pub fn miller_double(
         &mut self,
         region: &mut Region<'_, F>,
-        p: &MillerG2Value<F>,
+        point: &MillerG2Value<F>,
     ) -> Result<(MillerG2Value<F>, MillerLine<F>), Error> {
         let half = self.constant(
             region,
             [
-                0xdcff7fffffffd556,
-                0x0f55ffff58a9ffff,
-                0xb39869507b587b12,
-                0xb23ba5c279c2895f,
-                0x258dd3db21a5d66b,
-                0x0d0088f51cbff34d,
+                0xdcff_7fff_ffff_d556,
+                0x0f55_ffff_58a9_ffff,
+                0xb398_6950_7b58_7b12,
+                0xb23b_a5c2_79c2_895f,
+                0x258d_d3db_21a5_d66b,
+                0x0d00_88f5_1cbf_f34d,
             ],
         )?;
-        let a = self.mul_fp2(region, &p.x, &p.y)?;
-        let a = self.mul_fp2_by_fp(region, &a, &half)?;
-        let b = self.square_fp2(region, &p.y)?;
-        let c = self.square_fp2(region, &p.z)?;
-        let twice_c = self.add_fp2(region, &c, &c)?;
-        let thrice_c = self.add_fp2(region, &twice_c, &c)?;
+        let half_xy = self.mul_fp2(region, &point.x, &point.y)?;
+        let half_xy = self.mul_fp2_by_fp(region, &half_xy, &half)?;
+        let vertical_square = self.square_fp2(region, &point.y)?;
+        let projective_square = self.square_fp2(region, &point.z)?;
+        let twice_c = self.add_fp2(region, &projective_square, &projective_square)?;
+        let thrice_c = self.add_fp2(region, &twice_c, &projective_square)?;
         let coefficient_b = self.constant_fp2(region, [[4, 0, 0, 0, 0, 0]; 2])?;
-        let e = self.mul_fp2(region, &coefficient_b, &thrice_c)?;
-        let twice_e = self.add_fp2(region, &e, &e)?;
-        let f = self.add_fp2(region, &twice_e, &e)?;
-        let g = self.add_fp2(region, &b, &f)?;
-        let g = self.mul_fp2_by_fp(region, &g, &half)?;
-        let yz = self.add_fp2(region, &p.y, &p.z)?;
-        let h = self.square_fp2(region, &yz)?;
-        let bc = self.add_fp2(region, &b, &c)?;
-        let h = self.sub_fp2(region, &h, &bc)?;
-        let i = self.sub_fp2(region, &e, &b)?;
-        let j = self.square_fp2(region, &p.x)?;
-        let e_squared = self.square_fp2(region, &e)?;
-        let b_minus_f = self.sub_fp2(region, &b, &f)?;
-        let x = self.mul_fp2(region, &a, &b_minus_f)?;
-        let g_squared = self.square_fp2(region, &g)?;
+        let curve_term = self.mul_fp2(region, &coefficient_b, &thrice_c)?;
+        let twice_e = self.add_fp2(region, &curve_term, &curve_term)?;
+        let triple_curve = self.add_fp2(region, &twice_e, &curve_term)?;
+        let averaged_terms = self.add_fp2(region, &vertical_square, &triple_curve)?;
+        let averaged_terms = self.mul_fp2_by_fp(region, &averaged_terms, &half)?;
+        let yz = self.add_fp2(region, &point.y, &point.z)?;
+        let cross_term = self.square_fp2(region, &yz)?;
+        let bc = self.add_fp2(region, &vertical_square, &projective_square)?;
+        let cross_term = self.sub_fp2(region, &cross_term, &bc)?;
+        let line_constant = self.sub_fp2(region, &curve_term, &vertical_square)?;
+        let horizontal_square = self.square_fp2(region, &point.x)?;
+        let e_squared = self.square_fp2(region, &curve_term)?;
+        let b_minus_f = self.sub_fp2(region, &vertical_square, &triple_curve)?;
+        let x = self.mul_fp2(region, &half_xy, &b_minus_f)?;
+        let g_squared = self.square_fp2(region, &averaged_terms)?;
         let twice_e_squared = self.add_fp2(region, &e_squared, &e_squared)?;
         let thrice_e_squared = self.add_fp2(region, &twice_e_squared, &e_squared)?;
         let y = self.sub_fp2(region, &g_squared, &thrice_e_squared)?;
-        let z = self.mul_fp2(region, &b, &h)?;
+        let z = self.mul_fp2(region, &vertical_square, &cross_term)?;
         self.require_miller_z(region, &z)?;
-        let twice_j = self.add_fp2(region, &j, &j)?;
-        let thrice_j = self.add_fp2(region, &twice_j, &j)?;
-        let negative_h = self.neg_fp2(region, &h)?;
+        let twice_j = self.add_fp2(region, &horizontal_square, &horizontal_square)?;
+        let thrice_j = self.add_fp2(region, &twice_j, &horizontal_square)?;
+        let negative_h = self.neg_fp2(region, &cross_term)?;
         Ok((
             MillerG2Value { x, y, z },
             MillerLine {
-                coefficients: [i, thrice_j, negative_h],
+                coefficients: [line_constant, thrice_j, negative_h],
             },
         ))
     }
@@ -211,37 +211,37 @@ impl<F: PastaField> Bls381Chip<'_, F> {
     pub fn miller_add(
         &mut self,
         region: &mut Region<'_, F>,
-        p: &MillerG2Value<F>,
-        q: &G2Value<F>,
+        point: &MillerG2Value<F>,
+        affine: &G2Value<F>,
     ) -> Result<(MillerG2Value<F>, MillerLine<F>), Error> {
-        self.assert_nonidentity_g2(region, q)?;
-        let qyz = self.mul_fp2(region, q.y(), &p.z)?;
-        let theta = self.sub_fp2(region, &p.y, &qyz)?;
-        let qxz = self.mul_fp2(region, q.x(), &p.z)?;
-        let lambda = self.sub_fp2(region, &p.x, &qxz)?;
-        let c = self.square_fp2(region, &theta)?;
-        let d = self.square_fp2(region, &lambda)?;
-        let e = self.mul_fp2(region, &lambda, &d)?;
-        let f = self.mul_fp2(region, &p.z, &c)?;
-        let g = self.mul_fp2(region, &p.x, &d)?;
-        let ef = self.add_fp2(region, &e, &f)?;
-        let twice_g = self.add_fp2(region, &g, &g)?;
-        let h = self.sub_fp2(region, &ef, &twice_g)?;
-        let x = self.mul_fp2(region, &lambda, &h)?;
-        let gh = self.sub_fp2(region, &g, &h)?;
+        self.assert_nonidentity_g2(region, affine)?;
+        let qyz = self.mul_fp2(region, affine.y(), &point.z)?;
+        let theta = self.sub_fp2(region, &point.y, &qyz)?;
+        let qxz = self.mul_fp2(region, affine.x(), &point.z)?;
+        let lambda = self.sub_fp2(region, &point.x, &qxz)?;
+        let theta_squared = self.square_fp2(region, &theta)?;
+        let lambda_squared = self.square_fp2(region, &lambda)?;
+        let lambda_cubed = self.mul_fp2(region, &lambda, &lambda_squared)?;
+        let scaled_theta = self.mul_fp2(region, &point.z, &theta_squared)?;
+        let scaled_lambda = self.mul_fp2(region, &point.x, &lambda_squared)?;
+        let ef = self.add_fp2(region, &lambda_cubed, &scaled_theta)?;
+        let twice_g = self.add_fp2(region, &scaled_lambda, &scaled_lambda)?;
+        let difference = self.sub_fp2(region, &ef, &twice_g)?;
+        let x = self.mul_fp2(region, &lambda, &difference)?;
+        let gh = self.sub_fp2(region, &scaled_lambda, &difference)?;
         let first_y = self.mul_fp2(region, &theta, &gh)?;
-        let second_y = self.mul_fp2(region, &e, &p.y)?;
+        let second_y = self.mul_fp2(region, &lambda_cubed, &point.y)?;
         let y = self.sub_fp2(region, &first_y, &second_y)?;
-        let z = self.mul_fp2(region, &p.z, &e)?;
+        let z = self.mul_fp2(region, &point.z, &lambda_cubed)?;
         self.require_miller_z(region, &z)?;
-        let j0 = self.mul_fp2(region, &theta, q.x())?;
-        let j1 = self.mul_fp2(region, &lambda, q.y())?;
-        let j = self.sub_fp2(region, &j0, &j1)?;
+        let j0 = self.mul_fp2(region, &theta, affine.x())?;
+        let j1 = self.mul_fp2(region, &lambda, affine.y())?;
+        let line_constant = self.sub_fp2(region, &j0, &j1)?;
         let negative_theta = self.neg_fp2(region, &theta)?;
         Ok((
             MillerG2Value { x, y, z },
             MillerLine {
-                coefficients: [j, negative_theta, lambda],
+                coefficients: [line_constant, negative_theta, lambda],
             },
         ))
     }

@@ -12,12 +12,12 @@ pub(super) fn mul(a: &Fp2, b: &Fp2) -> Fp2 {
 }
 fn sqrt_fp(a: &Fp) -> Option<Fp> {
     const EXPONENT: Fp = [
-        0xee7fbfffffffeaab,
-        0x07aaffffac54ffff,
-        0xd9cc34a83dac3d89,
-        0xd91dd2e13ce144af,
-        0x92c6e9ed90d2eb35,
-        0x0680447a8e5ff9a6,
+        0xee7f_bfff_ffff_eaab,
+        0x07aa_ffff_ac54_ffff,
+        0xd9cc_34a8_3dac_3d89,
+        0xd91d_d2e1_3ce1_44af,
+        0x92c6_e9ed_90d2_eb35,
+        0x0680_447a_8e5f_f9a6,
     ];
     let mut x = native::ONE;
     for limb in EXPONENT.iter().rev() {
@@ -32,6 +32,15 @@ fn sqrt_fp(a: &Fp) -> Option<Fp> {
 }
 /// A root of a quadratic-extension element, if it has one.
 pub(super) fn sqrt(a: &Fp2) -> Option<Fp2> {
+    const HALF: Fp = [
+        0xdcff_7fff_ffff_d556,
+        0x0f55_ffff_58a9_ffff,
+        0xb398_6950_7b58_7b12,
+        0xb23b_a5c2_79c2_895f,
+        0x258d_d3db_21a5_d66b,
+        0x0d00_88f5_1cbf_f34d,
+    ];
+
     if a[1] == native::ZERO {
         if let Some(root) = sqrt_fp(&a[0]) {
             return Some([root, native::ZERO]);
@@ -40,14 +49,6 @@ pub(super) fn sqrt(a: &Fp2) -> Option<Fp2> {
     }
     let norm = native::add(&native::square(&a[0]), &native::square(&a[1]));
     let alpha = sqrt_fp(&norm)?;
-    const HALF: Fp = [
-        0xdcff7fffffffd556,
-        0x0f55ffff58a9ffff,
-        0xb39869507b587b12,
-        0xb23ba5c279c2895f,
-        0x258dd3db21a5d66b,
-        0x0d0088f51cbff34d,
-    ];
     let first = native::mul(&native::add(&a[0], &alpha), &HALF);
     let x = if let Some(root) = sqrt_fp(&first) {
         root
