@@ -36135,8 +36135,9 @@
             "description": "Opaque evaluator hash returned by the RAM-LFE backend.",
             "type": "string"
           },
-          "output_ciphertext": {
-            "description": "Hex-encoded Norito BFV ciphertext envelope produced by the RAM-LFE evaluator.",
+          "opaque_output": {
+            "description": "Uppercase hex-encoded opaque encrypted output bytes produced by the RAM-LFE evaluator.",
+            "pattern": "^(?:[0-9A-F]{2})*$",
             "type": "string"
           },
           "output_hash": {
@@ -36145,6 +36146,13 @@
           },
           "program_id": {
             "description": "RAM-LFE program identifier.",
+            "type": "string"
+          },
+          "program_id_canonical": {
+            "description": "Original native canonical ProgramId frame in uppercase hex, at most 4096 bytes. This is data bound by the signed receipt associated_data_hash, not a new authority.",
+            "maxLength": 8192,
+            "minLength": 2,
+            "pattern": "^(?:[0-9A-F]{2})+$",
             "type": "string"
           },
           "receipt": {
@@ -36161,9 +36169,10 @@
         },
         "required": [
           "program_id",
+          "program_id_canonical",
           "opaque_hash",
           "receipt_hash",
-          "output_ciphertext",
+          "opaque_output",
           "output_hash",
           "associated_data_hash",
           "executed_at_ms",
@@ -76877,6 +76886,132 @@
         "x-iroha-tool-effect": "operator"
       }
     },
+    "/v1/kagemusha/enrollment": {
+      "post": {
+        "description": "Account-authenticated private mutation using the current canonical EnrollmentServiceRequestV1 Norito frame (version 1). PreKey, Evidence, Issue, and Deliver bind the complete method, exact path and body to the dispatch account. dispatch_original is required and bounded to 16384 bytes; evidence_original is required only for Evidence and bounded to 524288 bytes. The complete frame is bounded to 557056 bytes. No query string, trailing slash, caller-selected signer/worker, or plaintext platform verdict is accepted. The configured private issuer retains the original attempt and rechecks current eligibility. Responses are private, no-store.",
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 557056,
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "maxLength": 270336,
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Canonical EnrollmentServiceResponseV1 frame: Permit, EvidenceReady, Pending, CredentialReady, or Credential. Pending preserves the exact consumed attempt; recovery never creates another platform verification attempt.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "const": "enrollment operation unavailable or rejected",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Invalid method, path or query, noncanonical or oversized Norito envelope, content type, or native account authentication.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "const": "enrollment operation unavailable or rejected",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Enrollment eligibility, configured provider selection, or journal policy rejected the operation.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "const": "enrollment operation unavailable or rejected",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Enrollment issuer is disabled or unavailable, admission capacity is exhausted, or the retained owner/worker operation could not complete. Recover the same exact operation and retained attempt.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Execute or recover a Kagemusha enrollment operation.",
+        "tags": [
+          "Kagemusha"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "contracts.kagemusha_enrollment_post"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/kaigi/relays": {
       "get": {
         "description": "Returns relay identifiers, domains, bandwidth classes, HPKE fingerprints, and the freshest health report (if available).",
@@ -86499,7 +86634,7 @@
                 }
               }
             },
-            "description": "The admission worker or authoritative Torii route is unavailable, or transaction dispatch ended without a conclusive admission response. transaction_dispatch_outcome_unknown means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that response carries a singleton x-iroha-entrypoint-hash matching ErrorEnvelope.details.entrypoint_hash. For External or SealedReveal entrypoints it also carries a singleton x-iroha-signed-transaction-hash matching ErrorEnvelope.details.tx_hash; for entrypoints without an inner SignedTransaction, both signed-transaction identity fields are absent. It does not fabricate queue-pressure details or headers.",
+            "description": "The admission worker or authoritative Torii route is unavailable, or transaction dispatch ended without a conclusive admission response. transaction_dispatch_outcome_unknown means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that response carries a singleton x-iroha-entrypoint-hash matching ErrorEnvelope.details.entrypoint_hash. For External or SealedReveal entrypoints it also carries a singleton x-iroha-signed-transaction-hash matching ErrorEnvelope.details.tx_hash; for entrypoints without an inner SignedTransaction, both signed-transaction identity fields are absent. An outcome-unknown response does not fabricate queue-pressure or Retry-After; reconcile its exact transaction identity.",
             "headers": {
               "x-iroha-entrypoint-hash": {
                 "description": "Present exactly once only for transaction_dispatch_outcome_unknown; the exact transaction-entrypoint hash also carried in ErrorEnvelope.details.entrypoint_hash.",
@@ -86793,7 +86928,7 @@
                 }
               }
             },
-            "description": "The admission worker or authoritative Torii route is unavailable, or transaction dispatch ended without a conclusive admission response. transaction_dispatch_outcome_unknown means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that response carries a singleton x-iroha-entrypoint-hash matching ErrorEnvelope.details.entrypoint_hash. It also carries a singleton x-iroha-signed-transaction-hash matching ErrorEnvelope.details.tx_hash.",
+            "description": "The admission worker or authoritative Torii route is unavailable, or transaction dispatch ended without a conclusive admission response. transaction_dispatch_outcome_unknown means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that response carries a singleton x-iroha-entrypoint-hash matching ErrorEnvelope.details.entrypoint_hash. It also carries a singleton x-iroha-signed-transaction-hash matching ErrorEnvelope.details.tx_hash. An outcome-unknown response does not fabricate queue-pressure or Retry-After; reconcile its exact transaction identity.",
             "headers": {
               "Retry-After": {
                 "description": "Whole-second retry delay when authoritative backpressure supplies one; dispatch outcome-unknown responses omit it.",

@@ -125,7 +125,6 @@ fn sccp_governance_openapi_tracks_the_v1_parliament_proposal() {
             "GovernanceParliamentProposalPayloadSccpRouteGovernanceV1",
             "proposal",
         ),
-        ("ExplorerSccpRouteGovernanceInstructionValue", "proposal"),
     ] {
         let schema = schemas
             .get(schema_name)
@@ -146,6 +145,23 @@ fn sccp_governance_openapi_tracks_the_v1_parliament_proposal() {
             "{schema_name}.{field}"
         );
     }
+    // Explorer carries the exact native InstructionBox, including this proposal;
+    // the retired parallel instruction JSON projection must stay absent.
+    assert!(!schemas.contains_key("ExplorerSccpRouteGovernanceInstructionValue"));
+    let native_box = schemas
+        .get("ExplorerInstructionDetail")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("box"))
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .expect("Explorer native instruction box");
+    assert_eq!(
+        native_box.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["framed_sha256", "instruction", "wire_id"]
+    );
     let proposal = schemas
         .get("SccpGovernanceProposalV1")
         .and_then(Value::as_object)
