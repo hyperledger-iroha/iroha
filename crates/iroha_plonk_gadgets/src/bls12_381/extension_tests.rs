@@ -43,29 +43,29 @@ fn fq(a: native::Fp) -> Fq {
 fn fq2(a: Fp2) -> Fq2 {
     Fq2::new(fq(a[0]), fq(a[1]))
 }
-fn fq6(a: Fp6) -> Fq6 {
+fn fq6(a: &Fp6) -> Fq6 {
     Fq6::new(fq2(a[0]), fq2(a[1]), fq2(a[2]))
 }
-fn fq12(a: Fp12) -> Fq12 {
-    Fq12::new(fq6(a[0]), fq6(a[1]))
+fn fq12(a: &Fp12) -> Fq12 {
+    Fq12::new(fq6(&a[0]), fq6(&a[1]))
 }
 fn out2(a: Fq2) -> Fp2 {
     [a.c0.into_bigint().0, a.c1.into_bigint().0]
 }
-fn out6(a: Fq6) -> Fp6 {
+fn out6(a: &Fq6) -> Fp6 {
     [out2(a.c0), out2(a.c1), out2(a.c2)]
 }
-fn out12(a: Fq12) -> Fp12 {
-    [out6(a.c0), out6(a.c1)]
+fn out12(a: &Fq12) -> Fp12 {
+    [out6(&a.c0), out6(&a.c1)]
 }
 fn flatten2(a: Fp2) -> Vec<native::Fp> {
     a.into_iter().collect()
 }
-fn flatten6(a: Fp6) -> Vec<native::Fp> {
-    a.into_iter().flatten().collect()
+fn flatten6(a: &Fp6) -> Vec<native::Fp> {
+    a.iter().flatten().copied().collect()
 }
-fn flatten12(a: Fp12) -> Vec<native::Fp> {
-    a.into_iter().flatten().flatten().collect()
+fn flatten12(a: &Fp12) -> Vec<native::Fp> {
+    a.iter().flatten().flatten().copied().collect()
 }
 
 fn sample(seed: u64) -> Fp12 {
@@ -118,10 +118,10 @@ impl<F: PastaField> TestCircuit<F> {
     fn public(&self) -> Vec<F> {
         let a2 = fq2(self.a[0][0]);
         let b2 = fq2(self.b[0][0]);
-        let a6 = fq6(self.a[0]);
-        let b6 = fq6(self.b[0]);
-        let a12 = fq12(self.a);
-        let b12 = fq12(self.b);
+        let a6 = fq6(&self.a[0]);
+        let b6 = fq6(&self.b[0]);
+        let a12 = fq12(&self.a);
+        let b12 = fq12(&self.b);
         if matches!(self.op, Op::Zero | Op::Equal) {
             let bit = match self.op {
                 Op::Zero => a2 == Fq2::ZERO,
@@ -132,7 +132,7 @@ impl<F: PastaField> TestCircuit<F> {
         }
         let result = match self.degree {
             2 => flatten2(out2(match self.op {
-                Op::Assign => a2,
+                Op::Assign | Op::Select(true) => a2,
                 Op::Frobenius(power) => a2.frobenius_map(usize::from(power)),
                 Op::Add => a2 + b2,
                 Op::Sub => a2 - b2,
@@ -143,11 +143,10 @@ impl<F: PastaField> TestCircuit<F> {
                 Op::Nonresidue => a2 * Fq2::new(Fq::ONE, Fq::ONE),
                 Op::Conjugate => Fq2::new(a2.c0, -a2.c1),
                 Op::Scale => a2 * Fq2::new(b2.c0, Fq::ZERO),
-                Op::Select(true) => a2,
                 Op::Select(false) => b2,
                 _ => unreachable!(),
             })),
-            6 => flatten6(out6(match self.op {
+            6 => flatten6(&out6(&match self.op {
                 Op::Assign => a6,
                 Op::Frobenius(power) => a6.frobenius_map(usize::from(power)),
                 Op::Add => a6 + b6,
@@ -159,7 +158,7 @@ impl<F: PastaField> TestCircuit<F> {
                 Op::Nonresidue => a6 * Fq6::new(Fq2::ZERO, Fq2::ONE, Fq2::ZERO),
                 _ => unreachable!(),
             })),
-            12 => flatten12(out12(match self.op {
+            12 => flatten12(&out12(&match self.op {
                 Op::Assign => a12,
                 Op::Frobenius(power) => a12.frobenius_map(usize::from(power)),
                 Op::Mul => a12 * b12,
@@ -252,7 +251,7 @@ impl<F: PastaField> Circuit<F> for TestCircuit<F> {
                         };
                         let constant = chip.constant_fp2(&mut region, self.a[0][0])?;
                         let assigned = chip.assign_fp2(&mut region, self.witness(self.a[0][0]))?;
-                        chip.assert_equal_fp2(&mut region, &assigned, &constant)?;
+                        Bls381Chip::assert_equal_fp2(&mut region, &assigned, &constant)?;
                         result
                             .coefficients()
                             .iter()
@@ -260,8 +259,8 @@ impl<F: PastaField> Circuit<F> for TestCircuit<F> {
                             .collect()
                     }
                     6 => {
-                        let a = chip.assign_fp6(&mut region, self.witness(self.a[0]))?;
-                        let b = chip.assign_fp6(&mut region, self.witness(self.b[0]))?;
+                        let a = chip.assign_fp6(&mut region, &self.witness(self.a[0]))?;
+                        let b = chip.assign_fp6(&mut region, &self.witness(self.b[0]))?;
                         let result = match self.op {
                             Op::Assign => a,
                             Op::Frobenius(power) => {
@@ -276,19 +275,19 @@ impl<F: PastaField> Circuit<F> for TestCircuit<F> {
                             Op::Nonresidue => chip.mul_fp6_nonresidue(&mut region, &a)?,
                             _ => return Err(Error::Synthesis),
                         };
-                        let constant = chip.constant_fp6(&mut region, self.a[0])?;
-                        let assigned = chip.assign_fp6(&mut region, self.witness(self.a[0]))?;
-                        chip.assert_equal_fp6(&mut region, &assigned, &constant)?;
+                        let constant = chip.constant_fp6(&mut region, &self.a[0])?;
+                        let assigned = chip.assign_fp6(&mut region, &self.witness(self.a[0]))?;
+                        Bls381Chip::assert_equal_fp6(&mut region, &assigned, &constant)?;
                         result
                             .coefficients()
                             .iter()
-                            .flat_map(|x| x.coefficients())
+                            .flat_map(Fp2Value::coefficients)
                             .flat_map(|x| x.limbs().iter().cloned())
                             .collect()
                     }
                     12 => {
-                        let a = chip.assign_fp12(&mut region, self.witness(self.a))?;
-                        let b = chip.assign_fp12(&mut region, self.witness(self.b))?;
+                        let a = chip.assign_fp12(&mut region, &self.witness(self.a))?;
+                        let b = chip.assign_fp12(&mut region, &self.witness(self.b))?;
                         let result = match self.op {
                             Op::Assign => a,
                             Op::Frobenius(power) => {
@@ -300,14 +299,14 @@ impl<F: PastaField> Circuit<F> for TestCircuit<F> {
                             Op::Conjugate => chip.conjugate_fp12(&mut region, &a)?,
                             _ => return Err(Error::Synthesis),
                         };
-                        let constant = chip.constant_fp12(&mut region, self.a)?;
-                        let assigned = chip.assign_fp12(&mut region, self.witness(self.a))?;
-                        chip.assert_equal_fp12(&mut region, &assigned, &constant)?;
+                        let constant = chip.constant_fp12(&mut region, &self.a)?;
+                        let assigned = chip.assign_fp12(&mut region, &self.witness(self.a))?;
+                        Bls381Chip::assert_equal_fp12(&mut region, &assigned, &constant)?;
                         result
                             .coefficients()
                             .iter()
-                            .flat_map(|x| x.coefficients())
-                            .flat_map(|x| x.coefficients())
+                            .flat_map(Fp6Value::coefficients)
+                            .flat_map(Fp2Value::coefficients)
                             .flat_map(|x| x.limbs().iter().cloned())
                             .collect()
                     }
@@ -366,7 +365,7 @@ fn run<F: PastaField>() {
             let c = TestCircuit::<F>::new(degree, op);
             let public = c.public();
             assert!(
-                check_circuit(&c, c.k(), &[public.clone()], CheckMode::Strict)
+                check_circuit(&c, c.k(), std::slice::from_ref(&public), CheckMode::Strict)
                     .expect("extension layout")
                     .is_satisfied(),
                 "degree {degree} {op:?}"
@@ -467,7 +466,7 @@ fn frobenius<F: PastaField>() {
             let c = TestCircuit::<F>::new(degree, Op::Frobenius(power));
             let public = c.public();
             assert!(
-                check_circuit(&c, c.k(), &[public.clone()], CheckMode::Strict)
+                check_circuit(&c, c.k(), std::slice::from_ref(&public), CheckMode::Strict)
                     .unwrap()
                     .is_satisfied(),
                 "degree {degree} power {power}"

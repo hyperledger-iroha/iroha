@@ -363,6 +363,31 @@ fn export(network: &Network, root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn fund_fee_successor(network: &Network) -> Result<()> {
+    // The automatic fee definition is registered at the end of genesis. Use
+    // one ordinary ALICE-signed H2 transaction to fund the already registered
+    // role accounts, preserving the selected genesis and fee policy.
+    let fee_asset: AssetDefinitionId =
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
+    let mut successor: Vec<InstructionBox> =
+        vec![Log::new(Level::INFO, "KAGEMUSHA monetary setup successor".to_owned()).into()];
+    for seed in [41, 42, 43, 95] {
+        successor.push(
+            Transfer::asset_quantity(
+                AssetId::of(fee_asset.clone(), iroha_test_samples::ALICE_ID.clone()),
+                ROLE_FEE_UNITS,
+                account(seed),
+            )
+            .into(),
+        );
+    }
+    network.client().submit_all(
+        successor,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    wait_for_committed(network, 2, network.sync_timeout(), &[])
+}
+
 #[test]
 #[ignore = "explicit four-validator source setup; complete proof catalog and monetary round remain separate"]
 fn export_four_validator_kagemusha_setup() -> Result<()> {
@@ -378,28 +403,7 @@ fn export_four_validator_kagemusha_setup() -> Result<()> {
     .ok_or_else(|| eyre!("four-validator qualification cannot skip network startup"))?;
     let result = (|| -> Result<()> {
         wait_for_committed(&network, 1, network.sync_timeout(), &[])?;
-        // The automatic fee definition is registered at the end of genesis. Use
-        // one ordinary ALICE-signed H2 transaction to fund the already registered
-        // role accounts, preserving the selected genesis and fee policy.
-        let fee_asset: AssetDefinitionId =
-            iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
-        let mut successor: Vec<InstructionBox> =
-            vec![Log::new(Level::INFO, "KAGEMUSHA monetary setup successor".to_owned()).into()];
-        for seed in [41, 42, 43, 95] {
-            successor.push(
-                Transfer::asset_quantity(
-                    AssetId::of(fee_asset.clone(), iroha_test_samples::ALICE_ID.clone()),
-                    ROLE_FEE_UNITS,
-                    account(seed),
-                )
-                .into(),
-            );
-        }
-        network.client().submit_all(
-            successor,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )?;
-        wait_for_committed(&network, 2, network.sync_timeout(), &[])?;
+        fund_fee_successor(&network)?;
         export(&network, output)
     })();
     rt.block_on(async { network.shutdown().await });
@@ -438,3 +442,6 @@ fn registration_incarnation_requires_one_isolated_signed_creation() {
     ]);
     assert!(registration_call(std::iter::once(&mixed)).is_err());
 }
+
+#[path = "kagemusha_network_setup/continuation.rs"]
+mod continuation;

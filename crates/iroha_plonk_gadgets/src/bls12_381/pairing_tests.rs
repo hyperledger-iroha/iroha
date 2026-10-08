@@ -4,7 +4,7 @@ use crate::{
     arith::{GlueChip, GlueConfig},
     bls12_381::{
         curve::{G1AffineWitness, G2AffineWitness},
-        extension::Fp12,
+        extension::{Fp2Value, Fp6Value, Fp12},
     },
     cells::Word,
     range::{LimbBits, RunningSumChip, RunningSumConfig},
@@ -22,11 +22,11 @@ use iroha_plonk::{
 fn native2(a: Fq2) -> Fp2 {
     [a.c0.into_bigint().0, a.c1.into_bigint().0]
 }
-fn native6(a: Fq6) -> [Fp2; 3] {
+fn native6(a: &Fq6) -> [Fp2; 3] {
     [native2(a.c0), native2(a.c1), native2(a.c2)]
 }
-fn native12(a: Fq12) -> Fp12 {
-    [native6(a.c0), native6(a.c1)]
+fn native12(a: &Fq12) -> Fp12 {
+    [native6(&a.c0), native6(&a.c1)]
 }
 fn q() -> G2Affine {
     G2Affine::generator()
@@ -92,7 +92,7 @@ impl<F: PastaField> TestCircuit<F> {
             let mut registers = initial_registers();
             native_final_step(final_exponent::FINAL_EXPONENT_STEPS[index], &mut registers);
             return registers
-                .into_iter()
+                .iter()
                 .flat_map(native12)
                 .flatten()
                 .flatten()
@@ -109,7 +109,7 @@ impl<F: PastaField> TestCircuit<F> {
                 &(c.1 * Fq2::new(p.x, Fq::ZERO)),
                 &(c.2 * Fq2::new(p.y, Fq::ZERO)),
             );
-            return native12(out)
+            return native12(&out)
                 .into_iter()
                 .flatten()
                 .flatten()
@@ -130,7 +130,7 @@ impl<F: PastaField> TestCircuit<F> {
             .collect();
         if !matches!(self.op, Op::Assign) {
             words.extend(
-                line(if matches!(self.op, Op::Double) { 0 } else { 1 })
+                line(usize::from(!matches!(self.op, Op::Double)))
                     .into_iter()
                     .flatten(),
             );
@@ -187,21 +187,21 @@ impl<F: PastaField> Circuit<F> for TestCircuit<F> {
                     let mut assigned = Vec::with_capacity(5);
                     for value in values {
                         assigned
-                            .push(chip.assign_fp12(&mut region, self.witness(native12(value)))?);
+                            .push(chip.assign_fp12(&mut region, &self.witness(native12(&value)))?);
                     }
                     let assigned: [Fp12Value<F>; 5] =
                         assigned.try_into().map_err(|_| Error::Synthesis)?;
                     let out = chip.final_exponent_step(&mut region, &assigned, index)?;
                     return Ok(out
                         .iter()
-                        .flat_map(|x| x.coefficients())
-                        .flat_map(|x| x.coefficients())
-                        .flat_map(|x| x.coefficients())
+                        .flat_map(Fp12Value::coefficients)
+                        .flat_map(Fp6Value::coefficients)
+                        .flat_map(Fp2Value::coefficients)
                         .flat_map(|x| x.limbs().iter().cloned())
                         .collect());
                 }
                 if matches!(self.op, Op::Evaluate) {
-                    let line = chip.assign_miller_line(&mut region, self.witness(line(0)))?;
+                    let line = chip.assign_miller_line(&mut region, &self.witness(line(0)))?;
                     let p = G1Affine::generator();
                     let p = chip.assign_g1(
                         &mut region,
@@ -212,19 +212,19 @@ impl<F: PastaField> Circuit<F> for TestCircuit<F> {
                         }),
                     )?;
                     let acc =
-                        chip.assign_fp12(&mut region, self.witness(native12(accumulator())))?;
+                        chip.assign_fp12(&mut region, &self.witness(native12(&accumulator())))?;
                     let out = chip.miller_evaluate(&mut region, &acc, &line, &p)?;
                     return Ok(out
                         .coefficients()
                         .iter()
-                        .flat_map(|x| x.coefficients())
-                        .flat_map(|x| x.coefficients())
+                        .flat_map(Fp6Value::coefficients)
+                        .flat_map(Fp2Value::coefficients)
                         .flat_map(|x| x.limbs().iter().cloned())
                         .collect());
                 }
                 let (point, line) = if matches!(self.op, Op::Assign) {
                     (
-                        chip.assign_miller_g2(&mut region, self.witness(self.initial))?,
+                        chip.assign_miller_g2(&mut region, &self.witness(self.initial))?,
                         None,
                     )
                 } else {
@@ -258,7 +258,7 @@ impl<F: PastaField> Circuit<F> for TestCircuit<F> {
                     out.extend(
                         line.coefficients()
                             .iter()
-                            .flat_map(|x| x.coefficients())
+                            .flat_map(Fp2Value::coefficients)
                             .flat_map(|x| x.limbs().iter().cloned()),
                     );
                 }
@@ -287,7 +287,7 @@ fn run<F: PastaField>() {
         let c = TestCircuit::<F>::new(op);
         let public = c.public();
         assert!(
-            check_circuit(&c, c.k(), &[public.clone()], CheckMode::Strict)
+            check_circuit(&c, c.k(), std::slice::from_ref(&public), CheckMode::Strict)
                 .expect("Miller layout")
                 .is_satisfied(),
             "{op:?}"

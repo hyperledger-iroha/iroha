@@ -540,16 +540,16 @@ fn transition(
             ];
             let zero = field.constant_fp2(region, [native::ZERO; 2])?;
             // Coefficient assignments are bound to explicit constant zero.
-            let line = field.assign_miller_line(region, Value::known([[native::ZERO; 2]; 3]))?;
+            let line = field.assign_miller_line(region, &Value::known([[native::ZERO; 2]; 3]))?;
             for c in line.coefficients() {
-                field.assert_equal_fp2(region, c, &zero)?;
+                Bls381Chip::assert_equal_fp2(region, c, &zero)?;
             }
             StateCells::Miller {
                 message_point: h,
                 state: Box::new(MillerPairState::from_parts(
                     points,
                     [line.clone(), line],
-                    field.constant_fp12(region, ONE12)?,
+                    field.constant_fp12(region, &ONE12)?,
                 )),
             }
         }
@@ -573,7 +573,7 @@ fn transition(
             }
         }
         (Step::StartFinal, StateCells::Miller { state, .. }) => {
-            let zero = field.constant_fp12(region, ZERO12)?;
+            let zero = field.constant_fp12(region, &ZERO12)?;
             StateCells::Final(Box::new(core::array::from_fn(|index| {
                 if index == 0 {
                     state.accumulator().clone()
@@ -586,8 +586,8 @@ fn transition(
             StateCells::Final(Box::new(field.final_exponent_step(region, regs, index)?))
         }
         (Step::Finish, StateCells::Final(regs)) => {
-            let one = field.constant_fp12(region, ONE12)?;
-            field.assert_equal_fp12(region, &regs[0], &one)?;
+            let one = field.constant_fp12(region, &ONE12)?;
+            Bls381Chip::assert_equal_fp12(region, &regs[0], &one)?;
             StateCells::Done
         }
         _ => return Err(Error::Synthesis),
@@ -600,8 +600,8 @@ fn negative_generator(
     let point = field.assign_g1(region, Value::known(G1_GENERATOR))?;
     let x = field.constant(region, G1_GENERATOR.x)?;
     let y = field.constant(region, G1_GENERATOR.y)?;
-    field.assert_equal(region, point.x(), &x)?;
-    field.assert_equal(region, point.y(), &y)?;
+    Bls381Chip::assert_equal(region, point.x(), &x)?;
+    Bls381Chip::assert_equal(region, point.y(), &y)?;
     field.assert_nonidentity_g1(region, &point)?;
     field.neg_g1(region, &point)
 }

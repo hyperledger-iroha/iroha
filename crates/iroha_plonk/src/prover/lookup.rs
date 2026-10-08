@@ -372,8 +372,11 @@ where
         }
         product[u] = running;
         // No later phase needs this scratch, including the commitment MSM.
-        crate::secret::wipe(&mut lookup.compressed_table);
-        lookup.compressed_table.clear();
+        // Move it into the wiping owner and release the allocation now; clearing
+        // the vector would retain a whole field column through the MSM and FFTs.
+        drop(SecretPolynomial::new(core::mem::take(
+            &mut lookup.compressed_table,
+        )));
         let random = SecretPolynomial::new(random_values::<C::ScalarExt, _>(
             rng,
             shape.blinding_factors,

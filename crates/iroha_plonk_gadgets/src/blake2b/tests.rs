@@ -183,7 +183,9 @@ fn raw_digest_vectors_cover_empty_partial_full_and_multiple_blocks() {
         ),
     ];
     for (len, expected) in vectors {
-        let input: Vec<_> = (0..len).map(|i| (i % 256) as u8).collect();
+        let input: Vec<_> = (0..len)
+            .map(|i| u8::try_from(i % 256).expect("byte residue"))
+            .collect();
         let (circuit, public, k) = hash_case::<Fp>(&input, expected, false);
         assert!(
             check_circuit(&circuit, k, &[public], CheckMode::Strict)
@@ -403,7 +405,9 @@ fn primitive_case<F: PastaField>(
 ) -> (PrimitiveCircuit<F>, Vec<F>) {
     let expected = match operation {
         Primitive::Add => a.wrapping_add(b),
-        Primitive::XorRotate(rotation) => (a ^ b).rotate_right(rotation as u32),
+        Primitive::XorRotate(rotation) => {
+            (a ^ b).rotate_right(u32::try_from(rotation % 64).expect("rotation modulo word width"))
+        }
     };
     let public = a
         .to_le_bytes()
@@ -572,15 +576,15 @@ fn streaming_word_codec_checks_every_cell_and_rejects_non_u64_values() {
 /// use the circuit's bit or carry witnesses; complete hashes also have the
 /// independent hashlib vectors above.
 fn native_compress(mut h: [u64; 8], block: &[u8; 128], counter: u128, last: bool) -> [u64; 8] {
-    fn g(v: &mut [u64; 16], [a, b, c, d]: [usize; 4], x: u64, y: u64) {
-        v[a] = v[a].wrapping_add(v[b]).wrapping_add(x);
-        v[d] = (v[d] ^ v[a]).rotate_right(32);
-        v[c] = v[c].wrapping_add(v[d]);
-        v[b] = (v[b] ^ v[c]).rotate_right(24);
-        v[a] = v[a].wrapping_add(v[b]).wrapping_add(y);
-        v[d] = (v[d] ^ v[a]).rotate_right(16);
-        v[c] = v[c].wrapping_add(v[d]);
-        v[b] = (v[b] ^ v[c]).rotate_right(63);
+    fn g(state: &mut [u64; 16], [first, second, third, fourth]: [usize; 4], left: u64, right: u64) {
+        state[first] = state[first].wrapping_add(state[second]).wrapping_add(left);
+        state[fourth] = (state[fourth] ^ state[first]).rotate_right(32);
+        state[third] = state[third].wrapping_add(state[fourth]);
+        state[second] = (state[second] ^ state[third]).rotate_right(24);
+        state[first] = state[first].wrapping_add(state[second]).wrapping_add(right);
+        state[fourth] = (state[fourth] ^ state[first]).rotate_right(16);
+        state[third] = state[third].wrapping_add(state[fourth]);
+        state[second] = (state[second] ^ state[third]).rotate_right(63);
     }
     let message: [u64; 16] = core::array::from_fn(|i| {
         u64::from_le_bytes(block[i * 8..i * 8 + 8].try_into().expect("word"))
@@ -588,8 +592,12 @@ fn native_compress(mut h: [u64; 8], block: &[u8; 128], counter: u128, last: bool
     let mut v = [0; 16];
     v[..8].copy_from_slice(&h);
     v[8..].copy_from_slice(&IV);
-    v[12] ^= counter as u64;
-    v[13] ^= (counter >> 64) as u64;
+    v[12] ^= u64::from_le_bytes(
+        counter.to_le_bytes()[..8]
+            .try_into()
+            .expect("low counter word"),
+    );
+    v[13] ^= u64::try_from(counter >> 64).expect("high counter word");
     if last {
         v[14] = !v[14];
     }
@@ -703,7 +711,14 @@ fn stream_case<F: PastaField>(
     let circuit = StreamCircuit {
         state: state.map(F::from),
         block: block.map(|byte| F::from(u64::from(byte))),
-        counter: [F::from(counter as u64), F::from((counter >> 64) as u64)],
+        counter: [
+            F::from(u64::from_le_bytes(
+                counter.to_le_bytes()[..8]
+                    .try_into()
+                    .expect("low counter word"),
+            )),
+            F::from(u64::try_from(counter >> 64).expect("high counter word")),
+        ],
         last: F::from(u64::from(last)),
         initial,
         known: true,
@@ -728,7 +743,7 @@ fn stream_case<F: PastaField>(
 #[test]
 fn streaming_compression_binds_high_counter_final_bit_and_full_state() {
     let initial = core::array::from_fn(|i| IV[i] ^ if i == 0 { 0x0101_0020 } else { 0 });
-    let block = core::array::from_fn(|i| i as u8);
+    let block = core::array::from_fn(|i| u8::try_from(i).expect("fixture byte index"));
     for (counter, last) in [
         (128, true),
         ((1_u128 << 64) + 129, false),

@@ -146,7 +146,7 @@ fn parity<F: PastaField>() {
             assert!(satisfies(&circuit, &circuit.public()));
             for mask in [32, 64, 128] {
                 let mut forged = circuit.public();
-                let b = crate::cells::low_u128(&forged[0][0]) as u8;
+                let b = crate::cells::low_u128(&forged[0][0]).to_le_bytes()[0];
                 forged[0][0] = F::from(u64::from(b ^ mask));
                 assert!(!satisfies(&circuit, &forged));
             }

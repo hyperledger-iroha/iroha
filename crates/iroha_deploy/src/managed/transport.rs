@@ -5,9 +5,22 @@ use iroha_fs::PrivateDirectory;
 use std::{
     io::{Read, Write},
     process::Command,
+    time::Instant,
 };
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn remaining_io(deadline: Instant) -> std::io::Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "managed cleanup observation deadline expired; original ownership is unconfirmed",
+            )
+        })
+}
 
 // Availability is observed only at the direct endpoint or stream-I/O boundaries below.
 // Native directory custody, peer authentication and decoding remain strict refusals.
@@ -322,20 +335,34 @@ mod native {
         directory: &PrivateDirectory,
         request: &ControlRequest,
     ) -> std::result::Result<T, RequestFailure> {
+        let deadline =
+            (request.action == "down").then(|| Instant::now() + STOP_OBSERVATION_MAXIMUM);
+        request_observed_with_deadline(directory, request, deadline)
+    }
+
+    pub(crate) fn request_observed_with_deadline<T: JsonDeserialize>(
+        directory: &PrivateDirectory,
+        request: &ControlRequest,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<T, RequestFailure> {
+        if let Some(deadline) = deadline {
+            remaining_io(deadline)?;
+        }
         let directory = ipc_directory(directory, false)?;
         let mut original = None;
         let result = (|| -> std::result::Result<T, RequestFailure> {
             let before = endpoint_observation(&directory)?;
             original = Some(before);
-            let mut stream = UnixStream::connect(endpoint(&directory))
-                .map_err(|error| RequestFailure::stream(error.into()))?;
+            let mut stream = match deadline {
+                Some(deadline) => connect_until(&endpoint(&directory), deadline),
+                None => UnixStream::connect(endpoint(&directory)),
+            }
+            .map_err(|error| RequestFailure::stream(error.into()))?;
             authenticate_peer(&stream)?;
-            stream.set_read_timeout(Some(if request.action == "down" {
-                Duration::from_secs(10)
-            } else {
-                IO_TIMEOUT
-            }))?;
-            stream.set_write_timeout(Some(IO_TIMEOUT))?;
+            if deadline.is_none() {
+                stream.set_read_timeout(Some(IO_TIMEOUT))?;
+                stream.set_write_timeout(Some(IO_TIMEOUT))?;
+            }
             if endpoint_observation(&directory)? != before {
                 return Err(Error::Invalid(
                     "managed control endpoint changed during connection".into(),
@@ -343,8 +370,20 @@ mod native {
                 .into());
             }
             let bytes = encode(request)?;
-            write_frame(&mut stream, &bytes).map_err(RequestFailure::stream)?;
-            let reply = read_frame(&mut stream).map_err(RequestFailure::stream)?;
+            let reply = if let Some(deadline) = deadline {
+                let mut stream = DeadlineStream {
+                    stream: &mut stream,
+                    deadline,
+                };
+                write_frame(&mut stream, &bytes).map_err(RequestFailure::stream)?;
+                read_frame(&mut stream).map_err(RequestFailure::stream)?
+            } else {
+                write_frame(&mut stream, &bytes).map_err(RequestFailure::stream)?;
+                read_frame(&mut stream).map_err(RequestFailure::stream)?
+            };
+            if let Some(deadline) = deadline {
+                remaining_io(deadline)?;
+            }
             decode(&reply).map_err(Into::into)
         })();
         let result = if matches!(&result, Err(RequestFailure::Unavailable(_))) {
@@ -364,6 +403,339 @@ mod native {
         };
         directory.revalidate()?;
         result
+    }
+
+    // A queued local connection can wait when the original owner's accept queue is full.
+    // Only the stop observer uses nonblocking admission; ordinary control transport is unchanged.
+    fn connect_until(path: &std::path::Path, deadline: Instant) -> std::io::Result<UnixStream> {
+        #[cfg(not(target_vendor = "apple"))]
+        use rustix::net::SocketFlags;
+        use rustix::{
+            io::Errno,
+            net::{self, AddressFamily, SocketAddrUnix, SocketType},
+        };
+        let address = SocketAddrUnix::new(path)?;
+        loop {
+            remaining_io(deadline)?;
+            #[cfg(target_vendor = "apple")]
+            let socket = {
+                // Darwin exposes neither SOCK_NONBLOCK nor SOCK_CLOEXEC at socket creation.
+                let socket = net::socket(AddressFamily::UNIX, SocketType::STREAM, None)?;
+                rustix::io::fcntl_setfd(&socket, rustix::io::FdFlags::CLOEXEC)?;
+                net::sockopt::set_socket_nosigpipe(&socket, true)?;
+                socket
+            };
+            #[cfg(not(target_vendor = "apple"))]
+            let socket = net::socket_with(
+                AddressFamily::UNIX,
+                SocketType::STREAM,
+                SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+                None,
+            )?;
+            let stream = UnixStream::from(socket);
+            stream.set_nonblocking(true)?;
+            let pending = match net::connect(&stream, &address) {
+                Ok(()) => false,
+                Err(Errno::INPROGRESS | Errno::ALREADY) => true,
+                Err(Errno::AGAIN) => {
+                    std::thread::sleep(POLL.min(remaining_io(deadline)?));
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
+            if pending {
+                loop {
+                    remaining_io(deadline)?;
+                    if let Some(error) = stream.take_error()? {
+                        return Err(error);
+                    }
+                    match stream.peer_addr() {
+                        Ok(_) => break,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotConnected => {
+                            std::thread::sleep(POLL.min(remaining_io(deadline)?));
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+            remaining_io(deadline)?;
+            stream.set_nonblocking(false)?;
+            return Ok(stream);
+        }
+    }
+
+    // A peer can close after writing a complete reply. Darwin rejects timeout sockopts on
+    // that disconnected socket even while its reply is buffered, so deadline I/O uses
+    // per-call nonblocking flags and waits only for the original absolute remainder.
+    // The descriptor's blocking mode stays unchanged, including after connect_until.
+    struct DeadlineStream<'a> {
+        stream: &'a mut UnixStream,
+        deadline: Instant,
+    }
+
+    impl DeadlineStream<'_> {
+        fn wait_ready(&self, events: rustix::event::PollFlags) -> std::io::Result<()> {
+            use rustix::{
+                event::{PollFd, Timespec, poll},
+                io::Errno,
+            };
+            loop {
+                let timeout = Timespec::try_from(remaining_io(self.deadline)?).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "managed poll timeout exceeds its native bound",
+                    )
+                })?;
+                let mut descriptors = [PollFd::new(&*self.stream, events)];
+                match poll(&mut descriptors, Some(&timeout)) {
+                    Ok(0) | Err(Errno::INTR) => continue,
+                    Ok(_) => {
+                        remaining_io(self.deadline)?;
+                        // HUP/ERR also wake poll. The next nonblocking receive/send obtains
+                        // buffered bytes, EOF or the actual socket error; readiness alone
+                        // never proves that a complete authenticated frame arrived.
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+    }
+
+    impl Read for DeadlineStream<'_> {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            use rustix::{
+                event::PollFlags,
+                io::Errno,
+                net::{RecvFlags, recv},
+            };
+            loop {
+                remaining_io(self.deadline)?;
+                if bytes.is_empty() {
+                    return Ok(0);
+                }
+                match recv(&*self.stream, &mut *bytes, RecvFlags::DONTWAIT) {
+                    Ok((_, received)) => {
+                        remaining_io(self.deadline)?;
+                        return Ok(received);
+                    }
+                    Err(Errno::AGAIN) => self.wait_ready(PollFlags::IN)?,
+                    Err(Errno::INTR) => continue,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+    }
+
+    impl Write for DeadlineStream<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            use rustix::{
+                event::PollFlags,
+                io::Errno,
+                net::{SendFlags, send},
+            };
+            let flags = SendFlags::DONTWAIT;
+            // Apple sockets retain SO_NOSIGPIPE from their creator; other native hosts
+            // suppress SIGPIPE on each send without changing process-wide signal policy.
+            #[cfg(not(any(target_vendor = "apple", target_os = "redox", target_os = "vita")))]
+            let flags = flags | SendFlags::NOSIGNAL;
+            loop {
+                remaining_io(self.deadline)?;
+                if bytes.is_empty() {
+                    return Ok(0);
+                }
+                match send(&*self.stream, bytes, flags) {
+                    Ok(written) => {
+                        remaining_io(self.deadline)?;
+                        return Ok(written);
+                    }
+                    Err(Errno::AGAIN) => self.wait_ready(PollFlags::OUT)?,
+                    Err(Errno::INTR) => continue,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            // UnixStream has no userspace write buffer to flush.
+            remaining_io(self.deadline).map(|_| ())
+        }
+    }
+
+    #[cfg(test)]
+    mod down_deadline_tests {
+        use super::*;
+        use std::{io, sync::mpsc, thread};
+
+        #[test]
+        fn complete_buffered_frame_survives_peer_close_before_header_or_body_read() {
+            for header_consumed in [false, true] {
+                let (mut reader, mut writer) = UnixStream::pair().unwrap();
+                writer.write_all(&4_u32.to_be_bytes()).unwrap();
+                writer.write_all(b"done").unwrap();
+                drop(writer);
+                // Closing precedes even the first bounded read, reproducing Darwin's
+                // disconnected-socket sockopt refusal without a scheduling race.
+                if header_consumed {
+                    let mut header = [0; 4];
+                    reader.read_exact(&mut header).unwrap();
+                    assert_eq!(u32::from_be_bytes(header), 4);
+                }
+                let mut bounded = DeadlineStream {
+                    stream: &mut reader,
+                    deadline: Instant::now() + Duration::from_secs(1),
+                };
+                if header_consumed {
+                    let mut body = [0; 4];
+                    bounded.read_exact(&mut body).unwrap();
+                    assert_eq!(&body, b"done");
+                } else {
+                    assert_eq!(read_frame(&mut bounded).unwrap(), b"done");
+                }
+            }
+        }
+
+        #[test]
+        fn truncated_buffered_frame_after_peer_close_is_eof_not_completion() {
+            for payload in [vec![], vec![0, 0], vec![0, 0, 0, 4, b'd', b'o']] {
+                let (mut reader, mut writer) = UnixStream::pair().unwrap();
+                writer.write_all(&payload).unwrap();
+                drop(writer);
+                let mut bounded = DeadlineStream {
+                    stream: &mut reader,
+                    deadline: Instant::now() + Duration::from_secs(1),
+                };
+                let error = read_frame(&mut bounded).unwrap_err();
+                assert!(
+                    matches!(&error, Error::Io(native) if native.kind() == io::ErrorKind::UnexpectedEof)
+                );
+                assert!(matches!(
+                    RequestFailure::stream(error),
+                    RequestFailure::Unavailable(_)
+                ));
+            }
+        }
+
+        #[test]
+        fn deadline_write_to_closed_peer_returns_socket_error_without_sigpipe() {
+            let (mut stream, peer) = UnixStream::pair().unwrap();
+            #[cfg(target_vendor = "apple")]
+            assert!(rustix::net::sockopt::socket_nosigpipe(&stream).unwrap());
+            drop(peer);
+            let mut bounded = DeadlineStream {
+                stream: &mut stream,
+                deadline: Instant::now() + Duration::from_secs(1),
+            };
+            let error = bounded.write(b"original request").unwrap_err();
+            assert!(matches!(
+                error.kind(),
+                io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+            ));
+        }
+
+        #[test]
+        fn blocked_frame_write_cannot_extend_original_deadline() {
+            let (mut writer, _reader) = UnixStream::pair().unwrap();
+            rustix::net::sockopt::set_socket_send_buffer_size(&writer, 4096).unwrap();
+            let started = Instant::now();
+            let mut bounded = DeadlineStream {
+                stream: &mut writer,
+                deadline: started + Duration::from_millis(80),
+            };
+            let error = write_frame(&mut bounded, &vec![0x5a; 128 * 1024]).unwrap_err();
+            assert!(matches!(error, Error::Io(error) if error.kind() == io::ErrorKind::TimedOut));
+            assert!(started.elapsed() >= Duration::from_millis(20));
+            assert!(started.elapsed() < Duration::from_secs(1));
+        }
+
+        #[test]
+        fn fragmented_frame_does_not_restart_absolute_deadline() {
+            let (mut reader, mut writer) = UnixStream::pair().unwrap();
+            let (start, proceed) = mpsc::channel();
+            let worker = thread::spawn(move || {
+                proceed.recv_timeout(Duration::from_secs(1)).unwrap();
+                writer
+                    .set_write_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                writer.write_all(&4_u32.to_be_bytes()).unwrap();
+                writer.write_all(b"a").unwrap();
+                // Every fragment would fit a renewed relative budget; the whole frame does not.
+                for byte in b"bcd" {
+                    thread::sleep(Duration::from_millis(100));
+                    if writer.write_all(&[*byte]).is_err() {
+                        break;
+                    }
+                }
+            });
+            let started = Instant::now();
+            let deadline = started + Duration::from_millis(180);
+            start.send(()).unwrap();
+            let result = read_frame(&mut DeadlineStream {
+                stream: &mut reader,
+                deadline,
+            });
+            assert!(
+                matches!(result, Err(Error::Io(error)) if matches!(error.kind(), io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock))
+            );
+            assert!(started.elapsed() < Duration::from_secs(1));
+            drop(reader);
+            worker.join().unwrap();
+        }
+
+        #[test]
+        fn down_connect_uses_original_deadline_and_returns_blocking_stream() {
+            let temporary = tempfile::tempdir().unwrap();
+            let path = temporary.path().join("socket");
+            let listener = UnixListener::bind(&path).unwrap();
+            let stream = connect_until(&path, Instant::now() + Duration::from_secs(1)).unwrap();
+            #[cfg(target_vendor = "apple")]
+            assert!(rustix::net::sockopt::socket_nosigpipe(&stream).unwrap());
+            let (mut accepted, _) = listener.accept().unwrap();
+            accepted
+                .set_write_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            accepted.write_all(b"x").unwrap();
+            let mut stream = stream;
+            let mut byte = [0];
+            stream.read_exact(&mut byte).unwrap();
+            assert_eq!(byte, *b"x");
+            stream
+                .set_read_timeout(Some(Duration::from_millis(50)))
+                .unwrap();
+            let started = Instant::now();
+            assert!(stream.read(&mut byte).is_err());
+            assert!(
+                started.elapsed() >= Duration::from_millis(20),
+                "returned stream remained nonblocking"
+            );
+            assert_eq!(
+                connect_until(&path, Instant::now()).unwrap_err().kind(),
+                io::ErrorKind::TimedOut
+            );
+        }
+
+        #[test]
+        fn expired_deadline_refuses_read_write_and_flush_without_io() {
+            let (mut stream, mut other) = UnixStream::pair().unwrap();
+            other.set_nonblocking(true).unwrap();
+            let mut bounded = DeadlineStream {
+                stream: &mut stream,
+                deadline: Instant::now(),
+            };
+            assert_eq!(
+                bounded.read(&mut [0]).unwrap_err().kind(),
+                io::ErrorKind::TimedOut
+            );
+            assert_eq!(
+                bounded.write(b"x").unwrap_err().kind(),
+                io::ErrorKind::TimedOut
+            );
+            assert_eq!(bounded.flush().unwrap_err().kind(), io::ErrorKind::TimedOut);
+            assert_eq!(
+                other.read(&mut [0]).unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+        }
     }
 
     #[cfg(test)]
@@ -665,6 +1037,13 @@ mod native {
     ) -> std::result::Result<T, RequestFailure> {
         Err(Error::Invalid("native IPC unavailable".into()).into())
     }
+    pub(crate) fn request_observed_with_deadline<T: JsonDeserialize>(
+        _: &PrivateDirectory,
+        _: &ControlRequest,
+        _: Option<Instant>,
+    ) -> std::result::Result<T, RequestFailure> {
+        Err(Error::Invalid("native IPC unavailable".into()).into())
+    }
 }
 
 pub(crate) use native::{Listener, detach, request_as, supported};
@@ -690,11 +1069,13 @@ pub(crate) fn request(
     request_as(directory, request)
 }
 
-pub(crate) fn request_observed(
+pub(crate) fn request_observed_until(
     directory: &PrivateDirectory,
     request: &ControlRequest,
+    deadline: Instant,
 ) -> std::result::Result<ManagedStatus, RequestFailure> {
-    native::request_observed_as(directory, request)
+    remaining_io(deadline)?;
+    native::request_observed_with_deadline(directory, request, Some(deadline))
 }
 
 #[cfg(test)]

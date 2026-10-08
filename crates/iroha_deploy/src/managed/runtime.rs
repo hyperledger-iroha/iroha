@@ -45,7 +45,7 @@ pub fn run_worker(
 ) -> Result<()> {
     let started = Instant::now();
     transport::supported()?;
-    if startup_timeout.is_zero() || startup_timeout > Duration::from_secs(600) {
+    if startup_timeout.is_zero() || startup_timeout > WORKER_STARTUP_MAXIMUM {
         return Err(Error::Invalid(
             "worker timeout is outside its bounded startup contract".into(),
         ));
@@ -110,7 +110,7 @@ pub fn run_worker(
         Err(error) => return fail_before_session(&directory, &mut status, &budget, error),
     };
     let prepared = retained.prepared.clone();
-    let mut processes = PeerProcesses::default();
+    let mut processes = PeerProcesses::with_background(Arc::clone(&cancelled));
     let _cancel_on_exit = CancelOnExit(Arc::clone(&cancelled));
     let activation::Startup {
         launch,
@@ -159,20 +159,30 @@ pub fn run_worker(
     let background_prepared = prepared.clone();
     let background_budget = Arc::clone(&budget);
     let (sender, mut receiver) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let result = activation::initial(
-            &background_prepared,
-            &background_budget,
-            generated,
-            authorization,
-        );
-        let _ = sender.send(result);
-    });
+    processes
+        .spawn_activation(move || {
+            let result = activation::initial(
+                &background_prepared,
+                &background_budget,
+                generated,
+                authorization,
+            );
+            let _ = sender.send(result);
+        })
+        .map_err(|error| {
+            close_worker_error(
+                &directory,
+                &mut status,
+                &mut processes,
+                &cancelled,
+                progress.unconfirmed(),
+                error,
+            )
+        })?;
     let mut service_expiry: Option<maintenance::Observation> = None;
     let mut refresh: Option<
         mpsc::Receiver<std::result::Result<maintenance::Observation, progress::Failure>>,
     > = None;
-    let mut attachment: Option<remote::AttachmentWorker> = None;
     let mut attachment_attempted = false;
     loop {
         if status.phase == ManagedPhase::Starting {
@@ -215,25 +225,18 @@ pub fn run_worker(
                     }
                     "attachment_start" => {
                         if status.phase == ManagedPhase::Ready
-                            && attachment
-                                .as_ref()
+                            && processes
+                                .attachment()
                                 .is_none_or(remote::AttachmentWorker::is_finished)
                         {
-                            attachment = remote::AttachmentWorker::start(
-                                store,
-                                name,
-                                &prepared,
-                                Arc::clone(&cancelled),
-                            )
-                            .ok()
-                            .flatten();
+                            let _ = processes.start_attachment(store, name, &prepared);
                             attachment_attempted = true;
                         }
                         let _ = connection.reply(&status);
                     }
                     "attachment_status" => {
-                        let observation = attachment
-                            .as_ref()
+                        let observation = processes
+                            .attachment()
                             .map(remote::AttachmentWorker::status)
                             .or_else(|| {
                                 remote::inactive_status(store, name, &prepared)
@@ -248,29 +251,13 @@ pub fn run_worker(
                         }
                     }
                     "down" => {
-                        cancelled.store(true, Ordering::Release);
-                        processes.stop().map_err(|error| {
-                            close_worker_error(
-                                &directory,
-                                &mut status,
-                                &mut processes,
-                                &cancelled,
-                                progress.unconfirmed(),
-                                error,
-                            )
-                        })?;
-                        status.phase = ManagedPhase::Stopped;
-                        status.running_peers = 0;
-                        publish(&directory, &status).map_err(|error| {
-                            close_worker_error(
-                                &directory,
-                                &mut status,
-                                &mut processes,
-                                &cancelled,
-                                progress.unconfirmed(),
-                                error,
-                            )
-                        })?;
+                        stop_worker(
+                            &directory,
+                            &mut status,
+                            &mut processes,
+                            &cancelled,
+                            progress.unconfirmed(),
+                        )?;
                         let _ = connection.reply(&status);
                         return Ok(());
                     }
@@ -347,10 +334,15 @@ pub fn run_worker(
                         let selected = prepared.clone();
                         let background_budget = Arc::clone(&budget);
                         let (sender, receiver) = mpsc::sync_channel(1);
-                        thread::spawn(move || {
-                            let _ =
-                                sender.send(recheck.finish(&selected, live, &background_budget));
-                        });
+                        processes
+                            .spawn_activation(move || {
+                                let _ = sender.send(recheck.finish(
+                                    &selected,
+                                    live,
+                                    &background_budget,
+                                ));
+                            })
+                            .map_err(|_| progress.unconfirmed())?;
                         Ok::<_, progress::Failure>(receiver)
                     })();
                     match next {
@@ -458,10 +450,10 @@ pub fn run_worker(
                     let live = processes.gateway(selection.provider())?;
                     let selected = prepared.clone();
                     let (sender, receiver) = mpsc::sync_channel(1);
-                    thread::spawn(move || {
+                    processes.spawn_refresh(move || {
                         let _ =
                             sender.send(maintenance::refresh(&selected, selection, live, &turn));
-                    });
+                    })?;
                     Ok(receiver)
                 })();
                 match next {
@@ -518,9 +510,20 @@ pub fn run_worker(
                     budget = Arc::clone(&turn.budget);
                     let selected = prepared.clone();
                     let (sender, next) = mpsc::sync_channel(1);
-                    thread::spawn(move || {
-                        let _ = sender.send(renewal::advance(&selected, turn, live));
-                    });
+                    processes
+                        .spawn_activation(move || {
+                            let _ = sender.send(renewal::advance(&selected, turn, live));
+                        })
+                        .map_err(|error| {
+                            close_worker_error(
+                                &directory,
+                                &mut status,
+                                &mut processes,
+                                &cancelled,
+                                progress.unconfirmed(),
+                                error,
+                            )
+                        })?;
                     receiver = next;
                 }
                 Ok(_) => {}
@@ -538,10 +541,7 @@ pub fn run_worker(
         if status.phase == ManagedPhase::Ready && !attachment_attempted {
             // Parent custody and transport failures cannot change private execution readiness.
             // A later authenticated activation can retry a previously absent binding.
-            attachment =
-                remote::AttachmentWorker::start(store, name, &prepared, Arc::clone(&cancelled))
-                    .ok()
-                    .flatten();
+            let _ = processes.start_attachment(store, name, &prepared);
             attachment_attempted = true;
         }
         thread::sleep(POLL);
@@ -691,6 +691,27 @@ fn check_owned_validator_exit(
     Ok(())
 }
 
+// The authenticated down reply follows this same closed cleanup path. Cancellation prevents
+// fresh work; joined tasks prove the owner cannot release runtime.lock with work still live.
+fn stop_worker(
+    directory: &PrivateDirectory,
+    status: &mut ManagedStatus,
+    processes: &mut PeerProcesses,
+    cancelled: &AtomicBool,
+    failure: progress::Failure,
+) -> Result<()> {
+    cancelled.store(true, Ordering::Release);
+    processes.stop().map_err(|error| {
+        close_worker_error(directory, status, processes, cancelled, failure, error)
+    })?;
+    status.phase = ManagedPhase::Stopped;
+    status.running_peers = 0;
+    publish(directory, status).map_err(|error| {
+        close_worker_error(directory, status, processes, cancelled, failure, error)
+    })?;
+    Ok(())
+}
+
 fn fail_worker(
     directory: &PrivateDirectory,
     status: &mut ManagedStatus,
@@ -726,7 +747,7 @@ fn close_worker_error(
     if cleanup.is_some() {
         status.running_peers = processes.children.len();
         status.failure = Some(format!(
-            "{}; owned validator cleanup is unconfirmed; running_peers is an upper bound from retained handles",
+            "{}; owned validator or background task cleanup is unconfirmed; running_peers is an upper bound from retained handles",
             failure.message()
         ));
     }
@@ -1155,9 +1176,7 @@ mod tests {
                     other => panic!("original startup and typed cleanup errors lost: {other:?}"),
                 }
                 assert!(display.starts_with(&failure.message()));
-                assert!(
-                    display.contains("Owned validator cleanup failed: owned child lock failed")
-                );
+                assert!(display.contains("Owned worker cleanup failed: owned child lock failed"));
                 assert!(cancelled.load(Ordering::Acquire));
                 assert_eq!(status.phase, ManagedPhase::Failed);
                 assert_eq!(status.running_peers, 2);
@@ -1269,7 +1288,7 @@ mod tests {
         } if original == failure.message() && matches!(*source, Error::Io(_))));
         assert!(display.starts_with(&failure.message()));
         assert!(display.contains("Failed to retain startup failure status:"));
-        assert!(!display.contains("Owned validator cleanup failed:"));
+        assert!(!display.contains("Owned worker cleanup failed:"));
         assert!(cancelled.load(Ordering::Acquire));
         assert!(processes.children.is_empty());
         assert_eq!(status.phase, ManagedPhase::Failed);
@@ -1698,3 +1717,7 @@ mod tests {
 #[cfg(test)]
 #[path = "runtime/handoff_tests.rs"]
 mod handoff_tests;
+
+#[cfg(test)]
+#[path = "runtime/background_tests.rs"]
+mod background_tests;

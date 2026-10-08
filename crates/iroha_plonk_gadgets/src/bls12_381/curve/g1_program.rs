@@ -163,8 +163,10 @@ impl<F: PastaField> Bls381Chip<'_, F> {
                     registers[0].infinity().word(),
                     registers[1].infinity().word(),
                 )?;
-                let xy_equal = self.glue().and(region, &x_equal, &y_equal)?;
-                let equal = self.glue().and(region, &xy_equal, &infinity_equal)?;
+                let coordinates_equal = self.glue().and(region, &x_equal, &y_equal)?;
+                let equal = self
+                    .glue()
+                    .and(region, &coordinates_equal, &infinity_equal)?;
                 let finite = self.glue().not(region, registers[0].infinity())?;
                 let invalid = self.glue().and(region, &finite, &equal)?;
                 self.glue()
@@ -176,7 +178,7 @@ impl<F: PastaField> Bls381Chip<'_, F> {
             out[destination] = value;
         }
         if index + 1 == G1_SUBGROUP_STEPS.len() {
-            self.assert_equal_g1(region, &out[1], &out[2])?;
+            Self::assert_equal_g1(region, &out[1], &out[2])?;
         }
         Ok(out)
     }

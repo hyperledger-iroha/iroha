@@ -124,7 +124,7 @@ impl<F: PastaField> TestCircuit<F> {
             let a = ark2(self.a2);
             let b = ark2(self.b2);
             let expected = match self.op {
-                Op::Assign | Op::Equal | Op::Nonidentity => self.a2,
+                Op::Assign | Op::Equal | Op::Nonidentity | Op::Select(true) => self.a2,
                 Op::Psi => native2(-a.mul_bigint([0xd201_0000_0001_0000]).into_affine()),
                 Op::Psi2 => native2(
                     a.mul_bigint([0xd201_0000_0001_0000])
@@ -134,7 +134,6 @@ impl<F: PastaField> TestCircuit<F> {
                 Op::Identity => native2(G2Affine::identity()),
                 Op::Add => native2((a + b).into_affine()),
                 Op::Neg => native2(-a),
-                Op::Select(true) => self.a2,
                 Op::Select(false) => self.b2,
                 Op::Step(bit) => native2(
                     (a.into_group().double()
@@ -158,11 +157,15 @@ impl<F: PastaField> TestCircuit<F> {
             let a = ark1(self.a1);
             let b = ark1(self.b1);
             let expected = match self.op {
-                Op::Assign | Op::Equal | Op::Nonidentity | Op::Psi | Op::Psi2 => self.a1,
+                Op::Assign
+                | Op::Equal
+                | Op::Nonidentity
+                | Op::Psi
+                | Op::Psi2
+                | Op::Select(true) => self.a1,
                 Op::Identity => native1(G1Affine::identity()),
                 Op::Add => native1((a + b).into_affine()),
                 Op::Neg => native1(-a),
-                Op::Select(true) => self.a1,
                 Op::Select(false) => self.b1,
                 Op::Step(bit) => native1(
                     (a.into_group().double()
@@ -247,7 +250,7 @@ impl<F: PastaField> Circuit<F> for TestCircuit<F> {
                             chip.scalar_step_g2(&mut region, &a, &b, &bit)?
                         }
                         Op::Equal => {
-                            chip.assert_equal_g2(&mut region, &a, &b)?;
+                            Bls381Chip::assert_equal_g2(&mut region, &a, &b)?;
                             a
                         }
                         Op::Nonidentity => {
@@ -281,7 +284,7 @@ impl<F: PastaField> Circuit<F> for TestCircuit<F> {
                             chip.scalar_step_g1(&mut region, &a, &b, &bit)?
                         }
                         Op::Equal => {
-                            chip.assert_equal_g1(&mut region, &a, &b)?;
+                            Bls381Chip::assert_equal_g1(&mut region, &a, &b)?;
                             a
                         }
                         Op::Nonidentity => {

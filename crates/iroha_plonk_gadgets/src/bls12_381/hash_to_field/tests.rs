@@ -164,7 +164,12 @@ fn circuit<F: PastaField>(message: &[u8]) -> HashCircuit<F> {
 #[test]
 fn independent_xmd_reference_matches_pinned_python_hashlib_receipt() {
     fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        use core::fmt::Write as _;
+        let mut output = String::new();
+        for byte in bytes {
+            write!(output, "{byte:02x}").expect("write to a string");
+        }
+        output
     }
     let expanded = xmd(b"abc");
     assert_eq!(
@@ -186,7 +191,9 @@ fn exact_w3f_xmd_and_field_reductions_match_arkworks_at_sha_boundaries() {
     // b0's unpadded transcript is 132+len bytes; len=43/44 and 107/108
     // straddle the SHA trailer boundary in successive blocks.
     for len in [0, 3, 43, 44, 107, 108] {
-        let message: Vec<_> = (0..len).map(|i| i as u8).collect();
+        let message: Vec<_> = (0..len)
+            .map(|i| u8::try_from(i).expect("fixture byte"))
+            .collect();
         assert!(
             check_circuit(
                 &circuit::<Fp>(&message),

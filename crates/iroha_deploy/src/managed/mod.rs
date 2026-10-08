@@ -40,6 +40,15 @@ mod workspace;
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
+// Observation may await an already-dispatched task through its original maximum budget.
+// These bounds never extend task execution, signing authority or a retained transaction.
+const WORKER_STARTUP_MAXIMUM: Duration = Duration::from_secs(600);
+const OWNED_PEER_STOP_GRACE: Duration = Duration::from_secs(5);
+const STOP_REPLY_ALLOWANCE: Duration = Duration::from_secs(5);
+const STOP_OBSERVATION_MAXIMUM: Duration = WORKER_STARTUP_MAXIMUM
+    .saturating_add(OWNED_PEER_STOP_GRACE)
+    .saturating_add(STOP_REPLY_ALLOWANCE);
+
 use norito::json::{JsonDeserialize, JsonSerialize};
 
 pub use bootstrap_failure::ManagedBootstrapFailure;
@@ -130,7 +139,7 @@ pub enum Error {
         /// Original local startup or service cause, including native I/O diagnostics.
         /// Retained status uses a separate closed classification, never this cause's text.
         failure: String,
-        /// Exact error from stopping this worker's directly owned validator handles.
+        /// Exact error from stopping owned validators or joining owned background tasks.
         cleanup: Option<Box<Error>>,
         /// Exact error from retaining the failed status after cleanup was attempted.
         publication: Option<Box<Error>>,
@@ -158,7 +167,7 @@ fn worker_failure_followup(
 ) -> String {
     let mut details = String::new();
     if let Some(error) = cleanup {
-        details.push_str(&format!("\nOwned validator cleanup failed: {error}"));
+        details.push_str(&format!("\nOwned worker cleanup failed: {error}"));
     }
     if let Some(error) = publication {
         details.push_str(&format!(

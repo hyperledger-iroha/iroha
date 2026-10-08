@@ -7,7 +7,7 @@
 //! Multiplication assigns canonical r,q and checks all twelve columns of
 //! `a*b = r + q*p`: `c_i + sum(a_j*b_k) - sum(q_j*p_k) - r_i = B*c_(i+1)`.
 //! Endpoint carries are zero. Each internal carry is represented by
-//! `u_i = c_i + 2^68`, with u_i range-checked to 69 bits; thus
+//! `u_i = c_i + 2^68`, with `u_i` range-checked to 69 bits; thus
 //! `-16B <= c_i < 16B`. Each product-column sum is below 6B². Consequently
 //! the absolute integer discrepancy in any column is below
 //! `22B² + 17B < 2^134`, strictly below both Pasta primes (>2^254).
@@ -28,7 +28,7 @@ use iroha_plonk::frontend::{Error, Region, Value};
 use super::native::{self, Fp};
 use crate::{
     arith::GlueChip,
-    cells::{Bit, Word, low_u128},
+    cells::{Bit, Word},
     range::RunningSumChip,
 };
 
@@ -54,7 +54,7 @@ impl<F: PastaField> Bls381Value<F> {
         let mut value = Value::known(native::ZERO);
         for (i, limb) in self.limbs.iter().enumerate() {
             value = value.zip(limb.value()).map(|(mut words, limb)| {
-                words[i] = low_u128(&limb) as u64;
+                words[i] = limb.to_canonical_limbs()[0];
                 words
             });
         }
@@ -253,12 +253,12 @@ impl<'a, F: PastaField> Bls381Chip<'a, F> {
             value.map(|carry| {
                 // Honest biased carries are nonnegative. A negative bad witness
                 // wraps to at least 2^127 and fails this narrow range constraint.
-                F::from_u128((carry + offset) as u128)
+                F::from_u128((carry + offset).cast_unsigned())
             }),
             bits,
         )?;
         self.glue
-            .add_constant(region, &biased, -F::from_u128(offset as u128))
+            .add_constant(region, &biased, -F::from_u128(offset.cast_unsigned()))
     }
 
     /// Canonical product, with constrained canonical quotient and signed carries.
@@ -284,20 +284,20 @@ impl<'a, F: PastaField> Bls381Chip<'a, F> {
         region: &mut Region<'_, F>,
         a: &Bls381Value<F>,
         b: &Bls381Value<F>,
-        r: &Bls381Value<F>,
+        remainder: &Bls381Value<F>,
         q: &Bls381Value<F>,
     ) -> Result<(), Error> {
         let carries = a
             .value()
             .zip(b.value())
-            .zip(r.value())
+            .zip(remainder.value())
             .zip(q.value())
-            .map(|(((a, b), r), q)| native::multiplication_carries(&a, &b, &r, &q));
+            .map(|(((a, b), remainder), q)| native::multiplication_carries(&a, &b, &remainder, &q));
         let mut previous = self.glue.constant(region, F::ZERO)?;
         for column in 0..12 {
             let mut left = previous;
             let mut right = if column < 6 {
-                r.limbs[column].clone()
+                remainder.limbs[column].clone()
             } else {
                 self.glue.constant(region, F::ZERO)?
             };
@@ -360,7 +360,7 @@ impl<'a, F: PastaField> Bls381Chip<'a, F> {
         for (i, word) in words.iter().enumerate() {
             self.range.range_check(region, word, 64)?;
             integer = integer.zip(word.value()).map(|(mut n, word)| {
-                n[i] = low_u128(&word) as u64;
+                n[i] = word.to_canonical_limbs()[0];
                 n
             });
         }
@@ -442,7 +442,7 @@ impl<'a, F: PastaField> Bls381Chip<'a, F> {
         let inverse = self.assign(region, a.value().map(|a| native::invert(&a)))?;
         let product = self.mul(region, a, &inverse)?;
         let one = self.constant(region, native::ONE)?;
-        self.assert_equal(region, &product, &one)?;
+        Self::assert_equal(region, &product, &one)?;
         Ok(inverse)
     }
 
@@ -505,7 +505,6 @@ impl<'a, F: PastaField> Bls381Chip<'a, F> {
     /// # Errors
     /// A copy-constraint error.
     pub fn assert_equal(
-        &mut self,
         region: &mut Region<'_, F>,
         a: &Bls381Value<F>,
         b: &Bls381Value<F>,

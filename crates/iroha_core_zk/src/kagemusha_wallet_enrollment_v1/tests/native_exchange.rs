@@ -37,6 +37,8 @@ use std::{
 
 #[path = "native_exchange/load.rs"]
 mod load;
+#[path = "native_exchange/network_settlement.rs"]
+mod network_settlement;
 #[path = "native_exchange/settlement.rs"]
 mod settlement;
 #[path = "native_exchange/setup.rs"]

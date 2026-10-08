@@ -381,9 +381,13 @@ impl<F: PastaField> CompiledExpressions<F> {
 
     /// `fold(acc * theta + value)` over `roots`.
     fn compress(roots: &[u32], scratch: EvaluatedRow<'_, F>, theta: F) -> F {
-        roots
-            .iter()
-            .fold(F::ZERO, |acc, root| acc * theta + scratch[*root as usize])
+        let Some((first, rest)) = roots.split_first() else {
+            return F::ZERO;
+        };
+        // The initial zero term contributes nothing; width-one lookups are reads.
+        rest.iter().fold(scratch[*first as usize], |acc, root| {
+            acc * theta + scratch[*root as usize]
+        })
     }
 
     /// Evaluates `width` outputs per row on the base domain into `width`

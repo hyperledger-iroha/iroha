@@ -20,13 +20,15 @@ pub const ZERO: Fp = [0; 6];
 /// Multiplicative identity.
 pub const ONE: Fp = [1, 0, 0, 0, 0, 0];
 
+use crate::cells::low_word;
+
 pub(super) fn subtract_words(a: &Fp, b: &Fp) -> (Fp, [u64; 6]) {
     let mut out = ZERO;
     let mut borrows = [0; 6];
     let mut borrow = 0_u64;
     for i in 0..6 {
         let wide = (1_u128 << 64) + u128::from(a[i]) - u128::from(b[i]) - u128::from(borrow);
-        out[i] = wide as u64;
+        out[i] = low_word(wide);
         borrow = 1 - (wide >> 64) as u64;
         borrows[i] = borrow;
     }
@@ -51,7 +53,7 @@ pub(super) fn add_with_quotient(a: &Fp, b: &Fp) -> (Fp, u64) {
     let mut carry = 0_u128;
     for i in 0..6 {
         let wide = u128::from(a[i]) + u128::from(b[i]) + carry;
-        sum[i] = wide as u64;
+        sum[i] = low_word(wide);
         carry = wide >> 64;
     }
     // Canonical inputs have a sum below 2p < 2^382, so no seventh limb.
@@ -75,7 +77,7 @@ pub fn sub(a: &Fp, b: &Fp) -> Fp {
     let mut carry = 0_u128;
     for i in 0..6 {
         let wide = u128::from(difference[i]) + u128::from(MODULUS[i] & mask) + carry;
-        out[i] = wide as u64;
+        out[i] = low_word(wide);
         carry = wide >> 64;
     }
     out
@@ -94,10 +96,10 @@ pub(super) fn product(a: &Fp, b: &Fp) -> [u64; 12] {
         let mut carry = 0_u128;
         for j in 0..6 {
             let wide = u128::from(a[i]) * u128::from(b[j]) + u128::from(out[i + j]) + carry;
-            out[i + j] = wide as u64;
+            out[i + j] = low_word(wide);
             carry = wide >> 64;
         }
-        out[i + 6] = carry as u64;
+        out[i + 6] = low_word(carry);
     }
     out
 }
@@ -162,7 +164,7 @@ pub fn invert(a: &Fp) -> Fp {
 /// Exact signed multiplication carries. Splitting each 128-bit product into
 /// halves keeps the fixed-width witness computation below 2^72, even though
 /// an unsplit column sum can exceed `u128`.
-pub(super) fn multiplication_carries(a: &Fp, b: &Fp, r: &Fp, q: &Fp) -> [i128; 13] {
+pub(super) fn multiplication_carries(a: &Fp, b: &Fp, remainder: &Fp, q: &Fp) -> [i128; 13] {
     let mut carries = [0; 13];
     for column in 0..12 {
         let mut low = carries[column];
@@ -172,12 +174,12 @@ pub(super) fn multiplication_carries(a: &Fp, b: &Fp, r: &Fp, q: &Fp) -> [i128; 1
                 let j = column - i;
                 let ab = u128::from(a[i]) * u128::from(b[j]);
                 let qp = u128::from(q[i]) * u128::from(MODULUS[j]);
-                low += i128::from(ab as u64) - i128::from(qp as u64);
-                high += (ab >> 64) as i128 - (qp >> 64) as i128;
+                low += i128::from(low_word(ab)) - i128::from(low_word(qp));
+                high += (ab >> 64).cast_signed() - (qp >> 64).cast_signed();
             }
         }
         if column < 6 {
-            low -= i128::from(r[column]);
+            low -= i128::from(remainder[column]);
         }
         carries[column + 1] = (low >> 64) + high;
     }
@@ -198,8 +200,8 @@ pub(super) fn reduction_carries(n: &[u64; 8], r: &Fp, q: &Fp) -> [i128; 13] {
         for i in 0..6 {
             if column >= i && column - i < 6 {
                 let product = u128::from(q[i]) * u128::from(MODULUS[column - i]);
-                low -= i128::from(product as u64);
-                high -= (product >> 64) as i128;
+                low -= i128::from(low_word(product));
+                high -= (product >> 64).cast_signed();
             }
         }
         carries[column + 1] = (low >> 64) + high;

@@ -662,6 +662,53 @@ fn normalized_dag_preserves_field_identities_and_shares_commuted_terms() {
     check::<Fq>(fixture.pk.binding().descriptor());
 }
 
+// Preserve the old zero-seeded definition independently of the optimized helper.
+// Public root order includes repetition and noncontiguous indices; both scalar
+// and four-lane row views must read precisely the selected lane.
+fn check_seeded_lookup_compression<F: PastaField>() {
+    let roots = [15_u32, 0, 7, 3, 12, 3, 1, 14, 2, 6, 5, 4, 11, 10, 9, 8];
+    let mut rng = ChaCha20Rng::from_seed([83; 32]);
+    for stride in [1, 4] {
+        for _ in 0..16 {
+            let mut values: Vec<F> = (0..16 * stride).map(|_| F::random(&mut rng)).collect();
+            values[0] = F::ZERO;
+            values[stride] = F::ONE;
+            values[2 * stride] = -F::ONE;
+            for theta in [F::ZERO, F::ONE, -F::ONE, F::random(&mut rng)] {
+                for lane in 0..stride {
+                    let row = EvaluatedRow::new(&values, stride, lane);
+                    for width in [0, 1, 2, 3, 8, 16] {
+                        let selected = &roots[..width];
+                        let expected = selected.iter().fold(F::ZERO, |acc, root| {
+                            acc * theta + values[*root as usize * stride + lane]
+                        });
+                        assert_eq!(
+                            CompiledExpressions::<F>::compress(selected, row, theta),
+                            expected,
+                            "width={width}, stride={stride}, lane={lane}",
+                        );
+                    }
+                    assert_eq!(CompiledExpressions::<F>::compress(&[], row, theta), F::ZERO);
+                    assert_eq!(
+                        CompiledExpressions::<F>::compress(&[0], row, theta),
+                        values[lane],
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn seeded_lookup_compression_preserves_fp_values_and_root_order() {
+    check_seeded_lookup_compression::<Fp>();
+}
+
+#[test]
+fn seeded_lookup_compression_preserves_fq_values_and_root_order() {
+    check_seeded_lookup_compression::<Fq>();
+}
+
 #[test]
 fn lookup_compression_matches_direct_folding() {
     let circuit = Lookups {

@@ -266,20 +266,20 @@ impl BlsStateWitness {
                 message_point: chip.assign_g2(region, v(*message_point, known))?,
                 state: Box::new(MillerPairState::from_parts(
                     [
-                        chip.assign_miller_g2(region, v(points[0], known))?,
-                        chip.assign_miller_g2(region, v(points[1], known))?,
+                        chip.assign_miller_g2(region, &v(points[0], known))?,
+                        chip.assign_miller_g2(region, &v(points[1], known))?,
                     ],
                     [
-                        chip.assign_miller_line(region, v(lines[0], known))?,
-                        chip.assign_miller_line(region, v(lines[1], known))?,
+                        chip.assign_miller_line(region, &v(lines[0], known))?,
+                        chip.assign_miller_line(region, &v(lines[1], known))?,
                     ],
-                    chip.assign_fp12(region, v(**accumulator, known))?,
+                    chip.assign_fp12(region, &v(**accumulator, known))?,
                 )),
             },
             Self::Final(a) => {
                 let mut values = Vec::with_capacity(5);
                 for x in a.iter() {
-                    values.push(chip.assign_fp12(region, v(*x, known))?);
+                    values.push(chip.assign_fp12(region, &v(*x, known))?);
                 }
                 StateCells::Final(Box::new(values.try_into().map_err(|_| Error::Synthesis)?))
             }

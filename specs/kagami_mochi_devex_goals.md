@@ -96,6 +96,11 @@ workflow likewise does not claim reference-host latency qualification. See
 - The supervisor owns live process handles and one environment lock. Frontends
   attach using owner-authenticated Unix sockets or Windows named pipes. They do
   not signal processes identified only by stored numeric PIDs.
+  Terminal cleanup cancels new work and joins activation, maintenance and attachment
+  tasks before publishing completion or releasing that lock. Authenticated `down`
+  uses one observation deadline across IPC and ownership release; a timeout never
+  proves cleanup. Cancellation preserves signed operations and ambiguous submission
+  markers for exact read-only recovery without authorizing another paid dispatch.
 - Managed generations and exact operation journals survive `down`; `reset` is
   explicit and local-only. Project context selection lives outside the project.
 - Native dataspace instances have independent World/State, queues, Kura, body and

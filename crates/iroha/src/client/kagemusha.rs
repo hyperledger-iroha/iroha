@@ -1,6 +1,7 @@
 //! Account-authenticated wallet enrollment and canonical load issuance originals.
 
 mod enrollment;
+mod event_proof;
 pub use iroha_torii_shared::kagemusha_enrollment::{
     EnrollmentServiceActionV1, EnrollmentServiceRequestV1, EnrollmentServiceResponseV1,
 };
@@ -81,7 +82,7 @@ impl Kagemusha<'_> {
                     .to_owned(),
             });
         }
-        ensure_deadline(client)?;
+        ensure_deadline(client, READ)?;
         let path = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_ISSUANCE_GET
             .path()
             .replace("{scheme}", &hex::encode(scheme))
@@ -109,18 +110,18 @@ impl Kagemusha<'_> {
         let issuance =
             Client::decode_canonical_norito_response(&response, MAX_RESPONSE_BYTES, READ)?;
         validate_response(&issuance, self.account.authority(), scheme, wallet, request)?;
-        ensure_deadline(client)?;
+        ensure_deadline(client, READ)?;
         Ok(issuance)
     }
 }
 
-fn ensure_deadline(client: &Client) -> Result<()> {
+fn ensure_deadline(client: &Client, operation: &'static str) -> Result<()> {
     if client
         .http_transport
         .deadline()
         .is_some_and(|deadline| std::time::Instant::now() >= deadline)
     {
-        return Err(Error::Timeout { operation: READ });
+        return Err(Error::Timeout { operation });
     }
     Ok(())
 }

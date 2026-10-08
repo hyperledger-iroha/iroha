@@ -27,7 +27,7 @@ use iroha_plonk::{
     frontend::{Error, Region, Value},
 };
 
-use crate::cells::{Bit, RowCursor, U64, Word, assign_constant, assign_word, copy_word};
+use crate::cells::{Bit, RowCursor, U64, Word, assign_constant, assign_word, copy_word, low_word};
 
 /// Number of exclusively owned advice columns.
 pub const BLAKE2B_ADVICE_COLUMNS: usize = 14;
@@ -180,7 +180,7 @@ impl Blake2bConfig {
     }
 }
 
-/// Thirty-two constrained digest bytes in the native BLAKE2b output order.
+/// Thirty-two constrained digest bytes in the native `BLAKE2b` output order.
 #[derive(Clone, Debug)]
 pub struct Blake2bDigest<F: PastaField> {
     bytes: [Word<F>; 32],
@@ -198,7 +198,7 @@ impl<F: PastaField> Blake2bDigest<F> {
 #[derive(Clone, Debug)]
 struct Bits64<F: PastaField>([Bit<F>; 64]);
 
-/// Eight constrained BLAKE2b chaining words, suitable for recursive linkage.
+/// Eight constrained `BLAKE2b` chaining words, suitable for recursive linkage.
 ///
 /// A state imported from witness words is only range-checked. The surrounding
 /// relation must authenticate the previous state or equate it to the initial
@@ -626,18 +626,22 @@ impl<'a, F: PastaField> Blake2bChip<'a, F> {
     fn mix(
         &mut self,
         region: &mut Region<'_, F>,
-        v: &mut [Bits64<F>; 16],
+        state: &mut [Bits64<F>; 16],
         indices: [usize; 4],
         message: [&Bits64<F>; 2],
         zero: &Bit<F>,
     ) -> Result<(), Error> {
         let [a, b, c, d] = indices;
         for (message, rotations) in message.into_iter().zip([[32, 24], [16, 63]]) {
-            let ab = self.add(region, &v[a], &v[b], zero)?;
-            v[a] = self.add(region, &ab, message, zero)?;
-            v[d] = self.xor(region, &v[d], &v[a])?.rotate_right(rotations[0]);
-            v[c] = self.add(region, &v[c], &v[d], zero)?;
-            v[b] = self.xor(region, &v[b], &v[c])?.rotate_right(rotations[1]);
+            let ab = self.add(region, &state[a], &state[b], zero)?;
+            state[a] = self.add(region, &ab, message, zero)?;
+            state[d] = self
+                .xor(region, &state[d], &state[a])?
+                .rotate_right(rotations[0]);
+            state[c] = self.add(region, &state[c], &state[d], zero)?;
+            state[b] = self
+                .xor(region, &state[b], &state[c])?
+                .rotate_right(rotations[1]);
         }
         Ok(())
     }
@@ -724,7 +728,7 @@ impl<'a, F: PastaField> Blake2bChip<'a, F> {
                 }))
             });
             let counter = (start as u128) + (bytes.len() as u128);
-            let low = Self::constant_word(&bits, counter as u64);
+            let low = Self::constant_word(&bits, low_word(counter));
             let high = Self::constant_word(&bits, (counter >> 64) as u64);
             state = Blake2bState(self.compress(
                 region,

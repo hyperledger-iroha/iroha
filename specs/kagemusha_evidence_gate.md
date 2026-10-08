@@ -413,7 +413,7 @@ Starting points, not evidence that this protocol has passed:
 ### Current implementation checkpoint (2026-10-08)
 
 The resumed `optimizations` checkout advanced from `ad75acfe2a` through
-`7f14c2389c` to `505a5bd87d` and another concurrent merge while checks were
+`7f14c2389c` and `505a5bd87d` to `28499f4150` while checks were
 running. Merge conflicts were resolved, but consumed CoreZk, bridge, data-model
 and filesystem sources changed.
 SDK and component results below belong to their captured pre-merge inputs;
@@ -430,9 +430,16 @@ defines the unchanged engineering limits and current shared-host method.
 four-row M3 campaign, canonical finality metadata snapshot 2, Linux enrollment
 guest receipt, later JS/Python supplements or fresh consensus mutation review.
 Those results cannot be independently rechecked from this checkout and do not
-qualify the current candidate. The canonical source and full52 jobs are stopped
-without terminal receipts or a signed complete wallet grant. Their surviving
-outputs are unqualified inputs for recovery. The retained four-row engine and
+qualify the current candidate. The interrupted canonical source and full52 jobs
+have no terminal receipts or signed complete wallet grant. Independent recovery
+rereads all 1,043 surviving content-addressed originals (65,074,847,520 bytes),
+with unchanged custody and no surviving producer or terminal output. A fresh
+full52 run reconstructs the complete descriptor/key graph before strictly
+importing any reusable proving key. It uses the preserved captured compiler;
+current-owner qualification remains mandatory. Records are retained in
+`canonical-complete52-interruption-review-2` and
+`canonical-complete52-after-interruption-1` under `target/qualification`.
+The retained four-row engine and
 oracle executables still match their recorded hashes; fresh M3 qualification is
 required after the implementation and harness are fixed. The availability
 inventory is `target/qualification/resume-20261008/retention.json`; it records
@@ -449,11 +456,34 @@ review in `target/qualification/keygen-cancellation-oracle-current`.
 Current Pasta/Plonk library and test targets pass strict Clippy.
 The combined proof/CoreZk/Torii/configuration test-target check and artifact CLI
 check pass; concurrent engine edits during that check restrict it to compilation
-evidence. Gadget strict lint still fails on 570 library diagnostics; the separate
-warning-only diagnostic is not a strict pass. Records are under
+evidence. The last gadget strict lint failed on 570 library diagnostics; the
+separate warning-only diagnostic is not a strict pass. Reviewed source fixes are
+now applied, together with lookup compression simplification and earlier wiping
+and release of the dead denominator allocation. Both-field regression tests are
+added. All six optimized engine test targets now compile. Independent review
+checks 73 actual compiler depfiles, 1,461 source inputs, 4,135 package files and
+five cfg-only generators; the 22 concurrent Deploy/Wallet edits are outside
+that compiled graph. Correctness execution, strict lint and complete proof-byte
+parity remain required before measuring this candidate. Captured binaries and
+the original broad source-drift verdict are retained in
+`target/qualification/engine23-capture-1`. The source port is recorded in
+`target/qualification/engine23-production-port-1`. Earlier records are under
 `target/qualification/keygen-advice-capture-20261008`,
 `keygen-cancellation-strict-2`, `keygen-m3-gadgets-strict-1` and
 `finality-server-import-check-3` within the same qualification directory.
+
+The Rust account SDK's bounded Load event-path API and existing Load receipt
+transport pass all 13 focused cases (seven existing and six event-path cases),
+with zero failures or ignored tests. They cover exact account/network signing,
+canonical Norito, malformed or oversized paths, deadline cancellation and
+blocking-runtime entry. All compiled inputs, generated samples, tools and the
+copied executable remain unchanged. Unrelated uncompiled Deploy/Wallet Rust
+edits are recorded separately; the original broad build verdict and first
+overbroad runtime refusal are preserved. These are transport component results,
+not finality proof or monetary-network results
+(`rust-sdk-kagemusha-capture-1/runtime-2`). The same-network controller passes
+21 local orchestration controls. Its first build with the new continuation
+stopped on a missing module-path declaration; no live monetary campaign ran.
 
 The copied six-executable component capture passes server cache 13, artifact CLI
 11, verifier recipes 10, catalog intake 10, continuity cancellation 2, Torii
@@ -490,6 +520,12 @@ matches those 26 rows to the source and confirms every other method's count and
 filter membership. The original refusal and separate reconciliation are retained
 under `target/qualification/csharp-current-abi27-1`. This establishes the
 selected host consumers, not installed release-package or network readiness.
+After the observation surface changed, the six actual C# native cases also pass
+against the preserved `37d3b93c…554dd9` library with its actual loader path
+observed. Managed inputs and compiled outputs remain unchanged. This separate
+receipt, `target/qualification/csharp-native-captured-abi27-3/runtime-result.json`,
+explicitly does not qualify current native sources; their admission refusal is
+retained separately.
 
 The collection and custody-deletion SDK changes pass 16 focused
 managed Kotlin tests with JDK 21 and the JDK 8 API compile guard retained. The
@@ -550,6 +586,11 @@ The next JavaScript capture executes all six original native cases successfully,
 but post-run admission rejects a data-model finality source change. Its original
 `passed: false` result remains in
 `target/qualification/js-native-current-abi27-2/runtime/result.json`.
+The subsequent attempt refuses a changed Node executable before compilation.
+After selecting the actual Node executable, another build succeeds but artifact
+admission refuses a consumed `iroha_torii_shared` source change, before runtime.
+Both refusals remain under `js-native-current-abi27-{3,4}`; neither is a native
+test pass for the current candidate.
 The new Core/CoreZk capture passes 24 explicitly selected setup, registration and
 finality diagnostics (14 Core and ten CoreZk). Its binaries and original
 mixed-source verdict remain unchanged in
@@ -562,7 +603,18 @@ tables. The companion harness builds successfully but its consumed data-model
 source changes during compilation, so source admission refuses it before
 network execution. Both original verdicts remain under
 `target/qualification/real-network-monetary-{stock,harness}-capture-1`.
-A matching merged-source rebuild is required before the four-validator run.
+The second stock daemon/CLI capture also passes exact consumed-input review and
+independent generated-table reproduction. Its original broad drift verdict is
+retained: only uncompiled harness/documentation paths changed during that build.
+A later merge changed 24 consumed inputs, so these binaries cannot be paired
+with a harness compiled from the current checkout. The exact comparison is
+retained in `post-merge-current-source-refusal.json`; no network runtime was
+started. A matching daemon/harness rebuild remains required. Originals are
+under `target/qualification/real-network-monetary-stock-capture-2`.
+The second harness also builds, but admission observes two consumed Torii
+telemetry source files changing during compilation and refuses it. Its original
+binary, input inventory and refusal remain under the corresponding
+`real-network-monetary-harness-capture-2`; no network test is counted as passed.
 
 All eight native Send control masks and both Receive variants complete their
 measurement and separate one-key footprint processes: 20 processes pass, with
