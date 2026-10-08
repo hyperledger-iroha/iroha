@@ -451,7 +451,7 @@ impl AccountService {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         self.ensure_deadline()?;
         fee_payment.validate()?;
-        let plan = self.client.client().plan_alias_setup(request)?;
+        let plan = self.client.plan_alias_setup(request)?;
         self.client
             .client()
             .verify_alias_setup_plan_for_request(request, &plan)?;

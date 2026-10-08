@@ -3940,7 +3940,7 @@ export function buildMultisigExecuteTriggerNorito(options, networkPrefix) {
 /**
  * Build a multisig registration instruction payload.
  * @param {{ accountId: string, spec: MultisigSpec | object }} options
- * @returns {{Custom: {payload: {Register: {account: string, spec: object}}}}}
+ * @returns {{Custom: {payload: {Register: {account: string, spec: object, uaid: null}}}}}
  */
 export function buildRegisterMultisigInstruction({ accountId, spec }) {
   const controller = normalizeAccountId(accountId, TEXT_ACCOUNT_ID);
@@ -3951,6 +3951,7 @@ export function buildRegisterMultisigInstruction({ accountId, spec }) {
         Register: {
           account: controller,
           spec: normalizedSpec,
+          uaid: null,
         },
       },
     },

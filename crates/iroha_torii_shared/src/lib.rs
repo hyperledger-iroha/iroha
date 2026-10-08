@@ -397,6 +397,50 @@ impl FeeSponsorProgramByIdRequest {
         }
     }
 }
+
+/// Canonical selector for one sponsor-program enrollment, without enumeration.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::FeeSponsorEnrollmentByIdRequest")]
+pub struct FeeSponsorEnrollmentByIdRequest {
+    /// Exact canonical `sponsor/program` literal.
+    pub program_id: String,
+    /// Exact canonical beneficiary account literal.
+    pub beneficiary: String,
+}
+impl FeeSponsorEnrollmentByIdRequest {
+    /// Construct an exact enrollment selector from native identities.
+    #[must_use]
+    pub fn new(program_id: &FeeSponsorProgramId, beneficiary: &AccountId) -> Self {
+        Self {
+            program_id: program_id.to_string(),
+            beneficiary: beneficiary.to_string(),
+        }
+    }
+}
+
+/// Current exact enrollment at the same native World view as read authorization.
+///
+/// `None` means absence only for this key in an existing program. A missing
+/// program or unauthorized request returns an error, never this absence response.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::FeeSponsorEnrollmentByIdResponse")]
+pub struct FeeSponsorEnrollmentByIdResponse {
+    /// Exact requested program and beneficiary, including on an absent result.
+    pub key: iroha_data_model::nexus::FeeSponsorEnrollmentKey,
+    /// Original native row, whose key equals `key`, or explicit current absence.
+    /// The field is mandatory; only an explicit JSON null establishes absence.
+    #[norito(required)]
+    pub enrollment: Option<iroha_data_model::nexus::FeeSponsorEnrollment>,
+}
+
 /// Queue pressure snapshot returned with transaction queue rejections.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 #[norito(deny_unknown_fields)]
@@ -1585,6 +1629,87 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn fee_enrollment_point_read_roundtrips_present_and_absent() {
+        use super::{FeeSponsorEnrollmentByIdRequest, FeeSponsorEnrollmentByIdResponse};
+        use iroha_data_model::nexus::{FeeSponsorEnrollment, FeeSponsorEnrollmentKey};
+
+        let sponsor = AccountId::new(checked_test_keypair(0x25).public_key().clone());
+        let beneficiary = AccountId::new(checked_test_keypair(0x26).public_key().clone());
+        let program_id = FeeSponsorProgramId::new(sponsor, "dpn".parse().unwrap());
+        let request = FeeSponsorEnrollmentByIdRequest::new(&program_id, &beneficiary);
+        let request_json = norito::json::to_vec(&request).unwrap();
+        assert_eq!(
+            norito::json::from_slice::<FeeSponsorEnrollmentByIdRequest>(&request_json).unwrap(),
+            request
+        );
+        let request_bytes = norito::to_bytes(&request).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<FeeSponsorEnrollmentByIdRequest>(&request_bytes).unwrap(),
+            request
+        );
+        let key = FeeSponsorEnrollmentKey {
+            program_id,
+            beneficiary,
+        };
+        for enrollment in [
+            None,
+            Some(FeeSponsorEnrollment {
+                key: key.clone(),
+                enrolled_at_height: 19,
+            }),
+        ] {
+            let response = FeeSponsorEnrollmentByIdResponse {
+                key: key.clone(),
+                enrollment,
+            };
+            let bytes = norito::to_bytes(&response).unwrap();
+            assert_eq!(
+                norito::decode_from_bytes::<FeeSponsorEnrollmentByIdResponse>(&bytes).unwrap(),
+                response
+            );
+            let json = norito::json::to_vec(&response).unwrap();
+            assert_eq!(
+                norito::json::from_slice::<FeeSponsorEnrollmentByIdResponse>(&json).unwrap(),
+                response
+            );
+        }
+        let key_json = norito::json::to_string(&key).unwrap();
+        let absent_json = norito::json::to_value(&FeeSponsorEnrollmentByIdResponse {
+            key: key.clone(),
+            enrollment: None,
+        })
+        .unwrap();
+        assert_eq!(
+            absent_json.get("enrollment"),
+            Some(&norito::json::Value::Null),
+            "absence is an explicit value, never an omitted observation"
+        );
+        for incomplete in [
+            format!(r#"{{"key":{key_json}}}"#),
+            format!(r#"{{"enrollment":null}}"#),
+            format!(r#"{{"key":{key_json},"enrollment":null,"extra":true}}"#),
+            format!(r#"{{"key":{key_json},"enrollment":null,"enrollment":null}}"#),
+        ] {
+            assert!(
+                norito::json::from_str::<FeeSponsorEnrollmentByIdResponse>(&incomplete).is_err()
+            );
+        }
+        for json in [
+            format!(
+                r#"{{"program_id":"{}","beneficiary":"{}","extra":true}}"#,
+                request.program_id, request.beneficiary
+            ),
+            format!(
+                r#"{{"program_id":"{}","beneficiary":"{}","beneficiary":"{}"}}"#,
+                request.program_id, request.beneficiary, request.beneficiary
+            ),
+        ] {
+            assert!(norito::json::from_str::<FeeSponsorEnrollmentByIdRequest>(&json).is_err());
+        }
+    }
+
     #[test]
     fn fee_quote_draft_validation_rejects_payer_revision_and_gas_substitution() {
         let (payload, quote, program_id, _) = sponsored_fee_quote_fixture();

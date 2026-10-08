@@ -1226,6 +1226,7 @@ mod tests {
             aliases::RETAIL_RECIPIENT_ROUTE,
             fees::QUOTE,
             fees::SPONSOR_PROGRAM_BY_ID,
+            fees::SPONSOR_ENROLLMENT_BY_ID,
         ] {
             assert_eq!(
                 route.authentication(),

@@ -16115,7 +16115,8 @@ pub mod isi {
                             )));
                         }
                     }
-                    FeeSponsorRuleSelector::ContractCall(selector) => {
+                    FeeSponsorRuleSelector::ContractCall(selector)
+                    | FeeSponsorRuleSelector::EnrolledMultisigContractCall(selector) => {
                         if state_transaction
                             .world
                             .contract_instances

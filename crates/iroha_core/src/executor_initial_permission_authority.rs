@@ -47,6 +47,9 @@ fn validate_initial_permission_payload_constraints(
         }};
     }
     match permission.name().as_ref() {
+        "CanGrantDpnUserForAccountDomain" => validate_exact_deployment_permission!(
+            executor_permission::dpn::CanGrantDpnUserForAccountDomain
+        ),
         "CanManageSmartContractCode"
         | "CanGrantSmartContractCodeManagement"
         | "CanManageSoracloud"
@@ -670,6 +673,20 @@ fn initial_permission_capability_root_authority(
             let manager: Permission = executor_permission::settlement::CanManageFxCorridors.into();
             authority_has_permission(&state_transaction.world, authority, &manager)?
         }
+        "CanGrantDpnUserForAccountDomain" => {
+            let token = decode!(executor_permission::dpn::CanGrantDpnUserForAccountDomain);
+            let admin: Permission = executor_permission::dpn::DpnAdmin.into();
+            authority_has_direct_permission(&state_transaction.world, authority, &admin)?
+                && authority_owns_domain(&state_transaction.world, authority, &token.domain)?
+                && crate::sns::active_domain_owner(
+                    &state_transaction.world,
+                    &token.domain,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .map_err(sns_permission_attempt_error)?
+                .as_ref()
+                    == Some(authority)
+        }
         "DpnAdmin" => {
             let _ = decode!(executor_permission::dpn::DpnAdmin);
             let admin: Permission = executor_permission::dpn::DpnAdmin.into();
@@ -823,6 +840,7 @@ fn initial_permission_delegation_allowed(
                 | "CanExecuteSettlement"
                 | "CanSetFxCorridorPolicy"
                 | "CanManageFeeSponsorProgram"
+                | "CanGrantDpnUserForAccountDomain"
                 | "DpnAdmin"
                 | "DpnUser"
                 | "DpnInori"
@@ -837,11 +855,85 @@ fn initial_permission_delegation_allowed(
     }
     Ok(capability_root.unwrap_or(false))
 }
+/// The enrollment capability is direct, exact-domain and evaluated against current native SNS
+/// ownership. Account registration alone or a stale alias index never confers this authority.
+fn authority_can_enroll_dpn_account(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    destination: &AccountId,
+    now_ms: u64,
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    let account = match world.account(destination) {
+        Ok(account) => account,
+        Err(_) => return Ok(false),
+    };
+    let Some(uaid) = account.value().uaid() else {
+        return Ok(false);
+    };
+    if world.uaid_accounts().get(uaid) != Some(destination) {
+        return Ok(false);
+    }
+    let permissions = world.account_permissions_iter(authority).map_err(|error| {
+        ValidationFail::InstructionFailed(InstructionExecutionError::Find(error))
+    })?;
+    for permission in permissions {
+        if permission.name() != "CanGrantDpnUserForAccountDomain" {
+            continue;
+        }
+        validate_initial_permission_payload_constraints(permission)?;
+        let token = executor_permission::dpn::CanGrantDpnUserForAccountDomain::try_from(permission)
+            .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+        for alias in world.bound_account_aliases(destination) {
+            if alias
+                .domain_id(world.dataspace_catalog())
+                .ok()
+                .flatten()
+                .as_ref()
+                != Some(&token.domain)
+            {
+                continue;
+            }
+            if crate::sns::resolve_active_account_alias(
+                world,
+                world.dataspace_catalog(),
+                &alias,
+                now_ms,
+            )
+            .map_err(sns_permission_attempt_error)?
+            .as_ref()
+                == Some(destination)
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
 fn initial_permission_revocation_allowed(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &Permission,
 ) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    if permission.name() == "CanGrantDpnUserForAccountDomain" {
+        validate_initial_permission_payload_constraints(permission)?;
+        let token = executor_permission::dpn::CanGrantDpnUserForAccountDomain::try_from(permission)
+            .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+        let admin: Permission = executor_permission::dpn::DpnAdmin.into();
+        if authority_has_direct_permission(&state_transaction.world, authority, &admin)? {
+            return Ok(true);
+        }
+        return Ok(
+            authority_owns_domain(&state_transaction.world, authority, &token.domain)?
+                && crate::sns::active_domain_owner(
+                    &state_transaction.world,
+                    &token.domain,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .map_err(sns_permission_attempt_error)?
+                .as_ref()
+                    == Some(authority),
+        );
+    }
     if permission.name() == "CanManageAssetDefinitionAlias" {
         let token = executor_permission::asset_definition::CanManageAssetDefinitionAlias::try_from(
             permission,
@@ -911,7 +1003,17 @@ fn validate_initial_permission_or_role_mutation(
             } else {
                 initial_permission_delegation_allowed(state_transaction, authority, permission)?
             };
-            if is_genesis || allowed {
+            let scoped_enrollment = !is_genesis
+                && !allowed
+                && !is_revoke
+                && permission == &Permission::from(executor_permission::dpn::DpnUser)
+                && authority_can_enroll_dpn_account(
+                    &state_transaction.world,
+                    authority,
+                    destination,
+                    state_transaction.block_unix_timestamp_ms(),
+                )?;
+            if is_genesis || allowed || scoped_enrollment {
                 return Ok(());
             }
             Err(ValidationFail::NotPermitted(format!(
@@ -2774,6 +2876,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanExecuteSettlement",
     "CanManageFxCorridors",
     "CanSetFxCorridorPolicy",
+    "CanGrantDpnUserForAccountDomain",
     "CanPublishSpaceDirectoryManifest",
     "CanPublishSpaceDirectoryManifestForUaid",
     "CanPublishSpaceDirectoryManifestForAccountDomain",

@@ -9,4 +9,5 @@ mod tests {
     include!("lib_tests/part_5.rs");
     include!("lib_tests/iso20022_operator_auth.rs");
     include!("lib_tests/identifier_owner_routes.rs");
+    include!("lib_tests/fee_sponsor_enrollment.rs");
 }

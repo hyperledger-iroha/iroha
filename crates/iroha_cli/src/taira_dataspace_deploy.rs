@@ -972,9 +972,10 @@ fn bootstrap_present(plan: &PlanV1, client: &Client) -> Result<bool> {
 fn phase_instructions(
     plan: &PlanV1,
     phase: &str,
-    client: &Client,
+    blocking: &BlockingClient,
     retained_alias_request: Option<&AliasSetupPlanRequestV1>,
 ) -> Result<(Vec<InstructionBox>, Option<AliasTransactionPlanV1>)> {
+    let client = blocking.client();
     match phase {
         "catalog" => {
             finality::committee_preflight(client, &plan.manifest)?;
@@ -1032,7 +1033,7 @@ fn phase_instructions(
                 )?;
                 &unsigned_request
             };
-            let alias_plan = client.plan_alias_setup(request)?;
+            let alias_plan = blocking.plan_alias_setup(request)?;
             let instructions = validate_alias_plan(&plan.manifest, &alias_plan, client)?;
             Ok((instructions, Some(alias_plan)))
         }
@@ -1620,7 +1621,7 @@ fn run_saved_until<C: RunContext>(
             .wrap_err_with(|| {
                 format!("deployment phase {phase}: verify funding for remaining caps")
             })?;
-            let (instructions, alias_plan) = phase_instructions(plan, phase, client.client(), None)
+            let (instructions, alias_plan) = phase_instructions(plan, phase, &client, None)
                 .wrap_err_with(|| {
                     format!("deployment phase {phase}: prepare native instructions")
                 })?;
@@ -1692,15 +1693,11 @@ fn run_saved_until<C: RunContext>(
                 .as_ref()
                 .map(|alias| alias_request_from_plan(&plan.manifest, alias))
                 .transpose()?;
-            let (instructions, fresh_alias_plan) = phase_instructions(
-                plan,
-                phase,
-                client.client(),
-                retained_alias_request.as_ref(),
-            )
-            .wrap_err_with(|| {
-                format!("deployment phase {phase}: revalidate instructions before dispatch")
-            })?;
+            let (instructions, fresh_alias_plan) =
+                phase_instructions(plan, phase, &client, retained_alias_request.as_ref())
+                    .wrap_err_with(|| {
+                        format!("deployment phase {phase}: revalidate instructions before dispatch")
+                    })?;
             require(
                 instructions == prepared.instructions,
                 "phase changed before first dispatch",

@@ -420,9 +420,10 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::soradns::AddReleaseSigner>,
     dispatch_instruction::<iroha_data_model::isi::soradns::RemoveReleaseSigner>,
     dispatch_instruction::<iroha_data_model::isi::soradns::SetDirectoryRotationPolicy>,
-    dispatch_instruction::<iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest>,
-    dispatch_instruction::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>,
-    dispatch_instruction::<iroha_data_model::isi::space_directory::ExpireSpaceDirectoryManifest>,
+    // Core requires a current catalog and exact dataspace, UAID or live-domain authority.
+    dispatch_instruction::<iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::space_directory::ExpireSpaceDirectoryManifest> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::ReplaceAccountController>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::SetAccountRecoveryPolicy>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::ClearAccountRecoveryPolicy>,
@@ -906,6 +907,10 @@ mod registry_dispatch_tests {
                 "{instruction:?}"
             );
         }
+    }
+    #[test]
+    fn every_space_directory_wire_instruction_has_a_reviewed_initial_disposition() {
+        assert_reviewed_initial_family("iroha_data_model::isi::space_directory::", BTreeSet::new());
     }
     #[test]
     fn every_sorafs_wire_instruction_has_a_reviewed_initial_disposition() {

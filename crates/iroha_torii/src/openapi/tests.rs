@@ -527,6 +527,7 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/retail/recipients/lookup"
                     | "/v1/retail/recipients/route"
                     | "/v1/fee-sponsor-programs/by-id"
+                    | "/v1/fee-sponsor-enrollments/by-id"
                     | "/v1/fees/quote"
                     | "/v1/validation-fee/accounts/{account_id}/statement"
                     | "/v1/validation-fee/quote"

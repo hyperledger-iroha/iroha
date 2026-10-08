@@ -92,6 +92,7 @@ use std::{
 };
 #[path = "executor_execution_fee.rs"]
 mod execution_fee;
+mod fee_sponsor_multisig;
 pub(crate) mod private_fees;
 /// Authenticated root scope for native and contract-generated instruction effects.
 pub(crate) mod root_scope;
@@ -233,6 +234,8 @@ enum NativeQueryAccess {
     Registered,
     /// Private data for one exact account.
     Account(AccountId),
+    /// Exact account identity or direct permissions eligible for scoped DPN enrollment checks.
+    EnrollmentAccount(AccountId),
     /// Ledger-wide state requiring the genesis-issued read root.
     AllLedger,
 }
@@ -248,7 +251,7 @@ where
 fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
     match query {
         SingularQueryBox::FindAccountById(query) => {
-            NativeQueryAccess::Account(query.account_id().clone())
+            NativeQueryAccess::EnrollmentAccount(query.account_id().clone())
         }
         SingularQueryBox::FindAliasesByAccountId(query) => {
             NativeQueryAccess::Account(query.account_id().clone())
@@ -397,7 +400,9 @@ fn native_iterable_query_access(
             data_model_query::permission::prelude::FindPermissionsByAccountId,
         >(payload)
         {
-            return Ok(NativeQueryAccess::Account(query.account_id().clone()));
+            return Ok(NativeQueryAccess::EnrollmentAccount(
+                query.account_id().clone(),
+            ));
         }
         return Err(invalid_native_iterable_query());
     }
@@ -665,10 +670,37 @@ fn invalid_native_iterable_query() -> ValidationFail {
         "iterable query is malformed or is not part of the native authorization matrix".to_owned(),
     )
 }
+/// Return whether one of the two exact native enrollment observations is permitted by a direct
+/// domain-scoped DPN capability and the target's current UAID/SNS binding.
+///
+/// This narrow predicate is also used by Torii route admission. It never authorizes balances,
+/// roster queries, alias lists, roles, or arbitrary reads from the same restricted dataspace.
+///
+/// # Errors
+/// Returns native state or permission decoding errors without treating malformed state as absent.
+pub fn can_observe_dpn_enrollment_query(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    query: &QueryRequest,
+    now_ms: u64,
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    let access = match query {
+        QueryRequest::Singular(query) => native_singular_query_access(query),
+        QueryRequest::Start(query) => native_iterable_query_access(query)?,
+        QueryRequest::Continue(_) => return Ok(false),
+    };
+    match access {
+        NativeQueryAccess::EnrollmentAccount(account) => {
+            authority_can_enroll_dpn_account(world, authority, &account, now_ms)
+        }
+        _ => Ok(false),
+    }
+}
 fn validate_builtin_native_query_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     query: &QueryRequest,
+    now_ms: u64,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
     world.account(authority).map_err(|_| {
         ValidationFail::NotPermitted(format!(
@@ -683,6 +715,7 @@ fn validate_builtin_native_query_permission(
         QueryRequest::Continue(_) => return Ok(()),
     };
     let has_global = || authority_has_native_global_read_permission(world, authority);
+    let enrollment_query = matches!(&access, NativeQueryAccess::EnrollmentAccount(_));
     match access {
         NativeQueryAccess::Registered => Ok(()),
         NativeQueryAccess::AllLedger => has_global()?
@@ -693,8 +726,13 @@ fn validate_builtin_native_query_permission(
                 )
             })
             .map_err(Into::into),
-        NativeQueryAccess::Account(account) => {
+        NativeQueryAccess::Account(account) | NativeQueryAccess::EnrollmentAccount(account) => {
             if account == *authority || has_global()? {
+                return Ok(());
+            }
+            if enrollment_query
+                && authority_can_enroll_dpn_account(world, authority, &account, now_ms)?
+            {
                 return Ok(());
             }
             authority_has_native_account_read_permission(world, authority, &account)?
@@ -2161,8 +2199,26 @@ fn fee_sponsor_asset_transfer_definition_id(
 }
 fn fee_sponsor_instruction_operation(
     instruction: &InstructionBox,
-) -> Result<FeeSponsorOperation, NexusFeeAdmissionError> {
-    if let Ok(multisig) = MultisigInstructionBox::try_from(instruction) {
+) -> Result<
+    FeeSponsorOperation,
+    crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
+> {
+    use crate::execution_attempt::ExecutionAttemptError;
+    let multisig = match MultisigInstructionBox::try_from(instruction) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            match crate::smartcontracts::isi::multisig::multisig_instruction_decode_attempt(
+                error,
+                |_| (),
+            ) {
+                ExecutionAttemptError::Deferred(reason) => {
+                    return Err(ExecutionAttemptError::Deferred(reason));
+                }
+                ExecutionAttemptError::Rejected(()) => None,
+            }
+        }
+    };
+    if let Some(multisig) = multisig {
         let (operation, account_id) = match multisig {
             MultisigInstructionBox::Propose(propose) => {
                 (FeeSponsorMultisigOperation::Propose, propose.account)
@@ -2200,7 +2256,10 @@ fn fee_sponsor_instruction_operation(
 }
 fn fee_sponsor_operations(
     executable: &Executable,
-) -> Result<Vec<FeeSponsorOperation>, NexusFeeAdmissionError> {
+) -> Result<
+    Vec<FeeSponsorOperation>,
+    crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
+> {
     match executable {
         Executable::Instructions(instructions) => instructions
             .iter()
@@ -2294,41 +2353,60 @@ fn fee_sponsor_selector_matches_operation(
     }
 }
 fn validate_fee_sponsor_rules(
+    world: &impl WorldReadOnly,
     revision: &FeeSponsorProgramRevision,
-    executable: &Executable,
-) -> Result<(), NexusFeeAdmissionError> {
-    let operations = fee_sponsor_operations(executable)?;
+    beneficiary: &AccountId,
+    payload: &TransactionPayload,
+    context: fee_sponsor_multisig::RuleContext,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>> {
+    let operations = fee_sponsor_operations(&payload.instructions)?;
     if operations.is_empty() {
         return Err(NexusFeeAdmissionError::sponsor(
             FeeRejectionCode::OperationNotAllowed,
             "fee sponsor program cannot authorize an empty executable",
-        ));
+        )
+        .into());
     }
-    for operation in &operations {
-        if revision.rules.iter().any(|rule| {
-            rule.effect == FeeSponsorRuleEffect::Deny
-                && rule
-                    .selectors
-                    .iter()
-                    .any(|selector| fee_sponsor_selector_matches_operation(selector, operation))
-        }) {
-            return Err(NexusFeeAdmissionError::sponsor(
-                FeeRejectionCode::OperationDenied,
-                "signed operation matches an explicit fee sponsor deny rule",
-            ));
+    for (index, operation) in operations.iter().enumerate() {
+        let mut allowed = false;
+        // Evaluate every matching deny before accepting an allow. Typed resource
+        // deferral must never become a non-match that silently skips a deny.
+        for effect in [FeeSponsorRuleEffect::Deny, FeeSponsorRuleEffect::Allow] {
+            for rule in revision.rules.iter().filter(|rule| rule.effect == effect) {
+                for selector in &rule.selectors {
+                    let matches = match selector {
+                        FeeSponsorRuleSelector::EnrolledMultisigContractCall(selector) => {
+                            fee_sponsor_multisig::selector_matches(
+                                world,
+                                &revision.program_id,
+                                beneficiary,
+                                selector,
+                                payload,
+                                index,
+                                context,
+                            )?
+                        }
+                        _ => fee_sponsor_selector_matches_operation(selector, operation),
+                    };
+                    if matches {
+                        if effect == FeeSponsorRuleEffect::Deny {
+                            return Err(NexusFeeAdmissionError::sponsor(
+                                FeeRejectionCode::OperationDenied,
+                                "signed operation matches an explicit fee sponsor deny rule",
+                            )
+                            .into());
+                        }
+                        allowed = true;
+                    }
+                }
+            }
         }
-        let allowed = revision.rules.iter().any(|rule| {
-            rule.effect == FeeSponsorRuleEffect::Allow
-                && rule
-                    .selectors
-                    .iter()
-                    .any(|selector| fee_sponsor_selector_matches_operation(selector, operation))
-        });
         if !allowed {
             return Err(NexusFeeAdmissionError::sponsor(
                 FeeRejectionCode::OperationNotAllowed,
                 "signed operation is not covered by a fee sponsor allow rule",
-            ));
+            )
+            .into());
         }
     }
     Ok(())
@@ -2342,7 +2420,11 @@ fn resolve_fee_sponsor_program(
     payload: &TransactionPayload,
     route_dataspace_id: Option<DataSpaceId>,
     block_height: u64,
-) -> Result<ResolvedSponsorProgram, NexusFeeAdmissionError> {
+    context: fee_sponsor_multisig::RuleContext,
+) -> Result<
+    ResolvedSponsorProgram,
+    crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
+> {
     let program = world
         .fee_sponsor_programs()
         .get(program_id)
@@ -2382,7 +2464,8 @@ fn resolve_fee_sponsor_program(
                 "fee sponsor program `{program_id}` is {:?}",
                 program.lifecycle
             ),
-        ));
+        )
+        .into());
     }
     if effective_revision != Some(signed_revision) {
         return Err(NexusFeeAdmissionError::sponsor(
@@ -2391,7 +2474,7 @@ fn resolve_fee_sponsor_program(
                 "fee sponsor program `{program_id}` active revision is {:?}; transaction selected {signed_revision}",
                 effective_revision
             ),
-        ));
+        ).into());
     }
     let revision = world
         .fee_sponsor_program_revisions()
@@ -2410,7 +2493,8 @@ fn resolve_fee_sponsor_program(
         return Err(NexusFeeAdmissionError::sponsor(
             FeeRejectionCode::InvalidProgramConfiguration,
             "fee sponsor revision key does not match its embedded program id",
-        ));
+        )
+        .into());
     }
     let enrollment_key = FeeSponsorEnrollmentKey {
         program_id: program_id.clone(),
@@ -2432,9 +2516,9 @@ fn resolve_fee_sponsor_program(
             format!(
                 "beneficiary `{beneficiary}` is not enrolled and `{program_id}` is not the eligible exact route default"
             ),
-        ));
+        ).into());
     }
-    validate_fee_sponsor_rules(&revision, &payload.instructions)?;
+    validate_fee_sponsor_rules(world, &revision, beneficiary, payload, context)?;
     Ok(ResolvedSponsorProgram {
         id: program_id.clone(),
         revision,
@@ -4328,6 +4412,7 @@ fn evaluate_nexus_fee_admission_payload(
                 payload,
                 route_dataspace_id,
                 next_block_height,
+                fee_sponsor_multisig::RuleContext::admission(observation_time_ms),
             )?;
             let capacities = evaluate_fee_sponsor_capacity(
                 world,
@@ -4974,6 +5059,29 @@ impl Executor {
                 "sponsor-program debit does not match the signed fee intent".to_owned(),
             ));
         }
+        let entrypoint_hash = transaction.try_hash_as_entrypoint().map_err(|error| {
+            state_transaction.attempt_error_to_validation_fail(
+                crate::smartcontracts::isi::multisig::multisig_instruction_decode_attempt(
+                    error,
+                    |error| {
+                        ValidationFail::InternalError(format!("fee settlement entrypoint: {error}"))
+                    },
+                ),
+            )
+        })?;
+        let authenticated_entrypoint = (state_transaction.tx_call_hash
+            == Some(Hash::from(entrypoint_hash)))
+        .then_some(*entrypoint_hash.as_ref());
+        let observation_time_ms = state_transaction
+            ._curr_block
+            .creation_time()
+            .as_millis()
+            .try_into()
+            .map_err(|_| {
+                ValidationFail::InternalError(
+                    "fee settlement block timestamp exceeds u64".to_owned(),
+                )
+            })?;
         let resolved = resolve_fee_sponsor_program(
             &state_transaction.world,
             &state_transaction.nexus,
@@ -4983,8 +5091,17 @@ impl Executor {
             transaction.payload(),
             state_transaction.current_dataspace_id,
             state_transaction.block_height(),
+            fee_sponsor_multisig::RuleContext::settlement(
+                observation_time_ms,
+                authenticated_entrypoint,
+                state_transaction.block_height(),
+            ),
         )
-        .map_err(nexus_fee_admission_error_to_validation_fail)?;
+        .map_err(|error| {
+            state_transaction.attempt_error_to_validation_fail(
+                error.map_rejection(nexus_fee_admission_error_to_validation_fail),
+            )
+        })?;
         let charge = FeeChargeBound {
             kind,
             asset_definition_id: asset_definition_id.clone(),
@@ -8324,7 +8441,14 @@ impl Executor {
         trace!("Running query validation");
         // This native boundary is mandatory for Initial and user-provided executors alike.
         // A custom executor may further restrict a query, but can never widen these grants.
-        validate_builtin_native_query_permission(world_ro, authority, query)?;
+        validate_builtin_native_query_permission(
+            world_ro,
+            authority,
+            query,
+            latest_block.as_ref().map_or(0, |header| {
+                u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX)
+            }),
+        )?;
         let query_box = match query {
             QueryRequest::Singular(singular) => AnyQueryBox::Singular(singular.clone()),
             QueryRequest::Start(iterable) => AnyQueryBox::Iterable(iterable.clone()),
@@ -10326,7 +10450,7 @@ mod tests {
         let mut tx = block.transaction();
         let request = QueryRequest::Singular(query);
         assert!(
-            validate_builtin_native_query_permission(tx.world(), &authority, &request).is_err()
+            validate_builtin_native_query_permission(tx.world(), &authority, &request, 0).is_err()
         );
         tx.world.account_permissions.insert(
             authority.clone(),
@@ -10336,17 +10460,17 @@ mod tests {
             .into()]),
         );
         assert!(
-            validate_builtin_native_query_permission(tx.world(), &authority, &request).is_err()
+            validate_builtin_native_query_permission(tx.world(), &authority, &request, 0).is_err()
         );
         tx.world.account_permissions.insert(
             authority.clone(),
             BTreeSet::from([executor_permission::query::CanReadAllLedgerData.into()]),
         );
-        validate_builtin_native_query_permission(tx.world(), &authority, &request)
+        validate_builtin_native_query_permission(tx.world(), &authority, &request, 0)
             .expect("ledger-wide receipt reader");
         tx.world.account_permissions.remove(authority.clone());
         assert!(
-            validate_builtin_native_query_permission(tx.world(), &authority, &request).is_err()
+            validate_builtin_native_query_permission(tx.world(), &authority, &request, 0).is_err()
         );
     }
     #[test]
@@ -10626,6 +10750,7 @@ mod tests {
             &register
         ));
     }
+    include!("executor_dpn_domain_enrollment_tests.rs");
     include!("executor_account_lineage_tests.rs");
     include!("executor_sns_attempt_tests.rs");
     include!("executor_raw_ivm_work_tests.rs");
@@ -15379,7 +15504,7 @@ mod tests {
                 volatility: GasVolatility::Stable,
             }];
     }
-    fn sponsored_pipeline_fee_fixture(
+    pub(super) fn sponsored_pipeline_fee_fixture(
         lease_allocation: Option<Quantity>,
     ) -> (
         State,
@@ -16600,6 +16725,7 @@ mod tests {
             transaction.payload(),
             Some(DataSpaceId::UNIVERSAL),
             10,
+            fee_sponsor_multisig::RuleContext::admission(1),
         )
         .expect("old revision stays effective while its lease is live");
         assert_eq!(current.revision.revision, 1);
@@ -16612,8 +16738,13 @@ mod tests {
             transaction.payload(),
             Some(DataSpaceId::UNIVERSAL),
             10,
+            fee_sponsor_multisig::RuleContext::admission(1),
         )
         .expect_err("scheduled revision must not be predicted before old leases drain");
+        let crate::execution_attempt::ExecutionAttemptError::Rejected(early_error) = early_error
+        else {
+            panic!("revision mismatch must be a completed rejection");
+        };
         assert_eq!(early_error.code(), FeeRejectionCode::RevisionNotActive);
         let drained = resolve_fee_sponsor_program(
             &state_transaction.world,
@@ -16624,6 +16755,7 @@ mod tests {
             transaction.payload(),
             Some(DataSpaceId::UNIVERSAL),
             21,
+            fee_sponsor_multisig::RuleContext::admission(1),
         )
         .expect("scheduled revision becomes effective after the old lease expiry");
         assert_eq!(drained.revision.revision, 2);

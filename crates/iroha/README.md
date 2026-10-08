@@ -75,6 +75,12 @@ outlive the other; an expired deadline refuses HTTP dispatch. Remaining synchron
 capability methods and authority-owned operations are tracked in the repository's
 first-release architecture redesign record.
 
+Alias setup planning uses `client.plan_alias_setup(&request).await?`. It signs
+the complete request, awaits asynchronous HTTP transport, and verifies the returned
+plan against that request, the account, the network, and its expiry. Synchronous
+callers use `iroha::blocking::Client::plan_alias_setup(&request)?`, which runs the
+same transport and verification through the facade's owned runtime.
+
 Signed Iroha queries use `account.query_single(query).await?` for singular
 lookups such as `FindAccountById`. Iterable signed queries
 (`account.query(query)` with `iroha::query::AsyncQueryBuilderExt` imported)

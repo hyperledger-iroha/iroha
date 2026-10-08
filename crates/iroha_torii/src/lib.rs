@@ -16405,6 +16405,30 @@ fn torii_authorize_signed_query_routes(
         }
         SignedQueryScope::TargetAccount(target) => {
             let state_view = app.state.view();
+            // Only the native exact account/permission enrollment queries may use this grant.
+            // The same state-aware predicate still gates Core execution after routing.
+            match iroha_core::executor::can_observe_dpn_enrollment_query(
+                state_view.world(),
+                authority,
+                request.request_with_authority().request(),
+                state_view.query_ledger_time_ms(),
+            ) {
+                Ok(true) => return Ok(routes),
+                Ok(false) => {}
+                Err(error) => {
+                    return Err(match error {
+                        iroha_core::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                            Error::Query(error)
+                        }
+                        iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => {
+                            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+                            ))
+                        }
+                    }
+                    .into_response());
+                }
+            }
             let exact_account_permission: Permission =
                 iroha_executor_data_model::permission::query::CanReadAccountData {
                     account: target.clone(),
@@ -32098,6 +32122,97 @@ async fn handler_fee_sponsor_program_by_id(
     };
     alias_json_response(StatusCode::OK, program)
 }
+
+#[cfg(feature = "app_api")]
+async fn handler_fee_sponsor_enrollment_by_id(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    use iroha_data_model::nexus::FeeSponsorEnrollmentKey;
+    use iroha_torii_shared::{FeeSponsorEnrollmentByIdRequest, FeeSponsorEnrollmentByIdResponse};
+
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/fee-sponsor-enrollments/by-id",
+    )?;
+    let Some(caller) = visibility.caller() else {
+        return Ok(torii_canonical_auth_required_response(
+            "fee_sponsor_enrollment_signature_required",
+            "fee sponsor enrollment lookup requires canonical request signing",
+        ));
+    };
+    let request: FeeSponsorEnrollmentByIdRequest = norito::json::from_slice(body.as_ref())
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+    let program_id = FeeSponsorProgramId::from_str(&request.program_id);
+    let beneficiary = AccountId::parse_encoded(&request.beneficiary);
+    let (Ok(program_id), Ok(beneficiary)) = (program_id, beneficiary) else {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_fee_sponsor_enrollment_key",
+            "program_id and beneficiary must be canonical native identifiers",
+        ));
+    };
+    if program_id.to_string() != request.program_id
+        || beneficiary.to_string() != request.beneficiary
+    {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_fee_sponsor_enrollment_key",
+            "program_id and beneficiary must use their exact canonical encodings",
+        ));
+    }
+    let key = FeeSponsorEnrollmentKey {
+        program_id,
+        beneficiary,
+    };
+    let response = {
+        // Permission, program existence and the row share one native view.
+        // Global ledger-read permissions do not authorize this registrar read.
+        let world = app.state.world_view();
+        let permission = torii_permission_target(CanEnrollFeeSponsorProgram {
+            program_id: key.program_id.clone(),
+        })?;
+        if world.accounts().get(caller).is_none()
+            || (caller != &key.program_id.sponsor
+                && !torii_account_has_permission(&world, caller, &permission))
+        {
+            return Ok(torii_proxy_error_response(
+                StatusCode::FORBIDDEN,
+                "fee_sponsor_enrollment_not_authorized",
+                "enrollment reads require the sponsor or exact program enrollment permission",
+            ));
+        }
+        if world.fee_sponsor_programs().get(&key.program_id).is_none() {
+            return Ok(torii_proxy_error_response(
+                StatusCode::NOT_FOUND,
+                "fee_sponsor_program_not_found",
+                "the exact on-chain fee sponsor program was not found",
+            ));
+        }
+        let enrollment = world.fee_sponsor_enrollments().get(&key).cloned();
+        if enrollment.as_ref().is_some_and(|row| row.key != key) {
+            return Err(Error::Query(
+                iroha_data_model::ValidationFail::InternalError(
+                    "native fee sponsor enrollment key mismatch".to_owned(),
+                ),
+            ));
+        }
+        FeeSponsorEnrollmentByIdResponse { key, enrollment }
+    };
+    alias_json_response(StatusCode::OK, response)
+}
+
 fn fee_quote_rejection_retryable(code: FeeRejectionCode) -> bool {
     matches!(
         code,
@@ -37246,6 +37361,7 @@ impl Torii {
             builder, fees;
             QUOTE => limited_canonical_signature_post(handler_fee_quote, quote_body_limit);
             SPONSOR_PROGRAM_BY_ID => limited_canonical_signature_post(handler_fee_sponsor_program_by_id, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            SPONSOR_ENROLLMENT_BY_ID => limited_canonical_signature_post(handler_fee_sponsor_enrollment_by_id, EXACT_ALIAS_READ_MAX_BODY_BYTES);
         );
     }
     fn add_time_routes(&self, builder: &mut RouterBuilder) {

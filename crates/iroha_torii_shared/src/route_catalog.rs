@@ -1293,6 +1293,8 @@ pub mod fees {
     pub const QUOTE_PATH: &str = "/v1/fees/quote";
     /// Canonical exact sponsor-program lookup path.
     pub const SPONSOR_PROGRAM_BY_ID_PATH: &str = "/v1/fee-sponsor-programs/by-id";
+    /// Canonical exact sponsor-program enrollment lookup path.
+    pub const SPONSOR_ENROLLMENT_BY_ID_PATH: &str = "/v1/fee-sponsor-enrollments/by-id";
     const fn account_signed_post(
         stable_route_id: &'static str,
         path: &'static str,
@@ -1321,8 +1323,15 @@ pub mod fees {
         SPONSOR_PROGRAM_BY_ID_PATH,
         RouteEffect::ReadOnly,
     );
+    /// Read one enrollment as its sponsor or exact delegated program registrar.
+    pub const SPONSOR_ENROLLMENT_BY_ID: RouteDescriptor = account_signed_post(
+        "fee_sponsor_enrollment.by_id",
+        SPONSOR_ENROLLMENT_BY_ID_PATH,
+        RouteEffect::ReadOnly,
+    );
     /// Canonical first-release fee API catalog.
-    pub const ROUTES: &[RouteDescriptor] = &[QUOTE, SPONSOR_PROGRAM_BY_ID];
+    pub const ROUTES: &[RouteDescriptor] =
+        &[QUOTE, SPONSOR_PROGRAM_BY_ID, SPONSOR_ENROLLMENT_BY_ID];
 }
 /// Operator `WebAuthn` credential-registration and login descriptors.
 pub mod operator_authentication {

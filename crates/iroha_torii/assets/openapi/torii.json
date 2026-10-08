@@ -11121,6 +11121,48 @@
         ],
         "type": "object"
       },
+      "FeeSponsorEnrollmentByIdRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "beneficiary": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "program_id": {
+            "description": "Canonical sponsor/program literal.",
+            "minLength": 3,
+            "type": "string"
+          }
+        },
+        "required": [
+          "program_id",
+          "beneficiary"
+        ],
+        "type": "object"
+      },
+      "FeeSponsorEnrollmentByIdResponse": {
+        "additionalProperties": false,
+        "description": "The enrollment field is mandatory; only explicit null proves current absence for the exact key in an existing program.",
+        "properties": {
+          "enrollment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NativeFeeSponsorEnrollmentV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "$ref": "#/components/schemas/NativeFeeSponsorEnrollmentKeyV1"
+          }
+        },
+        "required": [
+          "key",
+          "enrollment"
+        ],
+        "type": "object"
+      },
       "FeeSponsorProgram": {
         "additionalProperties": false,
         "properties": {
@@ -28470,6 +28512,23 @@
               },
               "value": {
                 "$ref": "#/components/schemas/NativeFeeSponsorIvmSelectorV1"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "enrolled_multisig_contract_call",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/NativeFeeSponsorContractSelectorV1"
               }
             },
             "required": [
@@ -70355,6 +70414,210 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.explorer_transactions_by_hash_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/fee-sponsor-enrollments/by-id": {
+      "post": {
+        "description": "Account-signed exact enrollment lookup. The caller must be the sponsor or hold the exact program enrollment permission. Authorization, program existence and the native row are read from one World view. A successful response always contains the exact key and enrollment: explicit null means absent in an existing program. Missing programs, malformed keys and authentication failures never mean absence.",
+        "operationId": "feeSponsorEnrollmentById",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeeSponsorEnrollmentByIdRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeSponsorEnrollmentByIdResponse"
+                }
+              }
+            },
+            "description": "The exact enrollment row, or explicit null for this key in an existing program.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Malformed, duplicate, unknown or noncanonical enrollment selector fields.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical authentication is absent, invalid, expired or replayed.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable challenge code when the exact enrollment read lacks canonical authentication.",
+                "schema": {
+                  "enum": [
+                    "fee_sponsor_enrollment_signature_required"
+                  ],
+                  "example": "fee_sponsor_enrollment_signature_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The signer is neither the program sponsor nor its exact authorized registrar.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The exact sponsor program is absent.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Read one exact on-chain sponsor-program enrollment.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "fee_sponsor_enrollment.by_id"
         },
         "x-iroha-tool-effect": "read"
       }

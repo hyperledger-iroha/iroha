@@ -309,13 +309,13 @@ def test_fee_budget_windows_keep_exact_tagged_payload(document, shape_data, kind
         assert not check.is_valid(invalid)
 
 
-@pytest.mark.parametrize('kind', ['native_instruction', 'multisig', 'contract_call', 'ivm', 'ivm_proved'])
+@pytest.mark.parametrize('kind', ['native_instruction', 'multisig', 'contract_call', 'ivm', 'ivm_proved', 'enrolled_multisig_contract_call'])
 def test_native_fee_rule_selectors_preserve_all_actual_families(document, shape_data, kind):
     if kind == 'native_instruction':
         payload = {'wire_id': 'public_shape_instruction'}
     elif kind == 'multisig':
         payload = {'operations': [{'operation': 'approve', 'value': None}], 'account_ids': [shape_data['wallet']]}
-    elif kind == 'contract_call':
+    elif kind in ('contract_call', 'enrolled_multisig_contract_call'):
         # A shape string, not a native contract-admission or checksum fixture.
         payload = {'contract_address': 'public_contract_shape', 'code_hash': shape_data['network_id'], 'entrypoints': ['main']}
     else:
@@ -529,3 +529,32 @@ def test_native_shapes_reject_unknown_nested_members_and_missing_fields(document
             missing = copy.deepcopy(original)
             del descend(missing, path)[field]
             assert not check.is_valid(missing), (root, path, field)
+
+
+def test_exact_enrollment_read_has_signed_scoped_absence_contract(document, shape_data):
+    operation = document['paths']['/v1/fee-sponsor-enrollments/by-id']['post']
+    assert operation['security'] == SECURITY
+    assert operation['x-iroha-tool-effect'] == 'read'
+    assert operation['x-iroha-route-auth'] == {
+        'admission': 'authenticated_account',
+        'authentication': 'canonical_account_signature',
+        'schemaVersion': 1,
+        'stableRouteId': 'fee_sponsor_enrollment.by_id',
+    }
+    assert set(operation['responses']) == {'200', '400', '401', '403', '404'}
+    assert 'expired' in operation['responses']['401']['description']
+    assert 'sponsor' in operation['responses']['403']['description']
+    assert 'program' in operation['responses']['404']['description']
+    assert operation['requestBody']['content']['application/json']['schema']['$ref'] == '#/components/schemas/FeeSponsorEnrollmentByIdRequest'
+    assert operation['responses']['200']['content']['application/json']['schema']['$ref'] == '#/components/schemas/FeeSponsorEnrollmentByIdResponse'
+    key = {'program_id': {'sponsor': shape_data['signatory'], 'name': 'fees'}, 'beneficiary': shape_data['wallet']}
+    check = validator(document, 'FeeSponsorEnrollmentByIdResponse')
+    for row in [None, {'key': key, 'enrolled_at_height': 7}]:
+        check.validate({'key': key, 'enrollment': row})
+    for malformed in [{}, {'key': key}, {'enrollment': None}, {'key': key, 'enrollment': None, 'extra': True}, {'key': key, 'enrollment': {}}]:
+        assert not check.is_valid(malformed)
+    request = validator(document, 'FeeSponsorEnrollmentByIdRequest')
+    good = {'program_id': shape_data['signatory'] + '/fees', 'beneficiary': shape_data['wallet']}
+    request.validate(good)
+    for malformed in [{}, {'program_id': good['program_id']}, {**good, 'extra': True}]:
+        assert not request.is_valid(malformed)

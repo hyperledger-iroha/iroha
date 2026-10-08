@@ -813,13 +813,29 @@ pub mod settlement {
         }
     }
 }
-/// Unscoped NEVO DPN application-role permissions.
+/// NEVO DPN application-role and scoped enrollment permissions.
 ///
-/// These marker permissions deliberately carry only the JSON `null` payload emitted by a unit
-/// struct. The default executor rejects every other payload shape and restricts their lifecycle
-/// to an existing [`DpnAdmin`] holder after genesis.
+/// The application-role markers carry exactly the JSON `null` payload emitted by a unit struct.
+/// Their lifecycle requires a direct [`DpnAdmin`] after genesis, except the narrowly scoped
+/// enrollment capability below can grant only [`DpnUser`]. The capability carries an exact domain.
+/// Its issuance requires a direct administrator who owns that live domain. A direct administrator
+/// or the current live domain owner can revoke it, including after ownership transfer.
 pub mod dpn {
     use super::*;
+    use iroha_model_base::domain::DomainId;
+    permission! {
+        /// Grant only `DpnUser` to a registered UAID account with an active alias in this domain.
+        ///
+        /// Also permits the exact native account and direct-permission queries needed to verify
+        /// that enrollment. Balances, assets, aliases, rosters and other account queries remain
+        /// separately protected. Only a direct `DpnAdmin` who owns the live domain may issue
+        /// this capability. A direct administrator or current live domain owner may revoke
+        /// it; possession does not permit redelegation or role grants.
+        pub struct CanGrantDpnUserForAccountDomain {
+            /// Exact account-alias domain, including its dataspace name.
+            pub domain: DomainId,
+        }
+    }
     permission! {
         /// NEVO DPN contract administrator authority.
         #[derive(Copy)]

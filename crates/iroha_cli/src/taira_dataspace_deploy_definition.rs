@@ -586,9 +586,7 @@ pub(super) fn run<C: RunContext>(
         let grant = manifest.validate()?;
         let catalog_transition = transition(&manifest, &baseline)?;
         check_funding(configured.client(), &manifest, &manifest.spending.max_fee)?;
-        let initial_alias_plan = configured
-            .client()
-            .plan_alias_setup(&manifest.alias_request)?;
+        let initial_alias_plan = configured.plan_alias_setup(&manifest.alias_request)?;
         validate_alias_plan(&manifest, &initial_alias_plan, configured.client())?;
         let plan = PlanV1 {
             schema_version: 1,

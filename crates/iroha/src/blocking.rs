@@ -26,7 +26,9 @@ use iroha_crypto::{HashOf, KeyPair, PrivateKey};
 use iroha_data_model::{
     Identifiable,
     account::AccountId,
-    alias_setup::{AliasLifecycleTransactionPlanV1, AliasTransactionPlanV1},
+    alias_setup::{
+        AliasLifecycleTransactionPlanV1, AliasSetupPlanRequestV1, AliasTransactionPlanV1,
+    },
     isi::{InstructionBox, register::RegisterBox},
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{FeePaymentIntent, SignedTransaction},
@@ -484,6 +486,32 @@ impl Client {
             .wrap_err("apply exact fee quote to transaction payload")?;
         let transaction = self.account.sign_transaction(payload)?;
         self.submit_transaction_and_wait(&transaction)
+    }
+
+    /// Send a canonical-account-signed alias setup planning request.
+    ///
+    /// Uses this facade's owned runtime for asynchronous HTTP transport.
+    ///
+    /// # Errors
+    /// Returns request signing, transport, or [`BlockingCallError`] failures.
+    pub fn post_alias_setup_plan(
+        &self,
+        request: &AliasSetupPlanRequestV1,
+    ) -> Result<crate::http::Response<Vec<u8>>> {
+        self.runtime
+            .block_on(self.inner.post_alias_setup_plan(request))?
+    }
+
+    /// Request and verify an alias setup plan against the complete request.
+    ///
+    /// # Errors
+    /// Returns request, transport, plan verification, or [`BlockingCallError`] failures.
+    pub fn plan_alias_setup(
+        &self,
+        request: &AliasSetupPlanRequestV1,
+    ) -> Result<AliasTransactionPlanV1> {
+        self.runtime
+            .block_on(self.inner.plan_alias_setup(request))?
     }
 
     /// Verify and submit one alias setup plan, then wait for `Applied` finality.
@@ -1284,6 +1312,33 @@ mod tests {
         dropped_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("shutdown drops the pending task and releases its resources");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn alias_setup_blocking_facade_rejects_runtime_and_inherited_blocking_context() {
+        let (client, async_sends, _) = accepting_client();
+        let assert_rejected = |client: &Client| {
+            let request = AliasSetupPlanRequestV1::new(Vec::new());
+            for error in [
+                client.post_alias_setup_plan(&request).unwrap_err(),
+                client.plan_alias_setup(&request).unwrap_err(),
+            ] {
+                assert_eq!(
+                    error
+                        .downcast_ref::<BlockingCallError>()
+                        .unwrap()
+                        .async_runtime_flavor(),
+                    Some(AsyncRuntimeFlavor::CurrentThread),
+                );
+            }
+        };
+        assert_rejected(&client);
+        let clone = client.clone();
+        tokio::task::spawn_blocking(move || assert_rejected(&clone))
+            .await
+            .expect("inherited runtime guard returns an error without panic");
+        assert_eq!(async_sends.load(Ordering::Relaxed), 0);
+        assert_eq!(client.runtime.runs.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
