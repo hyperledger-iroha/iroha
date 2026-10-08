@@ -20,6 +20,16 @@ Transaction signing requires the genesis-derived `NetworkId`: JNI accepts
 exactly 32 marked hash bytes, while the C and Swift surface accepts canonical
 checksummed `NetworkId` text.
 
+The current iOS wallet source requires 26 C exports. Its three observation and
+account-codec exports preserve the same admitted Native owner and existing
+account identity. Observation selectors 0–3 return bounded, explicitly framed
+DATA in their own result domain; they do not establish monetary completion.
+Setup 45 and result 48 remain the canonical Unload claim interface, while
+setup 46 retains an exact signed Activation attempt and result 49 reports an
+authenticated rejection of that attempt. Prepared Load recovery preserves
+one immutable request-to-ordinal reservation. Kotlin's 19 wallet JNI exports
+remain unchanged. These source changes require newly built matching artifacts.
+
 Canonical KAGEMUSHA wallet objects are owned by
 `iroha_data_model::kagemusha::kagemusha_wallet_v1`. The bridge exposes no
 KAGEMUSHA coordinator or device runtime. Native wallet integration and device

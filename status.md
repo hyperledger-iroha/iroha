@@ -118,19 +118,23 @@ owner).
 
 ## Deployment state
 
-Taira's four validators serve the e3766fdb daemon build and the fresh signed
-genesis `277902D32673C29F56D4AA104063347F290881909ECB838B5038E39ABE11C15F`.
-October 4 direct checks found height 9, three peers and an empty queue on every
-validator. Public status, text readiness and faucet policy return HTTP 200;
-twenty-two transactions are approved and none rejected. Idle chains create no
-empty blocks. Shared HTTP defaults are 1,000,000 requests per second,
-60,000,000 per minute and a 10,000,000-token burst. Native amendments applied
-26 explicit request-budget fields to each serving validator; installed-daemon
-config checks and service-unit checks passed before a serial restart. All four
-new process config bindings match the native amendment receipts. The live
-amendment excludes optional recipient lookup because the installed daemon's
-schema cannot accept its new source budget. The deployed native client's basic
-doctor passes all fifteen checks, including MCP server discovery and tools list.
+Taira is live at <https://taira.sora.org> on daemon source
+`c30e0b18cd7f5b9e1d680abe6478aea7f37ea5b9`, network
+`hash:47F0D781D98B119DB3DD130755BD806E08A5F81B1B5F4053601E9AD34D824297#9066`.
+The fresh deployment's authenticated cutover and cleanup completed. October 8
+02:52 UTC checks found all four validators at height 16, each with three peers
+and an empty queue. Public and direct readiness returned HTTP 200; the matching
+native client's basic doctor passed all fifteen checks, and authenticated
+consensus reported committed/applied height 16 with a ready beacon provider.
+The public MCP health call passed and exposed 164 tools. Idle chains create no
+empty blocks. The network-time enforcement mode remains `warn`.
+
+The preserved BPNG owner and direct `bpng` dataspace allocation are restored;
+the corrected Kina registration committed at height 16. Genuine signed
+checkpoint and network-profile artifacts are published under `/bootstrap/`
+and were verified against their producer hashes. Obsolete staged public binary
+copies were removed while preserving the current deployment and private state;
+guest filesystem space available after cleanup was 4.31 GB.
 
 Current source initializes fresh safety records before first startup and retires
 completed execution after successful replay before strict native archive
@@ -139,20 +143,10 @@ authenticated build-only candidate without a full regression gate. On-chain
 governance owns deployment policy; no fixed 24-hour fault test is a prerequisite
 for testnet or production. Release qualification remains open.
 
-The previous 7c77fd3c network's public accounts regression completed 240
-requests with HTTP 200 and no HTTP 429, but sustained only 3.01 requests per
-second against the required 20.
-The deployed fanout admission reserves its entire 48 MB execution pool for each
-read; the current single-World collection redesign still requires bounded row
-allocation and encoding before it can use a smaller concurrent reservation.
-Current-candidate release qualification and authenticated deployment completion
-remain open.
+Current-source release qualification remains open; the live testnet observation
+above applies to the deployed c30 candidate. BPNG application account/alias
+restoration and newer wallet ordinary-Load finality commissioning remain open.
 Private DPN, paid `dpn`/`admin@dpn` and clean-client completion remain open.
-The serving bundle lacks the standard `iroha3d` sibling and an installed native
-network profile. Source now prepares independently signed checkpoint/profile
-artifacts and provisions the dataspace and owner alias under one retained quote;
-component validation and a matching complete bundle remain required before
-those paths can qualify live deployment.
 Validators run in a Linux guest on MacStadium in Dublin; use the approved
 deployment tooling. Retained incident records describe the
 [previous readiness failure](docs/incidents/2026-09-30-taira-readiness.md).

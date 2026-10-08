@@ -131,6 +131,277 @@ final class ToriiKagemushaWalletLoadIssuanceV1Tests: XCTestCase {
         XCTAssertEqual(try original(Data([1]), response: response(url: url,
             headers: ["Content-Type": "application/x-norito", "Content-Length": "1"]), expected: url).canonicalResponseOriginal, Data([1]))
     }
+
+    func testCanonicalEventProofTransportSignsItsExactTargetAndPreservesBytes() async throws {
+        let selected = try selection(), signer = try auth(), bytes = Data([0, 255, 1])
+        let publicKey = try Curve25519.Signing.PrivateKey(rawRepresentation: seed).publicKey
+        let network = self.network
+        let (client, cleanup) = proofClient { request in
+            XCTAssertEqual(request.url?.path, selected.path + "/event-proof")
+            XCTAssertEqual(request.httpMethod, "GET"); XCTAssertNil(request.httpBody)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept-Encoding"), "identity")
+            let signature = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))))
+            let timestamp = try XCTUnwrap(UInt64(XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs))))
+            let nonce = try XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerNonce))
+            let message = try ToriiCanonicalRequest.signatureMessage(networkId: network, method: "GET",
+                url: XCTUnwrap(request.url), timestampMs: timestamp, nonce: nonce)
+            XCTAssertTrue(publicKey.isValidSignature(signature, for: message))
+            let receiptURL = request.url!.deletingLastPathComponent()
+            let receiptMessage = try ToriiCanonicalRequest.signatureMessage(networkId: network, method: "GET",
+                url: receiptURL, timestampMs: timestamp, nonce: nonce)
+            XCTAssertFalse(publicKey.isValidSignature(signature, for: receiptMessage))
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/x-norito", "Content-Length": "3"])!, bytes)
+        }
+        defer { cleanup() }
+        let received = try await client.getKagemushaWalletLoadEventProofOriginalV1(
+            selection: selected, canonicalAuth: signer, requireCurrentOwner: {})
+        XCTAssertEqual(received, bytes) // DATA only; no Native finality or credit is inferred.
+    }
+
+    func testCanonicalTerminalProofTransportSignsItsExactTargetAndPreservesBytes() async throws {
+        let selected = try selection(), signer = try auth(), bytes = Data([0, 255, 1])
+        let publicKey = try Curve25519.Signing.PrivateKey(rawRepresentation: seed).publicKey
+        let network = self.network
+        let (client, cleanup) = proofClient { request in
+            XCTAssertEqual(request.url?.path, selected.path + "/finality")
+            XCTAssertEqual(request.httpMethod, "GET"); XCTAssertNil(request.httpBody)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept-Encoding"), "identity")
+            let signature = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))))
+            let timestamp = try XCTUnwrap(UInt64(XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs))))
+            let nonce = try XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerNonce))
+            let message = try ToriiCanonicalRequest.signatureMessage(networkId: network, method: "GET",
+                url: XCTUnwrap(request.url), timestampMs: timestamp, nonce: nonce)
+            XCTAssertTrue(publicKey.isValidSignature(signature, for: message))
+            let receiptURL = request.url!.deletingLastPathComponent()
+            let receiptMessage = try ToriiCanonicalRequest.signatureMessage(networkId: network, method: "GET",
+                url: receiptURL, timestampMs: timestamp, nonce: nonce)
+            XCTAssertFalse(publicKey.isValidSignature(signature, for: receiptMessage))
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/x-norito", "Content-Length": "3"])!, bytes)
+        }
+        defer { cleanup() }
+        let received = try await client.getKagemushaWalletLoadFinalityOriginalV1(
+            selection: selected, canonicalAuth: signer, requireCurrentOwner: {})
+        XCTAssertEqual(received, bytes) // DATA only; no Native finality or credit is inferred.
+    }
+
+    func testCanonicalLedgerProofTransportUsesExactHeightAndBody() async throws {
+        let bytes = Data([0, 255, 1])
+        let (client, cleanup) = proofClient { request in
+            XCTAssertEqual(request.url?.path, "/v1/bridge/finality/7")
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/x-norito"])!, bytes)
+        }
+        defer { cleanup() }
+        let received = try await client.getKagemushaWalletLedgerFinalityOriginalV1(height: 7, requireCurrentOwner: {})
+        XCTAssertEqual(received, bytes)
+        do {
+            _ = try await client.getKagemushaWalletLedgerFinalityOriginalV1(height: 0, requireCurrentOwner: {})
+            XCTFail("zero height must fail before transport")
+        } catch is ToriiClientError { }
+    }
+
+    func testPendingTerminalProofPollsSameSelectionWithFreshAuthentication() async throws {
+        let selected = try selection(), signer = try auth(), calls = ProofPollCalls()
+        let publicKey = try Curve25519.Signing.PrivateKey(rawRepresentation: seed).publicKey
+        let network = self.network
+        let (client, cleanup) = proofClient { request in
+            XCTAssertEqual(request.url?.path, selected.path + "/finality")
+            let nonce = try XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerNonce))
+            let number = calls.record(nonce)
+            let timestamp = try XCTUnwrap(UInt64(XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerTimestampMs))))
+            let signature = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))))
+            let message = try ToriiCanonicalRequest.signatureMessage(networkId: network, method: "GET",
+                url: XCTUnwrap(request.url), timestampMs: timestamp, nonce: nonce)
+            XCTAssertTrue(publicKey.isValidSignature(signature, for: message))
+            if number == 1 {
+                return (HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil,
+                    headerFields: ["Retry-After": "1", "Content-Length": "0"])!, Data())
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/x-norito"])!, Data([7, 8]))
+        }
+        defer { cleanup() }
+        let bytes = try await client.getKagemushaWalletLoadFinalityOriginalV1(
+            selection: selected, canonicalAuth: signer, requireCurrentOwner: {})
+        XCTAssertEqual(bytes, Data([7, 8]))
+        XCTAssertEqual(calls.values.count, 2)
+        XCTAssertEqual(Set(calls.values).count, 2)
+    }
+
+    func testPendingTerminalProofCannotPollAfterOwnerRevocation() async throws {
+        actor Fence {
+            enum Revoked: Error { case owner }
+            var reads = 0
+            func check() throws { reads += 1; if reads == 4 { throw Revoked.owner } }
+        }
+        let fence = Fence(), calls = ProofPollCalls()
+        let (client, cleanup) = proofClient { request in
+            _ = calls.record("request")
+            return (HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil,
+                headerFields: ["Retry-After": "1"])!, Data())
+        }
+        defer { cleanup() }
+        do {
+            _ = try await client.getKagemushaWalletLoadFinalityOriginalV1(
+                selection: selection(), canonicalAuth: auth(), requireCurrentOwner: { try await fence.check() })
+            XCTFail("revoked owner must not poll again")
+        } catch Fence.Revoked.owner { }
+        XCTAssertEqual(calls.values.count, 1)
+    }
+
+    func testPendingTerminalProofSleepRemainsCancellable() async throws {
+        let selected = try selection(), signer = try auth(), calls = ProofPollCalls()
+        let pending = expectation(description: "pending response")
+        let (client, cleanup) = proofClient { request in
+            _ = calls.record("request"); pending.fulfill()
+            return (HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil,
+                headerFields: ["Retry-After": "30"])!, Data())
+        }
+        defer { cleanup() }
+        let task = Task { try await client.getKagemushaWalletLoadFinalityOriginalV1(
+            selection: selected, canonicalAuth: signer, requireCurrentOwner: {}) }
+        await fulfillment(of: [pending], timeout: 3)
+        task.cancel()
+        do { _ = try await task.value; XCTFail("cancelled polling must finish") }
+        catch is CancellationError { }
+        catch let error as URLError { XCTAssertEqual(error.code, .cancelled) }
+        XCTAssertEqual(calls.values.count, 1)
+    }
+
+    func testPendingTerminalProofRejectsChangedOrUnboundedTransport() throws {
+        let url = URL(string: "https://proof.example.test/finality")!, request = URLRequest(url: url)
+        for retry in ["", "0", "01", "-1", "31", "1.0", "1e0", " 1", "999999999999999999999"] {
+            XCTAssertThrowsError(try ToriiClient.kagemushaLoadFinalityRetryDelay(request,
+                response: response(url: url, headers: ["Retry-After": retry], status: 202), bytes: Data()))
+        }
+        let changes: [(URL, [String: String], Data)] = [
+            (url, [:], Data()), (url, ["Retry-After": "1"], Data([1])),
+            (url, ["Retry-After": "1", "Content-Length": "1"], Data()),
+            (url, ["Retry-After": "1", "Content-Encoding": "gzip"], Data()),
+            (url, ["Retry-After": "1", "Content-Type": "application/json"], Data()),
+            (URL(string: "https://foreign.example.test/finality")!, ["Retry-After": "1"], Data()),
+        ]
+        for (location, headers, bytes) in changes {
+            XCTAssertThrowsError(try ToriiClient.kagemushaLoadFinalityRetryDelay(request,
+                response: response(url: location, headers: headers, status: 202), bytes: bytes))
+        }
+    }
+
+    func testCanonicalProofTransportRejectsOversizedOrChangedRepresentations() async throws {
+        let selected = try selection(), signer = try auth()
+        let variants: [(Int, [String: String], Data)] = [
+            (200, ["Content-Type": "application/x-norito"], Data(repeating: 1, count: 8_193)),
+            (200, ["Content-Type": "application/x-norito", "Content-Length": "8193"], Data([1])),
+            (200, ["Content-Type": "application/x-norito", "Content-Length": "2"], Data([1])),
+            (200, ["Content-Type": "application/x-norito", "Content-Encoding": "gzip"], Data([1])),
+            (200, ["Content-Type": "application/json"], Data([1])),
+            (200, ["Content-Type": "application/x-norito"], Data()),
+            (202, ["Content-Type": "application/x-norito"], Data([1])),
+            (503, ["Content-Type": "application/x-norito"], Data([1])),
+        ]
+        for (status, headers, bytes) in variants {
+            let (client, cleanup) = proofClient { request in
+                (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: headers)!, bytes)
+            }
+            defer { cleanup() }
+            do {
+                _ = try await client.getKagemushaWalletLoadEventProofOriginalV1(
+                    selection: selected, canonicalAuth: signer, requireCurrentOwner: {})
+                XCTFail("invalid representation must not escape as an original")
+            } catch is ToriiClientError { }
+        }
+    }
+
+    func testTerminalProofTransportRejectsOversizedOrChangedRepresentations() async throws {
+        let selected = try selection(), signer = try auth()
+        let variants: [(Int, [String: String], Data)] = [
+            (200, ["Content-Type": "application/x-norito"], Data(repeating: 1, count: 16_385)),
+            (200, ["Content-Type": "application/x-norito", "Content-Length": "16385"], Data([1])),
+            (200, ["Content-Type": "application/x-norito", "Content-Length": "2"], Data([1])),
+            (200, ["Content-Type": "application/x-norito", "Content-Encoding": "gzip"], Data([1])),
+            (200, ["Content-Type": "application/json"], Data([1])),
+            (200, ["Content-Type": "application/x-norito"], Data()),
+            (202, ["Content-Type": "application/x-norito"], Data([1])),
+            (503, ["Content-Type": "application/x-norito"], Data([1])),
+        ]
+        for (status, headers, bytes) in variants {
+            let (client, cleanup) = proofClient { request in
+                (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: headers)!, bytes)
+            }
+            defer { cleanup() }
+            do {
+                _ = try await client.getKagemushaWalletLoadFinalityOriginalV1(
+                    selection: selected, canonicalAuth: signer, requireCurrentOwner: {})
+                XCTFail("invalid representation must not escape as an original")
+            } catch is ToriiClientError { }
+        }
+    }
+
+    func testChangedOwnerAfterProofReplyCannotReleaseItsData() async throws {
+        actor OwnerFence {
+            enum Failure: Error { case changed }
+            var reads = 0
+            func check() throws { reads += 1; if reads == 3 { throw Failure.changed } }
+        }
+        let fence = OwnerFence()
+        let (client, cleanup) = proofClient { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/x-norito"])!, Data([1]))
+        }
+        defer { cleanup() }
+        do {
+            _ = try await client.getKagemushaWalletLedgerFinalityOriginalV1(height: 7,
+                requireCurrentOwner: { try await fence.check() })
+            XCTFail("changed owner must reject a returned original")
+        } catch OwnerFence.Failure.changed { }
+    }
+
+    private func proofClient(_ handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)) -> (ToriiClient, () -> Void) {
+        let host = "proof-\(UUID().uuidString.lowercased()).example.test"
+        KagemushaProofTransportProtocol.install(host: host, handler: handler)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [KagemushaProofTransportProtocol.self]
+        let session = URLSession(configuration: configuration)
+        return (ToriiClient(baseURL: URL(string: "https://\(host)")!, session: session,
+            localSigningContext: .init(networkId: network)), {
+                session.invalidateAndCancel(); KagemushaProofTransportProtocol.remove(host: host)
+            })
+    }
+}
+
+private final class ProofPollCalls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var observed: [String] = []
+    func record(_ nonce: String) -> Int {
+        lock.lock(); defer { lock.unlock() }; observed.append(nonce); return observed.count
+    }
+    var values: [String] { lock.lock(); defer { lock.unlock() }; return observed }
+}
+
+/// Transport fixture only. It never constructs a Native proof, receipt, wallet or monetary result.
+private final class KagemushaProofTransportProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var handlers: [String: (URLRequest) throws -> (HTTPURLResponse, Data)] = [:]
+    static func install(host: String, handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)) {
+        lock.lock(); defer { lock.unlock() }; handlers[host] = handler
+    }
+    static func remove(host: String) { lock.lock(); defer { lock.unlock() }; handlers.removeValue(forKey: host) }
+    override class func canInit(with request: URLRequest) -> Bool {
+        lock.lock(); defer { lock.unlock() }; return handlers[request.url?.host ?? ""] != nil
+    }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.lock.lock(); let handler = Self.handlers[request.url?.host ?? ""]; Self.lock.unlock()
+        do {
+            let (response, bytes) = try XCTUnwrap(handler)(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: bytes)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch { client?.urlProtocol(self, didFailWithError: error) }
+    }
+    override func stopLoading() {}
 }
 
 private extension String {
