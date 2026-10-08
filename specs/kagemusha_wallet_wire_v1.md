@@ -1273,6 +1273,60 @@ encryption and checksums never replace the wallet's verification.
 - TODO(G6): the ledger instruction family; TODO(G3/G6): the release install path
   carrying the artifact manifest.
 
+## Native retained-history collection boundary
+
+The installed wallet setup selector **47** performs one bounded collection turn for the
+historical u128 sequence carried in `amount`; zero names Bootstrap. `setup_id`, `token`
+and all three originals are zero/empty. The caller supplies no fold verdict, map root or
+nonmembership path. Native selects the latest fully verified covering Ω and its retained
+pending-map descriptor, checks that exact root and derives Send nonmembership itself.
+Collection writes its source-bound durable intent before removing any object and resumes
+that same intent after interruption. The current head and undelivered Sends cannot be
+collected; required fee, activation and Unload originals and permanent replay records remain.
+
+Results **50 Idle**, **51 Progress**, **52 Collected** contain no bytes and `detail=0`.
+Idle has sequence zero; Progress/Collected return the exact requested sequence. Collection
+runs under ordinary background eligibility while real payment work can cancel and join it;
+the collection call itself does not reserve payment priority. It never deletes payment keys
+or terminal custody. The prior public caller-supplied `OutgoingAbsent`/`collect_step` surface
+is removed. Existing selector46/result49 keep their activation-attempt semantics.
+
+## Native explicit terminal custody deletion boundary
+
+Terminal deletion is separate from Retiring and retained-history collection. Setup48 reads
+actual provider-selected Pending/Released custody and returns result53 with an owner-local,
+one-use token in the low sequence word (positive and at most `i64::MAX`; high/detail zero)
+and exactly254 bytes of display DATA. The fixed frame is `KWCDV1\0\0` (8 bytes), phase
+(1 Pending/2 Released), lifecycle (1 Active/2 Retiring), selected operation kind (1..8), three
+boolean bytes for nonempty pending-outgoing/fee-claim/Load-Unload-recovery maps, then six
+nonzero bytes32 values (slot, marker original digest, scheme, asset scope, wallet, head),
+then LE128 sequence, gross retained balance and core burned total. Core burns must not exceed
+gross balance. These retained amounts are **not a fully folded spendable balance**; unfinished
+proof work may reveal additional burns. Copying the projection grants no capability.
+
+Before setup49 consumes the token, the client must display the exact state and obtain fresh
+explicit confirmation of permanent payment-key loss, loss of retained offline-value recovery,
+pending delivery recovery and unpaid or late fee/Unload/activation claims. Native accepts no
+caller-supplied marker, path, balance, generic approval flag or projection as authority. The
+actual non-Clone review binds the admitted owner and exact current marker. Capability tokens
+are process-wide, bounded, positive and never reused across wallet owners or token purposes.
+
+Setup49 freezes money operations before entering a possibly irreversible provider call. The
+existing provider publishes and anchors the terminal marker before deleting the key and
+custody. Result54 returns the exact nonzero32-byte terminal marker with all scalar fields zero;
+ordinary operations remain terminal. On error, only setup50 reconciliation or close may
+continue. Setup50 never newly publishes a terminal marker: it resumes already committed
+cleanup, or returns result56 (empty bytes/all scalar fields zero) after definite noncommit.
+A further deletion then requires a fresh review and explicit confirmation. Terminal recovery
+is idempotent and never recreates a key or wallet. Existing provider restart reconciliation
+owns cleanup if the process was lost; a terminal wallet cannot reopen for money operations.
+
+Setup51 discards only an unused review, returning result55 with empty bytes/all scalar fields
+zero; it cannot undo an attempted deletion. All four selectors use zero setup identity/amount
+and no originals; only49/51 carry a token. Discarding a warning or entering Retiring never
+publishes deletion. No hardware, phone or deployment qualification follows from host or
+simulated-provider tests of this boundary.
+
 ## 8. Differences from the implementation design
 
 - The full blacklist cap is 2,228,736 bytes, not the design's 2,228,224, which

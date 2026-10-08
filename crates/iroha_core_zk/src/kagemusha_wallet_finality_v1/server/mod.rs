@@ -1,8 +1,9 @@
 //! Server-only ordinary-finality production selected by the signed artifact graph.
 //!
-//! Wallet installations remain verifier-only. This owner separately mounts the original
-//! server proving tables and never accepts a receipt, cached byte string or native block
-//! certificate as a completed Load proof. Checkpoint restoration verifies the complete
+//! Wallet installations remain verifier-only. This owner qualifies the complete fixed
+//! descriptor/verifier graph before retaining a proving topology. Original server keys
+//! are loaded or exactly regenerated and strictly imported at each actual use. Neither
+//! graph construction, cached bytes nor native block certificates are completed Load proofs. Checkpoint restoration verifies the complete
 //! source statement and both curve obligations before reusing work.
 
 use std::path::Path;
@@ -209,7 +210,9 @@ struct MountStorage<'a> {
 }
 
 /// One server installation and exclusively owned immutable recovery journal.
-/// Construction always authenticates and imports the full selected original graph.
+/// Construction authenticates the complete fixed descriptor/verifier graph.
+/// Selected proving originals are regenerated or read and strictly imported only
+/// when used; successful construction is not a claim that all proving keys are ready.
 pub struct ServerFinalityV1 {
     installed: InstalledFinality,
     originals: artifacts::Originals,
@@ -221,7 +224,8 @@ pub struct ServerFinalityV1 {
 }
 impl ServerFinalityV1 {
     /// Initialize fresh empty private cache and journal namespaces after full authenticated
-    /// D/V reconstruction. Generated PKs must match signed bytes and pass strict import.
+    /// D/V reconstruction. No PK is generated during initialization. Every actual proof
+    /// loads or regenerates exact signed PK bytes and strictly imports its selected source.
     /// # Errors
     /// Invalid installation, populated namespace, custody/resource/source failure or cancellation.
     pub fn initialize(
@@ -248,7 +252,8 @@ impl ServerFinalityV1 {
     }
 
     /// Reopen existing exact selections; missing cache/journal selections never initialize.
-    /// Proving tables may be regenerated only from the fully matched compiled recipes.
+    /// Proving tables may be regenerated only at actual use from fully matched compiled
+    /// recipes, followed by strict source import. Opening grants no all-PK-ready verdict.
     /// # Errors
     /// Invalid installation, lost/substituted custody, source/resource failure or cancellation.
     pub fn open(
@@ -360,6 +365,9 @@ impl ServerFinalityV1 {
                 .take_failure()
                 .unwrap_or(ServerFinalityErrorV1::Catalog(error))
         })?;
+        // Complete D/V qualification fixes all children and obligations. No PK is
+        // opened here; every proof path strictly imports its exact signed originals.
+        let installed = recipes.installed_graph(Some(&cancellation.0))?;
         let selection = norito::to_bytes(&Selection {
             version: 1,
             scheme: installation.scheme_id,
@@ -398,24 +406,12 @@ impl ServerFinalityV1 {
         for root in &roots {
             root.revalidate()?;
         }
-        let mut originals = artifacts::Originals::new(
+        let originals = artifacts::Originals::new(
             verifier_originals,
             selected.originals.clone(),
             recipes,
             cache,
         );
-        let installed = InstalledFinality::from_original_artifacts_cancellable(
-            anchor,
-            &mut originals,
-            params,
-            imports,
-            Some(&cancellation.0),
-        )
-        .map_err(|error| {
-            originals
-                .take_failure()
-                .unwrap_or(ServerFinalityErrorV1::Proof(error))
-        })?;
         Ok(Self {
             installed,
             originals,

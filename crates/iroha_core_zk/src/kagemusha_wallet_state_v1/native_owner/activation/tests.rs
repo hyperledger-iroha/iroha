@@ -190,7 +190,7 @@ fn collection_requires_the_complete_selected_activation_copy() {
     w.fold_once().unwrap();
     w.fold_once().unwrap();
     assert!(matches!(
-        w.collect_step(0, None),
+        w.collect_retained_step(0),
         Err(Error::Invalid(
             "Bootstrap activation originals are not retained"
         ))
@@ -201,7 +201,7 @@ fn collection_requires_the_complete_selected_activation_copy() {
     w.finish_activation(&plan, &bytes).unwrap();
     for _ in 0..16 {
         if matches!(
-            w.collect_step(0, None).unwrap(),
+            w.collect_retained_step(0).unwrap(),
             CollectionStatus::Collected(0)
         ) {
             break;

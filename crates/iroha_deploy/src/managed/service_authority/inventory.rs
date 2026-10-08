@@ -211,6 +211,35 @@ impl<'a> ServiceChildInventory<'a> {
         Ok(absent)
     }
 
+    /// A fresh closed name observation used only to select bounded bootstrap scheduling.
+    /// Any existing purpose, including an empty pre-lock prefix, selects serial scheduling.
+    /// Ordinary child admission and shared lease fences still decide every action afterwards;
+    /// this observation grants no retained absence, signing or completion authority.
+    pub(in crate::managed) fn bootstrap_provider_purposes_absent(self) -> Result<bool> {
+        self.revalidate()?;
+        let absent = self.providers.iter().all(|branch| {
+            branch.is_none_or(|index| {
+                !self.branches[index].names.iter().any(|name| {
+                    [
+                        ProviderPurpose::Custody,
+                        ProviderPurpose::ReserveAccountRegistration,
+                        ProviderPurpose::ProviderFundingBootstrap,
+                        ProviderPurpose::ReserveTopUpRequest,
+                        ProviderPurpose::ReserveTopUpApproval,
+                        ProviderPurpose::InitialProviderCredit,
+                        ProviderPurpose::ProviderCapacityDeclaration,
+                        ProviderPurpose::InitialProviderIngestAuthority,
+                        ProviderPurpose::InitialGatewaySetup,
+                    ]
+                    .into_iter()
+                    .any(|purpose| name == purpose.directory_name())
+                })
+            })
+        });
+        self.finish()?;
+        Ok(absent)
+    }
+
     pub(in crate::managed) fn finish(self) -> Result<()> {
         self.revalidate()?;
         self.parent.validate_profile()?;

@@ -16,7 +16,7 @@ use std::{
     cell::Cell,
     ffi::OsString,
     sync::{
-        Arc,
+        Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError,
         atomic::{AtomicBool, Ordering},
     },
     time::Instant,
@@ -131,6 +131,9 @@ pub(in crate::managed) struct Lease {
     pub(in crate::managed) epoch: Epoch,
     deadline: Instant,
     cancelled: Arc<AtomicBool>,
+    // Serialize this live owner's epoch census with its sole replacement publication.
+    // This is not a retained absence verdict or a lock over another process's writes.
+    replacement_gate: RwLock<()>,
 }
 impl Lease {
     pub(in crate::managed) fn issue(
@@ -202,9 +205,16 @@ impl Lease {
             epoch,
             deadline,
             cancelled,
+            replacement_gate: RwLock::new(()),
         })
     }
     pub(in crate::managed) fn check(&self, deadline: Instant) -> Result<Instant> {
+        let _guard = self.read_guard(deadline)?;
+        self.check_locked(deadline)
+    }
+    // All native and final live checks remain in their original order. The caller owns
+    // either the shared census guard or the exclusive replacement guard throughout.
+    fn check_locked(&self, deadline: Instant) -> Result<Instant> {
         require_active(&self.cancelled)?;
         let deadline = deadline.min(self.deadline);
         if deadline <= Instant::now() {
@@ -243,6 +253,54 @@ impl Lease {
         require_active(&self.cancelled)?;
         Ok(deadline)
     }
+    fn require_lock_budget(&self, deadline: Instant) -> Result<()> {
+        require_active(&self.cancelled)?;
+        if deadline.min(self.deadline) <= Instant::now() {
+            return Err(ManagedBootstrapFailure::AuthorizationExpired.into());
+        }
+        if now_ms()? >= self.epoch.terms.signing_deadline_unix_ms {
+            return Err(ManagedBootstrapFailure::AuthorizationExpired.into());
+        }
+        Ok(())
+    }
+    fn read_guard(&self, deadline: Instant) -> Result<RwLockReadGuard<'_, ()>> {
+        loop {
+            self.require_lock_budget(deadline)?;
+            match self.replacement_gate.try_read() {
+                Ok(guard) => {
+                    self.require_lock_budget(deadline)?;
+                    return Ok(guard);
+                }
+                Err(TryLockError::Poisoned(_)) => {
+                    return Err(invalid("generated authorization replacement gate poisoned"));
+                }
+                Err(TryLockError::WouldBlock) => {
+                    #[cfg(test)]
+                    parallel_tests::after_contention();
+                    std::thread::yield_now();
+                }
+            }
+        }
+    }
+    fn write_guard(&self, deadline: Instant) -> Result<RwLockWriteGuard<'_, ()>> {
+        loop {
+            self.require_lock_budget(deadline)?;
+            match self.replacement_gate.try_write() {
+                Ok(guard) => {
+                    self.require_lock_budget(deadline)?;
+                    return Ok(guard);
+                }
+                Err(TryLockError::Poisoned(_)) => {
+                    return Err(invalid("generated authorization replacement gate poisoned"));
+                }
+                Err(TryLockError::WouldBlock) => {
+                    #[cfg(test)]
+                    parallel_tests::after_contention();
+                    std::thread::yield_now();
+                }
+            }
+        }
+    }
     fn origin(&self) -> Result<Origin> {
         Ok(Origin::Generated {
             ordinal: self.epoch.ordinal,
@@ -251,7 +309,10 @@ impl Lease {
         })
     }
     fn claim(&self, purpose: Purpose, target: ReplacementTarget, deadline: Instant) -> Result<()> {
-        self.check(deadline)?;
+        let _guard = self.write_guard(deadline)?;
+        #[cfg(test)]
+        parallel_tests::after_claim_lock();
+        self.check_locked(deadline)?;
         self.scope.check(purpose)?;
         target.validate(purpose)?;
         let root = self.directory.open_child("epochs")?;
@@ -266,10 +327,10 @@ impl Lease {
                 return Err(ManagedBootstrapFailure::ReplacementLimit.into());
             }
         } else {
-            self.check(deadline)?;
+            self.check_locked(deadline)?;
             attempts::write_record(&root, &name, &selected)?;
         }
-        self.check(deadline)?;
+        self.check_locked(deadline)?;
         Ok(())
     }
 }
@@ -572,3 +633,7 @@ mod reader_tests;
 #[cfg(test)]
 #[path = "authorization/cancellation_tests.rs"]
 mod cancellation_tests;
+
+#[cfg(test)]
+#[path = "authorization/parallel_tests.rs"]
+mod parallel_tests;

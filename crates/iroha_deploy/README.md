@@ -307,8 +307,15 @@ policy and registration, funding, distinct-key ingest authority, gateway configu
 original wallet and authenticated carrier. Recovery verifies explicit wallet preparation stages;
 partial request/payload history is read-only until an explicit advance rechecks the native
 prerequisite and finishes that same original. Recovery compares every original selection before
-network access and requires strictly ordered successful carriers; a newer I/O deadline cannot renew
-the original signing deadline. Complete reports describe historical execution. The worker now
+network access and requires the reserve carrier before every provider, strict prerequisites within
+each provider, and reputation after every gateway. Independent providers may share a certified block;
+every original transaction remains in the all-peer barrier. A fresh closed name census permits at most
+three scoped provider workers outside active decode budgets; existing purposes and resumed histories
+use serial dispatch. That census selects scheduling only: raced material still goes through ordinary
+native admission and the one shared epoch/replacement fence. Every spawned worker is joined before
+census or returning a report, with the same original deadline and cancellation. A provider failure may
+leave another provider's exact resumable work; it never grants readiness. A newer I/O deadline cannot
+renew the original signing deadline. Complete reports describe historical execution. The worker now
 composes those owners, promotes the original signed catalog and restarts only its owned peers
 with the derived token configuration. It rechecks the same paid readiness receipt, exact Applied
 carrier on all four peers, promoted catalog and fresh native discovery before reporting Ready.

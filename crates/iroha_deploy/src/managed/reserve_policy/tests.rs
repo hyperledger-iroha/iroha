@@ -229,7 +229,7 @@ fn reserve_original_rejects_selection_mutations_and_invalid_native_checkpoint_be
     let bytes = directory.read("original.nrt", 256 * 1024).unwrap();
     for mode in [Advance::ObserveOnly, Advance::SubmitOriginal] {
         let error = coordinator
-            .advance_original(Instant::now() + Duration::from_secs(10), mode, true)
+            .advance_original(Instant::now() + Duration::from_secs(10), mode, true, None)
             .unwrap_err();
         assert!(
             error

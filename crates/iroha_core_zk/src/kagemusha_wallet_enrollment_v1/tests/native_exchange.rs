@@ -2,7 +2,8 @@
 //!
 //! The producer and consumer reopen the SAME persisted A incarnation. The private software
 //! key fixture is never part of the public Load target. No grant, proof or ledger result is
-//! synthesized: both tests remain ignored until independently pinned artifacts are available.
+//! synthesized: the genuine pipeline tests remain ignored until independently pinned artifacts
+//! are available. The Load producer and settlement continuation have separate retained owners.
 
 use super::*;
 use crate::{
@@ -34,6 +35,10 @@ use std::{
     sync::Arc,
 };
 
+#[path = "native_exchange/load.rs"]
+mod load;
+#[path = "native_exchange/settlement.rs"]
+mod settlement;
 #[path = "native_exchange/setup.rs"]
 mod setup;
 use setup::LedgerSetup;
@@ -885,6 +890,17 @@ fn actual_native_a_to_b_to_c_then_unload_with_restart_and_replay() {
     ] {
         publish(&output.join(name), &bytes);
     }
+    // Keep exactly C's existing test-only private platform key for the separate actual-ledger
+    // settlement consumer. Public continuation originals grant no new custody or authority.
+    device_c.save_simulator();
+    let c_open_originals = FRAME_NAMES
+        .into_iter()
+        .zip(&frames_c)
+        .map(|(name, bytes)| {
+            publish(&device_c.root.join(name), bytes);
+            norito::json!({ "name": name, "bytes": (bytes.len()), "sha256": (sha(bytes)) })
+        })
+        .collect::<Vec<_>>();
     let result = norito::json!({ "schema": "iroha.kagemusha.native-abc-result.v1",
         "source_pins": (source_pins()), "binary_sha256": (executable_hash()),
         "target_sha256": (sha(&target_bytes)), "native_unload_payout": "100",
@@ -892,6 +908,10 @@ fn actual_native_a_to_b_to_c_then_unload_with_restart_and_replay() {
         "a_account_digest": (hex::encode(kagemusha_wallet_account_digest_v1(&f.account).unwrap())),
         "b_account_digest": (hex::encode(kagemusha_wallet_account_digest_v1(&f_b.account).unwrap())),
         "c_account_digest": (hex::encode(kagemusha_wallet_account_digest_v1(&f_c.account).unwrap())),
+        "c_open_originals": c_open_originals,
+        "c_wallet_id": (hex::encode(claim.credential.body.wallet_id)),
+        "c_unload_request_id": (hex::encode(unload_id)),
+        "c_unload_claim_sha256": (sha(&claim_original)),
         "ledger_settlement_executed": false, "physical_device_qualified": false,
         "scope": "Real installed proof source, finalized receipt proof, native host custody, exact replay and local folds; simulated hardware. Exported Unload claim still requires actual ledger execution and replay qualification." });
     publish(

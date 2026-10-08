@@ -69,6 +69,106 @@ fn no_http(peers: &[TcpListener]) {
         assert_eq!(peer.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
     }
 }
+#[cfg(unix)]
+thread_local! {
+    static BOOTSTRAP_REOPEN_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(unix)]
+pub(super) fn before_bootstrap_reopen() {
+    // Release the RefCell borrow before running the one-shot native mutation.
+    let action = BOOTSTRAP_REOPEN_HOOK.with(|hook| hook.borrow_mut().take());
+    if let Some(action) = action {
+        action();
+    }
+}
+
+#[cfg(unix)]
+struct BootstrapReopenHook;
+#[cfg(unix)]
+impl BootstrapReopenHook {
+    fn install(action: impl FnOnce() + 'static) -> Self {
+        BOOTSTRAP_REOPEN_HOOK.with(|hook| {
+            assert!(hook.borrow_mut().replace(Box::new(action)).is_none());
+        });
+        Self
+    }
+}
+#[cfg(unix)]
+impl Drop for BootstrapReopenHook {
+    fn drop(&mut self) {
+        BOOTSTRAP_REOPEN_HOOK.with(|hook| *hook.borrow_mut() = None);
+    }
+}
+
+#[cfg(unix)]
+fn bootstrap_loss_after_selection(owner: &GeneratedServiceRuntime, call: impl FnOnce()) {
+    let path = owner
+        .authority
+        .directory
+        .path()
+        .parent()
+        .unwrap()
+        .join("service-bootstrap");
+    let displaced = path.with_file_name("held-recovery-service-bootstrap");
+    let directory = PrivateDirectory::open_exact(&path).unwrap();
+    let directory_identity = directory.identity().unwrap();
+    let lock_identity =
+        iroha_fs::FileIdentity::of(&directory.open_existing_lock("operation.lock").unwrap())
+            .unwrap();
+    let lock_bytes = directory
+        .read("operation.lock", MAX_MANIFEST_BYTES)
+        .unwrap();
+    let initial = directory.open_child("initial").unwrap();
+    let original = initial.read("original.nrt", MAX_POLICY_BYTES).unwrap();
+    let names = initial.entries(32).unwrap();
+    let reached = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = std::rc::Rc::clone(&reached);
+    let removed_path = path.clone();
+    let saved_path = displaced.clone();
+    let hook = BootstrapReopenHook::install(move || {
+        std::fs::rename(&removed_path, &saved_path).unwrap();
+        observed.set(true);
+    });
+    call();
+    assert!(
+        reached.get(),
+        "the successful selection reached its second open"
+    );
+    assert!(BOOTSTRAP_REOPEN_HOOK.with(|hook| hook.borrow().is_none()));
+    assert!(
+        !path.exists(),
+        "recovery must not recreate the lost purpose or lock"
+    );
+    assert!(displaced.join("operation.lock").exists());
+    drop(hook);
+    std::fs::rename(&displaced, &path).unwrap();
+    assert_eq!(directory.identity().unwrap(), directory_identity);
+    assert_eq!(
+        iroha_fs::FileIdentity::of(&directory.open_existing_lock("operation.lock").unwrap())
+            .unwrap(),
+        lock_identity
+    );
+    assert_eq!(
+        directory
+            .read("operation.lock", MAX_MANIFEST_BYTES)
+            .unwrap()
+            .as_slice(),
+        lock_bytes.as_slice()
+    );
+    assert_eq!(
+        initial
+            .read("original.nrt", MAX_POLICY_BYTES)
+            .unwrap()
+            .as_slice(),
+        original.as_slice()
+    );
+    assert_eq!(initial.entries(32).unwrap(), names);
+    directory.revalidate().unwrap();
+    owner.authority.validate_profile().unwrap();
+}
+
 // Catalog creates the exact empty material skeleton needed by its derived configs.
 // This is not a token component, receipt journal or native enrollment publication.
 fn catalog_material_skeleton(
@@ -820,6 +920,44 @@ fn exact_publication_reopens_and_changed_config_or_manifest_is_never_overwritten
             .as_slice(),
         b"not a manifest"
     );
+    no_http(&peers);
+}
+
+#[test]
+#[cfg(unix)]
+fn material_recovery_refuses_bootstrap_loss_after_selection_without_repair() {
+    use crate::localnet::service_authorities::count_profile_validations;
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-recovery-bootstrap-race");
+    select(&prepared);
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let selected = RuntimeSelection::read(&owner.authority).unwrap();
+    let before = owner.authority.directory.entries(32).unwrap();
+    let ((), captures) = count_profile_validations(|| {
+        bootstrap_loss_after_selection(&owner, || {
+            assert!(matches!(
+                owner.retain_current_custody_material(options().deadline),
+                Err(crate::managed::Error::Invalid(message))
+                    if message == "original service bootstrap purpose is absent"
+            ));
+        });
+    });
+    assert_eq!(
+        captures, 0,
+        "selection and existing reopen borrow immutable originals"
+    );
+    let retried = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_eq!(
+        encode(&retried.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&selected.policies, MAX_POLICY_BYTES).unwrap()
+    );
+    // Restored ordinary history is still incomplete; no failed recovery publishes material.
+    assert!(matches!(
+        owner.retain_current_custody_material(options().deadline),
+        Err(crate::managed::Error::Invalid(message))
+            if message == "generated bootstrap has incomplete original execution"
+    ));
+    assert_eq!(owner.authority.directory.entries(32).unwrap(), before);
     no_http(&peers);
 }
 
@@ -1746,6 +1884,32 @@ fn runtime_retains_all_twenty_nine_original_transactions_and_same_block_distinct
         *fixture.carriers.last().unwrap()
     );
     fixture.owner.validate(&revision).unwrap();
+    #[cfg(unix)]
+    {
+        let peers = fixture.peers();
+        let names = fixture.owner.authority.directory.entries(32).unwrap();
+        let provider = fixture.selection.plans[0].provider_id();
+        bootstrap_loss_after_selection(&fixture.owner, || {
+            assert!(matches!(
+                fixture.owner.prepare_renewed_stream_tokens(
+                    &revision,
+                    provider,
+                    2,
+                    fixture.options.deadline,
+                ),
+                Err(crate::managed::Error::Invalid(message))
+                    if message == "original service bootstrap purpose is absent"
+            ));
+        });
+        // Restore the same original parent and leave every real carrier/component unchanged.
+        fixture.owner.validate(&revision).unwrap();
+        assert_eq!(revision.required_transactions(), fixture.carriers);
+        assert_eq!(
+            fixture.owner.authority.directory.entries(32).unwrap(),
+            names
+        );
+        no_http(&peers);
+    }
     for index in 0..3 {
         let provider = fixture.selection.plans[index].provider_id();
         let original = revision.selected_enrollment(provider).unwrap().unwrap();

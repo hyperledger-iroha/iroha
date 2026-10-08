@@ -118,6 +118,17 @@ impl ManagedInitialReservePolicy {
         })
     }
 
+    /// Create original reserve custody from a freshly checked parent without recapturing intent.
+    /// The caller still supplies its ordinary live authorization before requesting creation.
+    pub(super) fn open_from_original(parent: &ServiceAuthority) -> Result<Self> {
+        Ok(Self {
+            authority: ServiceAuthority::open_network_from_original(
+                parent,
+                NetworkPurpose::InitialReservePolicy,
+            )?,
+        })
+    }
+
     pub(super) fn open_existing(prepared: &PreparedLocalnet) -> Result<Option<Self>> {
         ServiceAuthority::open_network_existing(prepared, NetworkPurpose::InitialReservePolicy)
             .map(|authority| authority.map(|authority| Self { authority }))
@@ -243,7 +254,12 @@ impl ManagedInitialReservePolicy {
             |_| Ok(true),
         )?;
         authorization.validate(&self.authority, Purpose::ReservePolicy, deadline)?;
-        self.advance_original(deadline, Advance::SubmitAuthorized(authorization), false)
+        self.advance_original(
+            deadline,
+            Advance::SubmitAuthorized(authorization),
+            false,
+            Some(account),
+        )
     }
 
     /// Prepare or dispatch the exact retained initial policy at most once, then observe it.
@@ -251,7 +267,7 @@ impl ManagedInitialReservePolicy {
     /// Rejects missing/changed originals, changed native preflight or journal/evidence failures.
     /// A fresh I/O deadline never renews the original UTC authorization or signed envelope.
     pub fn advance(&mut self, deadline: Instant) -> Result<ManagedReservePolicyProgress> {
-        self.advance_original(deadline, Advance::SubmitOriginal, true)
+        self.advance_original(deadline, Advance::SubmitOriginal, true, None)
     }
 
     /// Observe the exact original intent and wallet transaction without preparing or dispatching.
@@ -259,7 +275,7 @@ impl ManagedInitialReservePolicy {
     /// Rejects missing/changed originals or invalid retained evidence. This may retain verified
     /// finality progress, but never creates a wallet transaction, quotes fees, signs or sends it.
     pub fn recover(&mut self, deadline: Instant) -> Result<ManagedReservePolicyProgress> {
-        self.advance_original(deadline, Advance::ObserveOnly, true)
+        self.advance_original(deadline, Advance::ObserveOnly, true, None)
     }
 
     /// Recover the semantic original using its selected immutable dispatch authorization.
@@ -305,7 +321,7 @@ impl ManagedInitialReservePolicy {
             &crate::managed::native_operation::attempts::HistoryScope::FixedBody,
         )?;
         history.require_fees(fees)?;
-        self.advance_original(deadline, mode, false).map(Some)
+        self.advance_original(deadline, mode, false, None).map(Some)
     }
 
     fn advance_original(
@@ -313,6 +329,7 @@ impl ManagedInitialReservePolicy {
         deadline: Instant,
         mode: Advance<'_>,
         observe_current: bool,
+        retained_account: Option<AccountService>,
     ) -> Result<ManagedReservePolicyProgress> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
@@ -321,8 +338,13 @@ impl ManagedInitialReservePolicy {
         self.validate_original(&original)?;
         let directory = original.directory();
         let path = directory.path().join("transaction");
-        let account = AccountService::new(self.authority.config.clone())
-            .map_err(|_| invalid("cannot open initial reserve wallet"))?;
+        // The generated caller closes its original authorization before moving the account
+        // used for request retention here. Standalone and recovery calls construct their own.
+        let account = match retained_account {
+            Some(account) => account,
+            None => AccountService::new(self.authority.config.clone())
+                .map_err(|_| invalid("cannot open initial reserve wallet"))?,
+        };
         let account = mode.bind_account(account)?;
         let verify_custody = || {
             original.verify_wallets(|intent, attempt| {
@@ -434,7 +456,7 @@ impl ManagedInitialReservePolicy {
         verify_custody()?;
         let transaction = match retained {
             Some(transaction) => transaction,
-            None => self.verify_wallet(&directory, &original, deadline)?,
+            None => Self::verify_wallet(&account, &directory, &original, deadline)?,
         };
         let request = original.request(deadline);
         let mut report = account
@@ -577,14 +599,15 @@ impl ManagedInitialReservePolicy {
         }
         Ok(())
     }
+    // Inspect through this call's already-bound account; the exact journal producer still
+    // reopens and verifies every record. No HTTP context or new signing authority is created.
     fn verify_wallet(
-        &self,
+        account: &AccountService,
         directory: &PrivateDirectory,
         original: &Selected<Original>,
         deadline: Instant,
     ) -> Result<SignedTransaction> {
-        AccountService::new(self.authority.config.clone())
-            .map_err(|_| invalid("cannot open initial reserve wallet"))?
+        account
             .verify_initial_reserve_policy_journal(
                 &directory.path().join("transaction"),
                 &original.request(deadline),

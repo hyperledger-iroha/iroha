@@ -233,8 +233,8 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
                     Box::new(NativeWallet {
                         wallet,
                         times: BTreeMap::new(),
-                        next_time: 0,
                         reviews: review::Tokens::default(),
+                        deletion_reviews: review::Tokens::default(),
                     }),
                     scheduler,
                 ))

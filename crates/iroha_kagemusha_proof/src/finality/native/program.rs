@@ -16,6 +16,13 @@ pub(super) fn identity(source: &SourceVerifier) -> Result<SourceIdentity, Error>
         key: source.key_digest().map_err(|_| Error::Artifact)?.to_repr(),
     })
 }
+/// Internal graph assembly mode. Only a complete opaque catalog can select the
+/// metadata-only arm; untrusted artifact loaders always take strict original import.
+pub(super) enum GraphSource<'a> {
+    Original(&'a mut dyn ArtifactSource),
+    Qualified(&'a crate::finality::catalog::ServerRecipes),
+}
+
 pub(super) struct Mounted<C: SourceCircuit> {
     id: NodeId,
     pub(super) source: SourceVerifier,
@@ -25,13 +32,23 @@ impl<C: SourceCircuit> Mounted<C> {
     pub(super) fn mount(
         id: NodeId,
         layout: &C,
-        artifacts: &mut dyn ArtifactSource,
+        artifacts: &mut GraphSource<'_>,
         params: &Parameters,
         limits: ImportLimits,
         cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Self, Error> {
         iroha_pasta::CancellationToken::checkpoint(cancellation)?;
-        let pair = load_pair(artifacts, &id)?;
+        if let GraphSource::Qualified(catalog) = artifacts {
+            return Ok(Self {
+                source: catalog.selected_source(&id)?,
+                id,
+                circuit: PhantomData,
+            });
+        }
+        let GraphSource::Original(originals) = artifacts else {
+            return Err(Error::Artifact);
+        };
+        let pair = load_pair(*originals, &id)?;
         let prover = Prover::from_original_artifacts_cancellable(
             layout,
             borrowed(&pair.source),
@@ -127,7 +144,7 @@ impl<C: SourceCircuit> InstalledProgram<C> {
         program: Program,
         count: u32,
         mut layout: impl FnMut(u32) -> Result<(u32, C), Error>,
-        artifacts: &mut dyn ArtifactSource,
+        artifacts: &mut GraphSource<'_>,
         params: &Parameters,
         limits: ImportLimits,
         cancellation: Option<&iroha_pasta::CancellationToken>,
@@ -159,21 +176,27 @@ impl<C: SourceCircuit> InstalledProgram<C> {
             }
             sequence.push(class);
         }
-        let tree = IntervalTree::from_original_artifacts_cancellable(
-            sequence
-                .iter()
-                .map(|class| leaves[class].source.clone())
-                .collect(),
-            |pair| load_pair(artifacts, &NodeId::Merge(Box::new(pair))),
-            params.pallas.clone(),
-            params.vesta.clone(),
-            TreeImportConfig {
-                key: limits.key,
-                maximum_keys: limits.maximum_artifacts,
-                maximum_original_bytes: limits.maximum_original_bytes,
-            },
-            cancellation,
-        )?;
+        let sources = sequence
+            .iter()
+            .map(|class| leaves[class].source.clone())
+            .collect();
+        let tree = match artifacts {
+            GraphSource::Original(originals) => IntervalTree::from_original_artifacts_cancellable(
+                sources,
+                |pair| load_pair(*originals, &NodeId::Merge(Box::new(pair))),
+                params.pallas.clone(),
+                params.vesta.clone(),
+                TreeImportConfig {
+                    key: limits.key,
+                    maximum_keys: limits.maximum_artifacts,
+                    maximum_original_bytes: limits.maximum_original_bytes,
+                },
+                cancellation,
+            )?,
+            GraphSource::Qualified(catalog) => {
+                IntervalTree::from_qualified_catalog(sources, catalog, cancellation)?
+            }
+        };
         Ok(Self {
             program,
             leaves,

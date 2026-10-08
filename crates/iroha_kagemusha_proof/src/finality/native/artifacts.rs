@@ -56,7 +56,7 @@ pub enum NodeId {
     /// Finite history continuation.
     Append,
 }
-/// One original artifact, never a runtime-generated or caller-authorized key.
+/// One fixed compiled original identity; no runtime witness or caller selects a new key.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ArtifactId {
     /// Original Vesta source tables and verifying key.

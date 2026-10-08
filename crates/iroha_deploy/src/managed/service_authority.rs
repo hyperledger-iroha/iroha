@@ -91,7 +91,7 @@ enum Scope {
 }
 
 // Active caller admission retains the original moved-output recipe. Otherwise the immutable
-// validated constructor bundle can be borrowed by read-only graph/census owners while each child opens
+// validated constructor bundle can be borrowed by graph/census and authorized creating owners while each child opens
 // its own operation directory/lock and rechecks the complete captured byte/native image.
 #[expect(
     clippy::large_enum_variant,
@@ -249,6 +249,17 @@ impl ServiceAuthority {
             .ok_or_else(|| invalid("new native operation custody was not created"))
     }
 
+    /// Create or retain one network purpose from the parent's immutable original bundle.
+    /// This supplies no signing authority; the selected child obtains its own native lock.
+    /// Active decode admission and an owned parent retain the full standalone capture recipe.
+    pub(super) fn open_network_from_original(
+        parent: &Self,
+        purpose: NetworkPurpose,
+    ) -> Result<Self> {
+        Self::open_from_original(parent, None, purpose.directory_name(), true, None)?
+            .ok_or_else(|| invalid("new native operation custody was not created"))
+    }
+
     pub(super) fn open_provider(
         prepared: &PreparedLocalnet,
         provider: ProviderId,
@@ -329,19 +340,29 @@ impl ServiceAuthority {
         )
     }
 
-    // Existing-only read-only graph and census owners borrow the original immutable bundle.
-    // A caller's active decode budget or an owned parent keeps the full original capture.
     fn open_existing_from_original(
         parent: &Self,
         provider: Option<ProviderId>,
         purpose: &'static str,
         scope: Option<&CheckpointImportScope>,
     ) -> Result<Option<Self>> {
+        Self::open_from_original(parent, provider, purpose, false, scope)
+    }
+
+    // The same immutable bundle and native tail serve existing readers and the authorized
+    // reserve creator. Active callers and owned parents keep the original full capture.
+    fn open_from_original(
+        parent: &Self,
+        provider: Option<ProviderId>,
+        purpose: &'static str,
+        create: bool,
+        scope: Option<&CheckpointImportScope>,
+    ) -> Result<Option<Self>> {
         if norito::core::decode_limits_active() {
-            return Self::open(&parent.prepared, provider, purpose, false);
+            return Self::open(&parent.prepared, provider, purpose, create);
         }
         let AuthorityProfile::Shared(captured) = &parent.profile else {
-            return Self::open(&parent.prepared, provider, purpose, false);
+            return Self::open(&parent.prepared, provider, purpose, create);
         };
         #[cfg(test)]
         inventory::record_authority_open();
@@ -350,7 +371,7 @@ impl ServiceAuthority {
             &parent.prepared,
             provider,
             purpose,
-            false,
+            create,
             AuthorityProfile::Shared(Arc::clone(captured)),
             captured.config.clone(),
             captured.genesis.clone(),
@@ -360,6 +381,10 @@ impl ServiceAuthority {
             // Eligible construction is outside active admission and from the shared profile.
             // Default/profile-only callers supply None and retain their original local memo.
             owner.checkpoint_import_scope = scope.cloned();
+        }
+        #[cfg(test)]
+        if create {
+            creating_original_tests::after_child();
         }
         // Close the retained parent on every ordinary child result while a successful child's
         // native directory and lock remain live. Parent custody failure supersedes that result.
@@ -667,3 +692,7 @@ pub(super) mod profile_validation_test_support;
 #[cfg(test)]
 #[path = "service_authority/original_intent_tests.rs"]
 mod original_intent_tests;
+
+#[cfg(test)]
+#[path = "service_authority/creating_original_tests.rs"]
+mod creating_original_tests;

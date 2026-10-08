@@ -245,7 +245,10 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
         )?;
         wallet::setup(handle as u64, request)
     });
-    response(&mut env, result)
+    wallet::terminal::deliver(handle as u64, selector as u32, result, |result| {
+        let value = response(&mut env, result);
+        (value, !value.is_null())
+    })
 }
 
 /// Typed lifecycle request; bounds are checked before copying any original object.

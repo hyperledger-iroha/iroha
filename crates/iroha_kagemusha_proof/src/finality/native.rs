@@ -1,8 +1,10 @@
 //! Installed, bounded production of the complete ordinary Load finality graph.
 //!
-//! Every original key is qualified against its compiled owner at mount. Only
-//! verifier metadata is retained; each active node reimports its original tables
-//! and checks the mounted identity before proving. Native inputs are untrusted
+//! The complete fixed descriptor/verifier graph is qualified before installation.
+//! Only verifier metadata is retained; every active node strictly imports its
+//! original proving tables and checks the installed identity before proving.
+//! Installation alone does not assert that any proving key is resident or ready.
+//! Native inputs are untrusted
 //! witness proposals, never authorization verdicts. The application must also
 //! perform its independent native genesis, custody and execution verification.
 
@@ -32,8 +34,8 @@ pub use source_policy::compiled_leaf_schedule_transcript;
 pub struct ImportLimits {
     /// Bound and cache policy for every original key.
     pub key: ReadConfig,
-    /// Maximum original artifact entries loaded during installation.
-    /// Repeated requests for the same identifier count once.
+    /// Maximum exact original artifact entries in the installed graph.
+    /// Repeated uses of the same identifier count once.
     pub maximum_artifacts: usize,
     /// Sum of original descriptor, VK and PK bytes for those entries.
     pub maximum_original_bytes: usize,

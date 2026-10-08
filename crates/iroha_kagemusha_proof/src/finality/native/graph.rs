@@ -3,7 +3,7 @@
 use super::*;
 use super::{
     artifacts::{Admission, borrowed},
-    program::{InstalledProgram, Mounted, identity},
+    program::{GraphSource, InstalledProgram, Mounted, identity},
 };
 use crate::finality::{
     aggregate::AggregateLeafCircuit,
@@ -32,7 +32,7 @@ pub(super) struct Programs {
 }
 impl Programs {
     fn mount(
-        artifacts: &mut dyn ArtifactSource,
+        artifacts: &mut GraphSource<'_>,
         params: &Parameters,
         limits: ImportLimits,
         cancellation: Option<&iroha_pasta::CancellationToken>,
@@ -114,7 +114,7 @@ impl<C: SourceCircuit> Pair<C> {
         kind: Composition,
         children: [SourceVerifier; 2],
         layout: impl FnOnce(SourcePairPlan) -> Result<C, iroha_plonk::frontend::Error>,
-        artifacts: &mut dyn ArtifactSource,
+        artifacts: &mut GraphSource<'_>,
         params: &Parameters,
         limits: ImportLimits,
         cancellation: Option<&iroha_pasta::CancellationToken>,
@@ -141,16 +141,25 @@ impl History {
     fn mount(
         anchor: HistoryAnchor,
         body: SourceVerifier,
-        artifacts: &mut dyn ArtifactSource,
+        artifacts: &mut GraphSource<'_>,
         params: &Parameters,
         limits: ImportLimits,
         cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Self, Error> {
         iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        if let GraphSource::Qualified(catalog) = artifacts {
+            return Ok(Self {
+                source: catalog.history_source(),
+                body,
+            });
+        }
+        let GraphSource::Original(originals) = artifacts else {
+            return Err(Error::Artifact);
+        };
         let prover = Self::import(
             anchor,
             body.clone(),
-            artifacts,
+            *originals,
             params,
             limits,
             cancellation,
@@ -211,8 +220,10 @@ impl History {
 }
 
 /// Complete source graph rooted in one independently authenticated signed genesis.
-/// All fields are private. Mounting imports every original against its fixed
-/// source and exact children; callers cannot inject a raw verifying-key capability.
+/// All fields are private. Construction either strictly imports all originals or
+/// consumes the metadata of an opaque, completely source-qualified catalog. Both
+/// paths fix every child and obligation; actual proofs strictly reimport their keys.
+/// Callers cannot inject a raw verifying-key capability.
 pub struct InstalledFinality {
     pub(super) anchor: HistoryAnchor,
     pub(super) params: Parameters,
@@ -257,13 +268,54 @@ impl InstalledFinality {
         if params.pallas.k() != 16 || params.vesta.k() != 16 {
             return Err(Error::Artifact);
         }
-        let mut artifacts = Admission::new(artifacts, limits)?;
-        let programs = Programs::mount(&mut artifacts, &params, limits, cancellation)?;
+        let mut admission = Admission::new(artifacts, limits)?;
+        Self::mount(
+            anchor,
+            &mut GraphSource::Original(&mut admission),
+            params,
+            limits,
+            cancellation,
+        )
+    }
+
+    pub(in crate::finality) fn from_qualified_catalog(
+        catalog: &crate::finality::catalog::ServerRecipes,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        let graph = Self::mount(
+            *catalog.receipt().anchor(),
+            &mut GraphSource::Qualified(catalog),
+            catalog.parameters().clone(),
+            catalog.import_limits(),
+            cancellation,
+        )?;
+        if identity(&graph.qualified_source())? != identity(catalog.receipt().source())?
+            || identity(&graph.history.source)? != identity(&catalog.history_source())?
+        {
+            return Err(Error::Artifact);
+        }
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        Ok(graph)
+    }
+
+    fn mount(
+        anchor: HistoryAnchor,
+        artifacts: &mut GraphSource<'_>,
+        params: Parameters,
+        limits: ImportLimits,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        if params.pallas.k() != 16 || params.vesta.k() != 16 {
+            return Err(Error::Artifact);
+        }
+        let programs = Programs::mount(artifacts, &params, limits, cancellation)?;
         let certificate = Pair::mount(
             Composition::Certificate,
             [programs.aggregation.source(), programs.bls.source()],
             CertificateCircuit::for_source,
-            &mut artifacts,
+            artifacts,
             &params,
             limits,
             cancellation,
@@ -272,7 +324,7 @@ impl InstalledFinality {
             Composition::CertifiedResult,
             [certificate.node.source.clone(), programs.result.source()],
             CertifiedResultCircuit::for_source,
-            &mut artifacts,
+            artifacts,
             &params,
             limits,
             cancellation,
@@ -281,7 +333,7 @@ impl InstalledFinality {
             Composition::Schedule,
             [programs.schedule.source(), programs.context.source()],
             ScheduleCircuit::for_source,
-            &mut artifacts,
+            artifacts,
             &params,
             limits,
             cancellation,
@@ -290,7 +342,7 @@ impl InstalledFinality {
             Composition::ScheduledResult,
             [certified.node.source.clone(), schedule.node.source.clone()],
             ScheduledResultCircuit::for_source,
-            &mut artifacts,
+            artifacts,
             &params,
             limits,
             cancellation,
@@ -299,7 +351,7 @@ impl InstalledFinality {
             Composition::HistoryStep,
             [scheduled.node.source.clone(), schedule.node.source.clone()],
             |plan| HistoryStepCircuit::for_source(anchor, plan),
-            &mut artifacts,
+            artifacts,
             &params,
             limits,
             cancellation,
@@ -307,7 +359,7 @@ impl InstalledFinality {
         let history = History::mount(
             anchor,
             step.node.source.clone(),
-            &mut artifacts,
+            artifacts,
             &params,
             limits,
             cancellation,
@@ -316,7 +368,7 @@ impl InstalledFinality {
             Composition::Receipt,
             [history.source.clone(), programs.load.source()],
             |plan| ReceiptFinalityCircuit::for_source(anchor, plan),
-            &mut artifacts,
+            artifacts,
             &params,
             limits,
             cancellation,

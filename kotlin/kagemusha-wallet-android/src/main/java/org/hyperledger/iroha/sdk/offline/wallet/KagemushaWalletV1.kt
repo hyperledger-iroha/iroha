@@ -32,11 +32,14 @@ class KagemushaWalletCallV1 internal constructor(
     bytes: ByteArray,
 ) {
     init {
-        val carriesBytes = status == CREDIT_PROJECTION || status == UNLOAD_CLAIM || status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status == CLOSE_LOADS || status == 31 || status == 33 || status == 36 || status == LEDGER_INSTRUCTION || status == UNLOAD_CONFIRMATION || status == ACTIVATION_CONFIRMATION || status == ACTIVATION_PROGRESS || status == ACTIVATION_REJECTED || status in listOf(18, 19, 23, 24, 25, 27, 28, 37, 38)
-        if (status in listOf(41, 43) || (status >= 0 && status !in UNKNOWN..ACTIVATION_REJECTED) || bytes.size > when (status) { CREDIT_PROJECTION -> 10_092; ACTIVATION, ENROLLMENT_DISPATCH, CLOSE_LOADS, 36, UNLOAD_CLAIM -> 16_384; LEDGER_INSTRUCTION -> 65_536; 24 -> KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES; 25 -> 262_144; 28 -> 1024; 37 -> 1028; 38 -> 73_740; 31 -> 21_024; 33, UNLOAD_CONFIRMATION, ACTIVATION_CONFIRMATION, ACTIVATION_PROGRESS, ACTIVATION_REJECTED -> 32; else -> 10_000 } ||
+        val carriesBytes = status == DELETION_REVIEW || status == DELETED || status == CREDIT_PROJECTION || status == UNLOAD_CLAIM || status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status == CLOSE_LOADS || status == 31 || status == 33 || status == 36 || status == LEDGER_INSTRUCTION || status == UNLOAD_CONFIRMATION || status == ACTIVATION_CONFIRMATION || status == ACTIVATION_PROGRESS || status == ACTIVATION_REJECTED || status in listOf(18, 19, 23, 24, 25, 27, 28, 37, 38)
+        if (status in listOf(41, 43) || (status >= 0 && status !in UNKNOWN..NOT_DELETED) || bytes.size > when (status) { DELETION_REVIEW -> 254; DELETED -> 32; DELETION_REVIEW_DISCARDED, NOT_DELETED -> 0; CREDIT_PROJECTION -> 10_092; ACTIVATION, ENROLLMENT_DISPATCH, CLOSE_LOADS, 36, UNLOAD_CLAIM -> 16_384; LEDGER_INSTRUCTION -> 65_536; 24 -> KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES; 25 -> 262_144; 28 -> 1024; 37 -> 1028; 38 -> 73_740; 31 -> 21_024; 33, UNLOAD_CONFIRMATION, ACTIVATION_CONFIRMATION, ACTIVATION_PROGRESS, ACTIVATION_REJECTED -> 32; else -> 10_000 } ||
             (if (carriesBytes) bytes.isEmpty() else bytes.isNotEmpty()) ||
             ((status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE) && (bytes.size != 32 || sequenceLow <= 0 || sequenceHigh != 0L)) ||
-            (status in listOf(ACTIVATION, CLOSE_LOADS, 31, 32, 34, 35, 36, ACTIVATION_NOT_STARTED, LEDGER_INSTRUCTION, UNLOAD_CLAIM) && (sequenceLow != 0L || sequenceHigh != 0L || detail != 0)) ||
+            (status in listOf(ACTIVATION, CLOSE_LOADS, 31, 32, 34, 35, 36, ACTIVATION_NOT_STARTED, LEDGER_INSTRUCTION, UNLOAD_CLAIM, COLLECTION_IDLE, DELETED, DELETION_REVIEW_DISCARDED, NOT_DELETED) && (sequenceLow != 0L || sequenceHigh != 0L || detail != 0)) ||
+            (status in COLLECTION_IDLE..COLLECTED && detail != 0) ||
+            (status == DELETION_REVIEW && (sequenceLow <= 0 || sequenceHigh != 0L || detail != 0 || bytes.size != 254)) ||
+            (status == DELETED && (bytes.size != 32 || bytes.all { it == 0.toByte() })) ||
             (status == OPENED && (sequenceLow <= 0 || sequenceHigh != 0L)) ||
             ((status in 18..28 || status in 37..39) && (sequenceLow <= 0 || sequenceHigh != 0L || detail != 0)) ||
             (status in listOf(UNLOAD_CONFIRMATION, ACTIVATION_CONFIRMATION, ACTIVATION_REJECTED) && java.lang.Long.compareUnsigned(sequenceLow, 2L) < 0) ||
@@ -120,6 +123,13 @@ class KagemushaWalletCallV1 internal constructor(
         const val CREDIT_PROJECTION = 47
         const val UNLOAD_CLAIM = 48
         const val ACTIVATION_REJECTED = 49
+        const val COLLECTION_IDLE = 50
+        const val COLLECTION_PROGRESS = 51
+        const val COLLECTED = 52
+        const val DELETION_REVIEW = 53
+        const val DELETED = 54
+        const val DELETION_REVIEW_DISCARDED = 55
+        const val NOT_DELETED = 56
     }
 }
 
@@ -132,10 +142,12 @@ class KagemushaWalletCallV1 internal constructor(
  */
 class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, KagemushaWalletCleanupResourceV1 {
     private val owner = AtomicLong(handle)
+    private val deletionGate = KagemushaWalletDeletionGateV1()
     private val closeGate = Any()
     private val retired = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var closeFailure: Throwable? = null
-    private fun handle(): Long {
+    private fun handle(): Long { deletionGate.requireOrdinary(); return custodyHandle() }
+    private fun custodyHandle(): Long {
         closeFailure?.let { throw it }
         check(!retired.get()) { "Native wallet owner is retired" }
         return owner.get().takeIf { it > 0 } ?: throw KagemushaWalletExceptionV1(-2)
@@ -155,6 +167,25 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
     }
     private fun setup(input: KagemushaWalletSetupInputV1): KagemushaWalletCallV1 {
         val value = KagemushaWalletNativeV1.setup(handle(), input.identity(), input.selector,
+            input.amount.low, input.amount.high, input.token, input.first(), input.second(), input.third())
+            ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        if (value.status < 0) throw KagemushaWalletExceptionV1(value.status, value.reason, value.platformCode)
+        return value
+    }
+    /** Display native-selected review DATA before explicit destructive confirmation. */
+    fun reviewCustodyDeletion(): KagemushaWalletDeletionReviewV1 = deletionGate.review { setup(KagemushaWalletSetupInputV1(48)) }
+    /** Permanently destroy payment-key custody. Display the review warning first.
+     * Any error freezes ordinary calls until recovery proves a definitive outcome. */
+    fun destructivelyDeleteCustody(review: KagemushaWalletDeletionReviewV1): ByteArray =
+        deletionGate.confirm(review) { token -> deletionSetup(KagemushaWalletSetupInputV1(49, token = token)) }
+    /** Recover the retained owner’s attempted deletion; restart cleanup belongs to native custody reconciliation. */
+    fun resumeCustodyDeletion(): KagemushaWalletDeletionStatusV1 =
+        deletionGate.resume { deletionSetup(KagemushaWalletSetupInputV1(50)) }
+    /** Discard an unused review; this cannot undo an attempted deletion. */
+    fun discardCustodyDeletionReview(review: KagemushaWalletDeletionReviewV1) =
+        deletionGate.discard(review) { token -> setup(KagemushaWalletSetupInputV1(51, token = token)) }
+    private fun deletionSetup(input: KagemushaWalletSetupInputV1): KagemushaWalletCallV1 {
+        val value = KagemushaWalletNativeV1.setup(custodyHandle(), input.identity(), input.selector,
             input.amount.low, input.amount.high, input.token, input.first(), input.second(), input.third())
             ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         if (value.status < 0) throw KagemushaWalletExceptionV1(value.status, value.reason, value.platformCode)
@@ -223,6 +254,12 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
         return setup(KagemushaWalletSetupInputV1(45, identity = requestId,
             first = chargeBeneficiary ?: ByteArray(0))).unloadClaimOriginal()
     }
+    /** One bounded native collection turn. No foreign path or acknowledgement is accepted.
+     * Keys, permanent replay records and required fee/activation originals remain retained.
+     * Repeat the same sequence after interruption until Collected. */
+    fun collectRetainedStep(sequence: KagemushaWalletUInt128V1): KagemushaWalletCollectionStatusV1 =
+        KagemushaWalletCollectionStatusV1.from(setup(KagemushaWalletSetupInputV1(47, amount = sequence)), sequence)
+
     /** Read both exact originals from one native-retained fee claim; null means no pending claim. */
     fun feeClaim(creditId: ByteArray): KagemushaWalletFeeClaimV1? {
         val result = setup(KagemushaWalletSetupInputV1(20, identity = creditId))

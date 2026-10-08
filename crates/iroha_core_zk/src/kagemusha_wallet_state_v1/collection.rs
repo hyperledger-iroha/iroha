@@ -3,11 +3,11 @@ use super::*;
 
 /// Exact indexed-tree nonmembership under the latest locally verified pending-outgoing root.
 /// Generic acknowledgements and an ArchiveSent operation name cannot authorize collection.
-pub struct OutgoingAbsent {
+struct DerivedOutgoingAbsence {
     /// Predecessor leaf bracketing the committed Send credit.
-    pub low: KagemushaWalletIndexedLeafV1,
+    low: KagemushaWalletIndexedLeafV1,
     /// Canonical depth-32 opening of that leaf.
-    pub opening: KagemushaWalletIndexedOpeningV1,
+    opening: KagemushaWalletIndexedOpeningV1,
 }
 
 /// At most one bounded collection action is performed by each scheduling call.
@@ -31,9 +31,32 @@ pub(super) struct CollectionIntent {
 }
 
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
+    fn collection_outgoing_absence(
+        &mut self,
+        manifest: &manifest::Manifest,
+        fold: &KagemushaWalletFoldRecordV1,
+        credit: &[u8; 32],
+    ) -> Result<DerivedOutgoingAbsence, Error> {
+        let address = manifest
+            .fold_pending
+            .get(&mut self.archive, &manifest::sequence_key(fold.sequence))?
+            .ok_or(Error::WitnessLost("collection pending map selection"))?;
+        let address: [u8; 32] = address
+            .try_into()
+            .map_err(|_| Error::WitnessLost("collection pending map address"))?;
+        let pending: map_tree::PersistentMapV1 =
+            archive::decode(&self.archive.read_object(&address, 2048)?)?;
+        pending.validate()?;
+        if pending.root() != fold.lineage.public.pending_outgoing_root {
+            return Err(Error::WitnessLost("collection pending map root"));
+        }
+        let (low, opening) = pending.non_membership(&mut self.archive, credit)?;
+        Ok(DerivedOutgoingAbsence { low, opening })
+    }
+
     /// Collect one historical step in bounded restartable turns. A newer durable Ω must cover
     /// it; the current head and latest folded head are always retained. Send collection also
-    /// requires authenticated removal from that Ω's pending-outgoing map. Earned fees have
+    /// requires authenticated removal from that Ω's retained native pending-outgoing map. Earned fees have
     /// independent custody and are unaffected. Unload/activation/control output records remain
     /// available for their ledger use; only old Receive and acknowledged Send outputs are pruned.
     ///
@@ -41,11 +64,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     /// can only require repeating the same idempotent removal, never re-proving or re-signing.
     /// # Errors
     /// Missing coverage, pending outgoing Send, conflicting intent or uncertain storage.
-    pub fn collect_step(
-        &mut self,
-        sequence: u128,
-        outgoing: Option<&OutgoingAbsent>,
-    ) -> Result<CollectionStatus, Error> {
+    pub fn collect_retained_step(&mut self, sequence: u128) -> Result<CollectionStatus, Error> {
         let Some(guard) = self.scheduler.start() else {
             return Ok(CollectionStatus::Idle);
         };
@@ -81,7 +100,9 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             if let KagemushaWalletEffectV1::Send { credit_id, fee, .. } =
                 step.frozen.capsule.statement.effect
             {
-                let opening = outgoing.ok_or(Error::Invalid("Send remains pending"))?;
+                let opening =
+                    self.collection_outgoing_absence(&manifest, &fold.record, &credit_id)?;
+                guard.token.check()?;
                 valid(kagemusha_wallet_indexed_verify_non_membership_v1(
                     &fold.record.lineage.public.pending_outgoing_root,
                     &credit_id,
@@ -192,12 +213,12 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
 
     /// Resume the exact source-selected collection after a restart, if any.
     /// # Errors
-    /// The same custody errors as [`Self::collect_step`].
+    /// The same custody errors as [`Self::collect_retained_step`].
     pub fn resume_collection(&mut self) -> Result<Option<CollectionStatus>, Error> {
         let (_, manifest) = self.manifest()?;
         manifest
             .collection
-            .map(|intent| self.collect_step(intent.sequence, None))
+            .map(|intent| self.collect_retained_step(intent.sequence))
             .transpose()
     }
 }

@@ -46,7 +46,9 @@ impl GeneratedServiceRuntime {
         require_deadline(deadline)?;
         let selection = require_retained_material(RuntimeSelection::read(&self.authority))?;
         selection.validate_interval(None)?;
-        let mut parent = ManagedServiceBootstrap::open(&self.authority.prepared)?;
+        #[cfg(all(test, unix))]
+        tests::before_bootstrap_reopen();
+        let mut parent = self.open_original_bootstrap(&self.authority.prepared)?;
         let ServiceBootstrapProgress::Complete(history) = parent.recover(deadline)? else {
             return Err(invalid(
                 "generated bootstrap has incomplete original execution",

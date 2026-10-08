@@ -304,7 +304,9 @@ impl GeneratedServiceRuntime {
                 "runtime renewal requires exact next provider sequence",
             ));
         }
-        let mut parent = ManagedServiceBootstrap::open(&self.authority.prepared)?;
+        #[cfg(all(test, unix))]
+        tests::before_bootstrap_reopen();
+        let mut parent = self.open_original_bootstrap(&self.authority.prepared)?;
         let ServiceBootstrapProgress::Complete(history) = parent.recover(deadline)? else {
             return Err(invalid("renewal requires all original parent execution"));
         };

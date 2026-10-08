@@ -378,3 +378,65 @@ fn cancelled_qualification_never_opens_originals_or_publishes_recipes() {
     assert!(qualifier.complete().is_err());
     assert!(qualifier.recipes.is_empty());
 }
+
+#[test]
+fn server_recipe_limits_and_cancelled_intake_never_publish_a_graph_owner() {
+    // Deliberately unqualified DATA. Every tested refusal occurs before key derivation,
+    // storage access, recipe construction or an installed-graph capability can exist.
+    let records = [sample_record()];
+    let base = ImportLimits {
+        key: ReadConfig {
+            maximum_bytes: 128 << 20,
+            maximum_rows: 1 << 16,
+            coset_cache: CosetCachePolicy::OnDemand,
+            msm_budget: MemoryBudget::DEFAULT,
+        },
+        maximum_artifacts: 16,
+        maximum_original_bytes: 1 << 30,
+    };
+    let token = iroha_pasta::CancellationToken::new();
+    token.cancel();
+    let mut blobs = Blobs::default();
+    let error = qualify_server_recipes(
+        anchor(),
+        &records,
+        &mut blobs,
+        params(),
+        limits(),
+        base,
+        Some(&token),
+    )
+    .err()
+    .unwrap();
+    assert!(error.is_cancelled());
+    assert!(blobs.opened.is_empty());
+    for change in 0..10 {
+        let mut imports = base;
+        let mut original = records.to_vec();
+        match change {
+            0 => imports.maximum_artifacts = 0,
+            1 => imports.key.maximum_rows = 1 << 15,
+            2 => imports.key.maximum_bytes = 0,
+            3 => imports.key.maximum_bytes = (1 << 30) + 1,
+            4 => imports.maximum_original_bytes = 2,
+            5 => original[0].lengths[2] = imports.key.maximum_bytes as u64 + 1,
+            6 => original.push(records[0].clone()),
+            7 => imports.maximum_artifacts = usize::MAX,
+            8 => imports.maximum_original_bytes = usize::MAX,
+            _ => imports.maximum_original_bytes = 0,
+        }
+        let error = qualify_server_recipes(
+            anchor(),
+            &original,
+            &mut blobs,
+            params(),
+            limits(),
+            imports,
+            None,
+        )
+        .err()
+        .unwrap();
+        assert!(!error.is_cancelled());
+        assert!(blobs.opened.is_empty());
+    }
+}

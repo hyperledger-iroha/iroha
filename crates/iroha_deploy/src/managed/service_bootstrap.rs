@@ -120,6 +120,38 @@ pub(super) enum ServiceBootstrapStep {
     Reputation,
 }
 
+/// Fresh traversal frontiers, not decoded completion or dispatch authority. A completed
+/// reserve precedes three independent provider chains; `None` means that branch was fully
+/// recovered by its native owners in this traversal.
+#[derive(Debug)]
+struct DependencyFrontiers {
+    reserve_complete: bool,
+    reputation_complete: bool,
+    providers: [Option<ServiceBootstrapStep>; 3],
+}
+impl DependencyFrontiers {
+    fn before_reserve(policies: &GeneratedServicePolicies) -> Self {
+        Self {
+            reserve_complete: false,
+            reputation_complete: false,
+            providers: std::array::from_fn(|slot| {
+                Some(ServiceBootstrapStep::CustodyPolicy {
+                    provider_id: policies.providers[slot].provider_id,
+                })
+            }),
+        }
+    }
+}
+
+/// One traversal's exact report and independently authenticated provider frontiers. Only
+/// the phase producer creates successful histories; the census uses frontiers solely to refuse
+/// out-of-order material and never turns presence into completion.
+#[derive(Debug)]
+struct RunOutcome {
+    progress: ServiceBootstrapProgress,
+    dependencies: DependencyFrontiers,
+}
+
 /// Only original completed funding facts enter the opaque parent history. The unfinished
 /// reports and their optional current-state graphs stay with the separate progress branch.
 #[derive(Debug)]
@@ -188,12 +220,23 @@ impl HistoricalServiceBootstrap {
             .find(|history| history.provider_id == provider)
             .ok_or_else(|| invalid("provider is absent from original bootstrap history"))
     }
-    /// Every original carrier in dependency order. At most29; no max-height projection.
+    /// Every original carrier in stable height order, retaining canonical provider/purpose
+    /// order for equal heights. At most29; no max-height projection.
     /// Optional funding Request/Approval are both absent only when original economics needed none.
     pub(super) fn ordered_carriers(&self) -> Result<Vec<ManagedTransactionFinality>> {
+        for (slot, provider) in self.providers.iter().enumerate() {
+            if self.providers[..slot]
+                .iter()
+                .any(|earlier| earlier.provider_id == provider.provider_id)
+            {
+                return Err(invalid("bootstrap history repeats a provider"));
+            }
+        }
         let mut carriers = Vec::with_capacity(MAX_CARRIERS);
         carriers.push(self.reserve_policy);
+        let mut maximum_gateway_height = self.reserve_policy.height;
         for provider in &self.providers {
+            let provider_start = carriers.len();
             carriers.extend([
                 provider.custody_policy,
                 provider.custody_enrollment,
@@ -223,14 +266,28 @@ impl HistoricalServiceBootstrap {
                 provider.provider_ingest,
                 provider.gateway,
             ]);
+            require_after(&provider.custody_policy, self.reserve_policy.height)?;
+            for pair in carriers[provider_start..].windows(2) {
+                require_after(&pair[1], pair[0].height)?;
+            }
+            maximum_gateway_height = maximum_gateway_height.max(provider.gateway.height);
         }
+        require_after(&self.reputation, maximum_gateway_height)?;
         carriers.push(self.reputation);
         if carriers.len() > MAX_CARRIERS {
             return Err(invalid("bootstrap carrier count exceeds bound"));
         }
-        for pair in carriers.windows(2) {
-            require_after(&pair[1], pair[0].height)?;
+        for (index, carrier) in carriers.iter().enumerate() {
+            if carriers[..index]
+                .iter()
+                .any(|earlier| earlier.transaction_hash == carrier.transaction_hash)
+            {
+                return Err(invalid("bootstrap history repeats an original transaction"));
+            }
         }
+        // Different providers may share a certified block. Stable ordering retains every
+        // exact original; it neither replaces per-provider prerequisites nor authenticates a DTO.
+        carriers.sort_by_key(|carrier| carrier.height);
         Ok(carriers)
     }
 }
@@ -364,7 +421,7 @@ impl ManagedServiceBootstrap {
             stage_started = Instant::now();
             eprintln!("bootstrap timing: action=authorize_startup stage=census begin");
         }
-        let census = self.validate_dependency_inventory(&progress);
+        let census = self.validate_dependency_inventory(&progress.dependencies);
         #[cfg(test)]
         eprintln!(
             "bootstrap timing: action=authorize_startup stage=census end elapsed_ms={} remaining_ms={} ok={}",
@@ -379,7 +436,7 @@ impl ManagedServiceBootstrap {
         tests::after_read(tests::ReadStage::AuthorizationCensus);
         authorization::require_active(&cancelled)?;
         require_deadline(deadline)?;
-        if matches!(progress, ServiceBootstrapProgress::Complete(_)) {
+        if matches!(progress.progress, ServiceBootstrapProgress::Complete(_)) {
             return Ok(None);
         }
         let authorization =
@@ -416,7 +473,7 @@ impl ManagedServiceBootstrap {
             stage_started = Instant::now();
             eprintln!("bootstrap timing: action=advance stage=census begin");
         }
-        let census = self.validate_dependency_inventory(&progress);
+        let census = self.validate_dependency_inventory(&progress.dependencies);
         #[cfg(test)]
         eprintln!(
             "bootstrap timing: action=advance stage=census end elapsed_ms={} remaining_ms={} ok={}",
@@ -427,15 +484,16 @@ impl ManagedServiceBootstrap {
             census.is_ok(),
         );
         census?;
-        if matches!(&progress, ServiceBootstrapProgress::Complete(_)) {
+        if matches!(&progress.progress, ServiceBootstrapProgress::Complete(_)) {
             // This call freshly authenticated every original child and the full dependency
             // census. Completion needs no dispatch pass; keep its live authorization exit.
             authorization.validate(&self.authority, deadline)?;
-            return Ok(progress);
+            return Ok(progress.progress);
         }
         let progress = self.run(deadline, Mode::Advance, Some(authorization))?;
+        self.validate_dependency_inventory(&progress.dependencies)?;
         authorization.validate(&self.authority, deadline)?;
-        Ok(progress)
+        Ok(progress.progress)
     }
 
     /// Observe exact original children without minting an epoch or creating missing custody.
@@ -460,7 +518,7 @@ impl ManagedServiceBootstrap {
             stage_started = Instant::now();
             eprintln!("bootstrap timing: action=recover stage=census begin");
         }
-        let census = self.validate_dependency_inventory(&progress);
+        let census = self.validate_dependency_inventory(&progress.dependencies);
         #[cfg(test)]
         eprintln!(
             "bootstrap timing: action=recover stage=census end elapsed_ms={} remaining_ms={} ok={}",
@@ -474,7 +532,7 @@ impl ManagedServiceBootstrap {
         #[cfg(test)]
         tests::after_read(tests::ReadStage::RecoveryCensus);
         require_deadline(deadline)?;
-        Ok(progress)
+        Ok(progress.progress)
     }
 
     /// Recover the same retained public intent for later runtime configuration.
@@ -492,14 +550,14 @@ impl ManagedServiceBootstrap {
         deadline: Instant,
         mode: Mode,
         authorization: Option<&GeneratedBootstrapAuthorization>,
-    ) -> Result<ServiceBootstrapProgress> {
+    ) -> Result<RunOutcome> {
         require_deadline(deadline)?;
         self.authority.validate_profile()?;
         let directory = self.authority.directory.open_child("initial")?;
         let original = read_original(&directory, &self.authority)?
             .ok_or_else(|| invalid("original service bootstrap intent is absent"))?;
         authorization::validate_inventory(&directory, &original)?;
-        // Keep the original directory and intent alive across every sequential child owner.
+        // Keep the original directory and intent alive across every joined native child owner.
         phases::run(&self.authority, &original, deadline, mode, authorization)
     }
 }
@@ -548,3 +606,7 @@ mod native_tests;
 #[cfg(test)]
 #[path = "service_bootstrap/inventory_tests.rs"]
 mod inventory_tests;
+
+#[cfg(test)]
+#[path = "service_bootstrap/provider_dag_tests.rs"]
+mod provider_dag_tests;

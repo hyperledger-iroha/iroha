@@ -2003,6 +2003,28 @@ typedef struct {
 // 1=awaiting fold/2=removed/3=retained; core-pending byte; three zeros; credit32;
 // Payment digest32; LE128amount; LE32original length; exact receiver Credited <=10000.
 // Payer original length is zero. Projection is display evidence, never permission to mutate.
+// CollectRetained47 takes only the historical u128 sequence in amount (zero is allowed).
+// setup_id/token/all original inputs must be zero/empty. Native verifies the selected newer
+// covering fold and derives the exact Send nonmembership path from retained native custody.
+// Results50 idle (zero sequence),51 progress,52 collected (exact requested sequence) have
+// empty bytes/detail0. Repeat the same sequence after interruption. Required fee/activation
+// originals, permanent replay records and all keys remain; this never destroys custody.
+// ReviewCustodyDeletion48(no inputs) returns kind53: sequence_low is a positive owner-local
+// one-use token<=INT64_MAX; high/detail0; exact254-byte display DATA. Magic8 "KWCDV1\0\0";
+// phase1Pending/2Released, lifecycle1Active/2Retiring, selected operation kind1..8, then three
+// bool bytes for nonempty pending-outgoing, fee-claim and Load/Unload-recovery maps; slot32,
+// marker32, scheme32, asset32, wallet32, head32; LE128sequence, gross balance, core burns.
+// These are retained values, NOT fully folded spendable balance; unfinished proofs can reveal burns.
+// ConfirmCustodyDeletion49(token only) consumes that exact native review after explicit warning
+// and user confirmation: permanent key/offline-value recovery, pending delivery and unpaid/late
+// claim loss. No marker, path, amount, approval flag or projection DATA is accepted as authority.
+// ResumeCustodyDeletion50(no inputs) reconciles an attempted deletion without newly publishing one.
+// Result54 has exact nonzero terminal marker32, all scalar fields0; money calls remain terminal.
+// Result56 has empty bytes/all scalars0: definite noncommit; fresh review/confirmation required.
+// Any uncertain attempt freezes money calls until actual reconciliation. Durable terminal cleanup
+// is idempotent, including after restart; it never re-creates a key or wallet incarnation.
+// DiscardCustodyDeletion51(token only) drops an unused review; kind55 empty/all scalars0.
+// Discard never undoes an attempted deletion. Review tokens cannot alias owners or purposes.
 // setup_id is exactly32 bytes: nonzero only for selectors1/2/19/20/25/27/30/33/34/39/41/42/43/44/45; all zero otherwise.
 // Unused originals/amount/token are empty/zero. Original bounds are selected by Native;
 // signer certificate frames are <=512 bytes. No caller clock, nonce, proof verdict or arbitrary signing body.

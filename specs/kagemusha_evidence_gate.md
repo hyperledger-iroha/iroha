@@ -412,8 +412,8 @@ Starting points, not evidence that this protocol has passed:
 
 ### Current implementation checkpoint (2026-10-08)
 
-The resumed `optimizations` checkout is based on `cafedcdd35` with a further
-resolved merge and continuing coordinated edits; a commit hash alone does not
+The resumed `optimizations` checkout is based on the resolved merge `ad75acfe2a`
+with continuing coordinated edits; a commit hash alone does not
 reproduce the changing candidate.
 Earlier component results belong to their captured source and binary, not
 retroactively to this checkout. No authenticated artifact
@@ -465,6 +465,51 @@ drift remain retained in
 `target/qualification/finality-server-component-capture-1`; this evidence belongs
 to the preserved binaries, not the subsequent merged source.
 
+The current complete host Swift run passes 2,180 tests across three XCTest
+bundles (4, 2,104 and 72), with zero failures. The canonical local runner rebuilt
+its native bridge and completed both source/artifact admission checks, including
+verification after execution. This includes 191 KAGEMUSHA cases, the new
+collection/deletion APIs and five actual native confidential-prover cases.
+Logs and producer records are retained in `target/qualification/swift-local-zlwyzn1a`;
+the completion receipt and exact three test executables are retained under
+`native-terminal-sdk-swift-current-1`. The copied Mach-O files alone are not
+runnable XCTest bundles. The earlier 2,174-test pre-change capture remains in
+`swift-local-ee69gvae`. Neither host run establishes device or complete monetary
+protocol qualification.
+
+The current C# native-consumer selection passes 543 cases, including six actual
+confidential-prover cases, with zero failures or skips and the exact rebuilt
+ABI27 dylib observed by the loader. Source and compiled artifacts remain
+unchanged. The wrapper initially refused its 518-case discovery count: one
+selected theory expands into 26 data rows at execution. Independent review
+matches those 26 rows to the source and confirms every other method's count and
+filter membership. The original refusal and separate reconciliation are retained
+under `target/qualification/csharp-current-abi27-1`. This establishes the
+selected host consumers, not installed release-package or network readiness.
+
+The collection and custody-deletion SDK changes pass 16 focused
+managed Kotlin tests with JDK 21 and the JDK 8 API compile guard retained. The
+run binds unchanged SDK inputs, compiled classes and XML results under
+`target/qualification/native-terminal-sdk-kotlin-managed-2`. This covers typed
+status parsing, immutable collection values, owner-bound one-use deletion
+reviews and uncertain-outcome recovery; it excludes host JNI execution and
+physical custody. ABI/header parity and the no-legacy-codec guard also pass for
+the coordinated source changes. The rebuilt ABI27 host `b968de18…fda800` also
+passes 62 fresh Kotlin/Java JNI cases: nine wallet/deletion/collection probes,
+18 privacy cases, 25 SoraFS cases and ten signer cases, with zero failures or
+skips. SDK/fixture sources and the selected artifact are unchanged before and
+after execution. The loader receives the sole explicit library directory;
+independent mapped-library path observation was unavailable. The retained
+receipt is `target/qualification/native-terminal-sdk-kotlin-native-current-2`;
+its initial test-probe compile failure is retained separately. These host
+boundary checks do not open a genuine funded wallet or qualify a phone. The
+current captured Rust collection/deletion selection passes 47 of 48 cases,
+including all 26 bridge cases. Its one failure is a test expecting empty-map
+warnings from a fixture whose three map roots are nonempty. The narrowly
+corrected expectation awaits a rebuilt run; the original failure and unchanged
+runtime sources, tools and binaries are retained in
+`finality-per-use-compiler-capture-1/collection-terminal-runtime-1`.
+
 The revised measurement harness passes 114 focused tests. It binds the complete
 local package inputs, actual compiler depfiles, selected Rust tools, and both
 present and absent Cargo configuration files in checkout ancestors and
@@ -476,7 +521,11 @@ package roots and 23 actual compiler depfiles. Independent preflight confirms
 unchanged before/after inputs and the selected executable. The nine-process,
 three-block campaign is running under seed 20261008 with stop-on-hard-failure;
 its partial samples do not establish any configuration's qualification. Memory
-compression invalidates an attempt even when its two proofs verify. Candidate,
+compression invalidates an attempt even when its two proofs verify. The first
+real-chip Q one-worker block has a 27.049123-second CPU median: all three runs
+meet the 30-second hard limit, but the median misses the required 27-second
+margin. That block remains a margin failure even if later blocks are faster.
+Candidate,
 preflight, raw attempts and the evolving verdict are retained in
 `target/qualification/m3-current-source-closure-candidate-20261008`. The source
 closure and configuration repair records are retained in
@@ -505,6 +554,24 @@ missing original compiler binary. It supplies no proving-key qualification,
 completed graph or wallet admission. The snapshot and independent review are in
 `target/qualification/canonical-finality-recovered-metadata-1` and
 `canonical-finality-recovered-metadata-review-1`.
+
+The optimized per-use artifact capture completes successfully. Independent
+review binds its three retained test executables to 78 emitted compiler
+depfiles, 3,651 ordinary source inputs, 67 local packages and 9,383 unchanged
+package files. All three generated inputs are reproduced exactly from the
+captured IVM and bridge generators; the bridge selects no installed runtime
+authority. The 20 changing files are outside the compiled packages and declared
+generator inputs. The original broad source-drift classification is preserved,
+with the narrower review retained separately under
+`target/qualification/finality-per-use-compiler-capture-1`.
+Its focused catalog/server/import selection passes 41 cases, including genuine
+both-curve cache proofs, exact regeneration after eviction, a real k16 original
+key import comparison, and recovered descriptor/key intake without reading or
+generating proving keys. Thirteen artifact-dependent cases remain ignored in
+those ordinary selections. The new complete52 run uses the independently
+reviewed binary and recovered originals, with its attempts retained at
+`target/qualification/canonical-complete52-per-use-1`. It has not produced a
+completed authenticated wallet catalog or a monetary acceptance result.
 
 **Artifact build-order correction.** `OwnPolicy` and `BootstrapPolicy` now fix
 only the independently selected provider and root key. They bind scheme identity
