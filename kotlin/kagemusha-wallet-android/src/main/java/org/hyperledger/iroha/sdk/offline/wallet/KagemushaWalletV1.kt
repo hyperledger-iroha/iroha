@@ -152,6 +152,28 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
         check(!retired.get()) { "Native wallet owner is retired" }
         return owner.get().takeIf { it > 0 } ?: throw KagemushaWalletExceptionV1(-2)
     }
+    /** Copy exact admitted account/asset originals from the same Native owner. */
+    fun metadata(): KagemushaWalletMetadataV1 = KagemushaWalletMetadataV1(observeProjection(0))
+    /** Observe a released request without repeating preparation, proving or signing. */
+    fun releasedOutputForRequest(requestId: ByteArray): KagemushaWalletReleasedOutputV1 =
+        KagemushaWalletReleasedOutputV1(observeProjection(1, requestId))
+    /** Read the exact retained output for an already known operation identity. */
+    fun releasedOutputForOperation(operationId: ByteArray): KagemushaWalletReleasedOutputV1 =
+        KagemushaWalletReleasedOutputV1(observeProjection(2, operationId))
+    /** True absence never reserves a replacement Load ordinal or constructs an instruction. */
+    fun preparedLedgerLoad(requestId: ByteArray): KagemushaWalletPreparedLoadV1? {
+        val retained = requestId.copyOf()
+        return KagemushaWalletPreparedLoadV1.observation(observeProjection(3, retained), retained)
+    }
+    private fun observeProjection(selector: Int, identity: ByteArray = byteArrayOf()): ByteArray {
+        val input = identity.copyOf()
+        require(selector in 0..3 && if (selector == 0) input.isEmpty() else input.size == 32 && input.any { it != 0.toByte() })
+        val owner = handle() // same close/deletion fence as every ordinary owner operation
+        val result = try { KagemushaWalletObservationNativeV1.observe(owner, selector, input) }
+            catch (_: LinkageError) { throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE) }
+            ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        return result.original(intArrayOf(5268, 20_066, 20_066, 65_756)[selector])
+    }
     private fun call(operation: Int, first: ByteArray = byteArrayOf(), second: ByteArray = byteArrayOf()): KagemushaWalletCallV1 {
         val value = KagemushaWalletNativeV1.call(handle(), operation, first.copyOf(), second.copyOf())
             ?: throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)

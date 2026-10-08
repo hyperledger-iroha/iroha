@@ -9,7 +9,11 @@ mod ledger;
 mod ledger_producer;
 mod unload;
 pub use ledger::{LEDGER_PROOF_MAX_BYTES_V1, LedgerProgressV1, PAYOUT_RECORD_MAX_BYTES_V1};
-pub use ledger_producer::{LEDGER_INSTRUCTION_MAX_BYTES_V1, UnloadFinalityProgressV1};
+pub use ledger_producer::{
+    LEDGER_INSTRUCTION_MAX_BYTES_V1, NativePreparedLedgerLoadV1, UnloadFinalityProgressV1,
+};
+mod output;
+pub use output::{NativeReleasedOutputV1, NativeWalletMetadataV1};
 mod bootstrap;
 mod request_fee;
 mod review;
@@ -54,6 +58,8 @@ pub struct NativeWalletProofsV1<F: KagemushaWalletFsV1, P, S> {
     enrollment: KagemushaWalletCredentialV1,
     asset: KagemushaWalletAssetScopeV1,
     account: iroha_data_model::account::AccountId,
+    account_original: Vec<u8>,
+    asset_original: Vec<u8>,
     enrollment_certificates: Vec<u8>,
 }
 
@@ -81,8 +87,19 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
         Coordinator<AdvanceHandle<F, P>, ProviderArchive<F, P>, NativeWalletProofsV1<F, P, S>>,
         (RuntimeCustodyV1<F, P>, S, Error),
     > {
-        let (provider, installed, sources, slot, enrollment, account, asset, _, certificates, _, _) =
-            self.into_parts();
+        let (
+            provider,
+            installed,
+            sources,
+            slot,
+            enrollment,
+            account,
+            asset,
+            _,
+            certificates,
+            account_original,
+            asset_original,
+        ) = self.into_parts();
         let verified = (|| {
             let anchor = derive_history_anchor(native_genesis)
                 .map_err(|_| Error::Proof("native Global root"))?;
@@ -110,6 +127,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
             enrollment,
             asset,
             account,
+            account_original,
+            asset_original,
             enrollment_certificates: certificates,
         };
         let mut wallet = Coordinator {

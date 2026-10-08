@@ -115,6 +115,14 @@ impl Wallet for Script {
     fn snapshot(&mut self) -> Result<state::Snapshot> {
         self.base.snapshot()
     }
+    fn observe(&mut self, selector: u32, _identity: &[u8]) -> Result<Response> {
+        self.base.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(Response {
+            kind: 12,
+            bytes: vec![selector as u8],
+            ..Response::default()
+        })
+    }
     fn execute(&mut self, request: state::OperationRequestV1) -> Result<Response> {
         self.base.execute(request)
     }
@@ -223,6 +231,53 @@ fn c_boundary_preserves_foreign_review_freezes_money_and_keeps_only_terminal_rec
     close(b).unwrap();
     assert_eq!(a_drops.load(Ordering::SeqCst), 1);
     assert_eq!(b_drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn c_boundary_observations_share_the_custody_deletion_gate() {
+    let (id, calls, drops) = scripted();
+    let identity = [1; 32];
+    for phase in 0..3 {
+        let previous_calls = calls.load(Ordering::SeqCst);
+        for selector in 0..=3 {
+            let mut out = WalletResult::default();
+            let rc = unsafe {
+                connect_norito_kagemusha_wallet_observe_v1(
+                    id,
+                    selector,
+                    identity.as_ptr(),
+                    if selector == 0 { 0 } else { identity.len() },
+                    &mut out,
+                )
+            };
+            assert_eq!((out.sequence_low, out.sequence_high, out.detail), (0, 0, 0));
+            if phase == 0 {
+                assert_eq!((rc, out.status, out.length), (0, 12, 1));
+                assert_eq!(unsafe { *out.bytes }, selector as u8);
+                crate::connect_norito_free(out.bytes);
+            } else {
+                assert_eq!((rc, out.status, out.length), (TERMINAL, TERMINAL, 0));
+                assert!(out.bytes.is_null());
+            }
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            previous_calls + if phase == 0 { 4 } else { 0 },
+            "uncertain and terminal deletion must not reach the observation implementation"
+        );
+        if phase == 0 {
+            let review = call(id, 48, 0);
+            assert_eq!(review.status, 53);
+            crate::connect_norito_free(review.bytes);
+            assert_eq!(call(id, 49, review.sequence_low).status, UNCERTAIN);
+        } else if phase == 1 {
+            let deleted = call(id, 50, 0);
+            assert_eq!(deleted.status, 54);
+            crate::connect_norito_free(deleted.bytes);
+        }
+    }
+    close(id).unwrap();
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 #[test]

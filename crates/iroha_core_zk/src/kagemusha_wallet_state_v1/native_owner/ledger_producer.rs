@@ -1,10 +1,12 @@
 //! Current ledger instruction preparation and native Unload confirmation.
 use super::*;
+mod projection;
 mod unload_session;
 use iroha_data_model::{
     isi::kagemusha_wallet::{KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1},
     sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
 };
+pub use projection::NativePreparedLedgerLoadV1;
 /// One complete current ledger instruction, including its original signed transport.
 pub const LEDGER_INSTRUCTION_MAX_BYTES_V1: usize = 64 * 1024;
 
@@ -150,21 +152,18 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         }
         let (root, mut manifest) = self.sync_manifest()?;
         self.require_ledger_activation(&manifest)?;
-        if let Some(address) = manifest
-            .ledger_load_plans
-            .get(&mut self.archive, &request)?
-        {
-            let address: [u8; 32] = address
-                .try_into()
-                .map_err(|_| Error::WitnessLost("ledger Load plan address"))?;
-            let bytes = self
-                .archive
-                .read_object(&address, LEDGER_INSTRUCTION_MAX_BYTES_V1)?;
-            let plan: LoadPlan = archive::decode(&bytes)?;
-            if plan.request != request || plan.amount != amount {
+        let scope = self.load_plan_scope();
+        if let Some(plan) = projection::selected_load_plan(
+            &mut self.archive,
+            &manifest.ledger_load_plans,
+            &manifest.ledger_load_ordinals,
+            &request,
+            scope,
+        )? {
+            if plan.amount != amount {
                 return Err(Error::Invalid("changed ledger Load request"));
             }
-            return Ok(plan.instruction);
+            return Ok(plan.instruction_original);
         }
         let released = self.indexed_step(&manifest, manifest.indexed.ok_or(Error::NoHead)?)?;
         let core = &released.frozen.capsule.successor_state.core;
@@ -188,13 +187,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             ordinal: core.next_load,
             instruction: archive::encode(&instruction)?,
         };
-        let address = self
-            .archive
-            .write_object(&archive::encode(&plan)?, LEDGER_INSTRUCTION_MAX_BYTES_V1)?;
-        manifest.ledger_load_plans =
-            manifest
-                .ledger_load_plans
-                .set(&mut self.archive, request, &address)?;
+        projection::reserve_load_plan(
+            &mut self.archive,
+            &mut manifest.ledger_load_plans,
+            &mut manifest.ledger_load_ordinals,
+            &plan,
+            scope,
+        )?;
         self.publish_manifest(root, &manifest)?;
         Ok(plan.instruction)
     }

@@ -1494,3 +1494,86 @@ fn retained_private_publication_keeps_native_rename_refusal_and_original_retry()
     );
     assert_eq!(published.read("record", 8).unwrap().as_slice(), b"original");
 }
+
+#[test]
+fn local_identity_projection_preserves_original_file_and_directory_through_publication() {
+    let (_temporary, parent) = store();
+    let staged = parent.create_child("staged").unwrap();
+    staged
+        .write_atomic("source", b"original", PublishMode::CreateNew)
+        .unwrap();
+    let directory_identity = staged.identity().unwrap().local_parts();
+    let file_identity = FileIdentity::of(&staged.open_read("source").unwrap())
+        .unwrap()
+        .local_parts();
+    let snapshot = FileSnapshot::of(&staged.open_read("source").unwrap(), true).unwrap();
+    let snapshot_parts = snapshot.local_parts();
+    assert_eq!(snapshot_parts.0, file_identity.0);
+    assert_eq!(snapshot_parts.1, (file_identity.1, file_identity.2));
+    assert_eq!(snapshot_parts.2, 8);
+    staged.sync().unwrap();
+    let published = staged
+        .rename_to_sibling("published", PublishMode::CreateNew)
+        .unwrap();
+    assert_eq!(
+        published.identity().unwrap().local_parts(),
+        directory_identity
+    );
+    assert_eq!(
+        FileIdentity::of(&published.open_read("source").unwrap())
+            .unwrap()
+            .local_parts(),
+        file_identity
+    );
+    assert_eq!(
+        FileSnapshot::of(&published.open_read("source").unwrap(), true).unwrap(),
+        snapshot
+    );
+    assert_eq!(
+        FileSnapshot::of(&published.open_read("source").unwrap(), true)
+            .unwrap()
+            .local_parts(),
+        snapshot_parts
+    );
+    drop(published);
+    let reopened = parent.open_child("published").unwrap();
+    assert_eq!(
+        reopened.identity().unwrap().local_parts(),
+        directory_identity
+    );
+    assert_eq!(
+        FileIdentity::of(&reopened.open_read("source").unwrap())
+            .unwrap()
+            .local_parts(),
+        file_identity
+    );
+    assert_eq!(
+        FileSnapshot::of(&reopened.open_read("source").unwrap(), true).unwrap(),
+        snapshot
+    );
+    assert_eq!(
+        FileSnapshot::of(&reopened.open_read("source").unwrap(), true)
+            .unwrap()
+            .local_parts(),
+        snapshot_parts
+    );
+    reopened
+        .write_atomic("source", b"original", PublishMode::Replace)
+        .unwrap();
+    assert_ne!(
+        FileIdentity::of(&reopened.open_read("source").unwrap())
+            .unwrap()
+            .local_parts(),
+        file_identity
+    );
+    assert_ne!(
+        FileSnapshot::of(&reopened.open_read("source").unwrap(), true)
+            .unwrap()
+            .local_parts(),
+        snapshot_parts
+    );
+    assert_eq!(
+        reopened.identity().unwrap().local_parts(),
+        directory_identity
+    );
+}

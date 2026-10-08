@@ -511,10 +511,10 @@ impl SumeragiFinalityProof {
             || decode_framed_signed_block(&self.block_wire),
         )
         .map_err(malformed)?;
-        need(
-            block.encode_wire().map_err(malformed)? == self.block_wire,
-            "block frame is not canonical",
-        )?;
+        // The framed decoder already streams exact canonical equality under the original
+        // limits. Retire payload/layout state before the independent certificate decoders,
+        // without materializing another complete block frame.
+        norito::core::reset_decode_state();
         need(
             block.header() == self.block_header && block.has_results(),
             "header or execution-result binding differs",

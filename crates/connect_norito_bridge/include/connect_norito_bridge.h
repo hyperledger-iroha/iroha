@@ -2047,6 +2047,18 @@ typedef struct {
 // Neither 12,13,14 nor17 is monetary completion;17 is not ledger activation confirmation. Result bytes use connect_norito_free.
 int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, const connect_norito_kagemusha_wallet_setup_request_v1* request, connect_norito_kagemusha_wallet_result_v1* out);
 
+// Read-only same-owner DATA, always generic original kind12 with zero sequence/detail.
+// Selector0 metadata (empty identity): exact KWMDV1\0\0 frame <=5268 bytes.
+// Selector1 released request /2 operation: exact KWROV1\0\0 frame <=20066 bytes.
+// Selector3 exact prepared Load request: KWLPV1\0\0 frame <=65756 bytes, or exactly
+// KWLNV1\0\0 (8 bytes) for absent selected plan only. Selectors1..3 use nonzero32.
+// Domain-specific frames are never general result kinds or monetary/custody verdicts.
+// Unload claims use canonical setup45/status48; activation rejection remains status49.
+int32_t connect_norito_kagemusha_wallet_observe_v1(uint64_t handle, uint32_t selector, const uint8_t* identity, size_t identity_length, connect_norito_kagemusha_wallet_result_v1* out);
+// Pure full AccountId codecs, no ownership or signing authority. Bounds4096, response12.
+int32_t connect_norito_kagemusha_wallet_account_original_v1(const uint8_t* literal, size_t length, connect_norito_kagemusha_wallet_result_v1* out);
+int32_t connect_norito_kagemusha_wallet_account_display_v1(const uint8_t* original, size_t length, uint16_t prefix, connect_norito_kagemusha_wallet_result_v1* out);
+
 /* Enrollment originals only. Native startup selects approved policy/root and owns custody.
  * Actions:0 requestId32/account/asset,1 account signature,2 progress,3 Android(token+DER chain),
  * 4 Apple(keyid32/attestation/assertion),5 E5 account signature,6 exact E6 result,7 load runtime,8 begin original open from retained E5/E6,9 signed pre-key permit<=2048,10 permanently abandon unused enrollment,11 installed-session JWT<=16384/DPoP<=4096/rootDER<=16384,12 persisted E6<=262144/account<=4096 (Native-selected asset, ordinary original open),

@@ -367,6 +367,19 @@ struct Snapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FileSnapshot(Snapshot);
 
+impl FileSnapshot {
+    pub(super) fn local_parts(self) -> LocalFileSnapshot {
+        (
+            2,
+            (self.0.id.volume, self.0.id.object),
+            self.0.length,
+            [u64::from(self.0.attributes), u64::from(self.0.links), 0, 0],
+            [self.0.modified, 0],
+            [self.0.changed, 0],
+        )
+    }
+}
+
 pub(super) fn journal_snapshot(file: &File) -> io::Result<FileSnapshot> {
     let value = snapshot(file, true, false)?;
     if value.attributes & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY != 0 {

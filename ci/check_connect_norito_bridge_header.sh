@@ -39,6 +39,9 @@ SELF_TESTS=(
   --self-test-bad-wallet-installation-close-owner
   --self-test-bad-wallet-enrollment-rust-result
   --self-test-bad-wallet-review-header-request
+  --self-test-bad-wallet-observe-selector
+  --self-test-bad-wallet-account-original-length
+  --self-test-bad-wallet-account-display-prefix
   --self-test-retired-offline-cash-header-symbol
   --self-test-retired-offline-cash-rust-symbol
   --self-test-retired-pixel6-jni-symbol
@@ -114,7 +117,7 @@ wallet_exports_path = jni_path.parent / "kagemusha_wallet_ffi/exports.rs"
 rust += "\n" + wallet_exports_path.read_text(encoding="utf-8")
 wallet_load_path = jni_path.parent / "kagemusha_wallet_load_original.rs"
 rust += "\n" + wallet_load_path.read_text(encoding="utf-8")
-for relative in ("review.rs", "installed/exports.rs"):
+for relative in ("review.rs", "installed/exports.rs", "observation.rs"):
     rust += "\n" + (jni_path.parent / "kagemusha_wallet_ffi" / relative).read_text(encoding="utf-8")
 native_sources = [jni_path, *sorted(
     source for source in jni_path.parent.rglob("*.rs") if source != jni_path
@@ -198,6 +201,9 @@ KAGEMUSHA_WALLET_EXPORTS = {
     "connect_norito_kagemusha_wallet_installation_register_v1",
     "connect_norito_kagemusha_wallet_installation_close_v1",
     "connect_norito_kagemusha_wallet_registration_source_relocate_v1",
+    "connect_norito_kagemusha_wallet_observe_v1",
+    "connect_norito_kagemusha_wallet_account_original_v1",
+    "connect_norito_kagemusha_wallet_account_display_v1",
     "connect_norito_kagemusha_wallet_enrollment_v1",
 }
 KAGEMUSHA_WALLET_JNI_EXPORTS = {
@@ -208,6 +214,7 @@ KAGEMUSHA_WALLET_JNI_EXPORTS = {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_registerInstallation",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_closeInstallation",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_relocateRegistrationSource",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletObservationNativeV1_observe",
 }
 KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS = {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate",
@@ -790,6 +797,21 @@ if [[ "${MODE}" == --self-test-* ]]; then
   expected_diagnostic=""
 
   case "${MODE}" in
+    --self-test-bad-wallet-observe-selector)
+      replace_regex_once "${tmp}/kagemusha_wallet_ffi/observation.rs" \
+        '(fn connect_norito_kagemusha_wallet_observe_v1\(.*?selector: )u32' '\1u64'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_observe_v1"
+      ;;
+    --self-test-bad-wallet-account-original-length)
+      replace_regex_once "${tmp}/kagemusha_wallet_ffi/observation.rs" \
+        '(fn connect_norito_kagemusha_wallet_account_original_v1\(.*?length: )usize' '\1u32'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_account_original_v1"
+      ;;
+    --self-test-bad-wallet-account-display-prefix)
+      replace_regex_once "${tmp}/kagemusha_wallet_ffi/observation.rs" \
+        '(fn connect_norito_kagemusha_wallet_account_display_v1\(.*?prefix: )u16' '\1u32'
+      expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_account_display_v1"
+      ;;
     --self-test-missing-wallet-jni-symbol)
       replace_once "${tmp}/platform_jni/kagemusha_wallet_advance.rs" \
         "fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call(" \
@@ -851,9 +873,9 @@ if [[ "${MODE}" == --self-test-* ]]; then
       expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_setup_v1"
       ;;
     --self-test-bad-wallet-setup-rust-request)
-      replace_once "${tmp}/kagemusha_wallet_ffi/exports.rs" \
-        'request: *const WalletSetupRequest,' \
-        'request: *const WalletOperationRequest,'
+      replace_regex_once "${tmp}/kagemusha_wallet_ffi/exports.rs" \
+        '(fn connect_norito_kagemusha_wallet_setup_v1\(.*?request: \*const )WalletSetupRequest' \
+        '\1WalletOperationRequest'
       expected_diagnostic="Rust/C FFI signature mismatch for connect_norito_kagemusha_wallet_setup_v1"
       ;;
     --self-test-bad-wallet-open-header-request)

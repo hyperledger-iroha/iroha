@@ -22,6 +22,7 @@ mod confidential_prover;
 mod first_device_auth_key_v1;
 mod gpu;
 mod kagemusha_wallet_advance;
+mod kagemusha_wallet_observation;
 mod kagemusha_wallet_review;
 
 include!("platform_jni/part_1.rs");

@@ -302,6 +302,36 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         self.publish_preparation(&mut selected, &mut manifest, request.request_id(), &entry)
     }
 
+    // Projection uses this mapping only after authenticating the selected source manifest.
+    // It grants no completion: the caller must re-read the actual custody record/capsule.
+    pub(in crate::kagemusha_wallet_state_v1) fn prepared_output_mapping(
+        &mut self,
+        request_id: &[u8; 32],
+    ) -> Result<([u8; 32], [u8; 32], KagemushaWalletOperationKindV1), Error> {
+        if *request_id == [0; 32] {
+            return Err(Error::Invalid("output request identity"));
+        }
+        let (_, manifest) = self.manifest()?;
+        let entry = self
+            .preparation_entry(&manifest, request_id)?
+            .ok_or(Error::Invalid("unknown output request"))?;
+        let original = self
+            .archive
+            .read_object(&entry.request, REQUEST_MAX_BYTES)?;
+        let (scheme, _) = self.proofs.ledger_scope()?;
+        let request = NativeIntentV1::decode(&original, &scheme)?;
+        if request.request_id() != *request_id
+            || entry.capsule.is_some() != entry.operation.is_some()
+        {
+            return Err(Error::WitnessLost("output request mapping"));
+        }
+        Ok((
+            entry.operation.ok_or(Error::Pending)?,
+            entry.capsule.ok_or(Error::Pending)?,
+            request.kind(),
+        ))
+    }
+
     /// Resolve a local request identity through its source-selected actual operation mapping.
     /// An uncommitted preparation has no completion, even when its native plan is durable.
     ///

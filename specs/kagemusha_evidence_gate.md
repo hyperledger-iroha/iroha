@@ -412,9 +412,12 @@ Starting points, not evidence that this protocol has passed:
 
 ### Current implementation checkpoint (2026-10-08)
 
-The resumed `optimizations` checkout is based on the resolved merge `ad75acfe2a`
-with continuing coordinated edits; a commit hash alone does not
-reproduce the changing candidate.
+The resumed `optimizations` checkout advanced from `ad75acfe2a` to `7f14c2389c`
+and another concurrent merge while checks were running. Four new conflicts were
+resolved, but consumed CoreZk, bridge, data-model and filesystem sources changed.
+SDK and component results below belong to their captured pre-merge inputs;
+the merged candidate requires rebuilt checks. A commit hash alone does not
+reproduce the continuing edits.
 Earlier component results belong to their captured source and binary, not
 retroactively to this checkout. No authenticated artifact
 set, full-protocol qualification, phone result or completed offline payment is
@@ -510,6 +513,54 @@ corrected expectation awaits a rebuilt run; the original failure and unchanged
 runtime sources, tools and binaries are retained in
 `finality-per-use-compiler-capture-1/collection-terminal-runtime-1`.
 
+The merged wallet observation surface now shares one native C/JNI dispatcher
+for metadata, retained peer output and prepared Load data. Kotlin and Java
+consumers pass eight managed tests with the JDK 8 API guard retained
+(`target/qualification/kotlin-observation-managed-current-1`). The canonical
+Kotlin account codec remains the single owner. Mandatory ABI27 inventory now
+contains 88 C/JNI exports; header parity, 60 mismatch controls and 69 artifact
+tests with 347 subtests pass. Originals are retained under
+`observation-jni-inventory-check-3`, including earlier tooling failures.
+The previous ABI27 artifact lacks the newly required exports and is correctly
+refused. The rebuilt ABI27 host `37d3b93c…554dd9` passes 65 fresh Kotlin/Java
+JNI cases, including the new observation probe and both canonical account
+codec tests. Sources, fixtures and artifact bytes remain unchanged; the receipt
+is `target/qualification/kotlin-observation-jni-current-1`. The loader used the
+sole explicit artifact directory; an independent mapped-library observation
+was unavailable. This covers the host boundary, not a funded wallet or phone.
+The complete rebuilt Swift suite also passes 2,203 unique tests across three
+XCTest bundles (4, 2,127 and 72), with zero failures or skips. The canonical
+runner completes its post-execution artifact check against the same current
+ABI27 dylib. The receipt is
+`target/qualification/kotlin-observation-swift-current-1/completion-review.json`;
+the earlier 2,180-case capture remains evidence for its own preserved candidate.
+
+The fresh Python installed-wheel selection passes all five native consumer
+tests with zero failures or skips. The emitted native module, wheel payload
+and installed module have the same SHA `2117d3e4…63d14e`; source, actual Cargo
+inputs, tools and installed files remain unchanged through final verification.
+The retained result is
+`target/qualification/python-native-local-unit-current-abi27-3/artifact/result.json`.
+The two earlier producer refusals remain recorded. This is a local component
+result; the clean-source release packaging guard remains unchanged and no
+release, wallet exchange or phone qualification follows.
+
+All eight native Send control masks and both Receive variants complete their
+measurement and separate one-key footprint processes: 20 processes pass, with
+all 304 timed proofs independently verified. Locally generated step descriptors
+encode 3,296-byte proofs without quotas and 3,456-byte proofs with quotas.
+Four-worker observed proof p95 ranges from 391.7 to 1,378.1 ms; separate one-key
+kernel peak RSS ranges from 46.50 to 169.16 MiB. These are captured-binary step
+diagnostics, not durable-payment latency, complete-catalog or phone results.
+The broad wrapper retains its source-drift failure from the concurrent merge;
+the binary and measurement tools remained unchanged. Original samples and
+descriptor/key digests are under
+`target/qualification/monetary-selectors-capture-1/runtime-1`; its
+`selector-summary.json` pins each process result. Three measurement helper tests
+pass, and selected-package strict Clippy with `--no-deps` passes. The ordinary
+strict command still fails on the 570 gadget dependency diagnostics; fixes are
+staged separately from the active measurement sources.
+
 The revised measurement harness passes 114 focused tests. It binds the complete
 local package inputs, actual compiler depfiles, selected Rust tools, and both
 present and absent Cargo configuration files in checkout ancestors and
@@ -519,14 +570,23 @@ qualification. This is a local input and tool policy, not a hermetic operating
 system claim. Fresh preparation succeeds with 2,022 bound inputs across 20 local
 package roots and 23 actual compiler depfiles. Independent preflight confirms
 unchanged before/after inputs and the selected executable. The nine-process,
-three-block campaign is running under seed 20261008 with stop-on-hard-failure;
-its partial samples do not establish any configuration's qualification. Memory
+three-block campaign under seed 20261008 stopped on a hard failure.
+All four A configurations (synthetic and real chips, with one and four workers)
+have completed nine valid processes with passing verdicts. The real A
+one-worker block medians are 31.107561, 30.902561 and 31.939405 seconds of CPU
+time; its six invalid attempts remain recorded. The real Q four-worker
+configuration failed on its seventh valid process: 10.630025916 seconds of
+observed elapsed time exceeded the 10-second hard limit, with no invalidity
+reasons. The other three Q configurations are incomplete. No retry or
+replacement sample changes that failure. Memory
 compression invalidates an attempt even when its two proofs verify. The first
 real-chip Q one-worker block has a 27.049123-second CPU median: all three runs
 meet the 30-second hard limit, but the median misses the required 27-second
-margin. That block remains a margin failure even if later blocks are faster.
+margin. The second real-chip Q four-worker block has a 9.420910083-second
+elapsed median, inside the 10-second hard limit but outside the required
+9-second margin. These block failures remain even if later blocks are faster.
 Candidate,
-preflight, raw attempts and the evolving verdict are retained in
+preflight, raw attempts and the terminal failure are retained in
 `target/qualification/m3-current-source-closure-candidate-20261008`. The source
 closure and configuration repair records are retained in
 `target/qualification/qualifier-source-closure` and

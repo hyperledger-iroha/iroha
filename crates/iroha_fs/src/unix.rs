@@ -1132,6 +1132,21 @@ pub struct FileSnapshot {
 }
 
 impl FileSnapshot {
+    pub(super) fn local_parts(self) -> LocalFileSnapshot {
+        (
+            1,
+            (self.identity.volume, self.identity.object),
+            self.length,
+            [
+                u64::from(self.mode),
+                u64::from(self.owner),
+                u64::from(self.group),
+                self.links,
+            ],
+            [self.modified.0, self.modified.1],
+            [self.changed.0, self.changed.1],
+        )
+    }
     fn from_metadata(value: &fs::Metadata) -> Self {
         let mut object = [0; 16];
         object[..8].copy_from_slice(&value.ino().to_le_bytes());

@@ -390,3 +390,96 @@ fn managed_amx_sources_feed_real_private_staging_and_exact_retained_generation()
     let registration = reopened.load_private_registration().unwrap();
     assert_eq!(registration.scope, fixture.spec.scope());
 }
+
+#[test]
+fn managed_amx_sources_reopen_refuses_identical_g1_h2_replacement_without_http_repair() {
+    for name in [G1, H2] {
+        let fixture = Fixture::new();
+        let sources = fixture.retain(true).unwrap();
+        let original =
+            iroha_fs::FileIdentity::of(&sources.directory.open_read(name).unwrap()).unwrap();
+        drop(sources);
+        let directory = fixture.attachment.open_child(DIRECTORY).unwrap();
+        directory
+            .write_atomic(
+                name,
+                if name == G1 { &fixture.g1 } else { &fixture.h2 },
+                iroha_fs::PublishMode::Replace,
+            )
+            .unwrap();
+        assert_ne!(
+            iroha_fs::FileIdentity::of(&directory.open_read(name).unwrap()).unwrap(),
+            original
+        );
+        drop(directory);
+        assert!(
+            matches!(
+                fixture.retain(false),
+                Err(BootstrapError::Invalid(
+                    "AMX source objects differ from their original local publication"
+                ))
+            ),
+            "reopen must refuse same bytes in a substituted original native file"
+        );
+        assert_eq!(
+            fixture.raw.requests.lock().unwrap().len(),
+            2,
+            "a published generation cannot repair original custody over HTTP"
+        );
+    }
+}
+
+#[test]
+fn managed_amx_sources_reopen_preserves_original_native_pair_and_directory_without_new_reads() {
+    let fixture = Fixture::new();
+    let sources = fixture.retain(true).unwrap();
+    let directory_identity = sources.directory.identity().unwrap();
+    let identities = [RECORD, G1, H2].map(|name| {
+        iroha_fs::FileIdentity::of(&sources.directory.open_read(name).unwrap()).unwrap()
+    });
+    drop(sources);
+    for _ in 0..2 {
+        let reopened = fixture.retain(false).unwrap();
+        assert_eq!(reopened.directory.identity().unwrap(), directory_identity);
+        for (name, original) in [RECORD, G1, H2].into_iter().zip(identities) {
+            assert_eq!(
+                iroha_fs::FileIdentity::of(&reopened.directory.open_read(name).unwrap()).unwrap(),
+                original
+            );
+        }
+        let (g1, h2) = reopened.read_pair().unwrap();
+        assert_eq!(g1.as_slice(), fixture.g1.as_slice());
+        assert_eq!(h2.as_slice(), fixture.h2.as_slice());
+    }
+    assert_eq!(fixture.raw.requests.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn managed_amx_sources_refuse_incomplete_staging_without_refetch_or_new_deadline() {
+    let fixture = Fixture::new();
+    let stage = fixture.attachment.create_child(STAGING).unwrap();
+    stage
+        .write_atomic(G1, &fixture.g1, iroha_fs::PublishMode::CreateNew)
+        .unwrap();
+    assert!(matches!(
+        fixture.retain(true),
+        Err(BootstrapError::Invalid(
+            "incomplete original AMX source publication"
+        ))
+    ));
+    assert!(fixture.raw.requests.lock().unwrap().is_empty());
+    assert_eq!(
+        stage
+            .read(G1, SIGNED_GENESIS_MAX_BYTES_V1)
+            .unwrap()
+            .as_slice(),
+        fixture.g1.as_slice()
+    );
+    assert!(
+        fixture
+            .attachment
+            .open_child_optional(DIRECTORY)
+            .unwrap()
+            .is_none()
+    );
+}

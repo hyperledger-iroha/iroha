@@ -9,7 +9,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use iroha_crypto::Hash;
 use iroha_data_model::{NetworkId, isi::sumeragi_amx::RegisterAmxParticipantV1};
-use iroha_fs::{PrivateDirectory, RetainedFile};
+use iroha_fs::{FileSnapshot, LocalFileSnapshot, PrivateDirectory, PublishMode, RetainedFile};
 use iroha_genesis::{RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1};
 use iroha_model_base::chain::ChainId;
 use norito::{Decode, Encode};
@@ -18,10 +18,12 @@ use super::{AuthenticatedBootstrap, BootstrapError, CheckpointTransport, Result,
 use crate::localnet::PrivateRootSpec;
 
 const DIRECTORY: &str = "amx-bootstrap";
+const STAGING: &str = ".amx-bootstrap-preparing";
 const RECORD: &str = "identity.nrt";
 const G1: &str = "global-g1.nrt";
 const H2: &str = "global-h2.nrt";
 const MAX_RECORD: usize = 16 * 1024;
+type LocalObjectIdentity = (u8, u64, [u8; 16]);
 type OriginalPair = (zeroize::Zeroizing<Vec<u8>>, zeroize::Zeroizing<Vec<u8>>);
 
 #[derive(Encode, Decode, norito::NoritoSchema)]
@@ -33,6 +35,9 @@ struct Identity {
     chain_id: String,
     genesis_hash: Hash,
     successor_hash: Hash,
+    directory_identity: LocalObjectIdentity,
+    genesis_identity: LocalFileSnapshot,
+    successor_identity: LocalFileSnapshot,
 }
 
 /// Borrow the caller's authenticated release and original private attachment directory.
@@ -83,6 +88,13 @@ impl AmxSourceSelection<'_> {
                 "published private generation lost its original AMX sources",
             ));
         }
+        // A visible unpublished stage is an incomplete original publication, never a reason
+        // to fetch a replacement pair or grant a new acquisition deadline.
+        if self.attachment.open_child_optional(STAGING)?.is_some() {
+            return Err(BootstrapError::Invalid(
+                "incomplete original AMX source publication",
+            ));
+        }
         let (genesis, successor) = transport
             .fetch_amx_pair(self.bootstrap, self.deadline)
             .map_err(|_| BootstrapError::Invalid("bounded original AMX source retrieval failed"))?;
@@ -101,6 +113,11 @@ impl AmxSourceSelection<'_> {
         // DEP4 restores publication after acquisition outlives the original release.
         #[cfg(not(all(test, sumeragi_deploy_mutation = "DEP4")))]
         self.require_live_release(spec, now()?)?;
+        // Keep one native directory and its actual files while deriving the local record.
+        // No machine identity is added to the signed G1/H2 or private genesis instruction.
+        let staging = self.attachment.create_child(STAGING)?;
+        staging.write_atomic(G1, &genesis, PublishMode::CreateNew)?;
+        staging.write_atomic(H2, &successor, PublishMode::CreateNew)?;
         let release = self.bootstrap.release();
         let identity = Identity {
             network_name: release.network_name.clone(),
@@ -109,6 +126,9 @@ impl AmxSourceSelection<'_> {
             chain_id: release.chain_id.clone(),
             genesis_hash: Hash::new(&genesis),
             successor_hash: Hash::new(&successor),
+            directory_identity: staging.identity()?.local_parts(),
+            genesis_identity: FileSnapshot::of(&staging.open_read(G1)?, true)?.local_parts(),
+            successor_identity: FileSnapshot::of(&staging.open_read(H2)?, true)?.local_parts(),
         };
         let record = norito::encode_canonical(&identity)
             .map_err(|_| BootstrapError::Invalid("cannot encode AMX source identity"))?;
@@ -117,10 +137,11 @@ impl AmxSourceSelection<'_> {
         }
         // A publication error may follow an actual rename. Never replace or blindly repair:
         // retry reopens and authenticates the original complete directory above.
-        let directory = self.attachment.publish_private_child(
-            DIRECTORY,
-            &[(RECORD, &record), (G1, &genesis), (H2, &successor)],
-        )?;
+        staging.write_atomic(RECORD, &record, PublishMode::CreateNew)?;
+        staging.sync()?;
+        #[cfg(not(all(test, sumeragi_deploy_mutation = "DEP4")))]
+        self.require_live_release(spec, now()?)?;
+        let directory = staging.rename_to_sibling(DIRECTORY, PublishMode::CreateNew)?;
         let original = ParentBootstrapSources::open(directory, self.bootstrap, spec)?;
         self.require_live_release(spec, now()?)?;
         Ok(original)
@@ -174,6 +195,9 @@ impl ParentBootstrapSources {
             identity,
             originals,
         };
+        // DEP5 restores content-only reopen without the originally published native snapshot.
+        #[cfg(not(all(test, sumeragi_deploy_mutation = "DEP5")))]
+        original.require_original_local_objects()?;
         let (genesis, successor) = original.read_pair()?;
         crate::genesis::amx::authenticate_global_sources(
             &original.chain_id()?,
@@ -218,6 +242,9 @@ impl ParentBootstrapSources {
             || current.chain_id != self.identity.chain_id
             || current.genesis_hash != self.identity.genesis_hash
             || current.successor_hash != self.identity.successor_hash
+            || current.directory_identity != self.identity.directory_identity
+            || current.genesis_identity != self.identity.genesis_identity
+            || current.successor_identity != self.identity.successor_identity
             || Hash::new(&genesis) != self.identity.genesis_hash
             || Hash::new(&successor) != self.identity.successor_hash
         {
@@ -233,6 +260,26 @@ impl ParentBootstrapSources {
         }
         self.directory.revalidate()?;
         Ok((genesis, successor))
+    }
+
+    // Local native identities are checked against the originally published private record.
+    // This checks ordinary object/metadata replacement across reopen under honest native
+    // filesystem/clock and private-record custody. IDs/timestamps are not non-reusable across
+    // closed handles; the record is neither crypto authority nor a defense against its owner
+    // replacing all local anchors. Live reads retain the separate DEP2 descriptor fences.
+    #[cfg(not(all(test, sumeragi_deploy_mutation = "DEP5")))]
+    fn require_original_local_objects(&self) -> Result<()> {
+        if self.directory.identity()?.local_parts() != self.identity.directory_identity
+            || FileSnapshot::of(self.originals[1].file(), true)?.local_parts()
+                != self.identity.genesis_identity
+            || FileSnapshot::of(self.originals[2].file(), true)?.local_parts()
+                != self.identity.successor_identity
+        {
+            return Err(BootstrapError::Invalid(
+                "AMX source objects differ from their original local publication",
+            ));
+        }
+        Ok(())
     }
 
     /// Move the exact retained input frames into one original fresh manifest before signing.
