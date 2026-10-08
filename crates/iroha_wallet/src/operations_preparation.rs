@@ -48,6 +48,15 @@ impl core::fmt::Debug for VerifiedNativePreparation {
     }
 }
 impl VerifiedNativePreparation {
+    fn missing() -> Self {
+        Self {
+            phase: NativePreparationPhase::Missing,
+            request_sha256: None,
+            signed: None,
+            unprepared: None,
+        }
+    }
+
     /// Local durable phase, independent of network inclusion.
     #[must_use]
     pub const fn phase(&self) -> NativePreparationPhase {
@@ -416,9 +425,20 @@ impl AccountService {
         kind: NativeOperationKind,
         expected: Option<OperationExpectation<'_>>,
     ) -> Result<Option<VerifiedNativePreparation>> {
+        self.inspect_existing_preparation_with(kind, expected, || Journal::open_optional(path))
+    }
+
+    // Both legitimate input boundaries use this one original inspection recipe. A borrowed
+    // native parent replaces only absolute ancestry acquisition, never record admission.
+    fn inspect_existing_preparation_with(
+        &self,
+        kind: NativeOperationKind,
+        expected: Option<OperationExpectation<'_>>,
+        open: impl FnOnce() -> Result<Option<Journal>>,
+    ) -> Result<Option<VerifiedNativePreparation>> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         norito::core::with_decode_limits_scope(LIMITS, || {
-            let Some(journal) = Journal::open_optional(path)? else {
+            let Some(journal) = open()? else {
                 return Ok(None);
             };
             let retained = Retained::read(&journal, &self.config)?;
@@ -474,12 +494,21 @@ impl AccountService {
     ) -> Result<VerifiedNativePreparation> {
         Ok(self
             .inspect_existing_preparation(path, kind, expected)?
-            .unwrap_or(VerifiedNativePreparation {
-                phase: NativePreparationPhase::Missing,
-                request_sha256: None,
-                signed: None,
-                unprepared: None,
-            }))
+            .unwrap_or_else(VerifiedNativePreparation::missing))
+    }
+
+    pub(super) fn inspect_preparation_in_parent(
+        &self,
+        parent: &iroha_fs::PrivateDirectory,
+        name: &std::ffi::OsStr,
+        kind: NativeOperationKind,
+        expected: Option<OperationExpectation<'_>>,
+    ) -> Result<VerifiedNativePreparation> {
+        Ok(self
+            .inspect_existing_preparation_with(kind, expected, || {
+                Journal::open_optional_child(parent, name)
+            })?
+            .unwrap_or_else(VerifiedNativePreparation::missing))
     }
 
     pub(super) fn retire_preparation(

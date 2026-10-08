@@ -40180,7 +40180,9 @@ impl Torii {
         let kagemusha_load_finality = config
             .kagemusha_load_finality
             .clone()
-            .map(|selected| kagemusha_wallet_finality::FinalityService::open(state.clone(), selected))
+            .map(|selected| {
+                kagemusha_wallet_finality::FinalityService::open(state.clone(), selected)
+            })
             .transpose()
             .map_err(|error| {
                 ToriiBuildError::component_initialization("kagemusha_load_finality", error)

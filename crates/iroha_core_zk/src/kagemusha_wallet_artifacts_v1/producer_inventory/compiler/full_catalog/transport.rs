@@ -78,6 +78,19 @@ pub(super) fn copy(
     )
 }
 
+/// Copy only signed finality descriptor/VK DATA for separate verifier qualification.
+pub(super) fn copy_finality(
+    authenticated: &AuthenticatedProducerInventoryV1,
+    source: &mut dyn OriginalSourceV1,
+    destination: &mut DirectoryOriginalsV1,
+) -> Result<(usize, u64), Error> {
+    copy_blobs(
+        &identities(&[], &authenticated.inventory.finality.originals)?,
+        source,
+        destination,
+    )
+}
+
 fn membership(wallet: &[OriginalV1], finality: &[ArtifactRecord]) -> Result<Vec<u8>, Error> {
     let wallet = identities(wallet, &[])?;
     let verifier = identities(&[], finality)?;
@@ -165,7 +178,7 @@ mod tests {
             lengths: server.map(|blob| blob.bytes),
             sha256: server.map(|blob| blob.sha256),
         };
-        let selected = identities(&[wallet], &[record]).unwrap();
+        let selected = identities(&[wallet], std::slice::from_ref(&record)).unwrap();
         assert_eq!(selected.len(), 5);
         for blob in [
             wallet.descriptor,
@@ -177,6 +190,18 @@ mod tests {
             assert_eq!(selected.get(&blob.sha256), Some(&blob));
         }
         assert!(!selected.contains_key(&server[2].sha256));
+        let verifier_only = identities(&[], std::slice::from_ref(&record)).unwrap();
+        assert_eq!(verifier_only.len(), 2);
+        assert_eq!(verifier_only.get(&server[0].sha256), Some(&server[0]));
+        assert_eq!(verifier_only.get(&server[1].sha256), Some(&server[1]));
+        for excluded in [
+            wallet.descriptor,
+            wallet.verifying_key,
+            wallet.proving_key,
+            server[2],
+        ] {
+            assert!(!verifier_only.contains_key(&excluded.sha256));
+        }
         let mut conflicting = wallet;
         conflicting.proving_key.bytes += 1;
         assert!(identities(&[wallet, conflicting], &[]).is_err());

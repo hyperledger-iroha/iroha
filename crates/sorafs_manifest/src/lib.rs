@@ -5,7 +5,10 @@
 //! profile, CAR commitments, pin policies, and governance attestations. Encoding uses Norito so
 //! manifests can be validated by Torii, gateways, and storage nodes without bespoke parsers.
 // Oracle-only transcript and randomness hooks must never enter a shipping consumer.
-const _: () = assert!(!iroha_plonk::ORACLE_BUILD, "iroha_plonk_oracle is test-only");
+const _: () = assert!(
+    !iroha_plonk::ORACLE_BUILD,
+    "iroha_plonk_oracle is test-only"
+);
 
 use blake3::Hash;
 use ed25519_dalek::Signature as DalekSig;

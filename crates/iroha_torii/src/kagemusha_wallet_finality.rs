@@ -246,6 +246,9 @@ fn mount(
     if verifier.initial_epoch().network_id != *view.network_id() {
         return Err("actual network differs");
     }
+    // The verifier owns the exact signed genesis; do not pin the live ledger
+    // view throughout the independently authenticated proof-graph import.
+    drop(view);
     ServerFinalityV1::open(
         &verifier,
         InstallationV1 {

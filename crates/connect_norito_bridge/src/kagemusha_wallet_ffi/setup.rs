@@ -52,6 +52,7 @@ pub(crate) enum Setup {
         finality: Vec<u8>,
     },
     ConfirmActivation(Vec<u8>),
+    RetainActivationAttempt(Vec<u8>),
     ActivationProofProgress(Vec<u8>),
     ActivationProofStep {
         signed: Vec<u8>,
@@ -117,6 +118,7 @@ fn activation_progress(value: state::ActivationFinalityProgressV1) -> Response {
     let (kind, progress) = match value {
         state::ActivationFinalityProgressV1::Confirmed(progress) => (44, Some(progress)),
         state::ActivationFinalityProgressV1::Verifying(progress) => (45, Some(progress)),
+        state::ActivationFinalityProgressV1::Rejected(progress) => (49, Some(progress)),
         state::ActivationFinalityProgressV1::NotStarted => (46, None),
     };
     let mut response = ledger_progress(progress);
@@ -148,7 +150,7 @@ pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
             KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
             0,
         ],
-        35 | 37 => [state::LEDGER_INSTRUCTION_MAX_BYTES_V1, 0, 0],
+        35 | 37 | 46 => [state::LEDGER_INSTRUCTION_MAX_BYTES_V1, 0, 0],
         36 => [
             state::LEDGER_INSTRUCTION_MAX_BYTES_V1,
             state::LEDGER_PROOF_MAX_BYTES_V1,
@@ -267,6 +269,7 @@ pub(crate) fn request(
             original: second.to_vec(),
         },
         37 if !first.is_empty() => Setup::ActivationProofProgress(first.to_vec()),
+        46 if !first.is_empty() => Setup::RetainActivationAttempt(first.to_vec()),
         23 if !first.is_empty() => Setup::LedgerFinality(first.to_vec()),
         24 => Setup::LedgerStatus,
         26 if !first.is_empty() && !second.is_empty() => Setup::FeeClaimTransport {
@@ -485,6 +488,11 @@ where
                     state::ActivationFinalityProgressV1::Confirmed(
                         self.wallet.confirm_ledger_activation(&signed)?,
                     ),
+                ));
+            }
+            Setup::RetainActivationAttempt(signed) => {
+                return Ok(activation_progress(
+                    self.wallet.retain_activation_attempt(&signed)?,
                 ));
             }
             Setup::ActivationProofProgress(signed) => {
@@ -769,7 +777,7 @@ mod tests {
             assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_ok());
             assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_err());
         }
-        assert!(bounds(46).is_err());
+        assert!(bounds(47).is_err());
     }
     #[test]
     fn unload_projection_requires_request_identity_and_only_optional_beneficiary() {
@@ -800,7 +808,7 @@ mod tests {
     #[test]
     fn activation_intake_and_progress_are_closed_and_exact() {
         let zero = [0; 32];
-        for selector in [35, 36, 37] {
+        for selector in [35, 36, 37, 46] {
             let second: &[u8] = if selector == 36 { &[2] } else { &[] };
             assert!(request(&zero, selector, 0, 0, [&[1], second, &[]]).is_ok());
             assert!(request(&zero, selector, 0, 0, [&[], second, &[]]).is_err());
@@ -811,7 +819,7 @@ mod tests {
             assert!(request(&zero, selector, 0, 0, [&vec![0; 65_537], second, &[]]).is_err());
         }
         assert!(request(&zero, 36, 0, 0, [&[1], &[], &[]]).is_err());
-        for selector in [35, 37] {
+        for selector in [35, 37, 46] {
             assert!(request(&zero, selector, 0, 0, [&[1], &[2], &[]]).is_err());
         }
         let progress = state::LedgerProgressV1 {
@@ -821,6 +829,7 @@ mod tests {
         for (value, kind) in [
             (state::ActivationFinalityProgressV1::Confirmed(progress), 44),
             (state::ActivationFinalityProgressV1::Verifying(progress), 45),
+            (state::ActivationFinalityProgressV1::Rejected(progress), 49),
         ] {
             let output = activation_progress(value);
             assert_eq!(

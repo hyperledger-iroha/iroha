@@ -28,6 +28,29 @@ pub(super) fn response(env: &mut JNIEnv<'_>, result: wallet::Result<wallet::Resp
         "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletCallV1",
     )
 }
+/// Canonical locator DATA rebinding only; no installed runtime, proof or account admission.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_relocateRegistrationSource(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    source: JByteArray<'_>,
+    root: JByteArray<'_>,
+) -> jobject {
+    let result = wallet::run(|| {
+        for (array, maximum) in [(&source, 8192), (&root, 4096)] {
+            let length = env
+                .get_array_length(array)
+                .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
+            if length <= 0 || length > maximum {
+                return Err(wallet::Failure::code(wallet::INVALID));
+            }
+        }
+        let source = read(&mut env, &source, 8192)?;
+        let root = read(&mut env, &root, 4096)?;
+        wallet::relocate_registration_source(&source, &root)
+    });
+    response(&mut env, result)
+}
 pub(super) fn response_class(
     env: &mut JNIEnv<'_>,
     result: wallet::Result<wallet::Response>,

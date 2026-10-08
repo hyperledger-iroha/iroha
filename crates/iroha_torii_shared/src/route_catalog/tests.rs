@@ -52,7 +52,7 @@ mod tests {
         assert!(CATALOGED_ROUTES.contains(&route));
     }
     #[test]
-    fn kagemusha_terminal_load_proof_is_a_private_authenticated_read() {
+    fn kagemusha_load_finality_is_a_private_authenticated_read() {
         let route = contracts_and_verification_keys::KAGEMUSHA_LOAD_FINALITY_PROOF_GET;
         assert_eq!(
             route.path(),

@@ -297,18 +297,47 @@ impl Journal {
         Self::open_optional_in_parent(&parent, name)
     }
 
+    /// Open an optional journal child through its original retained private parent.
+    ///
+    /// The child shares every held ancestor descriptor without reopening an absolute path.
+    /// Native child admission, the exclusive original lock and sync remain fresh. Only initial
+    /// child absence returns `None`; a missing lock or later custody failure remains an error.
+    /// Parent custody closes every ordinary result, including lock admission failures. The
+    /// original parent and all of its ancestors remain held for the returned journal lifetime.
+    ///
+    /// # Errors
+    /// Refuses invalid names, unsafe or changed custody, competing locks and native errors.
+    pub fn open_optional_child(
+        parent: &PrivateDirectory,
+        name: impl AsRef<std::ffi::OsStr>,
+    ) -> Result<Option<Self>> {
+        Self::open_optional_with_parent(|| parent.open_child_optional(name), || parent.revalidate())
+    }
+
     // The original parent remains held through the child lock/sync boundary and every exit.
     // A successful child shares its native ancestry; no second absolute owner is selected.
     fn open_optional_in_parent(
         parent: &OwnerDirectory,
         name: &std::ffi::OsStr,
     ) -> Result<Option<Self>> {
-        let outcome = match parent.open_private_child_optional(name) {
+        Self::open_optional_with_parent(
+            || parent.open_private_child_optional(name),
+            || parent.revalidate(),
+        )
+    }
+
+    // One child/lock/exit recipe for both legitimate parent admission boundaries. Keep the
+    // outcome live until the original parent exit, and release a successful lock on refusal.
+    fn open_optional_with_parent(
+        open_child: impl FnOnce() -> std::io::Result<Option<PrivateDirectory>>,
+        check_parent: impl FnOnce() -> std::io::Result<()>,
+    ) -> Result<Option<Self>> {
+        let outcome = match open_child() {
             Ok(Some(directory)) => Self::lock_directory(directory, false).map(Some),
             Ok(None) => Ok(None),
             Err(error) => Err(error.into()),
         };
-        if let Err(error) = parent.revalidate() {
+        if let Err(error) = check_parent() {
             drop(outcome);
             return Err(error.into());
         }
@@ -921,3 +950,7 @@ mod native_scope_tests;
 
 #[cfg(test)]
 mod parent_admission_tests;
+
+#[cfg(test)]
+#[path = "borrowed_private_parent_tests.rs"]
+mod borrowed_private_parent_tests;

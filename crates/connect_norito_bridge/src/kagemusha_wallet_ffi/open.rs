@@ -40,18 +40,6 @@ pub(super) struct Runtime<P: advance::KagemushaWalletPlatformV1, S: OriginalSour
     enrollment_session: Option<super::installed::Session>,
     enrolled_originals: Option<[Vec<u8>; 4]>,
 }
-impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Runtime<P, S> {
-    pub(super) fn new(
-        runtime: state::NativeWalletRuntimeV1<advance::KagemushaWalletStdFsV1, P, S>,
-    ) -> Self {
-        Self {
-            phase: Some(Phase::Ready(Box::new(runtime))),
-            binding: None,
-            enrollment_session: None,
-            enrolled_originals: None,
-        }
-    }
-}
 impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send + 'static>
     Admission for Runtime<P, S>
 {
@@ -181,14 +169,13 @@ impl<P: advance::KagemushaWalletPlatformV1 + 'static, S: OriginalSourceV1 + Send
                 ..Response::default()
             });
         }
-        if let Action::Begin([_, _, asset]) = &action {
-            if self
+        if let Action::Begin([_, _, asset]) = &action
+            && self
                 .binding
                 .as_ref()
                 .is_none_or(|binding| binding.asset_original() != *asset)
-            {
-                return Err(Failure::code(INVALID));
-            }
+        {
+            return Err(Failure::code(INVALID));
         }
         let Some(Phase::Ready(runtime)) = self.phase.as_mut() else {
             return Err(Failure::code(CONFLICT));

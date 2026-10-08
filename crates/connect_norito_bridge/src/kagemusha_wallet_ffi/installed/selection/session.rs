@@ -31,6 +31,10 @@ pub(super) struct FiAuthority {
     dataspace: String,
     origin: String,
     release: Vec<u8>,
+    apps: [String; 2],
+    challenge_path: String,
+    roles: std::collections::BTreeSet<String>,
+    required_role: String,
 }
 fn exact_text<'a>(map: &'a Map, name: &str, maximum: usize) -> Result<&'a str> {
     let value = text(map, name)?;
@@ -140,10 +144,171 @@ pub(super) fn authorities(
                 dataspace,
                 origin,
                 release,
+                apps: [
+                    "com.soramitsu.bokolocash".into(),
+                    "jp.co.soramitsu.bokolo".into(),
+                ],
+                challenge_path: "/api/v1/retail/kagemusha/enrollment/challenge".into(),
+                roles: [
+                    "FI_SIGNER",
+                    "FI_BRANCH_MANAGER",
+                    "FI_COMPLIANCE",
+                    "FI_ADMIN",
+                    "RETAIL_USER",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+                required_role: "RETAIL_USER".into(),
             })
         })
         .collect()
 }
+
+fn valid_origin(origin: &str) -> Result<()> {
+    let authority = origin.strip_prefix("https://").ok_or_else(invalid)?;
+    let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let (host, suffix) = bracketed.split_once(']').ok_or_else(invalid)?;
+        host.parse::<std::net::Ipv6Addr>().map_err(|_| invalid())?;
+        (
+            host,
+            if suffix.is_empty() {
+                None
+            } else {
+                Some(suffix.strip_prefix(':').ok_or_else(invalid)?)
+            },
+        )
+    } else {
+        let (host, port) = authority
+            .split_once(':')
+            .map_or((authority, None), |(host, port)| (host, Some(port)));
+        if host.is_empty()
+            || host.len() > 253
+            || host.split('.').any(|label| {
+                label.is_empty()
+                    || label.len() > 63
+                    || label.starts_with('-')
+                    || label.ends_with('-')
+                    || !label
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+            })
+        {
+            return Err(invalid());
+        }
+        (host, port)
+    };
+    if host.is_empty()
+        || port.is_some_and(|port| {
+            port.is_empty()
+                || !port.bytes().all(|c| c.is_ascii_digit())
+                || port.parse::<u16>().ok().is_none_or(|port| port == 0)
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// Session authentication values selected by a whole independently signed application release.
+/// They have no asset list and confer no eligibility or hardware admission verdict.
+pub(super) fn universal_authorities(
+    value: &Value,
+    android: &KagemushaWalletAppPolicyV1,
+    apple: &KagemushaWalletAppPolicyV1,
+) -> Result<Vec<FiAuthority>> {
+    let KagemushaWalletAppIdentityV1::Android { package_name, .. } = &android.identity else {
+        return Err(invalid());
+    };
+    let KagemushaWalletAppIdentityV1::Apple { app_id } = &apple.identity else {
+        return Err(invalid());
+    };
+    let rows = value.as_array().ok_or_else(invalid)?;
+    if rows.is_empty() || rows.len() > 64 {
+        return Err(invalid());
+    }
+    let mut identities = std::collections::BTreeSet::new();
+    rows.iter()
+        .map(|value| {
+            let row = exact(
+                value,
+                &[
+                    "issuer",
+                    "audience",
+                    "requestOrigin",
+                    "verificationKeyEd25519Base64",
+                    "releaseOriginalBase64",
+                    "androidClientApp",
+                    "appleClientApp",
+                    "enrollmentChallengePath",
+                    "roles",
+                    "requiredRole",
+                ],
+            )?;
+            let issuer = exact_text(row, "issuer", 512)?.to_owned();
+            let dataspace = exact_text(row, "audience", 512)?.to_owned();
+            if !identities.insert((issuer.clone(), dataspace.clone())) {
+                return Err(invalid());
+            }
+            let origin = exact_text(row, "requestOrigin", 2048)?.to_owned();
+            valid_origin(&origin)?;
+            let challenge_path = exact_text(row, "enrollmentChallengePath", 1024)?.to_owned();
+            if !challenge_path.starts_with('/')
+                || challenge_path.starts_with("//")
+                || challenge_path.contains(['?', '#', '\\'])
+                || challenge_path
+                    .split('/')
+                    .any(|part| matches!(part, "." | ".."))
+            {
+                return Err(invalid());
+            }
+            let key = raw(row, "verificationKeyEd25519Base64", 32)?;
+            if key.len() != 32 {
+                return Err(invalid());
+            }
+            let key = PublicKey::from_bytes(Algorithm::Ed25519, &key).map_err(|_| invalid())?;
+            let apps = [
+                exact_text(row, "androidClientApp", 512)?.to_owned(),
+                exact_text(row, "appleClientApp", 512)?.to_owned(),
+            ];
+            if apps != [package_name.clone(), app_id.clone()] {
+                return Err(invalid());
+            }
+            let values = field(row, "roles")?.as_array().ok_or_else(invalid)?;
+            if values.is_empty() || values.len() > 16 {
+                return Err(invalid());
+            }
+            let mut roles = std::collections::BTreeSet::new();
+            for value in values {
+                let role = value.as_str().ok_or_else(invalid)?;
+                if role.is_empty()
+                    || role.len() > 128
+                    || !role.is_ascii()
+                    || role.chars().any(char::is_control)
+                    || !roles.insert(role.to_owned())
+                {
+                    return Err(invalid());
+                }
+            }
+            let required_role = exact_text(row, "requiredRole", 128)?.to_owned();
+            if !roles.contains(&required_role) {
+                return Err(invalid());
+            }
+            Ok(FiAuthority {
+                key,
+                issuer,
+                dataspace,
+                origin,
+                release: raw(row, "releaseOriginalBase64", 16_384)?,
+                apps,
+                challenge_path,
+                roles,
+                required_role,
+            })
+        })
+        .collect()
+}
+
 fn segment(original: &str) -> Result<Vec<u8>> {
     if original.is_empty() || original.contains('=') {
         return Err(invalid());
@@ -265,33 +430,24 @@ impl Selection {
             .verify(&selected.key, format!("{h}.{c}").as_bytes())
             .map_err(|_| invalid())?;
         if text(claims, "aud")? != selected.dataspace
-            || text(claims, "client_app")?
-                != if android {
-                    "com.soramitsu.bokolocash"
-                } else {
-                    "jp.co.soramitsu.bokolo"
-                }
+            || text(claims, "client_app")? != selected.apps[usize::from(!android)]
         {
             return Err(invalid());
         }
         let actor = exact_text(claims, "sub", 512)?.as_bytes().to_vec();
         uuid(text(claims, "device_id")?)?;
         let roles = field(claims, "roles")?.as_array().ok_or(invalid())?;
-        if roles.is_empty() || roles.len() > 5 {
+        if roles.is_empty() || roles.len() > selected.roles.len() {
             return Err(invalid());
         }
         let mut seen = std::collections::BTreeSet::new();
         for role in roles {
             let role = role.as_str().ok_or(invalid())?;
-            if !matches!(
-                role,
-                "FI_SIGNER" | "FI_BRANCH_MANAGER" | "FI_COMPLIANCE" | "FI_ADMIN" | "RETAIL_USER"
-            ) || !seen.insert(role)
-            {
+            if !selected.roles.contains(role) || !seen.insert(role) {
                 return Err(invalid());
             }
         }
-        if !seen.contains("RETAIL_USER") {
+        if !seen.contains(selected.required_role.as_str()) {
             return Err(invalid());
         }
         let cnf = exact(field(claims, "cnf")?, &["jkt"])?;
@@ -332,11 +488,7 @@ impl Selection {
         let payload = json(&segment(c)?, 4096, false)?;
         let payload = exact(&payload, &["htm", "htu", "iat", "jti", "ath"])?;
         if text(payload, "htm")? != "POST"
-            || text(payload, "htu")?
-                != format!(
-                    "{}/api/v1/retail/kagemusha/enrollment/challenge",
-                    selected.origin
-                )
+            || text(payload, "htu")? != format!("{}{}", selected.origin, selected.challenge_path)
             || text(payload, "ath")? != URL_SAFE_NO_PAD.encode(hash(token))
         {
             return Err(invalid());

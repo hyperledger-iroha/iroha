@@ -47,7 +47,8 @@ class KagemushaWalletUnloadFinalityV1 internal constructor(result: KagemushaWall
     fun blockHash(): ByteArray? = block?.copyOf()
 }
 
-/** Native-verified successful inclusion of the account's exact retained signed Activate. */
+/** Native-verified successful inclusion of a registered same-Activation family member.
+ * This does not assert execution success of every other outer transaction in that family. */
 class KagemushaWalletActivationConfirmationV1 internal constructor(result: KagemushaWalletCallV1) {
     val heightBits: Long
     private val block: ByteArray
@@ -63,6 +64,9 @@ class KagemushaWalletActivationConfirmationV1 internal constructor(result: Kagem
 /** Native-owned Activate history. Only confirmation proves activation; height is unsigned u64. */
 class KagemushaWalletActivationFinalityV1 internal constructor(result: KagemushaWalletCallV1) {
     val confirmation: KagemushaWalletActivationConfirmationV1?
+    /** Native authenticated rejected execution of this exact retained outer transaction;
+     * never a conversion of transport, clock, proof-verification or custody failure. */
+    val rejected: Boolean = result.status == KagemushaWalletCallV1.ACTIVATION_REJECTED
     val verifiedHeightBits: Long?
     private val block: ByteArray?
     init {
@@ -72,7 +76,7 @@ class KagemushaWalletActivationFinalityV1 internal constructor(result: Kagemusha
                 verifiedHeightBits = result.sequenceLow
                 block = result.bytes()
             }
-            KagemushaWalletCallV1.ACTIVATION_PROGRESS -> {
+            KagemushaWalletCallV1.ACTIVATION_PROGRESS, KagemushaWalletCallV1.ACTIVATION_REJECTED -> {
                 confirmation = null
                 verifiedHeightBits = result.sequenceLow
                 block = result.bytes()

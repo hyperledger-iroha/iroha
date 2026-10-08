@@ -30,17 +30,24 @@ extension KagemushaWalletV1 {
         try .init(setup(.init(selector: 34, identity: transactionHash, first: original, second: finality)))
     }
 
-    /// Recover Native's durable confirmation of the exact retained signed Activate transaction.
+    /// Retain this exact same-Activation outer attempt before its first dispatch.
+    /// Intake alone establishes neither ledger inclusion nor permission to Load.
+    public func retainActivationAttempt(signedWire: Data) throws -> KagemushaWalletActivationFinalityV1 {
+        try .init(setup(.init(selector: 46, first: signedWire)))
+    }
+
+    /// Recover wallet activation through successful inclusion of any retained attempt.
+    /// Confirmation does not assert that every outer transaction executed successfully.
     public func confirmLedgerActivation(signedWire: Data) throws -> KagemushaWalletActivationConfirmationV1 {
         try .init(setup(.init(selector: 35, first: signedWire)))
     }
 
-    /// Verify one next original block for this Activate's independent Native history.
+    /// Verify one next original block for this registered attempt's independent Native history.
     public func ingestActivationFinality(signedWire: Data, original: Data) throws -> KagemushaWalletActivationFinalityV1 {
         try .init(setup(.init(selector: 36, first: signedWire, second: original)))
     }
 
-    /// Read the exact retained transaction's progress, independently of the main ledger cursor.
+    /// Read this registered attempt's progress or the wallet's common activation confirmation.
     public func activationFinalityProgress(signedWire: Data) throws -> KagemushaWalletActivationFinalityV1 {
         try .init(setup(.init(selector: 37, first: signedWire)))
     }
@@ -86,7 +93,7 @@ public struct KagemushaWalletUnloadFinalityV1: Sendable {
     }
 }
 
-/// Native-verified successful inclusion of the account's exact retained signed Activate.
+/// Native-verified wallet activation through one exact retained signed Activate attempt.
 public struct KagemushaWalletActivationConfirmationV1: Sendable {
     public let height: UInt64
     public let blockHash: Data
@@ -100,20 +107,25 @@ public struct KagemushaWalletActivationConfirmationV1: Sendable {
 /// Native-owned Activate history. Only a confirmation establishes activation.
 public struct KagemushaWalletActivationFinalityV1: Sendable {
     public let confirmation: KagemushaWalletActivationConfirmationV1?
+    /// Exact authenticated rejected execution of this attempt; it never establishes activation.
+    public let rejected: Bool
     public let verifiedHeight: UInt64?
     public let blockHash: Data?
     init(_ result: KagemushaWalletCallV1) throws {
         switch result.status {
         case 44:
             confirmation = try .init(result)
+            rejected = false
             verifiedHeight = result.sequenceLow
             blockHash = result.bytes
-        case 45:
+        case 45, 49:
             confirmation = nil
+            rejected = result.status == 49
             verifiedHeight = result.sequenceLow
             blockHash = result.bytes
         case 46:
             confirmation = nil
+            rejected = false
             verifiedHeight = nil
             blockHash = nil
         default:

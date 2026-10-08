@@ -67,24 +67,14 @@ enum ToriiIdentifierOwnerContract {
         return exact
     }
     static func signature(_ value: String, field: String) throws -> String {
-        guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
-            throw ToriiClientError.invalidPayload("\(field) must be exact hex without surrounding whitespace.")
-        }
-        let hex: String
-        do {
-            hex = try lowerHex(value, field: field)
-        } catch {
-            throw ToriiClientError.invalidPayload("\(field) must be valid hex with exact lowercase raw bytes.")
-        }
+        let hex = try lowerHex(value, field: field)
         guard hex.utf8.count <= 2 * 3309 else {
             throw ToriiClientError.invalidPayload("\(field) exceeds the canonical signature bound.")
         }
         return hex
     }
     static func modelSignature(_ value: String, field: String) throws -> String {
-        guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
-            throw ToriiClientError.invalidPayload("\(field) must be exact Model signature hex without surrounding whitespace.")
-        }
+        _ = try exact(value, field)
         guard value == value.uppercased(), !value.hasPrefix("0X") else {
             throw ToriiClientError.invalidPayload("\(field) requires exact uppercase Model signature hex.")
         }
@@ -120,22 +110,37 @@ enum ToriiIdentifierOwnerContract {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(value)
     }
-    /// Reports schema violations at the JSON object that owns the fields.
-    static func fields(_ decoder: Decoder, required: Set<String>, optional: Set<String> = [], debugDescription: String = "Identifier JSON requires its exact current fields.") throws {
+    /// Translate validation failures only at a Decodable boundary, retaining the source error.
+    static func decodedValue<Value>(at codingPath: [CodingKey], _ validate: () throws -> Value) throws -> Value {
+        do {
+            return try validate()
+        } catch let error as DecodingError {
+            throw error
+        } catch {
+            let reason: String
+            if case let ToriiClientError.invalidPayload(message) = error {
+                reason = message
+            } else {
+                reason = String(describing: error)
+            }
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: codingPath, debugDescription: reason, underlyingError: error))
+        }
+    }
+    static func decodeString<Key: CodingKey, Value>(
+        from container: KeyedDecodingContainer<Key>, forKey key: Key,
+        validating validate: (String) throws -> Value
+    ) throws -> Value {
+        let raw = try container.decode(String.self, forKey: key)
+        return try decodedValue(at: container.codingPath + [key]) { try validate(raw) }
+    }
+    static func fields(_ decoder: Decoder, required: Set<String>, optional: Set<String> = []) throws {
         let values = try decoder.container(keyedBy: IdentifierOwnerJSONKey.self)
         let keys = Set(values.allKeys.map(\.stringValue))
         guard required.isSubset(of: keys), keys.isSubset(of: required.union(optional)) else {
-            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: debugDescription))
-        }
-    }
-
-    /// Keeps owner validation errors attached to their original JSON field.
-    static func string<K: CodingKey>(from container: KeyedDecodingContainer<K>, forKey key: K, validate: (String) throws -> String) throws -> String {
-        let value = try container.decode(String.self, forKey: key)
-        do {
-            return try validate(value)
-        } catch {
-            throw DecodingError.dataCorrupted(.init(codingPath: container.codingPath + [key], debugDescription: String(describing: error), underlyingError: error))
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Identifier JSON requires its exact current fields."))
         }
     }
 }

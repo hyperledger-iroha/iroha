@@ -187,6 +187,7 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_wallet_installation_begin_v1",
     "connect_norito_kagemusha_wallet_installation_register_v1",
     "connect_norito_kagemusha_wallet_installation_close_v1",
+    "connect_norito_kagemusha_wallet_registration_source_relocate_v1",
     "connect_norito_kagemusha_wallet_enrollment_v1",
 ]
 EXPECTED_FORBIDDEN_SYMBOLS = [
@@ -425,8 +426,8 @@ def _validate_root_identity(
         header.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if header_abis != ["26"]:
-        raise ValidationError("authoritative NoritoBridge header ABI is not exact 26")
+    if header_abis != ["27"]:
+        raise ValidationError("authoritative NoritoBridge header ABI is not exact 27")
 
     bridge_source = root / "crates/connect_norito_bridge/src/lib.rs"
     _regular_file(bridge_source, "authoritative NoritoBridge source")
@@ -447,8 +448,8 @@ def _validate_root_identity(
         protocol.read_text(encoding="utf-8"),
         re.MULTILINE,
     )
-    if protocol_abis != ["26"]:
-        raise ValidationError("authoritative privacy bridge ABI is not exact 26")
+    if protocol_abis != ["27"]:
+        raise ValidationError("authoritative privacy bridge ABI is not exact 27")
 
 
 def _load_manifest(manifest_path: Path, root: Path, lockfile: Path, *, local_integration: bool = False) -> dict[str, object]:
@@ -475,8 +476,8 @@ def _load_manifest(manifest_path: Path, root: Path, lockfile: Path, *, local_int
         or SEMVER.fullmatch(payload["version"]) is None
     ):
         raise ValidationError("artifact version is not canonical")
-    if payload["native_bridge_abi_version"] != 26:
-        raise ValidationError("artifact does not bind exact native bridge ABI 26")
+    if payload["native_bridge_abi_version"] != 27:
+        raise ValidationError("artifact does not bind exact native bridge ABI 27")
     if payload["privacy_production_enabled"] is not True:
         raise ValidationError("artifact must include mandatory privacy support")
     expected_features = ["privacy-production-enabled"]

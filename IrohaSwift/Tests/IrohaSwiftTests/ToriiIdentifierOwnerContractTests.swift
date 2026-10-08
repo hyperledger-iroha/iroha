@@ -10,7 +10,7 @@ final class ToriiIdentifierOwnerContractTests: XCTestCase {
         init(from decoder: Decoder) throws {
             try ToriiIdentifierOwnerContract.fields(decoder, required: ["value"])
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            value = try ToriiIdentifierOwnerContract.string(from: container, forKey: .value) {
+            value = try ToriiIdentifierOwnerContract.decodeString(from: container, forKey: .value) {
                 try ToriiIdentifierOwnerContract.signature($0, field: "owner.value")
             }
         }

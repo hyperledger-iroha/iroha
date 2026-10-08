@@ -383,13 +383,14 @@ fn native_profile_matches_complete_compiled_encoder_preimage() {
     let body = native_profile_transcript_v1().unwrap();
     assert_eq!(body, original);
     assert_eq!(body.len(), 14_513);
+    // Renewed Receive assigns CreditEffects to A7; plain Receive keeps A0.
     assert_eq!(
         hex::encode(Sha256::digest(&body)),
-        "2048bd8e2bd68553d0ffb725f5f8660c56bb0a6ca346e4c9ca4b4791ffb91cc6"
+        "fd9870ada870783ff31e4f544e90ee667f5fe0c2db790ec7b754108dad5170ed"
     );
     assert_eq!(
         hex::encode(artifact_digest(b"native-profile", &body)),
-        "f02a720e7df4f35a0933d6ebf416b195b92a027b27726a874e2456300b5f833d"
+        "c7539c5c1bc5e36046014908cfa3c06ccbb9eb9f691623c65acf9893ffc7c6da"
     );
     eprintln!(
         "NATIVE_PROFILE bytes={} sha256={} digest={}",

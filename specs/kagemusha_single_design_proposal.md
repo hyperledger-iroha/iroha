@@ -669,6 +669,15 @@ is never initialized again.
 The ledger enables load issuance only after verifying and recording the complete
 Bootstrap package for that incarnation. A credential alone cannot receive a
 ordinary Load receipt. This activation is idempotent and occurs during enrollment.
+The ordinary account-signed transaction carrying Activate may have several
+submission attempts, each retaining its exact signed envelope. A new envelope
+must carry the identical retained Activation, with the same account, network,
+asset and incarnation; it does not repeat Bootstrap or initialize another head.
+Each candidate remains subject to ordinary transaction admission and fees.
+Expiry or an HTTP response is not evidence of non-inclusion. Native retains each
+attempt's independent verification cursor and confirms the wallet only after
+authenticating successful inclusion of one retained attempt. That confirmation
+proves activation of the wallet, not successful execution of every envelope.
 An interrupted enrollment resumes the same installation; it never creates two
 initialized heads. Abandonment is allowed only while the enrollment marker is
 still selected and Bootstrap has never committed. It commits a terminal marker

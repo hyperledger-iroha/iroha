@@ -75,7 +75,7 @@ object KagemushaEnrollmentEligibilityV1 {
 
     /** Exact canonical token/incarnation/scale DATA, without registration authority. */
     class AssetScope private constructor(private val fields: List<ByteArray>) {
-        private val id = fixed(fields[1], 16)
+        private val id = parseFields(fields[1], 16).map { fixed(it, 1)[0] }.toByteArray()
         private val incarnation = identity(fields[2])
         val scale: Int = BigInteger(1, fixed(fields[3], 4).reversedArray()).intValueExact()
         init {

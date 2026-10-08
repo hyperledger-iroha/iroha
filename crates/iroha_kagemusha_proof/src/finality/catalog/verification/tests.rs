@@ -171,8 +171,29 @@ fn actual_genesis_and_history_verifiers_match_strict_import_without_pk_reads() {
     let receipt_owner = ReceiptVerifier {
         anchor: anchor(),
         source: verified.clone(),
+        history: verified.clone(),
         vesta: params().vesta,
     };
+    // Neither decoded state nor a blank source proof constructs the opaque history.
+    let state = crate::finality::history::HistoryState::genesis(&anchor());
+    let bad = verified.blank_evidence().unwrap();
+    assert!(
+        receipt_owner
+            .restore_history(&state, bad.clone(), MemoryBudget::DEFAULT, None)
+            .is_err()
+    );
+    let mut malformed = state;
+    malformed.next_height = 1;
+    assert!(matches!(
+        receipt_owner.restore_history(&malformed, bad.clone(), MemoryBudget::DEFAULT, None),
+        Err(Error::Input)
+    ));
+    let cancel = iroha_pasta::CancellationToken::new();
+    cancel.cancel();
+    assert!(matches!(
+        receipt_owner.restore_history(&state, bad, MemoryBudget::DEFAULT, Some(&cancel)),
+        Err(Error::Cancelled)
+    ));
     let digest = Fp::from(91);
     let context = iroha_pasta::poseidon::hash_with_domain(
         crate::finality::receipt_finality::CONTEXT_DOMAIN,

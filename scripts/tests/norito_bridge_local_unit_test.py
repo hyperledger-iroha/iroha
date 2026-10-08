@@ -47,7 +47,7 @@ def originals():
                'source_changes': [], 'source_before': source, 'source_after': source,
                'finished_unix': 12, 'native_companion_sha256': 'c' * 64}
     component = {'emitter_path': '/owned/emitter.json', 'emitter_sha256': 'd' * 64,
-                 'qualified': True, 'observed_abi_version': 26,
+                 'qualified': True, 'observed_abi_version': 27,
                  'artifact_path': '/owned/retained/lib.dylib', 'artifact_sha256': 'c' * 64,
                  'source_before': source, 'source_after': source,
                  'toolchain_before': tools, 'toolchain_after': tools,
@@ -128,10 +128,12 @@ def test_wrong_stale_archive_emitter_source_tool_and_component_relationship_refu
 
 def test_current_repository_owned_c_jni_and_privacy_policy_is_exact():
     policy = unit.native_policy(ROOT)
-    assert len(policy['c_jni']) == 78
-    assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 20
+    assert len(policy['c_jni']) == 84
+    assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 23
     assert sum('offline_wallet_KagemushaWalletNativeV1_' in symbol for symbol in policy['c_jni']) == 14
-    assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_installRuntime' in policy['c_jni']
+    for method in ('beginInstallation', 'registerInstallation', 'closeInstallation', 'relocateRegistrationSource'):
+        assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_' + method in policy['c_jni']
+    assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_installRuntime' not in policy['c_jni']
     assert "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate" in policy["c_jni"]
     assert len(policy['privacy']) == 6
     assert 'connect_norito_kagemusha_wallet_setup_v1' in policy['required']
@@ -326,7 +328,7 @@ def test_make_dependency_words_are_not_shell_evaluated():
 
 def manifest_fixture():
     return {'schema': unit.SCHEMA, 'artifact_scope': 'local-unit', 'purpose': unit.PURPOSE,
-            'version': '0.1.0', 'native_bridge_abi_version': 26,
+            'version': '0.1.0', 'native_bridge_abi_version': 27,
             'target_triple': 'aarch64-apple-darwin', 'hashes': {'macos-arm64': 'a' * 64},
             'producer_record': '/owned/producer-record.json', 'producer_record_sha256': 'b' * 64,
             'source_inputs': {'inert-source': 'c' * 64}, 'tool_inputs': {'inert-tool': 'd' * 64},

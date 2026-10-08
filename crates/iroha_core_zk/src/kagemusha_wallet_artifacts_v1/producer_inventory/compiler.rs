@@ -745,7 +745,9 @@ mod tests;
 #[path = "compiler/full_catalog.rs"]
 mod full_catalog;
 #[cfg(test)]
-pub(crate) use full_catalog::open_pinned_engineering_wallet_sources;
+pub(crate) use full_catalog::{
+    open_pinned_engineering_finality_sources, open_pinned_engineering_wallet_sources,
+};
 
 #[path = "compiler/reuse.rs"]
 mod reuse;

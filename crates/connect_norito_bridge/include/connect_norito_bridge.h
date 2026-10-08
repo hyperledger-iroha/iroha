@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define CONNECT_NORITO_BRIDGE_ABI_VERSION 26
+#define CONNECT_NORITO_BRIDGE_ABI_VERSION 27
 
 #define CONNECT_NORITO_ERR_ACCOUNT_ADDRESS -200
 #define CONNECT_NORITO_ERR_UNSUPPORTED_ALGORITHM -21
@@ -1957,15 +1957,25 @@ typedef struct {
 // Missing inclusion is distinct from malformed/mismatched custody, which remains an error.
 // IngestUnloadProof34 adds second ordinary proof <=36MiB and returns kind33. Both use a separate
 // transaction+claim-bound cursor; ConfirmUnload30 consumes its selected block, independent of later global tips.
-// ConfirmActivation35(first exact signed Activate transaction <=65536) returns kind44 only after
-// Native verifies successful exact input/output inclusion and durably selects the confirmation.
+// RetainActivationAttempt46(first exact signed Activate transaction <=65536) durably registers
+// a same-account/network/inner-Activation outer attempt before its first POST. New intake after
+// family confirmation is rejected; exact registered intake is idempotent. No clock or non-inclusion
+// authority is inferred. Unsupported earlier DATA layouts are preserved and rejected, never reset.
+// ConfirmActivation35(first registered signed Activate transaction <=65536) returns kind44 only after
+// Native verifies successful exact input/output inclusion of a retained attempt and durably confirms
+// the shared wallet activation. Kind44 does not assert successful execution of every outer attempt.
 // IngestActivationProof36(first exact signed transaction <=65536, second complete finality <=36MiB)
-// verifies one next block in a separate Activate-bound cursor, independent of the ordinary ledger tip.
+// verifies one next block in that registered attempt's separate cursor, independent of other attempts
+// and the ordinary ledger tip. Each attempt retains its selected checkpoint; the winning actual finality
+// original remains independently retained. Cleanup may retire only that attempt's replaced prefix.
 // Matching successful execution is confirmed atomically before the cursor can pass its block.
 // ActivationProofProgress37(first exact signed transaction <=65536) reads that cursor after restart.
-// Results44 confirmed /45 verifying: sequence_low=verified height, sequence_high/detail=0, bytes=32-byte block hash.
+// Results44 family confirmed /45 verifying /49 this attempt authentically rejected:
+// sequence_low=verified height, sequence_high/detail=0, bytes=32-byte block hash.
+// Rejected49 retains exact authenticated failed input/output execution and its checkpoint, never
+// unlocks first Load, and does not prevent another retained attempt from proving activation.
 // Result46 not started: zero sequence/detail, empty bytes. Confirmed result44 requires height>=2.
-// Setup35..37 use zero setup_id/amount/token and no unused originals. No HTTP receipt is authority.
+// Setup35..37/46 use zero setup_id/amount/token and no unused originals. No HTTP receipt is authority.
 // RequestFeeSelection38(no inputs) returns kind12 bytes64 = asset digest32 || selected fee digest32.
 // Zero fee digest means Native-selected zero fee; this projection is DATA, never Request authority.
 // RequestWithFeePolicy39(nonzero setup_id, first Offer <=10000, optional paired second FeeSchedule
@@ -2108,11 +2118,13 @@ typedef struct {
     const uint8_t* producer_inventory; size_t producer_inventory_length;
     const uint8_t* signed_genesis; size_t signed_genesis_length;
     const uint8_t* originals_root; size_t originals_root_length;
+    /* Generic signed application release requires canonical registration source DATA (8192 max). */
+    const uint8_t* registration_source; size_t registration_source_length;
 } connect_norito_kagemusha_wallet_runtime_originals_v1;
 // Uses the existing platform custody_root callback and retains the actual provider and
 // authenticated originals together before registry admission. No reservation or permission.
 /* Move-only opaque actual Runtime+authenticated BoundOriginals; no registry ID or reservation.
- * Native alone constructs it after all seven originals and full financial graph qualification.
+ * Native alone constructs it after the exact eight-role originals and full financial graph qualification.
  * Caller owns exact pointer once; serialize registration/close, never copy/dereference/forge.
  * Zero begin creates the owner; failure clears output. Ordinary register refusal preserves it.
  * Register zero transfers once to existing runtime ID and clears pointer. Close zero alone
@@ -2127,6 +2139,12 @@ int32_t connect_norito_kagemusha_wallet_installation_register_v1(
     connect_norito_kagemusha_wallet_installation_attempt_v1** attempt, uint64_t* out_runtime);
 int32_t connect_norito_kagemusha_wallet_installation_close_v1(
     connect_norito_kagemusha_wallet_installation_attempt_v1** attempt);
+/* Rebind only the registration locator's DATA path after copying originals into private storage.
+ * source<=8192 and UTF-8 root<=4096; status12 canonical DATA, never proof/admission/copy success.
+ * Native validates private no-follow root custody; installation still verifies all originals. */
+int32_t connect_norito_kagemusha_wallet_registration_source_relocate_v1(
+    const uint8_t* source, size_t source_length, const uint8_t* root, size_t root_length,
+    connect_norito_kagemusha_wallet_result_v1* out);
 
 #ifdef __cplusplus
 } // extern "C"

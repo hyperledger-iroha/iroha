@@ -382,8 +382,9 @@ fn rust_packets_drive_actual_python_prepare_claim_and_recovery_protocol() {
         process::{Command, Stdio},
     };
     // This uses the real private parser, policy projection, explicit store initializer,
-    // prepared claim and serving loop. Only the external verifier is replaced with a
-    // deterministic Unavailable failure; no attestation or runtime admission is claimed.
+    // prepared claim and serving loop. Fixed test clock samples and an external verifier
+    // returning Unavailable keep this platform-independent protocol fixture deterministic;
+    // neither Linux clock/launch qualification nor attestation admission is claimed.
     const SCRIPT: &str = r#"
 import base64, hashlib, io, json, os, pathlib, sys, tempfile
 from unittest.mock import patch
@@ -420,7 +421,14 @@ for vector in json.load(sys.stdin):
             owner.request(original)
             packets = [base64.b64decode(x, validate=True) for x in vector['packets_base64']]
             output = io.BytesIO()
-            with patch.object(w, 'verify_android_wallet_enrollment', unavailable), patch.object(w, 'verify_apple_wallet_attestation_raw', unavailable):
+            complete = next(json.loads(packet[4:]) for packet in packets
+                            if json.loads(packet[4:])['action'] == 'complete')
+            # Protocol DATA uses a deterministic live clock; separate worker tests enforce
+            # actual Linux CLOCK_BOOTTIME availability, suspension, regression and expiry.
+            with patch.object(w, '_sleep_inclusive_ns', return_value=3_000_000_000), \
+                    patch.object(w, '_realtime_ns', return_value=complete['dispatch_time_ms'] * 1_000_000), \
+                    patch.object(w, 'verify_android_wallet_enrollment', unavailable), \
+                    patch.object(w, 'verify_apple_wallet_attestation_raw', unavailable):
                 w.serve(owner, io.BytesIO(b''.join(packets)), output)
             assert calls == [1], 'inspection claimed an operation or recovery repeated verification'
             data = output.getvalue()

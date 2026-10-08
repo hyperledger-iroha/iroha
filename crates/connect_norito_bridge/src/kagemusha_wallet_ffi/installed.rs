@@ -25,10 +25,12 @@ mod exports;
 ))]
 mod jni;
 mod originals;
+mod registration;
 mod selection;
 pub use attempt::WalletInstallationAttempt;
 pub use exports::*;
 use originals::CatalogOriginals;
+pub(crate) use registration::relocate_registration_source;
 use selection::Selection;
 pub(super) use selection::Session;
 
@@ -37,7 +39,9 @@ pub(crate) const ENVELOPE_MAX: usize = 2048;
 pub(crate) const WALLET_RUNTIME_MAX: usize = 128 * 1024;
 pub(crate) const GENESIS_MAX: usize = iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1;
 pub(crate) const ROOT_MAX: usize = 4096;
-pub(crate) const RUNTIME_BOUNDS: [usize; 7] = [
+pub(crate) const REGISTRATION_MAX: usize =
+    iroha_core_zk::kagemusha_wallet_registration_v1::REGISTRATION_SOURCE_MAX_BYTES_V1;
+pub(crate) const RUNTIME_BOUNDS: [usize; 8] = [
     APP_MANIFEST_MAX,
     ENVELOPE_MAX,
     WALLET_RUNTIME_MAX,
@@ -45,6 +49,7 @@ pub(crate) const RUNTIME_BOUNDS: [usize; 7] = [
     CATALOG_MAX_BYTES_V1,
     GENESIS_MAX,
     ROOT_MAX,
+    REGISTRATION_MAX,
 ];
 
 pub(crate) struct RuntimeOriginals<'a> {
@@ -55,6 +60,7 @@ pub(crate) struct RuntimeOriginals<'a> {
     pub producer_inventory: &'a [u8],
     pub signed_genesis: &'a [u8],
     pub originals_root: &'a [u8],
+    pub registration_source: &'a [u8],
 }
 impl RuntimeOriginals<'_> {
     pub(crate) fn validate_bounds(&self) -> Result<()> {
@@ -66,6 +72,7 @@ impl RuntimeOriginals<'_> {
             self.producer_inventory,
             self.signed_genesis,
             self.originals_root,
+            self.registration_source,
         ]
         .into_iter()
         .zip(RUNTIME_BOUNDS)
@@ -214,7 +221,8 @@ impl PreparedInstallation {
         {
             return Err(Failure::code(INVALID));
         }
-        selected.require_producer_selection(&installed)?;
+        let base = selected.authenticated_base()?;
+        base.require_producer_selection(&installed)?;
         let inventory = installed
             .authenticate_producer_inventory(input.producer_inventory)
             .map_err(|_| Failure::code(INVALID))?;
@@ -223,7 +231,7 @@ impl PreparedInstallation {
             input.originals_root,
             input.verifier_pack,
             input.producer_inventory,
-            Arc::clone(&selected),
+            base,
         )?;
         let parameters = Parameters {
             pallas: PinnedParams::derive(16).map_err(|_| Failure::code(RESOURCE))?,

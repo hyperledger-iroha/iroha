@@ -108,8 +108,9 @@ reused as production inputs.
 The optional `torii.kagemusha_load_finality` configuration selects exact nonzero
 Scheme and signed manifest digests, the signed verifier pack, authenticated
 producer inventory, complete `server-originals` archive and an existing private
-immutable journal. Explicit finite bounds cover keys, total original bytes,
-artifact count, MSM scratch, journal files/bytes, worker queue, native allocation,
+immutable journal. These identities and paths are mandatory when the service is
+configured. Finite configurable bounds with shared defaults cover keys, total
+original bytes, artifact count, MSM scratch, journal files/bytes, worker queue, native allocation,
 per-height native deadline and maximum receipt height. Absence supplies no
 replacement finality provider. The runtime independently authenticates this
 installation against Core's actual configured signed genesis and verifies the

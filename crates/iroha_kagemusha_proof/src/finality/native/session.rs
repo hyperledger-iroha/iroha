@@ -91,6 +91,72 @@ impl HistoryPrefix {
     pub const fn evidence(&self) -> &SourceNodeEvidence {
         &self.evidence
     }
+
+    // This constructor is crate-private: only the fixed installed graph and the complete
+    // verifier-only qualifier may supply a source. No external key or verdict can enter.
+    pub(crate) fn restore(
+        anchor: &HistoryAnchor,
+        source: &SourceVerifier,
+        params: &PinnedParams<Eq>,
+        state: &HistoryState,
+        evidence: SourceNodeEvidence,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, Error> {
+        Self::verify(
+            anchor,
+            source,
+            params,
+            state,
+            &evidence,
+            budget,
+            cancellation,
+        )?;
+        Ok(Self {
+            state: *state,
+            evidence,
+        })
+    }
+    fn verify(
+        anchor: &HistoryAnchor,
+        source: &SourceVerifier,
+        params: &PinnedParams<Eq>,
+        state: &HistoryState,
+        evidence: &SourceNodeEvidence,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        if !state.is_canonical() || evidence.endpoints != Self::endpoints(anchor, source, state)? {
+            return Err(Error::Input);
+        }
+        let _opening = source
+            .verify_native_cancellable(evidence, params, budget, cancellation)
+            .map_err(|error| {
+                if matches!(error, iroha_plonk::frontend::Error::Cancelled) {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
+        Ok(())
+    }
+    fn endpoints(
+        anchor: &HistoryAnchor,
+        source: &SourceVerifier,
+        state: &HistoryState,
+    ) -> Result<[Fp; 6], Error> {
+        let anchor = anchor.digest();
+        let key = source.key_digest().map_err(|_| Error::Artifact)?;
+        Ok([
+            Fp::from(history::PREFIX_PROGRAM_ID),
+            history::prefix_context(anchor, key),
+            Fp::from(0),
+            Fp::from(1),
+            Fp::from(0),
+            state.digest(anchor),
+        ])
+    }
 }
 
 impl InstalledFinality {
@@ -148,11 +214,15 @@ impl InstalledFinality {
         budget: MemoryBudget,
         cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<HistoryPrefix, Error> {
-        self.verify_history(state, &evidence, budget, cancellation)?;
-        Ok(HistoryPrefix {
-            state: *state,
+        HistoryPrefix::restore(
+            &self.anchor,
+            &self.history.source,
+            &self.params.vesta,
+            state,
             evidence,
-        })
+            budget,
+            cancellation,
+        )
     }
     fn verify_history(
         &self,
@@ -161,41 +231,18 @@ impl InstalledFinality {
         budget: MemoryBudget,
         cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<(), Error> {
-        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
-        if !state.is_canonical()
-            || state.next_height < 2
-            || evidence.endpoints != self.history_endpoints(state)?
-        {
-            return Err(Error::Input);
-        }
-        let _opening = self
-            .history
-            .source
-            .verify_native_cancellable(evidence, &self.params.vesta, budget, cancellation)
-            .map_err(|error| {
-                if matches!(error, iroha_plonk::frontend::Error::Cancelled) {
-                    Error::Cancelled
-                } else {
-                    Error::Proof
-                }
-            })?;
-        Ok(())
+        HistoryPrefix::verify(
+            &self.anchor,
+            &self.history.source,
+            &self.params.vesta,
+            state,
+            evidence,
+            budget,
+            cancellation,
+        )
     }
     fn history_endpoints(&self, state: &HistoryState) -> Result<[Fp; 6], Error> {
-        let anchor = self.anchor.digest();
-        let key = self
-            .history
-            .source
-            .key_digest()
-            .map_err(|_| Error::Artifact)?;
-        Ok([
-            Fp::from(history::PREFIX_PROGRAM_ID),
-            history::prefix_context(anchor, key),
-            Fp::from(0),
-            Fp::from(1),
-            Fp::from(0),
-            state.digest(anchor),
-        ])
+        HistoryPrefix::endpoints(&self.anchor, &self.history.source, state)
     }
 
     /// Prove exactly the next ordinary block, preserving the prior prefix on failure.

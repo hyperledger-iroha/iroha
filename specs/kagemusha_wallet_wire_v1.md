@@ -966,7 +966,26 @@ carries one byte.
 
 Exactly-once payouts per nullifier and per `credit_id`, recording activation and
 closure, and rejecting Abandon after Activate (and Activate or loads after
-Abandon) are ledger state: design only, TODO(G6).
+Abandon) are ledger state. The current ledger implements idempotent activation
+for the same asset and Bootstrap digest and rejects conflicting or abandoned
+incarnations; complete G6 qualification remains open.
+
+Activation recovery may retain additional ordinary account-signed transaction
+envelopes containing the exact same Activation frame. This does not alter the
+Activation wire, payment key, account identity or Bootstrap proof. Each envelope
+has its own exact transaction identity, admission and fee checks, transport DATA
+and Native finality cursor. App time can schedule a retry but cannot prove that
+an earlier attempt did not commit. Successful authenticated inclusion of any
+retained attempt confirms the same wallet; it does not imply that other attempts
+succeeded. Preserve all signed attempts, each selected verification checkpoint
+and the winning finality original. Superseded checkpoints may be retired only
+after durable replacement within the same attempt. Native/app/Core integration
+and installed execution of this recovery path remain under qualification.
+An attempt may be marked rejected only after Native authenticates its exact
+transaction and rejected execution output in a verified finalized block. A proof,
+storage or transport error never supplies that verdict. Rejection does not enable
+Load and does not prevent another retained same-Activation attempt from proving
+successful inclusion.
 
 ## 4. Measured sizes
 
@@ -1100,7 +1119,8 @@ insertion and membership opening.
 ## 6. Carriers
 
 Every peer message travels as one complete canonical envelope frame (§2). A carrier
-moves that frame unchanged; its framing is outside every digest and signature and
+moves that frame unchanged; Request additionally carries its destination-account
+original. Carrier framing is outside wallet object digests and signatures and
 grants no authority. Before handing a frame to the wallet, a carrier checks it
 structurally (`KagemushaWalletWireV1.inspectEnvelope`): the byte cap, the Norito header,
 schema hash, flags, padding, CRC and envelope field spans, the envelope and message's
@@ -1125,20 +1145,29 @@ envelope vectors of §5 and structural envelopes of every kind.
 | 8 | 1 | kind: the envelope message tag (Offer 1, Request 2, Payment 3, Credited 4, SessionControl 5, PolicyData 6, Lineage 7) |
 | 9 | 1 | flags `0` |
 | 10 | 2 | schema version, big-endian: `1` |
-| 12 | 4 | canonical (frame) length, big-endian |
+| 12 | 4 | canonical payload length, big-endian |
 | 16 | 4 | encoded body length, big-endian |
-| 20 | 32 | canonical hash: BLAKE2b-256 of `"IROHA-PEER-PAYLOAD-V1" ‖ 0x00 ‖ BE16 profile ‖ kind ‖ BE16 schema ‖ frame` |
+| 20 | 32 | canonical hash: BLAKE2b-256 of `"IROHA-PEER-PAYLOAD-V1" ‖ 0x00 ‖ BE16 profile ‖ kind ‖ BE16 schema ‖ canonical payload` |
 | 52 | 32 | wire hash: BLAKE2b-256 of `"IROHA-PEER-MESSAGE-V1" ‖ 0x00 ‖ header bytes 0..52 ‖ body` |
 
-- The canonical payload is exactly one envelope frame whose message tag equals the
-  IPM1 kind, within that kind's bound (2,048 bytes for Offer and SessionControl,
-  10,000 otherwise). Both lengths are positive and at most 10,000.
-- zlib is the RFC 1950 form (`78 9C`, DEFLATE, Adler-32 of the frame). A sender uses it
+- For Request, the canonical payload is `"KWRQAC1" ‖ 0x00 ‖ BE32 envelope_length ‖
+  BE32 account_length ‖ envelope_original ‖ destination_account_original`. The
+  unchanged Request envelope is 1..=10,000 bytes and the mandatory canonical
+  AccountId companion is 1..=4,096 bytes; the complete carrier is at most 14,112
+  bytes. Both hashes bind both originals; structural transport decoding grants no
+  account authentication or financial authority.
+- Every other kind carries exactly one envelope frame whose message tag equals
+  the IPM1 kind, within that kind's bound: 2,048 bytes for Offer and SessionControl,
+  10,000 for Payment, Credited, PolicyData and Lineage. Canonical and encoded lengths
+  are positive and bounded by the selected kind. The Request companion does not
+  increase the 10,000-byte complete Payment bound.
+- zlib is the RFC 1950 form (`78 9C`, DEFLATE, Adler-32 of the canonical payload). A sender uses it
   only when it saves at least 32 bytes and at least one 256-byte QR shard; a decoder
   rejects any other zlib header or length pair.
 - Decoding checks the header and both bounds before allocating, then the total length,
-  the wire hash, decompression to exactly the declared length, the envelope, and the
-  canonical hash. The stream identifier is the first 16 bytes of the wire hash.
+  the wire hash, decompression to exactly the declared length, the kind-specific
+  payload structure, and the canonical hash. The stream identifier is the first
+  16 bytes of the wire hash.
 
 **QR.** A QR text is `IQR1:` ‖ Base45 (RFC 9285, canonical) of one `IRQR` frame ‖ `:`,
 at most 700 bytes. An `IRQR` frame is `"IRQR" ‖ 1 ‖ frame kind ‖ BE16 profile ‖ IPM1
@@ -1149,14 +1178,17 @@ as that single static text. Otherwise the sequence is the header frame (the 84-b
 header), then
 256-byte data shards (the last zero-filled) with one XOR parity shard per pair, in the
 order D0, D1, P0, D2, D3, P1, …, and the identical header again after every 12
-non-header frames; `total` counts data shards (40 for a 10,000-byte body). A receiver
+non-header frames; `total` counts data shards (40 for a maximum 10,000-byte Payment,
+56 for a maximum 14,112-byte Request carrier). A receiver
 accepts frames in any order, ignores identical duplicates, recovers one missing shard
 per pair from parity, quarantines a stream on a conflicting duplicate or an invalid
 message, bounds active streams (3) and frames before the header (12 frames, 3,072 bytes
 per stream), and decodes only a complete message.
 
 **NFC.** ISO/IEC 7816 application `F0504B45504B524E464301`, proprietary class `0x80`,
-chunks of at most 4,096 bytes and messages of at most 10,084 bytes (header plus 10,000).
+chunks of at most 4,096 bytes and messages of at most 14,196 bytes (84-byte header
+plus the maximum Request carrier). Payment and Credited retain their 10,084-byte
+transport bound (84-byte header plus their 10,000-byte envelope).
 One session carries the receiver-hosted Request, the payer's Payment (begun, written in
 contiguous chunks and committed) and the receiver's durable acknowledgement, which is
 the Credited envelope. The receiver exposes Credited only after the Payment is durably

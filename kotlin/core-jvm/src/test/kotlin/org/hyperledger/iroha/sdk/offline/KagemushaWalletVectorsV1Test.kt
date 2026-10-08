@@ -786,6 +786,26 @@ class KagemushaWalletVectorsV1Test {
         assertFailsWith<IllegalArgumentException> { KagemushaWalletWireV1.requireExchangeBinding(changed, payment) }
     }
 
+    @Test fun `Payment display amount is exact unsigned Request DATA and grants no verification`() {
+        // These deliberate amount mutations invalidate signatures/proofs. The display codec
+        // still reads their DATA; only genuine Native completion can authenticate a receipt.
+        for (amount in listOf(BigInteger.ONE, BigInteger.ONE.shiftLeft(127), BigInteger.ONE.shiftLeft(128) - BigInteger.ONE)) {
+            val changed = withReplacedMessageField(envelope("Payment"), listOf(1, 0, 9),
+                amount.toByteArray().reversedArray().copyOf(16))
+            assertEquals(amount, KagemushaWalletWireV1.paymentAmountData(changed))
+        }
+    }
+
+    @Test fun `Payment display amount rejects noncanonical scalar shape and other message kinds`() {
+        for (bytes in listOf(ByteArray(16), ByteArray(15) { 1 }, ByteArray(17) { 1 })) {
+            val changed = withReplacedMessageField(envelope("Payment"), listOf(1, 0, 9), bytes)
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletWireV1.paymentAmountData(changed) }
+        }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletWireV1.paymentAmountData(envelope("Request")) }
+        val payment = envelope("Payment")
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletWireV1.paymentAmountData(payment.copyOf(payment.size - 1)) }
+    }
+
     @Test fun `vector Request Payment and Credited envelopes are structurally bound`() {
         val frames = vectors.array("envelopes").associate {
             it.jsonObject.text("variant") to it.jsonObject.hex("canonical_hex")

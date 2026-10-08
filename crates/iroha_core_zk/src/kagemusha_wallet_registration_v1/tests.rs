@@ -59,6 +59,11 @@ fn install_entries(f: &mut Fixture) {
 }
 fn fixture() -> Fixture {
     let temp = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let root = temp.path().canonicalize().unwrap().join("originals");
     private_dir(&root);
     let mut native = NativeFinalityFixture::start("universal-registration-source");
@@ -248,10 +253,34 @@ fn missing_first_or_middle_original_is_distinct_from_truncated_or_substituted() 
 #[test]
 fn foreign_native_genesis_is_not_a_content_address_authority() {
     let mut f = fixture();
-    let foreign = NativeFinalityFixture::start("foreign-registration-chain");
+    // Changing only the fixture's chain label leaves its genesis bytes identical. Include
+    // explicit native parameters to construct a genuinely different signed genesis original.
+    let foreign =
+        NativeFinalityFixture::start_with_explicit_parameters("foreign-registration-chain");
+    assert_ne!(f.genesis.initial_epoch().network_id, foreign.network_id());
     f.entries[0].proof = put(&f.source.originals_root, &encode(foreign.genesis_proof()));
     install_entries(&mut f);
     assert!(matches!(run(&f), Err(RegistrationErrorV1::Finality(_))));
+}
+#[test]
+fn same_genesis_foreign_chain_certificate_is_not_selected_instance_authority() {
+    let mut f = fixture();
+    let mut foreign = NativeFinalityFixture::start("foreign-registration-chain");
+    // H1 has no chain label. The H2 certificate carries the independently selected instance.
+    assert_eq!(f.genesis.initial_epoch().network_id, foreign.network_id());
+    assert_ne!(f.genesis.instance(), foreign.verifier().instance());
+    assert_eq!(
+        f.entries[0].proof,
+        BlobV1::of(&encode(foreign.genesis_proof()))
+    );
+    let block = foreign.block_with_submitted_work(foreign.next_header());
+    f.entries[1].proof = put(&f.source.originals_root, &encode(&foreign.certify(block)));
+    install_entries(&mut f);
+    let result = run(&f);
+    assert!(
+        matches!(result, Err(RegistrationErrorV1::Finality(_))),
+        "{result:?}"
+    );
 }
 #[test]
 fn cancellation_at_multiple_progress_points_emits_no_capability_and_allows_fresh_retry() {
@@ -302,10 +331,44 @@ fn native_io_classification_never_turns_lost_retained_custody_into_initial_absen
         RegistrationErrorV1::Custody(_)
     ));
     #[cfg(unix)]
-    assert!(matches!(
-        storage(io::Error::from_raw_os_error(5)),
-        RegistrationErrorV1::Unavailable(_)
-    ));
+    {
+        assert!(matches!(
+            storage(io::Error::from_raw_os_error(
+                rustix::io::Errno::IO.raw_os_error()
+            )),
+            RegistrationErrorV1::Unavailable(_)
+        ));
+        for errno in [rustix::io::Errno::LOOP, rustix::io::Errno::NOTDIR] {
+            assert!(matches!(
+                storage(errno.into()),
+                RegistrationErrorV1::Custody(_)
+            ));
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn root_and_selected_child_symlinks_are_custody_failures() {
+    use std::os::unix::fs::symlink;
+    let mut f = fixture();
+    let selected = f.source.originals_root.clone();
+    let alias = f._temp.path().canonicalize().unwrap().join("alias");
+    symlink(&selected, &alias).unwrap();
+    f.source.originals_root = alias.to_str().unwrap().to_owned();
+    assert!(matches!(run(&f), Err(RegistrationErrorV1::Custody(_))));
+    f.source.originals_root = selected;
+    let name =
+        Path::new(&f.source.originals_root).join(hex::encode(f.source.inventory.first.sha256));
+    let original = f
+        ._temp
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("original-entry");
+    fs::rename(&name, &original).unwrap();
+    symlink(original, name).unwrap();
+    assert!(matches!(run(&f), Err(RegistrationErrorV1::Custody(_))));
 }
 
 #[test]

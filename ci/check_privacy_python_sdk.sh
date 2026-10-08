@@ -10,7 +10,7 @@ TEST_VENV_OVERRIDE="${PRIVACY_PYTHON_SDK_TEST_VENV:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIREMENTS_LOCKFILE="${ROOT_DIR}/python/iroha_python/requirements-ci.lock"
 CHECKOUT_NATIVE_DIR="${ROOT_DIR}/python"
-ABI26_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_artifact.py"
+ABI27_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_artifact.py"
 WHEEL_PATH=""
 WHEEL_SEAL=""
 SDK_WHEEL_PATH=""
@@ -1156,17 +1156,17 @@ case "${INSTALLED_NATIVE_PATH}" in
 esac
 assert_privacy_sdk_inputs_unchanged
 
-NATIVE_ABI26_MANIFEST="${PRIVATE_CARGO_WRAPPER_DIR}/python-native-abi26.json"
-"${VENV_DIR}/bin/python" -I -S "${ABI26_CHECKER}" record \
+NATIVE_ABI27_MANIFEST="${PRIVATE_CARGO_WRAPPER_DIR}/python-native-abi27.json"
+"${VENV_DIR}/bin/python" -I -S "${ABI27_CHECKER}" record \
   --artifact "${INSTALLED_NATIVE_PATH}" \
-  --manifest "${NATIVE_ABI26_MANIFEST}" \
+  --manifest "${NATIVE_ABI27_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --python "${VENV_DIR}/bin/python" \
   --sdk python \
   --target "${AUTHENTICATED_RUST_HOST_TRIPLE}-py312"
-"${VENV_DIR}/bin/python" -I -S "${ABI26_CHECKER}" verify \
+"${VENV_DIR}/bin/python" -I -S "${ABI27_CHECKER}" verify \
   --artifact "${INSTALLED_NATIVE_PATH}" \
-  --manifest "${NATIVE_ABI26_MANIFEST}" \
+  --manifest "${NATIVE_ABI27_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --python "${VENV_DIR}/bin/python"
 assert_privacy_sdk_inputs_unchanged
@@ -1189,9 +1189,9 @@ export PYTHONPATH="${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"
   "${ROOT_DIR}/scripts/tests/check_privacy_python_witness_boundary_test.py"
 assert_privacy_sdk_inputs_unchanged
 
-"${VENV_DIR}/bin/python" -I -S "${ABI26_CHECKER}" verify \
+"${VENV_DIR}/bin/python" -I -S "${ABI27_CHECKER}" verify \
   --artifact "${INSTALLED_NATIVE_PATH}" \
-  --manifest "${NATIVE_ABI26_MANIFEST}" \
+  --manifest "${NATIVE_ABI27_MANIFEST}" \
   --source-root "${ROOT_DIR}" \
   --python "${VENV_DIR}/bin/python"
 assert_privacy_sdk_inputs_unchanged

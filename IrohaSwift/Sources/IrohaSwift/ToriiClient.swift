@@ -1453,21 +1453,27 @@ fileprivate enum ToriiIdentifierReceiptWireValue {
         guard container.contains(key) else {
             return nil
         }
-        return try ToriiIdentifierOwnerContract.hash32(container.decode(String.self, forKey: key), field: key.stringValue)
+        return try ToriiIdentifierOwnerContract.decodeString(from: container, forKey: key) {
+            try ToriiIdentifierOwnerContract.hash32($0, field: key.stringValue)
+        }
     }
 
     static func normalizedOpaqueId<K: CodingKey>(
         from container: KeyedDecodingContainer<K>,
         forKey key: K
     ) throws -> String {
-        try normalizedOpaqueId(try container.decode(String.self, forKey: key), field: key.stringValue)
+        try ToriiIdentifierOwnerContract.decodeString(from: container, forKey: key) {
+            try normalizedOpaqueId($0, field: key.stringValue)
+        }
     }
 
     static func normalizedUaid<K: CodingKey>(
         from container: KeyedDecodingContainer<K>,
         forKey key: K
     ) throws -> String {
-        try normalizedUaid(try container.decode(String.self, forKey: key), field: key.stringValue)
+        try ToriiIdentifierOwnerContract.decodeString(from: container, forKey: key) {
+            try normalizedUaid($0, field: key.stringValue)
+        }
     }
 
     static func exactAccountId<K: CodingKey>(
@@ -2098,7 +2104,7 @@ public struct ToriiRamLfeOutputOpening: Codable, Sendable {
         try ToriiIdentifierOwnerContract.fields(decoder, required: ["payload", "signature"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
         payload = try container.decode(ToriiRamLfeOutputOpeningPayload.self, forKey: .payload)
-        signature = try ToriiIdentifierOwnerContract.string(from: container, forKey: .signature) {
+        signature = try ToriiIdentifierOwnerContract.decodeString(from: container, forKey: .signature) {
             try ToriiIdentifierOwnerContract.signature($0, field: "opening.signature")
         }
     }
@@ -2337,7 +2343,9 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
     public init(from decoder: Decoder) throws {
         try ToriiIdentifierOwnerContract.fields(decoder, required: ["network_id", "policy_id", "execution", "opening", "opaque_id", "receipt_hash", "uaid", "account_id"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        networkId = try ToriiIdentifierOwnerContract.network(container.decode(String.self, forKey: .networkId))
+        networkId = try ToriiIdentifierOwnerContract.decodeString(from: container, forKey: .networkId) {
+            try ToriiIdentifierOwnerContract.network($0)
+        }
         policyId = try ToriiIdentifierReceiptWireValue.exactReceiptPolicyId(
             from: container,
             forKey: .policyId
@@ -2461,18 +2469,18 @@ public struct ToriiIdentifierReceiptAttestation: Codable, Sendable {
         kind = try c.decode(String.self, forKey: .kind)
         switch kind {
         case "signed":
-            try ToriiIdentifierOwnerContract.fields(decoder, required: ["kind", "signature"], debugDescription: "Signed attestations require only signature and kind.")
-            signature = try ToriiIdentifierOwnerContract.string(from: c, forKey: .signature) {
+            try ToriiIdentifierOwnerContract.fields(decoder, required: ["kind", "signature"])
+            signature = try ToriiIdentifierOwnerContract.decodeString(from: c, forKey: .signature) {
                 try ToriiIdentifierOwnerContract.modelSignature($0, field: "attestation.signature")
             }
             proofBackend = nil; proofB64 = nil
         case "proof":
             try ToriiIdentifierOwnerContract.fields(decoder, required: ["kind", "proof_backend", "proof_b64"])
             signature = nil
-            proofBackend = try ToriiIdentifierOwnerContract.string(from: c, forKey: .proofBackend) {
+            proofBackend = try ToriiIdentifierOwnerContract.decodeString(from: c, forKey: .proofBackend) {
                 try ToriiIdentifierOwnerContract.exact($0, "proof_backend")
             }
-            proofB64 = try ToriiIdentifierOwnerContract.string(from: c, forKey: .proofB64) {
+            proofB64 = try ToriiIdentifierOwnerContract.decodeString(from: c, forKey: .proofB64) {
                 let value = try ToriiIdentifierOwnerContract.exact($0, "proof_b64")
                 guard Data(base64Encoded: value) != nil else {
                     throw ToriiClientError.invalidPayload("proof_b64 must be valid base64.")
@@ -2480,7 +2488,8 @@ public struct ToriiIdentifierReceiptAttestation: Codable, Sendable {
                 return value
             }
         default:
-            throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "The attestation kind must be signed or proof.")
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind, in: c, debugDescription: "attestation.kind must be signed or proof.")
         }
     }
     public func encode(to encoder: Encoder) throws {
@@ -2516,7 +2525,9 @@ public struct ToriiIdentifierResolutionReceipt: Codable, Sendable {
         payload = try container.decode(ToriiIdentifierResolutionPayload.self, forKey: .payload)
         attestation = try container.decode(ToriiIdentifierReceiptAttestation.self, forKey: .attestation)
         phoneRetailCanonicality = try container.decodeIfPresent(ToriiPhoneRetailCanonicalityAttestationV1.self, forKey: .phoneRetailCanonicality)
-        _ = try ToriiIdentifierReceiptCanonicalEncoder.canonicalPayloadBytes(for: self)
+        _ = try ToriiIdentifierOwnerContract.decodedValue(at: decoder.codingPath + [CodingKeys.payload]) {
+            try ToriiIdentifierReceiptCanonicalEncoder.canonicalPayloadBytes(for: self)
+        }
     }
 }
 
@@ -22984,7 +22995,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// canonical Norito bytes selected by the server.
     ///
     /// This authority-bearing route is deliberately unavailable over HTTP,
-    /// JSON, redirects, mock catalogs, or without the loaded exact ABI26
+    /// JSON, redirects, mock catalogs, or without the loaded exact ABI27
     /// artifact. The returned model retains the response bytes and binds every
     /// compiled row to that artifact's natively validated local catalog and the
     /// expected network from `localSigningContext`.
@@ -23004,7 +23015,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         // Fail before network I/O when the bridge is absent, stale, or missing
-        // any of the exact six privacy ABI26 symbols.
+        // any of the exact six privacy ABI27 symbols.
         _ = try PrivacyNativeBridge.compiledProfileCatalogV1()
         let request = try makePrivacyExact12CapabilityRequestV1(canonicalAuth: canonicalAuth)
         let (data, response) = try await sendBoundedResponse(

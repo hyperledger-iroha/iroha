@@ -436,9 +436,27 @@ A separate `MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR` input may select a producer-vali
 single-host macOS archive for debug unit tests. It requires genuine current-source
 static capture, normalization, complete-archive native consumer checks, and the
 explicit `local-unit` artifact schema. It retains every package test and exact
-ABI-26 admission. It cannot be selected together with the external/release input;
+ABI-27 admission. It cannot be selected together with the external/release input;
 iOS and Release compilation reject it. It is never accepted by the canonical
 three-slice validator, pin owner, archive owner, or release publication.
+
+For the complete local macOS Debug test suite, use this command from the repository
+root with Python 3.12, full Xcode selected through `xcode-select` or `DEVELOPER_DIR`,
+and rustup installed:
+
+```bash
+python3.12 scripts/test_swift_local.py
+```
+
+Unset `MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR`, `MOBILE_SDK_APPLE_ARTIFACT_DIR`, and
+`MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT` before running it. The command builds
+the current native source, produces and verifies its local-unit artifact, then
+runs every Swift test and verifies the inputs again. Cargo reuses
+`target/native-sdk-host-local` (override with an absolute `--target-dir`); SwiftPM
+reuses `IrohaSwift/.build`. Fresh artifacts and logs remain under
+`target/qualification/swift-local-*`. `--jobs` optionally sets the Cargo job budget.
+The command leaves `dist/` untouched and never accepts a stale ABI. Direct
+`swift test` still requires a matching artifact to be prepared and selected first.
 
 The Apple pull-request lane preserves that build envelope while avoiding a
 hosted-runner timeout: five isolated macOS jobs each build one attested target
@@ -999,7 +1017,7 @@ let finality = try await torii.waitForDetachedAssetTransferFinality(
 )
 ```
 
-Preparation fails closed unless ABI-26 native inspection proves the versioned
+Preparation fails closed unless ABI-27 native inspection proves the versioned
 scaffold has the exact authority, network identity, protocol receipt chain, definition, source scope, amount,
 destination, memo, typed fee payer, creation time, TTL, and no extra metadata.
 The prepare route obtains the canonical fee quote and replaces only the charge
@@ -1038,7 +1056,7 @@ guard assessment.intentHash == intentHash.map { String(format: "%02X", $0) }.joi
 let canonicalMarker = try assessment.marker()
 ```
 
-The three ABI-26 retail fee operations use native typed Norito and reject
+The three ABI-27 retail fee operations use native typed Norito and reject
 noncanonical markers. Local decoding does not verify that an assessment is
 current or authorized. Signed read and verified finality remain required before
 payment approval; admission checks the assessment against ledger state.
@@ -1500,7 +1518,7 @@ stale native bridge fail closed. The signed fetch bypasses local cached response
 and sends `Cache-Control: no-cache, no-store` for current committed state.
 `PrivacyExact12CapabilityAdmissionV1` issues
 an opaque per-protocol token only when the committed row is active, ready, and
-byte-identical to the ABI26 native-validated compiled catalog. The generic
+byte-identical to the ABI27 native-validated compiled catalog. The generic
 transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
 complete final V1 envelope profile tuple both at construction and final encoding.
@@ -1511,7 +1529,7 @@ Final batch encoding also compares the token and statement against the batch's
 exact `networkId`; an admission from another network cannot be reused. Managed
 fixture projection and standalone native validation do not mint network authority.
 
-ABI26 requires exactly six privacy C exports, including
+ABI27 requires exactly six privacy C exports, including
 `iroha_privacy_validate_exact12_capability_manifest_v1`. Swift passes the exact
 Torii archive to the canonical Rust validator before projecting its fields.
 Rust checks the complete release and deployment records, artifact counts,
@@ -1523,7 +1541,7 @@ without the manifest validator is unavailable.
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
 `validateExact12FixtureBundleV1(_:)`
-accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 26
+accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 27
 availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
 the capability-manifest validator, the zeroizing-free symbol, and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
@@ -2454,8 +2472,10 @@ from that exact archive.
   packages inherit the required native links without additional linker flags.
 - Broken bridge symbols surface `bridgeUnavailable`/`nativeBridgeUnavailable` errors
   that include the expected xcframework location.
-- Example: `swift test --package-path IrohaSwift --disable-automatic-resolution`
-  requires the bridge artifact and reviewed `Package.resolved` to be materialized first.
+- For local macOS tests, `python3.12 scripts/test_swift_local.py` prepares the current
+  native dependency and runs the complete suite. Direct
+  `swift test --package-path IrohaSwift --disable-automatic-resolution` requires the
+  matching bridge artifact and reviewed `Package.resolved` to be materialized first.
 
 ## SwiftUI demo and CI
 
@@ -2567,7 +2587,7 @@ one scalar field. They have no hash marker, alias tag or issuance timestamp.
 The roster root remains a separate marked Iroha hash.
 
 Account-controller policies retain the full u16 member count (1–65,535). The
-public address constructors and parsers require the ABI-26 Rust address codec
+public address constructors and parsers require the ABI-27 Rust address codec
 for complete key and policy admission. Canonical I105 parsers reject surrounding
 Unicode whitespace; unavailable native validation is an
 explicit error. The
@@ -2591,7 +2611,7 @@ account ordering, establish rekey authority or verify an authorization proof.
 all five private actions and a complex private create to Rust-owned model
 bytes. Its synthetic proofs are wire fixtures. Proof generation, native bridge
 qualification and four-validator execution require separate evidence. The
-canonical Swift package always requires the real ABI26 NoritoBridge artifact.
+canonical Swift package always requires the real ABI27 NoritoBridge artifact.
 
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,

@@ -1,50 +1,52 @@
-//! Explicit optional server-only ordinary Load proof production.
+//! Explicit bounded terminal Load proving configuration; it grants no finality authority.
 
 use std::{path::PathBuf, time::Duration};
 
-/// Independent signed installation, existing custody and finite worker limits.
-/// Absence disables the terminal-proof route; it selects no replacement proof.
+/// Optional server proof source and resource policy. Actual committed genesis/history
+/// and the installed complete proof graph independently authenticate every result.
 #[derive(Clone, PartialEq, Eq)]
 pub struct KagemushaLoadFinality {
-    /// Independently selected exact Scheme identity.
+    /// Exact installed Scheme identity.
     pub scheme_id: [u8; 32],
-    /// Independently selected signed ArtifactManifest identity.
+    /// Exact installed artifact manifest identity.
     pub manifest_digest: [u8; 32],
-    /// Exact canonical signed verifier pack; public material with authenticated contents.
+    /// Existing verifier-pack original file.
     pub verifier_pack: PathBuf,
-    /// Exact complete producer inventory authenticated by that same signed manifest.
+    /// Existing producer-inventory original file.
     pub producer_inventory: PathBuf,
-    /// Existing private content-addressed server D/V/PK original directory.
+    /// Existing private directory of complete server originals.
     pub server_originals: PathBuf,
-    /// Existing private, exclusively owned immutable proof journal.
+    /// Existing private retention journal; startup never creates it.
     pub journal_dir: PathBuf,
-    /// Maximum original server proving key length.
-    pub maximum_key_bytes: usize,
-    /// Aggregate D/V/PK graph extent ceiling, not process RSS.
-    pub maximum_original_bytes: usize,
-    /// Maximum exact source graph members.
-    pub maximum_artifacts: usize,
-    /// Scratch ceiling of one genuine proof/MSM kernel, not total RSS.
-    pub msm_bytes: usize,
-    /// Maximum actual journal files, including interrupted partials.
-    pub maximum_journal_entries: usize,
-    /// Maximum actual journal byte extent, including interrupted partials.
-    pub maximum_journal_bytes: u64,
-    /// Maximum queued, active and completed-but-unread requests together.
+    /// Maximum queued, active and unread terminal results.
     pub max_pending_requests: usize,
-    /// Physical allocation admission for the genuine native history cursor.
-    pub native_working_set_bytes: usize,
-    /// Finite monotonic deadline for each native history observation.
-    pub native_step_timeout: Duration,
-    /// Highest receipt height accepted for finite historical catch-up.
+    /// Maximum receipt height eligible for bounded native replay.
     pub maximum_receipt_height: u64,
+    /// Maximum individual proving-key original extent.
+    pub maximum_key_bytes: usize,
+    /// Maximum aggregate original graph extent.
+    pub maximum_original_bytes: usize,
+    /// Maximum graph entries.
+    pub maximum_artifacts: usize,
+    /// Scratch budget for each proof operation.
+    pub msm_bytes: usize,
+    /// Maximum journal entries including partials and locks.
+    pub maximum_journal_entries: usize,
+    /// Maximum aggregate journal file extent.
+    pub maximum_journal_bytes: u64,
+    /// Allocation budget for actual native history acquisition.
+    pub native_working_set_bytes: usize,
+    /// Deadline for each native block acquisition.
+    pub native_step_timeout: Duration,
 }
+
 impl std::fmt::Debug for KagemushaLoadFinality {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KagemushaLoadFinality")
             .field("scheme_id", &self.scheme_id)
             .field("manifest_digest", &self.manifest_digest)
             .field("max_pending_requests", &self.max_pending_requests)
+            .field("maximum_receipt_height", &self.maximum_receipt_height)
             .finish_non_exhaustive()
     }
 }

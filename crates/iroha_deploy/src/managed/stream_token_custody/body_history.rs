@@ -1208,7 +1208,7 @@ impl BodyHistory {
                 };
                 let preparation = original
                     .request(attempt.terms(), attempt.observation()?, Instant::now())?
-                    .inspect(account, &attempt.wallet_path())?;
+                    .inspect_in_parent(account, attempt.directory())?;
                 #[cfg(test)]
                 parser_snapshot_tests::hit(
                     parser_snapshot_tests::Point::WalletInspected,
@@ -1310,7 +1310,7 @@ impl BodyHistory {
             .ok_or_else(|| invalid("paid original absent"))?;
         let preparation = original
             .request(last.terms(), last.observation()?, Instant::now())?
-            .inspect(&owner.wallet()?, &last.wallet_path())?;
+            .inspect_in_parent(&owner.wallet()?, last.directory())?;
         Ok(matches!(
             preparation.phase(),
             iroha_wallet::operations::NativePreparationPhase::PayloadRetained
@@ -1644,7 +1644,7 @@ impl BodyHistory {
             active.history.verify_wallets(|attempt| {
                 let value = original
                     .request(attempt.terms(), attempt.observation()?, deadline)?
-                    .inspect(&account, &attempt.wallet_path())?;
+                    .inspect_in_parent(&account, attempt.directory())?;
                 if Some(attempt.digest()?) == last_digest
                     && !matches!(
                         value.phase(),
@@ -1785,7 +1785,7 @@ impl BodyHistory {
                             |attempt| {
                                 original
                                     .request(attempt.terms(), attempt.observation()?, deadline)?
-                                    .inspect(&account, &attempt.wallet_path())
+                                    .inspect_in_parent(&account, attempt.directory())
                             },
                             |attempt| {
                                 original
@@ -1800,7 +1800,7 @@ impl BodyHistory {
                             |attempt| {
                                 original
                                     .request(attempt.terms(), attempt.observation()?, deadline)?
-                                    .inspect(&account, &attempt.wallet_path())
+                                    .inspect_in_parent(&account, attempt.directory())
                             },
                             |attempt| {
                                 original

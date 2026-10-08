@@ -465,7 +465,7 @@ impl Setup {
             |attempt| {
                 original
                     .request(attempt.terms(), deadline)
-                    .inspect(&account, &attempt.wallet_path())
+                    .inspect_in_parent(&account, attempt.directory())
             },
             |attempt| {
                 original
@@ -603,11 +603,13 @@ impl Setup {
             original.verify_wallets(|intent, attempt| {
                 intent
                     .request(attempt.terms(), deadline)
-                    .inspect(&account, &attempt.wallet_path())
+                    .inspect_in_parent(&account, attempt.directory())
             })
         };
         verify_custody()?;
-        let preparation = original.request(deadline).inspect(&account, &path)?;
+        let preparation = original
+            .request(deadline)
+            .inspect_in_parent(&account, directory)?;
         let unprepared_expired = preparation.unprepared_status() == Some(OperationStatus::Expired);
         let retained = match preparation.phase() {
             iroha_wallet::operations::NativePreparationPhase::Missing
@@ -735,6 +737,7 @@ enum Request {
     Reputation(InitialReputationPolicyRequest),
 }
 impl Request {
+    #[cfg(test)]
     fn inspect(
         &self,
         account: &AccountService,
@@ -751,7 +754,36 @@ impl Request {
                 account.inspect_initial_reputation_policy_preparation(path, request)
             }
         }
-        .map_err(|_| invalid("service wallet preparation differs from exact original request"))
+        .map_err(Self::inspection_error)
+    }
+    fn inspect_in_parent(
+        &self,
+        account: &AccountService,
+        parent: &PrivateDirectory,
+    ) -> Result<iroha_wallet::operations::VerifiedNativePreparation> {
+        match self {
+            Self::ProviderIngest(request) => account
+                .inspect_initial_provider_ingest_authority_preparation_in_parent(
+                    parent,
+                    std::ffi::OsStr::new("transaction"),
+                    request,
+                ),
+            Self::Gateway(request) => account.inspect_initial_gateway_setup_preparation_in_parent(
+                parent,
+                std::ffi::OsStr::new("transaction"),
+                request,
+            ),
+            Self::Reputation(request) => account
+                .inspect_initial_reputation_policy_preparation_in_parent(
+                    parent,
+                    std::ffi::OsStr::new("transaction"),
+                    request,
+                ),
+        }
+        .map_err(Self::inspection_error)
+    }
+    fn inspection_error(_: color_eyre::eyre::Report) -> crate::managed::Error {
+        invalid("service wallet preparation differs from exact original request")
     }
     fn retain(
         &self,

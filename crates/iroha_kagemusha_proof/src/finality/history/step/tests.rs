@@ -132,12 +132,6 @@ fn fixtures(case: usize) -> Vec<Link> {
     instance_preimage.extend_from_slice(case.get("chain_id").unwrap().as_str().unwrap().as_bytes());
     instance_preimage.extend_from_slice(&[0; 5]);
     let instance = <[u8; 32]>::from(iroha_crypto::Hash::new(instance_preimage));
-    let expected = if case.get("seats").unwrap().as_u64().unwrap() == 4 {
-        "b4ebc81a87ff9a9a95ddc026946acbf68057fa614cb1b28687d8a80e7f1d4c4b"
-    } else {
-        "ba5246293a2990a09bcc1ee1cf5007b71612fa6f623629446a449638d8188443"
-    };
-    assert_eq!(instance.as_slice(), hex(expected));
     let anchor = HistoryAnchor {
         network,
         instance,
@@ -148,6 +142,18 @@ fn fixtures(case: usize) -> Vec<Link> {
     let mut before = HistoryState::genesis(&anchor);
     let mut out = Vec::new();
     for block in blocks.iter().skip(1) {
+        // Compare with the captured native original rather than a second hash
+        // literal that can outlive regeneration of the signed-genesis fixture.
+        // This checks DATA identity, not the QC signature or either child proof.
+        let frame = bytes(block, "commit_qc_frame_hex");
+        let qc: iroha_sumeragi::message::Qc = norito::decode_canonical_with_limits(
+            &frame,
+            norito::canonical_decode_limits(frame.len()),
+        )
+        .unwrap();
+        assert_eq!(qc.kind, iroha_sumeragi::message::VoteKind::Commit);
+        assert_eq!(instance.as_slice(), qc.instance.as_bytes());
+        assert_eq!(qc.height, block.get("height").unwrap().as_u64().unwrap());
         let schedule = block.get("schedule").unwrap();
         let current = schedule.get("current").unwrap();
         let boundary = schedule.get("boundary").unwrap();

@@ -10,6 +10,6 @@ pub use kagemusha_wallet_v1::*;
 pub mod kagemusha_enrollment_permit_v1;
 pub use kagemusha_enrollment_permit_v1::*;
 
-/// Bank or governed non-regulated-token enrollment eligibility observations.
+/// Bank or scheme-operator enrollment eligibility observations.
 pub mod enrollment_eligibility_v1;
 pub use enrollment_eligibility_v1::*;

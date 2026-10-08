@@ -80,9 +80,12 @@ use std::{
 #[path = "actual_soranet_handshake_debug.rs"]
 mod actual_soranet_handshake_debug;
 mod kagemusha_enrollment;
+pub use kagemusha_enrollment::{
+    KagemushaEnrollmentGoogle, KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider,
+    KagemushaEnrollmentWorker,
+};
 mod kagemusha_load_finality;
 pub use kagemusha_load_finality::KagemushaLoadFinality;
-pub use kagemusha_enrollment::{KagemushaEnrollmentGoogle, KagemushaEnrollmentProvider, KagemushaEnrollmentIssuer, KagemushaEnrollmentWorker};
 mod sccp;
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
@@ -7482,7 +7485,7 @@ pub struct Torii {
     pub recipient_lookup: ToriiRecipientLookup,
     /// Optional current bank-selected KAGEMUSHA issuer dependencies; absent disables serving.
     pub kagemusha_enrollment: Option<KagemushaEnrollmentIssuer>,
-    /// Optional server-only terminal Load proof producer with explicit signed sources.
+    /// Optional bounded terminal Load proof service over committed native history.
     pub kagemusha_load_finality: Option<KagemushaLoadFinality>,
     /// Explicit Torii origins used for public-dataspace routed reads.
     pub public_dataspace_upstreams: Vec<ToriiPublicDataspaceUpstream>,

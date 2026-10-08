@@ -17,6 +17,7 @@ fn parse_wallet_runtime_trust(
         (None, None) => return Ok(None),
         (Some("bpng-taira-v7"), Some(value)) => ("BpngTairaV7", value),
         (Some("cbsi-release-v1"), Some(value)) => ("CbsiReleaseV1", value),
+        (Some("application-release-v1"), Some(value)) => ("ApplicationReleaseV1", value),
         _ => return Err("expected an exact application authority and public key pair"),
     };
     if value.len() != 64
@@ -77,7 +78,7 @@ mod tests {
             "1".repeat(65),
             format!("{}\n", "1".repeat(64)),
         ] {
-            for authority in ["bpng-taira-v7", "cbsi-release-v1"] {
+            for authority in ["bpng-taira-v7", "cbsi-release-v1", "application-release-v1"] {
                 assert!(parse_wallet_runtime_trust(Some(authority), Some(&key)).is_err());
             }
         }
@@ -90,6 +91,7 @@ mod tests {
         for (authority, variant) in [
             ("bpng-taira-v7", "BpngTairaV7"),
             ("cbsi-release-v1", "CbsiReleaseV1"),
+            ("application-release-v1", "ApplicationReleaseV1"),
         ] {
             assert_eq!(
                 parse_wallet_runtime_trust(Some(authority), Some(&selected)),
@@ -101,7 +103,7 @@ mod tests {
     fn partial_unknown_or_normalized_authority_never_selects_a_profile() {
         let key = "1".repeat(64);
         assert!(parse_wallet_runtime_trust(None, Some(&key)).is_err());
-        for authority in ["bpng-taira-v7", "cbsi-release-v1"] {
+        for authority in ["bpng-taira-v7", "cbsi-release-v1", "application-release-v1"] {
             assert!(parse_wallet_runtime_trust(Some(authority), None).is_err());
         }
         for authority in [

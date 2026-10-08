@@ -20,8 +20,17 @@ class KagemushaWalletHostNativeV1Test {
 
     @BeforeEach
     fun requireCurrentNativeBridge() {
-        assertTrue(NativeSignerBridge.isNativeAvailable(), "The supplied ABI-26 native bridge must load")
+        assertTrue(NativeSignerBridge.isNativeAvailable(), "The supplied ABI-27 native bridge must load")
         assertEquals(1, KagemushaWalletNativeV1.revision())
+    }
+
+    @Test
+    fun registrationRelocationCallsActualJniAndRefusesMalformedOriginalData() {
+        val error = assertFailsWith<KagemushaWalletExceptionV1> {
+            KagemushaWalletInstallationOriginalsV1.relocateRegistrationSource(byteArrayOf(1), directory.absolutePath)
+        }
+        assertEquals(-1, error.status)
+        assertTrue(directory.listFiles().orEmpty().isEmpty())
     }
 
     @Test

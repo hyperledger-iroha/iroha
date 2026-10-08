@@ -3,7 +3,10 @@
 #![allow(clippy::missing_safety_doc)]
 
 // Oracle-only transcript and randomness hooks must never enter a shipping consumer.
-const _: () = assert!(!iroha_plonk::ORACLE_BUILD, "iroha_plonk_oracle is test-only");
+const _: () = assert!(
+    !iroha_plonk::ORACLE_BUILD,
+    "iroha_plonk_oracle is test-only"
+);
 
 // The locked pqcrypto-internals build emits both static and unqualified links.
 // With the current Rust toolchain its rlib does not retain the common/Keccak

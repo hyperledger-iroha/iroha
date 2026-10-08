@@ -65,9 +65,12 @@ use std::{
 };
 use thiserror::Error;
 mod kagemusha_enrollment;
+pub use kagemusha_enrollment::{
+    KagemushaEnrollmentGoogle, KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider,
+    KagemushaEnrollmentWorker,
+};
 mod kagemusha_load_finality;
 pub use kagemusha_load_finality::KagemushaLoadFinality;
-pub use kagemusha_enrollment::{KagemushaEnrollmentGoogle, KagemushaEnrollmentProvider, KagemushaEnrollmentIssuer, KagemushaEnrollmentWorker};
 mod app_routed_read_config;
 mod musubi_publication_installation;
 pub use musubi_publication_installation::MusubiPublicationInstallation;
@@ -15026,7 +15029,7 @@ pub struct Torii {
     pub recipient_lookup: Option<ToriiRecipientLookup>,
     /// Optional KAGEMUSHA issuer; all trust and runtime leaves are mandatory when present.
     pub kagemusha_enrollment: Option<KagemushaEnrollmentIssuer>,
-    /// Optional server-only terminal Load proof producer with explicit signed sources.
+    /// Optional bounded terminal Load proof service over committed native history.
     pub kagemusha_load_finality: Option<KagemushaLoadFinality>,
     /// Explicit Torii origins used for public-dataspace routed reads.
     #[config(default)]

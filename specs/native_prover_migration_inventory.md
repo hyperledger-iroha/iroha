@@ -114,7 +114,7 @@ the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 | --- | --- | --- | --- |
 | `irohad`, `iroha_torii` (`zk_prover.rs`, routing), `iroha_cli` (`zk.rs`), `iroha_kagami` (genesis), `iroha_test_network` | Verify dispatch and confidential | All nodes and operators | M2 (dispatch) |
 | `iroha_deploy` (`localnet.rs` registers confidential VK records; `genesis/staging.rs`) | Confidential VKs | Localnet, staging | M2(c) fixtures |
-| `connect_norito_bridge` (`confidential_prover_ffi`, `confidential_note_ffi`) | Confidential prover and note hash | iOS and Android apps (staticlib/cdylib) | Step 3, M2(c): source-admitted ABI-26 macOS JNI/C#/Swift consumers pass as recorded below. Release artifacts, size reports and physical-device qualification remain open. |
+| `connect_norito_bridge` (`confidential_prover_ffi`, `confidential_note_ffi`) | Confidential prover and note hash | iOS and Android apps (staticlib/cdylib) | Step 3, M2(c): captured source-admitted ABI-27 macOS JNI/C#/Swift consumers pass as recorded below; historical captures remain retained. Release artifacts, size reports and physical-device qualification remain open. |
 | `iroha_python_rs` (`confidential_wallet.rs`), `iroha_js_host` | Confidential wallet | PyPI wheels, npm | M2(c) |
 | `integration_tests` (dev) | Proof fixtures, `queries/proof.rs` | Test | M2 (4-peer cutover tests) |
 
@@ -126,7 +126,7 @@ the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 | Swift `Halo2Transcript.swift`, `Halo2EvaluationDomain.swift`, `Halo2VestaHashToCurve.swift` | Independent Blake2b `Halo2-Transcript` `Challenge255` transcript, FFT domain (`omega`), and Vesta hash-to-curve. Must match `blake2b_transcript`, the FFT omega and `generators` | Cross-check against `kats_v1.json` (M1a) |
 | Swift `ConfidentialProver`, `ConfidentialNote`, `VerifyingKeyBackendTag` | Through the bridge; exact backend label `pipa-r/pasta` | M2(c) fixtures |
 | Kotlin `core-jvm`/`client-android` (privacy native bridge, VK registry); Java `iroha_android` (retiring) | Through the bridge; labels | M2(c) fixtures |
-| C# (`Zk/VerifyingKeyBackendTag.cs`, `Privacy/ConfidentialProver.cs`, `Kaigi`) | Through the bridge; exact native labels | M2(b)(c) positive registry/query/event/receipt fixtures use `pipa-r/pasta`, including domain-separated commitments and URL/circuit identities; retired labels stay rejected. The original-source combined suite passes **536/536**, zero failed/skipped/not-run: 482 registry/query/event/receipt cases, seven managed owner cases, six native confidential cases and 41 Kaigi cases. Native coverage includes real full-65,536-tree proofs with both evidence formats, change followed by redemption, wrong roots, duplicate/conservation rejection and disposal. Exact SDK 8.0.419, source/binary pins and the actually loaded ABI-26 host `3b51ff55…` are retained under `target/qualification/native-sdk/csharp-native-migration/current-native-combined-*`; all observed source/binary hashes stayed unchanged for the 592.36 s run. Earlier SDK, old-label and broad-run failures remain recorded separately. This is captured native host component evidence; installed NuGet release-package and network qualification remain open. |
+| C# (`Zk/VerifyingKeyBackendTag.cs`, `Privacy/ConfidentialProver.cs`, `Kaigi`) | Through the bridge; exact native labels | M2(b)(c) positive registry/query/event/receipt fixtures use `pipa-r/pasta`, including domain-separated commitments and URL/circuit identities; retired labels stay rejected. The original-source combined suite passes **536/536**, zero failed/skipped/not-run: 482 registry/query/event/receipt cases, seven managed owner cases, six native confidential cases and 41 Kaigi cases. Native coverage includes real full-65,536-tree proofs with both evidence formats, change followed by redemption, wrong roots, duplicate/conservation rejection and disposal. The current captured ABI-27 rerun uses .NET SDK 8.0.419 and the actually loaded host `ae5589d0…`, with source, full toolchain and output binary pins unchanged throughout its 547.99 s run (`target/qualification/native-sdk/csharp-abi27-current/result.json`). Every observed bridge load resolves to that admitted dylib. The historical ABI-26 536-case pass and earlier SDK, old-label and broad-run failures remain recorded separately. This is captured native host component evidence; installed NuGet release-package and network qualification remain open. |
 | JavaScript `iroha_js` (`kaigiScalarV1.js` Pasta Fp checks) | `iroha_js_host` napi | M2(b)(c) |
 | Python `iroha_python` | `iroha_python_rs` | M2(c): five original nonskipping tests pass against actual installed sealed wheels, including a full-depth real proof and local verification, change redemption, adversarial rejection and GIL progress. Exact artifacts and scope are recorded below. |
 | `fuzz/Cargo.toml`, `crates/fastpq_prover/fuzz/Cargo.toml`, `scripts/cargo_fuzz_locked_cargo.sh` | Native consumer dependencies; obsolete vendored Halo2 patches and proxy path requirements removed | Step 7 source cleanup complete. Locked/offline forwarding and fuzz-smoke inventory checks pass; this is not standalone sanitizer execution or a qualified locking proxy. Existing fuzz runtime/lock qualification remains open. |
@@ -135,9 +135,30 @@ the shared vendor tree and temporary oracle; no compatibility shim is shipped.
 | CI for the release-only oracle suites and `fixtures/native_prover/verify_kats_v1.py` | `pytests/scripts/native_prover_kats_test.py` runs the complete standard-library verifier from an unrelated directory and rejects a forged transcript challenge. Together with the confidential corpus mutations, eight tests pass; fixed category counts prevent partial replay. The captured x86_64 Mach-O oracle now passes all 45 non-timing cases under Rosetta with actual Cargo dep-info and unchanged consumed source/tool inputs (`target/qualification/oracle-x86-rosetta/attempt2/summary.json`). This satisfies the x86 instruction-target proof-parity subset of M1a; no physical x86 performance claim is made. Both companion captures pass all 73 library, parameter/curve, release KAT and constraint-system cases with unchanged consumed code, fixtures and tools (`target/qualification/oracle-m1a-current/{arm,x86}/summary.json`). The x86 receipt separately records the oracle README update during execution; no consumed input changed. The path-filtered `native_prover_parity.yml` job now requires all five release harnesses on native ARM and x86 runners, including ignored correctness cases, and rejects disabled oracle mode, incomplete counts and ignored tails; hosted execution remains unobserved. It excludes the named timing measurement and maintenance-only reference fixture printer, retaining the timing parser test | M0 exit (x86_64 run) |
 | Independent full-proof Python reference | `reference_verifier/` derives the complete individual PLONK/multiopen/IPA verifier and generator decision from the normative equations, using only the standard library. The 46-case frozen genuine fixture spans both curves, three transcript profiles and k6–k10. All 169 adversarial/parser/decision tests pass with source drift zero; a fresh exact Rust fixture recomputation passes with 2,743 pinned consumed inputs and no tool/runtime drift (`target/qualification/python-reference/current2`). Constructive false claims preserve the soft equation yet fail `decide`. Independent review accepted the bounded implementation. CI requires both genuine fixture equality and independent verification. Keep the reference and inputs after oracle deletion; this is not a production decoder. Batch weights, encoded accumulators, k16, recursion and full wallet catalog remain outside its scope | §15 individual-reference requirement; broader M7 gates remain open |
 
-Current native source admission requires **ABI 26** after replacement of the
-generic wallet commit export with typed native preparation. ABI-25 artifacts
-are rejected. The captured ABI-26 host in
+Current native source admission requires **ABI 27** because the wallet runtime
+originals structure and JNI installation constructor now include the exact
+registration source. ABI-26 and earlier artifacts are rejected before this
+changed layout is called. The guarded ABI-27 macOS host capture
+`target/qualification/native-sdk/host-abi27-universal-registration/` is admitted
+with 341 exports (84 required), unchanged source/tool/dep-info inputs and unchanged
+supplemental private-worker sources. Its dylib SHA-256 is
+`ae5589d06b41027f1ccbd4924255c92164e3e2ee49b5a15a62b7852e58606090`.
+The actual Kotlin/Java native consumer rerun passes **60/60**, zero skipped,
+including seven wallet JNI cases and 53 Privacy/SoraFS/signer consumers. It forces
+execution, rejects XML from earlier runs, and retains unchanged source/artifact
+pins under `native-sdk/universal-abi27-kotlin-jni-2/`. The matching Swift producer
+is retained under `native-sdk/swift-abi27-universal-registration/`. Its captured
+original-source runtime passes **246/246**, zero failed/skipped, including five
+genuine native confidential cases and 14 installation/registration-locator cases.
+The exact XCTest binary and native producer stayed unchanged; a concurrent change
+to `IrohaPeerQRV1Tests.swift` is retained as runtime source drift in
+`native-sdk/universal-abi27-swift-runtime/runtime-summary.json`. C# independently
+passes the unchanged 536-case consumer suite on the same dylib as described above.
+These are captured host components;
+subsequent source changes do not make them whole-checkout, release-package or
+physical-device qualification.
+
+The historical captured ABI-26 host in
 `target/qualification/native-sdk/host-abi26-close-loads-current/` passed
 compiler/source/tool/dep-info guards and the actual ABI/export probe with no
 source drift; its retained dylib SHA-256 is
