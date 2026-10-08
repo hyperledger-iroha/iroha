@@ -20512,6 +20512,81 @@
         ],
         "type": "object"
       },
+      "IdentifierNormalization": {
+        "additionalProperties": false,
+        "properties": {
+          "normalization": {
+            "enum": [
+              "exact",
+              "lowercase_trimmed",
+              "phone_e164",
+              "email_address",
+              "account_number"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "normalization",
+          "value"
+        ],
+        "type": "object"
+      },
+      "IdentifierPolicy": {
+        "additionalProperties": false,
+        "description": "Complete original world.identifier_policies row. None-valued phone_retail_attestor_public_key and note are omitted by native JSON serialization. Presence does not establish active-policy authority or World membership.",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IdentifierPolicyId"
+          },
+          "normalization": {
+            "$ref": "#/components/schemas/IdentifierNormalization"
+          },
+          "note": {
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "phone_retail_attestor_public_key": {
+            "$ref": "#/components/schemas/NativePublicKeyV1"
+          },
+          "program_id": {
+            "$ref": "#/components/schemas/RamLfeProgramId"
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "normalization",
+          "program_id",
+          "active"
+        ],
+        "type": "object"
+      },
+      "IdentifierPolicyId": {
+        "additionalProperties": false,
+        "description": "Exact native identifier policy key object. The kind#business_rule display literal is not its Norito JSON representation.",
+        "properties": {
+          "business_rule": {
+            "$ref": "#/components/schemas/NativeNameV1"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NativeNameV1"
+          }
+        },
+        "required": [
+          "kind",
+          "business_rule"
+        ],
+        "type": "object"
+      },
       "IdentifierPolicyListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -27810,6 +27885,23 @@
               "payload"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "IdentifierPolicy",
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/NativeIdentifierPolicyStateV1"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -27877,6 +27969,23 @@
                   "fee_asset"
                 ],
                 "type": "object"
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "IdentifierPolicy",
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/IdentifierPolicyId"
               }
             },
             "required": [
@@ -28718,6 +28827,23 @@
           "revisions",
           "enrollments",
           "vaults"
+        ],
+        "type": "object"
+      },
+      "NativeIdentifierPolicyStateV1": {
+        "additionalProperties": false,
+        "description": "Exact selected identifier policy and only its referenced original RAM-LFE program from the same certified World cut. Each original row has a 1048576-byte native ceiling. Consumers independently verify World membership, selector/program identity and active-policy authority; this carrier grants none.",
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/IdentifierPolicy"
+          },
+          "program": {
+            "$ref": "#/components/schemas/RamLfeProgramPolicy"
+          }
+        },
+        "required": [
+          "policy",
+          "program"
         ],
         "type": "object"
       },
@@ -30392,6 +30518,27 @@
           "status",
           "scope",
           "resolved_from"
+        ],
+        "type": "object"
+      },
+      "PolicyCommitment": {
+        "additionalProperties": false,
+        "description": "Complete native commitment original. public_parameters is emitted even when empty.",
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/RamLfeBackend"
+          },
+          "policy_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "public_parameters": {
+            "$ref": "#/components/schemas/NativeByteVectorV1"
+          }
+        },
+        "required": [
+          "backend",
+          "policy_hash",
+          "public_parameters"
         ],
         "type": "object"
       },
@@ -36097,6 +36244,15 @@
         ],
         "type": "object"
       },
+      "RamLfeBackend": {
+        "description": "Exact stored native backend tag. Carrying this original does not establish production support or authorize program execution.",
+        "enum": [
+          "hkdf-sha3-512-prf-v1",
+          "bfv-affine-v1",
+          "bfv-programmed-v1"
+        ],
+        "type": "string"
+      },
       "RamLfeExecuteRequest": {
         "additionalProperties": false,
         "properties": {
@@ -36333,6 +36489,63 @@
         ],
         "type": "object"
       },
+      "RamLfeProgramId": {
+        "additionalProperties": false,
+        "description": "Exact native RAM-LFE program key object, not its display-name string.",
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/NativeNameV1"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "RamLfeProgramPolicy": {
+        "additionalProperties": false,
+        "description": "Complete original world.ram_lfe_program_policies row selected by the identifier policy. A None-valued note is omitted. Backend and verification-mode originals grant no execution permission.",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "backend": {
+            "$ref": "#/components/schemas/RamLfeBackend"
+          },
+          "commitment": {
+            "$ref": "#/components/schemas/PolicyCommitment"
+          },
+          "note": {
+            "type": "string"
+          },
+          "output_opening_public_key": {
+            "$ref": "#/components/schemas/NativePublicKeyV1"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "program_id": {
+            "$ref": "#/components/schemas/RamLfeProgramId"
+          },
+          "resolver_public_key": {
+            "$ref": "#/components/schemas/NativePublicKeyV1"
+          },
+          "verification_mode": {
+            "$ref": "#/components/schemas/RamLfeVerificationMode"
+          }
+        },
+        "required": [
+          "program_id",
+          "owner",
+          "backend",
+          "verification_mode",
+          "commitment",
+          "resolver_public_key",
+          "output_opening_public_key",
+          "active"
+        ],
+        "type": "object"
+      },
       "RamLfeProgramPolicyListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -36561,6 +36774,26 @@
         "required": [
           "kind",
           "signature"
+        ],
+        "type": "object"
+      },
+      "RamLfeVerificationMode": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "enum": [
+              "signed",
+              "proof"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "mode",
+          "value"
         ],
         "type": "object"
       },
@@ -77497,7 +77730,7 @@
     },
     "/v1/ledger/authority-originals": {
       "post": {
-        "description": "The current account signature covers the entire exact method, canonical URI and request body. Queries and alternate target spellings are rejected. API-token possession alone is insufficient. Finite heavy-query admission and complete aggregate memory/egress reservations remain in force. Decoding provides data only: consumers independently authenticate the installed native roots, current clock/controller and complete certified World preimages before accepting any effect. The holder must currently possess CanReadAllLedgerData. The body selects only AccountAlias or GlobalFeeProgram. Its fresh entropy is included in the exact canonical signed body. The attestation challenge is SHA256(domain || exact body); an optional X-Iroha-Finality-Challenge must equal that derived digest. Complete keys and selected values come from one certified applied cut. Requests are at most 65536 bytes, responses at most 134217728 bytes and the smaller configured content ceiling.",
+        "description": "The current account signature covers the entire exact method, canonical URI and request body. Queries and alternate target spellings are rejected. API-token possession alone is insufficient. Finite heavy-query admission and complete aggregate memory/egress reservations remain in force. Decoding provides data only: consumers independently authenticate the installed native roots, current clock/controller and complete certified World preimages before accepting any effect. The holder must currently possess CanReadAllLedgerData. The body selects only AccountAlias, GlobalFeeProgram or IdentifierPolicy. Its fresh entropy is included in the exact canonical signed body. The attestation challenge is SHA256(domain || exact body); an optional X-Iroha-Finality-Challenge must equal that derived digest. Complete keys and selected values come from one certified applied cut. Requests are at most 65536 bytes, responses at most 134217728 bytes and the smaller configured content ceiling.",
         "operationId": "ledger_authority_originals",
         "requestBody": {
           "content": {

@@ -1054,6 +1054,56 @@ mod tests {
             assert!(runtime_update::selected_source_fingerprint(commit, version).is_err());
         }
     }
+
+    #[test]
+    fn authority_runtime_chain_cli_preserves_order_and_refuses_mutating_or_unbounded_selection() {
+        use clap::Parser as _;
+        let paths = (0..17)
+            .map(|index| format!("/private/runtime/taira-public-reset/update-{index:032x}"))
+            .collect::<Vec<_>>();
+        for (action, count, duplicate, accepted) in [
+            ("status", 2, false, true),
+            ("status", 16, false, true),
+            ("status", 17, false, false),
+            ("status", 2, true, false),
+            ("plan", 2, false, false),
+            ("apply", 2, false, false),
+        ] {
+            let mut words = vec![
+                "iroha",
+                "dataspace",
+                action,
+                "/definition",
+                "--trust",
+                "/trust",
+            ];
+            for index in 0..count {
+                words.extend([
+                    "--verification-runtime-update",
+                    paths[if duplicate { 0 } else { index }].as_str(),
+                ]);
+            }
+            let args = crate::Args::try_parse_from(words).unwrap();
+            let crate::Command::Dataspace(command) = args.command else {
+                panic!("wrong command")
+            };
+            assert_eq!(
+                command
+                    .verification_origins(&finality::test_trust())
+                    .is_ok(),
+                accepted
+            );
+            if let Command::Status(args) = command {
+                assert_eq!(args.verification_runtime_update.len(), count);
+                if !duplicate {
+                    assert_eq!(
+                        args.verification_runtime_update[1],
+                        PathBuf::from(&paths[1])
+                    );
+                }
+            }
+        }
+    }
     #[test]
     fn authority_completion_inspection_requires_exact_named_original() {
         let mut inventory = inventory();

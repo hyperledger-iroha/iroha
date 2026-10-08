@@ -486,6 +486,53 @@ fn bpng_whole_application_and_runtime_original_bytes_are_authenticated() {
     }
 }
 #[test]
+fn bpng_current_signed_allocation_accepts_lane_eight() {
+    let mut fixture = BpngFixture::new();
+    for section in ["digitalKina", "routing"] {
+        mutate(
+            object_mut(&mut fixture.0.app).get_mut(section).unwrap(),
+            "physicalLaneId",
+            Value::from(8u64),
+        );
+    }
+    fixture.load().unwrap();
+}
+#[test]
+fn bpng_lane_selection_keeps_bounds_routing_and_original_signature_binding() {
+    for lane in [0u64, 3, u64::from(u32::MAX) + 1] {
+        let mut fixture = BpngFixture::new();
+        for section in ["digitalKina", "routing"] {
+            mutate(
+                object_mut(&mut fixture.0.app).get_mut(section).unwrap(),
+                "physicalLaneId",
+                Value::from(lane),
+            );
+        }
+        assert!(fixture.load().is_err(), "lane {lane}");
+    }
+    let mut fixture = BpngFixture::new();
+    let (_, original_envelope, runtime) = fixture.originals();
+    for section in ["digitalKina", "routing"] {
+        mutate(
+            object_mut(&mut fixture.0.app).get_mut(section).unwrap(),
+            "physicalLaneId",
+            Value::from(8u64),
+        );
+    }
+    let (changed_app, _, _) = fixture.originals();
+    assert!(
+        fixture
+            .load_originals(&changed_app, &original_envelope, &runtime)
+            .is_err()
+    );
+    mutate(
+        object_mut(&mut fixture.0.app).get_mut("routing").unwrap(),
+        "physicalLaneId",
+        Value::from(41u64),
+    );
+    assert!(fixture.load().is_err());
+}
+#[test]
 fn bpng_signed_projection_refuses_foreign_network_asset_routes_and_service() {
     for (section, name, value) in [
         (
