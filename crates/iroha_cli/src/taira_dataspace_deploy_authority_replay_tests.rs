@@ -64,6 +64,11 @@ fn lane_observation(plan: &PlanV1, trust: &TrustV1) -> SumeragiLaneStatus {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_tip_heights([4, 5, 6, 4])
+    }
+
+    fn with_tip_heights(tip_heights: [u64; 4]) -> Self {
+        let maximum = *tip_heights.iter().max().unwrap();
         let mut config = TestChainConfig::new(World::new(), 10_000);
         let key = config.genesis_key.clone();
         let chain_id = config.chain_id.clone();
@@ -163,9 +168,10 @@ impl Fixture {
             });
             prepared.push((retained, signed));
         }
-        chain.commit(Vec::new());
-        chain.commit(Vec::new());
-        let proofs = (1..=6)
+        for _ in 5..=maximum {
+            chain.commit(Vec::new());
+        }
+        let proofs = (1..=maximum)
             .map(|height| {
                 iroha_core::sumeragi::finality::build_proof(&chain.state().view(), height).unwrap()
             })
@@ -195,7 +201,7 @@ impl Fixture {
             .zip(keys)
             .enumerate()
             .map(|(index, (peer, key))| {
-                let height = [4_u64, 5, 6, 4][index];
+                let height = tip_heights[index];
                 let tip = &proofs[height as usize - 1];
                 let body = SumeragiFinalityAttestationBody {
                     observed_at_unix_ms: 1_000_000,
@@ -275,15 +281,27 @@ impl Fixture {
     }
 
     fn replay(&self) -> Result<(Vec<json::Value>, Vec<json::Value>)> {
-        self.completion
-            .replay(&self.plan, &self.trust, &self.prepared, |name, limit| {
+        self.replay_with_tips(&runtime_update::RetainedTips::default())
+    }
+
+    fn replay_with_tips(
+        &self,
+        tips: &runtime_update::RetainedTips,
+    ) -> Result<(Vec<json::Value>, Vec<json::Value>)> {
+        self.completion.replay(
+            &self.plan,
+            &self.trust,
+            &self.prepared,
+            tips,
+            |name, limit| {
                 let bytes = self
                     .originals
                     .get(name)
                     .ok_or_else(|| eyre!("missing fixture original"))?;
                 require(bytes.len() <= limit, "fixture size bound")?;
                 Ok(bytes.clone())
-            })
+            },
+        )
     }
 }
 
@@ -383,4 +401,87 @@ fn portable_replay_rejects_gaps_carrier_changes_and_forged_applied_observations(
     fixture.completion.value = json::from_slice(&original).unwrap();
     fixture.trust.peers[0].build_fingerprint = Hash::new(b"another target source");
     assert!(fixture.replay().is_err());
+}
+
+fn runtime_checkpoint_claims(height: u64, hash: Hash) -> json::Value {
+    norito::json!(
+        (1..=4)
+            .map(|peer| norito::json!({
+                "role":(format!("taira-validator-{peer}")),
+                "kura_tip":{"height":height,"hash":(hex::encode(hash.as_ref()))}
+            }))
+            .collect::<Vec<_>>()
+    )
+}
+
+#[test]
+fn portable_replay_joins_historical_runtime_tips_to_real_authenticated_prefix() {
+    // Height five is neither a current peer tip nor an allocation carrier.
+    // Replay must explicitly retain it for the historical runtime checkpoint.
+    let mut fixture = Fixture::with_tip_heights([6, 6, 7, 6]);
+    let proof: SumeragiFinalityProof =
+        json::from_slice(&fixture.originals["proof-00000000000000000005.json"]).unwrap();
+    let record = runtime_checkpoint_claims(5, proof.block_header.hash().into());
+    let claims =
+        runtime_update::test_chain_retained_tip_claims(5, proof.block_header.hash().into())
+            .unwrap();
+    fixture.replay_with_tips(&claims).unwrap();
+
+    let claims =
+        runtime_update::test_chain_retained_tip_claims(5, Hash::new(b"different retained block"))
+            .unwrap();
+    assert!(
+        fixture
+            .replay_with_tips(&claims)
+            .unwrap_err()
+            .to_string()
+            .contains("differs from authenticated finality")
+    );
+
+    let beyond = runtime_checkpoint_claims(8, proof.block_header.hash().into());
+    let claims = runtime_update::RetainedTips::from_checkpoint_records([&beyond]).unwrap();
+    assert!(
+        fixture
+            .replay_with_tips(&claims)
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds the completed authenticated prefix")
+    );
+
+    // A longer peer prefix must not mask another peer regressing below its own checkpoint.
+    let proof7: SumeragiFinalityProof =
+        json::from_slice(&fixture.originals["proof-00000000000000000007.json"]).unwrap();
+    let beyond_peer = runtime_checkpoint_claims(7, proof7.block_header.hash().into());
+    let claims = runtime_update::RetainedTips::from_checkpoint_records([&beyond_peer]).unwrap();
+    assert!(
+        fixture
+            .replay_with_tips(&claims)
+            .unwrap_err()
+            .to_string()
+            .contains("peer's signed current height")
+    );
+
+    let claims = runtime_update::RetainedTips::from_checkpoint_records([&record]).unwrap();
+    let saved = fixture
+        .originals
+        .remove("proof-00000000000000000005.json")
+        .unwrap();
+    assert!(fixture.replay_with_tips(&claims).is_err());
+    fixture
+        .originals
+        .insert("proof-00000000000000000005.json".into(), saved);
+    fixture.replay_with_tips(&claims).unwrap();
+
+    // The live completion invokes exactly the same check after ProofPrefix::synchronize.
+    let mut prefix = BTreeMap::new();
+    prefix.insert(5, proof);
+    claims
+        .verify_authenticated_prefix(&prefix, [6, 6, 7, 6])
+        .unwrap();
+    prefix.clear();
+    assert!(
+        claims
+            .verify_authenticated_prefix(&prefix, [6, 6, 7, 6])
+            .is_err()
+    );
 }

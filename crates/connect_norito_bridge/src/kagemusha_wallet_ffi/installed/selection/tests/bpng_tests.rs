@@ -8,7 +8,14 @@ impl BpngFixture {
         Self::with_asset("839FV3NJC8NfgWQvghXU2hEFQm9a")
     }
     fn with_asset(asset: &str) -> Self {
-        let mut base = BaseFixture::with_asset(asset);
+        Self::with_asset_and_mode(asset, SumeragiConsensusMode::Permissioned)
+    }
+    fn with_asset_and_mode(asset: &str, mode: SumeragiConsensusMode) -> Self {
+        let short_mode = match &mode {
+            SumeragiConsensusMode::Permissioned => "permissioned",
+            SumeragiConsensusMode::Npos => "npos",
+        };
+        let mut base = BaseFixture::with_asset_and_mode(asset, mode);
         // Complete public BPNG v7 DATA fixture from the maintained Android runtime
         // fixture. Replace its graph selections with this genuine signed genesis and
         // genuine scheme/certificate/policy originals; no proof graph is fabricated.
@@ -39,6 +46,9 @@ impl BpngFixture {
         );
         mutate(&mut app, "ledger", ledger);
         let mut consensus = native["consensus"].clone();
+        // Preserve the maintained BPNG v7 renderer grammar while replacing only
+        // its public genesis/roster selections with genuine fixture originals.
+        mutate(&mut consensus, "mode", Value::String(short_mode.into()));
         for name in [
             "checkpointSha256",
             "checkpointHeight",
@@ -165,6 +175,88 @@ fn bpng_token(claims: &Value, key: &KeyPair) -> Vec<u8> {
     let message = format!("{header}.{claims}");
     let signature = Signature::try_new(key.private_key(), message.as_bytes()).unwrap();
     format!("{message}.{}", URL_SAFE_NO_PAD.encode(signature.payload())).into_bytes()
+}
+
+#[test]
+fn bpng_consensus_mode_matches_genuine_genesis_with_exact_v7_labels() {
+    for (mode, expected, other) in [
+        (SumeragiConsensusMode::Permissioned, "permissioned", "npos"),
+        (SumeragiConsensusMode::Npos, "npos", "permissioned"),
+    ] {
+        let mut fixture = BpngFixture::with_asset_and_mode("839FV3NJC8NfgWQvghXU2hEFQm9a", mode);
+        assert_eq!(fixture.0.app["consensus"]["mode"].as_str(), Some(expected));
+        fixture.load().unwrap();
+        for wrong in [
+            other,
+            "iroha3-consensus::permissioned-sumeragi@v1",
+            "iroha3-consensus::npos-sumeragi@v1",
+            "unknown",
+            "",
+        ] {
+            mutate(
+                object_mut(&mut fixture.0.app).get_mut("consensus").unwrap(),
+                "mode",
+                Value::String(wrong.into()),
+            );
+            // Even a fresh genuine application signature cannot change genesis
+            // policy or select a foreign format's mode grammar.
+            assert!(fixture.load().is_err(), "BPNG {expected} accepted {wrong}");
+        }
+    }
+}
+
+#[test]
+fn bpng_consensus_mode_remains_bound_to_original_signature() {
+    let mut fixture = BpngFixture::new();
+    let (_, envelope, runtime) = fixture.originals();
+    mutate(
+        object_mut(&mut fixture.0.app).get_mut("consensus").unwrap(),
+        "mode",
+        Value::String("npos".into()),
+    );
+    let (changed, changed_envelope, _) = fixture.originals();
+    assert!(signed_app(&fixture.trust(), &changed, &changed_envelope).is_ok());
+    assert!(signed_app(&fixture.trust(), &changed, &envelope).is_err());
+    assert!(
+        fixture
+            .load_originals(&changed, &envelope, &runtime)
+            .is_err()
+    );
+}
+
+#[test]
+fn cbsi_consensus_keeps_exact_protocol_tags_for_both_genuine_genesis_modes() {
+    for (mode, expected, short, other) in [
+        (
+            SumeragiConsensusMode::Permissioned,
+            "iroha3-consensus::permissioned-sumeragi@v1",
+            "permissioned",
+            "iroha3-consensus::npos-sumeragi@v1",
+        ),
+        (
+            SumeragiConsensusMode::Npos,
+            "iroha3-consensus::npos-sumeragi@v1",
+            "npos",
+            "iroha3-consensus::permissioned-sumeragi@v1",
+        ),
+    ] {
+        let mut fixture = BaseFixture::with_asset_and_mode("7ZepsJTHCVLKsrFFNZGSRGZgvBhv", mode);
+        assert_eq!(
+            native_installation_mut(&mut fixture.app)["consensus"]["mode"].as_str(),
+            Some(expected),
+        );
+        fixture.load().unwrap();
+        for wrong in [short, other] {
+            mutate(
+                native_installation_mut(&mut fixture.app)
+                    .get_mut("consensus")
+                    .unwrap(),
+                "mode",
+                Value::String(wrong.into()),
+            );
+            assert!(fixture.load().is_err(), "CBSI {expected} accepted {wrong}");
+        }
+    }
 }
 
 #[test]
@@ -484,6 +576,53 @@ fn bpng_whole_application_and_runtime_original_bytes_are_authenticated() {
                 .is_err()
         );
     }
+}
+#[test]
+fn bpng_current_signed_allocation_accepts_lane_eight() {
+    let mut fixture = BpngFixture::new();
+    for section in ["digitalKina", "routing"] {
+        mutate(
+            object_mut(&mut fixture.0.app).get_mut(section).unwrap(),
+            "physicalLaneId",
+            Value::from(8u64),
+        );
+    }
+    fixture.load().unwrap();
+}
+#[test]
+fn bpng_lane_selection_keeps_bounds_routing_and_original_signature_binding() {
+    for lane in [0u64, 3, u64::from(u32::MAX) + 1] {
+        let mut fixture = BpngFixture::new();
+        for section in ["digitalKina", "routing"] {
+            mutate(
+                object_mut(&mut fixture.0.app).get_mut(section).unwrap(),
+                "physicalLaneId",
+                Value::from(lane),
+            );
+        }
+        assert!(fixture.load().is_err(), "lane {lane}");
+    }
+    let mut fixture = BpngFixture::new();
+    let (_, original_envelope, runtime) = fixture.originals();
+    for section in ["digitalKina", "routing"] {
+        mutate(
+            object_mut(&mut fixture.0.app).get_mut(section).unwrap(),
+            "physicalLaneId",
+            Value::from(8u64),
+        );
+    }
+    let (changed_app, _, _) = fixture.originals();
+    assert!(
+        fixture
+            .load_originals(&changed_app, &original_envelope, &runtime)
+            .is_err()
+    );
+    mutate(
+        object_mut(&mut fixture.0.app).get_mut("routing").unwrap(),
+        "physicalLaneId",
+        Value::from(41u64),
+    );
+    assert!(fixture.load().is_err());
 }
 #[test]
 fn bpng_signed_projection_refuses_foreign_network_asset_routes_and_service() {

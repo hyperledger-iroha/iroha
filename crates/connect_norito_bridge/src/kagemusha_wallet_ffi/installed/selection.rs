@@ -732,10 +732,13 @@ impl Selection {
         // This actual native reader verifies the full original block/transaction signatures,
         // commitments, PoPs and every signed initial-epoch/schedule parameter.
         let epoch = genesis_epoch(&genesis).map_err(|_| invalid())?;
-        let mode = if epoch.mode.is_permissioned() {
-            "iroha3-consensus::permissioned-sumeragi@v1"
-        } else {
-            "iroha3-consensus::npos-sumeragi@v1"
+        // Each independently selected application format owns its exact mode label.
+        // The BPNG v7 renderer signs short labels; CBSI signs protocol tags.
+        let mode = match (trust.authority, epoch.mode.is_permissioned()) {
+            (RuntimeAuthority::BpngTairaV7, true) => "permissioned",
+            (RuntimeAuthority::BpngTairaV7, false) => "npos",
+            (_, true) => "iroha3-consensus::permissioned-sumeragi@v1",
+            (_, false) => "iroha3-consensus::npos-sumeragi@v1",
         };
         if text(consensus, "mode")? != mode {
             return Err(invalid());

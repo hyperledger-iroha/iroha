@@ -480,28 +480,24 @@ pub(super) fn run<C: RunContext>(
         }
     };
     let verification_origins = command.verification_origins(&trust)?;
-    let runtime_update = args
-        .verification_runtime_update
-        .as_deref()
-        .map(|path| {
-            match (
-                &args.verification_source_commit,
-                &args.verification_source_version,
-            ) {
-                (Some(commit), Some(version)) => runtime_update::Verified::admit_target(
-                    path,
-                    &trust,
-                    context.config().network_id,
-                    commit,
-                    version,
-                ),
-                (None, None) => {
-                    runtime_update::Verified::admit(path, &trust, context.config().network_id)
-                }
-                _ => eyre::bail!("incomplete explicit target source selection"),
-            }
-        })
-        .transpose()?;
+    let runtime_update = if args.verification_runtime_update.is_empty() {
+        None
+    } else {
+        let selected = match (
+            args.verification_source_commit.as_deref(),
+            args.verification_source_version.as_deref(),
+        ) {
+            (Some(commit), Some(version)) => Some((commit, version)),
+            (None, None) => None,
+            _ => eyre::bail!("incomplete explicit target source selection"),
+        };
+        Some(runtime_update::Verified::admit_chain(
+            &args.verification_runtime_update,
+            &trust,
+            context.config().network_id,
+            selected,
+        )?)
+    };
     let deadline = operation_deadline(args.timeout_ms)?;
     let binding = DefinitionBinding::new(
         definition,

@@ -3,7 +3,8 @@
 use super::*;
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
-    nexus::AxtAssetIncarnationV1, sumeragi_finality::test_fixtures::NativeFinalityFixture,
+    nexus::AxtAssetIncarnationV1, parameter::system::SumeragiConsensusMode,
+    sumeragi_finality::test_fixtures::NativeFinalityFixture,
 };
 use p256::ecdsa::{Signature as G1Signature, SigningKey, signature::Signer as _};
 
@@ -193,7 +194,11 @@ impl BaseFixture {
         Self::with_asset("7ZepsJTHCVLKsrFFNZGSRGZgvBhv")
     }
     fn with_asset(asset_id: &str) -> Self {
-        let native = NativeFinalityFixture::start("fc56984b-2be7-431d-840e-21514d1883f0");
+        Self::with_asset_and_mode(asset_id, SumeragiConsensusMode::Permissioned)
+    }
+    fn with_asset_and_mode(asset_id: &str, mode: SumeragiConsensusMode) -> Self {
+        let native =
+            NativeFinalityFixture::start_with_mode("fc56984b-2be7-431d-840e-21514d1883f0", mode);
         let genesis = native.genesis().encode_wire().unwrap();
         let epoch = genesis_epoch(native.genesis()).unwrap();
         let root = g1_key(7);
@@ -317,7 +322,7 @@ impl BaseFixture {
         mutate(
             &mut app,
             "consensus",
-            norito::json!({"mode":("iroha3-consensus::permissioned-sumeragi@v1"),"protocolVersion":(1),"networkId":(native.network_id().to_string()),"genesisBlockHash":(hex::encode(native.genesis().hash().as_ref())),"signedGenesisSha256":(hex::encode(BlobV1::of(&genesis).sha256)),"genesisPublicKey":(genesis_key),"finalityVerifierSha256":("99".repeat(32)),"validators":(validators),"checkpointSha256":("ab".repeat(32)),"checkpointHeight":(0),"checkpointContextId":("ac".repeat(32))}),
+            norito::json!({"mode":(if epoch.mode.is_permissioned() { "iroha3-consensus::permissioned-sumeragi@v1" } else { "iroha3-consensus::npos-sumeragi@v1" }),"protocolVersion":(1),"networkId":(native.network_id().to_string()),"genesisBlockHash":(hex::encode(native.genesis().hash().as_ref())),"signedGenesisSha256":(hex::encode(BlobV1::of(&genesis).sha256)),"genesisPublicKey":(genesis_key),"finalityVerifierSha256":("99".repeat(32)),"validators":(validators),"checkpointSha256":("ab".repeat(32)),"checkpointHeight":(0),"checkpointContextId":("ac".repeat(32))}),
         );
         mutate(
             &mut app,

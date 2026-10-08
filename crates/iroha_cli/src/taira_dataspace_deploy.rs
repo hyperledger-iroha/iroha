@@ -113,7 +113,7 @@ impl Command {
             "--verification-peer-url is only available for read-only dataspace status",
         )?;
         require(
-            status || args.verification_runtime_update.is_none(),
+            status || args.verification_runtime_update.is_empty(),
             "--verification-runtime-update is only available for read-only dataspace status",
         )?;
         require(
@@ -123,7 +123,7 @@ impl Command {
         require(
             args.verification_source_commit.is_some() == args.verification_source_version.is_some()
                 && (args.verification_source_commit.is_none()
-                    || (status && args.verification_runtime_update.is_some())),
+                    || (status && !args.verification_runtime_update.is_empty())),
             "explicit target source requires a complete source pair and read-only runtime-update status",
         )?;
         if let (Some(commit), Some(version)) = (
@@ -132,6 +132,7 @@ impl Command {
         ) {
             runtime_update::selected_source_fingerprint(commit, version)?;
         }
+        runtime_update::validate_selection(&args.verification_runtime_update)?;
         finality::verification_origins(trust, &args.verification_peer_urls)
     }
 }
@@ -150,9 +151,9 @@ pub(crate) struct DefinitionArgs {
     /// Signed peer identities and retained deployment intent are never changed.
     #[arg(long = "verification-peer-url", value_name = "URL")]
     pub(crate) verification_peer_urls: Vec<String>,
-    /// Actual completed preserved-state update on this Linux guest; verify its target build identity.
+    /// Completed preserved-state updates on this guest, oldest to newest. Repeat for a chain.
     #[arg(long, value_name = "DIRECTORY")]
-    pub(crate) verification_runtime_update: Option<PathBuf>,
+    pub(crate) verification_runtime_update: Vec<PathBuf>,
     /// Independently authenticated target commit for read-only status with a separate verifier.
     #[arg(long, value_name = "COMMIT", requires_all = ["verification_source_version", "verification_runtime_update"])]
     pub(crate) verification_source_commit: Option<String>,
