@@ -4,8 +4,12 @@ The child is a public command observer/mutator. Successful observation proves
 only command routing and before/after guards, never a build or release.
 """
 from pathlib import Path
+import hashlib
 import json
 import os
+import re
+import shutil
+import stat
 import subprocess
 import sys
 import unittest
@@ -159,6 +163,73 @@ class AndroidProductionCargoConfigurationTests(unittest.TestCase):
         self.assertEqual(seal.PLATFORM_TARGETS["android"],
                          ("aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"))
         self.assertIn("scripts/norito_bridge_local_integration.py", seal.PLATFORM_ROOT_INPUTS["android"])
+
+    def source_inventory(self):
+        return {
+            str(path.relative_to(self.root)): (
+                stat.S_IMODE(path.stat().st_mode),
+                hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None,
+            )
+            for path in [self.root, *self.root.rglob("*")]
+        }
+
+    def copy_public_helpers(self):
+        destination = self.root / "scripts"
+        destination.mkdir()
+        for name in ("norito_bridge_local_integration.py", "run_mobile_hermetic_command.py"):
+            shutil.copyfile(fixtures.SCRIPTS / name, destination / name)
+        return destination
+
+    def gradle_python_launches(self):
+        launches = []
+        for relative in (
+            "kotlin/client-android/build.gradle.kts",
+            "gradle/mobile-sdk-external-android-build.settings.gradle.kts",
+        ):
+            source = (fixtures.SCRIPTS.parent / relative).read_text()
+            for match in re.finditer(
+                r'(?:candidate|python|tools\.python)\.toString\(\),\s*'
+                r'((?:"-[ISB]",\s*)+)', source,
+            ):
+                launches.append((relative, source.count("\n", 0, match.start()) + 1,
+                                 re.findall(r'"(-[ISB])"', match[1])))
+        self.assertGreaterEqual(len(launches), 10)
+        return launches
+
+    def test_actual_gradle_python_flags_keep_helper_imports_out_of_source(self):
+        """Exercise real dynamic imports with each producer command's flags, without Cargo."""
+        helpers = self.copy_public_helpers()
+        original = self.source_inventory()
+        for source, line, flags in self.gradle_python_launches():
+            with self.subTest(source=source, line=line):
+                result = subprocess.run(
+                    [str(Path(sys.executable).resolve()), *flags,
+                     str(helpers / "norito_bridge_local_integration.py"),
+                     "--role", "android-cargo", "--root", str(self.root),
+                     "--path", str(self.cwd), "--cargo-home", str(self.cache)],
+                    capture_output=True, text=True, check=True,
+                )
+                observed = json.loads(result.stdout)
+                self.assertEqual(observed["schema"], "iroha.android-cargo-configuration.v1")
+                self.assertFalse(observed["release_admitted"])
+                self.assertEqual(observed["source_root"], str(self.root))
+                self.assertEqual(self.source_inventory(), original)
+
+    def test_isolated_helper_without_no_bytecode_changes_source_even_with_environment_flag(self):
+        """The original command reproduces the defect; an environment variable cannot repair it."""
+        helpers = self.copy_public_helpers()
+        original = self.source_inventory()
+        flags = [flag for flag in self.gradle_python_launches()[0][2] if flag != "-B"]
+        subprocess.run(
+            [str(Path(sys.executable).resolve()), *flags,
+             str(helpers / "norito_bridge_local_integration.py"),
+             "--role", "android-cargo", "--root", str(self.root),
+             "--path", str(self.cwd), "--cargo-home", str(self.cache)],
+            env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+            capture_output=True, text=True, check=True,
+        )
+        self.assertNotEqual(self.source_inventory(), original)
+        self.assertTrue(list((helpers / "__pycache__").glob("run_mobile_hermetic_command.*.pyc")))
 
 
 if __name__ == "__main__":

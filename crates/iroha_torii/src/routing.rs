@@ -375,15 +375,14 @@ impl DataspaceReadVisibility {
         }
         // The immutable home determines definition visibility. A holder's bucket or
         // a mutable alias must never grant access to another namespace's definition.
-        match world.asset_definition_dataspace(definition_id) {
-            Ok(Some(dataspace)) => return self.allows_dataspace(dataspace),
-            Ok(None) => {}
-            Err(_) => return false,
+        // Global definitions have no owning domain or direct-dataspace binding.
+        use iroha_data_model::asset::AssetDefinitionHome;
+        match world.asset_definition_home(definition_id) {
+            Ok(Some(AssetDefinitionHome::Global)) => self.allows_dataspace(DataSpaceId::UNIVERSAL),
+            Ok(Some(AssetDefinitionHome::Domain(domain))) => self.allows_domain(world, &domain),
+            Ok(Some(AssetDefinitionHome::Dataspace(dataspace))) => self.allows_dataspace(dataspace),
+            Ok(None) | Err(_) => false,
         }
-        world
-            .asset_definition_domains()
-            .get(definition_id)
-            .is_some_and(|domain| self.allows_domain(world, domain))
     }
 
     /// Return whether an asset bucket and its holder belong only to visible routes.
@@ -36538,6 +36537,81 @@ mod explorer_lookup_tests {
         let state = Arc::new(state);
         bind_account_alias_for_test(&state, &escrow_id, "escrow@restricted");
         (state, public_dataspace, definition_id)
+    }
+
+    routing_test! { async global_asset_collection_keeps_exact_holder_and_immutable_home_visibility
+        let (owner, _) = checked_explorer_lookup_account(0x35, "global balance collection owner");
+        let (other, _) = checked_explorer_lookup_account(0x36, "other global balance holder");
+        let private_home = DomainId::try_new("cash", "restricted").expect("private home");
+        let global: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().expect("global XOR");
+        let private = AssetDefinitionId::derive_from_components(private_home.clone(), "private".parse().unwrap());
+        let unknown = AssetDefinitionId::derive_from_components(private_home.clone(), "absent".parse().unwrap());
+        let definition = |id, name, home| dm::AssetDefinition::numeric(
+            id, name, iroha_data_model::asset::AssetBalancePolicy::Global, home,
+        ).build(&owner);
+        let mut world = World::with_assets(
+            [dm::Domain::new(private_home.clone()).build(&owner)],
+            [dm::Account::new(owner.clone()).build(&owner), dm::Account::new(other.clone()).build(&other)],
+            [definition(global.clone(), "XOR", None), definition(private.clone(), "Private", Some(private_home))],
+            [
+                dm::Asset::new(dm::AssetId::new(global.clone(), owner.clone()), iroha_primitives::numeric::Quantity::from(10_u32)),
+                dm::Asset::new(dm::AssetId::new(global.clone(), other.clone()), iroha_primitives::numeric::Quantity::from(99_u32)),
+                dm::Asset::new(dm::AssetId::new(private.clone(), owner.clone()), iroha_primitives::numeric::Quantity::from(7_u32)),
+            ],
+            [],
+        );
+        crate::test_utils::bind_fixture_root(&mut world, iroha_data_model::block::consensus::SumeragiRootScope::Global);
+        let private_dataspace = DataSpaceId::new(7);
+        let catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: private_dataspace, alias: "restricted".to_owned(), description: None, fault_tolerance: 1,
+            },
+        ]).expect("global and private catalog");
+        let state = Arc::new(State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus { dataspace_catalog: catalog, ..Default::default() },
+            LiveQueryStore::start_test(),
+        ));
+        let visibility = DataspaceReadVisibility::exact_account(BTreeSet::from([DataSpaceId::UNIVERSAL]), owner.clone());
+        {
+            let world = state.world_view();
+            assert!(world.asset_definitions().get(&global).unwrap().alias().is_none());
+            assert!(visibility.allows_asset_definition(&world, &global), "global home does not require an alias or domain binding");
+            assert!(!visibility.allows_asset_definition(&world, &private), "a global balance policy does not reveal a private definition home");
+            assert!(!visibility.allows_asset_definition(&world, &unknown));
+            assert!(!visibility.allows_asset(&world, &dm::AssetId::new(global.clone(), other)), "an exact holder read must not expose another holder");
+            let private_only = DataspaceReadVisibility::new(BTreeSet::from([private_dataspace]), false);
+            assert!(!private_only.allows_asset_definition(&world, &global));
+            assert!(private_only.allows_asset_definition(&world, &private));
+        }
+        let page = collection_sources::execute_collection_local(
+            None,
+            &state,
+            &collection_sources::CollectionTarget::AccountAssets(owner.to_string()),
+            iroha_torii_shared::list_query::ListQuery::new(),
+            &MaybeTelemetry::for_tests(),
+            &visibility,
+        ).await.expect("exact holder global balance collection");
+        assert_eq!(page.items.len(), 1, "global balance appears without private-home or other-holder balances");
+        assert_eq!(page.items[0]["asset"].as_str(), Some(global.to_string().as_str()));
+        assert_eq!(page.items[0]["account_id"].as_str(), Some(owner.to_string().as_str()));
+        assert_eq!(page.items[0]["scope"].as_str(), Some("global"));
+        assert_eq!(page.items[0]["quantity"].as_str(), Some("10"));
+    }
+
+    routing_test! { sync definition_visibility_rejects_a_restricted_definition_without_a_home
+        let (owner, _) = checked_explorer_lookup_account(0x37, "invalid restricted definition owner");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("cash", "universal").unwrap(), "invalid".parse().unwrap(),
+        );
+        let definition = dm::AssetDefinition::numeric(
+            definition_id.clone(), "Invalid", iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted, None,
+        ).build(&owner);
+        let world = World::with([], [dm::Account::new(owner.clone()).build(&owner)], [definition]);
+        let world = world.view();
+        assert!(world.asset_definition_home(&definition_id).is_err());
+        assert!(!DataspaceReadVisibility::new(BTreeSet::from([DataSpaceId::UNIVERSAL]), false).allows_asset_definition(&world, &definition_id));
     }
 
     routing_test! { sync direct_dataspace_definition_visibility_uses_immutable_home

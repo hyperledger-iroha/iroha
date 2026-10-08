@@ -559,6 +559,16 @@ mod tests {
                     dataspace_id: dataspace,
                     ..Default::default()
                 });
+            // The isolated current-catalog fixture still needs the lane's
+            // complete retained identity, as every subsequent State scope does.
+            runtime.get_mut().lane_incarnation_lineage.push(
+                crate::state::SnapshotLaneIncarnationLineage {
+                    lane_id: iroha_model_base::topology::LaneId::new(1),
+                    generation: 1,
+                    incarnation: Hash::new(b"space-directory current DPN lane fixture"),
+                    activation_height: 1,
+                },
+            );
             runtime.commit();
         }
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
