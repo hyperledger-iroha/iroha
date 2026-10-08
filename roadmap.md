@@ -7,8 +7,8 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
 
 ## Current priorities
 
-1. Rebuild the daemon and Nexus harness, then complete fault/restart qualification
-   and restricted lane isolation;
+1. Complete remaining Nexus fault/restart qualification and restricted lane isolation
+   after the paid settlement, serial restart and disjoint-lane recovery controls;
    preserve original funded execution through publication and replay, qualify lane
    retirement ownership, and reclaim physical storage only after retained global
    history releases its certified dependencies.

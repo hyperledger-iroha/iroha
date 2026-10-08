@@ -818,6 +818,37 @@ CORE_MUTATIONS = [
     m("HC167", "native AMX Worker retry: bind immutable decoded legs to a stale State visibility publication",
       ["sumeragi::executor::amx_retry_tests::original_paid_amx_post_decode_refusal_retains_worker_leg_and_exact_retry"]),
 
+    m("HC168", "retained State package read: reset cumulative traversal work on retry",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_package_read_tests::original_package_read_same_limit_retry_preserves_monotonic_work_and_exact_source"]),
+    m("HC169", "retained State package read: discard completed current positions on later undo allocation refusal",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_package_read_tests::original_package_read_retains_completed_current_index_on_later_physical_refusal"]),
+    m("HC170", "retained State reader retirement: report success while actual original readers remain",
+      ["state::block_field::retained_read::tests::retained_field_readers_and_positions_refuse_thaw_without_a_writer_wait"]),
+    m("HC171", "retained State group callback: return a result after the original State source changes",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_musubi_group_tests::original_musubi_group_callback_state_publication_refuses_and_drops_exact_result"]),
+
+    m("HC172", "retained State revision: accept equal staged allocations under the same predecessor",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_musubi_group_tests::original_musubi_group_equal_same_predecessor_revision_substitution_retains_original_pair"]),
+    m("HC173", "retained State Cell retirement: report success while actual original revision readers remain",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_musubi_group_tests::original_musubi_group_revision_reader_refusal_retains_completed_tables_and_exact_scope"]),
+
+    m("HC174", "retained State predecessor merge: select current instead of undo at an equal key",
+      ["state::publication::retained_rows::predecessor::tests::retained_predecessor_ordered_merge_matches_exact_original_before_rows_in_both_modes"]),
+    m("HC175", "retained State predecessor retry: discard completed descriptor backing and frontiers on later work refusal",
+      ["state::publication::retained_rows::predecessor::tests::retained_predecessor_later_work_refusal_preserves_descriptor_heads_frontiers_and_pool"]),
+
+    m("HC176", "retained semantic capture: discard original completed canonical rows on later local refusal",
+      ["state::authority_registry::leaf::paired::retained_semantic::tests::retained_semantic_original_rows_and_cursor_survive_later_refusal"]),
+
+    m("HC177", "retained State publication: discard successful Musubi validation on later writer refusal",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_state_successful_musubi_validation_survives_late_writer_refusal"]),
+
+    m("HC178", "retained State publication: discard successful live validation after universal scratch refuses",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_state_live_musubi_success_survives_universal_capacity_refusal"]),
+
+    m("HC179", "retained World cut: discard completed original tail after final shared control refusal",
+      ["sumeragi::executor::publication_tests::original_worker_world_cut_retains_completed_tail_after_final_control_refusal"]),
+
 ]
 
 

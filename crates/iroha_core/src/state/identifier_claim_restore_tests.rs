@@ -148,7 +148,7 @@ fn snapshot_parser_rejects_phone_registry_key_with_non_phone_policy_identity() {
 
 #[test]
 fn snapshot_parser_rejects_unclaimed_identifier_policy_key_mismatch() {
-    let mut tampered = world();
+    let tampered = world();
     let mut policy = tampered
         .identifier_policies
         .view()
@@ -171,7 +171,7 @@ fn snapshot_parser_rejects_unclaimed_identifier_policy_key_mismatch() {
 
 #[test]
 fn snapshot_parser_rejects_unreferenced_program_policy_key_mismatch() {
-    let mut tampered = world();
+    let tampered = world();
     let program = tampered
         .ram_lfe_program_policies
         .view()
@@ -265,7 +265,7 @@ fn restored_phone_claim_rejects_changed_normalization_and_nullifier() {
             .unwrap_err()
             .contains("PhoneE164")
     );
-    let mut wrong_nullifier = world();
+    let wrong_nullifier = world();
     let mut claims = wrong_nullifier.identifier_claims.block();
     let opaque_id = *claims.iter().next().unwrap().0;
     claims.get_mut(&opaque_id).unwrap().phone_retail_nullifier =

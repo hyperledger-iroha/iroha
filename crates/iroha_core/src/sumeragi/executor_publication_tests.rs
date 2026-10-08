@@ -3459,3 +3459,160 @@ fn worker_fixture_invokes_and_consumes_one_move_only_callback_on_the_actual_chai
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
+
+/// Late World-cut control funding must not discard successful native reconstruction.
+#[test]
+fn original_worker_world_cut_retains_completed_tail_after_final_control_refusal() {
+    use crate::state::world_projection::world_state_accumulator::world_state_cut::completion_observer;
+    with_worker(|chain, worker, blocks, events| {
+        let (block, qc) = executed(chain, worker);
+        let budget = worker.state.ivm_execution_budget();
+        let limit = budget.limit_bytes();
+        let height = worker.state.view().height();
+        let applied = worker.applied;
+        let overlay = original_overlay(worker);
+        let wire = block.payload().as_slice().as_ptr();
+        let source = std::ptr::from_ref(block.source());
+        assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(qc.result));
+        blocks.append(&block, &qc).unwrap();
+        completion_observer::observe(&budget, |observation| {
+            let Err(PublicationError::Deferred(reason)) = worker.commit(&block, &qc) else {
+                panic!("actual completed World cut must defer at final original shell funding");
+            };
+            assert!(matches!(reason.allocation_refusal(),
+                Some(iroha_allocation::AllocationRefusal::Capacity { requested_bytes, limit_bytes, .. })
+                if *requested_bytes == completion_observer::control_bytes()
+                && *limit_bytes == limit));
+            drop(reason);
+            let completed = observation.snapshot();
+            assert_eq!(
+                completed.0, 1,
+                "actual native reconstruction completed once"
+            );
+            assert!(completed.1.is_some());
+            assert_eq!(
+                worker
+                    .live
+                    .as_ref()
+                    .unwrap()
+                    .overlay
+                    .as_deref()
+                    .unwrap()
+                    .completed_world_cut_identity_for_test(),
+                completed.1,
+                "completed original World cut must survive final shared-control refusal"
+            );
+            assert_eq!(original_overlay(worker), overlay);
+            assert_eq!(worker.applied, applied);
+            assert_eq!(worker.state.view().height(), height);
+            assert!(worker.recovery.is_none());
+            assert!(events.try_recv().is_err());
+            assert!(budget.same_pool(&worker.state.ivm_execution_budget()));
+            assert_eq!(block.payload().as_slice().as_ptr(), wire);
+            assert_eq!(std::ptr::from_ref(block.source()), source);
+            let (write_free, commit_free) = worker.state.publication_fences_available_for_test();
+            assert!(write_free);
+            assert!(commit_free);
+            // The original reconstructed scratch retired on the refused return.
+            // Its freed capacity may already fit the shell; never require another
+            // refusal or change the configured limit to manufacture a retry.
+            observation.release_original_blocker();
+            worker
+                .commit(&block, &qc)
+                .expect("same original completed cut publishes after release");
+            assert_eq!(
+                observation.snapshot(),
+                completed,
+                "final shell retry must not hash or reconstruct the original tail again"
+            );
+            assert_eq!(budget.limit_bytes(), limit);
+            assert_eq!(worker.applied, (block.header().height, qc.block_hash));
+            assert_eq!(worker.state.view().height(), height + 1);
+            assert!(worker.live.as_ref().unwrap().overlay.is_none());
+            assert!(worker.recovery.is_none());
+            let original_events = std::iter::from_fn(|| events.try_recv().ok()).count();
+            assert!(
+                original_events > 0,
+                "real original publication emits its retained events"
+            );
+            worker.commit(&block, &qc).unwrap();
+            assert_eq!(observation.snapshot(), completed);
+            assert!(
+                events.try_recv().is_err(),
+                "published completion delivers events once"
+            );
+        });
+    });
+}
+
+/// Completed local cut custody cannot authorize a changed State visibility source.
+#[test]
+fn original_worker_completed_world_cut_refuses_changed_publication_source() {
+    use crate::state::world_projection::world_state_accumulator::world_state_cut::completion_observer;
+    with_worker(|chain, worker, blocks, _events| {
+        let (block, qc) = executed(chain, worker);
+        let budget = worker.state.ivm_execution_budget();
+        let height = worker.state.view().height();
+        let overlay = original_overlay(worker);
+        assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(qc.result));
+        blocks.append(&block, &qc).unwrap();
+        completion_observer::observe(&budget, |observation| {
+            assert!(matches!(
+                worker.commit(&block, &qc),
+                Err(PublicationError::Deferred(_))
+            ));
+            let completed = observation.snapshot();
+            assert_eq!(completed.0, 1);
+            assert_eq!(
+                worker
+                    .live
+                    .as_ref()
+                    .unwrap()
+                    .overlay
+                    .as_deref()
+                    .unwrap()
+                    .completed_world_cut_identity_for_test(),
+                completed.1
+            );
+            let generation = worker.state.state_view_generation();
+            worker
+                .state
+                .with_held_view_publication_for_reader_test(|_| {});
+            assert_eq!(worker.state.state_view_generation(), generation + 2);
+            observation.release_original_blocker();
+            let mut exact_changed_source = false;
+            let retry = worker.commit_with(&block, &qc, |original| {
+                let outcome = original.try_publish();
+                exact_changed_source = matches!(&outcome,
+                    crate::state::StatePublicationOutcome::RecoveryRequired(
+                        crate::state::storage_transactions::TransactionsBlockError::SnapshotObservationChanged));
+                outcome
+            });
+            assert!(
+                exact_changed_source,
+                "the original typed generation refusal precedes completed capsule reuse"
+            );
+            assert!(matches!(retry, Err(PublicationError::RecoveryRequired(_))));
+            assert_eq!(observation.snapshot(), completed);
+            assert_eq!(original_overlay(worker), overlay);
+            assert_eq!(
+                worker
+                    .live
+                    .as_ref()
+                    .unwrap()
+                    .overlay
+                    .as_deref()
+                    .unwrap()
+                    .completed_world_cut_identity_for_test(),
+                completed.1
+            );
+            assert_eq!(worker.state.view().height(), height);
+            assert!(worker.recovery.is_some());
+            assert!(matches!(
+                worker.commit(&block, &qc),
+                Err(PublicationError::RecoveryRequired(_))
+            ));
+            assert_eq!(observation.snapshot(), completed);
+        });
+    });
+}

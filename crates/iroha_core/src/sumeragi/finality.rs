@@ -794,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn portable_builder_verifies_original_unflagged_boundary_quorum() {
+    fn portable_builder_verifies_original_boundary_commit_quorum() {
         let mut chain = CertifiedTestChain::npos_boundary_fixture();
         chain.commit(Vec::new());
         let proof = build_proof(&chain.state().view(), 10).unwrap();

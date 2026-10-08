@@ -852,12 +852,47 @@ fn native_lane_admission_and_restore_keep_original_carrier_clock_through_penalty
     evidence::validate_persisted_records(chain.state()).unwrap();
 }
 
+// These two view-only phases must return before nested native history reads start.
+// Keep their concrete StateView temporaries off the enclosing default-stack test frame.
+#[inline(never)]
+fn original_lane_observer_carrier(state: &crate::state::State) -> u64 {
+    assert!(
+        state
+            .view()
+            .world()
+            .consensus_evidence()
+            .iter()
+            .next()
+            .is_none()
+    );
+    state.view().height() as u64 + 1
+}
+
+#[inline(never)]
+fn assert_original_lane_observer_record(
+    state: &crate::state::State,
+    key: iroha_crypto::Hash,
+    proof: &iroha_data_model::block::consensus::Evidence,
+    carrier: u64,
+) {
+    use iroha_data_model::block::consensus::EvidencePenaltyStatus;
+    let view = state.view();
+    let record = view.world().consensus_evidence().get(&key).unwrap();
+    assert_eq!(record.evidence, *proof);
+    assert_eq!(record.recorded_at_height, carrier);
+    assert_eq!(record.penalty_status, EvidencePenaltyStatus::Pending);
+    assert_eq!(
+        view.world().consensus_evidence().iter().count(),
+        1,
+        "forged observations never gain World authority"
+    );
+    drop(view);
+}
+
 #[test]
 fn native_lane_observer_proposes_only_original_authenticated_reports_after_local_retry() {
     use crate::sumeragi::{evidence, lanes::runner::evidence_observer};
-    use iroha_data_model::{
-        block::consensus::EvidencePenaltyStatus, parameter::system::SumeragiNposParameters,
-    };
+    use iroha_data_model::parameter::system::SumeragiNposParameters;
     let (mut chain, _guard) = anchored_chain_with_policy(
         7,
         SumeragiNposParameters {
@@ -895,16 +930,7 @@ fn native_lane_observer_proposes_only_original_authenticated_reports_after_local
     observer.evidence(&native);
     let retained = budget.reserved_bytes();
     assert!(retained > initial);
-    assert!(
-        state
-            .view()
-            .world()
-            .consensus_evidence()
-            .iter()
-            .next()
-            .is_none()
-    );
-    let carrier = state.view().height() as u64 + 1;
+    let carrier = original_lane_observer_carrier(&state);
     assert!(
         7 > carrier,
         "local lane height must not exclude a global proposal"
@@ -933,17 +959,7 @@ fn native_lane_observer_proposes_only_original_authenticated_reports_after_local
     assert_eq!(original_pool.reserved_bytes(), original_base);
     assert_eq!(budget.reserved_bytes(), retained);
     chain.commit(Vec::new());
-    let view = state.view();
-    let record = view.world().consensus_evidence().get(&key).unwrap();
-    assert_eq!(record.evidence, proof);
-    assert_eq!(record.recorded_at_height, carrier);
-    assert_eq!(record.penalty_status, EvidencePenaltyStatus::Pending);
-    assert_eq!(
-        view.world().consensus_evidence().iter().count(),
-        1,
-        "forged observations never gain World authority"
-    );
-    drop(view);
+    assert_original_lane_observer_record(&state, key, &proof, carrier);
     evidence::validate_persisted_records(&state).unwrap();
 }
 
