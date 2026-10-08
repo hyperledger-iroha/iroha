@@ -1,7 +1,8 @@
 //! One original certified carrier and archive acquisition, retained across local refusal.
 //!
 //! The portable proof's complete backing is prepaid before copying its authenticated fields.
-//! Native prefix verification remains the certified-chain reader's distinct custody boundary.
+//! A final namespace refusal retains that complete graph; delivery still requires every
+//! original source guard. Native prefix verification remains a distinct custody boundary.
 
 use std::{fmt, ops::Range};
 
@@ -83,6 +84,9 @@ pub enum NativeAmxRecordProofPollV1 {
     Complete(Option<AllocatedAmxRecordProofV1>),
 }
 
+#[cfg(test)]
+type PortableProofProbe<'v> = Box<dyn FnOnce(&Option<AllocatedAmxRecordProofV1>) + 'v>;
+
 struct Projection {
     lane_range: Range<usize>,
     witness: RetainedPayload<ExecWitness>,
@@ -103,6 +107,11 @@ pub struct NativeAmxRecordProofReadV1<'v, V: StateReadOnly> {
     read: Option<NativeContextRead>,
     bytes: Option<ChargedBuffer<u8>>,
     projection: Option<Projection>,
+    // None: not built; Some(None): authenticated absence; Some(Some(_)): exact funded graph.
+    // Delivery takes this slot only after every original namespace check succeeds.
+    portable: Option<Option<AllocatedAmxRecordProofV1>>,
+    #[cfg(test)]
+    portable_probe: Option<PortableProofProbe<'v>>,
     authenticated: bool,
     completed: bool,
 }
@@ -137,9 +146,31 @@ impl<'v, V: StateReadOnly> NativeAmxRecordProofReadV1<'v, V> {
             read: None,
             bytes: None,
             projection: None,
+            portable: None,
+            #[cfg(test)]
+            portable_probe: None,
             authenticated: false,
             completed: false,
         }
+    }
+
+    /// Observe one actual completed portable construction, before its final namespace guard.
+    /// This test-only seam cannot replace a source, proof, allocation pool or guard result.
+    ///
+    /// # Errors
+    /// Refuses a second observation or an already prepared/delivered selection.
+    #[cfg(test)]
+    pub(crate) fn probe_portable_prepared_once(
+        &mut self,
+        probe: impl FnOnce(&Option<AllocatedAmxRecordProofV1>) + 'v,
+    ) -> Result<(), NativeAmxRecordProofErrorV1> {
+        if self.completed || self.portable.is_some() || self.portable_probe.is_some() {
+            return Err(NativeAmxRecordProofErrorV1::Source(
+                "portable proof observation already selected",
+            ));
+        }
+        self.portable_probe = Some(Box::new(probe));
+        Ok(())
     }
 
     /// Resume the same source, retaining acquired bytes through every failed decode.
@@ -253,18 +284,37 @@ impl<'v, V: StateReadOnly> NativeAmxRecordProofReadV1<'v, V> {
             self.authenticated = true;
         }
         read.recheck_namespace()?;
-        let certificate = certified
-            .certificate()
-            .ok_or(Error::Source("original carrier has no native certificate"))?;
-        let proof = AllocatedAmxRecordProofV1::from_original_witness(
-            certificate,
-            projection.witness.get(),
-            self.kind,
-            self.transaction,
-            root,
-            &self.budget,
-        )?;
-        read.recheck_namespace()?;
+        if self.portable.is_none() {
+            let certificate = certified
+                .certificate()
+                .ok_or(Error::Source("original carrier has no native certificate"))?;
+            self.portable = Some(AllocatedAmxRecordProofV1::from_original_witness(
+                certificate,
+                projection.witness.get(),
+                self.kind,
+                self.transaction,
+                root,
+                &self.budget,
+            )?);
+            #[cfg(test)]
+            if let Some(probe) = self.portable_probe.take() {
+                probe(
+                    self.portable
+                        .as_ref()
+                        .expect("actual completed portable construction"),
+                );
+            }
+        }
+        let namespace = read.recheck_namespace();
+        #[cfg(all(test, sumeragi_core_mutation = "HC159"))]
+        if namespace.is_err() {
+            self.portable = None;
+        }
+        namespace?;
+        let proof = self
+            .portable
+            .take()
+            .ok_or(Error::Source("completed portable proof is not retained"))?;
         self.completed = true;
         Ok(NativeAmxRecordProofPollV1::Complete(proof))
     }

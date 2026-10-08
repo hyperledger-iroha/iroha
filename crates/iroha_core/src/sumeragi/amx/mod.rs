@@ -61,7 +61,7 @@ use iroha_data_model::{
     },
     permission::Permission,
     sumeragi::epoch::ValidatorEpochContextV1,
-    sumeragi_amx::{AmxDecisionV1, AmxError, AmxForeignInstanceV1, AmxRecordV1, AmxRelayOutcome},
+    sumeragi_amx::{AmxError, AmxForeignInstanceV1, AmxRecordV1, AmxRelayOutcome},
     sumeragi_finality::MAX_RESULT_PREIMAGE_BYTES,
 };
 use mv::storage::StorageReadOnly;
@@ -240,8 +240,18 @@ impl StateBlock<'_> {
     /// cell untouched.
     ///
     /// # Errors
-    /// A decision record does not encode (a local bug).
-    pub(crate) fn advance_sumeragi_amx(&mut self) -> Result<Vec<AmxDecisionV1>, String> {
+    /// Preserve the original record/allocator refusal. No pending entry is removed before
+    /// every decision write completes; provisional witness writes retry under the same keys.
+    pub(crate) fn advance_sumeragi_amx(&mut self) -> Result<usize, AmxError> {
+        self.advance_sumeragi_amx_with(write)
+    }
+
+    /// The same deadline owner accepts an injected record writer in unit controls.
+    /// TODO: fund the existing global cell graph and witness encoding/storage independently.
+    fn advance_sumeragi_amx_with(
+        &mut self,
+        mut record: impl FnMut(&AmxRecordV1) -> Result<(), AmxError>,
+    ) -> Result<usize, AmxError> {
         let height = self._curr_block.height().get();
         if !self
             .world
@@ -251,13 +261,21 @@ impl StateBlock<'_> {
             .iter()
             .any(|entry| entry.begin.deadline < height)
         {
-            return Ok(Vec::new());
+            return Ok(0);
         }
-        let decisions = self.world.sumeragi_amx.get_mut().expire(height);
-        for decision in &decisions {
-            write(&AmxRecordV1::Decision(*decision)).map_err(|error| error.to_string())?;
+        let outcome = self
+            .world
+            .sumeragi_amx
+            .get_mut()
+            .expire(height, |decision| record(&AmxRecordV1::Decision(decision)));
+        #[cfg(all(test, sumeragi_core_mutation = "HC161"))]
+        {
+            outcome.map_err(|error| AmxError::Encoding(error.to_string()))
         }
-        Ok(decisions)
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC161")))]
+        {
+            outcome
+        }
     }
 }
 

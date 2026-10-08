@@ -36,12 +36,12 @@ run on the same rebuilt candidate. Full fault/leakage campaigns and the complete
 original funded execution graph remain open.
 
 Native ceremony handoff preserves overlapping descriptors and read-only phase pipes.
-The rebuilt paid committee attempt authenticated seven-seat activation at height 129
-and its E+3 four-seat election, completed the corrected reward and exit-scheduling
-checks, then failed during four-seat return preparation when the original ceremony
-transport deadline expired. The original overall runtime limit was also exceeded.
+The committee fixture explicitly pays for the first E+1 successor before authenticating
+preparation: stopping exactly at the E selection boundary cannot supply E+1 evidence.
 Full paid 4→7→4, withdrawal, return-boundary liveness, restart and slashing qualification
-remain open. Lane retirement component controls now cover original reads, publications,
+remain open. Both rotation ceremonies must finish within their original transport and
+overall runtime deadlines on the rebuilt candidate. Lane retirement component controls
+now cover original reads, publications,
 historical opening joins, final-reader release and authentication/refusal propagation.
 Physical retirement and complete retained-history dependency closure remain open;
 certified disk frames remain retained for global replay.

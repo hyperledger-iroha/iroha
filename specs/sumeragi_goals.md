@@ -66,7 +66,7 @@ evidence, and implementation coverage alone does not close its network or releas
 All six gates remain open. H6 uses the reset runbook's deployment authority and runtime-only
 signing inputs; local build or component results cannot stand in for live qualification.
 
-### Current validation contract (2026-10-07)
+### Current validation contract (2026-10-08)
 
 Validate the current implementation and its surviving requirements. Generic
 consensus attestation, its flag/attachments and its dedicated mutations are
@@ -140,8 +140,10 @@ diagnostics select the current native proof, wallet, AMX and ordinary committed-
 finality owners; removed module paths and omitted current controls fail the source guard.
 Ordinary Clippy and documentation checks derive their explicit feature selection
 from current manifests, including implicit optional-dependency features. They keep
-all supported diagnostic features and exclude only the four owned mutation selectors;
-dedicated jobs compile those selectors as their owning unit tests. Forwarded mutation
+all supported diagnostic features and exclude only the six owned mutation selectors;
+dedicated jobs compile those selectors as their owning unit tests. SDK public-read
+and Deploy bootstrap controls have separate test-only selectors; their named
+positive baselines and mutation kills use their actual owning crates. Forwarded mutation
 selectors are refused, and feature coverage is checked against actual Cargo metadata.
 CI sweeps clear inherited single-seed and seed-base overrides. The nightly
 simulator explicitly runs 10,000 seeds; PR simulator and driver controls clear

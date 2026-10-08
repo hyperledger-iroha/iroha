@@ -150,13 +150,22 @@ fn each_missing_checked_semantic_or_membership_adapter_names_its_exact_output() 
             let error = capture_original_table_once(&block, table, limits(), 0)
                 .err()
                 .unwrap();
+            if matches!(owner, TableMaterializer::TransactionMembership) {
+                assert_eq!(error, Failure::MembershipGroupRequired.into());
+                assert_eq!(error.missing_adapter(), None);
+                assert!(matches!(
+                    table,
+                    "state.transactions.current" | "state.transactions.rollback"
+                ));
+                continue;
+            }
             assert_eq!(error.missing_adapter(), Some(table));
             assert_eq!(error, Failure::MissingAdapter(table).into());
             assert!(error.to_string().ends_with(table));
             missing.push(table);
         }
     }
-    assert_eq!(missing.len(), 5);
+    assert_eq!(missing.len(), 3);
     assert!(!missing.contains(&"triggers.contracts"));
     assert!(!missing.contains(&"world.account_rekey_records"));
     assert!(!missing.contains(&"world.nfts"));
@@ -176,8 +185,8 @@ fn each_missing_checked_semantic_or_membership_adapter_names_its_exact_output() 
     assert!(!missing.contains(&"triggers.time"));
     assert!(!missing.contains(&"triggers.by_call"));
     assert!(missing.contains(&"world.musubi_archive_availability"));
-    assert!(missing.contains(&"state.transactions.current"));
-    assert!(missing.contains(&"state.transactions.rollback"));
+    assert!(!missing.contains(&"state.transactions.current"));
+    assert!(!missing.contains(&"state.transactions.rollback"));
     for unknown in [
         "",
         "world",

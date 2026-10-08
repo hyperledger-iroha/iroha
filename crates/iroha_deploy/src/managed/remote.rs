@@ -530,12 +530,25 @@ impl ManagedStore {
             )?;
         }
         let spec = binding.spec.clone();
-        let local = self.up_private_root_bound(
+        let bootstrap =
+            authenticate_parent(&release_path(self, &request.name), profile, deadline, false)?;
+        if bootstrap.release().network_id != spec.parent_network_id {
+            return Err(Error::Invalid(
+                "parent reset cannot replace the selected AMX private root".into(),
+            ));
+        }
+        let sources = crate::bootstrap::AmxSourceSelection {
+            bootstrap: &bootstrap,
+            attachment: &directory,
+            deadline,
+        };
+        let local = self.up_private_root_with_amx_bound(
             &runtime.private_root_request(
                 &request.name,
                 remaining(deadline)?.min(Duration::from_secs(30)),
             ),
             &spec,
+            &sources,
             |prepared| {
                 retain_prepared_activation(
                     self,

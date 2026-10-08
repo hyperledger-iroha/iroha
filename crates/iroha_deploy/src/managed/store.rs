@@ -167,6 +167,7 @@ impl ManagedStore {
             RootKind::Global,
             GenerationPolicy::CreateOrRetain,
             StartupSelection::Select,
+            None,
             |_| Ok(()),
         )
     }
@@ -184,6 +185,7 @@ impl ManagedStore {
             RootKind::Global,
             GenerationPolicy::CreateOnly,
             StartupSelection::Select,
+            None,
             |_| Ok(()),
         )
     }
@@ -216,6 +218,28 @@ impl ManagedStore {
             RootKind::Private { spec: spec.clone() },
             GenerationPolicy::CreateOrRetain,
             StartupSelection::Select,
+            None,
+            retain_context,
+        )
+    }
+
+    /// Prepare only a fresh AMX manifest, or authenticate the original sources of a retained
+    /// signed generation. Source creation and generation admission share the operation lock.
+    pub(super) fn up_private_root_with_amx_bound(
+        &self,
+        request: &LocalnetRequest,
+        spec: &crate::localnet::PrivateRootSpec,
+        selection: &crate::bootstrap::AmxSourceSelection<'_>,
+        retain_context: impl FnOnce(&PreparedLocalnet) -> Result<()>,
+    ) -> Result<ManagedStatus> {
+        spec.validate()
+            .map_err(|_| Error::Invalid("invalid private-root SNS identity".into()))?;
+        self.up_environment(
+            request,
+            RootKind::Private { spec: spec.clone() },
+            GenerationPolicy::CreateOrRetain,
+            StartupSelection::Select,
+            Some(selection),
             retain_context,
         )
     }
@@ -240,6 +264,7 @@ impl ManagedStore {
             retained.root_kind,
             GenerationPolicy::RetainOnly,
             selection,
+            None,
             |_| Ok(()),
         )
     }
@@ -250,6 +275,7 @@ impl ManagedStore {
         root_kind: RootKind,
         generation_policy: GenerationPolicy,
         selection: StartupSelection,
+        amx: Option<&crate::bootstrap::AmxSourceSelection<'_>>,
         retain_context: impl FnOnce(&PreparedLocalnet) -> Result<()>,
     ) -> Result<ManagedStatus> {
         if matches!(root_kind, RootKind::Private { .. })
@@ -272,7 +298,20 @@ impl ManagedStore {
         let directory = self.networks.ensure_child(&request.name)?;
         let _operation = acquire(&directory, "operation.lock", &request.name)?;
         let mut reservations = None;
-        let retained = match generation::read_optional(&directory)? {
+        let previous = generation::read_optional(&directory)?;
+        let amx_sources = amx
+            .map(|selection| {
+                let RootKind::Private { spec } = &root_kind else {
+                    return Err(Error::Invalid(
+                        "AMX bootstrap requires the selected private generation".into(),
+                    ));
+                };
+                selection
+                    .retain(spec, previous.is_none())
+                    .map_err(|error| Error::Invalid(error.to_string()))
+            })
+            .transpose()?;
+        let retained = match previous {
             Some(retained) => {
                 if matches!(generation_policy, GenerationPolicy::CreateOnly) {
                     return Err(Error::Invalid(format!(
@@ -311,12 +350,22 @@ impl ManagedStore {
                     ));
                 }
                 let ports = LocalnetPorts::reserve()?;
-                let retained =
-                    generation::prepare(&directory, request, root_kind, launcher, daemon, &ports)?;
+                let retained = if let Some(sources) = amx_sources.as_ref() {
+                    generation::prepare_with_amx(
+                        &directory, request, root_kind, launcher, daemon, &ports, sources,
+                    )?
+                } else {
+                    generation::prepare(&directory, request, root_kind, launcher, daemon, &ports)?
+                };
                 reservations = Some(ports);
                 retained
             }
         };
+        if let Some(sources) = amx_sources.as_ref() {
+            sources
+                .require_signed_generation(&retained.prepared)
+                .map_err(|error| Error::Invalid(error.to_string()))?;
+        }
         // Binding is serialized with this exact validated generation, before spawn and before
         // any reset can acquire operation.lock. No callback may activate parent operations.
         programs.validate()?;

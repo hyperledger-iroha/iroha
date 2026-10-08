@@ -50,6 +50,38 @@ pub(super) fn prepare(
     daemon: BinaryPin,
     ports: &LocalnetPorts,
 ) -> Result<RetainedLocalnet> {
+    prepare_selected(directory, request, root_kind, launcher, daemon, ports, None)
+}
+
+pub(super) fn prepare_with_amx(
+    directory: &PrivateDirectory,
+    request: &LocalnetRequest,
+    root_kind: RootKind,
+    launcher: BinaryPin,
+    daemon: BinaryPin,
+    ports: &LocalnetPorts,
+    sources: &crate::bootstrap::ParentBootstrapSources,
+) -> Result<RetainedLocalnet> {
+    prepare_selected(
+        directory,
+        request,
+        root_kind,
+        launcher,
+        daemon,
+        ports,
+        Some(sources),
+    )
+}
+
+fn prepare_selected(
+    directory: &PrivateDirectory,
+    request: &LocalnetRequest,
+    root_kind: RootKind,
+    launcher: BinaryPin,
+    daemon: BinaryPin,
+    ports: &LocalnetPorts,
+    amx: Option<&crate::bootstrap::ParentBootstrapSources>,
+) -> Result<RetainedLocalnet> {
     if matches!(root_kind, RootKind::Private { .. })
         && request.service_profile != crate::localnet::LocalnetServiceProfile::Standard
     {
@@ -67,13 +99,23 @@ pub(super) fn prepare(
             request.service_profile,
             Some(&published_path),
         )?,
-        RootKind::Private { spec } => crate::localnet::prepare_private_root_at(
-            &request.name,
-            stage.path(),
-            ports,
-            spec,
-            Some(&published_path),
-        )?,
+        RootKind::Private { spec } => match amx {
+            Some(sources) => crate::localnet::prepare_private_root_with_amx_at(
+                &request.name,
+                stage.path(),
+                ports,
+                spec,
+                Some(&published_path),
+                sources,
+            )?,
+            None => crate::localnet::prepare_private_root_at(
+                &request.name,
+                stage.path(),
+                ports,
+                spec,
+                Some(&published_path),
+            )?,
+        },
     };
     let retained = RetainedLocalnet {
         root_kind,
