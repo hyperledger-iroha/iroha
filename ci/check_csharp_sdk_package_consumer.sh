@@ -207,7 +207,7 @@ if (Encoding.UTF8.GetString(canonicalMessage) != expectedMessage)
     throw new InvalidOperationException("Canonical request package smoke failed");
 }
 
-if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 26u
+if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 27u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {
     throw new InvalidOperationException("Packed ABI-27 SoraFS native bridge is unavailable");

@@ -409,7 +409,12 @@ STAGES = (
         'taira_public_reset::host::occupied::tests::stopped_unit_admission_requires_the_exact_prior_or_durable_successor',
     )),
     ("stopped owner runtime cleanup", (
-        "taira_public_reset::host::maintenance::tests::maintenance_scope_binds_all_four_units_and_failed_installed_runtime",
+        "taira_public_reset::host::maintenance::tests::maintenance_scope_admits_all_four_observed_daemon_pins",
+        "taira_public_reset::host::maintenance::tests::maintenance_scope_rejects_incomplete_or_crossed_observed_cohorts",
+        "taira_public_reset::host::maintenance::tests::maintenance_predecessor_kind_is_explicit_and_never_inferred",
+        "taira_public_reset::host::maintenance::tests::observed_daemon_hash_is_exact_size_and_deadline_bounded",
+        "taira_public_reset::host::maintenance::tests::maintenance_scope_binds_v2_all_four_units_and_installed_runtime",
+        "taira_public_reset::host::maintenance::tests::maintenance_scope_rejects_unsupported_update_contracts",
         "taira_public_reset::host::maintenance::tests::maintenance_flock_requires_one_exact_live_updater_owner",
         "taira_public_reset::host::maintenance::tests::maintenance_process_identity_handles_names_and_rejects_dead_owner",
         "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cohort_preflight_preserves_workers_until_every_slot_is_admitted",

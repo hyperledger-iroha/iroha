@@ -410,6 +410,21 @@ mod native {
             directory.revalidate().unwrap();
         }
 
+        // These controls specifically exercise the local ipc child, not the
+        // production long-path endpoint. Select a private short OS fixture root
+        // without mutating process-wide TMPDIR or weakening socket assertions.
+        fn short_store_fixture() -> tempfile::TempDir {
+            let root = if cfg!(target_os = "macos") {
+                "/private/tmp"
+            } else {
+                "/tmp"
+            };
+            tempfile::Builder::new()
+                .prefix("iroha-ipc-")
+                .tempdir_in(root)
+                .expect("create private short local socket fixture")
+        }
+
         #[cfg(target_os = "linux")]
         #[test]
         fn linux_peer_credentials_authenticate_both_owned_socket_pair_ends() {
@@ -444,7 +459,7 @@ mod native {
 
         #[test]
         fn short_store_keeps_authenticated_socket_inside_its_private_custody() {
-            let temporary = tempfile::tempdir().unwrap();
+            let temporary = short_store_fixture();
             let directory = PrivateDirectory::open_or_create(temporary.path().join("a")).unwrap();
             let expected = directory.path().join("ipc/s");
             assert!(
@@ -474,7 +489,7 @@ mod native {
 
         #[test]
         fn unsafe_local_ipc_custody_is_rejected_without_selecting_another_endpoint() {
-            let temporary = tempfile::tempdir().unwrap();
+            let temporary = short_store_fixture();
             let directory = PrivateDirectory::open_or_create(temporary.path().join("a")).unwrap();
             assert!(directory.path().join("ipc/s").as_os_str().as_bytes().len() < 104);
             let target = directory.ensure_child("target").unwrap();
@@ -492,7 +507,7 @@ mod native {
 
         #[test]
         fn stopped_endpoint_cleanup_keeps_other_files_and_rejects_non_sockets() {
-            let temporary = tempfile::tempdir().unwrap();
+            let temporary = short_store_fixture();
             let directory = PrivateDirectory::open_or_create(temporary.path().join("a")).unwrap();
             assert!(directory.path().join("ipc/s").as_os_str().as_bytes().len() < 104);
             clear_stopped_endpoint(&directory).unwrap();

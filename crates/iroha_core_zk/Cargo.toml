@@ -22,6 +22,7 @@ workspace = true
 [[bin]]
 name = "kagemusha_wallet_artifacts"
 path = "src/bin/kagemusha_wallet_artifacts.rs"
+required-features = ["dev-tools"]
 
 [[example]]
 name = "confidential_redemption"
@@ -32,6 +33,8 @@ path = "tests/grouped.rs"
 required-features = ["zk-tests"]
 
 [features]
+# Offline packaging generators are built only through explicit artifact selection.
+dev-tools = []
 # Every build includes native PIPA-R proving and verification. Defaults also
 # select STARK and advisory pre-verification; test fixtures remain separate.
 default = ["proofs-stark", "zk-preverify"]

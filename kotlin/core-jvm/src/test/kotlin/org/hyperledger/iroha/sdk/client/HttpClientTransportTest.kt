@@ -2501,6 +2501,7 @@ class HttpClientTransportTest {
             ),
         )
         for ((field, body) in executeCases) {
+            assertTrue(body != canonicalExecute, "execute response.$field mutation must change the fixture")
             val error = assertFailsWith<RuntimeException> {
                 RamLfeJsonParser.parseExecuteResponse(body.toByteArray(StandardCharsets.UTF_8))
             }
@@ -2517,6 +2518,9 @@ class HttpClientTransportTest {
         assertContains(openingError.message.orEmpty(), "ram-lfe execute response.output_opening")
 
         val canonicalVerify = ramLfeReceiptVerifyResponseJson()
+        val verifyFields = JsonParser.parse(canonicalVerify) as Map<*, *>
+        val verifyOutputHash = verifyFields["output_hash"] as String
+        val verifyAssociatedDataHash = verifyFields["associated_data_hash"] as String
         val verifyCases = listOf(
             "program_id" to canonicalVerify.replace(
                 "\"program_id\": \"identifier_lookup_retail\"",
@@ -2531,15 +2535,16 @@ class HttpClientTransportTest {
                 "\"verification_mode\": \" signed\"",
             ),
             "output_hash" to canonicalVerify.replace(
-                "\"output_hash\": \"${currentOwnerExecuteResponseField("output_hash")}\"",
-                "\"output_hash\": \"${currentOwnerExecuteResponseField("output_hash")} \"",
+                "\"output_hash\": \"${verifyOutputHash}\"",
+                "\"output_hash\": \"${verifyOutputHash} \"",
             ),
             "associated_data_hash" to canonicalVerify.replace(
-                "\"associated_data_hash\": \"${currentOwnerExecuteResponseField("associated_data_hash")}\"",
-                "\"associated_data_hash\": \" ${currentOwnerExecuteResponseField("associated_data_hash")}\"",
+                "\"associated_data_hash\": \"${verifyAssociatedDataHash}\"",
+                "\"associated_data_hash\": \" ${verifyAssociatedDataHash}\"",
             ),
         )
         for ((field, body) in verifyCases) {
+            assertTrue(body != canonicalVerify, "verify response.$field mutation must change the fixture")
             val error = assertFailsWith<RuntimeException> {
                 RamLfeJsonParser.parseReceiptVerifyResponse(body.toByteArray(StandardCharsets.UTF_8))
             }

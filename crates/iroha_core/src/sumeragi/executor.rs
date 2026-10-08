@@ -729,10 +729,24 @@ struct Live<'s> {
     witness: Option<crate::state::CapturedExecWitness>,
     result: Hash32,
     /// Complete original canonical epoch result and its exact source-bound allocation ledger.
-    commitment: iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
+    /// Retained for custody through the same Live lifetime and field drop order, even when
+    /// shipping execution no longer reads its value after encoding the original preimage.
+    _commitment: iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
     applied_config: AppliedConfig,
     committee: Vec<PeerId>,
     events: Vec<EventBox>,
+}
+
+#[cfg(test)]
+impl Live<'_> {
+    /// Borrow the retained canonical result for original-custody assertions.
+    fn commitment(&self) -> &iroha_allocation::RetainedPayload<ExecutionResultCommitment> {
+        let Self {
+            _commitment: commitment,
+            ..
+        } = self;
+        commitment
+    }
 }
 
 /// The one original execution's progress; no phase reconstructs a predecessor owner.
@@ -1965,7 +1979,7 @@ impl<'s> Worker<'s> {
             overlay: Some(original.overlay),
             witness: Some(original.witness),
             result,
-            commitment,
+            _commitment: commitment,
             applied_config: original.applied_config,
             committee: original.committee,
             events: original.events,

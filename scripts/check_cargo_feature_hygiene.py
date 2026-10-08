@@ -106,6 +106,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "sm-neon": ("dep:sm4-neon", "dep:sm3-neon"),
     },
     "iroha_data_model": {
+        "mutation-testing": (),
         "default": ("application-model",),
         "application-model": ("governance", "pqc", "bls", "gost", "sm"),
         "bls": ("iroha_crypto/bls",),
@@ -137,6 +138,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "zk-preverify": ("iroha_core_zk/zk-preverify",),
  "zk-stark": ("iroha_core_zk/zk-stark", "iroha_core_privacy/zk-stark")},
     "iroha_core_zk": {
+        "dev-tools": (),
         "default": ("proofs-stark", "zk-preverify"),
         "proofs-stark": ("zk-stark",),
         "zk-stark": ("dep:fastpq_prover",),
@@ -233,6 +235,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "bridge": (),
  "offline-visual-codecs": ("dep:image",)},
     "iroha": {
+        "mutation-testing": (),
         "default": ("tls-rustls-native-roots", "gost", "sm"),
         "gost": ("iroha_crypto/gost", "iroha_data_model/gost"),
         "sm": ("iroha_crypto/sm", "iroha_data_model/sm"),
@@ -436,6 +439,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
         "bench",
         "dev-tools",
         "fault_injection",
+        "mutation-testing",
         "test-fixtures",
         "trybuild-tests",
     ),
@@ -456,6 +460,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "zk-proof-tags",
  "zk-tests"),
     "iroha_core_zk": (
+        "dev-tools",
         "test-utils",
         "zk-tests",
     ),
@@ -485,6 +490,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "zk-stark"),
     "iroha_cli_lib": ("cli_integration_harness",),
     "iroha": (
+        "mutation-testing",
         "test-fixtures",
         "test-network-private-settlement-evidence",
         "tls-native",

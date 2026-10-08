@@ -970,7 +970,7 @@ fn reversible_publication_refusal_retains_original_overlay_capture_and_certified
             .live
             .as_ref()
             .unwrap()
-            .commitment
+            .commitment()
             .get()
             .schedule
             .current
@@ -1001,7 +1001,7 @@ fn reversible_publication_refusal_retains_original_overlay_capture_and_certified
                     .live
                     .as_ref()
                     .unwrap()
-                    .commitment
+                    .commitment()
                     .get()
                     .schedule
                     .current
@@ -1612,7 +1612,7 @@ fn context_proof_capacity_retry_retains_original_witness_inputs_and_execution() 
             overlay
         );
         assert_eq!(
-            live.commitment.get().schedule.current.committee.as_ptr(),
+            live.commitment().get().schedule.current.committee.as_ptr(),
             authority
         );
         assert_eq!(live.witness.as_ref().unwrap().writes.as_ptr(), writes);
@@ -1712,7 +1712,7 @@ fn result_encoding_capacity_retry_keeps_original_execution_and_allocation_custod
             overlay
         );
         assert_eq!(
-            live.commitment.get().schedule.current.committee.as_ptr(),
+            live.commitment().get().schedule.current.committee.as_ptr(),
             authority
         );
         assert_eq!(
@@ -1774,7 +1774,7 @@ fn assert_certificate_allocation_retry(
             let overlay = original_overlay(worker);
             let live = worker.live.as_ref().unwrap();
             let witness = iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire());
-            let authority = live.commitment.get().schedule.current.committee.as_ptr();
+            let authority = live.commitment().get().schedule.current.committee.as_ptr();
             let preimage = match &live.phase {
                 PublicationPhase::Executed { preimage, .. } => preimage.as_slice().as_ptr(),
                 _ => panic!("original executed phase"),
@@ -1840,7 +1840,7 @@ fn assert_certificate_allocation_retry(
                     witness
                 );
                 assert_eq!(
-                    live.commitment.get().schedule.current.committee.as_ptr(),
+                    live.commitment().get().schedule.current.committee.as_ptr(),
                     authority
                 );
                 assert_eq!(live.events.len(), event_count);
@@ -2273,14 +2273,14 @@ fn native_prepare_checks_real_quorum_before_changing_original_publication_owners
     with_worker(|chain, worker, _, _| {
         let (block, qc) = executed(chain, worker);
         let original = original_overlay(worker);
-        let commitment = std::ptr::from_ref(worker.live.as_ref().unwrap().commitment.get());
+        let commitment = std::ptr::from_ref(worker.live.as_ref().unwrap().commitment().get());
         let mut changed = qc.clone();
         changed.result = Hash32([0xA9; 32]);
         // The unchanged genuine signature cannot authenticate a different execution result.
         assert!(worker.prepare(&block, &changed).is_err());
         assert_eq!(original_overlay(worker), original);
         assert_eq!(
-            std::ptr::from_ref(worker.live.as_ref().unwrap().commitment.get()),
+            std::ptr::from_ref(worker.live.as_ref().unwrap().commitment().get()),
             commitment
         );
         assert!(matches!(
@@ -2315,8 +2315,8 @@ fn native_certificate_refusals_retain_original_execution_until_exact_publication
                 let state_height = worker.state.view().height();
                 let overlay = original_overlay(worker);
                 let live = worker.live.as_ref().unwrap();
-                let commitment = std::ptr::from_ref(live.commitment.get());
-                let authority = live.commitment.get().schedule.current.committee.as_ptr();
+                let commitment = std::ptr::from_ref(live.commitment().get());
+                let authority = live.commitment().get().schedule.current.committee.as_ptr();
                 let event_count = live.events.len();
                 let PublicationPhase::Executed { preimage, .. } = &live.phase else {
                     panic!("actual execution owns its original result preimage")
@@ -2382,9 +2382,9 @@ fn native_certificate_refusals_retain_original_execution_until_exact_publication
                     assert!(worker.commit(&block, refused).is_err());
                     assert_eq!(original_overlay(worker), overlay);
                     let live = worker.live.as_ref().unwrap();
-                    assert_eq!(std::ptr::from_ref(live.commitment.get()), commitment);
+                    assert_eq!(std::ptr::from_ref(live.commitment().get()), commitment);
                     assert_eq!(
-                        live.commitment.get().schedule.current.committee.as_ptr(),
+                        live.commitment().get().schedule.current.committee.as_ptr(),
                         authority
                     );
                     assert_eq!(live.events.len(), event_count);
@@ -2440,7 +2440,7 @@ fn boundary_certificate_read_refusal_retains_original_source_and_availability_un
 
             let overlay = original_overlay(worker);
             let live = worker.live.as_ref().unwrap();
-            let authority = live.commitment.get().schedule.current.committee.as_ptr();
+            let authority = live.commitment().get().schedule.current.committee.as_ptr();
             let PublicationPhase::Executed { preimage, .. } = &live.phase else {
                 panic!("actual original boundary preimage")
             };
@@ -2479,7 +2479,7 @@ fn boundary_certificate_read_refusal_retains_original_source_and_availability_un
                         .live
                         .as_ref()
                         .unwrap()
-                        .commitment
+                        .commitment()
                         .get()
                         .schedule
                         .current
@@ -2540,7 +2540,7 @@ fn boundary_discard_releases_only_the_unretained_original_execution_and_result()
             let state_height = worker.state.view().height();
             let overlay = original_overlay(worker);
             let live = worker.live.as_ref().unwrap();
-            let commitment = std::ptr::from_ref(live.commitment.get());
+            let commitment = std::ptr::from_ref(live.commitment().get());
             let PublicationPhase::Executed { preimage, .. } = &live.phase else {
                 panic!("actual original boundary execution")
             };
@@ -2548,7 +2548,7 @@ fn boundary_discard_releases_only_the_unretained_original_execution_and_result()
             worker.discard(10, &[qc.block_hash]);
             assert_eq!(original_overlay(worker), overlay);
             let live = worker.live.as_ref().unwrap();
-            assert_eq!(std::ptr::from_ref(live.commitment.get()), commitment);
+            assert_eq!(std::ptr::from_ref(live.commitment().get()), commitment);
             assert_eq!(live.result, qc.result);
             let PublicationPhase::Executed { preimage, .. } = &live.phase else {
                 panic!("keep preserves the same original result preimage")
@@ -2684,11 +2684,11 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
         // RetainedPayload's inline value moves into Live. Its original heap allocations,
         // complete canonical value and allocation-pool custody must survive that move.
         assert_eq!(
-            live.commitment.get().schedule.current.committee.as_ptr(),
+            live.commitment().get().schedule.current.committee.as_ptr(),
             authority
         );
         assert_eq!(
-            live.commitment
+            live.commitment()
                 .get()
                 .schedule
                 .current
@@ -2699,10 +2699,10 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             proofs
         );
         assert_eq!(
-            norito::encode_canonical(live.commitment.get()).unwrap(),
+            norito::encode_canonical(live.commitment().get()).unwrap(),
             canonical_result
         );
-        assert!(live.commitment.belongs_to(&budget));
+        assert!(live.commitment().belongs_to(&budget));
         assert_eq!(
             iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire()),
             witness
@@ -2732,7 +2732,7 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             "archive retains the exact original execution write order"
         );
         assert!(
-            live.commitment
+            live.commitment()
                 .get()
                 .native_lanes
                 .matches_state_encoding(chain.network_id(), 2, &projection.lanes)
@@ -2906,14 +2906,14 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
         assert_eq!(
             Some((
                 retained
-                    .commitment
+                    .commitment()
                     .get()
                     .schedule
                     .current
                     .committee
                     .as_ptr(),
                 retained
-                    .commitment
+                    .commitment()
                     .get()
                     .schedule
                     .current
@@ -2921,13 +2921,13 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
                     .iter()
                     .map(|member| member.proof_of_possession.as_ptr())
                     .collect::<Vec<_>>(),
-                norito::encode_canonical(retained.commitment.get()).unwrap(),
+                norito::encode_canonical(retained.commitment().get()).unwrap(),
             )),
             original_result
         );
         assert!(
             retained
-                .commitment
+                .commitment()
                 .belongs_to(&worker.state.ivm_execution_budget())
         );
         assert!(retained.native_contexts.is_some());

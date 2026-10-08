@@ -981,7 +981,7 @@
       },
       {
         "path": "crates/iroha_cli/src/taira_public_reset_history.rs",
-        "contains": "Immutable inventory custody for a terminal predecessor, never executable input."
+        "contains": "Immutable custody of a historical inventory, never executable input."
       }
     ]
   },
@@ -1039,14 +1039,14 @@
       "id": "T1-A08",
       "owner": "R.6",
       "path": "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs",
-      "anchor": "RamLfeVerificationMode::Signed => {",
+      "anchor": "if program_policy.verification_mode == RamLfeVerificationMode::Proof {",
       "summary": "signed-receipt RAM-LFE verification mode is still admitted"
     },
     {
       "id": "T1-A09",
       "owner": "R.6",
       "path": "crates/iroha_core/src/smartcontracts/isi/identifier.rs",
-      "anchor": "RamLfeVerificationMode::Signed => {",
+      "anchor": "execution.verification_mode != RamLfeVerificationMode::Signed",
       "summary": "identifier claims still accept the signed-receipt RAM-LFE mode"
     },
     {

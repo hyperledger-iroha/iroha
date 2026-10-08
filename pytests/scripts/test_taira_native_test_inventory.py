@@ -63,7 +63,7 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 404)
+        self.assertEqual(len(names), 406)
 
     def test_current_native_owner_additions_reject_same_count_selector_replacement(self):
         expected = {
@@ -84,7 +84,12 @@ class NativeInventoryTests(unittest.TestCase):
                 ('native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime', 'native_amx_original_begin_instruction_refusal_preserves_same_pool_and_last_owner_ledger', 'native_amx_paid_owned_queue_and_payload_clones_retain_original_proof_graph_and_last_owner_charge')),
             'native persisted AMX original proof custody': (
                 ('sumeragi/amx/mod.rs', 'sumeragi/amx/proof_tests.rs', 'proof_tests', 'sumeragi::amx::proof_tests'),
-                ('persisted_amx_records_survive_deadline_pruning_and_certified_replay', 'persisted_amx_proof_rejects_missing_corrupt_and_substituted_archives', 'persisted_amx_proof_refuses_original_pool_exhaustion_and_unverified_certificates', 'persisted_amx_original_read_retains_acquired_inode_and_exact_pool_through_decode_refusal')),
+                ('persisted_amx_records_survive_deadline_pruning_and_certified_replay',
+                 'persisted_amx_proof_rejects_missing_corrupt_and_substituted_archives',
+                 'persisted_amx_proof_refuses_original_pool_exhaustion_and_unverified_certificates',
+                 'persisted_amx_original_read_retains_acquired_inode_and_exact_pool_through_decode_refusal',
+                 'persisted_amx_completed_proof_retains_exact_graph_through_final_namespace_refusal',
+                 'persisted_amx_authenticated_absence_retains_final_guard_and_one_shot_delivery')),
             'native driver scheduling': (
                 ('sumeragi/driver/tests/mod.rs', 'sumeragi/driver/tests/sched.rs', 'sched', 'sumeragi::driver::tests::sched'),
                 (

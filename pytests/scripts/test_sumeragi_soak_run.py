@@ -405,7 +405,7 @@ class OrchestratorRunTests(unittest.TestCase):
             p2p = free_base(4, set(range(api, api + 4)))
             out = root / "run"
             status = soak.main(
-                ["--validators", "4", "--faults", "kill", "--seed", "1", "--duration", "10s", "--bin-dir", str(bins), "--out", str(out),
+                ["--validators", "4", "--faults", "none", "--seed", "1", "--duration", "10s", "--live-bound", "8s", "--bin-dir", str(bins), "--out", str(out),
                  "--base-api-port", str(api), "--base-p2p-port", str(p2p)]
             )
             self.assertEqual(status, soak.EXIT_HARNESS)

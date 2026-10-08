@@ -18,7 +18,14 @@ NATIVE_CORE_TEST_OWNERS = (
         'native_amx_original_begin_instruction_refusal_preserves_same_pool_and_last_owner_ledger',
         'native_amx_paid_owned_queue_and_payload_clones_retain_original_proof_graph_and_last_owner_charge',
     )),
-    ('native persisted AMX original proof custody', 'sumeragi/amx/mod.rs', 'sumeragi/amx/proof_tests.rs', 'proof_tests', 'sumeragi::amx::proof_tests', ('persisted_amx_records_survive_deadline_pruning_and_certified_replay', 'persisted_amx_proof_rejects_missing_corrupt_and_substituted_archives', 'persisted_amx_proof_refuses_original_pool_exhaustion_and_unverified_certificates', 'persisted_amx_original_read_retains_acquired_inode_and_exact_pool_through_decode_refusal')),
+    ('native persisted AMX original proof custody', 'sumeragi/amx/mod.rs', 'sumeragi/amx/proof_tests.rs', 'proof_tests', 'sumeragi::amx::proof_tests', (
+        'persisted_amx_records_survive_deadline_pruning_and_certified_replay',
+        'persisted_amx_proof_rejects_missing_corrupt_and_substituted_archives',
+        'persisted_amx_proof_refuses_original_pool_exhaustion_and_unverified_certificates',
+        'persisted_amx_original_read_retains_acquired_inode_and_exact_pool_through_decode_refusal',
+        'persisted_amx_completed_proof_retains_exact_graph_through_final_namespace_refusal',
+        'persisted_amx_authenticated_absence_retains_final_guard_and_one_shot_delivery',
+    )),
     ('native complete World root verification', 'sumeragi/test_chain.rs', 'sumeragi/test_chain/world_state_tests.rs', 'world_state_tests', 'sumeragi::test_chain::tests::world_state_tests', (
         'certified_results_bind_the_complete_world_and_the_emitted_events',
         'unwitnessed_world_divergence_changes_the_certified_result',

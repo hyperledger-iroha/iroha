@@ -573,8 +573,15 @@ fn generated_native_registration_retains_exact_reserve_operator_wallet_and_disti
                 .as_slice(),
             original_bytes.as_slice()
         );
+        let recovered_original = journal::required_original(&directory).unwrap();
         assert_eq!(
-            directory
+            recovered_original.directory().identity().unwrap(),
+            original.directory().identity().unwrap(),
+            "offline recovery must retain the exact committed attempt directory"
+        );
+        assert_eq!(
+            recovered_original
+                .directory()
                 .read("carrier.nrt", carrier_bytes.len())
                 .unwrap()
                 .as_slice(),

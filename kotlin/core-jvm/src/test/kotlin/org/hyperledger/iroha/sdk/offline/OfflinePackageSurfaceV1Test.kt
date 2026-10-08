@@ -12,7 +12,8 @@ import org.junit.jupiter.api.Test
  * Pins the KAGEMUSHA source surface of the three published Kotlin SDK modules.
  *
  * Only the KAGEMUSHA wallet V1 wire, typed ordinary Activate/IssueLoad constructors, account originals, enrollment binding, P-256 codec,
- * Native installation/admission and operation owners, platform adapter, and private native replies remain. The retired coordinator,
+ * Eligibility middleware, native installation/admission and operation owners, ledger and output
+ * projections, platform adapter, and private native replies remain. The retired coordinator,
  * ordinary-runtime, device-lifecycle, probe, provider and
  * Torii sources must not return under any source set, and neither Android module may register a
  * `ServiceLoader` provider. The `core-jvm` test task declares these file names as inputs.
@@ -48,6 +49,26 @@ class OfflinePackageSurfaceV1Test {
         private const val WALLET_PACKAGE = "org/hyperledger/iroha/sdk/offline/wallet"
 
         val KEPT = listOf(
+            "core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaEnrollmentEligibilityV1.kt",
+            "core-jvm/src/test/java/org/hyperledger/iroha/sdk/offline/KagemushaEligibilityJavaTest.java",
+            "core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/KagemushaLedgerOriginalTransportV1Test.kt",
+            "core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaEnrollmentEligibilityV1Test.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletCreditProjectionV1.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletDeletionV1.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletLedgerV1.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletOutputV1.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletRequestFeeSelectionV1.kt",
+            "kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletUnloadChargeReviewV1.kt",
+            "kagemusha-wallet-android/src/test/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletOutputJavaTest.java",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletBoundDeliveryV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletCreditProjectionV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletDeletionHostNativeV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletDeletionV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletLedgerV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletObservationHostNativeV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletOutputV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletRequestFeeSelectionV1Test.kt",
+            "kagemusha-wallet-android/src/test/kotlin/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletUnloadChargeReviewV1Test.kt",
             "core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaWalletAccountOriginalV1.kt",
             "core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaWalletEnrollmentBindingV1.kt",
             "core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaWalletAccountOriginalV1Test.kt",

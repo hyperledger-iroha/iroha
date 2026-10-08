@@ -132,6 +132,41 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                 gate.validate_selected_source_test_inventory(
                     SCRIPT.parents[1], gate.qualification_stages(scope))
 
+    def test_current_amx_final_guard_and_maintenance_controls_are_exact_required_tests(self):
+        root = SCRIPT.parents[1]
+        controls = {
+            "core": tuple("sumeragi::amx::proof_tests::" + leaf for leaf in (
+                "persisted_amx_completed_proof_retains_exact_graph_through_final_namespace_refusal",
+                "persisted_amx_authenticated_absence_retains_final_guard_and_one_shot_delivery",
+            )),
+            "cli": tuple("taira_public_reset::host::maintenance::tests::" + leaf for leaf in (
+                "maintenance_scope_admits_all_four_observed_daemon_pins",
+                "maintenance_scope_rejects_incomplete_or_crossed_observed_cohorts",
+                "maintenance_predecessor_kind_is_explicit_and_never_inferred",
+                "observed_daemon_hash_is_exact_size_and_deadline_bounded",
+                "maintenance_scope_binds_v2_all_four_units_and_installed_runtime",
+                "maintenance_scope_rejects_unsupported_update_contracts",
+            )),
+        }
+        retired = ("taira_public_reset::host::maintenance::tests::"
+                   "maintenance_scope_binds_all_four_units_and_failed_installed_runtime")
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)
+            for harness, required in controls.items():
+                names = [name for _, cases in selected[harness] for name in cases]
+                self.assertNotIn(retired, names)
+                for name in required:
+                    with self.subTest(scope=scope, harness=harness, name=name):
+                        self.assertEqual(names.count(name), 1)
+                        focused = gate.focused_regression_stages(scope, (harness + "=" + name,))
+                        self.assertEqual(tuple(focused), (harness,))
+                        self.assertEqual([item for _, cases in focused[harness] for item in cases], [name])
+                        gate.validate_selected_source_test_inventory(root, focused)
+                        gate.require_tests(name + ": test", focused[harness])
+                        listing = "\n".join(item + ": test" for item in names if item != name)
+                        with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                            gate.require_tests(listing, selected[harness])
+
     def test_original_shared_history_consumers_are_selected_focusable_and_required(self):
         root = SCRIPT.parents[1]
         groups = {

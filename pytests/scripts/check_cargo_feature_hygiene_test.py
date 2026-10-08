@@ -822,13 +822,23 @@ def test_contextual_cuda_pins_both_exact_dependency_members() -> None:
         ), members
 
 
-def test_daemon_mutation_testing_is_empty_explicit_and_excluded_from_defaults() -> None:
-    document = _guarded_document("irohad_lib")
-    assert _guarded_errors("irohad_lib", document) == []
-    assert FEATURE_HYGIENE.EXPECTED_FEATURES["irohad_lib"]["mutation-testing"] == ()
+@pytest.mark.parametrize(
+    ("package", "aggregates"),
+    [
+        ("irohad_lib", ("default", "daemon")),
+        ("iroha", ("default",)),
+        ("iroha_data_model", ("default", "application-model")),
+    ],
+)
+def test_unit_mutation_testing_is_empty_explicit_and_excluded_from_defaults(
+    package: str, aggregates: tuple[str, ...],
+) -> None:
+    document = _guarded_document(package)
+    assert _guarded_errors(package, document) == []
+    assert FEATURE_HYGIENE.EXPECTED_FEATURES[package]["mutation-testing"] == ()
     assert document["features"]["mutation-testing"] == []
-    assert "mutation-testing" in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES["irohad_lib"]
-    assert "mutation-testing" not in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES["irohad_lib"]
+    assert "mutation-testing" in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES[package]
+    assert "mutation-testing" not in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES[package]
     assert "mutation-testing" not in FEATURE_HYGIENE.local_default_feature_closure(
         FEATURE_HYGIENE.cargo_visible_features(document)
     )
@@ -836,22 +846,25 @@ def test_daemon_mutation_testing_is_empty_explicit_and_excluded_from_defaults() 
     changed["features"]["mutation-testing"] = ["iroha_core/mutation-testing"]
     assert any(
         "feature `mutation-testing` must be []" in error
-        for error in _guarded_errors("irohad_lib", changed)
+        for error in _guarded_errors(package, changed)
     )
-    for aggregate in ("default", "daemon"):
+    for aggregate in aggregates:
         changed = copy.deepcopy(document)
         changed["features"][aggregate].append("mutation-testing")
         assert any(
             "explicit opt-in feature `mutation-testing` is reachable from `default`" in error
-            for error in _guarded_errors("irohad_lib", changed)
+            for error in _guarded_errors(package, changed)
         ), aggregate
 
 
-def test_daemon_mutation_dependency_is_nonshipping_even_through_an_alias(tmp_path: Path) -> None:
+@pytest.mark.parametrize("package", ["irohad_lib", "iroha", "iroha_data_model"])
+def test_unit_mutation_dependency_is_nonshipping_even_through_an_alias(
+    tmp_path: Path, package: str,
+) -> None:
     _write_fixture(tmp_path)
     assert FEATURE_HYGIENE.check_repository(tmp_path) == []
     assert not any(
-        owner == "irohad_lib" and feature == "mutation-testing"
+        owner == package and feature == "mutation-testing"
         for _consumer, owner, feature in
         FEATURE_HYGIENE.NONSHIPPING_EXPLICIT_OPT_IN_DEPENDENCY_ALLOWLIST
     )
@@ -860,7 +873,7 @@ def test_daemon_mutation_dependency_is_nonshipping_even_through_an_alias(tmp_pat
         if section != "dependencies":
             rows.extend(["", f"[{section}]"])
         rows.append(
-            'daemon_owner = { package = "irohad_lib", version = "0.1.0", '
+            f'unit_owner = {{ package = "{package}", version = "0.1.0", '
             'default-features = false, features = ["mutation-testing"] }'
         )
         _write_member(tmp_path, "crates/consumer", rows)
@@ -869,8 +882,8 @@ def test_daemon_mutation_dependency_is_nonshipping_even_through_an_alias(tmp_pat
             assert errors == []
         else:
             assert any(
-                f"package `consumer` [{section}] dependency `daemon_owner` "
-                "(package `irohad_lib`) selects explicit opt-in feature `mutation-testing` "
+                f"package `consumer` [{section}] dependency `unit_owner` "
+                f"(package `{package}`) selects explicit opt-in feature `mutation-testing` "
                 "from a non-dev dependency declaration" in error
                 for error in errors
             ), (section, errors)

@@ -26,7 +26,7 @@ ff = "0.13.1"
 
 [dev-dependencies]
 # Exact ordinary ledger Merkle hashing and normal validator signature oracles.
-iroha_crypto = { workspace = true, features = ["bls"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["bls"] }
 # Fallible kernel resource probes for the qualification harness only.
 iroha_measurement = { workspace = true }
 # The harness owns and verifies its actual computational worker pool.
