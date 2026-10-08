@@ -343,20 +343,49 @@ fn corrupted_or_noncanonical_frame_never_becomes_absent_or_a_recovered_tip() {
 }
 
 #[test]
-fn startup_refuses_invalid_full_qc_and_flagged_certificate_without_application_verifier() {
-    for flagged in [false, true] {
+fn startup_authenticates_signature_and_requires_exact_commit_quorum() {
+    // Authenticate real signatures with too few, exactly enough, and too many equal votes.
+    for signer_count in [0, 2, 3, 4] {
         let dir = tempfile::tempdir().unwrap();
         let (body, mut qc, source, budget, crypto) = fixture(1025);
         let crypto: SharedCrypto = Arc::new(crypto);
-        if !flagged {
+        let mut signers: Vec<_> = (1..=4)
+            .map(|seed| {
+                KeyPairSigner::new(&KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+                    .unwrap()
+            })
+            .collect();
+        signers.sort_by(|a, b| a.public_key().cmp(b.public_key()));
+        if signer_count == 0 {
             qc.agg_sig.0[0] ^= 1;
+            let keys: Vec<_> = signers[..3].iter().map(Signer::public_key).collect();
+            assert!(!crypto.verify_aggregate(&keys, &qc.preimage(), &qc.agg_sig));
+        } else {
+            qc.signers = Bitmap::from_indices(
+                4,
+                (0..signer_count).map(|index| u32::try_from(index).unwrap()),
+            )
+            .unwrap();
+            let signatures: Vec<_> = signers[..signer_count]
+                .iter()
+                .map(|signer| signer.sign(&qc.preimage()))
+                .collect();
+            qc.agg_sig = crypto.aggregate(&signatures);
+            let keys: Vec<_> = signers[..signer_count]
+                .iter()
+                .map(Signer::public_key)
+                .collect();
+            assert!(crypto.verify_aggregate(&keys, &qc.preimage(), &qc.agg_sig));
         }
-        // Place structurally canonical but unauthenticated bytes; startup must not trust them.
+        // Place canonical bytes directly: startup must authenticate the complete
+        // certificate against its independently selected committee and exact q.
         let mut prepared = PreparedLaneWrite::new(body, qc);
         let bytes = prepared.prepare(&budget).unwrap();
         let root = dir.path().join(hex::encode(source.instance().0));
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join(frame_name(1)), bytes).unwrap();
+        let path = root.join(frame_name(1));
+        fs::write(&path, bytes).unwrap();
+        let original = fs::read(&path).unwrap();
         let start = FileLaneBlockStore::begin_open(
             dir.path(),
             &source.instance(),
@@ -365,10 +394,25 @@ fn startup_refuses_invalid_full_qc_and_flagged_certificate_without_application_v
             schedule(&source),
         )
         .unwrap();
-        let (start, e) = start.complete().err().unwrap();
-        assert_eq!(e.io_kind(), io::ErrorKind::InvalidData);
-        let (_, e) = start.complete().err().unwrap();
-        assert_eq!(e.io_kind(), io::ErrorKind::InvalidData);
+        if signer_count == 3 {
+            let store = start
+                .complete()
+                .unwrap_or_else(|(_, error)| panic!("exact authenticated quorum: {error}"));
+            assert_eq!(store.height(), 1);
+            assert!(store.entry(1).unwrap().is_some());
+        } else {
+            let (start, error) = match start.complete() {
+                Err(failure) => failure,
+                Ok(_) => panic!("invalid certificate must refuse startup"),
+            };
+            assert_eq!(error.io_kind(), io::ErrorKind::InvalidData);
+            let (_, error) = match start.complete() {
+                Err(failure) => failure,
+                Ok(_) => panic!("same original invalid certificate must still refuse"),
+            };
+            assert_eq!(error.io_kind(), io::ErrorKind::InvalidData);
+        }
+        assert_eq!(fs::read(path).unwrap(), original);
     }
 }
 
@@ -528,6 +572,7 @@ fn contiguous_heights_context_conflicts_and_reopening_preserve_prior_semantics()
         match index {
             0 => bad.instance = Hash32([9; 32]),
             1 => bad.epoch.context = Hash32([9; 32]),
+            2 => bad.height = 2,
             _ => unreachable!(),
         };
         assert!(store.append(&first, &bad).is_err());

@@ -70,6 +70,25 @@ pub(super) async fn height_until(client: &iroha::client::Client, deadline: Insta
     .wrap_err("committee status exceeded its original deadline")?
 }
 
+/// Observe every voter concurrently within the same original phase deadline.
+/// The exact bounded committee roster determines both concurrency and result order;
+/// one failed or missing seat cannot be replaced by a smaller successful subset.
+pub(super) async fn heights_until(
+    clients: &[iroha::client::Client],
+    deadline: Instant,
+) -> Result<Vec<u64>> {
+    ensure!(
+        iroha_data_model::block::consensus::is_valid_committee_size(clients.len()),
+        "committee status requires an exact bounded voter roster"
+    );
+    ensure!(
+        Instant::now() < deadline,
+        "committee status deadline elapsed"
+    );
+    futures_util::future::try_join_all(clients.iter().map(|client| height_until(client, deadline)))
+        .await
+}
+
 /// Observe from a dedicated blocking worker with the same classified retry policy.
 pub(super) fn height_until_blocking(
     client: &iroha::blocking::Client,
@@ -561,5 +580,167 @@ mod status_observation_tests {
                 assert_eq!(transport.request_budgets.lock().unwrap().len(), 1);
             }
         }
+    }
+    #[derive(Debug)]
+    struct ConcurrentStatusTransport {
+        gate: Arc<tokio::sync::Barrier>,
+        calls: Arc<Vec<std::sync::atomic::AtomicUsize>>,
+        index: usize,
+        budget: Duration,
+        pending: bool,
+        refusal: bool,
+    }
+
+    impl HttpTransport for ConcurrentStatusTransport {
+        fn send_blocking(&self, _: TransportRequest) -> Result<Response<Vec<u8>>> {
+            panic!("committee batch must use asynchronous reads")
+        }
+
+        fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+            Box::pin(async move {
+                use std::sync::atomic::Ordering::SeqCst;
+                assert_eq!(request.method, iroha::http::Method::GET);
+                assert_eq!(request.url.path(), "/status");
+                assert!(request.body.is_empty());
+                assert!(request.timeout.unwrap() <= self.budget);
+                assert_eq!(self.calls[self.index].fetch_add(1, SeqCst), 0);
+                // A serialized implementation cannot pass this real transport
+                // barrier: all voter requests must enter before any can complete.
+                self.gate.wait().await;
+                if self.pending {
+                    return std::future::pending::<Result<Response<Vec<u8>>>>().await;
+                }
+                if self.refusal {
+                    return Ok(Response::builder()
+                        .status(503)
+                        .header(
+                            "x-iroha-reject-code",
+                            iroha::StatusFailureReason::CheckpointChanged.code(),
+                        )
+                        .body(Vec::new())?);
+                }
+                tokio::time::sleep(Duration::from_millis(
+                    u64::try_from(self.calls.len() - self.index).unwrap() * 2,
+                ))
+                .await;
+                Ok(Response::builder()
+                    .status(200)
+                    .header("content-type", "application/json")
+                    .body(json::to_vec(&iroha_torii_shared::status::Status {
+                        blocks: 10 + u64::try_from(self.index).unwrap(),
+                        ..Default::default()
+                    })?)?)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_status_batch_reads_every_seat_and_preserves_roster_order() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        for seats in [4, 7] {
+            let budget = Duration::from_secs(2);
+            let gate = Arc::new(tokio::sync::Barrier::new(seats));
+            let calls = Arc::new((0..seats).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
+            let clients = (0..seats)
+                .map(|index| {
+                    client(Arc::new(ConcurrentStatusTransport {
+                        gate: Arc::clone(&gate),
+                        calls: Arc::clone(&calls),
+                        index,
+                        budget,
+                        pending: false,
+                        refusal: false,
+                    }))
+                })
+                .collect::<Vec<_>>();
+            let heights = heights_until(&clients, Instant::now() + budget)
+                .await
+                .unwrap();
+            assert_eq!(
+                heights,
+                (0..seats)
+                    .map(|index| 10 + u64::try_from(index).unwrap())
+                    .collect::<Vec<_>>()
+            );
+            assert!(calls.iter().all(|count| count.load(SeqCst) == 1));
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_status_batch_keeps_original_deadline_and_exact_peer_refusal() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        for refuse in [false, true] {
+            let budget = if refuse {
+                Duration::from_secs(2)
+            } else {
+                Duration::from_millis(100)
+            };
+            let gate = Arc::new(tokio::sync::Barrier::new(4));
+            let calls = Arc::new((0..4).map(|_| AtomicUsize::new(0)).collect::<Vec<_>>());
+            let clients = (0..4)
+                .map(|index| {
+                    client(Arc::new(ConcurrentStatusTransport {
+                        gate: Arc::clone(&gate),
+                        calls: Arc::clone(&calls),
+                        index,
+                        budget,
+                        pending: index == 2 && !refuse,
+                        refusal: index == 2 && refuse,
+                    }))
+                })
+                .collect::<Vec<_>>();
+            let deadline = Instant::now() + budget;
+            let error = heights_until(&clients, deadline).await.unwrap_err();
+            assert!(calls.iter().all(|count| count.load(SeqCst) == 1));
+            if refuse {
+                assert!(matches!(
+                    error.downcast_ref::<iroha::Error>(),
+                    Some(iroha::Error::StatusUnavailable {
+                        reason: Some(iroha::StatusFailureReason::CheckpointChanged),
+                        ..
+                    })
+                ));
+            } else {
+                // The SDK dispatch and outer phase timers share this deadline.
+                // Either timer can win; preserve the actual typed timeout rather
+                // than requiring the outer timer's display text.
+                assert!(
+                    matches!(
+                        error.downcast_ref::<iroha::Error>(),
+                        Some(iroha::Error::Timeout {
+                            operation: "diagnostic.status",
+                        })
+                    ) || error
+                        .downcast_ref::<tokio::time::error::Elapsed>()
+                        .is_some(),
+                    "unexpected pending status refusal: {error:#}"
+                );
+                assert!(Instant::now() >= deadline);
+                assert!(Instant::now().duration_since(deadline) < Duration::from_secs(1));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_status_batch_refuses_invalid_rosters_and_expired_deadline_before_dispatch()
+    {
+        let source = transport([]);
+        for seats in [0, 3, 5, 32] {
+            let clients = (0..seats)
+                .map(|_| client(source.clone()))
+                .collect::<Vec<_>>();
+            let error = heights_until(&clients, Instant::now() + Duration::from_secs(1))
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("exact bounded voter roster"));
+        }
+        let clients = (0..4).map(|_| client(source.clone())).collect::<Vec<_>>();
+        let error = heights_until(&clients, Instant::now()).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("committee status deadline elapsed")
+        );
+        assert!(source.request_budgets.lock().unwrap().is_empty());
     }
 }

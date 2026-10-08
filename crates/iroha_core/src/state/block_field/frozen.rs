@@ -142,7 +142,7 @@ where
     pub(crate) fn recover_installed_frozen_publication(&mut self) {
         assert!(!self.released, "field was terminally released");
         match self.phase.as_ref() {
-            Some(Phase::Frozen(_)) => {}
+            Some(Phase::Frozen(_) | Phase::Reading(_)) => {}
             Some(Phase::Publishing(_)) => self.recover_frozen_publication(),
             _ => panic!("original frozen or reacquiring field required"),
         }
@@ -153,7 +153,7 @@ where
     pub(crate) fn retire_frozen_cleanup(&mut self) {
         assert!(!self.released, "field was terminally released");
         assert!(
-            matches!(self.phase, Some(Phase::Frozen(_))),
+            matches!(self.phase, Some(Phase::Frozen(_) | Phase::Reading(_))),
             "complete original frozen field required"
         );
         drop(self.retry_cleanup.take());

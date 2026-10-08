@@ -181,7 +181,7 @@ pub(super) fn asset(app: &Map) -> Result<&Map> {
         )
         || !field(asset, "physicalLaneId")?
             .as_u64()
-            .is_some_and(|id| (1..=u32::MAX as u64).contains(&id) && id != 3 && id != 8)
+            .is_some_and(|id| (1..=u32::MAX as u64).contains(&id) && id != 3)
         || text(asset, "physicalLaneAlias")? != "bpng"
         || text(asset, "physicalDataspaceId")? != "8648377547929788715"
         || text(asset, "physicalDataspaceAlias")? != "bpng"

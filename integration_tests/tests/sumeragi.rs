@@ -223,6 +223,10 @@ fn a_crashed_leader_is_replaced() -> Result<()> {
 #[path = "nexus/atomic_private_settlement_transport.rs"]
 mod transport_evidence;
 
+#[cfg(unix)]
+#[path = "support/rs16_local_state.rs"]
+mod rs16_local_state;
+
 /// Opaque inbound transport hold, not selective RS16 row withholding or a
 /// Byzantine-node switch. Finality is verified independently from original
 /// genesis; the actual observer process must subsequently acquire signed rows.
@@ -231,7 +235,7 @@ mod transport_evidence;
 fn observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality() -> Result<()> {
     use iroha_test_network::{ObserverP2pBootstrap, ObserverSlowReaderRelayConfig};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use rs16_hold::{balances, certified_at, exact_processes, observer_held, wait_applied};
+    use rs16_hold::{balances, certified_at, exact_processes, observer_held, supply, wait_applied};
 
     init_instruction_registry();
     let sink = BOB_ID.to_i105_for_discriminant(
@@ -296,7 +300,7 @@ fn observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality() -> 
             .client()
             .with_request_deadline(warm_deadline)?
             .submit(
-                Register::account(Account::new(warm)),
+                Register::account(Account::new(warm.clone())),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )?;
         let baseline = network.validators()[0]
@@ -307,7 +311,25 @@ fn observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality() -> 
             .applied_height;
         ensure!(baseline > 1, "warmup must execute nonempty paid work");
         wait_applied(&network, baseline, warm_deadline, true)?;
-        let before = balances(&network, &fee_ids, warm_deadline, false)?;
+        let before = balances(&network, &fee_ids, warm_deadline)?;
+        let supply_before = supply(&network, fee_ids[0].definition(), warm_deadline)?;
+        let baseline_certified = certified_at(&network, observer, baseline, warm_deadline)?;
+        ensure!(
+            rs16_local_state::account_present(
+                observer,
+                &rt,
+                &warm,
+                &baseline_certified,
+                warm_deadline
+            )? && rs16_local_state::balances(
+                observer,
+                &rt,
+                &fee_ids,
+                &baseline_certified,
+                warm_deadline
+            )? == before,
+            "warm observer must locally apply the warm account and funded fee ledger"
+        );
         let established = network
             .observer_slow_reader_relay_stats_for(&observer.id())
             .ok_or_else(|| eyre!("observer relay source missing"))?;
@@ -350,21 +372,31 @@ fn observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality() -> 
         wait_applied(&network, target, deadline, false)?;
         observer_held(observer, baseline, deadline)?;
         ensure!(
-            !observer
-                .client()
-                .with_request_deadline(deadline)?
-                .client()
-                .query(FindAccounts::new())
-                .execute_all()?
-                .iter()
-                .any(|a| a.id() == &fresh),
-            "held observer applied fresh paid account work"
+            !rs16_local_state::account_present(
+                observer,
+                &rt,
+                &fresh,
+                &baseline_certified,
+                deadline
+            )? && rs16_local_state::balances(
+                observer,
+                &rt,
+                &fee_ids,
+                &baseline_certified,
+                deadline
+            )? == before,
+            "held observer locally applied fresh paid account work or its fee changes"
         );
-        let after = balances(&network, &fee_ids, deadline, false)?;
+        let after = balances(&network, &fee_ids, deadline)?;
+        let supply_after = supply(&network, fee_ids[0].definition(), deadline)?;
         let fee = iroha_primitives::numeric::Quantity::from(1_u32);
+        // Current direct Nexus settlement burns the real fee. A credited sink
+        // would preserve supply and cannot qualify this monetary observation.
         ensure!(
-            before[0].checked_sub(&after[0])? == fee && after[1].checked_sub(&before[1])? == fee,
-            "fresh work must debit the ordinary funded signer and credit the distinct fee sink"
+            before[0].checked_sub(&after[0])? == fee
+                && after[1] == before[1]
+                && supply_before.checked_sub(&supply_after)? == fee,
+            "fresh work must burn exactly one funded fee without crediting the sink: balances {before:?} -> {after:?}, supply {supply_before} -> {supply_after}"
         );
         let certified = certified_at(&network, &network.validators()[0], target, deadline)?;
         ensure!(
@@ -375,6 +407,44 @@ fn observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality() -> 
                     .external_transactions()
                     .any(|tx| tx.hash() == transaction),
             "certified held-height carrier must contain the actual paid transaction"
+        );
+        let block = certified.committed().block();
+        let mut settled = 0;
+        for index in 0..block.network_entrypoint_count() {
+            let Some(TransactionEntrypoint::External(input)) = block.network_entrypoint_at(index)
+            else {
+                continue;
+            };
+            if input.hash() != transaction {
+                continue;
+            }
+            let (_, output) = block
+                .network_output_at(u32::try_from(index)?)
+                .ok_or_else(|| eyre!("paid RS16 input has no original execution output"))?;
+            let receipt = output
+                .result
+                .nexus_fee_receipt()
+                .ok_or_else(|| eyre!("paid RS16 output omitted its actual fee receipt"))?;
+            ensure!(
+                output.result.0.is_ok()
+                    && receipt.source_id
+                        == *iroha_crypto::Hash::from(input.hash_as_entrypoint()).as_ref()
+                    && receipt.block_height == target
+                    && receipt.fee_asset_id == *fee_ids[0].definition()
+                    && receipt.debit_source
+                        == iroha_data_model::nexus::FeeDebitSource::Account(ALICE_ID.clone())
+                    && receipt.fee_amount == fee
+                    && matches!(
+                        receipt.settlement,
+                        iroha_data_model::block::consensus::NexusFeeSettlementV1::Burn
+                    ),
+                "certified RS16 execution must bind the same successful authority-paid fee burn"
+            );
+            settled += 1;
+        }
+        ensure!(
+            settled == 1,
+            "paid RS16 input must have exactly one fee output"
         );
         // A fixed bounded observation interval after committee finality confirms
         // the guard is still held; it never manufactures another block.
@@ -408,22 +478,29 @@ fn observer_transport_hold_preserves_signed_rs16_custody_and_paid_finality() -> 
         let held_for = held_at.elapsed();
         drop(pause);
         wait_applied(&network, target, deadline, true)?;
-        ensure!(
-            balances(&network, &fee_ids, deadline, true)? == after,
-            "released observer must apply the same fee debit and sink credit"
-        );
-        ensure!(
-            observer
-                .client()
-                .with_request_deadline(deadline)?
-                .client()
-                .query(FindAccounts::new())
-                .execute_all()?
-                .iter()
-                .any(|a| a.id() == &fresh),
-            "released observer must apply that same account work"
-        );
         let observer_certified = certified_at(&network, observer, target, deadline)?;
+        ensure!(
+            balances(&network, &fee_ids, deadline)? == after
+                && supply(&network, fee_ids[0].definition(), deadline)? == supply_after
+                && rs16_local_state::balances(
+                    observer,
+                    &rt,
+                    &fee_ids,
+                    &observer_certified,
+                    deadline
+                )? == after,
+            "released observer must locally apply the same fee debit and unchanged sink balance"
+        );
+        ensure!(
+            rs16_local_state::account_present(
+                observer,
+                &rt,
+                &fresh,
+                &observer_certified,
+                deadline
+            )?,
+            "released observer must locally apply that same account work"
+        );
         ensure!(
             observer_certified.committed().block_hash() == certified.committed().block_hash()
                 && observer_certified.committed().core_hash() == certified.committed().core_hash()
@@ -574,22 +651,16 @@ mod rs16_hold {
         network: &Network,
         ids: &[AssetId; 2],
         deadline: Instant,
-        observer: bool,
     ) -> Result<[Quantity; 2]> {
         let mut original = None;
-        for peer in network
-            .validators()
-            .iter()
-            .chain(network.observers().iter().filter(|_| observer))
-        {
+        for peer in network.validators() {
             let mut rows = BTreeMap::new();
-            for asset in peer
-                .client()
-                .with_request_deadline(deadline)?
-                .client()
-                .query(FindAssets::new())
-                .execute_all()?
-            {
+            let client = peer.client().with_request_deadline(deadline)?;
+            for id in ids {
+                let asset = client
+                    .client()
+                    .query_single(FindAssetById::new(id.clone()))?;
+                ensure!(asset.id() == id, "fee balance returned a different asset");
                 ensure!(
                     rows.insert(asset.id().clone(), asset.value().clone())
                         .is_none(),
@@ -610,6 +681,32 @@ mod rs16_hold {
             original = Some(values);
         }
         original.ok_or_else(|| eyre!("validator ledger observations absent"))
+    }
+
+    /// Observe the actual fee-asset supply on every validator within the original deadline.
+    pub(super) fn supply(
+        network: &Network,
+        id: &AssetDefinitionId,
+        deadline: Instant,
+    ) -> Result<Quantity> {
+        let mut original = None;
+        for peer in network.validators() {
+            let definition = peer
+                .client()
+                .with_request_deadline(deadline)?
+                .client()
+                .query_single(FindAssetDefinitionById::new(id.clone()))?;
+            ensure!(
+                definition.id() == id,
+                "fee supply returned a different asset"
+            );
+            let value = definition.total_quantity();
+            if let Some(previous) = &original {
+                ensure!(previous == value, "validator fee supplies disagree");
+            }
+            original = Some(value.clone());
+        }
+        original.ok_or_else(|| eyre!("validator fee supply observations absent"))
     }
 
     pub(super) fn certified_at(

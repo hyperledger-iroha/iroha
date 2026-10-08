@@ -595,13 +595,14 @@ async fn advance_to_height(
 ) -> Result<()> {
     let peers = exact_process_roster(network, voters)?;
     let deadline = Instant::now() + WAIT;
+    let clients = peers
+        .iter()
+        .map(|peer| peer.client().client().clone())
+        .collect::<Vec<_>>();
     let mut tick = 0_u64;
     let mut pending_height = None;
     loop {
-        let mut heights = Vec::new();
-        for peer in &peers {
-            heights.push(committee_status::height_until(peer.client().client(), deadline).await?);
-        }
+        let heights = committee_status::heights_until(&clients, deadline).await?;
         ensure!(
             Instant::now() < deadline,
             "current validator quorum stalled before height {target}; heights={heights:?}"

@@ -8,7 +8,10 @@ lane (override with --target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR; both must ag
 `prepare` keeps repo target/ by default, ignoring the development-only environment
 selector, and builds the four Linux release binaries
 from one fixed Git-object source capture with six jobs and captures read-only
-copies. Rerun the same prepare command to reuse completed captures or retry an
+copies. Explicit --source-mode canonical-checkout instead compiles the selected
+checkout; its HEAD, index and tracked bytes must match the signed selection before
+and after work. The immutable capture remains authority evidence only. This mode
+is available only for Linux prepare, not prepare-client or prepare-native-runtime. Rerun the same prepare command to reuse completed captures or retry an
 incomplete local build in the same warm Cargo lane. Failed attempt directories
 and logs remain intact. Preparation records native_check_scope=build-only
 and checks.passed=false, without running native regression checks. Its signed
@@ -99,7 +102,8 @@ from release_artifact_contract import (
     exclusive_output_fd, exclusive_write_bytes, publish_directory_noreplace, stable_hash_path,
     stable_open_relative,
 )
-from taira_cargo_cache import admit_source_fingerprints, local_package_names, source_fingerprints
+from taira_cargo_cache import (admit_source_fingerprints, local_package_names,
+                               local_package_roots, source_fingerprints)
 from taira_cargo_artifact import cargo_hash_path, cargo_open_relative
 
 
@@ -590,6 +594,31 @@ def verify_signed_source(root: Path, commit: str, signer: str) -> str:
             "commit signature does not match the expected signer")
     verify_controller_sources(root, commit)
     return git(root, "rev-parse", commit + "^{tree}").decode()
+
+
+def canonical_source_snapshot(root: Path, commit: str, entries: bytes) -> list[dict[str, object]]:
+    """Bind a canonical compiler checkout to the admitted signed Git selection."""
+    real_path(root)
+
+    def identity():
+        require(git(root, "rev-parse", "HEAD").decode() == commit,
+                "canonical compiler HEAD differs from the selected signed commit")
+        require(git(root, "branch", "--show-current") == b"optimizations",
+                "canonical compiler checkout requires optimizations")
+        require(git(root, "ls-files", "--stage", "-z") == entries,
+                "canonical compiler index differs from the selected signed tree")
+        require(not git(root, "ls-files", "--others", "--exclude-standard", "-z"),
+                "canonical compiler checkout has untracked source files")
+
+    identity()
+    for entry in entries.split(b"\0"):
+        if entry:
+            path = root / os.fsdecode(entry.split(b"\t", 1)[1])
+            require(path.resolve(strict=False).is_relative_to(root),
+                    "canonical compiler source symlink escapes the checkout")
+    snapshot = source_snapshot(root, entries)
+    identity()
+    return snapshot
 
 
 def frozen_snapshot(source: Path, entries: bytes, target_dir: Path, *,
@@ -1708,6 +1737,8 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
 def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, mode_lock_fd: int) -> dict[str, object]:
     root, target_dir = real_path(args.repo_root), real_path(args.target_dir)
     require(args.native_check_scope == "build-only", "preparation is build-only; use check for regression tests")
+    source_mode = getattr(args, "source_mode", "captured")
+    require(source_mode in {"captured", "canonical-checkout"}, "unsupported compiler source mode")
     output = real_path(args.output_dir, exists=False)
     preflight_preparation_tmpdir(dict(os.environ))
     require(Path(__file__).resolve() == root / "scripts/taira_release.py",
@@ -1722,6 +1753,8 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
             "output-dir must not contain the Cargo lane")
     tree = verify_signed_source(root, args.expected_commit, args.expected_signer)
     entries = commit_entries(root, args.expected_commit)
+    canonical_before = (canonical_source_snapshot(root, args.expected_commit, entries)
+                        if source_mode == "canonical-checkout" else None)
     if fresh:
         capacity_preflight([(target_dir, signed_source_size(root, args.expected_commit, entries),
                              "fixed source capture"),
@@ -1752,6 +1785,11 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         capture_thread.join()
     print(f"[taira-release] signed source capture ready ({capture_total} entries "
           f"in {time.monotonic() - capture_started:.1f}s)", flush=True)
+    authority_source, authority_before = source, before
+    if canonical_before is not None:
+        source, before = root, canonical_before
+        require(canonical_source_snapshot(root, args.expected_commit, entries) == before,
+                "canonical compiler source changed during authority capture")
     inherited = dict(os.environ)
     env, environment_record, incremental = preparation_environment(output, target_dir, inherited, fresh=fresh)
     tools = [verify_tool(args.zig, args.zig_sha256),
@@ -1778,8 +1816,9 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
             "native_environment_sha256": hashlib.sha256(canonical_json_bytes(native_env)).hexdigest(),
             "tree": tree, "target": TARGET, "profile": "release", "jobs": 6,
             "source_unchanged": True, "toolchain_unchanged": True,
-            "source_snapshot_sha256": hashlib.sha256(canonical_json_bytes(before)).hexdigest(),
-            "source_root": str(source), "source_output_target": str(target_dir), "compiler_tools": compiler_tools,
+            "source_snapshot_sha256": hashlib.sha256(canonical_json_bytes(authority_before)).hexdigest(),
+            # Source root names immutable authority; command binds the actual compiler root.
+            "source_root": str(authority_source), "source_output_target": str(target_dir), "compiler_tools": compiler_tools,
             "tools": tools, "command": command, "release_qualified": False, "deployed": False}
     request = {"schema": SESSION_SCHEMA, "repo_root": str(root), "target_dir": str(target_dir), **base}
     if fresh:
@@ -1792,7 +1831,11 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
                 "native linker choice or tool identity changed during preparation")
         require(recorded_preparation_environment(output, target_dir, request) == environment_record,
                 "preparation environment checkpoint changed during preparation")
-        require(frozen_snapshot(source, entries, target_dir) == before, "captured source changed during preparation")
+        require(frozen_snapshot(authority_source, entries, target_dir) == authority_before,
+                "captured source changed during preparation")
+        if canonical_before is not None:
+            require(canonical_source_snapshot(root, args.expected_commit, entries) == before,
+                    "canonical compiler source changed during preparation")
         require([{"name": row["name"], **verify_tool(Path(row["path"]), row["sha256"])}
                  for row in compiler_tools] == compiler_tools, "Rust toolchain changed during preparation")
         require([verify_tool(args.zig, args.zig_sha256),
@@ -1842,7 +1885,13 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         # Resolve the complete signed package graph before allocating an attempt
         # or running the release build.
         print("[taira-release] verify offline Cargo package closure", flush=True)
-        packages = local_package_names(source, env)
+        source_paths = ({root / row["path"] for row in before if row["kind"] == "regular"}
+                        if canonical_before is not None else None)
+        package_roots = (local_package_roots(source, env, source_paths=source_paths)
+                         if source_paths is not None else None)
+        packages = set(package_roots) if package_roots is not None else local_package_names(source, env)
+        fingerprint_options = ({"package_roots": package_roots, "source_paths": source_paths}
+                               if package_roots is not None else {})
         attempt_number = 1 if not names else int(names[-1]) + 1
         require(attempt_number <= 999999, "preparation attempt namespace exhausted")
         attempt = create_fresh_directory(attempts / f"{attempt_number:06d}", mode=0o700)
@@ -1878,7 +1927,8 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         def retire_checks():
             retire_checkpoint(checks)
 
-        admit_source_fingerprints(source, target_dir, TARGET, packages, before_retire=retire_checks)
+        admit_source_fingerprints(source, target_dir, TARGET, packages, before_retire=retire_checks,
+                                  **fingerprint_options)
         revalidate()
         if checks.exists():
             print("[taira-release] reused build-only observation; native checks were not run", flush=True)
@@ -1887,7 +1937,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
             print("[taira-release] build-only: native checks not run; artifacts remain unqualified", flush=True)
         revalidate()
         stage("Linux release build", lambda: run_build(source, command, env, attempt / "cargo.log", lock_fd=lock_fd, lane_lock_fd=lane_lock_fd, mode_lock_fd=mode_lock_fd))
-        with source_fingerprints(source, target_dir, TARGET, packages, repair=False):
+        with source_fingerprints(source, target_dir, TARGET, packages, repair=False, **fingerprint_options):
             revalidate()
             artifacts = stage("read-only artifact capture", lambda: capture_artifacts(target_dir, attempt))
             revalidate()
@@ -2307,6 +2357,8 @@ def parser() -> argparse.ArgumentParser:
                                  help="development diagnostic: run selected portable ownership targets first, then mandatory configuration and remaining explicit harnesses; not qualification")
         if name == "prepare":
             command.set_defaults(native_check_scope="build-only")
+            command.add_argument("--source-mode", choices=("captured", "canonical-checkout"), default="captured",
+                                 help="compiler input: immutable capture (default), or the exact clean signed HEAD in repo-root; capture remains authority evidence")
             command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
                                  help="pinned native build linker: LLVM 18 by default on Linux; system Apple ld on macOS; separate from shipping Zig")
             command.add_argument("--expected-commit", required=True)

@@ -3494,3 +3494,268 @@ def test_exact_control_later_extra_scenario_failure_cannot_hide_behind_earlier_c
     assert result["verdict"] == "error", result
     assert result["reason"] == "scenarios: only additional substring-selected tests failed"
     assert [step["required_failed"] for step in result["scenario"]["steps"]] == [[gate.SCENARIOS[scenarios[0]]], []]
+
+
+@pytest.mark.parametrize("mutation,name,owner", [
+    ("HC172", "original_musubi_group_equal_same_predecessor_revision_substitution_retains_original_pair",
+     "state/publication/retained_musubi_group.rs"),
+    ("HC173", "original_musubi_group_revision_reader_refusal_retains_completed_tables_and_exact_scope",
+     "state/block_field/retained_read.rs"),
+])
+def test_retained_cell_revision_mutations_bind_actual_core_pair_and_exact_control(mutation, name, owner):
+    prefix = "state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_musubi_group_tests::"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mutation]
+    assert rule.tests == (prefix + name,)
+    assert not rule.scenarios
+    assert gate.has_switch(mutation, core=True)
+    assert not gate.has_switch(mutation)
+    assert not gate.has_switch(mutation, model=True)
+    assert not gate.has_switch(mutation, daemon=True)
+    source = ROOT / "crates/iroha_core/src"
+    owners = {path.relative_to(source).as_posix() for path in source.rglob("*.rs")
+              if re.search(r'sumeragi_core_mutation\s*=\s*"' + mutation + '"', path.read_text())}
+    assert owners == {owner}
+    implementation = (source / owner).read_text()
+    assert 'all(test, sumeragi_core_mutation = "' + mutation + '")' in implementation
+    controls = (source / "state/publication/retained_musubi_group/tests.rs").read_text()
+    assert "fn " + name + "(" in controls
+    assert "allocations_during" in controls
+    assert "std::mem::replace" in controls
+    assert "scope_belongs_to(&foreign)" in controls
+    row = re.search(r"^\| " + mutation + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert row is not None and name in row.group()
+    if mutation == "HC172":
+        assert "revision.retained_read_matches_source(source)" in implementation
+        assert "revision: Option<mv::cell::FrozenDetachedRead<MusubiResolverIndexRevisionV1>>" in implementation
+    else:
+        cell = implementation.split("impl<V: Value", 1)[1]
+        assert "original.matches_read(source)" in cell
+        assert "original.try_into_detached()" in cell
+        assert "self.phase = Some(Phase::Reading(original))" in cell
+        assert "Err(RetainedReadPhaseError::ReadersRetained)" in cell
+
+
+@pytest.mark.parametrize("mutation,name", [
+    ("HC174", "retained_predecessor_ordered_merge_matches_exact_original_before_rows_in_both_modes"),
+    ("HC175", "retained_predecessor_later_work_refusal_preserves_descriptor_heads_frontiers_and_pool"),
+])
+def test_retained_predecessor_mutations_bind_original_descriptor_kernel_and_exact_control(mutation, name):
+    prefix = "state::publication::retained_rows::predecessor::tests::"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mutation]
+    assert rule.tests == (prefix + name,)
+    assert not rule.scenarios
+    assert gate.has_switch(mutation, core=True)
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}):
+        assert not gate.has_switch(mutation, **family)
+    source = ROOT / "crates/iroha_core/src"
+    owners = {path.relative_to(source).as_posix() for path in source.rglob("*.rs")
+              if re.search(r'sumeragi_core_mutation\s*=\s*"' + mutation + '"', path.read_text())}
+    owner = "state/publication/retained_rows/predecessor.rs"
+    assert owners == {owner}
+    implementation = (source / owner).read_text()
+    assert 'all(test, sumeragi_core_mutation = "' + mutation + '")' in implementation
+    controls = (source / "state/publication/retained_rows/predecessor_tests.rs").read_text()
+    assert "fn " + name + "(" in controls
+    assert '#[path = "predecessor_tests.rs"]' in implementation
+    assert "allocations_during" in controls
+    assert "resolve_amount" in controls
+    assert "original preimage value allocation" in controls
+    assert "same completed descriptor frontiers survive refusal" in controls
+    row = re.search(r"^\| " + mutation + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert row is not None and name in row.group()
+    assert "admit(work, required, limit)" in implementation
+    assert "exact_resolve(amount, head.resolve)" in implementation
+
+
+def test_retained_predecessor_closed_keys_and_actual_group_consumer_keep_fallible_work():
+    source = ROOT / "crates/iroha_core/src/state/publication"
+    group = (source / "retained_musubi_group.rs").read_text()
+    kernel = (source / "retained_rows/predecessor.rs").read_text()
+    keys = (source / "retained_rows/key_work.rs").read_text()
+    assert "advance_original_musubi_group_predecessor_read" in group
+    assert "self.check_original_musubi_group_read()?" in group
+    assert "self.scope.allocation_budget(),&mutself.work,limit" in re.sub(r"\s+", "", group)
+    assert "current_consumed" in kernel and "undo_consumed" in kernel
+    assert "ChargedBuffer::new(capacity, budget)" in kernel
+    assert "current_head" in kernel and "undo_head" in kernel
+    assert "comparison_units(work, limit)?" in kernel
+    assert "key.cmp(old_key)" in kernel
+    assert "key.clone()" not in kernel and "value.clone()" not in kernel
+    assert "StorageReadOnly" not in kernel
+    assert "MusubiReleaseIdV1" in keys and "self.version.prerelease.len()" in keys
+    assert "mod sealed" in keys
+    controls = (source / "retained_musubi_group/tests.rs").read_text()
+    assert "fn original_musubi_group_retained_predecessor_descriptors_use_exact_pair_and_scope(" in controls
+    assert "retired index grants no old row authority" in controls
+
+
+def test_retained_semantic_materializer_mutation_binds_original_rows_and_three_real_producers():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC176"]
+    name = "retained_semantic_original_rows_and_cursor_survive_later_refusal"
+    assert rule.tests == ("state::authority_registry::leaf::paired::retained_semantic::tests::" + name,)
+    assert not rule.scenarios
+    assert gate.has_switch("HC176", core=True)
+    assert not gate.has_switch("HC176")
+    assert not gate.has_switch("HC176", model=True)
+    assert not gate.has_switch("HC176", daemon=True)
+    source = ROOT / "crates/iroha_core/src"
+    owners = {path.relative_to(source).as_posix() for path in source.rglob("*.rs")
+              if re.search(r'sumeragi_core_mutation\s*=\s*"HC176"', path.read_text())}
+    # The mutation wrapper and its private physical-row retirement kernel.
+    assert owners == {"state/authority_registry/leaf/paired/retained_semantic.rs",
+                      "state/authority_registry/leaf/paired/staging.rs"}
+    kernel = (source / "state/authority_registry/leaf/paired/retained_semantic.rs").read_text()
+    assert 'all(test, sumeragi_core_mutation = "HC176")' in kernel
+    assert "self.builder.encoded.discard_for_mutation()" in kernel
+    assert "scope: scope.cloned()" in kernel
+    assert "setup_registry_work(key_literal, value_literal)" in kernel
+    assert kernel.index("admit_work(", kernel.index("fn from_source(")) < kernel.index("RetainedSemanticTable::new(", kernel.index("fn from_source("))
+    assert "self.pending = self.rows.next()" in kernel
+    assert "self.pending_row.take()" in re.sub(r"\s+", "", kernel)
+    assert "self.ordered=Some(NoritoKeyDigestRangeTreeV1::from_sorted_digests" in re.sub(r"\s+", "", kernel)
+    controls = (source / "state/authority_registry/leaf/paired/retained_semantic_tests.rs").read_text()
+    assert "fn " + name + "(" in controls
+    for obligation in ["first_key", "polls.get()", "original_value", "budget.reserved_bytes()", "allocations_during"]:
+        assert obligation in controls
+    assert "retained_semantic_physical_lookup_refusal_and_zero_budget_retirement_keep_completed_nodes" in controls
+    candidate = (source / "state/deserialize_world_musubi_capture_candidate.rs").read_text()
+    once = candidate.split("fn capture_table(", 1)[1].split("/// Retain", 1)[0]
+    assert once.count("RetainedSemanticRows::once(") == 3
+    assert "paired_semantic_table_from_rows" not in once
+    for owner in ["availability", "resolver", "directory"]:
+        assert "fn retain_" + owner + "_capture" in candidate
+    producer_controls = (source / "state/deserialize_world_musubi_retained_capture_tests.rs").read_text()
+    assert "actual_three_validated_semantic_producers_retry_in_the_original_pool" in producer_controls
+    assert "actual_retained_semantic_source_remains_the_original_snapshot_after_new_commit" in producer_controls
+    row = re.search(r"^\| HC176 \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert row is not None and name in row.group()
+
+
+def test_retained_musubi_validation_stage_has_exact_core_owner_and_real_late_refusal_control():
+    mutation = "HC177"
+    name = "retained_state_successful_musubi_validation_survives_late_writer_refusal"
+    prefix = "state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mutation]
+    assert rule.tests == (prefix + name,)
+    assert not rule.scenarios
+    assert gate.has_switch(mutation, core=True)
+    for other_owner in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}):
+        assert not gate.has_switch(mutation, **other_owner)
+    source = ROOT / "crates/iroha_core/src"
+    owners = {path.relative_to(source).as_posix() for path in source.rglob("*.rs")
+              if re.search(r'sumeragi_core_mutation\s*=\s*"HC177"', path.read_text())}
+    assert owners == {"state/publication.rs"}
+    publication = (source / "state/publication.rs").read_text()
+    validators = (source / "state/world_commit.rs").read_text()
+    controls = (source / "state/direct_commit_musubi_scratch_tests.rs").read_text()
+    assert 'all(test, sumeragi_core_mutation = "HC177")' in publication
+    assert "original.musubi_validated = false;" in publication
+    assert publication.index("validate_prepared_policy_transition(world)") < publication.index("if !*musubi_validated")
+    assert publication.index("validate_prepared_musubi_universal(") < publication.index("*musubi_validated = true;")
+    assert publication.index("let current_generation =") < publication.index("if !*musubi_validated")
+    compact_publication = re.sub(r"\s+", "", publication)
+    assert compact_publication.index("if!*musubi_validated") < compact_publication.index("world.install_frozen_publication(")
+    assert "world.try_prepare_frozen_publication()" in compact_publication
+    assert "original_preparation_error" in publication
+    assert "fn " + name + "(" in controls
+    assert "state.world.merge_global_state_root.block()" in controls
+    assert "successful Musubi validation must survive a later original writer refusal" in controls
+    assert "refused_prefix[0] + 1" in controls and "refused_prefix[1] + 1" in controls
+    assert "state.world.musubi_packages.block()" in controls
+    assert "retained_state_validated_musubi_refuses_changed_visibility_before_retry" in controls
+    assert "retained_state_validated_musubi_refuses_equal_predecessor_advance" in controls
+    assert "retained_state_unchanged_musubi_skips_both_validators" in controls
+    assert "nested_validation_observation_restores_original_counts_after_unwind" in validators
+    original_predicates = {
+        "musubi_archives", "musubi_archive_locations", "musubi_provider_bundle_attestations",
+        "musubi_locations_by_pin", "musubi_locations_by_replication_order", "musubi_locations_by_provider",
+        "pin_manifests", "replication_orders", "provider_owners", "musubi_archive_availability",
+        "musubi_packages", "musubi_releases", "musubi_resolver_index", "musubi_public_directory",
+        "musubi_resolver_index_revision",
+    }
+    body = validators.split("fn validate_prepared_musubi(", 1)[1].split("/// Read the completed overlay", 1)[0]
+    assert set(re.findall(r"world\.(\w+)\.is_dirty\(\)", body)) == original_predicates
+    assert "validate_musubi_live_projection_cut" in body
+    assert "validate_musubi_universal_projection_cut" in body
+    assert "ProjectionCut::Candidate" in body
+    rows = re.findall(r"^\| HC177 \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and name in rows[0]
+
+
+def test_partial_musubi_validation_phase_binds_original_pool_and_exact_control():
+    name = "retained_state_live_musubi_success_survives_universal_capacity_refusal"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC178"]
+    assert rule.tests == ("state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::" + name,)
+    assert not rule.scenarios
+    assert gate.has_switch("HC178", core=True)
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}):
+        assert not gate.has_switch("HC178", **family)
+    root = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(root).as_posix() for p in root.rglob("*.rs")
+              if re.search(r'sumeragi_core_mutation\s*=\s*"HC178"', p.read_text())}
+    assert owners == {"state/publication.rs"}
+    publication = (root / "state/publication.rs").read_text()
+    validators = (root / "state/world_commit.rs").read_text()
+    controls = (root / "state/direct_commit_musubi_scratch_tests.rs").read_text()
+    assert 'all(test, sumeragi_core_mutation = "HC178")' in publication
+    assert "original.musubi_live_validated = false;" in publication
+    assert publication.index("validate_prepared_policy_transition(world)") < publication.index("if !*musubi_live_validated")
+    assert publication.index("let current_generation =") < publication.index("if !*musubi_live_validated")
+    assert publication.index("validate_prepared_musubi_live(") < publication.index("*musubi_live_validated = true;") < publication.index("validate_prepared_musubi_universal(")
+    assert publication.index("validate_prepared_musubi_universal(") < publication.index("*musubi_validated = true;")
+    assert "world.try_prepare_frozen_publication()" in re.sub(r"\s+", "", publication)
+    assert "Self::validate_prepared_musubi_live(world, execution_budget)?;" in validators
+    assert "Self::validate_prepared_musubi_universal(world, execution_budget)" in validators
+    assert validators.count("if Self::requires_musubi_validation(world)") == 2
+    assert "fn " + name + "(" in controls
+    for obligation in ["remaining - live_bytes", "universal_bytes > live_bytes", "original_reserved",
+                       "successful live Musubi pass must survive original universal capacity refusal",
+                       "retained_state_partial_musubi_validation_refuses_changed_visibility"]:
+        assert obligation in controls
+    assert "AllocationBudget::new" not in controls.split("fn " + name + "(", 1)[1]
+    rows = re.findall(r"^\| HC178 \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and name in rows[0]
+
+
+def test_completed_world_cut_mutation_uses_actual_worker_and_original_final_shell():
+    name = "original_worker_world_cut_retains_completed_tail_after_final_control_refusal"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC179"]
+    assert rule.tests == ("sumeragi::executor::publication_tests::" + name,)
+    assert not rule.scenarios
+    assert gate.has_switch("HC179", core=True)
+    for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True}, {"deploy": True}):
+        assert not gate.has_switch("HC179", **family)
+    root = ROOT / "crates/iroha_core/src"
+    owners = {p.relative_to(root).as_posix() for p in root.rglob("*.rs")
+              if re.search(r'sumeragi_core_mutation\s*=\s*"HC179"', p.read_text())}
+    assert owners == {"state/publication.rs"}
+    publication = (root / "state/publication.rs").read_text()
+    cut = (root / "state/world_state_cut.rs").read_text()
+    controls = (root / "sumeragi/executor_publication_tests.rs").read_text()
+    compact = re.sub(r"\s+", "", publication)
+    assert 'all(test,sumeragi_core_mutation="HC179")' in compact
+    assert "*world_cut_pending=None;" in compact
+    assert publication.index("let current_generation =") < publication.index("match world_cut_pending.take()")
+    assert "world.try_prepare_frozen_publication()" in compact
+    assert "budget: budget.clone()" in cut
+    assert "self.budget.try_reserve" in re.sub(r"\s+", "", cut)
+    assert "Err((self, error.into()))" in cut
+    assert "(Self { capsule, budget }, error)" in cut
+    assert cut.index("let mut reconstructed = applied.clone()") < cut.index("completion_observer::completed(&capsule)") < cut.index("let pending = PendingCutCapsule")
+    assert 'if matches!(&error, CutError::Deferred(_))' in cut
+    assert "fn " + name + "(" in controls
+    body = controls.split("fn " + name + "(", 1)[1].split("/// Completed local cut custody", 1)[0]
+    for obligation in ["executed(chain, worker)", "worker.prepare(&block, &qc)", "blocks.append(&block, &qc)",
+                       "worker.commit(&block, &qc)", "completed_world_cut_identity_for_test",
+                       "completed original World cut must survive final shared-control refusal",
+                       "observation.release_original_blocker()", "budget.limit_bytes()", "budget.same_pool",
+                       "final shell retry must not hash or reconstruct the original tail again"]:
+        assert obligation in body
+    assert "AllocationBudget::new" not in body and "set_limit_bytes" not in body
+    assert "original_worker_completed_world_cut_refuses_changed_publication_source" in controls
+    assert "with_held_view_publication_for_reader_test" in controls
+    positive = (root / "state/world_state_cut_tests.rs").read_text()
+    assert "completed_cut_refusal_retains_exact_tail_rows_and_original_pool_until_delivery" in positive
+    assert "capsule.rows.as_slice().as_ptr(), tail" in positive
+    rows = re.findall(r"^\| HC179 \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1 and name in rows[0]

@@ -10852,7 +10852,6 @@ async fn handler_explorer_metrics(
     }
     routing::handle_v1_explorer_metrics(
         app.state.clone(),
-        app.kura.clone(),
         app.telemetry.clone(),
         visibility.current_visibility(),
     )
@@ -24595,10 +24594,10 @@ async fn handler_telemetry_live(
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_telemetry_live(
             app.state.clone(),
-            app.kura.clone(),
             app.telemetry.clone(),
             app.peer_telemetry.clone(),
             app.events.clone(),
+            app.clone(),
         )?
         .into_response());
     }
@@ -24616,10 +24615,10 @@ async fn handler_telemetry_live(
     }
     Ok(routing::handle_v1_telemetry_live(
         app.state.clone(),
-        app.kura.clone(),
         app.telemetry.clone(),
         app.peer_telemetry.clone(),
         app.events.clone(),
+        app.clone(),
     )?
     .into_response())
 }

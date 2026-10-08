@@ -1378,6 +1378,13 @@ fn complete<C: RunContext>(
         report.state = "verification_sync_pending".into();
         return Ok(());
     }
+    if let Some(update) = completion.runtime_update {
+        update.retained_tip_claims()?.verify_authenticated_prefix(
+            &completion.prefix.proofs,
+            tips.iter()
+                .map(|tip| tip.body.finality_proof.block_header.height().get()),
+        )?;
+    }
     let prepared = PHASES
         .iter()
         .map(|phase| {

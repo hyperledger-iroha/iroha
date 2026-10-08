@@ -277,7 +277,6 @@ impl LaneStoreAuthorities for NativeLaneStoreAuthorities {
                 instance,
                 authority,
             }),
-            // Match the node application: no flagged certificate supplies lane authority.
         }))
     }
 }

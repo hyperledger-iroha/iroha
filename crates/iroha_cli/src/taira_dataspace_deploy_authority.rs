@@ -421,7 +421,7 @@ fn verify(
         effective == expected,
         "effective peer trust differs from selected target source",
     )?;
-    let runtime = if let Some(receipt) = &completion.runtime_update {
+    let (runtime, retained_tips) = if let Some(receipt) = &completion.runtime_update {
         let names = runtime_update::portable_record_names(receipt)?;
         let mut records = BTreeMap::new();
         for name in names {
@@ -430,7 +430,7 @@ fn verify(
                 read(&format!("runtime-update-{name}"), MAX_BYTES)?,
             );
         }
-        Some(runtime_update::verify_public_originals(
+        let projection = runtime_update::verify_public_originals(
             receipt,
             &records,
             &original,
@@ -438,9 +438,13 @@ fn verify(
             plan.manifest.network_id,
             target_commit,
             target_version,
-        )?)
+        )?;
+        (
+            Some(projection),
+            runtime_update::retained_tip_claims(receipt, &records)?,
+        )
     } else {
-        None
+        (None, runtime_update::RetainedTips::default())
     };
     let mut prepared = Vec::new();
     let mut budget = DeploymentBudget::new(&plan.manifest)?;
@@ -459,7 +463,8 @@ fn verify(
         )?;
         prepared.push((retained, transaction));
     }
-    let (phases, peers) = completion.replay(&plan, &effective, &prepared, &mut read)?;
+    let (phases, peers) =
+        completion.replay(&plan, &effective, &prepared, &retained_tips, &mut read)?;
     drop(read);
     require(
         consumed.len() == inventory.files.len(),
@@ -1052,6 +1057,56 @@ mod tests {
             (source.as_str(), "2.0.0\n"),
         ] {
             assert!(runtime_update::selected_source_fingerprint(commit, version).is_err());
+        }
+    }
+
+    #[test]
+    fn authority_runtime_chain_cli_preserves_order_and_refuses_mutating_or_unbounded_selection() {
+        use clap::Parser as _;
+        let paths = (0..17)
+            .map(|index| format!("/private/runtime/taira-public-reset/update-{index:032x}"))
+            .collect::<Vec<_>>();
+        for (action, count, duplicate, accepted) in [
+            ("status", 2, false, true),
+            ("status", 16, false, true),
+            ("status", 17, false, false),
+            ("status", 2, true, false),
+            ("plan", 2, false, false),
+            ("apply", 2, false, false),
+        ] {
+            let mut words = vec![
+                "iroha",
+                "dataspace",
+                action,
+                "/definition",
+                "--trust",
+                "/trust",
+            ];
+            for index in 0..count {
+                words.extend([
+                    "--verification-runtime-update",
+                    paths[if duplicate { 0 } else { index }].as_str(),
+                ]);
+            }
+            let args = crate::Args::try_parse_from(words).unwrap();
+            let crate::Command::Dataspace(command) = args.command else {
+                panic!("wrong command")
+            };
+            assert_eq!(
+                command
+                    .verification_origins(&finality::test_trust())
+                    .is_ok(),
+                accepted
+            );
+            if let Command::Status(args) = command {
+                assert_eq!(args.verification_runtime_update.len(), count);
+                if !duplicate {
+                    assert_eq!(
+                        args.verification_runtime_update[1],
+                        PathBuf::from(&paths[1])
+                    );
+                }
+            }
         }
     }
     #[test]

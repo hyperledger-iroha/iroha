@@ -33,12 +33,13 @@ The paid Nexus workload exposed an AMX retry defect: a completed State visibilit
 publication incorrectly invalidated retained decoded bytes and halted the node.
 The repair separates immutable decode custody from State authority; every retry
 still authenticates the current committed parent. Native retry and parent
-authentication controls pass; rebuilt daemon/Nexus qualification remains pending.
+authentication controls pass. The rebuilt candidate passes ten fresh paid Nexus
+workloads, serial restart/readback of all sixteen validators and disjoint-lane
+stop/restart, with all expected peer processes closing cleanly.
 The retired publisher-custody fixture
 cannot supply current admission evidence.
-Paid settlement, serial all-seat restart/readback and disjoint-lane isolation must
-run on the same rebuilt candidate. Full fault/leakage campaigns and the complete
-original funded execution graph remain open.
+Full fault/leakage campaigns, optimized-build resource qualification and the
+complete original funded execution graph remain open.
 
 Native ceremony handoff preserves overlapping descriptors and read-only phase pipes.
 The committee fixture explicitly pays for the first E+1 successor before authenticating

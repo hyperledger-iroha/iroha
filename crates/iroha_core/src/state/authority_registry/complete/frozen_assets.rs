@@ -142,12 +142,11 @@ mod direct_home_admission_tests {
             authority_registry::grouped_ownership::{
                 GroupedOwnershipError, asset_balance_test_support as fixture,
             },
-            block_field::BlockField,
         },
     };
     use iroha_data_model::block::BlockHeader;
     use iroha_model_base::topology::DataSpaceId;
-    use mv::{BlockRetirement as _, storage::StorageReadOnly};
+    use mv::storage::StorageReadOnly;
     use std::num::NonZeroU64;
 
     #[test]

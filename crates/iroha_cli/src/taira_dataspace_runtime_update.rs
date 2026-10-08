@@ -6,6 +6,9 @@ use super::*;
 use base64::Engine as _;
 use iroha_crypto::Hash;
 
+const MAX_UPDATES: usize = 16;
+const CHAIN_SCHEMA: &str = "iroha.dataspace-runtime-update-chain-verification.v1";
+
 const BASE: &str = "/private/runtime/taira-public-reset";
 const RECORDS: [&str; 7] = [
     "intent.json",
@@ -48,8 +51,94 @@ struct PublicReceipt {
     chain_write_performed: bool,
 }
 
+#[derive(JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+struct ChainReceipt {
+    schema: String,
+    source_commit: String,
+    original_trust_sha256: String,
+    effective_trust_sha256: String,
+    updates: Vec<json::Value>,
+    chain_write_performed: bool,
+}
+
+/// Bounded explicit read-only selection; no filesystem or credentials are opened.
+pub(super) fn validate_selection(paths: &[PathBuf]) -> Result<()> {
+    require(
+        paths.len() <= MAX_UPDATES
+            && paths.iter().all(|path| operation_name(path).is_ok())
+            && paths
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                == paths.len(),
+        "runtime update selection must be bounded and nonduplicate",
+    )
+}
+
+fn operation_name(path: &Path) -> Result<&str> {
+    let operation = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| eyre!("invalid runtime update path"))?;
+    require(
+        path.to_str() == Some(format!("{BASE}/{operation}").as_str())
+            && operation.strip_prefix("update-").is_some_and(|suffix| {
+                suffix.len() == 32
+                    && suffix
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            }),
+        "runtime update must select one exact retained operation",
+    )?;
+    Ok(operation)
+}
+
+fn chain_receipt(value: &json::Value) -> Result<Option<ChainReceipt>> {
+    if value.get("schema").and_then(json::Value::as_str) != Some(CHAIN_SCHEMA) {
+        return Ok(None);
+    }
+    let chain: ChainReceipt = json::from_value(value.clone())?;
+    require(
+        (2..=MAX_UPDATES).contains(&chain.updates.len()) && !chain.chain_write_performed,
+        "runtime update chain must be bounded, nonempty and read-only",
+    )?;
+    let mut operations = std::collections::BTreeSet::new();
+    let mut sources = std::collections::BTreeSet::new();
+    for value in &chain.updates {
+        single_record_names(value)?;
+        let step: PublicReceipt = json::from_value(value.clone())?;
+        require(
+            operations.insert(step.operation_directory) && sources.insert(step.source_commit),
+            "runtime update chain repeats an operation or source",
+        )?;
+    }
+    Ok(Some(chain))
+}
+
+fn chain_name(index: usize, name: &str) -> String {
+    format!("chain-{index:04}-{name}")
+}
+
+/// Exact portable closure for either the original single update or a bounded chain.
+pub(super) fn portable_record_names(value: &json::Value) -> Result<Vec<String>> {
+    if let Some(chain) = chain_receipt(value)? {
+        let mut names = Vec::new();
+        for (index, step) in chain.updates.iter().enumerate() {
+            names.extend(
+                single_record_names(step)?
+                    .iter()
+                    .map(|name| chain_name(index, name)),
+            );
+        }
+        Ok(names)
+    } else {
+        single_record_names(value)
+    }
+}
+
 /// Select only the existing public seven originals plus the exact optional retirement pair.
-pub(super) fn portable_record_names(receipt: &json::Value) -> Result<Vec<String>> {
+fn single_record_names(receipt: &json::Value) -> Result<Vec<String>> {
     let receipt: PublicReceipt = json::from_value(receipt.clone())?;
     let mut required = RECORDS
         .into_iter()
@@ -89,7 +178,7 @@ pub(super) fn portable_record_names(receipt: &json::Value) -> Result<Vec<String>
 }
 
 /// Recheck public original hashes and semantic joins without claiming host custody.
-pub(super) fn verify_public_originals(
+fn verify_single_public_originals(
     value: &json::Value,
     originals: &BTreeMap<String, Vec<u8>>,
     original: &DeploymentTrustV1,
@@ -98,13 +187,10 @@ pub(super) fn verify_public_originals(
     source: &str,
     version: &str,
 ) -> Result<json::Value> {
-    let names = portable_record_names(value)?;
+    let names = single_record_names(value)?;
     let receipt: PublicReceipt = json::from_value(value.clone())?;
     let directory = Path::new(&receipt.operation_directory);
-    let operation = directory
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| eyre!("runtime operation missing"))?;
+    let operation = operation_name(directory)?;
     require(
         directory.parent() == Some(Path::new(BASE))
             && operation.strip_prefix("update-").is_some_and(|s| {
@@ -144,6 +230,345 @@ pub(super) fn verify_public_originals(
         "source_commit":source,"receipt_sha256":(digest(&json::to_vec(value)?)),"record_sha256":(receipt.receipt_sha256),
         "semantic_joins_verified":true,"host_custody_verified":false}),
     )
+}
+
+/// Replay every original transition from the unchanged allocation trust. A chain
+/// carries historical producer DATA, not a substitute live-custody signature.
+pub(super) fn verify_public_originals(
+    value: &json::Value,
+    originals: &BTreeMap<String, Vec<u8>>,
+    original: &DeploymentTrustV1,
+    effective: &DeploymentTrustV1,
+    network: NetworkId,
+    source: &str,
+    version: &str,
+) -> Result<json::Value> {
+    let Some(chain) = chain_receipt(value)? else {
+        return verify_single_public_originals(
+            value, originals, original, effective, network, source, version,
+        );
+    };
+    let names = portable_record_names(value)?;
+    require(
+        chain.source_commit == source
+            && chain.original_trust_sha256 == digest(&json::to_vec(original)?)
+            && chain.effective_trust_sha256 == digest(&json::to_vec(effective)?)
+            && originals.len() == names.len()
+            && names.iter().all(|name| originals.contains_key(name)),
+        "runtime chain selection or exact original closure differs",
+    )?;
+    let mut trust = original.clone();
+    let mut previous = None;
+    let mut projections = Vec::new();
+    let mut seen_sources = std::collections::BTreeSet::new();
+    for (index, step) in chain.updates.iter().enumerate() {
+        let receipt: PublicReceipt = json::from_value(step.clone())?;
+        let step_originals = single_record_names(step)?
+            .into_iter()
+            .map(|name| {
+                let bytes = originals[&chain_name(index, &name)].clone();
+                (name, bytes)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut next = trust.clone();
+        let fingerprint = selected_source_fingerprint(&receipt.source_commit, version)?;
+        for peer in &mut next.peers {
+            peer.build_fingerprint = fingerprint;
+        }
+        // Authenticate bounded originals before parsing any adjacency fields.
+        projections.push(verify_single_public_originals(
+            step,
+            &step_originals,
+            &trust,
+            &next,
+            network,
+            &receipt.source_commit,
+            version,
+        )?);
+        let records = step_originals
+            .iter()
+            .map(|(name, bytes)| Ok((name.clone(), json::from_slice(bytes)?)))
+            .collect::<Result<BTreeMap<String, json::Value>>>()?;
+        if index == 0 {
+            seen_sources.insert(
+                text(
+                    field(field(&records["intent.json"], "deployment")?, "current")?,
+                    "commit",
+                )?
+                .to_owned(),
+            );
+        }
+        require(
+            seen_sources.insert(receipt.source_commit.clone()),
+            "runtime update chain contains a source cycle",
+        )?;
+        if let Some((prior, prior_digest)) = &previous {
+            validate_adjacency(prior, &records, prior_digest)?;
+        }
+        previous = Some((records, receipt.receipt_sha256["intent.json"].clone()));
+        trust = next;
+    }
+    retained_tip_claims(value, originals)?;
+    require(
+        trust == *effective && text(chain.updates.last().unwrap(), "source_commit")? == source,
+        "runtime chain terminal source or trust differs",
+    )?;
+    Ok(
+        norito::json!({"schema":"iroha.dataspace-runtime-update-chain-public-joins.v1",
+        "source_commit":source,"receipt_sha256":(digest(&json::to_vec(value)?)),"updates":projections,
+        "semantic_joins_verified":true,"host_custody_verified":false}),
+    )
+}
+
+/// A later producer must have retained exactly the prior producer's installation.
+/// Heights may advance between updates; configuration, state roots and units may not.
+fn validate_adjacency(
+    previous: &BTreeMap<String, json::Value>,
+    next: &BTreeMap<String, json::Value>,
+    previous_intent_sha256: &str,
+) -> Result<()> {
+    let old = &previous["intent.json"];
+    let new = &next["intent.json"];
+    let old_deployment = field(old, "deployment")?;
+    let new_deployment = field(new, "deployment")?;
+    let current = field(new_deployment, "current")?;
+    let daemon = format!(
+        "{BASE}/release-{}-{}/bin/iroha3d_taira",
+        text(old, "commit")?,
+        text(old, "operation")?
+    );
+    require(
+        text(current, "kind")? == "completed-update"
+            && text(current, "commit")? == text(old, "commit")?
+            && text(current, "attempt_name")? == text(old, "operation")?
+            && text(current, "daemon")? == daemon
+            && text(current, "local_plan_sha256")? == previous_intent_sha256
+            && text(current, "plan_schema")? == text(old, "schema")?
+            && text(current, "result_schema")? == text(&previous["result.json"], "schema")?
+            && text(old, "network_id")? == text(new, "network_id")?,
+        "runtime chain predecessor producer identity differs",
+    )?;
+    // The producer's successor deployment copies all metadata except `current`.
+    // Keep genesis, Kura location, config and routing bound to the original installation.
+    let mut prior_deployment = old_deployment.clone();
+    let mut next_deployment = new_deployment.clone();
+    prior_deployment
+        .as_object_mut()
+        .ok_or_else(|| eyre!("runtime deployment is not an object"))?
+        .remove("current");
+    next_deployment
+        .as_object_mut()
+        .ok_or_else(|| eyre!("runtime deployment is not an object"))?
+        .remove("current");
+    require(
+        prior_deployment == next_deployment,
+        "runtime chain retained deployment differs",
+    )?;
+    config_filename(old_deployment)?;
+    config_filename(new_deployment)?;
+    let old_units = rows(field(old, "units")?)?;
+    let new_units = rows(field(new, "units")?)?;
+    let final_rows = rows(field(&previous["cohort-ready.json"], "observations")?)?;
+    let initial_rows = rows(&next["retained-entry.json"])?;
+    require(
+        [
+            old_units.len(),
+            new_units.len(),
+            final_rows.len(),
+            initial_rows.len(),
+        ]
+        .iter()
+        .all(|n| *n == 4),
+        "runtime chain cohort count differs",
+    )?;
+    for index in 0..4 {
+        require(
+            field(&old_units[index], "after")? == field(&new_units[index], "before")?
+                && field(&old_units[index], "after_sha256")?
+                    == field(&new_units[index], "before_sha256")?,
+            "runtime chain units are not adjacent",
+        )?;
+        for key in [
+            "role",
+            "state_root_identity",
+            "current_target",
+            "config_stamp",
+        ] {
+            require(
+                field(&final_rows[index], key)? == field(&initial_rows[index], key)?,
+                "runtime chain changed retained peer custody",
+            )?;
+        }
+        let before = field(&initial_rows[index], "public")?;
+        let prior = field(&final_rows[index], "public")?;
+        require(
+            text(before, "commit")? == text(prior, "commit")?
+                && text(before, "network_id")? == text(prior, "network_id")?
+                && number(before, "height")? >= number(prior, "height")?,
+            "runtime chain predecessor public identity or height differs",
+        )?;
+    }
+    Ok(())
+}
+
+/// Runtime receipt claims awaiting comparison with an authenticated protocol prefix.
+/// These values do not authenticate blocks or establish host custody themselves.
+#[derive(Default)]
+pub(super) struct RetainedTips {
+    hashes: BTreeMap<u64, Hash>,
+    peer_heights: [u64; 4],
+    checkpoint_count: usize,
+}
+
+fn checkpoint_tips(record: &json::Value) -> Result<Vec<(u64, Hash)>> {
+    let records = rows(record)?;
+    require(records.len() == 4, "runtime retained tip cohort differs")?;
+    records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            require(
+                text(record, "role")? == format!("taira-validator-{}", index + 1),
+                "runtime retained tip role differs",
+            )?;
+            let tip = field(record, "kura_tip")?;
+            let height = number(tip, "height")?;
+            let raw = text(tip, "hash")?;
+            require(
+                height > 0
+                    && raw.len() == 64
+                    && raw
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "runtime retained tip height or hash is malformed",
+            )?;
+            let mut bytes = [0u8; Hash::LENGTH];
+            hex::decode_to_slice(raw, &mut bytes)?;
+            let hash = Hash::from_marked_bytes(bytes)
+                .ok_or_else(|| eyre!("runtime retained block hash has no Iroha marker"))?;
+            Ok((height, hash))
+        })
+        .collect()
+}
+
+impl RetainedTips {
+    /// Collect bounded chronological checkpoint claims without granting authority.
+    pub(super) fn from_checkpoint_records<'a>(
+        records: impl IntoIterator<Item = &'a json::Value>,
+    ) -> Result<Self> {
+        let mut value = Self::default();
+        for record in records {
+            value.append_checkpoint(record)?;
+        }
+        Ok(value)
+    }
+
+    fn append_checkpoint(&mut self, record: &json::Value) -> Result<()> {
+        require(
+            self.checkpoint_count < MAX_UPDATES,
+            "runtime retained tip chain exceeds bound",
+        )?;
+        for (peer, (height, hash)) in checkpoint_tips(record)?.into_iter().enumerate() {
+            require(
+                height >= self.peer_heights[peer],
+                "runtime retained tip regressed",
+            )?;
+            if let Some(prior) = self.hashes.insert(height, hash) {
+                require(
+                    prior == hash,
+                    "runtime retained tips conflict at one height",
+                )?;
+            }
+            self.peer_heights[peer] = height;
+        }
+        self.checkpoint_count += 1;
+        Ok(())
+    }
+
+    /// Heights that portable replay must retain from its authenticated proof walk.
+    pub(super) fn heights(&self) -> impl Iterator<Item = u64> + '_ {
+        self.hashes.keys().copied()
+    }
+
+    /// Match all claims only after the existing genesis/QC verifier authenticated
+    /// this prefix. Missing historical heights fail; no receipt extends the prefix.
+    pub(super) fn verify_authenticated_prefix(
+        &self,
+        proofs: &BTreeMap<u64, iroha_data_model::sumeragi_finality::SumeragiFinalityProof>,
+        current_peer_heights: impl IntoIterator<Item = u64>,
+    ) -> Result<()> {
+        let current = current_peer_heights.into_iter().collect::<Vec<_>>();
+        require(
+            current.len() == 4
+                && self
+                    .peer_heights
+                    .iter()
+                    .zip(&current)
+                    .all(|(retained, current)| retained <= current),
+            "runtime retained tip exceeds its peer's signed current height",
+        )?;
+        for (&height, expected) in &self.hashes {
+            let proof = proofs
+                .get(&height)
+                .ok_or_else(|| eyre!("runtime retained tip is outside the authenticated prefix"))?;
+            require(
+                proof.block_header.height().get() == height
+                    && Hash::from(proof.block_header.hash()) == *expected,
+                "runtime retained block hash differs from authenticated finality",
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Read claims from the exact hash-bound checkpoint originals. The caller first
+/// verifies all runtime semantic joins; these claims still require protocol proofs.
+pub(super) fn retained_tip_claims(
+    value: &json::Value,
+    originals: &BTreeMap<String, Vec<u8>>,
+) -> Result<RetainedTips> {
+    let names = portable_record_names(value)?;
+    require(
+        originals.len() == names.len() && names.iter().all(|name| originals.contains_key(name)),
+        "runtime retained tip original closure differs",
+    )?;
+    let chain = chain_receipt(value)?;
+    let steps = chain.as_ref().map_or_else(
+        || std::slice::from_ref(value),
+        |chain| chain.updates.as_slice(),
+    );
+    let mut claims = RetainedTips::default();
+    for (index, step) in steps.iter().enumerate() {
+        let receipt: PublicReceipt = json::from_value(step.clone())?;
+        let name = if chain.is_some() {
+            chain_name(index, "checkpoint-stopped.json")
+        } else {
+            "checkpoint-stopped.json".into()
+        };
+        let bytes = &originals[&name];
+        require(
+            bytes.len() <= MAX_BYTES
+                && digest(bytes) == receipt.receipt_sha256["checkpoint-stopped.json"],
+            "runtime retained checkpoint original changed",
+        )?;
+        let checkpoint = json::from_slice::<json::Value>(bytes)?;
+        claims.append_checkpoint(&checkpoint)?;
+    }
+    Ok(claims)
+}
+
+fn config_filename(deployment: &json::Value) -> Result<&str> {
+    let filename = match deployment.get("config_filename") {
+        Some(value) => value
+            .as_str()
+            .ok_or_else(|| eyre!("runtime config filename differs"))?,
+        None => "config.toml",
+    };
+    require(
+        matches!(filename, "config.toml" | "beacon.toml"),
+        "runtime config filename differs",
+    )?;
+    Ok(filename)
 }
 
 fn field<'a>(value: &'a json::Value, name: &str) -> Result<&'a json::Value> {
@@ -372,6 +797,7 @@ fn validate_records(
             "runtime update artifact identity differs",
         )?;
     }
+    let retained_tips = checkpoint_tips(&records["checkpoint-stopped.json"])?;
     let final_rows = rows(field(&records["cohort-ready.json"], "observations")?)?;
     for name in [
         "retained-entry.json",
@@ -445,6 +871,11 @@ fn validate_records(
             "runtime unit transition exceeds the daemon argument",
         )?;
         flag(stopped, "cohort_stopped", true)?;
+        require(
+            retained_tips[index].0 >= number(stopped, "checkpoint_height")?
+                && retained_tips[index].0 >= number(field(before, "public")?, "height")?,
+            "runtime stopped tip predates its retained observation",
+        )?;
         let strict = verify_restored_record(restored, stopped, after, source, network, modern)?;
         if !strict {
             let final_ready = field(&final_rows[index], "cohort_observation")?;
@@ -573,6 +1004,10 @@ pub(super) struct Verified {
     directory: PathBuf,
     #[cfg(target_os = "linux")]
     binaries: Vec<(PathBuf, File, fs::Metadata)>,
+    #[cfg(target_os = "linux")]
+    installed: bool,
+    #[cfg(target_os = "linux")]
+    historical: Vec<Self>,
 }
 
 #[cfg(target_os = "linux")]
@@ -651,6 +1086,84 @@ fn process(role: &str) -> Result<BTreeMap<String, String>> {
 }
 
 impl Verified {
+    /// Authenticate an ordered, bounded update history without replacing the
+    /// original trust. Only the last update must still be the live installation.
+    pub(super) fn admit_chain(
+        paths: &[PathBuf],
+        original: &DeploymentTrustV1,
+        network: NetworkId,
+        selected: Option<(&str, &str)>,
+    ) -> Result<Self> {
+        validate_selection(paths)?;
+        require(!paths.is_empty(), "runtime update selection is empty")?;
+        if paths.len() == 1 {
+            return match selected {
+                Some((source, version)) => {
+                    Self::admit_target(&paths[0], original, network, source, version)
+                }
+                None => Self::admit(&paths[0], original, network),
+            };
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            eyre::bail!("runtime update verification requires the actual Linux validator guest");
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let identity = if selected.is_none() {
+                Some(crate::compiled_build_identity()?)
+            } else {
+                None
+            };
+            let (source, version) = match selected {
+                Some(target) => target,
+                None => {
+                    let identity = identity.as_ref().expect("compiled target was selected");
+                    (identity.release_source_commit()?, identity.version())
+                }
+            };
+            selected_source_fingerprint(source, version)?;
+            let mut steps = Vec::new();
+            let mut trust = original.clone();
+            for (index, path) in paths.iter().enumerate() {
+                let installed = index + 1 == paths.len();
+                let step = Self::admit_selected(
+                    path,
+                    &trust,
+                    network,
+                    installed.then_some(source),
+                    version,
+                    installed && selected.is_none(),
+                    installed,
+                )?;
+                trust = step.trust.clone();
+                steps.push(step);
+            }
+            let receipt = norito::json!({"schema":CHAIN_SCHEMA,"source_commit":source,
+                "original_trust_sha256":(digest(&json::to_vec(original)?)),
+                "effective_trust_sha256":(digest(&json::to_vec(&trust)?)),
+                "updates":(steps.iter().map(|step| step.receipt.clone()).collect::<Vec<_>>()),
+                "chain_write_performed":false});
+            let mut value = steps.pop().expect("bounded nonempty chain");
+            value.receipt = receipt;
+            value.historical = steps;
+            // The same maintained portable joins enforce every producer edge.
+            // Live admission adds custody, retained binaries and terminal process checks.
+            let originals = value.public_originals()?;
+            verify_public_originals(
+                &value.receipt,
+                &originals,
+                original,
+                &value.trust,
+                network,
+                source,
+                version,
+            )?;
+            value.revalidate()?;
+            Ok(value)
+        }
+    }
+
     /// Export only exact already-admitted public originals. Private configurations
     /// and measured binaries remain in the actual Linux custody verifier.
     pub(super) fn public_originals(&self) -> Result<BTreeMap<String, Vec<u8>>> {
@@ -661,17 +1174,31 @@ impl Verified {
         #[cfg(target_os = "linux")]
         {
             self.revalidate()?;
-            let names = portable_record_names(&self.receipt)?;
-            let receipt: PublicReceipt = json::from_value(self.receipt.clone())?;
             let mut originals = BTreeMap::new();
-            for name in names {
-                let input = PublicInput::read(&self.directory.join(&name))?;
-                require(
-                    digest(&input.bytes) == receipt.receipt_sha256[&name],
-                    "runtime public original changed",
-                )?;
-                input.revalidate()?;
-                originals.insert(name, input.bytes);
+            let steps = self.historical.iter().chain(std::iter::once(self));
+            let chain = chain_receipt(&self.receipt)?;
+            for (index, step) in steps.enumerate() {
+                let receipt = chain
+                    .as_ref()
+                    .map_or(&step.receipt, |chain| &chain.updates[index]);
+                let names = single_record_names(receipt)?;
+                let receipt: PublicReceipt = json::from_value(receipt.clone())?;
+                for name in names {
+                    let input = PublicInput::read(&step.directory.join(&name))?;
+                    require(
+                        digest(&input.bytes) == receipt.receipt_sha256[&name],
+                        "runtime public original changed",
+                    )?;
+                    input.revalidate()?;
+                    originals.insert(
+                        if chain.is_some() {
+                            chain_name(index, &name)
+                        } else {
+                            name
+                        },
+                        input.bytes,
+                    );
+                }
             }
             self.revalidate()?;
             Ok(originals)
@@ -687,8 +1214,9 @@ impl Verified {
             path,
             original,
             network,
-            identity.release_source_commit()?,
+            Some(identity.release_source_commit()?),
             identity.version(),
+            true,
             true,
         )
     }
@@ -703,18 +1231,21 @@ impl Verified {
         source: &str,
         version: &str,
     ) -> Result<Self> {
-        Self::admit_selected(path, original, network, source, version, false)
+        Self::admit_selected(path, original, network, Some(source), version, false, true)
     }
 
     fn admit_selected(
         path: &Path,
         original: &DeploymentTrustV1,
         network: NetworkId,
-        source: &str,
+        source: Option<&str>,
         version: &str,
         require_candidate_executable: bool,
+        installed: bool,
     ) -> Result<Self> {
-        let fingerprint = selected_source_fingerprint(source, version)?;
+        if let Some(source) = source {
+            selected_source_fingerprint(source, version)?;
+        }
         #[cfg(not(target_os = "linux"))]
         {
             let _ = (
@@ -724,7 +1255,7 @@ impl Verified {
                 source,
                 version,
                 require_candidate_executable,
-                fingerprint,
+                installed,
             );
             eyre::bail!("runtime update verification requires the actual Linux validator guest");
         }
@@ -736,19 +1267,7 @@ impl Verified {
                 rustix::process::geteuid().as_raw() == 0,
                 "runtime update verification requires root metadata custody",
             )?;
-            let operation = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .ok_or_else(|| eyre!("invalid runtime update path"))?;
-            require(
-                path.parent() == Some(Path::new(BASE))
-                    && operation.strip_prefix("update-").is_some_and(|s| {
-                        s.len() == 32
-                            && s.bytes()
-                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-                    }),
-                "runtime update must select one exact retained operation",
-            )?;
+            let operation = operation_name(path)?;
             require(
                 root_path(path, true)?.mode() & 0o7777 == 0o700,
                 "runtime operation must remain root-private",
@@ -786,6 +1305,10 @@ impl Verified {
                 records.insert(name.to_owned(), json::from_slice(&input.bytes)?);
                 held.push(input);
             }
+            // A historical target comes from its held root-private producer original.
+            // The terminal target is still independently selected or compiled in.
+            let source = source.unwrap_or(text(&records["intent.json"], "commit")?);
+            let fingerprint = selected_source_fingerprint(source, version)?;
             validate_records(&records, operation, network, source, original, version)?;
             let release = Path::new(BASE).join(format!("release-{source}-{operation}/bin"));
             require(
@@ -840,9 +1363,28 @@ impl Verified {
                 records,
                 directory: path.into(),
                 binaries,
+                installed,
+                historical: Vec::new(),
             };
             value.revalidate()?;
             Ok(value)
+        }
+    }
+
+    /// Retained producer claims, compared with authenticated finality before completion.
+    pub(super) fn retained_tip_claims(&self) -> Result<RetainedTips> {
+        #[cfg(not(target_os = "linux"))]
+        {
+            eyre::bail!("runtime retained tips require admitted Linux custody");
+        }
+        #[cfg(target_os = "linux")]
+        {
+            RetainedTips::from_checkpoint_records(
+                self.historical
+                    .iter()
+                    .chain(std::iter::once(self))
+                    .map(|step| &step.records["checkpoint-stopped.json"]),
+            )
         }
     }
 
@@ -854,8 +1396,33 @@ impl Verified {
         #[cfg(target_os = "linux")]
         {
             use std::os::unix::fs::MetadataExt as _;
+            for step in &self.historical {
+                step.revalidate()?;
+            }
+            require(
+                root_path(&self.directory, true)?.mode() & 0o7777 == 0o700,
+                "runtime operation must remain root-private",
+            )?;
             for input in &self.held {
                 input.revalidate()?;
+            }
+            for name in RECORDS.into_iter().chain([
+                "config-retirement-prepared.json",
+                "config-retirement-installed.json",
+            ]) {
+                let path = self.directory.join(name);
+                if self.records.contains_key(name) {
+                    require(
+                        root_path(&path, false)?.mode() & 0o7777 == 0o600,
+                        "runtime receipt must remain root-private",
+                    )?;
+                } else {
+                    require(
+                        fs::symlink_metadata(path)
+                            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+                        "runtime retirement inventory changed",
+                    )?;
+                }
             }
             for (path, file, snapshot) in &self.binaries {
                 require(
@@ -864,12 +1431,19 @@ impl Verified {
                     "runtime artifact custody changed",
                 )?;
             }
-            for name in ["failure.json", "rollback.json"] {
+            for name in [
+                "failure.json",
+                "rollback.json",
+                "config-retirement-restored.json",
+            ] {
                 require(
                     fs::symlink_metadata(self.directory.join(name))
                         .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound),
                     "runtime update has a failure or rollback marker",
                 )?;
+            }
+            if !self.installed {
+                return Ok(());
             }
             let plan = &self.records["intent.json"];
             if let Some(prepared) = self.records.get("config-retirement-prepared.json") {
@@ -890,14 +1464,7 @@ impl Verified {
                 release.len() == 40 && release.bytes().all(|b| b.is_ascii_hexdigit()),
                 "runtime retained config revision differs",
             )?;
-            let filename = deployment
-                .get("config_filename")
-                .and_then(json::Value::as_str)
-                .unwrap_or("config.toml");
-            require(
-                matches!(filename, "config.toml" | "beacon.toml"),
-                "runtime config filename differs",
-            )?;
+            let filename = config_filename(deployment)?;
             let daemon = &self.binaries[0].0;
             let final_rows = rows(field(&self.records["cohort-ready.json"], "observations")?)?;
             for index in 0..4 {
@@ -985,6 +1552,11 @@ pub(super) fn test_transition_trust() -> DeploymentTrustV1 {
 }
 
 #[cfg(test)]
+pub(super) fn test_chain_retained_tip_claims(height: u64, hash: Hash) -> Result<RetainedTips> {
+    tests::chain_retained_tip_claims(height, hash)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1027,7 +1599,7 @@ mod tests {
                 "systemd":{"MainPID":"123","InvocationID":"actual","NRestarts":"0"}});
             before.push(row.clone());
             after.push(row);
-            stopped.push(norito::json!({"role":(role.clone()),"cohort_stopped":true,"checkpoint_height":12,"kura_tip":{"height":12}}));
+            stopped.push(norito::json!({"role":(role.clone()),"cohort_stopped":true,"checkpoint_height":12,"kura_tip":{"height":12,"hash":(hex::encode(Hash::new(b"retained fixture block").as_ref()))}}));
             restored.push(norito::json!({"role":role,"native_strict_checkpoint_verified":true,"restored_height":12}));
         }
         let artifacts: Vec<_> = ["iroha3d_taira", "iroha", "kagami"]
@@ -1038,7 +1610,9 @@ mod tests {
             "network_id":(network.to_string()),"secret_contents_read":false,"transaction_submission":false,
             "python_transaction_submission":false,"units":units,"artifacts":artifacts,
             "deployment":{"runtime_root":BASE,"config_root":"/srv/taira","state_root":"/var/lib/taira",
-                "network_id":(network.to_string()),"current":{"commit":PREVIOUS,"daemon":old}}});
+                "network_id":(network.to_string()),"genesis_manifest":"/srv/taira/genesis-manifest.json",
+                "kura_hash_journal":"storage/kura/blocks/canonical/blocks.hashes",
+                "current":{"commit":PREVIOUS,"daemon":old}}});
         let result = norito::json!({"schema":"taira.daemon-update.result.v2","commit":SOURCE,"network_id":(network.to_string()),
             "runtime_update_complete":true,"state_preserved":true,"retained_native_snapshot_verified":true,
             "retained_native_state_verified":true,"historical_genesis_replay_supported":false,
@@ -1087,6 +1661,647 @@ mod tests {
             "source_commit":SOURCE,"receipt_sha256":hashes,"original_trust_sha256":(digest(&json::to_vec(&original).unwrap())),
             "effective_trust_sha256":(digest(&json::to_vec(&effective).unwrap())),"chain_write_performed":false});
         (receipt, originals, original, effective, network)
+    }
+
+    struct ChainFixture {
+        receipt: json::Value,
+        originals: BTreeMap<String, Vec<u8>>,
+        original: DeploymentTrustV1,
+        effective: DeploymentTrustV1,
+        network: NetworkId,
+    }
+
+    fn put(value: &mut json::Value, key: &str, replacement: json::Value) {
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert(key.into(), replacement);
+    }
+
+    impl ChainFixture {
+        fn verify(&self) -> Result<json::Value> {
+            verify_public_originals(
+                &self.receipt,
+                &self.originals,
+                &self.original,
+                &self.effective,
+                self.network,
+                text(&self.receipt, "source_commit")?,
+                VERSION,
+            )
+        }
+
+        /// Rehash modified DATA so refusal exercises semantic joins, not merely SHA checks.
+        fn change_record(
+            &mut self,
+            index: usize,
+            name: &str,
+            change: impl FnOnce(&mut json::Value),
+        ) {
+            let key = chain_name(index, name);
+            let mut value = json::from_slice(&self.originals[&key]).unwrap();
+            change(&mut value);
+            let bytes = json::to_vec(&value).unwrap();
+            let step = self
+                .receipt
+                .get_mut("updates")
+                .unwrap()
+                .get_mut(index)
+                .unwrap();
+            put(
+                step.get_mut("receipt_sha256").unwrap(),
+                name,
+                norito::json!(digest(&bytes)),
+            );
+            self.originals.insert(key, bytes);
+        }
+    }
+
+    fn chain_fixture(count: usize) -> ChainFixture {
+        chain_fixture_selected(count, None, None)
+    }
+
+    fn chain_fixture_selected(
+        count: usize,
+        terminal: Option<&str>,
+        retirement: Option<usize>,
+    ) -> ChainFixture {
+        let (_, _, network, original) = fixture();
+        let mut trust = original.clone();
+        let mut updates = Vec::new();
+        let mut originals = BTreeMap::new();
+        let mut prior_records: Option<BTreeMap<String, json::Value>> = None;
+        let mut prior_source = PREVIOUS.to_owned();
+        let mut prior_operation = String::new();
+        let mut prior_intent_hash = String::new();
+        for index in 0..count {
+            let (mut records, _, _, _) = fixture();
+            let source = if index + 1 == count {
+                terminal.map(str::to_owned)
+            } else {
+                None
+            }
+            .unwrap_or_else(|| format!("{:040x}", index + 2));
+            let operation = format!("update-{index:032x}");
+            let old_daemon = if prior_records.is_some() {
+                format!("{BASE}/release-{prior_source}-{prior_operation}/bin/iroha3d_taira")
+            } else {
+                format!("{BASE}/previous/bin/iroha3d_taira")
+            };
+            let daemon = format!("{BASE}/release-{source}-{operation}/bin/iroha3d_taira");
+            let plan = records.get_mut("intent.json").unwrap();
+            put(plan, "commit", norito::json!(source.clone()));
+            put(plan, "operation", norito::json!(operation.clone()));
+            let deployment = plan.get_mut("deployment").unwrap();
+            put(deployment, "config_release", norito::json!(PREVIOUS));
+            put(deployment, "config_filename", norito::json!("beacon.toml"));
+            put(
+                deployment,
+                "current",
+                norito::json!({"kind":"completed-update",
+                "commit":(prior_source.clone()),"daemon":(old_daemon.clone()),
+                "attempt_name":(prior_operation.clone()),
+                "local_plan_sha256":(prior_intent_hash.clone()),
+                "plan_schema":"taira.daemon-update.plan.v2","result_schema":"taira.daemon-update.result.v2"}),
+            );
+            let mut units = Vec::new();
+            for peer in 0..4 {
+                let role = format!("taira-validator-{}", peer + 1);
+                let raw = if let Some(prior) = &prior_records {
+                    base64::engine::general_purpose::STANDARD
+                        .decode(
+                            text(
+                                &rows(field(&prior["intent.json"], "units").unwrap()).unwrap()
+                                    [peer],
+                                "after",
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap()
+                } else {
+                    format!("ExecStart={old_daemon} --config /srv/taira/{role}/current/config/beacon.toml --sora\n").into_bytes()
+                };
+                let changed = std::str::from_utf8(&raw)
+                    .unwrap()
+                    .replace(&old_daemon, &daemon)
+                    .into_bytes();
+                units.push(norito::json!({"role":role,"before":(base64::engine::general_purpose::STANDARD.encode(&raw)),
+                    "before_sha256":(digest(&raw)),"after":(base64::engine::general_purpose::STANDARD.encode(&changed)),
+                    "after_sha256":(digest(&changed))}));
+            }
+            put(plan, "units", norito::json!(units));
+            let mut before = if let Some(prior) = &prior_records {
+                field(&prior["cohort-ready.json"], "observations")
+                    .unwrap()
+                    .clone()
+            } else {
+                records["retained-entry.json"].clone()
+            };
+            for (peer, row) in before.as_array_mut().unwrap().iter_mut().enumerate() {
+                put(
+                    row.get_mut("public").unwrap(),
+                    "commit",
+                    norito::json!(prior_source.clone()),
+                );
+                if prior_records.is_none() {
+                    put(
+                        row,
+                        "config_stamp",
+                        norito::json!([1, (10 + peer), 33152, 0, 0, 1, 100, 1000, 1000]),
+                    );
+                }
+            }
+            let mut after = before.clone();
+            for row in after.as_array_mut().unwrap() {
+                put(
+                    row.get_mut("public").unwrap(),
+                    "commit",
+                    norito::json!(source.clone()),
+                );
+            }
+            records.insert("retained-entry.json".into(), before);
+            records.insert("after.json".into(), after.clone());
+            records.insert(
+                "cohort-ready.json".into(),
+                norito::json!({"observations":after}),
+            );
+            put(
+                records.get_mut("result.json").unwrap(),
+                "commit",
+                norito::json!(source.clone()),
+            );
+            if retirement == Some(index) {
+                add_retirement(&mut records, &operation, network, &source);
+            }
+            validate_records(&records, &operation, network, &source, &trust, VERSION).unwrap();
+            let mut hashes = BTreeMap::new();
+            for (name, value) in &records {
+                let bytes = json::to_vec(value).unwrap();
+                hashes.insert(name.clone(), digest(&bytes));
+                originals.insert(chain_name(index, name), bytes);
+            }
+            let original_hash = digest(&json::to_vec(&trust).unwrap());
+            for peer in &mut trust.peers {
+                peer.build_fingerprint = selected_source_fingerprint(&source, VERSION).unwrap();
+            }
+            updates.push(norito::json!({"schema":"iroha.dataspace-runtime-update-verification.v1",
+                "operation_directory":(format!("{BASE}/{operation}")),"source_commit":(source.clone()),
+                "receipt_sha256":(hashes.clone()),"original_trust_sha256":original_hash,
+                "effective_trust_sha256":(digest(&json::to_vec(&trust).unwrap())),"chain_write_performed":false}));
+            prior_records = Some(records);
+            prior_source = source;
+            prior_operation = operation;
+            prior_intent_hash = hashes["intent.json"].clone();
+        }
+        ChainFixture {
+            receipt: norito::json!({"schema":CHAIN_SCHEMA,"source_commit":prior_source,
+            "original_trust_sha256":(digest(&json::to_vec(&original).unwrap())),
+            "effective_trust_sha256":(digest(&json::to_vec(&trust).unwrap())),"updates":updates,"chain_write_performed":false}),
+            originals,
+            original,
+            effective: trust,
+            network,
+        }
+    }
+
+    #[test]
+    fn portable_runtime_chain_replays_two_and_maximum_hops_without_host_authority() {
+        for count in [2, MAX_UPDATES] {
+            let fixture = chain_fixture(count);
+            let result = fixture.verify().unwrap();
+            assert_eq!(result["host_custody_verified"].as_bool(), Some(false));
+            assert_eq!(result["semantic_joins_verified"].as_bool(), Some(true));
+            assert_eq!(rows(&result["updates"]).unwrap().len(), count);
+            assert_eq!(
+                portable_record_names(&fixture.receipt).unwrap().len(),
+                count * RECORDS.len()
+            );
+            assert!(fixture.originals.contains_key("chain-0000-intent.json"));
+            assert_eq!(
+                fixture.original.peers[0].build_fingerprint,
+                selected_source_fingerprint(PREVIOUS, VERSION).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn portable_runtime_chain_replays_historical_or_terminal_retirement_and_refuses_source_cycles()
+    {
+        for retired in [0, 1] {
+            let fixture = chain_fixture_selected(2, None, Some(retired));
+            fixture.verify().unwrap();
+            assert_eq!(portable_record_names(&fixture.receipt).unwrap().len(), 16);
+            assert!(
+                fixture
+                    .originals
+                    .contains_key(&chain_name(retired, "config-retirement-installed.json"))
+            );
+        }
+        // Both constituent transitions are individually valid; returning to the
+        // allocation's original build still cannot become a chain authority.
+        let fixture = chain_fixture_selected(2, Some(PREVIOUS), None);
+        assert!(
+            fixture
+                .verify()
+                .unwrap_err()
+                .to_string()
+                .contains("source cycle")
+        );
+    }
+
+    #[test]
+    fn runtime_chain_config_filename_is_closed_and_preserves_the_existing_default() {
+        assert_eq!(config_filename(&norito::json!({})).unwrap(), "config.toml");
+        for filename in ["config.toml", "beacon.toml"] {
+            assert_eq!(
+                config_filename(&norito::json!({"config_filename":filename})).unwrap(),
+                filename
+            );
+        }
+        for value in [
+            norito::json!(null),
+            norito::json!(7),
+            norito::json!("../config.toml"),
+        ] {
+            assert!(config_filename(&norito::json!({"config_filename":value})).is_err());
+        }
+    }
+
+    #[test]
+    fn portable_runtime_chain_rejects_omitted_reordered_duplicate_nested_and_excess_hops() {
+        for mutation in 0..6 {
+            let mut fixture = chain_fixture(2);
+            let replacement = fixture.receipt.clone();
+            let steps = fixture
+                .receipt
+                .get_mut("updates")
+                .unwrap()
+                .as_array_mut()
+                .unwrap();
+            match mutation {
+                0 => {
+                    steps.remove(0);
+                }
+                1 => steps.reverse(),
+                2 => steps[1] = steps[0].clone(),
+                3 => steps[0] = replacement,
+                4 => steps.clear(),
+                _ => {
+                    let step = steps[0].clone();
+                    steps.resize(MAX_UPDATES + 1, step);
+                }
+            }
+            assert!(fixture.verify().is_err(), "mutation {mutation}");
+        }
+        let mut fixture = chain_fixture(2);
+        put(&mut fixture.receipt, "unreviewed", norito::json!(true));
+        assert!(fixture.verify().is_err());
+    }
+
+    #[test]
+    fn portable_runtime_chain_requires_exact_originals_and_each_trust_link() {
+        for index in 0..2 {
+            for name in RECORDS {
+                let mut fixture = chain_fixture(2);
+                fixture.originals.remove(&chain_name(index, name));
+                assert!(fixture.verify().is_err());
+                let mut fixture = chain_fixture(2);
+                fixture
+                    .originals
+                    .get_mut(&chain_name(index, name))
+                    .unwrap()
+                    .push(b' ');
+                assert!(fixture.verify().is_err());
+            }
+            for key in [
+                "original_trust_sha256",
+                "effective_trust_sha256",
+                "source_commit",
+            ] {
+                let mut fixture = chain_fixture(2);
+                let step = fixture
+                    .receipt
+                    .get_mut("updates")
+                    .unwrap()
+                    .get_mut(index)
+                    .unwrap();
+                put(
+                    step,
+                    key,
+                    norito::json!("f".repeat(if key == "source_commit" { 40 } else { 64 })),
+                );
+                assert!(fixture.verify().is_err(), "{index} {key}");
+            }
+            for name in [
+                "config-retirement-prepared.json",
+                "config-retirement-installed.json",
+            ] {
+                let mut fixture = chain_fixture(2);
+                let step = fixture
+                    .receipt
+                    .get_mut("updates")
+                    .unwrap()
+                    .get_mut(index)
+                    .unwrap();
+                put(
+                    step.get_mut("receipt_sha256").unwrap(),
+                    name,
+                    norito::json!("a".repeat(64)),
+                );
+                assert!(fixture.verify().is_err());
+            }
+        }
+        let mut fixture = chain_fixture(2);
+        fixture
+            .originals
+            .insert("unexpected.json".into(), b"{}".to_vec());
+        assert!(fixture.verify().is_err());
+        let mut fixture = chain_fixture(2);
+        fixture.effective.peers[0].config_fingerprint = Hash::new(b"substituted authority");
+        put(
+            &mut fixture.receipt,
+            "effective_trust_sha256",
+            norito::json!(digest(&json::to_vec(&fixture.effective).unwrap())),
+        );
+        assert!(fixture.verify().is_err());
+    }
+
+    #[test]
+    fn portable_runtime_chain_requires_exact_predecessor_and_retained_installation() {
+        for key in [
+            "kind",
+            "commit",
+            "attempt_name",
+            "daemon",
+            "local_plan_sha256",
+            "plan_schema",
+            "result_schema",
+        ] {
+            let mut fixture = chain_fixture(2);
+            fixture.change_record(1, "intent.json", |record| {
+                put(
+                    record
+                        .get_mut("deployment")
+                        .unwrap()
+                        .get_mut("current")
+                        .unwrap(),
+                    key,
+                    norito::json!("changed"),
+                )
+            });
+            assert!(fixture.verify().is_err(), "{key}");
+        }
+        for key in [
+            "runtime_root",
+            "config_root",
+            "state_root",
+            "config_release",
+            "config_filename",
+            "genesis_manifest",
+            "kura_hash_journal",
+        ] {
+            let mut fixture = chain_fixture(2);
+            fixture.change_record(1, "intent.json", |record| {
+                put(
+                    record.get_mut("deployment").unwrap(),
+                    key,
+                    norito::json!("changed"),
+                )
+            });
+            assert!(fixture.verify().is_err(), "{key}");
+        }
+        for key in [
+            "role",
+            "state_root_identity",
+            "current_target",
+            "config_stamp",
+        ] {
+            let mut fixture = chain_fixture(2);
+            fixture.change_record(1, "retained-entry.json", |record| {
+                put(
+                    record.get_mut(0usize).unwrap(),
+                    key,
+                    norito::json!("changed"),
+                )
+            });
+            assert!(fixture.verify().is_err(), "{key}");
+        }
+        for (key, value) in [
+            ("height", norito::json!(1)),
+            ("commit", norito::json!(PREVIOUS)),
+            ("network_id", norito::json!("wrong")),
+        ] {
+            let mut fixture = chain_fixture(2);
+            fixture.change_record(1, "retained-entry.json", |record| {
+                put(
+                    record.get_mut(0usize).unwrap().get_mut("public").unwrap(),
+                    key,
+                    value,
+                )
+            });
+            assert!(fixture.verify().is_err(), "{key}");
+        }
+    }
+
+    pub(super) fn chain_retained_tip_claims(height: u64, hash: Hash) -> Result<RetainedTips> {
+        let mut fixture = chain_fixture(2);
+        for index in 0..2 {
+            fixture.change_record(index, "checkpoint-stopped.json", |record| {
+                for row in record.as_array_mut().unwrap() {
+                    put(row, "checkpoint_height", norito::json!(height));
+                    put(
+                        row,
+                        "kura_tip",
+                        norito::json!({"height":height,"hash":(hex::encode(hash.as_ref()))}),
+                    );
+                }
+            });
+            fixture.change_record(index, "checkpoint-restored.json", |record| {
+                for row in record.as_array_mut().unwrap() {
+                    put(row, "restored_height", norito::json!(height));
+                }
+            });
+            for name in ["retained-entry.json", "after.json", "cohort-ready.json"] {
+                fixture.change_record(index, name, |record| {
+                    let rows = if name == "cohort-ready.json" {
+                        record.get_mut("observations").unwrap()
+                    } else {
+                        record
+                    };
+                    for row in rows.as_array_mut().unwrap() {
+                        put(
+                            row.get_mut("public").unwrap(),
+                            "height",
+                            norito::json!(height),
+                        );
+                    }
+                });
+            }
+        }
+        // Every changed receipt is consistently rehashed; proof mismatch must be
+        // caught by the authenticated prefix, never by a superficial digest check.
+        fixture.verify()?;
+        retained_tip_claims(&fixture.receipt, &fixture.originals)
+    }
+
+    #[test]
+    fn portable_runtime_chain_rejects_rehashed_missing_changed_and_decreasing_tips() {
+        for mutation in 0..5 {
+            let mut fixture = chain_fixture(3);
+            fixture.change_record(1, "checkpoint-stopped.json", |record| {
+                let tip = record.get_mut(0usize).unwrap().get_mut("kura_tip").unwrap();
+                match mutation {
+                    0 => {
+                        tip.as_object_mut().unwrap().remove("hash");
+                    }
+                    1 => put(
+                        tip,
+                        "hash",
+                        norito::json!(hex::encode(Hash::new(b"different middle block").as_ref())),
+                    ),
+                    2 => put(tip, "height", norito::json!(11)),
+                    3 => put(tip, "height", norito::json!(0)),
+                    _ => put(tip, "hash", norito::json!("0".repeat(64))),
+                }
+            });
+            assert!(
+                fixture.verify().is_err(),
+                "rehashed tip mutation {mutation}"
+            );
+        }
+        // A source-native replay claim must retain the same exact checkpoint hash.
+        let (mut records, operation, network, trust) = fixture();
+        records
+            .get_mut("checkpoint-stopped.json")
+            .unwrap()
+            .get_mut(0usize)
+            .unwrap()
+            .get_mut("kura_tip")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("hash");
+        assert!(validate_records(&records, &operation, network, SOURCE, &trust, VERSION).is_err());
+    }
+
+    #[test]
+    fn portable_runtime_chain_preserves_all_deployment_metadata_and_tip_inventory() {
+        for key in [
+            "genesis_manifest",
+            "kura_hash_journal",
+            "public_origin",
+            "renderer_sha256",
+        ] {
+            let mut fixture = chain_fixture(2);
+            fixture.change_record(1, "intent.json", |record| {
+                put(
+                    record.get_mut("deployment").unwrap(),
+                    key,
+                    norito::json!("changed"),
+                );
+            });
+            assert!(
+                fixture
+                    .verify()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("retained deployment"),
+                "{key}"
+            );
+        }
+        let fixture = chain_fixture(2);
+        fixture.verify().unwrap();
+        let claims = retained_tip_claims(&fixture.receipt, &fixture.originals).unwrap();
+        assert_eq!(claims.heights().collect::<Vec<_>>(), vec![12]);
+        let mut originals = fixture.originals.clone();
+        originals.remove(&chain_name(0, "checkpoint-stopped.json"));
+        assert!(retained_tip_claims(&fixture.receipt, &originals).is_err());
+    }
+
+    #[test]
+    fn runtime_chain_selection_is_direct_bounded_and_read_only_off_linux() {
+        let paths = (0..MAX_UPDATES)
+            .map(|index| PathBuf::from(format!("{BASE}/update-{index:032x}")))
+            .collect::<Vec<_>>();
+        validate_selection(&paths).unwrap();
+        for invalid in [
+            format!("{BASE}/update-{}", "A".repeat(32)),
+            format!("{BASE}/./update-{}", "a".repeat(32)),
+            format!("{BASE}/update-{}/", "a".repeat(32)),
+            "relative/update-00000000000000000000000000000000".into(),
+        ] {
+            assert!(validate_selection(&[PathBuf::from(invalid)]).is_err());
+        }
+        assert!(validate_selection(&[paths[0].clone(), paths[0].clone()]).is_err());
+        let mut excessive = paths.clone();
+        excessive.push(PathBuf::from(format!("{BASE}/update-{}", "f".repeat(32))));
+        assert!(validate_selection(&excessive).is_err());
+        let (_, _, network, trust) = fixture();
+        assert!(Verified::admit_chain(&[], &trust, network, Some((SOURCE, VERSION))).is_err());
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert!(
+                Verified::admit_chain(&paths[..2], &trust, network, Some((SOURCE, VERSION)))
+                    .is_err()
+            );
+            assert!(Verified::admit_chain(&paths[..2], &trust, network, None).is_err());
+        }
+    }
+
+    #[test]
+    fn portable_runtime_chain_rejects_individually_valid_but_disjoint_units_and_state() {
+        let mut fixture = chain_fixture(2);
+        fixture.change_record(1, "intent.json", |record| {
+            let unit = record.get_mut("units").unwrap().get_mut(0usize).unwrap();
+            for side in ["before", "after"] {
+                let mut bytes = base64::engine::general_purpose::STANDARD
+                    .decode(text(unit, side).unwrap())
+                    .unwrap();
+                bytes.extend_from_slice(b"# changed between updates\n");
+                put(
+                    unit,
+                    side,
+                    norito::json!(base64::engine::general_purpose::STANDARD.encode(&bytes)),
+                );
+                put(
+                    unit,
+                    &format!("{side}_sha256"),
+                    norito::json!(digest(&bytes)),
+                );
+            }
+        });
+        assert!(
+            fixture
+                .verify()
+                .unwrap_err()
+                .to_string()
+                .contains("units are not adjacent")
+        );
+        for (key, value) in [
+            ("state_root_identity", norito::json!([99, 99])),
+            ("current_target", norito::json!("changed")),
+            ("config_stamp", norito::json!([99, 99, 99])),
+        ] {
+            let mut fixture = chain_fixture(2);
+            for name in ["retained-entry.json", "after.json", "cohort-ready.json"] {
+                fixture.change_record(1, name, |record| {
+                    let rows = if name == "cohort-ready.json" {
+                        record.get_mut("observations").unwrap()
+                    } else {
+                        record
+                    };
+                    put(rows.get_mut(0usize).unwrap(), key, value.clone());
+                });
+            }
+            assert!(
+                fixture
+                    .verify()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("changed retained peer custody"),
+                "{key}"
+            );
+        }
     }
 
     #[test]
@@ -1181,9 +2396,12 @@ mod tests {
         assert!(portable_record_names(&changed).is_err());
     }
 
-    #[test]
-    fn runtime_transition_accepts_only_the_native_config_stamp_join() {
-        let (mut records, operation, network, trust) = fixture();
+    fn add_retirement(
+        records: &mut BTreeMap<String, json::Value>,
+        operation: &str,
+        network: NetworkId,
+        source: &str,
+    ) {
         let deployment = records
             .get_mut("intent.json")
             .unwrap()
@@ -1236,8 +2454,14 @@ mod tests {
                 .unwrap() = installed;
         }
         for (kind, rows) in [("prepared", prepared_rows), ("installed", installed_rows)] {
-            records.insert(format!("config-retirement-{kind}.json"), norito::json!({"schema":(format!("taira.validator-config-retirement.{kind}.v1")),"operation":(operation.clone()),"source_commit":SOURCE,"network_id":(network.to_string()),"rows":rows}));
+            records.insert(format!("config-retirement-{kind}.json"), norito::json!({"schema":(format!("taira.validator-config-retirement.{kind}.v1")),"operation":(operation.clone()),"source_commit":source,"network_id":(network.to_string()),"rows":rows}));
         }
+    }
+
+    #[test]
+    fn runtime_transition_accepts_only_the_native_config_stamp_join() {
+        let (mut records, operation, network, trust) = fixture();
+        add_retirement(&mut records, &operation, network, SOURCE);
         validate_records(&records, &operation, network, SOURCE, &trust, VERSION).unwrap();
         let mut changed = records.clone();
         *changed

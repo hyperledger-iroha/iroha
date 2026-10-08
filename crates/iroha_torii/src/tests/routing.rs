@@ -621,10 +621,15 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn average_block_time_handles_empty_chain() {
-        let kura = iroha_core::kura::Kura::blank_kura_for_testing();
-        let budget = iroha_allocation::AllocationBudget::new(0);
+        let state = CoreState::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let owner = crate::history_producer::HistoryProducerOwner::for_test();
+        let budget = owner.canonical_history_budget();
         assert!(
-            super::average_block_time_ms(&kura, 0, 10, &budget)
+            super::average_block_time_ms(&state, 0, 10, &budget)
                 .expect("empty history needs no body admission")
                 .is_none()
         );
@@ -638,9 +643,14 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         assert!(
-            super::latest_block_created_at(&state, 0)
-                .expect("height zero needs no body admission")
-                .is_none()
+            super::latest_block_created_at(
+                &state,
+                0,
+                &crate::history_producer::HistoryProducerOwner::for_test()
+                    .canonical_history_budget()
+            )
+            .expect("height zero needs no body admission")
+            .is_none()
         );
     }
     #[cfg(feature = "app_api")]

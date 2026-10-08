@@ -38060,6 +38060,166 @@ mod explorer_lookup_tests {
             "invalid instruction index should return not found"
         );
     }
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn telemetry_live_polls_owned_history_after_handler_and_releases_each_snapshot() {
+        use iroha_data_model::events::pipeline::{BlockEvent, BlockStatus};
+
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "telemetry".to_owned()).into();
+        let (chain, _) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(vec![instruction])],
+            None,
+            None,
+        );
+        let source = Arc::clone(chain.state());
+        let height = source.committed_height() as u64;
+        assert!(height > 0);
+        let header = crate::history_producer::HistoryProducerOwner::for_test().scope(|| {
+            HistoryReadBudget::new()
+                .read(&source, nonzero_height(height).unwrap())
+                .unwrap()
+                .header()
+                .clone()
+        });
+        let mut app = crate::mk_app_state_for_tests();
+        let working = 48_000_000_usize;
+        let app_mut = Arc::get_mut(&mut app).expect("new test application is uniquely owned");
+        app_mut.query_fanout_working_set_bytes = working;
+        app_mut.query_fanout_inflight = crate::ByteWeightedMemoryPool::new(working).unwrap();
+        let telemetry = MaybeTelemetry::for_tests();
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let response = handle_v1_telemetry_live(
+            source,
+            telemetry.clone(),
+            app.peer_telemetry.clone(),
+            events.clone(),
+            app.clone(),
+        )
+        .unwrap()
+        .into_response();
+        assert!(crate::history_producer::HistoryProducerOwner::current().is_err());
+        let mut body = response.into_body();
+        let first = next_sse_chunk(&mut body).await;
+        assert!(first.starts_with("data: "), "{first}");
+        let payload: norito::json::Value =
+            norito::json::from_str(first.trim_start_matches("data: ").trim()).unwrap();
+        assert_eq!(payload["kind"].as_str(), Some("first"));
+        assert_eq!(payload["network_status"]["block"].as_u64(), Some(height));
+        assert!(!payload["network_status"]["block_created_at"].is_null());
+        assert!(
+            app.query_fanout_inflight
+                .try_acquire_parts([working as u64])
+                .is_some(),
+            "completed scalar snapshot must release its native history backing"
+        );
+        assert!(crate::history_producer::HistoryProducerOwner::current().is_err());
+
+        // The initially due interval tick executes after bootstrap, outside the
+        // handler's task-local scope, and must emit a real changed metric.
+        telemetry
+            .metrics()
+            .await
+            .txs
+            .with_label_values(&["accepted"])
+            .inc();
+        let tick = next_sse_chunk(&mut body).await;
+        assert!(tick.starts_with("data: "), "{tick}");
+        let payload: norito::json::Value =
+            norito::json::from_str(tick.trim_start_matches("data: ").trim()).unwrap();
+        assert_eq!(payload["kind"].as_str(), Some("network_status"));
+        assert_eq!(payload["transactions_accepted"].as_u64(), Some(1));
+
+        telemetry
+            .metrics()
+            .await
+            .txs
+            .with_label_values(&["accepted"])
+            .inc();
+        events
+            .send(
+                BlockEvent {
+                    header,
+                    status: BlockStatus::Committed,
+                }
+                .into(),
+            )
+            .unwrap();
+        let delta = next_sse_chunk(&mut body).await;
+        assert!(delta.starts_with("data: "), "{delta}");
+        let payload: norito::json::Value =
+            norito::json::from_str(delta.trim_start_matches("data: ").trim()).unwrap();
+        assert_eq!(payload["kind"].as_str(), Some("network_status"));
+        assert_eq!(payload["transactions_accepted"].as_u64(), Some(2));
+        assert!(
+            app.query_fanout_inflight
+                .try_acquire_parts([working as u64])
+                .is_some()
+        );
+        assert!(crate::history_producer::HistoryProducerOwner::current().is_err());
+        let retained_app = Arc::downgrade(&app);
+        drop(app);
+        assert!(
+            retained_app.upgrade().is_some(),
+            "deferred stream retains acquisition authority"
+        );
+        drop(body);
+        assert!(
+            retained_app.upgrade().is_none(),
+            "stream drop releases acquisition authority"
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn telemetry_live_refuses_exhausted_history_pool_without_bypassing_admission() {
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "telemetry capacity".to_owned()).into();
+        let (chain, _) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(vec![instruction])],
+            None,
+            None,
+        );
+        let mut app = crate::mk_app_state_for_tests();
+        let working = 48_000_000_usize;
+        let app_mut = Arc::get_mut(&mut app).expect("new test application is uniquely owned");
+        app_mut.query_fanout_working_set_bytes = working;
+        app_mut.query_fanout_inflight = crate::ByteWeightedMemoryPool::new(working).unwrap();
+        let occupied = app
+            .query_fanout_inflight
+            .try_acquire_parts([working as u64])
+            .unwrap();
+        let response = handle_v1_telemetry_live(
+            Arc::clone(chain.state()),
+            MaybeTelemetry::for_tests(),
+            app.peer_telemetry.clone(),
+            app.events.clone(),
+            app.clone(),
+        )
+        .unwrap()
+        .into_response();
+        let mut body = response.into_body();
+        let refused = next_sse_chunk(&mut body).await;
+        assert!(
+            refused.starts_with(':') && refused.contains("error"),
+            "{refused}"
+        );
+        assert!(!refused.contains("data:"));
+        assert!(
+            app.query_fanout_inflight
+                .try_acquire_parts([working as u64])
+                .is_none()
+        );
+        assert!(crate::history_producer::HistoryProducerOwner::current().is_err());
+        drop(body);
+        drop(occupied);
+        assert!(
+            app.query_fanout_inflight
+                .try_acquire_parts([working as u64])
+                .is_some()
+        );
+    }
     routing_test! { async explorer_sse_lag_is_machine_readable_and_terminal
         let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "initial".to_owned()).into();
         let (mut chain, _) = build_chain_with_executables_and_route_plans(
@@ -39392,9 +39552,11 @@ struct TelemetryLiveState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     ticker: tokio::time::Interval,
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     telemetry: MaybeTelemetry,
     peer_telemetry: Arc<crate::telemetry::peers::PeerTelemetryService>,
+    // Retain acquisition authority across deferred body polls, not one cumulative
+    // producer budget for an unbounded stream. Each snapshot admits its own read.
+    history_app: crate::SharedAppState,
     pending: VecDeque<SseEvent>,
     bootstrap_pending: bool,
     prev_peers_info: BTreeMap<String, String>,
@@ -39406,10 +39568,10 @@ struct TelemetryLiveState {
 /// GET `/v1/telemetry/live` — SSE stream with peer and network telemetry deltas.
 pub fn handle_v1_telemetry_live(
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     telemetry: MaybeTelemetry,
     peer_telemetry: Arc<crate::telemetry::peers::PeerTelemetryService>,
     events: EventsSender,
+    history_app: crate::SharedAppState,
 ) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, Error> {
     if !telemetry.allows_metrics() {
         return Err(Error::telemetry_profile_forbidden(
@@ -39424,9 +39586,9 @@ pub fn handle_v1_telemetry_live(
             rx: events.subscribe(),
             ticker,
             state,
-            kura,
             telemetry,
             peer_telemetry,
+            history_app,
             pending: VecDeque::new(),
             bootstrap_pending: true,
             prev_peers_info: BTreeMap::new(),
@@ -39443,9 +39605,9 @@ pub fn handle_v1_telemetry_live(
                 if state.bootstrap_pending {
                     match collect_telemetry_live_snapshot(
                         state.state.clone(),
-                        state.kura.clone(),
                         state.telemetry.clone(),
                         state.peer_telemetry.clone(),
+                        &state.history_app,
                     )
                     .await
                     {
@@ -39470,9 +39632,9 @@ pub fn handle_v1_telemetry_live(
                     _ = state.ticker.tick() => {
                         match collect_telemetry_live_snapshot(
                             state.state.clone(),
-                            state.kura.clone(),
                             state.telemetry.clone(),
                             state.peer_telemetry.clone(),
+                            &state.history_app,
                         ).await {
                             Ok(snapshot) => enqueue_telemetry_deltas(&mut state, snapshot),
                             Err(error) => {
@@ -39488,10 +39650,10 @@ pub fn handle_v1_telemetry_live(
                         match recv {
                             Ok(event_box) => {
                                 if committed_block_height(&event_box).is_some() {
-                                    match explorer_network_metrics_snapshot(
+                                    match telemetry_live_network_metrics_snapshot(
                                         state.state.clone(),
-                                        state.kura.clone(),
                                         &state.telemetry,
+                                        &state.history_app,
                                     ).await {
                                         Ok(network) => enqueue_telemetry_network_delta(&mut state, network),
                                         Err(error) => {
@@ -39524,12 +39686,13 @@ pub fn handle_v1_telemetry_live(
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn collect_telemetry_live_snapshot(
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     telemetry: MaybeTelemetry,
     peer_telemetry: Arc<crate::telemetry::peers::PeerTelemetryService>,
+    history_app: &crate::SharedAppState,
 ) -> Result<TelemetryLiveSnapshot, Error> {
     let peer_snapshot = peer_telemetry.snapshot().await;
-    let network_status = explorer_network_metrics_snapshot(state, kura, &telemetry).await?;
+    let network_status =
+        telemetry_live_network_metrics_snapshot(state, &telemetry, history_app).await?;
     Ok(TelemetryLiveSnapshot {
         peers_info: peer_snapshot.peers_info,
         peers_status: peer_snapshot.peers_status,
@@ -39537,6 +39700,20 @@ async fn collect_telemetry_live_snapshot(
         network_status,
     })
 }
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+async fn telemetry_live_network_metrics_snapshot(
+    state: Arc<CoreState>,
+    telemetry: &MaybeTelemetry,
+    app: &crate::SharedAppState,
+) -> Result<crate::explorer::ExplorerNetworkMetricsDto, Error> {
+    let reservation = crate::try_acquire_new_query_fanout_memory(app)
+        .map_err(|_| crate::native_projection_response::capacity())?;
+    let owner = crate::history_producer::HistoryProducerOwner::from_reservation(&reservation)?;
+    // Only copied metric scalars escape this read; no canonical block backing is
+    // retained in the SSE queue. Keep the real owner until the read completes.
+    explorer_network_metrics_snapshot(state, telemetry, &owner).await
+}
+
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 fn enqueue_telemetry_bootstrap(state: &mut TelemetryLiveState, snapshot: TelemetryLiveSnapshot) {
     let mut peers_info = BTreeMap::new();
@@ -54086,8 +54263,16 @@ pub async fn handle_v1_explorer_health(
         let head_height = state.committed_height() as u64;
         let body = crate::explorer::ExplorerHealthDto {
             head_height,
-            head_created_at: latest_block_created_at(state.as_ref(), head_height)?,
-            sampled_at: crate::explorer_history::HistoryTime(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| explorer_response_capacity_error())?),
+            head_created_at: latest_block_created_at(
+                state.as_ref(),
+                head_height,
+                &owner.canonical_history_budget(),
+            )?,
+            sampled_at: crate::explorer_history::HistoryTime(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|_| explorer_response_capacity_error())?,
+            ),
         };
         owner.json(&body)
     });
@@ -54187,7 +54372,6 @@ impl ExplorerInstructionFilters {
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 pub async fn handle_v1_explorer_metrics(
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     telemetry: MaybeTelemetry,
     visibility: DataspaceReadVisibility,
 ) -> Result<AxResponse, Error> {
@@ -54204,82 +54388,108 @@ pub async fn handle_v1_explorer_metrics(
             telemetry.profile(),
         ));
     }
-    let dto = explorer_network_metrics_snapshot(state, kura, &telemetry).await?;
-    crate::history_producer::HistoryProducerOwner::current()?.json(&dto)
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    let dto = explorer_network_metrics_snapshot(state, &telemetry, &owner).await?;
+    owner.json(&dto)
 }
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn explorer_network_metrics_snapshot(
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     telemetry: &MaybeTelemetry,
+    owner: &crate::history_producer::HistoryProducerOwner,
 ) -> Result<crate::explorer::ExplorerNetworkMetricsDto, Error> {
     let metrics = telemetry.metrics().await;
-    let world = state.world_view();
-    let peers = world.peers().len() as u64;
-    let domains = world.domains().len() as u64;
-    let accounts = world.accounts().len() as u64;
-    let assets = world.assets().len() as u64 + world.nfts().len() as u64;
-    let finalized_block = state.committed_height() as u64;
-    let transactions_accepted = metrics.txs.with_label_values(&["accepted"]).get();
-    let transactions_rejected = metrics.txs.with_label_values(&["rejected"]).get();
-    let avg_commit_time_ms = metrics.last_commit_time_ms.get();
-    let avg_commit_time = if avg_commit_time_ms == 0 {
-        None
-    } else {
-        Some(crate::explorer::ExplorerDurationDto {
-            ms: avg_commit_time_ms,
+    // Install the native owner only after the asynchronous metrics refresh.
+    // This synchronous scope cannot leak into another task or survive an await.
+    owner.scope(|| {
+        let world = state.world_view();
+        let peers = world.peers().len() as u64;
+        let domains = world.domains().len() as u64;
+        let accounts = world.accounts().len() as u64;
+        let assets = world.assets().len() as u64 + world.nfts().len() as u64;
+        let finalized_block = state.committed_height() as u64;
+        let transactions_accepted = metrics.txs.with_label_values(&["accepted"]).get();
+        let transactions_rejected = metrics.txs.with_label_values(&["rejected"]).get();
+        let avg_commit_time_ms = metrics.last_commit_time_ms.get();
+        let avg_commit_time = if avg_commit_time_ms == 0 {
+            None
+        } else {
+            Some(crate::explorer::ExplorerDurationDto {
+                ms: avg_commit_time_ms,
+            })
+        };
+        let history_budget = owner.canonical_history_budget();
+        let block_created_at =
+            latest_block_created_at(state.as_ref(), finalized_block, &history_budget)?;
+        let avg_block_time =
+            average_block_time_ms(state.as_ref(), finalized_block, 20, &history_budget)?
+                .map(|ms| crate::explorer::ExplorerDurationDto { ms });
+        Ok(crate::explorer::ExplorerNetworkMetricsDto {
+            peers,
+            domains,
+            accounts,
+            assets,
+            transactions_accepted,
+            transactions_rejected,
+            block: finalized_block,
+            block_created_at,
+            finalized_block,
+            avg_commit_time,
+            avg_block_time,
         })
-    };
-    let execution_budget = state.ivm_execution_budget();
-    let block_created_at = latest_block_created_at(state.as_ref(), finalized_block)?;
-    let avg_block_time = average_block_time_ms(kura.as_ref(), finalized_block, 20, &execution_budget)?
-        .map(|ms| crate::explorer::ExplorerDurationDto { ms });
-    Ok(crate::explorer::ExplorerNetworkMetricsDto {
-        peers,
-        domains,
-        accounts,
-        assets,
-        transactions_accepted,
-        transactions_rejected,
-        block: finalized_block,
-        block_created_at,
-        finalized_block,
-        avg_commit_time,
-        avg_block_time,
     })
 }
 fn latest_block_created_at(
     state: &CoreState,
     height: u64,
+    history_budget: &iroha_core::state::CanonicalHistoryReadBudget,
 ) -> Result<Option<crate::explorer_history::HistoryTime>> {
-    let Some(height) = nonzero_height(height) else { return Ok(None); };
-    let block = HistoryReadBudget::new().read(state, height)?;
-    Ok(Some(crate::explorer_history::HistoryTime(block.header().creation_time())))
+    let Some(height) = nonzero_height(height) else {
+        return Ok(None);
+    };
+    let block = state
+        .read_canonical_history_block(height, history_budget)
+        .map_err(crate::canonical_history::query_attempt_error)?;
+    Ok(Some(crate::explorer_history::HistoryTime(
+        block.header().creation_time(),
+    )))
 }
 fn average_block_time_ms(
-    kura: &Kura,
+    state: &CoreState,
     latest: u64,
     window: usize,
-    execution_budget: &iroha_core::state::AllocationBudget,
+    history_budget: &iroha_core::state::CanonicalHistoryReadBudget,
 ) -> Result<Option<u64>> {
-    if latest <= 1 || window == 0 { return Ok(None); }
+    if latest <= 1 || window == 0 {
+        return Ok(None);
+    }
     let mut height = latest;
     let mut prev_ts_ms: Option<u128> = None;
     let mut deltas: Vec<u128> = Vec::new();
     let mut remaining = window;
     while height >= 1 && remaining > 0 {
-        let Some(nonzero_height) = nonzero_height(height) else { break; };
-        let Some(block) = kura.get_block(nonzero_height, execution_budget).map_err(crate::canonical_history::kura_attempt_error)? else { break; };
+        let Some(nonzero_height) = nonzero_height(height) else {
+            break;
+        };
+        let block = state
+            .read_canonical_history_block(nonzero_height, history_budget)
+            .map_err(crate::canonical_history::query_attempt_error)?;
         let ts_ms = block.header().creation_time().as_millis();
         if let Some(prev) = prev_ts_ms {
-            if prev >= ts_ms { deltas.push(prev - ts_ms); }
+            if prev >= ts_ms {
+                deltas.push(prev - ts_ms);
+            }
         }
         prev_ts_ms = Some(ts_ms);
-        if height == 1 { break; }
+        if height == 1 {
+            break;
+        }
         height -= 1;
         remaining -= 1;
     }
-    Ok(if deltas.is_empty() { None } else {
+    Ok(if deltas.is_empty() {
+        None
+    } else {
         let sum: u128 = deltas.iter().copied().sum();
         Some((sum / (deltas.len() as u128)) as u64)
     })
