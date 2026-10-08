@@ -551,8 +551,9 @@ impl<'a> Preflight<'a> {
             let peer = &self.trust.peers[index];
             let height = NonZeroU64::new(client.get_sumeragi_status()?.committed_height)
                 .ok_or_else(|| eyre!("validator has no durable tip"))?;
-            let attestation =
-                client.get_sumeragi_finality_attestation(height, challenge, &peer.peer_id)?;
+            let attestation = client
+                .get_sumeragi_finality_attestation(height, challenge, &peer.peer_id)?
+                .into_attestation();
             validate_attestation(&self.authority, peer, challenge, &attestation)?;
             Ok(attestation)
         })?;
@@ -1098,7 +1099,7 @@ fn verify_peer_state(
         challenge,
         &peer.peer_id,
     ))? {
-        PeerRead::Verified(attestation) => attestation,
+        PeerRead::Verified(attestation) => attestation.into_attestation(),
         PeerRead::Pending => {
             require_operation_budget(deadline, "validator finality tip is changing")?;
             return Ok(PeerRead::Pending);
@@ -1333,7 +1334,7 @@ fn complete<C: RunContext>(
             challenge,
             &peer.peer_id,
         ))? {
-            PeerRead::Verified(attestation) => attestation,
+            PeerRead::Verified(attestation) => attestation.into_attestation(),
             PeerRead::Pending => {
                 require_operation_budget(deadline, "validator finality tip is changing")?;
                 return Ok(PeerRead::Pending);

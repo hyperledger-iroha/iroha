@@ -1,5 +1,6 @@
 //! Sealed local body-chain evidence; only the custody owner supplies its original namespace proof.
 use super::*;
+use crate::managed::stream_token_custody::body_history::SnapshotReadPass;
 use std::sync::Arc;
 
 mod sealed {
@@ -36,6 +37,12 @@ pub(in crate::managed) trait EnrollmentScopeEvidence:
     fn operation(&self) -> &PrivateDirectory;
     fn fees(&self) -> &super::super::Fees;
     fn revalidate(&self) -> Result<()>;
+    fn with_snapshot_read_pass(
+        &self,
+        action: &mut dyn FnMut(Option<&SnapshotReadPass<'_>>) -> Result<()>,
+    ) -> Result<()>;
+    fn revalidate_with_snapshot_read_pass(&self, pass: Option<&SnapshotReadPass<'_>>)
+    -> Result<()>;
     fn require_active(&self) -> Result<()>;
 }
 pub(in crate::managed) trait BodyReplacementTarget:
@@ -117,18 +124,18 @@ impl BodyDispatchScope {
         }
     }
     fn revalidate(&self) -> Result<()> {
-        self.revalidate_local()?;
+        self.revalidate_local(None)?;
         if let Some(prior) = &self.state.predecessor {
             retained_graph::validate_predecessor(prior)?;
-            self.revalidate_local()?;
+            self.revalidate_local(None)?;
         }
         Ok(())
     }
     // Does not descend through another History. The graph owner validates every retained
     // predecessor separately while preserving this exact evidence and native handle graph.
-    fn revalidate_local(&self) -> Result<()> {
+    fn revalidate_local(&self, pass: Option<&SnapshotReadPass<'_>>) -> Result<()> {
         let value = &self.state;
-        value.evidence.revalidate()?;
+        value.evidence.revalidate_with_snapshot_read_pass(pass)?;
         if value.evidence.root().identity()? != value.root_identity
             || value.evidence.operation().identity()? != value.operation_identity
         {
@@ -201,10 +208,11 @@ impl HistoryScope {
         operation: &PrivateDirectory,
         purpose: Purpose,
         semantic: [u8; 32],
+        pass: Option<&SnapshotReadPass<'_>>,
     ) -> Result<()> {
         match self {
             Self::FixedBody if !is_enrollment(purpose) => {}
-            Self::Enrollment(value) if is_enrollment(purpose) => value.revalidate_local()?,
+            Self::Enrollment(value) if is_enrollment(purpose) => value.revalidate_local(pass)?,
             _ => {
                 return Err(invalid(
                     "dispatch purpose requires its exact closed body scope",
@@ -235,6 +243,15 @@ impl HistoryScope {
             }
         }
         Ok(())
+    }
+    pub(super) fn with_snapshot_read_pass(
+        &self,
+        action: &mut dyn FnMut(Option<&SnapshotReadPass<'_>>) -> Result<()>,
+    ) -> Result<()> {
+        match self {
+            Self::FixedBody => action(None),
+            Self::Enrollment(value) => value.state.evidence.with_snapshot_read_pass(action),
+        }
     }
     pub(super) fn predecessor(&self) -> Option<&VerifiedUnsignedClosure> {
         match self {

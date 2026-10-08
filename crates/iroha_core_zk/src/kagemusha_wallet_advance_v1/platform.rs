@@ -310,8 +310,15 @@ pub trait KagemushaWalletFsV1 {
     ///
     /// `WouldBlock` when another opener holds it; otherwise the OS error.
     fn try_lock(&self) -> io::Result<Self::Lock>;
-    /// A fresh staging name (`.tmp-` and 32 lowercase hex digits).
-    fn staging_name(&self) -> String;
+    /// A candidate staging name (`.tmp-` and 32 lowercase hex digits).
+    ///
+    /// Names carry no custody authority: callers must still create exclusively and retain
+    /// the original descriptor. Name generation itself does not mutate the filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns an entropy or platform failure before any staging file is created.
+    fn staging_name(&self) -> io::Result<String>;
 }
 
 // ---------------------------------------------------------------------------------------

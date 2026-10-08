@@ -190,7 +190,7 @@ impl<F: Fs> FsArchive<F> {
             Err(e) if e.kind() == io::ErrorKind::NotFound => false,
             Err(e) => return Err(e.into()),
         };
-        let stage = self.fs.staging_name();
+        let stage = self.fs.staging_name()?;
         let mut file = self.fs.create_new(&self.directory, &stage)?;
         self.fs.write_all(&mut file, bytes)?;
         self.fs.sync_staged(&file)?;

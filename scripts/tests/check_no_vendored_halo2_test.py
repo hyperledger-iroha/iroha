@@ -18,7 +18,7 @@ def graph():
     names = ["wallet", "native", "halo2_proofs", "halo2curves", "iroha_plonk_oracle", "halo2-axiom"]
     return {
         "packages": [{"id": name, "name": name, "manifest_path": str(ROOT / "crates" / name / "Cargo.toml"), "publish": []} for name in names],
-        "workspace_members": ["wallet", "native", "iroha_plonk_oracle"],
+        "workspace_members": ["wallet", "native"],
         "resolve": {"nodes": [{"id": name, "deps": []} for name in names]},
     }
 
@@ -34,7 +34,6 @@ class RetirementGraphTests(unittest.TestCase):
         edge(data, "wallet", "native")
         edge(data, "native", "halo2_proofs")
         edge(data, "native", "halo2curves")
-        edge(data, "iroha_plonk_oracle", "halo2-axiom")
         self.assertEqual(GUARD.violations(data, ROOT), [])
 
     def test_direct_transitive_build_and_foreign_target_dependencies_fail(self):
@@ -45,13 +44,14 @@ class RetirementGraphTests(unittest.TestCase):
                 edge(data, "native", "halo2-axiom", kind, target)
                 self.assertIn("wallet -> native -> halo2-axiom", GUARD.violations(data, ROOT))
 
-    def test_development_only_oracle_edges_do_not_ship(self):
+    def test_development_only_retired_edges_are_rejected(self):
         data = graph()
         edge(data, "native", "halo2-axiom", "dev")
         edge(data, "wallet", "iroha_plonk_oracle", "dev")
-        self.assertEqual(GUARD.violations(data, ROOT), [])
+        self.assertIn("native -> halo2-axiom", GUARD.violations(data, ROOT))
+        self.assertIn("wallet -> iroha_plonk_oracle", GUARD.violations(data, ROOT))
 
-    def test_consumer_cannot_reach_the_exempt_oracle_owner(self):
+    def test_consumer_cannot_reach_the_retired_oracle_owner(self):
         data = graph()
         edge(data, "wallet", "iroha_plonk_oracle")
         self.assertIn("wallet -> iroha_plonk_oracle", GUARD.violations(data, ROOT))
@@ -65,12 +65,10 @@ class RetirementGraphTests(unittest.TestCase):
                 edge(data, "wallet", "halo2-axiom")
                 self.assertIn(f"wallet -> {name}", GUARD.violations(data, ROOT))
 
-    def test_oracle_root_requires_exact_path_and_nonpublishability(self):
-        for field, value in [("publish", None), ("manifest_path", str(ROOT / "other/Cargo.toml"))]:
-            with self.subTest(field=field):
-                data = graph()
-                next(p for p in data["packages"] if p["name"] == "iroha_plonk_oracle")[field] = value
-                self.assertTrue(GUARD.violations(data, ROOT))
+    def test_exact_nonpublishable_oracle_root_is_also_rejected(self):
+        data = graph()
+        data["workspace_members"].append("iroha_plonk_oracle")
+        self.assertIn("iroha_plonk_oracle", GUARD.violations(data, ROOT))
 
     def test_missing_or_unknown_resolve_evidence_fails_closed(self):
         baseline = graph()
@@ -108,7 +106,7 @@ class RetirementGraphTests(unittest.TestCase):
                     capture_output=True, text=True, check=False,
                 )
                 self.assertEqual(result.returncode, int(forbidden), result.stderr)
-                self.assertIn("forbidden production path" if forbidden else "PASS", result.stderr if forbidden else result.stdout)
+                self.assertIn("forbidden dependency path" if forbidden else "PASS", result.stderr if forbidden else result.stdout)
 
 
 if __name__ == "__main__":

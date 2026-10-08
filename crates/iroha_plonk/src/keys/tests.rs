@@ -1007,9 +1007,8 @@ fn small_domains_are_unpinned() {
     ));
 }
 
-#[cfg(iroha_plonk_oracle)]
 #[test]
-fn oracle_builds_can_inject_the_vendored_transcript_repr() {
+fn unit_tests_can_inject_the_captured_transcript_repr() {
     use iroha_pasta::Fq;
     let params = params::<Ep>();
     let vk = keygen_vk(

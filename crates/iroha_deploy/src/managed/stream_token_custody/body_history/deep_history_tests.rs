@@ -13,6 +13,14 @@ use iroha_data_model::isi::{InstructionBox, Log};
 use iroha_wallet::operations::NativePreparationPhase;
 use std::{path::PathBuf, time::Duration};
 
+// This exercises history depth and custody, not a short-window signing latency target.
+// All 64 bodies expire naturally: 640 seconds of expiry pacing leaves 560 seconds in
+// the original finite campaign for fixture setup, native retirement, proofs and assertions.
+// Focused short-expiry tests retain their own 500 ms / two-second authorizations.
+const BODY_VALIDITY_MS: u64 = 10_000;
+const CAMPAIGN_BUDGET: Duration = Duration::from_secs(1_200);
+const BODY_EXPIRY_WAIT: Duration = Duration::from_secs(12);
+
 struct OriginalBytes {
     body: PathBuf,
     original: zeroize::Zeroizing<Vec<u8>>,
@@ -62,25 +70,26 @@ fn refresh_old_anchor(fixture: &mut Fixture) {
 #[test]
 fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_substitution() {
     let _guard = crate::managed::native_test_guard();
-    let fixture = Fixture::enrolled_with_renewal_validity(4_000, 4_000);
-    exercise_deep_history(fixture);
+    let complete_before = Instant::now() + CAMPAIGN_BUDGET;
+    let fixture = Fixture::enrolled_with_policy_lifetime(4_000, BODY_VALIDITY_MS, CAMPAIGN_BUDGET);
+    exercise_deep_history(fixture, complete_before);
 }
 
 // Initial enrollment completes before the retained-history exercise needs its parser scratch.
 // The caller holds the native fixture guard through both phases and the fixture's drop.
 #[inline(never)]
-fn exercise_deep_history(mut fixture: Fixture) {
-    let completed = populate_deep_history(&mut fixture);
+fn exercise_deep_history(mut fixture: Fixture, complete_before: Instant) {
+    let completed = populate_deep_history(&mut fixture, complete_before);
     verify_deep_history(&fixture, completed);
+    assert!(Instant::now() < complete_before);
 }
 
 // Each phase owns its parser scratch only while it runs. The original native handles and
 // byte buffers move directly into the verification phase without reopening or copying them.
 #[inline(never)]
-fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
+fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> CompletedDeepHistory {
     let original_policy = fixture.policy.clone();
     let original_fees = Fees::from_options(&fixture.options).unwrap();
-    let complete_before = Instant::now() + Duration::from_secs(600);
     wait_until(
         fixture.initial.issued_at_unix_ms + 2_000,
         Duration::from_secs(4),
@@ -124,7 +133,10 @@ fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
                 .unsigned
                 .statement
                 .expires_at_unix_ms;
-            wait_until(expiry, Duration::from_secs(6));
+            wait_until(
+                expiry,
+                BODY_EXPIRY_WAIT.min(complete_before.saturating_duration_since(Instant::now())),
+            );
         }
         // A fresh production startup acquires its turn before opening any body history.
         // End the preceding invocation only after using its exact original expiry; the next
@@ -142,14 +154,18 @@ fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
         assert_eq!(current.current().unwrap().record(), &original_native);
         assert_eq!(current.current().unwrap().control().next_sequence, 2);
 
-        let history = if ordinal > 1 {
+        let selection_started;
+        let selection_finished;
+        let finish_started;
+        let (history, authorization) = if ordinal > 1 {
             let previous = BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2))
                 .unwrap()
                 .expect("previous startup must retain its renewal body history");
             let authorization = turn
                 .authorize_retained(&fixture.owner, &previous, fixture.options.deadline)
                 .unwrap();
-            let terms = Terms::new(now_ms().unwrap() + 4_000, &fixture.options).unwrap();
+            selection_started = Instant::now();
+            let terms = Terms::new(now_ms().unwrap() + BODY_VALIDITY_MS, &fixture.options).unwrap();
             let unsigned = fixture
                 .owner
                 .select_renewal_unsigned(
@@ -161,7 +177,8 @@ fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
                     fixture.options.deadline,
                 )
                 .unwrap();
-            previous
+            selection_finished = Instant::now();
+            let history = previous
                 .reserve_successor(
                     &fixture.owner,
                     unsigned,
@@ -169,7 +186,9 @@ fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
                     authorization,
                     fixture.options.deadline,
                 )
-                .unwrap()
+                .unwrap();
+            finish_started = Instant::now();
+            let history = history
                 .finish_pending_with_reads(
                     &fixture.owner,
                     &current,
@@ -177,9 +196,11 @@ fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
                     fixture.options.deadline,
                     &NativeEnrollmentReads(&fixture.native),
                 )
-                .unwrap()
+                .unwrap();
+            (history, authorization)
         } else {
-            let terms = Terms::new(now_ms().unwrap() + 4_000, &fixture.options).unwrap();
+            selection_started = Instant::now();
+            let terms = Terms::new(now_ms().unwrap() + BODY_VALIDITY_MS, &fixture.options).unwrap();
             let unsigned = fixture
                 .owner
                 .select_renewal_unsigned(
@@ -191,6 +212,7 @@ fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
                     fixture.options.deadline,
                 )
                 .unwrap();
+            selection_finished = Instant::now();
             let history = BodyHistory::initialize(
                 &fixture.owner,
                 CustodyPurpose::Renewal(2),
@@ -203,7 +225,8 @@ fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
             let authorization = turn
                 .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
                 .unwrap();
-            history
+            finish_started = Instant::now();
+            let history = history
                 .finish_pending_with_reads(
                     &fixture.owner,
                     &current,
@@ -211,8 +234,10 @@ fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
                     fixture.options.deadline,
                     &NativeEnrollmentReads(&fixture.native),
                 )
-                .unwrap()
+                .unwrap();
+            (history, authorization)
         };
+        let finish_finished = Instant::now();
         assert_eq!(history.anchor.highest, ordinal);
         assert_eq!(history.bodies.len(), usize::from(ordinal));
         assert_eq!(history.anchor.active, Some(ordinal));
@@ -239,9 +264,31 @@ fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
             history.anchor.completed.is_some(),
             history.original().unwrap().is_some(),
         );
+        let retention_started = Instant::now();
         let selected = fixture
-            .retain_generated_attempt(&mut turn, &history, &current)
-            .unwrap();
+            .retain_generated_attempt(authorization, &history, &current)
+            .unwrap_or_else(|error| {
+                let failed_at = Instant::now();
+                let unsigned = &history.bodies.last().unwrap().reservation.unsigned;
+                panic!(
+                    "generated body {ordinal} request retention failed: {error:?}; selected_at_unix_ms={}, body_expiry_unix_ms={}, now_unix_ms={}, options_remaining_ms={}, policy_expiry_unix_ms={}, selection_us={}, reservation_authorization_us={}, finish_us={}, assertions_us={}, native_retention_us={}, timed_body_work_us={}",
+                    unsigned.selected_at_unix_ms,
+                    unsigned.statement.expires_at_unix_ms,
+                    now_ms().unwrap(),
+                    fixture
+                        .options
+                        .deadline
+                        .saturating_duration_since(Instant::now())
+                        .as_millis(),
+                    original_policy.active_until_unix_ms,
+                    selection_finished.duration_since(selection_started).as_micros(),
+                    finish_started.duration_since(selection_finished).as_micros(),
+                    finish_finished.duration_since(finish_started).as_micros(),
+                    retention_started.duration_since(finish_finished).as_micros(),
+                    failed_at.duration_since(retention_started).as_micros(),
+                    failed_at.duration_since(selection_started).as_micros(),
+                );
+            });
         assert!(matches!(
             selected.attempt().origin(),
             attempts::Origin::Generated { .. }
@@ -295,6 +342,28 @@ fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
     }
 
     let history = retained.unwrap();
+    // The final body remains unretired for the depth-limit and read-only custody assertions,
+    // but its exact original interval also expires; no synthetic clock or replacement is used.
+    let expiry = history
+        .bodies
+        .last()
+        .unwrap()
+        .reservation
+        .unsigned
+        .statement
+        .expires_at_unix_ms;
+    wait_until(
+        expiry,
+        BODY_EXPIRY_WAIT.min(complete_before.saturating_duration_since(Instant::now())),
+    );
+    let expired_at = now_ms().unwrap();
+    assert!(
+        history
+            .bodies
+            .iter()
+            .all(|body| { body.reservation.unsigned.statement.expires_at_unix_ms <= expired_at })
+    );
+    assert!(Instant::now() < complete_before);
     CompletedDeepHistory {
         history,
         originals,

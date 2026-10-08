@@ -29,7 +29,7 @@ use iroha_plonk_gadgets::{
     bytes::p_bytes_native, range::secondary::SecondaryPlan, statement::foreign_limbs,
 };
 use iroha_plonk_recursion::{
-    ACCUMULATOR_BYTES, AccumulatorT, FOLD_WITNESS_BYTES, FoldConfig, FoldInput, K,
+    ACCUMULATOR_BYTES, AccumulatorT, FOLD_WITNESS_BYTES, FoldConfig, FoldInput, FoldWitness, K,
     VESTA_TRIVIAL_GENERATOR, create_fold, verifier::CompactSpans,
 };
 
@@ -73,6 +73,27 @@ impl Error {
     pub fn is_cancelled(self) -> bool {
         matches!(self, Self::Cancelled)
     }
+}
+
+fn fold_terminal_slots(
+    params: &PinnedParams<Eq>,
+    slots: &[FoldInput<Eq>],
+    salt: [u8; 32],
+    budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<(FoldWitness<Eq>, AccumulatorT<Eq>), Error> {
+    let config = FoldConfig {
+        kernel_budget: budget,
+        cancellation: cancellation.cloned(),
+        ..FoldConfig::default()
+    };
+    create_fold(params, slots, salt, &config).map_err(|error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Proof
+        }
+    })
 }
 
 /// Fixed outer source layout, supplied by the authenticated producer catalog owner.
@@ -466,18 +487,8 @@ impl Prover {
                     }
                 })?;
         }
-        let fold_config = FoldConfig {
-            kernel_budget: budget,
-            ..FoldConfig::default()
-        };
         let (fold, vesta) =
-            create_fold(&program.vesta, &slots, salt, &fold_config).map_err(|error| {
-                if error.is_cancelled() {
-                    Error::Cancelled
-                } else {
-                    Error::Proof
-                }
-            })?;
+            fold_terminal_slots(&program.vesta, &slots, salt, budget, cancellation)?;
         vesta
             .decide_cancellable(&program.vesta, budget, cancellation)
             .map_err(|error| {

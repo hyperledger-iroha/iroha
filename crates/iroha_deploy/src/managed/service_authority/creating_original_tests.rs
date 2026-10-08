@@ -11,13 +11,13 @@ use std::{cell::RefCell, rc::Rc};
 thread_local! {
     static AFTER_CHILD: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
 }
-struct HookGuard;
+pub(super) struct HookGuard;
 impl Drop for HookGuard {
     fn drop(&mut self) {
         AFTER_CHILD.with(|hook| *hook.borrow_mut() = None);
     }
 }
-fn install(action: impl FnOnce() + 'static) -> HookGuard {
+pub(super) fn install(action: impl FnOnce() + 'static) -> HookGuard {
     AFTER_CHILD.with(|hook| {
         assert!(hook.borrow().is_none());
         *hook.borrow_mut() = Some(Box::new(action));
@@ -30,7 +30,7 @@ pub(super) fn after_child() {
         action();
     }
 }
-fn fixture() -> (tempfile::TempDir, ServiceAuthority) {
+pub(super) fn fixture() -> (tempfile::TempDir, ServiceAuthority) {
     let temporary = tempfile::tempdir().unwrap();
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
     let prepared = crate::localnet::prepare_localnet_at(
@@ -45,7 +45,7 @@ fn fixture() -> (tempfile::TempDir, ServiceAuthority) {
         ServiceAuthority::open_network(&prepared, NetworkPurpose::ServiceBootstrap).unwrap();
     (temporary, parent)
 }
-fn parsed<T>(action: impl FnOnce() -> T) -> (T, usize) {
+pub(super) fn parsed<T>(action: impl FnOnce() -> T) -> (T, usize) {
     crate::localnet::service_authorities::count_profile_validations(action)
 }
 fn create(parent: &ServiceAuthority) -> Result<ServiceAuthority> {
@@ -286,7 +286,7 @@ fn reserve_creator_refuses_fresh_profile_native_substitution_and_closes_parent_e
     peers.finish();
 }
 
-fn limits(allocated: usize) -> norito::DecodeLimits {
+pub(super) fn limits(allocated: usize) -> norito::DecodeLimits {
     let finite = 64 * 1024 * 1024;
     norito::DecodeLimits::new(finite, finite, finite, allocated, 64)
 }

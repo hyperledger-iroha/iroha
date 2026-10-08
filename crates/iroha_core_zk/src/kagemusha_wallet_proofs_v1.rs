@@ -25,6 +25,7 @@ use iroha_plonk::{
 use iroha_plonk_recursion::{ACCUMULATOR_BYTES, AccumulatorT, K};
 
 mod cancellation;
+pub(crate) mod randomness;
 pub(crate) use cancellation::NativeProofError;
 
 /// Native artifact/proof admission failure. No failure selects or modifies wallet state.

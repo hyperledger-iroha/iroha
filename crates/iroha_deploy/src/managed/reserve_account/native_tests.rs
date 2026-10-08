@@ -492,6 +492,17 @@ fn generated_native_registration_retains_exact_reserve_operator_wallet_and_disti
             crate::managed::native_operation::test_support::provider_id(&prepared, 0),
         )
         .unwrap();
+        crate::managed::native_operation::test_support::assert_optional_current(
+            &unavailable,
+            &committed,
+            |verifier| {
+                recovered_coordinator.read_current(
+                    &policy,
+                    verifier,
+                    Instant::now() + Duration::from_secs(30),
+                )
+            },
+        );
         let selected_options = original
             .terms
             .options(Instant::now() + Duration::from_secs(30));

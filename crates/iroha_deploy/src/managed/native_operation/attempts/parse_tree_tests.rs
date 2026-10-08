@@ -379,6 +379,6 @@ fn fresh_parse_tree_anchor_exit_closes_real_row_results_and_restores_original_so
             .unwrap(),
         original
     );
-    history.require_current_local().unwrap();
+    history.require_current_local(None).unwrap();
     assert!(!attempt.wallet_path().exists());
 }

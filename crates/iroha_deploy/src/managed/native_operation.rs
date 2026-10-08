@@ -349,6 +349,19 @@ pub(crate) fn retain_carrier_progress(
     Ok(Some(finalized))
 }
 
+// Optional post-replay reporting only. Required predecessor, authorization and native carrier
+// checks stay with their callers and must complete before this projection can be skipped.
+pub(super) fn optional_current<T>(
+    requested: bool,
+    observed: Option<&FinalityVerifier>,
+    read: impl FnOnce(&FinalityVerifier) -> Result<T>,
+) -> Option<T> {
+    if !requested {
+        return None;
+    }
+    observed.and_then(|verifier| read(verifier).ok())
+}
+
 // Every candidate is checked by the supplied SDK operation against the same independently
 // authenticated block. This helper owns only bounded endpoint iteration, never proof authority.
 pub(super) fn read_selected_peers<T>(

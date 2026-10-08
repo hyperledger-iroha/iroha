@@ -149,6 +149,21 @@ impl ManagedReserveTopUpApproval {
         })
     }
 
+    /// Borrow the immutable original profile while admitting this provider's own purpose lock.
+    /// Active decode admission and owned parents retain the full standalone capture recipe.
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+    ) -> Result<Self> {
+        Ok(Self {
+            authority: ServiceAuthority::open_provider_from_original(
+                parent,
+                provider,
+                ProviderPurpose::ReserveTopUpApproval,
+            )?,
+        })
+    }
+
     /// Retain one exact approval after fresh predecessor proof, then advance once-only work.
     /// # Errors
     /// Refuses substituted history, original intent/UTC/fees, stale predecessors or custody faults.
@@ -204,6 +219,7 @@ impl ManagedReserveTopUpApproval {
         Ok(original)
     }
 
+    #[cfg(test)]
     pub(super) fn open_existing(
         prepared: &PreparedLocalnet,
         provider: iroha_data_model::sorafs::capacity::ProviderId,
@@ -565,9 +581,11 @@ impl ManagedReserveTopUpApproval {
         // A public status/finality report never mints historical authority. Reopen the retained
         // independently authenticated carrier and bind its exact single signed instruction.
         let historical = self.retained_historical(history, &directory, &original, &transaction)?;
-        let current = observed
-            .as_ref()
-            .and_then(|verifier| self.read_current(&original.policy, verifier, deadline).ok());
+        let current = super::native_operation::optional_current(
+            observe_current,
+            observed.as_ref(),
+            |verifier| self.read_current(&original.policy, verifier, deadline),
+        );
         verify_custody()?;
         Ok(progress(report.status, historical, current))
     }

@@ -484,7 +484,21 @@ fn finish_attestation(
     let signature = SignatureOf::try_from_hash(signer.private_key(), body.signing_hash())
         .map_err(|error| Error::Signing(error.to_string()))?;
     let attestation = SumeragiFinalityAttestation { body, signature };
-    attestation.verify().map_err(Error::InvalidBody)?;
+    if norito::core::decode_limits_active() {
+        // An enclosing owner retains the original second body decode and its charges/refusals.
+        attestation.verify().map_err(Error::InvalidBody)?;
+    } else {
+        // This exact immutable body already passed complete consistency checks above. Its
+        // move into the statement changes no proof or binding; verify the fresh signature
+        // without repeating both independent native proof decodes in this same invocation.
+        attestation
+            .signature
+            .verify_hash(
+                attestation.body.node_id.public_key(),
+                attestation.body.signing_hash(),
+            )
+            .map_err(|error| Error::InvalidBody(FinalityError(error.to_string())))?;
+    }
     Ok(attestation)
 }
 

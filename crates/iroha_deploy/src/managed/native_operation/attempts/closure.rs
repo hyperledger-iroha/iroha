@@ -78,8 +78,11 @@ impl VerifiedUnsignedClosure {
         &self.history
     }
     // The bounded graph owner invokes this only as part of its complete before/after passes.
-    pub(super) fn require_retained_local(&self) -> Result<()> {
-        self.history.require_current_local()?;
+    pub(super) fn require_retained_local(
+        &self,
+        pass: Option<&crate::managed::stream_token_custody::body_history::SnapshotReadPass<'_>>,
+    ) -> Result<()> {
+        self.history.require_current_local(pass)?;
         self.require_receipt()
     }
     pub(super) fn require_receipt(&self) -> Result<()> {

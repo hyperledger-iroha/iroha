@@ -56,20 +56,19 @@ fn absent<T>(step: ServiceBootstrapStep) -> Result<Phase<T>> {
     }))
 }
 
-// Open-existing paths authenticate without creating directories or lock files. Only the
-// live startup branch can create a genuinely missing purpose after its prerequisites.
+// Each existing admission authenticates ordinary native absence without creating material;
+// the scheduling census supplies no authority. Only the live startup branch may then create.
+// Advance has no import scope; active/owned originals use their full standalone producer.
 macro_rules! open_child {
     ($run:expr, $owner:ty, $step:expr $(, $provider:expr)?) => {{
-        let existing = if $run.mode == Mode::Advance {
-            <$owner>::open_existing(&$run.authority.prepared $(, $provider)?)
-        } else {
-            <$owner>::open_existing_from_original(
-                $run.authority $(, $provider)?, $run.checkpoint_import_scope.as_ref()
-            )
-        };
+        let existing = <$owner>::open_existing_from_original(
+            $run.authority $(, $provider)?, $run.checkpoint_import_scope.as_ref()
+        );
         match existing? {
             Some(owner) => owner,
-            None if $run.may_submit()? => <$owner>::open(&$run.authority.prepared $(, $provider)?)?,
+            None if $run.may_submit()? => {
+                <$owner>::open_from_original($run.authority $(, $provider)?)?
+            }
             None => return absent($step),
         }
     }};
@@ -186,7 +185,9 @@ pub(super) fn run(
                 std::thread::Builder::new()
                     .name(format!("bootstrap-provider-{slot}"))
                     .spawn_scoped(scope, move || {
-                        run.provider(slot, selected, reserve_policy.height)
+                        retry_fresh_provider(run, || {
+                            run.provider(slot, selected, reserve_policy.height)
+                        })
                     })
             });
             handles.map(|handle| match handle {
@@ -246,6 +247,39 @@ pub(super) fn run(
         dependencies,
     })
 }
+
+// A transient failure or incomplete observation belongs to this already-admitted worker.
+// Waiting for another provider's whole chain before retrying can consume the shared startup
+// interval. Reopen only the same native child owners under the same live epoch and clocks;
+// resumed/active-decode serial scheduling above keeps its original admission policy.
+fn retry_fresh_provider<T>(
+    run: &Run<'_>,
+    mut advance: impl FnMut() -> Result<Phase<T>>,
+) -> Result<Phase<T>> {
+    let authorization = run
+        .authorization
+        .filter(|_| run.mode == Mode::Advance)
+        .ok_or_else(|| invalid("fresh provider retry requires original startup authorization"))?;
+    loop {
+        authorization.validate(run.authority, run.deadline)?;
+        match advance() {
+            Ok(complete @ Phase::Complete(_)) => {
+                authorization.validate(run.authority, run.deadline)?;
+                return Ok(complete);
+            }
+            Err(error @ crate::managed::Error::Bootstrap(_)) => return Err(error),
+            Ok(Phase::Incomplete(_)) | Err(_) => {}
+        }
+        let deadline = authorization.validate(run.authority, run.deadline)?;
+        std::thread::sleep(
+            crate::managed::POLL.min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+}
+
+#[cfg(test)]
+#[path = "provider_retry_tests.rs"]
+mod provider_retry_tests;
 
 impl Run<'_> {
     #[inline(never)]
@@ -852,3 +886,7 @@ pub(super) mod test_passes {
 #[cfg(test)]
 #[path = "original_profile_tests.rs"]
 mod original_profile_tests;
+
+#[cfg(test)]
+#[path = "creating_original_tests.rs"]
+mod creating_original_tests;

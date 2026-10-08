@@ -239,7 +239,7 @@ fn genuine_ingest_original_expiry_never_creates_wallet_or_requests_http() {
         &owner.inner,
         &directory,
         &original,
-        now_ms().unwrap() + 500,
+        || now_ms().unwrap() + 500,
         &options(),
     );
     let bytes = std::fs::read(directory.path().join("original.nrt")).unwrap();

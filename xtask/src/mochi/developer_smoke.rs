@@ -17,6 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(super) mod cold_start_smoke;
 mod context_smoke;
 mod publication_smoke;
 

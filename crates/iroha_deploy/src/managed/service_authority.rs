@@ -115,6 +115,9 @@ impl std::ops::Deref for AuthorityProfile {
 pub(super) struct ServiceAuthority {
     scope: Scope,
     profile: AuthorityProfile,
+    // Immutable original client: only its transport is inherited by freshly built contexts.
+    // Keep it separate from mutable diagnostic/configuration projections.
+    transport_seed: Client,
     checkpoint_cache: checkpoint_cache::CheckpointCache,
     checkpoint_import_scope: Option<CheckpointImportScope>,
     pub(super) prepared: PreparedLocalnet,
@@ -126,11 +129,12 @@ pub(super) struct ServiceAuthority {
     pub(super) peers: Vec<(PeerId, Client)>,
 }
 
-/// Borrowed original public intent inside one synchronous pure projection.
+/// Borrowed original public intent inside one synchronous projection scope.
 ///
 /// This is neither current native state nor a signing capability. The sole projection owner
-/// must consume the view with `finish` before returning its result; native reads and actions
-/// retain their ordinary independent authority checks outside this view.
+/// must consume the view with `finish` before returning its result. Any interleaved native
+/// reads retain their ordinary independent authority checks; this view grants only immutable
+/// projections and cannot authorize a child read or action.
 #[must_use = "finish the original-intent view before returning its projection"]
 pub(super) struct OriginalServiceIntent<'a> {
     authority: &'a ServiceAuthority,
@@ -185,6 +189,17 @@ impl OriginalServiceIntent<'_> {
         self.authority.provider_inventory(provider)?;
         // The original bounded canonical decode remains real in every enclosing resource scope.
         self.authority.profile.original_compliance_plan(provider)
+    }
+
+    pub(super) fn publication_plan(
+        &self,
+    ) -> Result<crate::localnet::service_authorities::RetainedPublicationServicePlan> {
+        if matches!(self.authority.scope, Scope::Provider { .. }) {
+            return Err(invalid(
+                "provider service cannot select network publication intent",
+            ));
+        }
+        self.authority.profile.original_publication_plan()
     }
 
     pub(super) fn finish(self) -> Result<()> {
@@ -269,6 +284,25 @@ impl ServiceAuthority {
             .ok_or_else(|| invalid("new native operation custody was not created"))
     }
 
+    /// Create or retain one provider purpose from the parent's immutable original bundle.
+    /// The selected child takes its own native lock; this grants no current or signing authority.
+    /// Active decode admission and an owned parent retain the full standalone capture recipe.
+    pub(super) fn open_provider_from_original(
+        parent: &Self,
+        provider: ProviderId,
+        purpose: ProviderPurpose,
+    ) -> Result<Self> {
+        Self::open_from_original(parent, Some(provider), purpose.directory_name(), true, None)?
+            .ok_or_else(|| invalid("new native operation custody was not created"))
+    }
+
+    /// Observe the actual creating-child return before its original parent exit check.
+    /// This delegates the existing one-shot test hook and restores it when the guard drops.
+    #[cfg(test)]
+    pub(super) fn test_on_creating_child_exit(action: impl FnOnce() + 'static) -> impl Drop {
+        creating_original_tests::install(action)
+    }
+
     pub(super) fn open_network_existing(
         prepared: &PreparedLocalnet,
         purpose: NetworkPurpose,
@@ -336,7 +370,7 @@ impl ServiceAuthority {
             )
         };
         Self::open_profile(
-            prepared, provider, purpose, create, profile, config, genesis, peer_ids,
+            prepared, provider, purpose, create, profile, config, genesis, peer_ids, None,
         )
     }
 
@@ -350,7 +384,7 @@ impl ServiceAuthority {
     }
 
     // The same immutable bundle and native tail serve existing readers and the authorized
-    // reserve creator. Active callers and owned parents keep the original full capture.
+    // typed creators. Active callers and owned parents keep the original full capture.
     fn open_from_original(
         parent: &Self,
         provider: Option<ProviderId>,
@@ -376,6 +410,7 @@ impl ServiceAuthority {
             captured.config.clone(),
             captured.genesis.clone(),
             captured.peer_ids.clone(),
+            Some(&parent.transport_seed),
         );
         if let Ok(Some(owner)) = &mut result {
             // Eligible construction is outside active admission and from the shared profile.
@@ -405,6 +440,7 @@ impl ServiceAuthority {
         config: Config,
         genesis: GenesisAnchor,
         peer_ids: [PeerId; 4],
+        transport_seed: Option<&Client>,
     ) -> Result<Option<Self>> {
         let manifest = profile.manifest().clone();
         // Resolve the original provider before any operation directory or lock is created.
@@ -416,18 +452,12 @@ impl ServiceAuthority {
             None => Scope::Network,
         };
         let _profile = ChainDiscriminantGuard::enter(config.account_chain_discriminant);
-        let mut peers = Vec::with_capacity(4);
-        for (peer, id) in prepared.peers.iter().zip(peer_ids) {
-            let mut selected = config.clone();
-            selected.torii_api_url = peer
-                .torii_url
-                .parse()
-                .map_err(|_| invalid("invalid service peer endpoint"))?;
-            let client = Client::builder(selected)
-                .build()
-                .map_err(|_| invalid("cannot construct service peer client"))?;
-            peers.push((id, client));
-        }
+        let peers = service_peers(prepared, peer_ids, &config, transport_seed)?;
+        let transport_seed = peers
+            .first()
+            .ok_or_else(|| invalid("original service committee is empty"))?
+            .1
+            .clone();
         let Some(directory) = operation_directory(profile.runtime(), scope, purpose, create)?
         else {
             return Ok(None);
@@ -452,6 +482,7 @@ impl ServiceAuthority {
         Ok(Some(Self {
             scope,
             profile,
+            transport_seed,
             checkpoint_cache: checkpoint_cache::CheckpointCache::default(),
             checkpoint_import_scope: None,
             prepared: prepared.clone(),
@@ -696,3 +727,36 @@ mod original_intent_tests;
 #[cfg(test)]
 #[path = "service_authority/creating_original_tests.rs"]
 mod creating_original_tests;
+
+#[cfg(test)]
+#[path = "service_authority/creating_custody_tests.rs"]
+mod creating_custody_tests;
+
+// The seed is private original constructor state, never a mutable account/peer projection.
+// Rebuilding resets all compatibility/probe state while retaining only transport owners.
+fn service_peers(
+    prepared: &PreparedLocalnet,
+    peer_ids: [PeerId; 4],
+    config: &Config,
+    seed: Option<&Client>,
+) -> Result<Vec<(PeerId, Client)>> {
+    let mut peers: Vec<(PeerId, Client)> = Vec::with_capacity(4);
+    for (peer, id) in prepared.peers.iter().zip(peer_ids) {
+        let original = seed.or_else(|| peers.first().map(|(_, client)| client));
+        let mut builder =
+            original.map_or_else(|| Client::builder(config.clone()), Client::to_builder);
+        builder.torii_url = peer
+            .torii_url
+            .parse()
+            .map_err(|_| invalid("invalid service peer endpoint"))?;
+        let client = builder
+            .build()
+            .map_err(|_| invalid("cannot construct service peer client"))?;
+        peers.push((id, client));
+    }
+    Ok(peers)
+}
+
+#[cfg(test)]
+#[path = "service_authority/transport_tests.rs"]
+mod transport_tests;

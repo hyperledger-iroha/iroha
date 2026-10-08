@@ -8,8 +8,8 @@
 //! A running verifier retains its own advancing checkpoint; a release must never replace that
 //! checkpoint with an older tip. Changing the installed authority fails closed against retained
 //! releases and requires an independently authenticated key-rotation migration.
-// TODO(DX5): publish release-signed Taira checkpoints and install the independently selected
-// release key/floor in native runtime bundles, then qualify the connected dataspace provisioning flow.
+// TODO(DX5): qualify recurring signed Taira checkpoint publication and the connected dataspace
+// provisioning flow using the approved installation profile's independently selected key/floor.
 
 use std::{fs::File, path::Path, sync::Mutex};
 

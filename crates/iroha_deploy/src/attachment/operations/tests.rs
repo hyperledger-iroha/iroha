@@ -71,8 +71,7 @@ fn status_carrier_is_only_a_bounded_hint_and_elapsed_budget_fails_before_io() {
 fn parent_context_and_fresh_quorum_are_required_before_preparation_or_dispatch() {
     use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
     use iroha_data_model::{
-        sumeragi_finality::{SumeragiFinalityAttestation, SumeragiFinalityProof},
-        transaction::FeePaymentIntent,
+        sumeragi_finality::SumeragiFinalityProof, transaction::FeePaymentIntent,
     };
     use iroha_model_base::peer::PeerId;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -91,7 +90,8 @@ fn parent_context_and_fresh_quorum_are_required_before_preparation_or_dispatch()
             &self,
             _: &PeerId,
             _: &[u8; 32],
-        ) -> std::result::Result<SumeragiFinalityAttestation, Self::Error> {
+        ) -> std::result::Result<crate::verify::finality::FinalityAttestation, Self::Error>
+        {
             self.0.fetch_add(1, Ordering::Relaxed);
             Err(std::io::Error::other("offline fixture"))
         }
@@ -222,8 +222,7 @@ fn failed_atomic_completion_preserves_old_receipt_and_pending_then_reopens_exact
 fn cancelled_attachment_refuses_new_parent_work_but_preserves_pending_reconciliation() {
     use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
     use iroha_data_model::{
-        sumeragi_finality::{SumeragiFinalityAttestation, SumeragiFinalityProof},
-        transaction::FeePaymentIntent,
+        sumeragi_finality::SumeragiFinalityProof, transaction::FeePaymentIntent,
     };
     use iroha_model_base::peer::PeerId;
     use std::cell::Cell;
@@ -241,7 +240,8 @@ fn cancelled_attachment_refuses_new_parent_work_but_preserves_pending_reconcilia
             &self,
             _: &PeerId,
             _: &[u8; 32],
-        ) -> std::result::Result<SumeragiFinalityAttestation, Self::Error> {
+        ) -> std::result::Result<crate::verify::finality::FinalityAttestation, Self::Error>
+        {
             self.0.set(self.0.get() + 1);
             Err(std::io::Error::other("offline cancellation fixture"))
         }

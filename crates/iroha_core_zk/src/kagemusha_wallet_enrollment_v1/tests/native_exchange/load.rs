@@ -384,7 +384,24 @@ fn inputs(genesis: &SumeragiFinalityVerifier, installation: InstallationV1) -> I
         }
         let block = native.verify(&proof).unwrap();
         if height == 1 {
-            assert_eq!(proof.block_wire, setup_originals["signed-genesis.wire"]);
+            // H1's result attachment differs from the original signed proposal. Native
+            // verification above still authenticates the entire executed wire and result;
+            // the next proof binds that result through its parent commitment.
+            let signed_original = &setup_originals["signed-genesis.wire"];
+            let signed =
+                iroha_data_model::block::decode_framed_signed_block(signed_original).unwrap();
+            assert!(signed.header().is_genesis() && signed.is_resultless_proposal());
+            assert_eq!(signed.encode_wire().unwrap(), *signed_original);
+            assert_eq!(block.block().hash(), signed.hash());
+            assert_eq!(
+                block
+                    .block()
+                    .canonical_resultless_proposal()
+                    .unwrap()
+                    .encode_wire()
+                    .unwrap(),
+                *signed_original
+            );
         } else {
             require_block(&rows[height as usize - 2], &block);
             blocks.push(block);

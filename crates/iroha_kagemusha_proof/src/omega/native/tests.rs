@@ -1,7 +1,33 @@
-//! Pure frame/transport codec tests. These fabricated proof carriers are never passed
-//! to the native preparation/proof/restore verifier and establish no operation admission.
+//! Frame/transport codec and recursive fold cancellation tests. Fabricated proof carriers
+//! establish no operation admission; the cancellation case refuses before fold inputs.
 use super::*;
 use iroha_plonk_recursion::PALLAS_TRIVIAL_GENERATOR;
+
+#[test]
+fn terminal_fold_preserves_cancellation_at_recursive_boundary() {
+    let params = PinnedParams::<Eq>::derive(1).unwrap();
+    let cancellation = iroha_pasta::CancellationToken::new();
+    for token in [None, Some(&cancellation)] {
+        assert_eq!(
+            fold_terminal_slots(&params, &[], [0; 32], MemoryBudget::default(), token).err(),
+            Some(Error::Proof)
+        );
+    }
+    cancellation.cancel();
+    // The real fold checks its cancellation token before the deliberately short
+    // parameter set. Losing that token would report Proof instead of Cancelled.
+    assert_eq!(
+        fold_terminal_slots(
+            &params,
+            &[],
+            [0; 32],
+            MemoryBudget::default(),
+            Some(&cancellation)
+        )
+        .err(),
+        Some(Error::Cancelled)
+    );
+}
 
 fn frame() -> [Fp; 69] {
     let generator = decode_point::<Eq>(&VESTA_TRIVIAL_GENERATOR).unwrap();

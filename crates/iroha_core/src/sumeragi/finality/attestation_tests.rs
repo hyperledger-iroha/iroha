@@ -457,3 +457,6 @@ fn check_tail_source_retry(chain: &CertifiedTestChain) {
     }
     assert_eq!(chain.height(), 2);
 }
+
+#[path = "attestation_signature_tests.rs"]
+mod signature_tests;

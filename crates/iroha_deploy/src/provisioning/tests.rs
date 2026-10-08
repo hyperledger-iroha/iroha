@@ -202,7 +202,7 @@ impl FinalitySource for Source<'_> {
         &self,
         peer: &PeerId,
         challenge: &[u8; 32],
-    ) -> std::result::Result<SumeragiFinalityAttestation, Self::Error> {
+    ) -> std::result::Result<crate::verify::finality::FinalityAttestation, Self::Error> {
         self.reads.set(self.reads.get() + 1);
         if self.offline {
             return Err(std::io::Error::other("offline"));
@@ -251,7 +251,8 @@ impl FinalitySource for Source<'_> {
         Ok(SumeragiFinalityAttestation {
             signature: SignatureOf::try_from_hash(key.private_key(), body.signing_hash()).unwrap(),
             body,
-        })
+        }
+        .into())
     }
 }
 

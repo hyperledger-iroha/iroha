@@ -98,7 +98,7 @@ fn closed_row_scope_keeps_before_after_native_inventory_and_original_retry() {
     assert_eq!(counts.reads, 1);
     assert_eq!(counts.decoded, 1);
     std::fs::remove_file(attempt.directory.path().join("replay.nrt")).unwrap();
-    history.require_current_local().unwrap();
+    history.require_current_local(None).unwrap();
     assert_eq!(fixture.history().unwrap().reserved_attempt_count(), 1);
     assert_eq!(attempt.directory.identity().unwrap(), row_identity);
     assert_eq!(
@@ -200,7 +200,7 @@ fn closed_row_scope_custody_overrides_real_optional_and_decode_results_and_resto
                 fs::remove_file(&authorization_path).unwrap();
                 fs::rename(&held_authorization, &authorization_path).unwrap();
             }
-            history.require_current_local().unwrap();
+            history.require_current_local(None).unwrap();
             assert_eq!(fixture.history().unwrap().reserved_attempt_count(), 1);
             assert_eq!(attempt.directory.identity().unwrap(), original_identity);
             assert_eq!(

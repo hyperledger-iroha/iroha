@@ -2833,3 +2833,221 @@ fn runtime_selection_missing_original_bootstrap_keeps_absence_and_same_original_
     owner.authority.validate_profile().unwrap();
     no_http(&peers);
 }
+
+thread_local! {
+    static SELECTION_FINISH_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+pub(super) fn before_selection_finish() {
+    let action = SELECTION_FINISH_HOOK.with(|hook| hook.borrow_mut().take());
+    if let Some(action) = action {
+        action();
+    }
+}
+
+struct SelectionFinishHook;
+impl SelectionFinishHook {
+    fn install(action: impl FnOnce() + 'static) -> Self {
+        SELECTION_FINISH_HOOK.with(|hook| {
+            assert!(hook.borrow_mut().replace(Box::new(action)).is_none());
+        });
+        Self
+    }
+}
+impl Drop for SelectionFinishHook {
+    fn drop(&mut self) {
+        SELECTION_FINISH_HOOK.with(|hook| *hook.borrow_mut() = None);
+    }
+}
+
+fn assert_same_runtime_selection(
+    authority: &ServiceAuthority,
+    actual: &RuntimeSelection,
+    expected: &RuntimeSelection,
+) {
+    assert_eq!(
+        encode(&actual.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&expected.policies, MAX_POLICY_BYTES).unwrap()
+    );
+    assert_eq!(actual.initial, expected.initial);
+    assert_eq!(
+        actual.publication.configuration_table().unwrap(),
+        expected.publication.configuration_table().unwrap()
+    );
+    for index in 0..3 {
+        assert!(
+            actual.identity(authority, index).unwrap()
+                == expected.identity(authority, index).unwrap()
+        );
+    }
+}
+
+#[test]
+fn runtime_selection_immutable_projection_keeps_original_values_and_bounded_full_checks() {
+    use crate::managed::service_authority::profile_validation_test_support;
+
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-projection-checks");
+    let policies = select(&prepared);
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let expected_plans = owner.authority.provider_plans().unwrap().clone();
+    let expected_publication = owner.authority.publication_plan().unwrap();
+    let expected_compliance: [_; 3] = std::array::from_fn(|index| {
+        owner
+            .authority
+            .gateway_compliance_plan(expected_plans[index].provider_id())
+            .unwrap()
+    });
+    let expected_initial = standalone_custody_initials(&owner.authority, &policies);
+    let (actual, checks) =
+        profile_validation_test_support::count(|| RuntimeSelection::read(&owner.authority));
+    let actual = actual.unwrap();
+    // The existing bootstrap constructor additionally performs one direct profile revalidation.
+    // This successful absent-custody path therefore keeps seventeen full traversals, not twenty-one.
+    assert_eq!(checks, 16);
+    assert_eq!(actual.initial, expected_initial);
+    assert_eq!(
+        encode(&actual.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&policies, MAX_POLICY_BYTES).unwrap()
+    );
+    assert_eq!(
+        actual.publication.configuration_table().unwrap(),
+        expected_publication.configuration_table().unwrap()
+    );
+    for index in 0..3 {
+        assert_eq!(
+            actual.plans[index].original_profile_commitment(),
+            expected_plans[index].original_profile_commitment()
+        );
+        assert_eq!(
+            actual.plans[index].provider_id(),
+            expected_plans[index].provider_id()
+        );
+        assert_eq!(
+            actual.plans[index].peer_index(),
+            expected_plans[index].peer_index()
+        );
+        assert_eq!(actual.plans[index].slot(), expected_plans[index].slot());
+        assert_eq!(
+            actual.compliance[index].original_commitment(),
+            expected_compliance[index].original_commitment()
+        );
+    }
+    no_http(&peers);
+}
+
+#[test]
+fn runtime_selection_projection_refuses_source_changes_at_entry_and_exit_then_retries() {
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-projection-custody");
+    select(&prepared);
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let expected = RuntimeSelection::read(&owner.authority).unwrap();
+    let generation = PrivateDirectory::open_exact(generation_path(&prepared).unwrap()).unwrap();
+    let original = generation.read("peer3.toml", MAX_CONFIG_BYTES).unwrap();
+    let mut changed = original.to_vec();
+    changed.extend_from_slice(b"\n# changed source image, same parsed configuration\n");
+    let names = owner
+        .authority
+        .directory
+        .entries(MAX_RUNTIME_ENTRIES)
+        .unwrap();
+
+    generation
+        .write_atomic("peer3.toml", &changed, PublishMode::Replace)
+        .unwrap();
+    assert!(RuntimeSelection::read(&owner.authority).is_err());
+    generation
+        .write_atomic("peer3.toml", &original, PublishMode::Replace)
+        .unwrap();
+    let restored = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_same_runtime_selection(&owner.authority, &restored, &expected);
+
+    let source = generation.retain().unwrap();
+    let hook = SelectionFinishHook::install(move || {
+        source
+            .write_atomic("peer3.toml", &changed, PublishMode::Replace)
+            .unwrap();
+    });
+    let error = RuntimeSelection::read(&owner.authority).err().unwrap();
+    assert!(SELECTION_FINISH_HOOK.with(|value| value.borrow().is_none()));
+    drop(hook);
+    assert!(
+        matches!(error, crate::managed::Error::Invalid(message) if message == "retained service profile input custody differs")
+    );
+    generation
+        .write_atomic("peer3.toml", &original, PublishMode::Replace)
+        .unwrap();
+    let restored = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_same_runtime_selection(&owner.authority, &restored, &expected);
+    assert_eq!(
+        owner
+            .authority
+            .directory
+            .entries(MAX_RUNTIME_ENTRIES)
+            .unwrap(),
+        names
+    );
+    no_http(&peers);
+}
+
+#[test]
+fn runtime_selection_projection_closes_original_custody_after_child_read_error() {
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-projection-error-exit");
+    select(&prepared);
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let expected = RuntimeSelection::read(&owner.authority).unwrap();
+    let generation = PrivateDirectory::open_exact(generation_path(&prepared).unwrap()).unwrap();
+    let profile = generation.read("peer3.toml", MAX_CONFIG_BYTES).unwrap();
+    let bootstrap = PrivateDirectory::open_exact(
+        owner
+            .authority
+            .directory
+            .path()
+            .parent()
+            .unwrap()
+            .join("service-bootstrap"),
+    )
+    .unwrap();
+    let initial = bootstrap.open_child("initial").unwrap();
+    let original = initial.read("original.nrt", MAX_POLICY_BYTES).unwrap();
+    let names = initial.entries(32).unwrap();
+    initial
+        .write_atomic(
+            "original.nrt",
+            b"malformed bootstrap original",
+            PublishMode::Replace,
+        )
+        .unwrap();
+    let ordinary = RuntimeSelection::read(&owner.authority).err().unwrap();
+    assert!(
+        matches!(ordinary, crate::managed::Error::Invalid(message) if message == "invalid original service bootstrap intent")
+    );
+
+    let source = generation.retain().unwrap();
+    let mut changed = profile.to_vec();
+    changed.extend_from_slice(b"\n# changed source after an ordinary child refusal\n");
+    let hook = SelectionFinishHook::install(move || {
+        source
+            .write_atomic("peer3.toml", &changed, PublishMode::Replace)
+            .unwrap();
+    });
+    let error = RuntimeSelection::read(&owner.authority).err().unwrap();
+    assert!(SELECTION_FINISH_HOOK.with(|value| value.borrow().is_none()));
+    drop(hook);
+    assert!(
+        matches!(error, crate::managed::Error::Invalid(message) if message == "retained service profile input custody differs")
+    );
+    generation
+        .write_atomic("peer3.toml", &profile, PublishMode::Replace)
+        .unwrap();
+    initial
+        .write_atomic("original.nrt", &original, PublishMode::Replace)
+        .unwrap();
+    let restored = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_same_runtime_selection(&owner.authority, &restored, &expected);
+    assert_eq!(initial.entries(32).unwrap(), names);
+    no_http(&peers);
+}

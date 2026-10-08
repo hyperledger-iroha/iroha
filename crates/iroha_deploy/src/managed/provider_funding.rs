@@ -122,6 +122,25 @@ impl ProviderFundingBootstrap {
         owner.plan()?;
         Ok(owner)
     }
+    /// Admit the fixed funding purpose and its original plan from immutable parent intent.
+    /// The native child lock and fresh plan postcondition remain independently required.
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+    ) -> Result<Self> {
+        let owner = Self {
+            authority: ServiceAuthority::open_provider_from_original(
+                parent,
+                provider,
+                ProviderPurpose::ProviderFundingBootstrap,
+            )?,
+        };
+        owner.plan()?;
+        Ok(owner)
+    }
+
+    // The real standalone producer remains the test baseline for physical admission parity.
+    #[cfg(test)]
     pub(super) fn open_existing(
         prepared: &PreparedLocalnet,
         provider: iroha_data_model::sorafs::capacity::ProviderId,
@@ -319,7 +338,11 @@ impl ProviderFundingBootstrap {
         } = phase;
         if let Some(intent) = original.top_up() {
             let mut request = match (if mode == Mode::Advance {
-                ManagedReserveTopUpRequest::open_existing(&self.authority.prepared, provider)
+                ManagedReserveTopUpRequest::open_existing_from_original(
+                    &self.authority,
+                    provider,
+                    None,
+                )
             } else {
                 ManagedReserveTopUpRequest::open_existing_from_original(
                     &self.authority,
@@ -333,7 +356,7 @@ impl ProviderFundingBootstrap {
                     authorization
                         .ok_or_else(|| invalid("funding startup authorization absent"))?
                         .validate(&self.authority, deadline)?;
-                    ManagedReserveTopUpRequest::open(&self.authority.prepared, provider)?
+                    ManagedReserveTopUpRequest::open_from_original(&self.authority, provider)?
                 }
                 None => {
                     return self
@@ -436,7 +459,11 @@ impl ProviderFundingBootstrap {
         } = phase;
         let intent = approval_selection.approval(original)?;
         let mut approval = match (if mode == Mode::Advance {
-            ManagedReserveTopUpApproval::open_existing(&self.authority.prepared, provider)
+            ManagedReserveTopUpApproval::open_existing_from_original(
+                &self.authority,
+                provider,
+                None,
+            )
         } else {
             ManagedReserveTopUpApproval::open_existing_from_original(
                 &self.authority,
@@ -450,7 +477,7 @@ impl ProviderFundingBootstrap {
                 authorization
                     .ok_or_else(|| invalid("funding startup authorization absent"))?
                     .validate(&self.authority, deadline)?;
-                ManagedReserveTopUpApproval::open(&self.authority.prepared, provider)?
+                ManagedReserveTopUpApproval::open_from_original(&self.authority, provider)?
             }
             None => {
                 return self
@@ -531,7 +558,11 @@ impl ProviderFundingBootstrap {
         };
         let intent = credit_selection.credit(original)?;
         let mut credit = match (if mode == Mode::Advance {
-            ManagedInitialProviderCredit::open_existing(&self.authority.prepared, provider)
+            ManagedInitialProviderCredit::open_existing_from_original(
+                &self.authority,
+                provider,
+                None,
+            )
         } else {
             ManagedInitialProviderCredit::open_existing_from_original(
                 &self.authority,
@@ -545,7 +576,7 @@ impl ProviderFundingBootstrap {
                 authorization
                     .ok_or_else(|| invalid("funding startup authorization absent"))?
                     .validate(&self.authority, deadline)?;
-                ManagedInitialProviderCredit::open(&self.authority.prepared, provider)?
+                ManagedInitialProviderCredit::open_from_original(&self.authority, provider)?
             }
             None => return self.unprepared(FundingStep::Credit),
         };
@@ -576,7 +607,7 @@ impl ProviderFundingBootstrap {
             return Err(invalid("funding credit carrier predates prerequisites"));
         }
         let mut capacity = match (if mode == Mode::Advance {
-            ManagedProviderCapacity::open_existing(&self.authority.prepared, provider)
+            ManagedProviderCapacity::open_existing_from_original(&self.authority, provider, None)
         } else {
             ManagedProviderCapacity::open_existing_from_original(
                 &self.authority,
@@ -590,7 +621,7 @@ impl ProviderFundingBootstrap {
                 authorization
                     .ok_or_else(|| invalid("funding startup authorization absent"))?
                     .validate(&self.authority, deadline)?;
-                ManagedProviderCapacity::open(&self.authority.prepared, provider)?
+                ManagedProviderCapacity::open_from_original(&self.authority, provider)?
             }
             None => return self.unprepared(FundingStep::Capacity),
         };
@@ -936,3 +967,7 @@ mod tests;
 #[cfg(test)]
 #[path = "provider_funding/bootstrap_test_support.rs"]
 mod bootstrap_test_support;
+
+#[cfg(test)]
+#[path = "provider_funding/creating_original_tests.rs"]
+mod creating_original_tests;

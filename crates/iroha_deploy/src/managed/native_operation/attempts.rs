@@ -852,6 +852,13 @@ impl History {
         Ok(value)
     }
 
+    #[cfg(test)]
+    pub(in crate::managed) fn test_enrollment_evidence(
+        &self,
+    ) -> Result<&dyn EnrollmentScopeEvidence> {
+        self.scope.enrollment()
+    }
+
     /// Inspect every retained wallet through the concrete canonical purpose owner. The closure
     /// cannot substitute a decoded DTO for the opaque wallet result.
     pub(in crate::managed) fn verify_wallets(
@@ -981,13 +988,16 @@ impl History {
 
     // Only the complete retained-graph owner may omit predecessor descent here. Every local
     // native handle, original record and before/after inventory check remains authoritative.
-    fn require_current_local(&self) -> Result<()> {
+    fn require_current_local(
+        &self,
+        pass: Option<&crate::managed::stream_token_custody::body_history::SnapshotReadPass<'_>>,
+    ) -> Result<()> {
         #[cfg(test)]
         retained_graph::record_validation_visit(self)?;
         // The original identity-aware handles remain live. Re-read their bounded canonical
         // records one at a time instead of retaining another complete directory graph.
         self.scope
-            .validate_local(&self.operation, self.purpose, self.semantic)?;
+            .validate_local(&self.operation, self.purpose, self.semantic, pass)?;
         // The inventory begins and ends with fresh native directory checks.
         let operation_names = operation_inventory(&self.operation, self.purpose)?;
         require_semantic_original(&self.operation, self.semantic)?;
@@ -1073,7 +1083,7 @@ impl History {
         }
         self.operation.revalidate()?;
         self.scope
-            .validate_local(&self.operation, self.purpose, self.semantic)
+            .validate_local(&self.operation, self.purpose, self.semantic, pass)
     }
 
     // Keep original native owners live through the sole fresh parser; retain shares their

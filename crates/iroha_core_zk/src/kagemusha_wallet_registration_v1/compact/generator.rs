@@ -13,13 +13,17 @@ use crate::{
         ServerFinalityV1,
     },
 };
+use iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock;
 use iroha_kagemusha_proof::finality::native::HistoryPrefix;
+
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write as _,
     path::PathBuf,
 };
+
+mod preflight;
 
 const CAPTURE_SCHEMA: &str = "iroha.kagemusha.executed-terminal-registration.v1";
 const CAPTURE_MAX: usize = 16 * 1024;
@@ -189,10 +193,10 @@ fn export_authenticated_registration_fixture_selection() {
     parent.sync().unwrap();
 }
 
-// Native verification always precedes server append, including on reopened exact journals.
-// Only six real blocks are involved in this fixture; no fake history state is constructed.
-fn produce(
-    producer: &mut ServerFinalityV1,
+// All exact originals, native continuity and terminal Register joins are checked before
+// opening proof custody or invoking genesis. Executed H1 includes its result attachment;
+// the selected signed genesis is bound through the native owner's resultless identity.
+fn preflight(
     genesis: &SumeragiFinalityVerifier,
     capture: &PrivateDirectory,
     rows: &BTreeMap<String, BlobV1>,
@@ -200,67 +204,77 @@ fn produce(
     terminal_bytes: &[u8],
     scheme: &KagemushaWalletSchemeV1,
     native: &FinalizedKagemushaWalletRegistrationV1,
+) -> Vec<VerifiedSumeragiBlock> {
+    let signed = named_pin(
+        capture,
+        "signed-genesis.wire",
+        MAX_FINALITY_BLOCK_BYTES,
+        rows["signed-genesis.wire"],
+    );
+    let names = (1..=REGISTER_HEIGHT)
+        .map(|height| format!("proof-{height}.norito"))
+        .chain(std::iter::once("successor-proof.norito".to_owned()));
+    let proofs = names
+        .map(|name| {
+            decode(&named_pin(
+                capture,
+                &name,
+                REGISTRATION_PROOF_MAX_BYTES_V1,
+                rows[&name],
+            ))
+            .unwrap()
+        })
+        .collect::<Vec<SumeragiFinalityProof>>();
+    let blocks = preflight::verify_history(genesis, &signed, &proofs).unwrap();
+    let terminal = &blocks[usize::try_from(REGISTER_HEIGHT - 1).unwrap()];
+    assert_eq!(terminal.block().encode_wire().unwrap(), terminal_bytes);
+    let selected = verify_finalized_kagemusha_wallet_registration_v1(
+        terminal,
+        committed,
+        genesis.initial_epoch().network_id,
+        genesis.chain_id(),
+        scheme,
+        native.asset().asset_digest(),
+        0,
+    )
+    .unwrap();
+    super::genuine::same_registration(native, &selected);
+    blocks
+}
+
+fn produce(
+    producer: &mut ServerFinalityV1,
+    blocks: &[VerifiedSumeragiBlock],
 ) -> (HistoryPrefix, HistoryPrefix) {
+    assert_eq!(blocks.len(), usize::try_from(REGISTER_HEIGHT + 1).unwrap());
     let mut prefix = producer.genesis().unwrap();
     assert_eq!(prefix.state().next_height, 2);
-    let mut verifier = genesis.clone();
-    for height in 1..=REGISTER_HEIGHT {
-        let name = format!("proof-{height}.norito");
-        let proof: SumeragiFinalityProof = decode(&named_pin(
-            capture,
-            &name,
-            REGISTRATION_PROOF_MAX_BYTES_V1,
-            rows[&name],
-        ))
-        .unwrap();
-        assert_eq!(proof.height(), height);
-        let verified = verifier.verify(&proof).unwrap();
-        if height == 1 {
-            assert_eq!(
-                proof.block_wire,
-                named_pin(
-                    capture,
-                    "signed-genesis.wire",
-                    MAX_FINALITY_BLOCK_BYTES,
-                    rows["signed-genesis.wire"]
-                )
-            );
-        } else {
-            prefix = producer.append(&prefix, &verified).unwrap();
-        }
-        assert_eq!(prefix.state().next_height, height + 1);
-        if height == REGISTER_HEIGHT {
-            assert_eq!(verified.block().encode_wire().unwrap(), terminal_bytes);
-            let selected = verify_finalized_kagemusha_wallet_registration_v1(
-                &verified,
-                committed,
-                genesis.initial_epoch().network_id,
-                genesis.chain_id(),
-                scheme,
-                native.asset().asset_digest(),
-                0,
-            )
-            .unwrap();
-            super::genuine::same_registration(native, &selected);
-        }
+    eprintln!("GENUINE_REGISTER_HISTORY height=1 native_preflight=true");
+    for block in &blocks[1..usize::try_from(REGISTER_HEIGHT).unwrap()] {
+        assert_eq!(prefix.state().next_height, block.height());
+        prefix = producer.append(&prefix, block).unwrap();
+        assert_eq!(prefix.state().next_height, block.height() + 1);
+        eprintln!(
+            "GENUINE_REGISTER_HISTORY height={} native_preflight=true",
+            block.height()
+        );
     }
-    let following: SumeragiFinalityProof = decode(&named_pin(
-        capture,
-        "successor-proof.norito",
-        REGISTRATION_PROOF_MAX_BYTES_V1,
-        rows["successor-proof.norito"],
-    ))
-    .unwrap();
-    assert_eq!(following.height(), REGISTER_HEIGHT + 1);
-    let verified = verifier.verify(&following).unwrap();
-    let later = producer.append(&prefix, &verified).unwrap();
+    let successor = blocks.last().unwrap();
+    assert_eq!(successor.height(), REGISTER_HEIGHT + 1);
+    let later = producer.append(&prefix, successor).unwrap();
     assert_eq!(later.state().next_height, REGISTER_HEIGHT + 2);
+    eprintln!("GENUINE_REGISTER_HISTORY height=6 native_preflight=true");
     (prefix, later)
 }
 
-#[test]
-#[ignore = "requires actual StateExecutor Register capture, signed finality inventory, authenticated code recipes and bounded proving cache"]
-fn generate_genuine_terminal_register_history_for_compact_differential() {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Preflight,
+    Fresh,
+    Resume,
+}
+
+fn run(mode: Mode) {
     let capture = PrivateDirectory::open_exact(
         std::env::var_os("KAGEMUSHA_REGISTER_CAPTURE")
             .expect("exact private executed Register capture"),
@@ -277,9 +291,13 @@ fn generate_genuine_terminal_register_history_for_compact_differential() {
         std::env::var_os("KAGEMUSHA_COMPACT_REGISTER_OUTPUT").expect("fresh private proof output"),
     );
     let parent = PrivateDirectory::open_exact(output_path.parent().unwrap()).unwrap();
-    let output = parent
-        .create_child(output_path.file_name().unwrap())
-        .unwrap();
+    let output = if mode == Mode::Resume {
+        PrivateDirectory::open_exact(&output_path).unwrap()
+    } else {
+        parent
+            .create_child(output_path.file_name().unwrap())
+            .unwrap()
+    };
 
     // Actual signed descriptor/VK admission. No wallet PKs or complete wallet grant.
     let (installed, graph, genesis, verifier_originals) =
@@ -354,6 +372,37 @@ fn generate_genuine_terminal_register_history_for_compact_differential() {
     assert_eq!(terminal.encode_wire().unwrap(), terminal_bytes);
     assert_eq!(*terminal.hash().as_ref(), native.block_hash());
 
+    let blocks = preflight(
+        &genesis,
+        &capture,
+        &rows,
+        &committed,
+        &terminal_bytes,
+        &scheme,
+        &native,
+    );
+    let preflight_receipt = norito::json!({
+        "schema": "iroha.kagemusha.registration-native-preflight.v1",
+        "capture_sha256": (hex::encode(Sha256::digest(&manifest_original))),
+        "signed_genesis_sha256": (hex::encode(rows["signed-genesis.wire"].sha256)),
+        "terminal_height": REGISTER_HEIGHT, "following_height": (REGISTER_HEIGHT + 1),
+        "native_contiguous_blocks": (blocks.len()), "proof_production_started": false,
+        "scheme_id": (hex::encode(scheme.scheme_id())),
+        "asset_digest": (hex::encode(native.asset().asset_digest())),
+        "scope": "Exact original identities, native H1-H6 continuity and terminal Register only; no recursive proof or wallet grant.",
+    });
+    put(
+        &output,
+        "native-preflight.json",
+        &norito::json::to_vec(&preflight_receipt).unwrap(),
+        CAPTURE_MAX,
+    );
+    output.sync().unwrap();
+    parent.sync().unwrap();
+    if mode == Mode::Preflight {
+        return;
+    }
+
     // Only the server owner regenerates/imports exact signed PK identities. The live
     // compiler store is neither opened nor modified. Logical and resident bounds differ.
     let (installation, pack, inventory) = signed_inputs();
@@ -399,14 +448,27 @@ fn generate_genuine_terminal_register_history_for_compact_differential() {
         maximum_journal_entries: 100_000,
         maximum_journal_bytes: 512 << 20,
     };
-    let cache = output.create_child("proving-cache").unwrap();
-    let journal = output.create_child("proof-journal").unwrap();
+    let cache = if mode == Mode::Resume {
+        PrivateDirectory::open_exact(output.path().join("proving-cache")).unwrap()
+    } else {
+        output.create_child("proving-cache").unwrap()
+    };
+    let journal = if mode == Mode::Resume {
+        PrivateDirectory::open_exact(output.path().join("proof-journal")).unwrap()
+    } else {
+        output.create_child("proof-journal").unwrap()
+    };
     let storage = || ServerFinalityStorageV1 {
         verifier_originals: verifier_originals.root().unwrap(),
         proving_cache: cache.path(),
         journal: journal.path(),
     };
-    let mut producer = ServerFinalityV1::initialize(
+    let mount = if mode == Mode::Resume {
+        ServerFinalityV1::open
+    } else {
+        ServerFinalityV1::initialize
+    };
+    let mut producer = mount(
         &genesis,
         installation,
         &pack,
@@ -416,16 +478,7 @@ fn generate_genuine_terminal_register_history_for_compact_differential() {
         ServerFinalityCancellationV1::default(),
     )
     .unwrap();
-    let (prefix, later) = produce(
-        &mut producer,
-        &genesis,
-        &capture,
-        &rows,
-        &committed,
-        &terminal_bytes,
-        &scheme,
-        &native,
-    );
+    let (prefix, later) = produce(&mut producer, &blocks);
     let original = CompactRegistrationOriginalV1::from_terminal(
         &prefix,
         &terminal,
@@ -480,16 +533,7 @@ fn generate_genuine_terminal_register_history_for_compact_differential() {
         ServerFinalityCancellationV1::default(),
     )
     .unwrap();
-    let (same, same_later) = produce(
-        &mut reopened,
-        &genesis,
-        &capture,
-        &rows,
-        &committed,
-        &terminal_bytes,
-        &scheme,
-        &native,
-    );
+    let (same, same_later) = produce(&mut reopened, &blocks);
     assert_eq!(
         HistoryOriginalV1::from_prefix(&same)
             .encode_canonical()
@@ -531,6 +575,24 @@ fn generate_genuine_terminal_register_history_for_compact_differential() {
     output.sync().unwrap();
     parent.sync().unwrap();
     capture.revalidate().unwrap();
+}
+
+#[test]
+#[ignore = "requires exact StateExecutor capture and signed finality graph; verifies all six native blocks before any recursive proof work"]
+fn preflight_genuine_terminal_register_history_for_compact_differential() {
+    run(Mode::Preflight);
+}
+
+#[test]
+#[ignore = "requires actual StateExecutor Register capture, signed finality inventory, authenticated code recipes and bounded proving cache"]
+fn generate_genuine_terminal_register_history_for_compact_differential() {
+    run(Mode::Fresh);
+}
+
+#[test]
+#[ignore = "requires the same pinned capture and existing exact proof journal/cache; fully verifies retained proofs and never initializes missing custody"]
+fn resume_genuine_terminal_register_history_for_compact_differential() {
+    run(Mode::Resume);
 }
 
 #[test]

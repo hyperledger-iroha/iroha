@@ -444,10 +444,11 @@ impl DeploymentService {
         self.prepare(request)
             .map(|prepared| prepared.record.preflight)
     }
-    /// Persist the exact prepared plan without submitting it.
+    /// Atomically publish the exact prepared plan and its journal lock without submitting it.
     ///
     /// # Errors
-    /// Rejects a substituted plan, unsafe/busy journal, or a different plan already at that path.
+    /// Rejects a substituted plan, unsafe/busy or incomplete journal, or a different plan
+    /// already at that path. An existing destination is never repaired or replaced.
     pub fn persist(
         &self,
         prepared: &PreparedDeployment,
@@ -456,42 +457,45 @@ impl DeploymentService {
         let _address_profile =
             ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         self.validate_plan(&prepared.record)?;
-        let journal = Journal::open(journal_dir, true).map_err(DeploymentError::Journal)?;
-        journal
-            .put_exact("plan.json", &prepared.record)
+        Journal::persist_plan(journal_dir, &prepared.record)
+            .map(|_| ())
             .map_err(DeploymentError::Journal)
     }
     /// Persist the signed plan, then execute each unattempted step and recover exact attempted hashes.
-    /// The observer receives exact preflight, durable stage progress, and readback events.
+    /// The fallible observer receives exact preflight, durable stage progress, and readback events.
+    /// Observer refusal stops further work; retained attempts still require exact recovery.
     ///
     /// # Errors
-    /// Returns journal, exact-hash pending/failure, and post-commit readback errors. No attempted
+    /// Returns journal, exact-hash pending/failure, and post-commit readback errors. Observer
+    /// refusal stops further work and retains the original journal evidence. No attempted
     /// transaction is signed again or blindly resubmitted, including after an ambiguous failure.
     pub fn execute(
         &self,
         prepared: &PreparedDeployment,
         journal_dir: &Path,
-        progress: &mut dyn FnMut(DeploymentProgress),
+        progress: &mut dyn FnMut(DeploymentProgress) -> DeploymentResult<()>,
     ) -> DeploymentResult<DeploymentReceipt> {
         let _address_profile =
             ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
-        self.validate_plan(&prepared.record)?;
-        let journal = Journal::open(journal_dir, true).map_err(DeploymentError::Journal)?;
+        self.persist(prepared, journal_dir)?;
+        let journal = Journal::open(journal_dir, false).map_err(DeploymentError::Journal)?;
         journal
-            .put_exact("plan.json", &prepared.record)
+            .require_exact("plan.json", &prepared.record)
             .map_err(DeploymentError::Journal)?;
         self.execute_record(&prepared.record, &journal, progress)
     }
     /// Recover only the exact signed plan retained in the authenticated journal.
-    /// The observer receives the retained preflight and exact-hash recovery progress.
+    /// The fallible observer receives the retained preflight and exact-hash recovery progress.
+    /// Refusal stops subsequent stages without erasing or replaying retained attempts.
     ///
     /// # Errors
-    /// Rejects mismatched client/plan identities or unsafe journal data; unresolved attempted
-    /// transactions remain pending under their original hashes and are never resubmitted.
+    /// Rejects mismatched client/plan identities or unsafe journal data. Observer refusal stops
+    /// further work and retains original evidence; unresolved attempted transactions remain
+    /// pending under their original hashes and are never resubmitted.
     pub fn resume(
         &self,
         journal_dir: &Path,
-        progress: &mut dyn FnMut(DeploymentProgress),
+        progress: &mut dyn FnMut(DeploymentProgress) -> DeploymentResult<()>,
     ) -> DeploymentResult<DeploymentReceipt> {
         let _address_profile =
             ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
@@ -661,12 +665,12 @@ impl DeploymentService {
         &self,
         record: &PlanRecord,
         journal: &Journal,
-        progress: &mut dyn FnMut(DeploymentProgress),
+        progress: &mut dyn FnMut(DeploymentProgress) -> DeploymentResult<()>,
     ) -> DeploymentResult<DeploymentReceipt> {
         reject_cancelled(record, journal)?;
         progress(DeploymentProgress::Prepared(Box::new(
             record.preflight.clone(),
-        )));
+        )))?;
         if journal
             .exists(RECEIPT_FILE_NAME)
             .map_err(DeploymentError::Journal)?
@@ -675,13 +679,13 @@ impl DeploymentService {
             progress(DeploymentProgress::Recovering(progress::stage(
                 record,
                 record.transactions.len() - 1,
-            )));
+            )))?;
         }
         if let Some(receipt) = self.verify_completed_receipt(record, journal)? {
             progress(DeploymentProgress::Applied {
                 stage: progress::stage(record, record.transactions.len() - 1),
                 evidence: receipt.commit.clone(),
-            });
+            })?;
             return Ok(receipt);
         }
         self.client
@@ -697,7 +701,7 @@ impl DeploymentService {
         progress(DeploymentProgress::ReadingBack {
             alias: preflight.contract_alias.clone(),
             address: preflight.contract_address.clone(),
-        });
+        })?;
         let (readback_block_height, readback_block_hash) = self.read_back(record, &commit)?;
         let receipt = DeploymentReceipt {
             version: 1,
@@ -945,7 +949,7 @@ fn execute_transactions<T: DeploymentTransport>(
     record: &PlanRecord,
     journal: &Journal,
     transport: &T,
-    progress: &mut dyn FnMut(DeploymentProgress),
+    progress: &mut dyn FnMut(DeploymentProgress) -> DeploymentResult<()>,
 ) -> DeploymentResult<Vec<AppliedEvidence>> {
     reject_cancelled(record, journal)?;
     let mut stages = Vec::with_capacity(record.transactions.len());
@@ -966,7 +970,7 @@ fn execute_transactions<T: DeploymentTransport>(
             }
             progress(DeploymentProgress::Recovering(progress::stage(
                 record, index,
-            )));
+            )))?;
         } else {
             journal
                 .put_exact(
@@ -979,7 +983,10 @@ fn execute_transactions<T: DeploymentTransport>(
                 .map_err(DeploymentError::Journal)?;
             progress(DeploymentProgress::Submitting(progress::stage(
                 record, index,
-            )));
+            )))?;
+            // The observer is arbitrary caller code. Retain the original journal lock
+            // after it returns and before crossing the paid dispatch boundary.
+            journal.revalidate().map_err(DeploymentError::Journal)?;
             if let Err(source) = transport.submit(&signed) {
                 return Err(record_step_failure(step, index, journal, source));
             }
@@ -1006,7 +1013,7 @@ fn execute_transactions<T: DeploymentTransport>(
         progress(DeploymentProgress::Applied {
             stage: progress::stage(record, index),
             evidence: evidence.clone(),
-        });
+        })?;
         stages.push(evidence);
     }
     Ok(stages)

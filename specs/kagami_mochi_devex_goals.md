@@ -38,7 +38,11 @@ distinct required transactions. Fresh histories may use three scoped, joined wor
 finite authorization and deadline, while resumed work and active caller decode budgets use serial
 dispatch. Partial recovery validates each provider's frontier independently and refuses its later
 material without a completed prerequisite. One shared epoch retains its original replacement limit;
-parallelism creates no signing authority, budget extension or readiness from partial work. This combined path still needs
+parallelism creates no signing authority, budget extension or readiness from partial work.
+Within that initial invocation, each admitted provider worker retries its own incomplete or
+nonterminal operation under the same authorization and deadline, without waiting for another
+provider's full chain. Terminal bootstrap failures stop that worker; every worker is joined.
+Reopening a retained startup still uses serial dispatch. This combined path still needs
 native qualification. Reopen preserves each original finite interval, endpoint and profile;
 it never upgrades a retained generation in place.
 An attached private dataspace has four local validators with owner-only application

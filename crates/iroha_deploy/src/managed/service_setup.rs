@@ -65,6 +65,17 @@ impl ManagedInitialGatewaySetup {
             inner: Setup::open_provider(prepared, provider, Kind::Gateway)?,
         })
     }
+
+    /// Admit the fixed setup purpose from immutable original intent with its own native lock.
+    /// Active decode admission and owned parents retain the full standalone producer.
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: Setup::open_provider_from_original(parent, provider, Kind::Gateway)?,
+        })
+    }
     /// Retain a complete revision-one policy and bounded authorization, then advance it.
     /// # Errors
     /// Rejects substituted generated roles, changed retained intent, unavailable original
@@ -120,6 +131,8 @@ impl ManagedInitialGatewaySetup {
         let intent = Intent::gateway(&self.inner.authority, policy)?;
         self.inner.advance_selected(intent, authorization, deadline)
     }
+    // The real standalone producer remains the test baseline for physical admission parity.
+    #[cfg(test)]
     pub(super) fn open_existing(
         prepared: &PreparedLocalnet,
         provider: ProviderId,
@@ -151,6 +164,14 @@ impl ManagedInitialReputationPolicy {
     pub fn open(prepared: &PreparedLocalnet) -> Result<Self> {
         Ok(Self {
             inner: Setup::open_reputation(prepared)?,
+        })
+    }
+
+    /// Admit the fixed network recorder purpose from immutable original intent.
+    /// This grants no signing authority and retains the child's independent native lock.
+    pub(super) fn open_from_original(parent: &ServiceAuthority) -> Result<Self> {
+        Ok(Self {
+            inner: Setup::open_reputation_from_original(parent)?,
         })
     }
     /// Retain a full revision-one recorder policy and its complete original gateway list.
@@ -213,6 +234,8 @@ impl ManagedInitialReputationPolicy {
         let intent = Intent::reputation(&self.inner.authority, compliance_gateway_ids, policy)?;
         self.inner.advance_selected(intent, authorization, deadline)
     }
+    // The real standalone producer remains the test baseline for physical admission parity.
+    #[cfg(test)]
     pub(super) fn open_existing(prepared: &PreparedLocalnet) -> Result<Option<Self>> {
         Setup::open_reputation_existing(prepared).map(|inner| inner.map(|inner| Self { inner }))
     }
@@ -240,6 +263,17 @@ impl ManagedInitialProviderIngestAuthority {
     pub fn open(prepared: &PreparedLocalnet, provider: ProviderId) -> Result<Self> {
         Ok(Self {
             inner: Setup::open_provider(prepared, provider, Kind::ProviderIngest)?,
+        })
+    }
+
+    /// Admit the fixed setup purpose from immutable original intent with its own native lock.
+    /// Active decode admission and owned parents retain the full standalone producer.
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: Setup::open_provider_from_original(parent, provider, Kind::ProviderIngest)?,
         })
     }
     /// Retain one exact initial authority and finite fee/UTC authorization, then advance it.
@@ -295,6 +329,8 @@ impl ManagedInitialProviderIngestAuthority {
         let intent = Intent::provider_ingest(&self.inner.authority, authority)?;
         self.inner.advance_selected(intent, authorization, deadline)
     }
+    // The real standalone producer remains the test baseline for physical admission parity.
+    #[cfg(test)]
     pub(super) fn open_existing(
         prepared: &PreparedLocalnet,
         provider: ProviderId,
@@ -375,6 +411,28 @@ impl Setup {
             kind: Kind::Reputation,
         })
     }
+    fn open_provider_from_original(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+        kind: Kind,
+    ) -> Result<Self> {
+        let purpose = Self::provider_purpose(kind)?;
+        Ok(Self {
+            authority: ServiceAuthority::open_provider_from_original(parent, provider, purpose)?,
+            kind,
+        })
+    }
+    fn open_reputation_from_original(parent: &ServiceAuthority) -> Result<Self> {
+        Ok(Self {
+            authority: ServiceAuthority::open_network_from_original(
+                parent,
+                NetworkPurpose::InitialReputationPolicy,
+            )?,
+            kind: Kind::Reputation,
+        })
+    }
+    // Used only by the standalone constructor baseline above.
+    #[cfg(test)]
     fn open_provider_existing(
         prepared: &PreparedLocalnet,
         provider: ProviderId,
@@ -401,6 +459,8 @@ impl Setup {
             Kind::Reputation => return Err(invalid("recorder setup requires network scope")),
         })
     }
+    // Used only by the standalone constructor baseline above.
+    #[cfg(test)]
     fn open_reputation_existing(prepared: &PreparedLocalnet) -> Result<Option<Self>> {
         ServiceAuthority::open_network_existing(prepared, NetworkPurpose::InitialReputationPolicy)
             .map(|authority| {

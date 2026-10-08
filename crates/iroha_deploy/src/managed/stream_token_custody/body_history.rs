@@ -68,6 +68,8 @@ impl RecordSnapshot {
         }
     }
     fn revalidate(&self) -> Result<()> {
+        #[cfg(test)]
+        shared_snapshot_tests::record_read();
         // Both readers begin with fresh native directory revalidation. The
         // optional reader also revalidates custody before accepting absence.
         let bytes = if self.observed.is_some() {
@@ -84,6 +86,8 @@ impl RecordSnapshot {
         Ok(())
     }
     fn revalidate_in_scope(&self, reader: &mut iroha_fs::PrivateReadScope<'_>) -> Result<()> {
+        #[cfg(test)]
+        shared_snapshot_tests::record_read();
         let observe = |bytes: &[u8]| (bytes.len(), *Hash::new(bytes).as_ref());
         let observed = if self.observed.is_some() {
             Some(reader.read(&self.name, self.maximum, observe)?)
@@ -128,6 +132,27 @@ struct Snapshot {
     records: Vec<RecordSnapshot>,
     names: Vec<NamesSnapshot>,
     root: Option<Arc<PrivateDirectory>>,
+}
+/// Borrowed coverage of one exact immutable snapshot chain during a closed read-only pass.
+/// Construction and membership stay with the sole snapshot owner; no token is retained.
+pub(in crate::managed) struct SnapshotReadPass<'a> {
+    head: &'a Snapshot,
+}
+impl SnapshotReadPass<'_> {
+    fn covers(&self, snapshot: &Snapshot) -> bool {
+        if norito::core::decode_limits_active() {
+            return false;
+        }
+        let mut next = Some(self.head);
+        for _ in 0..usize::from(MAX_BODIES) + 2 {
+            let Some(current) = next else { return false };
+            if std::ptr::eq(current, snapshot) {
+                return true;
+            }
+            next = current.previous.as_deref();
+        }
+        false
+    }
 }
 impl Snapshot {
     fn revalidate(&self) -> Result<()> {
@@ -225,6 +250,8 @@ impl Snapshot {
         &self,
         mut tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
     ) -> Result<()> {
+        #[cfg(test)]
+        shared_snapshot_tests::snapshot_visit();
         if let Some(root) = &self.root {
             root.revalidate()?;
             check_names(root, &["original.nrt", "anchor.nrt", "bodies", "epochs"], 4)?;
@@ -294,6 +321,29 @@ impl EnrollmentScopeEvidence for ScopeEvidence {
         &self.fees
     }
     fn revalidate(&self) -> Result<()> {
+        self.revalidate_with_snapshot_read_pass(None)
+    }
+    fn with_snapshot_read_pass(
+        &self,
+        action: &mut dyn FnMut(Option<&SnapshotReadPass<'_>>) -> Result<()>,
+    ) -> Result<()> {
+        // Preserve the original source/codec charging recipe under an inherited owner.
+        if norito::core::decode_limits_active() {
+            return action(None);
+        }
+        self.revalidate()?;
+        let pass = SnapshotReadPass {
+            head: &self.snapshots,
+        };
+        let result = action(Some(&pass));
+        // Close every ordinary result. Persistent custody/byte changes outrank inner errors.
+        self.revalidate()?;
+        result
+    }
+    fn revalidate_with_snapshot_read_pass(
+        &self,
+        pass: Option<&SnapshotReadPass<'_>>,
+    ) -> Result<()> {
         self.root.revalidate()?;
         check_names(
             &self.root,
@@ -301,7 +351,11 @@ impl EnrollmentScopeEvidence for ScopeEvidence {
             4,
         )?;
         self.body.revalidate()?;
-        self.snapshots.revalidate()
+        if pass.is_some_and(|pass| pass.covers(&self.snapshots)) {
+            Ok(())
+        } else {
+            self.snapshots.revalidate()
+        }
     }
     fn require_active(&self) -> Result<()> {
         self.revalidate()?;
@@ -2065,3 +2119,7 @@ mod handle_tree_tests;
 #[cfg(test)]
 #[path = "body_history/optional_admission_tests.rs"]
 mod optional_admission_tests;
+
+#[cfg(test)]
+#[path = "body_history/shared_snapshot_tests.rs"]
+mod shared_snapshot_tests;

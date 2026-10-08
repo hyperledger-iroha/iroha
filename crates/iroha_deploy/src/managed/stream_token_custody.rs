@@ -167,6 +167,22 @@ impl ManagedStreamTokenCustody {
         })
     }
 
+    /// Create or retain this provider's Custody purpose from an authenticated original parent.
+    /// Fresh native admission and the parent's ordinary exit checks remain mandatory.
+    /// This creates no Configure/Enroll original or signing authorization.
+    pub(super) fn open_from_original(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+    ) -> Result<Self> {
+        Ok(Self {
+            authority: ServiceAuthority::open_provider_from_original(
+                parent,
+                provider,
+                ProviderPurpose::Custody,
+            )?,
+        })
+    }
+
     pub(super) fn open_existing(
         prepared: &PreparedLocalnet,
         provider: iroha_data_model::sorafs::capacity::ProviderId,
@@ -1036,17 +1052,23 @@ impl ManagedStreamTokenCustody {
             imports.retained_finality(&directory, &transaction)?
         } {
             Some(retained)
-        } else if report.status == OperationStatus::Applied {
-            self.authority.advance_carrier(
-                &directory,
-                &original.checkpoint,
-                &transaction,
-                &report,
-                observed.checkpoint().height(),
-                deadline,
-            )?
         } else {
-            None
+            applied_carrier(
+                &mut self.authority,
+                report.status,
+                deadline,
+                ServiceAuthority::observe_finality,
+                |authority, observed_height, deadline| {
+                    authority.advance_carrier(
+                        &directory,
+                        &original.checkpoint,
+                        &transaction,
+                        &report,
+                        observed_height,
+                        deadline,
+                    )
+                },
+            )?
         };
         // Refresh separately after any dispatch/replay; an old original inclusion never becomes
         // a claim that today's policy, revocation or enrollment head still agrees.
@@ -1213,6 +1235,27 @@ fn validate_enrollment_slots(
     });
     owner.authority.validate_profile()?;
     result
+}
+
+// Submission can commit above the predecessor observed before dispatch. As for Reserve,
+// refresh independently authenticated finality before bounding the exact native carrier replay.
+// These callbacks use the same observation/replay owners in production and native fixtures;
+// they confer no signing authority and always receive the unchanged operation deadline.
+fn applied_carrier(
+    authority: &mut ServiceAuthority,
+    status: OperationStatus,
+    deadline: Instant,
+    observe: impl FnOnce(&mut ServiceAuthority, Instant) -> Result<FinalityVerifier>,
+    replay: impl FnOnce(&ServiceAuthority, u64, Instant) -> Result<Option<ManagedTransactionFinality>>,
+) -> Result<Option<ManagedTransactionFinality>> {
+    if status != OperationStatus::Applied {
+        return Ok(None);
+    }
+    // An unavailable fresh observation leaves the original Applied wallet recoverable.
+    let Ok(observed) = observe(authority, deadline) else {
+        return Ok(None);
+    };
+    replay(authority, observed.checkpoint().height(), deadline)
 }
 
 fn matches_predecessor(

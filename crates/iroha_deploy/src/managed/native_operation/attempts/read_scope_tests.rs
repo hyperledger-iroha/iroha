@@ -105,7 +105,7 @@ fn scoped_parser_preserves_metadata_and_row_validation_before_later_record_reads
     assert_eq!(retried.unwrap().reserved_attempt_count(), 1);
     assert_eq!(counts.reads, 7);
     assert_eq!(counts.decoded, 2);
-    history.require_current_local().unwrap();
+    history.require_current_local(None).unwrap();
     assert!(!attempt.wallet_path().join("preparation.json").exists());
     assert!(!attempt.wallet_path().join("payload.json").exists());
     assert!(!attempt.wallet_path().join("operation.json").exists());
@@ -164,7 +164,7 @@ fn scoped_record_decode_keeps_active_allocation_refusal_and_exact_original_retry
 
 fn history_retry(fixture: &Fixture, attempt: &Attempt) {
     let history = fixture.history().unwrap();
-    history.require_current_local().unwrap();
+    history.require_current_local(None).unwrap();
     attempt.verify_authorization().unwrap();
     assert_eq!(history.reserved_attempt_count(), 1);
     assert!(!attempt.wallet_path().join("payload.json").exists());

@@ -59,8 +59,6 @@ iroha_plonk = { workspace = true }
 ff = "0.13.1"
 
 [dev-dependencies]
-# Independent RP56 parameter oracle, excluded from production consumers.
-poseidon-primitives = "0.2.0"
 iroha_plonk_gadgets = { workspace = true }
 tempfile = "3.23.0"
 assert_cmd = "2.1.1"

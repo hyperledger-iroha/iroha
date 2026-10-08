@@ -143,11 +143,21 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
         None,
     )
     .unwrap();
-    let mut owner = ManagedStreamTokenCustody::open(
+    // Reuse this real paid Configure/Enroll fixture to exercise the typed creator.
+    // The retained Bootstrap parent supplies immutable intent, never signing/current authority.
+    let parent = ServiceAuthority::open_network(
         &prepared,
-        crate::managed::native_operation::test_support::provider_id(&prepared, 0),
+        crate::managed::service_authority::NetworkPurpose::ServiceBootstrap,
     )
     .unwrap();
+    let provider = parent.manifest.providers[0].provider_id;
+    let (owner, parses) = crate::localnet::service_authorities::count_profile_validations(|| {
+        ManagedStreamTokenCustody::open_from_original(&parent, provider)
+    });
+    let mut owner = owner.unwrap();
+    assert_eq!(parses, 0);
+    parent.validate_profile().unwrap();
+    drop(parent);
     let mut policy = super::transport_tests::policy(&owner);
     // Wide original interval avoids timing-sensitive signing in this component fixture.
     policy.active_until_unix_ms = now_ms().unwrap() + 1_200_000;
@@ -410,14 +420,28 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
         assert_eq!(carrier.checkpoint().height(), height);
         let finalized = verify_carrier(&carrier, &signed).unwrap();
         assert_eq!(finalized.height, height);
-        original
-            .directory()
-            .write_atomic(
-                "carrier.nrt",
-                &checkpoint_bytes(&carrier).unwrap(),
-                PublishMode::CreateNew,
-            )
-            .unwrap();
+        if name == "configure" {
+            // Component decision coverage: the same post-Applied owner must replace its
+            // stale H2 preflight bound with fresh H3 native finality before retaining replay.
+            carrier_refresh_tests::retain_after_applied(
+                &mut owner,
+                &original,
+                &signed,
+                &native,
+                &checkpoint,
+                options.deadline,
+                finalized,
+            );
+        } else {
+            original
+                .directory()
+                .write_atomic(
+                    "carrier.nrt",
+                    &checkpoint_bytes(&carrier).unwrap(),
+                    PublishMode::CreateNew,
+                )
+                .unwrap();
+        }
         retained.push((
             name,
             directory.path().join("original.nrt"),
@@ -476,3 +500,6 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
     }
     peers.finish();
 }
+
+#[path = "carrier_refresh_tests.rs"]
+mod carrier_refresh_tests;

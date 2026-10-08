@@ -76,6 +76,17 @@ pub const SOURCE_RANGE_BUSES: usize = 3;
 const DESCRIPTOR_MAX_BYTES: usize = 1 << 20;
 const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
 
+fn terminal_restore_fold_config(
+    budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> FoldConfig {
+    FoldConfig {
+        kernel_budget: budget,
+        cancellation: cancellation.cloned(),
+        ..FoldConfig::default()
+    }
+}
+
 /// Production preparation or proof failure. No failure changes a monetary head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -777,10 +788,7 @@ impl Session<'_> {
         cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Terminal, Error> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
-        let fold = FoldConfig {
-            kernel_budget: budget,
-            ..FoldConfig::default()
-        };
+        let fold = terminal_restore_fold_config(budget, cancellation);
         let (_, public, pallas) =
             self.prepared
                 .terminal_circuit(wrapper, &self.prover.w, salt, &fold)?;

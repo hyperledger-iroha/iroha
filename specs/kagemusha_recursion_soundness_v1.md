@@ -154,15 +154,392 @@ digest is ultimately pinned by that same final native check. This induction
 requires the actual key-hash and equality constraints in every operation,
 not just a native digest helper.
 
-Omega is hiding. Q/A and local fold proofs remain private. An accumulator
-reveals G and its transcript challenge vector; for a deciding accumulator,
-G is a deterministic function of that vector and the pinned generators.
-This observation alone is not a zero-knowledge proof: a simulator must also
-match the joint distribution and correlations of both exposed accumulators,
-public step proofs, D_A and all adversarial oracle queries. TODO: complete
-and independently review that simulator argument for the final composed
-relation and artifact set. No additional privacy guarantee is inferred from
-the fact that the local fold protocol is non-hiding.
+Omega uses a hiding proof construction. Q/A and local fold proofs remain private.
+An accumulator reveals G and its transcript challenge vector; for a deciding
+accumulator, G is determined by that vector and the pinned generators.
+`a_relation::binding::lineage_digest_fields` hashes exactly the 18 public lineage
+words, two Pallas coordinates and 32 canonical challenge limbs. Thus D_A is a
+deterministic function of the public tuple and adds no further information
+conditional on that tuple. Neither fact proves that the tuple is zero knowledge.
+
+Each non-hiding fold absorbs its salt and complete ordered inputs before
+alpha/z/zeta and the sixteen L/R challenge rounds. The inputs may include public
+step proofs and earlier visible accumulators. A composed simulation must show
+that the adversary has not already queried each hidden fold's full random-oracle
+prefix, conditioned on that public history, and then maintain consistent answers
+across both fields, all domains and adaptive queries. Fresh private salts help
+only after their conditional entropy and exposure have been established; field
+canonicality alone proves neither. Durable checkpoint reuse, retries and the
+protocol's exceptional aborts must have the same distribution in the simulation.
+
+In particular, independently sampling two challenge vectors and computing their
+G values does not provide an Omega witness. Ordinary zero knowledge for valid
+witnesses does not by itself justify simulating Omega for those chosen instances.
+TODO: complete and independently review the joint simulator and this composition
+step for the final relation and artifact set. These are explicit missing
+hypotheses/arguments, not an observed plaintext leak or an established additional
+privacy guarantee from the non-hiding local fold protocol.
+
+A possible bounded-network proof has two separate hybrids. First retain the
+real accumulator pair and replace only its Omega proof using an adaptive,
+multi-theorem simulator for valid instances. Then replace the accumulator pair
+while applying that same total, polynomial-time simulator. The second step
+requires joint indistinguishability under the simulator's complete stateful
+oracle-query and programming interface. Marginal pseudorandomness of each
+challenge vector is insufficient. If these premises hold, no known Omega witness
+for the sampled pair is needed: efficient postprocessing transfers the joint
+indistinguishability, including the public verifier's acceptance result. Neither
+premise is established by the local hiding-budget checks.
+
+For fixed inputs and the implemented fixed Poseidon function, a fold is a
+deterministic function of one base-field salt. Its vector support has at most
+the base-field cardinality, far fewer than all nonzero sixteen-scalar vectors.
+Consequently the required argument is computational, not statistical uniformity
+conditioned on that fixed function. Programming a different inner hash answer
+also does not preserve a witness satisfying the concrete Poseidon arithmetic
+gates. A model connecting the stateful sponge and the outer simulator must make
+that distinction explicit. The deterministic public Q nonce is not fresh private
+entropy; the argument must trace the final folds exporting acc_P and acc_V.
+
+There is a concrete encoding obstacle to directly replacing the sponge by an
+oracle on unrestricted logical absorb/squeeze histories. Starting from the same
+state, absorbing `[x]` and squeezing twice processes the rate-two blocks
+`(x,1),(1,0)`. Absorbing `[x,1]` and squeezing once processes exactly those
+same blocks. The final answer is identical for every underlying permutation,
+while the prototype's logical histories differ. Previous squeeze outputs are
+not separately absorbed by the production sponge. A proposed idealization must
+identify these aliases, for example through cumulative padded block prefixes,
+and then justify its remaining sponge/permutation assumptions. This observation
+does not establish a payment-proof forgery; it prevents claiming the current
+unrestricted full-prefix model is a proven realization of the production hash.
+Both fields reproduce the alias at three domain values, including `pipa-rb1`,
+with identical complete states and outputs. The source audit and six checks are
+retained in `target/qualification/c12-sponge-prefix-alias-audit-1`.
+
+The revised target-only oracle indexes the cumulative padded rate-two blocks
+and base field under the fixed parameter/initial-state identifier. It adds no
+logical squeeze markers, previous outputs or extra protocol namespaces; native
+domain words remain ordinary first inputs. Eight small controls pass, including
+alias agreement, both fields, complete k6 verification and a shared adaptive
+table. The selected deferred k16 runner passes ten boundary controls but has not
+executed a k16 proof. Its phase guards require the original M3 phase receipts
+and cannot turn a borderline measurement into a pass. The records are in
+`target/qualification/c12-padded-prefix-model-1` and
+`target/qualification/c12-actual-omega-model-draft`.
+
+A source argument now transfers the earlier ideal-model address bounds using
+two fixed positions: exact Omega's first advice point occupies block24, and each
+honest final fold's block0 is `(pipa-as1, salt)`. Padding aliases still supply
+at most one candidate point or salt per outside prefix. That conditional
+transfer passes independent source/mathematical review in
+`target/qualification/c12-normalized-prefix-lemma-1`. Distinct-prefix answer
+independence remains an ideal-model assumption. Concrete permutation relations,
+the outer public interface and inner fixed-Poseidon circuit constraints remain
+unresolved by this addressing correction.
+
+The actual recursive call sites make that last boundary concrete. A proof that
+is an outer Omega today may be hard-verified as a predecessor, or soft-verified
+as incoming evidence, inside a later A circuit under the same installed Omega
+key and `pipa-rb1` profile. The circuit reproduces the fixed RP57 transcript;
+there is no separate namespace reserved for a call labeled outer. Bootstrap has
+no external predecessor Omega and instead verifies its pinned internal W0/Q
+sources, but ordinary continuation has the same-key boundary. A call-site ideal
+outer oracle can define a local hybrid while retaining the concrete arithmetic
+relation. It does not itself show that an earlier programmed proof satisfies a
+later fixed arithmetic verifier or supplies an honest wallet's next witness.
+The joint argument must cover that continuation interface, including branches,
+obligations and exact replay. Source mapping and review are retained in
+`target/qualification/c12-inner-circuit-bridge-audit-1`. This is a missing model
+and composition argument, not an observed attack on the concrete protocol.
+
+For native-reachable cumulative block prefixes, removing only the final padding
+gives a one-shot sponge input with exactly the same processed blocks and final
+state. A fixed affine coordinate change also maps the native IV/rate placement
+to a zero-IV ideal-permutation presentation. These algebraic correspondences do
+not establish independent prefix answers or programmable Fiat–Shamir security.
+The normalized model also permits raw prefixes outside the native padded suffix
+grammar; a reduction must account for that larger interface. Ordinary sponge
+indifferentiability does not by itself justify programming answers while keeping
+forward and inverse permutation access consistent. The
+[Chiesa–Orrù author presentation](https://zksc2026.secpriv.wien/static/talks/slides-michele-orru.pdf)
+identifies this separate programming requirement on slides33–34. Primary-source
+applicability findings, including retrieval limits and unmatched theorem
+assumptions, are retained in
+`target/qualification/c12-sponge-theorem-applicability-1`. No cited theorem has
+been applied as a complete bridge for this implementation.
+
+A separate target-only experiment replaces independent prefix answers with a
+lazy width-three permutation in each base field. Direct forward and inverse
+queries share the transcript's tables. Programming replays the prefix and
+requires an unoccupied final primitive input, then samples an unused output
+conditioned on its returned word. It never overwrites an edge; a fresh logical
+address alone is insufficient. Frozen verification replays every primitive edge
+without allocating new entries. Fifteen controls pass, including six complete
+k6 curve/layout cases, mutations and a second proof sharing prior permutation
+queries. Sources remain unchanged through execution. The independent source
+review and result are retained in `target/qualification/c12-ideal-permutation-adapter-1`
+and `c12-ideal-permutation-controls-1` (result SHA
+`48fcc556b0c68d0586f60afd4cf8a4791decbe6b5eff4521db0716e08564e535`).
+These finite executions establish primitive consistency for those examples.
+They do not inherit the independent-prefix bounds: adaptive conditioning,
+programming refusal probabilities, fixed-Poseidon circuits and recursive
+continuation remain separate obligations. C12 remains open.
+
+An independently reviewed local argument now bounds a particular programming
+refusal in that ideal-permutation experiment. The final IPA round appends exactly
+L's coordinates, R's coordinates and `(1,0)` padding. Conditional on its earlier
+choices, a fresh uniform scalar masking the solved finite R makes R uniform over
+the group's `r-1` finite points. With m previously installed permutation edges,
+its block hits an occupied input with probability at most `m/(r-1)`; if fresh,
+the next padding input hits an occupied input with probability at most
+`(m+1)/(p^3-m)`. Here p is the base-field size, and all forward, inverse and
+previously programmed edges count. This requires atomic processing before R is
+exposed, ideal random tapes and explicit bounded sampling. It supplies no joint
+law for the selected challenge and the later disclosed scalars. Exact conditional
+output-fiber bias and those remaining obligations are recorded in
+`target/qualification/c12-ideal-permutation-programming-obligations-1`.
+
+A subsequent local final-round coupling passes independent mathematical/source
+review in `target/qualification/c12-final-ipa-stopped-coupling-1`. In the stated
+ideal-coin IPA experiment, fresh coefficient masking and point blinds preserve
+the required conditional vector distribution; away from the explicit rank
+exception, c is uniform and the full verification equation uniquely determines
+the disclosed f. Coupling the complete permutation output also couples later
+public-only forward/inverse queries and the pending transcript buffer. The bound
+retains both freshness-stop terms, finite-point and sampling failures, and
+averages over random prefixes rather than selecting a favorable observed prefix.
+This supplies a conditional last-round argument, not the preceding PLONK
+distribution, hidden-fold interface or recursive circuit composition.
+
+A further independently reviewed argument treats the private `as1` paths under
+the same ideal permutation as public forward, inverse and programming calls.
+For a field of size p, at most B fresh paths, H primitive path positions and Q
+outside operations, it bounds the first hidden-path interaction by
+`min(1, [2Q(B+H)+B(B-1)/2+H(H+1)/2]/p)`. It counts early logical-address cache
+replies even when they skip primitive evaluation. Fresh virtual salt and capacity
+tapes justify the bound without assuming uniformity after prior misses; a first
+extra rejection against a hidden edge is charged explicitly. Metadata, scheduling
+and failure replies must jointly preserve the stated private-tape independence.
+Hidden occupancy may not cause an uncharged budget refusal. Fold-abort,
+generator-relation, entropy and operational terms remain separate. Exact retained
+retries reuse their original paths. The source pins, full interface and reviews
+are in `target/qualification/c12-hidden-as1-permutation-path-1`. This conditional
+coupling does not prove that actual Omega and subsequent wallet operations expose
+only that interface, or establish fixed-Poseidon circuit composition.
+
+Two independently reviewed arguments now connect the public outer prefix to the
+local IPA argument. In an atomic proof-request experiment, the first freshly
+blinded advice point hides the first private path input. With T prior permutation
+edges and at most H subsequent primitive positions, a stopped coupling costs at
+most `min(1, T/(r-1) + [2TH+H(H+1)/2]/p)`, in addition to the first point's
+identity cost. It couples complete permutation edges, so queries after publication
+replay the same path. The local owned transcript buffer supports this API model;
+it does not establish secrecy against operational observations or permit public
+programming between a revealed prefix and its next challenge. The final IPA's
+programming step has its separate bound. Details and source pins are retained in
+`target/qualification/c12-atomic-outer-path-freshness-1`.
+
+The stopped PLONK-prefix argument uses fresh commitment blinds, the full-rank
+Lagrange evaluation map of the row masks, and the random polynomial R's final
+coefficient in its opening group. It accounts for dependent quotient and
+multiopen polynomials rather than treating them as independent. Conditional on
+the quotient identity and the explicit challenge stops, it gives the joint
+public-prefix law and the uniform zero-evaluation coefficient vector required
+by the IPA argument. Its audited Omega shape has26 freshly blinded points and
+131,186 scalar draws through S. The R residual argument conditions on other
+original opening polynomials and h, but not the R-dependent q-prime coefficients.
+Exact masked-relation validity, challenge freshness, native coin replacement,
+operational observations and public preprocessing remain explicit premises.
+The argument and reviews are in
+`target/qualification/c12-outer-prefix-coupling-1`. Neither argument executes an
+actual Omega simulator or resolves the fixed-Poseidon/recursive-circuit bridge;
+C12 remains open.
+
+The mask-validity premise is now checked for the exact historical full52 Omega
+artifact. A symbolic audit substitutes its original fixed evaluations into all
+156 gate expressions: the two usable boundary rows are independent of fresh tail
+advice, and every gate vanishes on all six tail rows. Both lookup tuple sides at
+the boundaries are independent of those masks, and all six sigma columns fix
+every tail cell. The auxiliary product/lookup guards preserve their prescribed
+padding. Given a satisfying original witness and nonzero usable denominators,
+the numerator vanishes on the domain and its degree bound gives an honest
+quotient of degree at most `8n-9`, within eight pieces. Ten small controls and
+independent source review support this result. The original PK was hashed once;
+only144 boundary scalars were decoded, with no FFT or proof execution. Records
+are in `target/qualification/c12-omega-mask-boundary-audit-1`. This establishes
+the stated predicate on that pinned artifact, not a current wallet witness or
+current source-key admission.
+
+The production wallet trace now identifies those draws. All six ordinary owner
+families give the final A a fresh Fp salt; Bootstrap does so in its separate
+terminal circuit. Native terminal extraction carries that checked Pallas result
+into Omega. Omega preparation obtains a separate fresh Fq salt and folds its
+four decided Vesta slots. The shared fallible sampler accepts canonical values
+including zero, with no deterministic fallback. Under independent uniform OS
+bytes its output is uniform conditioned on success, with 128-attempt exhaustion
+below 2^-128. This describes entropy before disclosure, not statistical secrecy
+after the concrete public transcript.
+
+The exported transport is original Omega proof followed by P544 and V544; it
+does not append either local fold witness or salt. Local checkpoints may retain
+salts for restoration, so this is a remote-transport claim, not protection after
+local custody compromise. The independently reviewed source trace is retained in
+`target/qualification/c12-exported-salt-source-trace-1`. Existing checkpoints and
+completed folds are restored before starting new work. Exact retries reuse their
+retained proof and salt; interrupted attempts before publication may sample anew
+and must count against the experiment's attempt/query budget. Input-dependent identity
+aborts require a bound or a matching simulated distribution, beyond the existing
+full-length-slot rule. The source-bound decomposition is retained in
+`target/qualification/c12-joint-simulation-audit-1`; it closes no C12 gate.
+
+The target-only complete outer-transcript prototype now exercises both curves,
+lookup/permutation, multiopen and the complete hiding IPA under a consistent
+programmable full-prefix oracle. Eight bounded-model controls pass, including
+rejection under the unchanged fixed-Poseidon verifier. This is an executable
+model of the proposed simulation, not a proof accepted by the production hash.
+The accepted historical full52 Omega descriptor has k16, degree 9, b=5 and four
+opening sets at rotations `{0,1,-1}`, `{0,1}`, `{0}`, and `{0,-1}`. Every set
+ends with a fresh masked slot of coefficient one; the quotient set ends in R.
+There is no public-only set, and the maximum disclosed-rotation count plus x3
+is four, meeting `b−1`. The proposed simulator still requires public fixed and
+permutation preprocessing polynomials; VK points alone are not their coefficient
+encodings. Native acceptance independently decides Omega's opening and both
+public accumulators, so a simulated outer transcript cannot make a nondeciding
+pair acceptable. The source-pinned model and structural audit are retained in
+`target/qualification/c12-outer-simulator-reference-1`. The actual Omega
+simulation, adaptive theorem and concrete-sponge bridge remain open.
+
+The public-setup implementation now decodes exact `PIPAPK01` fixed/sigma
+evaluation tables, checking their externally selected original digest, descriptor,
+VK, extent and scalar canonicality. Batch Lagrange evaluation supplies rotated
+public queries and the computed public-only multiopen branch. Eight small-case
+controls pass independently on both curves, including multiple permutation
+products/lookups and a same-descriptor foreign-VK refusal. Five additional
+controls exercise a target-only reference copy whose k16 exception is restricted
+to the exact historical Omega descriptor and pinned Pallas parameters; all
+semantic and generator checks remain. Repository reference limits are unchanged.
+These records are in `target/qualification/c12-actual-omega-model-draft`.
+No k16 proof has run under this adapter, and decoding tables is not native
+installed-circuit or signed-package admission.
+
+An independently reviewed local refinement bounds the hiding IPA's exceptional
+events in that same unconditioned ideal fresh-answer game. For prime group order
+`r`, any point with a fresh independent uniform W blind is identity with
+probability `1/r`. The actual Omega shape has 58 such commitments, including
+its 32 IPA L/R points, giving `58/r` by a union bound. This argument does not
+apply to the nonhiding accumulation protocol's L/R points. The final generator
+is the group-valued multilinear polynomial
+`G(u) = sum_i g_i product_j u_j^(bit_{k−1−j}(i))`, with nonidentity constant
+coefficient `g_0`. Its identity probability is at most `k lambda` by
+Schwartz–Zippel; computing discrete logarithms is unnecessary for this argument.
+The two hiding-IPA coefficient functionals lose rank only at one complete
+nonzero challenge vector for fixed nonzero x3, costing at most `lambda^k`.
+Zero challenges and prefix conflicts are separate events. These bounds use a
+virtual fresh tape when execution stops early, not conditioning on future
+successful challenges.
+
+For one final-round simulation attempt, the solved R is affine in its fresh
+uniform scalar blind. Conditional on R being finite, at most Q existing
+full-prefix addresses can cause a collision, giving `min(1,Q/(r−1))` for
+that draw. A complete adaptive simulator must aggregate its bounded retries;
+it may never overwrite an occupied address. Scalar reduction bias, bounded
+sampler exhaustion, entropy and operational errors also require their own
+aggregate terms. The source argument and three passing small-field controls
+are retained in `target/qualification/c12-hiding-ipa-abort-refinement-1`.
+This refinement supplies conditional local bounds, not the missing adaptive
+simulation or concrete-sponge theorem.
+
+### Conditional honest-fold abort bound
+
+One exceptional-event term has a source-reviewed conditional bound. Let
+`N = 2^K`, `K = 16`, and `m` be the nonempty ordered input count. Fix every
+input before alpha; require that every input actually decides, at least one has
+source k16, and all real source challenges are nonzero. Syntax acceptance alone
+is insufficient: a false deferred commitment can fail the fold equation with
+probability one. Cancellation, storage, allocation, invalid parameters and entropy
+source failures are separate operational outcomes.
+
+Work in a stopped lazy-sampling game. At each challenge the typed query address
+is fixed by the prior transcript and oracle-table history. A fresh answer has
+maximum mapped scalar atom `lambda`; encountering a prequeried or conflicting
+prefix stops the game. Never condition earlier answers on eventual freshness of
+all later queries. For uniform fresh base-field answers and the actual challenge
+map, `lambda = 1/p` for Pallas Fp→Fq and `lambda = 2/q` for Vesta Fq→Fp,
+where `p < q < 2p`. The still-missing hidden-prefix/shared-oracle argument must
+bound the stopped game's freshness failures separately.
+
+Write the combined polynomial coefficient as
+`H_j(alpha) = sum_i alpha^i s_i[j]`. The full slot makes each `H_j` a nonzero
+formal polynomial of degree at most `m−1`. Consequently any coefficient with
+`j > 0` vanishes with total probability at most `(N−1)(m−1)lambda`.
+The shifted constant is `a_0 = −sum_{j>0} H_j z^j`; outside that event it
+vanishes at at most `N−1` values of the fresh z. The actual IPA update is
+`a'_i = a_i + u^−1 a_{i+half}`. For nonzero inputs, each updated coefficient
+vanishes only at `u = −a_{i+half}/a_i`; zero u is separately rejected.
+Summing half-vector sizes and the K zero-challenge events gives the conservative
+bound
+
+`epsilon_field = min(1, ((m+1)(N−1)+K)lambda)`.
+
+No independence between coordinate events is required. Some counted coefficient
+zeros would not themselves abort a proof, so this deliberately overcounts.
+Outside this event, the exact generator update `g'_i = g_i + u g_{i+half}`
+preserves disjoint, nonempty supports over the original generators, with every
+support coefficient nonzero. An identity L or R therefore exposes a nonzero
+linear relation among the pinned `g_j` and U; its U coefficient may be zero.
+An identity intermediate generator or final G does likewise. The actual setup
+derives those generators using distinct hash-to-curve messages, and authenticated
+parameter pinning fixes their bytes. This is a computational relation-finding
+assumption for that setup, not an assertion of linear independence in a cyclic
+group. A reduction outputs the first extracted relation, charged to the whole
+execution's work/query budget.
+
+The relevant honest-fold algebraic abort probability is thus at most
+`epsilon_field + epsilon_relation + epsilon_prefix`, with the latter two terms
+explicit assumptions or remaining proof obligations. Repeated fresh attempts
+need a bounded-execution union bound; exact retained-byte retries are not fresh
+trials. The source review and exhaustive small-field falsification checks are
+retained in `target/qualification/fold-abort-bound-1` and
+`target/qualification/c12-fold-abort-independent-review-1`. This lemma supplies
+one conditional term; it establishes neither concrete Poseidon pseudorandomness
+nor the C12 joint simulator or privacy qualification.
+
+### Conditional joint view in the full-prefix model
+
+The independently reviewed ideal-model lemma is retained in
+`target/qualification/c12-hidden-fold-ro-lemma-1`. It assumes a public interface
+that exposes the final accumulators and public metadata but neither private
+salts nor hidden transcript addresses. Every outside algorithm, including a
+total adaptive outer simulator, accesses one shared typed full-prefix oracle
+through queries/programming requests; it cannot inspect the private table.
+That interface is an explicit hypothesis, not a consequence of omitting a salt
+field from transport or of valid-instance zero knowledge.
+
+Fix bounds `B_P`, `B_V` on fresh attempts and `Q_P`, `Q_V` on outside queries
+in the two fold namespaces, including prior queries. In a virtual experiment
+the hidden challenge tapes and public view are independent of the salts until
+the first guessed salt or same-curve salt collision. A first-hit coupling and
+union bound charge at most
+
+`Q_P B_P/p + Q_V B_V/q + choose(B_P,2)/p + choose(B_V,2)/q`.
+
+Vesta inputs may depend on the complete preceding private Pallas execution;
+its fresh independent salt and challenge tape still permit the sequential pair
+coupling. The ideal pair uses the actual mapped challenge laws and computes
+each G from its challenges and pinned generators, retaining zero/identity
+failures. Internal re-verification of the same hidden transcript is memoized,
+as are exact retained retries. Fresh unpublished retries count as new attempts.
+
+Add the preceding fold field bounds using deterministic per-attempt maxima
+`M_{C,i}` for input counts, plus the whole-execution relation-finding bound.
+An observed random sum over one adaptive run is not an unconditional probability
+bound. Entropy replacement, sampler exhaustion and operational disclosures need
+their stated separate treatment. The result is an unconditional coupling of
+bounded views inside the stipulated ideal interface, including aborts. Replacing
+that interface by an actual outer proof with only computational zero knowledge
+gives a PPT distinguishing bound, not statistical closeness of actual proofs.
+Neither the required actual-Omega interface theorem nor the concrete Poseidon
+realization follows from this lemma; C12 remains open.
 
 ## Executable checks and remaining review
 

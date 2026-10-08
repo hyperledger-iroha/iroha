@@ -17,18 +17,12 @@ SPEC.loader.exec_module(seal)
 REVIEWED_VENDOR_FILES = (
     "vendor/concread/.codespell_ignore",
     "vendor/concread/Cargo.toml.orig",
-    "vendor/halo2-axiom/Cargo.toml.orig",
-    "vendor/halo2curves-axiom/Cargo.toml.orig",
     "vendor/wayland-scanner-0.31.10/Cargo.toml.orig",
-    "vendor/halo2curves-axiom/src/bls12_381/tests/g1_compressed_valid_test_vectors.dat",
-    "vendor/halo2curves-axiom/src/bls12_381/tests/g1_uncompressed_valid_test_vectors.dat",
-    "vendor/halo2curves-axiom/src/bls12_381/tests/g2_compressed_valid_test_vectors.dat",
-    "vendor/halo2curves-axiom/src/bls12_381/tests/g2_uncompressed_valid_test_vectors.dat",
     "vendor/bytes/Cargo.toml.orig",
     "vendor/http-body-util/Cargo.toml.orig",
     "vendor/axum-core/Cargo.toml.orig",
 )
-ROLE_EXAMPLES = (REVIEWED_VENDOR_FILES[0], REVIEWED_VENDOR_FILES[1], REVIEWED_VENDOR_FILES[5], REVIEWED_VENDOR_FILES[9], REVIEWED_VENDOR_FILES[10], REVIEWED_VENDOR_FILES[11])
+ROLE_EXAMPLES = REVIEWED_VENDOR_FILES
 
 
 def public_original(relative: str) -> bytes:
@@ -51,7 +45,7 @@ def write_public(root: Path, relative: str) -> bytes:
 
 def test_reviewed_vendor_inventory_is_exactly_the_established_roles() -> None:
     assert seal._REVIEWED_PUBLIC_VENDOR_INPUTS == frozenset(REVIEWED_VENDOR_FILES)
-    assert len(seal._REVIEWED_PUBLIC_VENDOR_INPUTS) == 12
+    assert len(seal._REVIEWED_PUBLIC_VENDOR_INPUTS) == 6
 
 
 @pytest.mark.parametrize("relative", [
@@ -80,7 +74,7 @@ def test_actual_listed_file_admission_keeps_every_reviewed_vendor_input(tmp_path
     lock.write_bytes(b"public synthetic lock original\n")
     filename_inventory = b"\0".join(name.encode() for name in REVIEWED_VENDOR_FILES) + b"\0"
     # Only the filename-only Git boundary is mocked; real lexical/ancestor/file
-    # admission runs for all twelve. No repository script, Cargo or Git is invoked.
+    # admission runs for all six. No repository script, Cargo or Git is invoked.
     with mock.patch.object(seal, "source_seal_tools", return_value=(None, None, None, None)), \
             mock.patch.object(seal, "source_seal_environment", return_value={}), \
             mock.patch.object(seal, "run", return_value=filename_inventory):

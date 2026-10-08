@@ -1062,22 +1062,7 @@ mod tests {
                     iroha_config::parameters::defaults::network::PREAUTH_TIMEOUT,
                 )
             );
-            let pow = &config.network.soranet_handshake.pow;
-            let expected_pow = actual::SoranetPow::default_const();
-            assert_eq!(
-                (
-                    pow.difficulty,
-                    pow.puzzle.memory_kib,
-                    pow.puzzle.time_cost,
-                    pow.puzzle.lanes,
-                ),
-                (
-                    expected_pow.difficulty,
-                    expected_pow.puzzle.memory_kib,
-                    expected_pow.puzzle.time_cost,
-                    expected_pow.puzzle.lanes,
-                )
-            );
+            managed_puzzle::assert_managed_profile(&table, &config.network.soranet_handshake.pow);
             assert!(config.torii.peer_telemetry_urls.is_empty());
             assert_eq!(config.nexus.dataspace_catalog.entries().len(), 1);
             assert_eq!(

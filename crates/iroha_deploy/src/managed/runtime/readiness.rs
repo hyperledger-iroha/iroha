@@ -341,23 +341,14 @@ fn native(
     config.torii_request_timeout = Duration::from_millis(750);
     config.transaction_status_timeout = budget.timeout;
     config.transaction_ttl = budget.timeout.max(Duration::from_secs(60));
-    // The loader and SDK builder apply the same canonical endpoint normalization.
-    // Status peer 0 must be the original selected submission endpoint before its transport
-    // can serve a freshly rebuilt submission context.
-    let submission_endpoint = config.torii_api_url.clone();
-    let mut clients = Vec::with_capacity(4);
-    for (index, peer) in prepared.peers.iter().enumerate() {
-        let mut peer_config = config.clone();
-        peer_config.torii_api_url = peer.torii_url.parse().map_err(|_| budget.unconfirmed())?;
-        let native = iroha::client::Client::builder(peer_config)
-            .build()
-            .map_err(|_| budget.unconfirmed())?
-            .with_request_deadline(deadline);
-        if index == 0 && native.endpoint() != &submission_endpoint {
-            return Err(budget.unconfirmed());
-        }
-        clients.push(Client::from_client(native).map_err(|_| budget.unconfirmed())?);
-    }
+    let endpoints = prepared
+        .peers
+        .iter()
+        .map(|peer| peer.torii_url.parse())
+        .collect::<Result<Vec<url::Url>, _>>()
+        .map_err(|_| budget.unconfirmed())?;
+    let clients = readiness_clients(iroha::client::Client::builder(config), &endpoints, deadline)
+        .map_err(|()| budget.unconfirmed())?;
     Ok((
         Native {
             clients,
@@ -367,6 +358,45 @@ fn native(
         selected.genesis_hash,
     ))
 }
+
+// One readiness session retains its first peer's native transport. Rebuilding each selected
+// peer context still validates its endpoint/account and starts independent compatibility probes;
+// only the connection pools and original deadline are shared. Every runtime owner stays alive
+// until the whole session returns, including connections first driven by another peer's runtime.
+fn readiness_clients(
+    mut selected: iroha::client::ClientBuilder,
+    endpoints: &[url::Url],
+    deadline: Instant,
+) -> Result<Vec<Client>, ()> {
+    if endpoints.len() != 4 {
+        return Err(());
+    }
+    let submission_endpoint = selected.torii_url.clone();
+    selected.torii_url = endpoints[0].clone();
+    let first = selected
+        .build()
+        .map_err(|_| ())?
+        .with_request_deadline(deadline);
+    // The loader and SDK builder apply the same canonical endpoint normalization.
+    if first.endpoint() != &submission_endpoint {
+        return Err(());
+    }
+    let mut clients = vec![Client::from_client(first).map_err(|_| ())?];
+    for endpoint in &endpoints[1..] {
+        let mut builder = clients[0].client().to_builder();
+        builder.torii_url = endpoint.clone();
+        let peer = builder
+            .build()
+            .map_err(|_| ())?
+            .with_request_deadline(deadline);
+        clients.push(Client::from_client(peer).map_err(|_| ())?);
+    }
+    Ok(clients)
+}
+
+#[cfg(test)]
+#[path = "readiness/client_tests.rs"]
+mod client_tests;
 
 fn wait_status(backend: &mut impl Backend, budget: &Budget<'_>, mesh: bool) -> Result<(), Failure> {
     loop {

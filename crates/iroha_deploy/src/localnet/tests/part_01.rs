@@ -331,6 +331,13 @@ fn canonical_taira_generation_binds_four_runtime_signers_to_validator_peers() {
     let mut output = BufWriter::new(Vec::new());
     generate_localnet_with_chain(&opts, &mut output, Some(PUBLIC_TAIRA_CHAIN_ID), None)
         .expect("generate canonical Taira localnet");
+    for index in 0..4 {
+        let path = temp.path().join(format!("peer{index}.toml"));
+        let source = iroha_fs::read_private(&path, 1024 * 1024).unwrap();
+        let parsed =
+            parse_localnet_peer_config(std::str::from_utf8(&source).unwrap(), Some(&path)).unwrap();
+        managed_puzzle::assert_public_profile(&parsed.network.soranet_handshake.pow);
+    }
     let peers = build_peers(
         TAIRA_TESTNET_PEERS,
         opts.seed.as_deref().map(str::as_bytes),

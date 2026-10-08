@@ -30,14 +30,10 @@ use iroha_plonk::{
     prover::{ProverConfig, ProverRandomness, Witness, create_proof_owned},
     verifier::verify_full,
 };
-#[cfg(test)]
-use poseidon_primitives::poseidon::primitives::Spec;
 use std::{collections::BTreeMap, sync::OnceLock};
 pub(super) const POP_MEMBERSHIP_CIRCUIT_ID_V1: &str = "sorafs-pop-membership-pipa-r-v1";
 pub(super) const POP_MEMBERSHIP_CIRCUIT_K_V1: u32 = 14;
 const WIDTH: usize = 3;
-#[cfg(test)]
-const RATE: usize = 2;
 const FULL_ROUNDS: usize = 8;
 const PARTIAL_ROUNDS: usize = 56;
 const ROUND_COUNT: usize = FULL_ROUNDS + PARTIAL_ROUNDS;
@@ -67,24 +63,6 @@ const PI_REVOCATION_LIST_VERSION: usize = 7;
 const PI_NULLIFIER: usize = 8;
 const PI_PRESENTATION_BINDING: usize = 9;
 const PUBLIC_INPUT_COUNT: usize = 10;
-#[cfg(test)]
-#[derive(Debug)]
-struct PopPoseidonSpec;
-#[cfg(test)]
-impl Spec<Fp, WIDTH, RATE> for PopPoseidonSpec {
-    fn full_rounds() -> usize {
-        FULL_ROUNDS
-    }
-    fn partial_rounds() -> usize {
-        PARTIAL_ROUNDS
-    }
-    fn sbox(value: Fp) -> Fp {
-        value.pow_vartime([5])
-    }
-    fn secure_mds() -> usize {
-        0
-    }
-}
 struct PoseidonConstants {
     round_constants: Vec<[Fp; WIDTH]>,
     mds: [[Fp; WIDTH]; WIDTH],
@@ -1452,14 +1430,23 @@ fn _assert_send_sync() {
 }
 
 #[cfg(test)]
+#[path = "../../../../fixtures/poseidon/reader.rs"]
+mod reference;
+
+#[cfg(test)]
 mod migration_tests {
     use super::*;
 
     #[test]
     fn native_rp56_parameters_match_every_upstream_constant() {
         let actual = poseidon_constants();
-        let (rounds, mds, _) = <PopPoseidonSpec as Spec<Fp, WIDTH, RATE>>::constants();
-        assert_eq!(actual.round_constants, rounds);
+        let (rounds, mds) = reference::parameters::<3>(include_str!(
+            "../../../../fixtures/poseidon/pasta-fp-w3-rp56.hex"
+        ));
+        let field = |bytes| Fp::from_repr(bytes).unwrap();
+        let rounds = rounds.map(|row| row.map(field));
+        let mds = mds.map(|row| row.map(field));
+        assert_eq!(actual.round_constants.as_slice(), rounds.as_slice());
         assert_eq!(actual.mds, mds);
         assert_eq!(rounds.len(), 64);
     }

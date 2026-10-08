@@ -10,9 +10,6 @@ documentation.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories = ["cryptography"]
-# `build.rs` only declares the `iroha_plonk_oracle` cfg for check-cfg (spec
-# section 6.4); it generates nothing and reads no environment.
-build = "build.rs"
 
 [lints]
 workspace = true

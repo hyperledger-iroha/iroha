@@ -829,12 +829,21 @@ of `P` and of SHA-256 on 32-byte inputs, plus P-256 EUF-CMA (owner protocol choi
 in-circuit P-256 is complete for natively accepted inputs: complete Renes–Costello–Batina
 formulas, low-S, x(R) mod n.
 
-**C12. Zero knowledge.** Ω follows the halo2 argument (PIPA §13). acc_P and acc_V are outputs of
-non-hiding fold IPAs whose inputs derive from hiding proofs; in the ROM u is a hash of
-high-entropy transcripts and G = ⟨s(u), g⟩ is public given u, so a simulator samples u. D_A is
-a function of public fields and acc_P. Q, A and the fold proofs never leave the device. Ω
-already exposes `wallet_id` and `payment_key`, so linkability is unchanged. The formal memo is
-M4 work (PIPA §13 TODO).
+**C12. Zero knowledge.** Ω uses the hiding proof construction in PIPA §13. For a deciding
+accumulator, G = ⟨s(u), g⟩ is determined by u and the pinned generators. D_A hashes the
+18 public lineage fields and acc_P's coordinates and challenge limbs (52 field words),
+so it adds no information beyond that public tuple. Q, A and the local fold proofs are
+not transported; `wallet_id` and `payment_key` are already public.
+
+These local facts do not prove privacy of the joint public transcript. The two exposed
+challenge vectors come from non-hiding folds and can share inputs correlated with
+public σ proofs and earlier accumulators. A simulator must handle both vectors and Ω
+under one random oracle, including adaptive queries, retained checkpoint reuse, retries
+and exceptional aborts. Independently sampling two vectors does not by itself produce
+an Ω witness or establish that distribution. Fresh private salts support a possible
+hidden-prefix argument, but that argument and the composed simulator remain M4 work
+([recursive soundness memo](kagemusha_recursion_soundness_v1.md), PIPA §13 TODO).
+No stronger privacy or linkability conclusion is established by this paragraph.
 
 ## 8. PIPA-v1 extensions (applied to `plonk_ipa_v1.md` in M4)
 

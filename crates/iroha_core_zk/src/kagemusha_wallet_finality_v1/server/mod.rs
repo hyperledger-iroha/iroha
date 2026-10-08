@@ -41,6 +41,7 @@ use crate::kagemusha_wallet_artifacts_v1::{InstallationV1, InstalledVerifierPack
 mod artifacts;
 mod cache;
 mod custody;
+mod randomness;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -57,6 +58,10 @@ pub enum ServerFinalityErrorV1 {
     /// Existing immutable proof custody is unavailable or changed.
     #[error(transparent)]
     Storage(#[from] std::io::Error),
+    /// OS entropy was temporarily unavailable or bounded salt sampling exhausted.
+    /// This is a retryable resource refusal, not an invalid-proof verdict.
+    #[error("server finality entropy unavailable")]
+    EntropyUnavailable,
     /// The complete installed native proof graph refused its input or resources.
     #[error(transparent)]
     Proof(#[from] iroha_kagemusha_proof::finality::continuity::producer::Error),
@@ -433,14 +438,9 @@ impl ServerFinalityV1 {
             iroha_kagemusha_proof::finality::continuity::producer::Error,
         >,
     ) -> Result<T> {
-        let mut randomness = |_| {
-            Ok(NodeRandomness {
-                inner_salt: Fp::random(rand_core_06::OsRng),
-                outer_salt: Fq::random(rand_core_06::OsRng).to_repr(),
-                source: ProverRandomness::hedged(),
-                wrapper: ProverRandomness::hedged(),
-            })
-        };
+        let mut entropy = randomness::NodeEntropy::new(&self.cancellation.0);
+        let mut randomness =
+            |_| entropy.draw(crate::kagemusha_wallet_proofs_v1::randomness::os_entropy);
         let fold = FoldConfig {
             kernel_budget: self.budget,
             cancellation: Some(self.cancellation.0.clone()),
@@ -458,11 +458,7 @@ impl ServerFinalityV1 {
         .with_checkpoints(&mut self.journal);
         let result = operation(&self.installed, &mut context);
         drop(context);
-        result.map_err(|error| {
-            self.originals
-                .take_failure()
-                .unwrap_or(ServerFinalityErrorV1::Proof(error))
-        })
+        entropy.finish(result, || self.originals.take_failure())
     }
 
     /// Start or fully reverify the exact immutable genesis proof checkpoint.

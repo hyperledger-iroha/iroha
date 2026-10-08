@@ -38,19 +38,26 @@ fn validate_bounded(current: &History, maximum: usize) -> Result<()> {
     // The original local census already authenticates its own before/after state. With no
     // predecessor, preserve that common path without replaying it a second time.
     if count == 0 {
-        return current.require_current_local();
+        return current.require_current_local(None);
     }
     // Authenticate all ancestors before the selected node, then recheck in reverse order.
     // References keep every original File/Arc owner live across both complete passes.
-    for prior in predecessors[..count].iter().rev().flatten() {
-        prior.require_retained_local()?;
-    }
-    current.require_current_local()?;
-    current.require_current_local()?;
-    for prior in predecessors[..count].iter().flatten() {
-        prior.require_retained_local()?;
-    }
-    Ok(())
+    // Each original traversal has its own full snapshot entry/exit fence. The opaque
+    // borrowed pass shares only pointer-identical immutable prefixes; local attempt,
+    // inventory, receipt and native handle checks still run in their original order.
+    current.scope.with_snapshot_read_pass(&mut |pass| {
+        for prior in predecessors[..count].iter().rev().flatten() {
+            prior.require_retained_local(pass)?;
+        }
+        current.require_current_local(pass)
+    })?;
+    current.scope.with_snapshot_read_pass(&mut |pass| {
+        current.require_current_local(pass)?;
+        for prior in predecessors[..count].iter().flatten() {
+            prior.require_retained_local(pass)?;
+        }
+        Ok(())
+    })
 }
 
 // Instrument the actual local census only in tests. The fixed scratch records borrowed object

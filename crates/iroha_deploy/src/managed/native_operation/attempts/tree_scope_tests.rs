@@ -36,7 +36,7 @@ fn canonical_rows(fixture: &Fixture) {
 
 fn current(history: &History) -> (Result<()>, parse_digest_tests::Counts) {
     let counter = parse_digest_tests::Counter::begin();
-    let result = history.require_current_local();
+    let result = history.require_current_local(None);
     (result, counter.finish())
 }
 
@@ -200,7 +200,7 @@ fn retained_row_tree_preserves_late_active_allocation_refusal_and_exact_original
             .unwrap(),
         original
     );
-    history.require_current_local().unwrap();
+    history.require_current_local(None).unwrap();
     assert!(!attempt.wallet_path().join("preparation.json").exists());
     assert!(!attempt.wallet_path().join("payload.json").exists());
 }
