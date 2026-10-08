@@ -107,6 +107,11 @@ if (mobileSdkAndroidArtifactDirectory != null) {
         .resolve("gradle-build")
         .resolve(buildNamespace)
     gradle.beforeProject {
+        // Kotlin also keeps persistent state outside layout.buildDirectory.
+        extensions.extraProperties.set(
+            "kotlin.project.persistent.dir",
+            externalProjectRoot.resolve("kotlin-persistent").toString(),
+        )
         val relativeProjectPath = if (path == ":") {
             "root"
         } else {

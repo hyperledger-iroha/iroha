@@ -935,7 +935,7 @@ The `libconnect_norito_bridge.so` files are **not tracked in git** — they are 
 
 ```bash
 # Install Rust Android targets
-rustup target add --toolchain 1.93.1 aarch64-linux-android x86_64-linux-android
+rustup target add --toolchain 1.93.1 aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 
 # Install cargo-ndk
 cargo install cargo-ndk --version 4.1.2 --locked
@@ -952,6 +952,14 @@ mkdir -p "$MOBILE_SDK_ANDROID_ARTIFACT_DIR"
 # Build the capability-only native bridge.
 ./gradlew :client-android:buildNativeLibs
 ```
+
+For an authenticated source capture, also pass an external `--project-cache-dir`
+to the root Gradle invocation. With `MOBILE_SDK_ANDROID_ARTIFACT_DIR` selected,
+the shared settings script routes Kotlin persistent state below
+`gradle-build/iroha_kotlin_sdk/kotlin-persistent` in that artifact directory,
+including when the SDK is included in an application composite build. This
+Kotlin path takes precedence over caller properties; normal developer builds
+without the artifact directory retain their existing Kotlin cache selection.
 
 This Gradle task (and every `client-android` release assembly):
 1. Reads `iroha.dir` from `local.properties`
