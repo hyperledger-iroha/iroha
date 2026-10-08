@@ -3,6 +3,67 @@ use super::*;
 use crate::kagemusha_wallet_state_v1::tests::{bootstrap, field, fixture, frozen, signer, wallet};
 use p256::ecdsa::{Signature, signature::Signer as _};
 
+/// Exact previous single-attempt layout, retained only to prove rejection of old DATA.
+/// This test encoder is never a production decoder or migration path.
+#[derive(norito::Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::ActivationPlanV1")]
+struct PriorSingleAttemptPlan {
+    version: u16,
+    capsule: [u8; 32],
+    completion: [u8; 32],
+    credential: KagemushaWalletCredentialV1,
+    certificates: KagemushaWalletCertificateSetV1,
+    asset: KagemushaWalletAssetScopeV1,
+    bootstrap: KagemushaWalletPackageV1,
+    nonce: [u8; 32],
+    output: Option<[u8; 32]>,
+    confirmation: Option<[u8; 32]>,
+    cursor: Option<[u8; 32]>,
+    retired_cursor: Option<[u8; 32]>,
+}
+
+#[test]
+fn prior_single_attempt_layouts_are_preserved_and_rejected_without_mutation() {
+    for (cursor, confirmation) in [
+        (None, None),
+        (Some(field(71)), None),
+        (None, Some(field(72))),
+    ] {
+        let mut wallet = wallet();
+        wallet.commit(bootstrap()).unwrap();
+        let asset = fixture("KagemushaWalletAssetScopeV1");
+        let plan = wallet.activation_plan(&asset).unwrap();
+        wallet.finish_activation(&plan, &output(&plan)).unwrap();
+        let plan = wallet.activation_plan(&asset).unwrap();
+        let previous = PriorSingleAttemptPlan {
+            version: plan.version,
+            capsule: plan.capsule,
+            completion: plan.completion,
+            credential: plan.credential,
+            certificates: plan.certificates.clone(),
+            asset: plan.asset.clone(),
+            bootstrap: plan.bootstrap.clone(),
+            nonce: plan.nonce,
+            output: plan.output,
+            confirmation,
+            cursor,
+            retired_cursor: None,
+        };
+        let bytes = archive::encode(&previous).unwrap();
+        let address = wallet.archive.write_object(&bytes, PLAN_MAX).unwrap();
+        let (root, mut manifest) = wallet.sync_manifest().unwrap();
+        manifest.activation = Some(address);
+        wallet.publish_manifest(root, &manifest).unwrap();
+        let before = wallet.manifest().unwrap().0;
+        assert!(wallet.activation_plan(&asset).is_err());
+        assert_eq!(wallet.manifest().unwrap().0, before);
+        assert_eq!(
+            wallet.archive.read_object(&address, PLAN_MAX).unwrap(),
+            bytes
+        );
+    }
+}
+
 pub(super) fn output(plan: &Plan) -> Vec<u8> {
     let body = plan.body().unwrap();
     let raw: Signature = signer(&plan.credential).sign(&body.signing_message());

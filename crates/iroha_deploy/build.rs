@@ -1,32 +1,30 @@
-//! Model-owned, test-only mutation selection for Sumeragi spec §13.4.
+//! DEPLOY-owned, test-only mutation selection for Sumeragi spec §13.4.
 //!
-//! This selector affects only the `DataModel` unit-test compilation, never Core or another
+//! This selector affects only the `iroha_deploy` unit-test compilation, never another
 //! dependency. The library guard rejects the feature in every non-test build. The environment
 //! supplies one registered source switch; inherited compiler cfg injection is always refused.
 
 use std::{env, fs, path::Path};
 
-const CFG: &str = "sumeragi_model_mutation";
-const ENV: &str = "SUMERAGI_MODEL_MUTATION";
-const IDS: &[&str] = &[
-    "DM1", "DM2", "DM3", "DM4", "DM5", "DM6", "DM7", "DM8", "DM9",
-];
+const CFG: &str = "sumeragi_deploy_mutation";
+const ENV: &str = "SUMERAGI_DEPLOY_MUTATION";
+const IDS: &[&str] = &["DEP1", "DEP2", "DEP3", "DEP4"];
 
 fn main() {
     println!(
-        "cargo:rustc-check-cfg=cfg(sumeragi_model_mutation, values(\"DM1\", \"DM2\", \"DM3\", \"DM4\", \"DM5\", \"DM6\", \"DM7\", \"DM8\", \"DM9\"))"
+        "cargo:rustc-check-cfg=cfg(sumeragi_deploy_mutation, values(\"DEP1\", \"DEP2\", \"DEP3\", \"DEP4\"))"
     );
     println!("cargo:rerun-if-env-changed={ENV}");
     println!("cargo:rerun-if-changed=build.rs");
     let rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
     assert!(
         !rustflags.contains(CFG),
-        "Model mutation cfg cannot be injected through compiler flags; use the owning test selector"
+        "DEPLOY mutation cfg cannot be injected through compiler flags; use the owning test selector"
     );
     let requested = env::var(ENV).ok().filter(|id| !id.is_empty());
     if env::var_os("CARGO_FEATURE_MUTATION_TESTING").is_none() {
         if let Some(id) = requested {
-            println!("cargo:warning={ENV}={id} ignored: Model mutation-testing is off");
+            println!("cargo:warning={ENV}={id} ignored: DEPLOY mutation-testing is off");
         }
         return;
     }
@@ -35,7 +33,7 @@ fn main() {
     };
     assert!(
         IDS.contains(&id.as_str()),
-        "{ENV}={id:?}: unknown Model mutation id"
+        "{ENV}={id:?}: unknown DEPLOY mutation id"
     );
     println!("cargo:rerun-if-changed=src");
     let needle = format!("{CFG} = \"{id}\"");
@@ -44,7 +42,7 @@ fn main() {
         "{ENV}={id}: missing registered source switch"
     );
     println!("cargo:rustc-cfg={CFG}=\"{id}\"");
-    println!("cargo:warning=iroha_data_model is built with mutation {id} (spec §13.4)");
+    println!("cargo:warning=iroha_deploy is built with mutation {id} (spec §13.4)");
 }
 
 fn mentions(directory: &Path, needle: &str) -> bool {

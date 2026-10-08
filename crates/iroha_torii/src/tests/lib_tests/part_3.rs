@@ -1405,6 +1405,41 @@ fn identifier_claim_expiry_uses_actual_delivery_time_not_original_opening_time()
     assert!(!identifier_claim_is_live_at(&claim, 0));
 }
 #[cfg(feature = "app_api")]
+/// Check that the public opening projection preserves every original signed field.
+fn assert_identifier_opening_projection(
+    actual: &routing::IdentifierOutputOpeningDto,
+    original: &iroha_data_model::ram_lfe::RamLfeOutputOpening,
+) {
+    assert_eq!(actual.signature, hex::encode(original.signature.payload()));
+    assert_eq!(
+        actual.payload.program_id,
+        original.payload.program_id.to_string()
+    );
+    assert_eq!(
+        actual.payload.input_ciphertext_hash,
+        original.payload.input_ciphertext_hash.to_string()
+    );
+    assert_eq!(
+        actual.payload.output_ciphertext_hash,
+        original.payload.output_ciphertext_hash.to_string()
+    );
+    assert_eq!(
+        actual.payload.parameter_digest,
+        original.payload.parameter_digest.to_string()
+    );
+    assert_eq!(
+        actual.payload.evaluation_key_digest,
+        original.payload.evaluation_key_digest.to_string()
+    );
+    assert_eq!(
+        actual.payload.opened_output_hash,
+        original.payload.opened_output_hash.to_string()
+    );
+    assert_eq!(actual.payload.opened_at_ms, original.payload.opened_at_ms);
+    assert_eq!(actual.payload.expires_at_ms, original.payload.expires_at_ms);
+}
+
+#[cfg(feature = "app_api")]
 #[tokio::test]
 async fn signed_owner_prepare_and_claim_retain_exact_native_opening() {
     let (app, owner, signer, policy, program) = registered_hkdf_identifier_app(0x42);
@@ -1500,39 +1535,6 @@ async fn signed_owner_prepare_and_claim_retain_exact_native_opening() {
         receipt.payload.execution.expires_at_ms,
         prepared.output_opening.payload.expires_at_ms
     );
-}
-#[cfg(feature = "app_api")]
-fn assert_identifier_opening_projection(
-    actual: &routing::IdentifierOutputOpeningDto,
-    original: &iroha_data_model::ram_lfe::RamLfeOutputOpening,
-) {
-    assert_eq!(actual.signature, hex::encode(original.signature.payload()));
-    assert_eq!(
-        actual.payload.program_id,
-        original.payload.program_id.to_string()
-    );
-    assert_eq!(
-        actual.payload.input_ciphertext_hash,
-        original.payload.input_ciphertext_hash.to_string()
-    );
-    assert_eq!(
-        actual.payload.output_ciphertext_hash,
-        original.payload.output_ciphertext_hash.to_string()
-    );
-    assert_eq!(
-        actual.payload.parameter_digest,
-        original.payload.parameter_digest.to_string()
-    );
-    assert_eq!(
-        actual.payload.evaluation_key_digest,
-        original.payload.evaluation_key_digest.to_string()
-    );
-    assert_eq!(
-        actual.payload.opened_output_hash,
-        original.payload.opened_output_hash.to_string()
-    );
-    assert_eq!(actual.payload.opened_at_ms, original.payload.opened_at_ms);
-    assert_eq!(actual.payload.expires_at_ms, original.payload.expires_at_ms);
 }
 
 #[cfg(feature = "app_api")]

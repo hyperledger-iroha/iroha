@@ -16,7 +16,11 @@ use iroha_data_model::{
     sumeragi_finality::{SumeragiFinalityVerifier, VerifiedSumeragiBlock},
 };
 use iroha_kagemusha_proof::finality::{
-    continuity::{SourceNodeEvidence, tree::NodeRandomness},
+    catalog::ArtifactRecord,
+    continuity::{
+        SourceNodeEvidence,
+        tree::{NodeRandomness, SourceIdentity},
+    },
     native::{HistoryPrefix, ImportLimits, InstalledFinality, Parameters, ProvingContext},
     receipt_finality::{CONTEXT_DOMAIN, PROGRAM_ID},
 };
@@ -24,6 +28,7 @@ use iroha_pasta::{Ep, Eq, Fp, Fq, msm::MemoryBudget, poseidon::hash_with_domain}
 use iroha_plonk::{
     ProverConfig, ProverRandomness,
     keys::{CosetCachePolicy, pk::artifact::ReadConfig},
+    pcs::ipa::PinnedParams,
 };
 use iroha_plonk_recursion::{AccumulatorT, FoldConfig};
 use norito::{Decode, Encode, NoritoSchema};
@@ -120,6 +125,47 @@ impl ServerFinalityLimitsV1 {
             maximum_original_bytes: self.maximum_original_bytes,
         })
     }
+}
+
+/// Reimport a complete offline compiler archive through the shared immutable byte reader.
+/// Records are unadmitted compiler DATA; success returns only the terminal source identity.
+/// It does not create a runtime, authenticate a release, sign an inventory or prove a Load.
+/// The serving owner separately requires its independently selected signed verifier pack
+/// and producer inventory. No key generation, fallback or repair occurs here.
+/// # Errors
+/// Wrong original identity/extent, incomplete graph, native genesis, source import or limits.
+pub fn qualify_server_archive(
+    verifier: &SumeragiFinalityVerifier,
+    records: &[ArtifactRecord],
+    path: &Path,
+    limits: ImportLimits,
+) -> Result<SourceIdentity> {
+    let imports = limits;
+    let anchor = derive_history_anchor(verifier).map_err(|_| ServerFinalityErrorV1::Binding)?;
+    let mut originals = artifacts::ArchiveOriginals::from_records(records, path, imports)?;
+    let installed = InstalledFinality::from_original_artifacts(
+        anchor,
+        &mut originals,
+        Parameters {
+            pallas: PinnedParams::derive(16).map_err(|_| ServerFinalityErrorV1::Binding)?,
+            vesta: PinnedParams::derive(16).map_err(|_| ServerFinalityErrorV1::Binding)?,
+        },
+        imports,
+    )
+    .map_err(|error| {
+        originals
+            .take_failure()
+            .unwrap_or(ServerFinalityErrorV1::Proof(error))
+    })?;
+    originals.require_complete()?;
+    let source = installed.qualified_source();
+    Ok(SourceIdentity {
+        descriptor: *source.binding().digest(),
+        key: source
+            .key_digest()
+            .map_err(|_| ServerFinalityErrorV1::Binding)?
+            .to_repr(),
+    })
 }
 
 /// Cooperative cancellation of genuine proof work; contains no proof authority.

@@ -903,3 +903,121 @@ def test_compiler_environment_dependency_is_bound_or_explicitly_derived(tmp_path
     depfile.write_text(original + "# env-dep:CARGO_UNKNOWN=value\n")
     with pytest.raises(ValueError, match="no disposition"):
         qualify.component_scope(metadata, artifacts)
+
+
+@pytest.mark.parametrize("location", ["ancestor", "home"])
+def test_cargo_configuration_absence_creation_change_and_removal_are_bound(tmp_path, monkeypatch, location):
+    checkout = tmp_path / "work/checkout"
+    checkout.mkdir(parents=True)
+    home = tmp_path / "cargo-home"
+    home.mkdir()
+    monkeypatch.setattr(qualify, "ROOT", checkout)
+    monkeypatch.setenv("CARGO_HOME", str(home))
+    directory = tmp_path / "work/.cargo" if location == "ancestor" else home
+    directory.mkdir(exist_ok=True)
+    path = directory / "config.toml"
+    before = qualify.cargo_configuration()
+    assert before[str(path)] is None
+    path.write_text('[build]\njobs = 2\n')
+    present = qualify.cargo_configuration()
+    assert present[str(path)] == qualify.file_hash(path) and present != before
+    path.write_text('[build]\njobs = 4\n')
+    assert qualify.cargo_configuration() != present
+    path.unlink()
+    assert qualify.cargo_configuration() == before
+
+
+@pytest.mark.parametrize("selector", ["rustc", "rustc-wrapper", "rustc-workspace-wrapper"])
+@pytest.mark.parametrize("location", ["ancestor", "home"])
+def test_cargo_configuration_cannot_silently_select_unpinned_compiler(tmp_path, monkeypatch, selector, location):
+    checkout = tmp_path / "work/checkout"
+    checkout.mkdir(parents=True)
+    home = tmp_path / "cargo-home"
+    home.mkdir()
+    monkeypatch.setattr(qualify, "ROOT", checkout)
+    monkeypatch.setenv("CARGO_HOME", str(home))
+    directory = tmp_path / "work/.cargo" if location == "ancestor" else home
+    directory.mkdir(exist_ok=True)
+    (directory / "config").write_text(f'[build]\n"{selector}" = "/unqualified/tool"\n')
+    with pytest.raises(ValueError, match="configured compiler/wrapper"):
+        qualify.cargo_configuration()
+
+
+@pytest.mark.parametrize("text,reason", [
+    ('[env]\nRUSTC = {value="/unqualified/rustc", force=true}\n', "configuration environment"),
+    ('include = ["other.toml"]\n', "configuration include"),
+    ('[build]\nrustc-wrapper =', "Invalid value"),
+])
+def test_cargo_configuration_includes_environment_and_malformed_data_refuse(tmp_path, monkeypatch, text, reason):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CARGO_HOME", str(home))
+    (home / "config.toml").write_text(text)
+    with pytest.raises(ValueError, match=reason):
+        qualify.cargo_configuration()
+
+
+@pytest.mark.parametrize("kind", ["file", "directory", "missing-leaf"])
+def test_cargo_configuration_symlink_custody_refuses(tmp_path, monkeypatch, kind):
+    home = tmp_path / "home"
+    home.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "config.toml").write_text('[build]\njobs = 2\n')
+    if kind == "file":
+        (home / "config.toml").symlink_to(other / "config.toml")
+    else:
+        home.rmdir()
+        home.symlink_to(other, target_is_directory=True)
+        if kind == "missing-leaf":
+            (other / "config.toml").unlink()
+    monkeypatch.setenv("CARGO_HOME", str(home))
+    with pytest.raises(ValueError, match="symlinked Cargo"):
+        qualify.cargo_configuration()
+
+
+def test_both_cargo_config_names_are_pinned_even_with_precedence(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CARGO_HOME", str(home))
+    (home / "config").write_text('[build]\njobs = 1\n')
+    (home / "config.toml").write_text('[build]\njobs = 2\n')
+    values = qualify.cargo_configuration()
+    assert values[str(home / "config")] == qualify.file_hash(home / "config")
+    assert values[str(home / "config.toml")] == qualify.file_hash(home / "config.toml")
+
+
+@pytest.mark.parametrize("phase", ["build", "runtime"])
+def test_new_ancestor_configuration_invalidates_actual_candidate_binding(tmp_path, monkeypatch, phase):
+    metadata, artifacts, binary = source_fixture(tmp_path, monkeypatch)
+    home = tmp_path / "cargo-home"
+    home.mkdir()
+    monkeypatch.setenv("CARGO_HOME", str(home))
+    monkeypatch.setattr(qualify, "tool_identity", lambda: {"config": qualify.cargo_configuration()})
+    path = home / "config.toml"
+    def mutate():
+        path.write_text('[build]\njobs = 2\n')
+    if phase == "build":
+        mocked_build(monkeypatch, artifacts, binary, during_build=mutate)
+        with pytest.raises(ValueError, match="metadata or tools changed"):
+            qualify.prepare(tmp_path / "target/output", component=True)
+        assert not (tmp_path / "target/output/candidate.json").exists()
+    else:
+        scope = qualify.component_scope(metadata, artifacts)
+        before = qualify.source_digest(scope)
+        mutate()
+        assert qualify.source_digest(scope) != before
+
+
+def test_unavailable_cargo_configuration_is_not_absence(tmp_path, monkeypatch):
+    home = tmp_path / "cargo-home"
+    home.mkdir()
+    monkeypatch.setenv("CARGO_HOME", str(home))
+    original = qualify.file_hash
+    def inaccessible(path):
+        if path == home / "config.toml":
+            raise PermissionError("fixture denied")
+        return original(path)
+    monkeypatch.setattr(qualify, "file_hash", inaccessible)
+    with pytest.raises(PermissionError, match="fixture denied"):
+        qualify.cargo_configuration()

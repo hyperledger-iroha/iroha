@@ -29,6 +29,11 @@ import stat
 import subprocess
 import sys
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python3.10 uses the already pinned scripts dependency.
+    import tomli as tomllib
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIGS = {
     f"{kind}-{workers}": {"kind": kind, "workers": workers, "test": test, "gate": gate}
@@ -171,9 +176,56 @@ def metadata_roots(metadata: dict) -> list[str]:
     return sorted(roots)
 
 
+def cargo_configuration() -> dict:
+    """Pin Cargo's config hierarchy, including absent optional candidates.
+
+    Both filename spellings are retained even where Cargo gives `config`
+    precedence. Compiler overrides and Cargo-provided environment require a
+    separately reviewed tool disposition; this M3 profile admits neither.
+    Only hashes are retained, never configuration contents or credentials.
+    """
+    home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+    if not home.is_absolute():
+        home = ROOT / home
+    directories = {base / ".cargo" for base in (ROOT, *ROOT.parents)} | {home}
+    result = {}
+    for directory in sorted(directories):
+        for name in ("config", "config.toml"):
+            path = directory / name
+            # Inspect each lexical ancestor so a symlink cannot conceal an
+            # alternate configuration, even if its final leaf is absent.
+            for parent in (*reversed(path.parents), path):
+                try:
+                    mode = parent.lstat().st_mode
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISLNK(mode):
+                    raise ValueError(f"symlinked Cargo configuration: {path}")
+            try:
+                before = file_hash(path)
+            except FileNotFoundError:
+                result[str(path)] = None
+                continue
+            original = path.read_bytes()
+            if hashlib.sha256(original).hexdigest() != before or file_hash(path) != before:
+                raise ValueError(f"Cargo configuration changed while reading: {path}")
+            config = tomllib.loads(original.decode("utf-8"))
+            if "include" in config:
+                raise ValueError("Cargo configuration include needs an explicit input policy")
+            build = config.get("build", {})
+            if not isinstance(build, dict):
+                raise ValueError("malformed Cargo build configuration")
+            if any(build.get(key) for key in ("rustc", "rustc-wrapper", "rustc-workspace-wrapper")):
+                raise ValueError("configured compiler/wrapper needs an explicit tool-input policy")
+            if config.get("env"):
+                raise ValueError("Cargo configuration environment needs an explicit tool-input policy")
+            result[str(path)] = before
+    return result
+
+
 def tool_identity() -> dict:
     """Bind selected Rust tools and build controls, without claiming OS closure."""
-    tools = {}
+    tools = {"cargo_configuration": cargo_configuration()}
     for name in ("bash", "git", "python3", "cargo", "rustc", "rustup"):
         selected = shutil.which(name)
         if selected is None:
@@ -197,6 +249,7 @@ def tool_identity() -> dict:
     tools["environment"] = {key: os.environ.get(key) for key in (
         "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_PROFILE_RELEASE_LTO",
         "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTUP_TOOLCHAIN",
+        "CARGO_HOME", "RUSTUP_HOME", "CARGO_BUILD_TARGET", "CARGO_TARGET_DIR", "CARGO_FAST_TARGET_ROOT",
         "CARGO_BUILD_RUSTC", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
         "DOCS_RS", "NORITO_CHECK_BINDINGS_SYNC", "NORITO_SKIP_BINDINGS_SYNC",
         "ENABLE_CABAC", "ENABLE_TRELLIS",

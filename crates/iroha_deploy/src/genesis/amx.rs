@@ -3,8 +3,9 @@
 //! This offline owner authenticates source artifacts with Core's sole native prefix verifier.
 //! It does not execute a new global block, grant authority, or replace the private signer.
 //! Core staging still executes the appended instruction and binds the private genesis policy.
-//! TODO: managed source acquisition, full nested offline verifier funding, global participant
-//! registration and durable validator relaying remain separate production owners.
+//! TODO: full nested offline verifier funding, global participant registration and durable
+//! validator relaying remain separate production owners. Managed source custody is independent
+//! of runtime readiness and does not qualify whole-network bootstrap or settlement.
 
 use color_eyre::eyre::{WrapErr, eyre};
 use iroha_allocation::AllocationBudget;
@@ -82,6 +83,28 @@ pub fn append_amx_participant(
             "private genesis already contains a native AMX participant instruction"
         ));
     }
+    authenticate_global_sources(
+        &global_chain_id,
+        parent_network_id,
+        &global_genesis,
+        &global_successor,
+    )?;
+    manifest.append_instruction_transaction(RegisterAmxParticipantV1 {
+        dataspace: dataspace_id,
+        global_chain_id,
+        global_genesis,
+        global_successor,
+    })
+}
+
+/// Authenticate original global sources through the same sole verifier used by assembly.
+/// This exposes no receipt or authority and performs no signing or publication.
+pub(crate) fn authenticate_global_sources(
+    global_chain_id: &ChainId,
+    parent_network_id: NetworkId,
+    global_genesis: &[u8],
+    global_successor: &[u8],
+) -> color_eyre::Result<()> {
     // Prepay both exact control shells before allocating or consuming either decoded source.
     // The operational offline pool is separate from every runtime State/attempt pool.
     let control_bytes = SharedSignedBlock::allocation_layout()
@@ -91,7 +114,7 @@ pub fn append_amx_participant(
     let pool = AllocationBudget::new(control_bytes);
     let genesis_shell = SharedSignedBlock::reserve(&pool)?;
     let successor_shell = SharedSignedBlock::reserve(&pool)?;
-    let genesis = canonical_source(&global_genesis, SIGNED_GENESIS_MAX_BYTES_V1)?;
+    let genesis = canonical_source(global_genesis, SIGNED_GENESIS_MAX_BYTES_V1)?;
     if NetworkId::from_genesis_hash(genesis.hash()) != parent_network_id {
         return Err(eyre!(
             "global genesis differs from the private root's selected parent network"
@@ -107,12 +130,12 @@ pub fn append_amx_participant(
         ));
     }
     let mut prefix = CertifiedPrefix::new(
-        &global_chain_id,
+        global_chain_id,
         parent_network_id,
         genesis_shell.initialize(genesis),
     )
     .wrap_err("authenticate original global genesis")?;
-    let successor = canonical_source(&global_successor, MAX_FINALITY_BLOCK_BYTES)?;
+    let successor = canonical_source(global_successor, MAX_FINALITY_BLOCK_BYTES)?;
     let (_, genesis_anchor) = prefix
         .push(successor_shell.initialize(successor))
         .wrap_err("authenticate genuine global H2 successor")?
@@ -122,12 +145,7 @@ pub fn append_amx_participant(
             "global source pair did not authenticate the genesis execution through H2"
         ));
     }
-    manifest.append_instruction_transaction(RegisterAmxParticipantV1 {
-        dataspace: dataspace_id,
-        global_chain_id,
-        global_genesis,
-        global_successor,
-    })
+    Ok(())
 }
 
 #[cfg(test)]

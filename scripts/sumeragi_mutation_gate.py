@@ -41,6 +41,8 @@ Purpose
     `SUMERAGI_CORE_MUTATION`;
     `--daemon` selects the daemon unit-test owner and `SUMERAGI_DAEMON_MUTATION`.
     `--model` selects DataModel unit tests in the test profile and its separate `SUMERAGI_MODEL_MUTATION`.
+    `--sdk` and `--deploy` select their own unit-test crates in the test profile, with
+    `SUMERAGI_SDK_MUTATION` and `SUMERAGI_DEPLOY_MUTATION`.
     Each test-only feature guards only its own crate, without mutating dependencies.
 
 Prerequisites
@@ -781,6 +783,34 @@ CORE_MUTATIONS = [
     m("HC152", "native AMX Worker retry: collapse distinct equal Prepare instruction occurrences",
       ["sumeragi::executor::amx_retry_tests::completed_amx_worker_bank_preserves_equal_occurrences_and_metadata_refusal"]),
 
+    m("HC153", "State membership capture: substitute the committed view for the staged original successor",
+      ["state::storage_transactions::authority::tests::original_publication_pair_matches_real_advance_replace_and_repeat"]),
+
+    m("HC154", "State membership capture: retain the repeated tip in the original successor rollback",
+      ["state::storage_transactions::authority::tests::original_publication_pair_matches_real_advance_replace_and_repeat"]),
+
+    m("HC155", "State membership capture: lend a terminal prepared publication writer",
+      ["state::storage_transactions::block::capture::publication_capture_phase_tests::original_membership_cut_refuses_started_published_unwind_and_completed_phases",
+       "state::storage_transactions::block::detached_publication::publication_capture_phase_tests::detached_membership_cut_refuses_started_published_unwind_and_released_phases"]),
+
+    m("HC156", "State membership capture: accept a refund scope belonging to another original pool",
+      ["state::authority_registry::complete::transaction_membership::tests::original_membership_scope_partial_foreign_and_released_owners_refuse"]),
+
+    m("HC157", "State membership capture: accept a prepared writer from foreign membership storage",
+      ["state::authority_registry::complete::transaction_membership::tests::original_membership_scope_partial_foreign_and_released_owners_refuse"]),
+
+    m("HC158", "State membership capture: accept a membership replacement beside an ordinary frozen World",
+      ["state::authority_registry::complete::transaction_membership::tests::original_membership_scope_partial_foreign_and_released_owners_refuse"]),
+    m("HC159", "native AMX outbound proof: discard the completed original graph after final namespace refusal",
+      ["sumeragi::amx::proof_tests::persisted_amx_completed_proof_retains_exact_graph_through_final_namespace_refusal"]),
+    m("HC160", "pending consensus penalty: erase the original physical compact-key allocator refusal",
+      ["sumeragi::penalties::tests::pending_penalty_peer_key_allocator_refusal_preserves_original_source_and_retries"]),
+
+    m("HC161", "AMX deadline publication: erase the original typed record resource refusal",
+      ["sumeragi::amx::tests::amx_deadline_record_refusal_keeps_original_pending_state_and_typed_retry"]),
+
+    m("HC162", "AMX deadline finalizer: turn local resource refusal into protocol rejection",
+      ["block::valid::tests::amx_deadline_finalizer_preserves_exact_local_refusal_without_rejection"]),
 
 ]
 
@@ -804,6 +834,11 @@ MODEL_MUTATIONS = [
     m("DM7", "Native AMX monetary effects: materialize the canonical leg frame as unfunded heap scratch",
       ["amx_prepare_streaming_allocations::observer_counts_all_three_allocation_routes_and_resets_after_unwind",
        "amx_prepare_streaming_allocations::native_transfer_effects_stream_exact_monetary_fields_without_heap_allocations"]),
+    m("DM8", "AMX deadline custody: consume pending source before every decision record succeeds",
+      ["sumeragi_amx::tests::sumeragi_amx_expiry_refusal_and_unwind_preserve_original_pending_graph"]),
+    m("DM9", "AMX record encoding: erase the original physical allocation refusal",
+      ["sumeragi_amx::tests::sumeragi_amx_encoding_keeps_exact_physical_allocator_refusal"]),
+
 ]
 
 
@@ -832,6 +867,26 @@ DAEMON_MUTATIONS = [
 ]
 
 
+SDK_MUTATIONS = [
+    m("SDK1", "Public Norito reads: accept missing or foreign response media",
+      ["http::public::tests::public_norito_reads_refuse_missing_foreign_media_and_elapsed_requests",
+       "http::public::tests::public_norito_reads_select_only_fixed_media_and_retain_original_public_policies"]),
+]
+
+DEPLOY_MUTATIONS = [
+    m("DEP1", "Managed AMX sources: reconstruct a lost published capsule over HTTP",
+      ["bootstrap::amx_sources::tests::managed_amx_sources_refuse_partial_removed_and_substituted_custody_without_http_repair",
+       "bootstrap::amx_sources::tests::managed_amx_sources_keep_original_g1_h2_across_advanced_checkpoint_and_reopen"]),
+    m("DEP2", "Managed AMX sources: accept same bytes from a replaced original file inode",
+      ["bootstrap::amx_sources::tests::managed_amx_sources_bind_original_file_identity_and_exact_capsule_inventory",
+       "bootstrap::amx_sources::tests::managed_amx_sources_feed_real_private_staging_and_exact_retained_generation"]),
+    m("DEP3", "Managed AMX sources: omit the live-release check after retained authentication",
+      ["bootstrap::amx_sources::tests::managed_amx_sources_recheck_release_after_retained_authentication_without_refetch"]),
+    m("DEP4", "Managed AMX sources: publish a new capsule after original acquisition expires",
+      ["bootstrap::amx_sources::tests::managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publication"]),
+]
+
+
 def index_mutations(mutations):
     """Reject duplicate ids before selecting a test or counting a mutation kill."""
     indexed = {}
@@ -848,6 +903,10 @@ BY_ID = index_mutations(MUTATIONS)
 
 def package_options(args):
     """Select the actual implementation owner without propagating a mutation to dependencies."""
+    if getattr(args, "sdk", False):
+        return "iroha", "mutation-testing", "SUMERAGI_SDK_MUTATION"
+    if getattr(args, "deploy", False):
+        return "iroha_deploy", "mutation-testing", "SUMERAGI_DEPLOY_MUTATION"
     if getattr(args, "model", False):
         return "iroha_data_model", "mutation-testing", "SUMERAGI_MODEL_MUTATION"
     if getattr(args, "daemon", False):
@@ -916,6 +975,8 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     env.pop("SUMERAGI_CORE_MUTATION", None)
     env.pop("SUMERAGI_DAEMON_MUTATION", None)
     env.pop("SUMERAGI_MODEL_MUTATION", None)
+    env.pop("SUMERAGI_SDK_MUTATION", None)
+    env.pop("SUMERAGI_DEPLOY_MUTATION", None)
     crate, features, mutation_env = package_options(args)
     env.pop("SUMERAGI_SIM_SEED", None)
     env.pop("SUMERAGI_SIM_SEED_BASE", None)
@@ -926,7 +987,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     else:
         env.pop("SUMERAGI_SIM_SEEDS", None)
     env["CARGO_TARGET_DIR"] = str(target_dir)
-    profile = ("test" if getattr(args, "model", False) else
+    profile = ("test" if any(getattr(args, owner, False) for owner in ("model", "sdk", "deploy")) else
                (getattr(args, "core_profile", None) or "test") if getattr(args, "core", False) else None)
     profile_options = ["--profile", profile] if profile else ["--release"]
     cmd = ["cargo", "test", "--locked", "-p", crate, *profile_options, "--features", features, "--lib"]
@@ -1044,10 +1105,14 @@ def build(args, target_dir, mutation, log_path):
                 detail=detail, log=str(log_path))
 
 
-def has_switch(mid, *, core=False, daemon=False, model=False):
-    if sum((core, daemon, model)) > 1:
+def has_switch(mid, *, core=False, daemon=False, model=False, sdk=False, deploy=False):
+    if sum((core, daemon, model, sdk, deploy)) > 1:
         raise ValueError("a mutation has exactly one implementation owner")
-    if model:
+    if sdk:
+        cfg, source = "sumeragi_sdk_mutation", REPO / "crates" / "iroha" / "src"
+    elif deploy:
+        cfg, source = "sumeragi_deploy_mutation", REPO / "crates" / "iroha_deploy" / "src"
+    elif model:
         cfg, source = "sumeragi_model_mutation", REPO / "crates" / "iroha_data_model" / "src"
     elif daemon:
         cfg, source = "sumeragi_daemon_mutation", REPO / "crates" / "irohad" / "src"
@@ -1089,7 +1154,11 @@ def evaluate(args, target_dir, mu):
         result.update(verdict="error", reason="no named test selectors")
         return result
     started = time.monotonic()
-    if getattr(args, "model", False):
+    if getattr(args, "sdk", False):
+        present = has_switch(mu.id, sdk=True)
+    elif getattr(args, "deploy", False):
+        present = has_switch(mu.id, deploy=True)
+    elif getattr(args, "model", False):
         present = has_switch(mu.id, model=True)
     elif getattr(args, "daemon", False):
         present = has_switch(mu.id, daemon=True)
@@ -1166,6 +1235,10 @@ def main():
                        help="qualify registered irohad_lib integration rules with daemon unit tests")
     owner.add_argument("--model", action="store_true",
                        help="qualify registered DataModel resource-custody rules with Model unit tests in the test profile")
+    owner.add_argument("--sdk", action="store_true",
+                       help="qualify registered SDK public-read rules with owning unit tests in the test profile")
+    owner.add_argument("--deploy", action="store_true",
+                       help="qualify registered Deploy managed-bootstrap custody rules with owning unit tests in the test profile")
     parser.add_argument("--only", help="comma-separated mutation ids (default: all)")
     parser.add_argument("--jobs", type=int, default=1,
                         help="parallel jobs, each with its own target sub-directory")
@@ -1174,7 +1247,7 @@ def main():
     parser.add_argument("--seeds", type=int, default=200,
                         help="SUMERAGI_SIM_SEEDS for the scenarios (default 200)")
     parser.add_argument("--target-dir", type=Path,
-                        help="dedicated target root (default: target/sumeragi-mutants; --core: target/sumeragi-core-mutants; --daemon: target/sumeragi-daemon-mutants; --model: target/sumeragi-model-mutants)")
+                        help="dedicated target root (default: target/sumeragi-mutants; --core: target/sumeragi-core-mutants; --daemon: target/sumeragi-daemon-mutants; --model: target/sumeragi-model-mutants; --sdk: target/sumeragi-sdk-mutants; --deploy: target/sumeragi-deploy-mutants)")
     parser.add_argument("--skip-baseline", action="store_true",
                         help="do not run the unmutated build")
     parser.add_argument("--strict", action="store_true",
@@ -1197,14 +1270,17 @@ def main():
     if args.strict and args.skip_baseline:
         parser.error("--strict requires the unmutated baseline")
     if args.target_dir is None:
-        name = ("sumeragi-model-mutants" if args.model else
+        name = ("sumeragi-sdk-mutants" if args.sdk else
+                "sumeragi-deploy-mutants" if args.deploy else
+                "sumeragi-model-mutants" if args.model else
                 "sumeragi-daemon-mutants" if args.daemon else
                 "sumeragi-core-mutants" if args.core else "sumeragi-mutants")
         args.target_dir = REPO / "target" / name
     args.target_dir = args.target_dir.resolve()
     if args.core_profile is not None and not args.core:
         parser.error("--core-profile requires --core; protocol and daemon qualification use release")
-    table = (MODEL_MUTATIONS if args.model else DAEMON_MUTATIONS if args.daemon else
+    table = (SDK_MUTATIONS if args.sdk else DEPLOY_MUTATIONS if args.deploy else
+             MODEL_MUTATIONS if args.model else DAEMON_MUTATIONS if args.daemon else
              CORE_MUTATIONS if args.core else MUTATIONS)
     by_id = index_mutations(table)
     if min(args.timeout_build, args.timeout_test, args.timeout_scenario) < 0:
@@ -1290,7 +1366,7 @@ def main():
         "generated": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "command": sys.argv,
         "package": package_options(args)[0],
-        "profile": ("test" if args.model else
+        "profile": ("test" if args.model or args.sdk or args.deploy else
                     (args.core_profile or "test") if args.core else "release"),
         "seeds": None if args.fast else args.seeds,
         "fast": args.fast,

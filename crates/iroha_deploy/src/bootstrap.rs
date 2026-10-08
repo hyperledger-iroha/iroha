@@ -25,6 +25,8 @@ use crate::verify::finality::FinalityVerifier;
 
 mod runtime;
 pub use runtime::ParentFinalityStore;
+mod amx_sources;
+pub(crate) use amx_sources::{AmxSourceSelection, ParentBootstrapSources};
 mod profile;
 mod transport;
 pub use profile::{

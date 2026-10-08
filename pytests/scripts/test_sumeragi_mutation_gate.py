@@ -2597,6 +2597,8 @@ MODEL_NAMES = {
     "DM5": "amx_prepare_streaming_allocations::transaction_id_streaming_matches_canonical_frames_without_heap_allocations",
     "DM6": "amx_prepare_streaming_allocations::begin_matches_borrows_original_graph_without_heap_allocations",
     "DM7": "amx_prepare_streaming_allocations::native_transfer_effects_stream_exact_monetary_fields_without_heap_allocations",
+    "DM8": "sumeragi_amx::tests::sumeragi_amx_expiry_refusal_and_unwind_preserve_original_pending_graph",
+    "DM9": "sumeragi_amx::tests::sumeragi_amx_encoding_keeps_exact_physical_allocator_refusal",
 }
 MODEL_ALLOCATION_OBSERVER = "amx_prepare_streaming_allocations::observer_counts_all_three_allocation_routes_and_resets_after_unwind"
 
@@ -2628,7 +2630,7 @@ def test_model_mutations_have_owning_source_hooks_named_controls_and_exact_spec_
         assert not gate.has_switch(identifier, daemon=True)
     assert "mutation-testing = []" in (model / "Cargo.toml").read_text()
     assert "mod model_mutation_guard;" in (model / "src/lib.rs").read_text()
-    assert 'const IDS: &[&str] = &["DM1", "DM2", "DM3", "DM4", "DM5", "DM6", "DM7"];' in (model / "build.rs").read_text()
+    assert tuple(re.findall(r'"(DM\d+)"', (model / "build.rs").read_text().split("const IDS:", 1)[1].split(";", 1)[0])) == tuple(MODEL_NAMES)
 
 
 def test_model_streaming_mutations_keep_exact_heap_observation_and_fresh_thread_inputs():
@@ -2700,7 +2702,7 @@ def test_original_begin_depth_mutation_bypasses_only_its_participant_payload_con
     assert source[end:].startswith('                let deadline = fixed_field::<u64, _>')
 
 
-@pytest.mark.parametrize("selected", [None, "DM1", "DM4", "DM5", "DM6", "DM7"])
+@pytest.mark.parametrize("selected", [None, "DM1", "DM4", "DM5", "DM6", "DM7", "DM8", "DM9"])
 def test_model_actual_cargo_argv_profile_and_isolated_environment(monkeypatch, tmp_path, selected):
     captured = {}
     class Process:
@@ -2763,7 +2765,7 @@ def test_model_main_keeps_positive_baseline_exact_report_and_default_caps(monkey
     assert gate.main() == expected
     assert len(captured) == 1
     args, directory, ids = captured[0]
-    assert ids == ("DM1", "DM2", "DM3", "DM4", "DM5", "DM6", "DM7")
+    assert ids == tuple(MODEL_NAMES)
     assert directory == target / "job0"
     assert (args.timeout_build, args.timeout_test, args.timeout_scenario, args.seeds) == (1200, 900, 3600, 200)
     assert not args.fast and not args.skip_baseline
@@ -2771,7 +2773,7 @@ def test_model_main_keeps_positive_baseline_exact_report_and_default_caps(monkey
     assert report["package"] == "iroha_data_model" and report["profile"] == "test"
     assert report["summary"]["baseline"] == baseline
     assert [result["id"] for result in report["mutations"]] == list(ids)
-    assert report["summary"]["mutations"] == 7
+    assert report["summary"]["mutations"] == len(MODEL_NAMES)
 
 
 @pytest.mark.parametrize("arguments", [
@@ -2838,6 +2840,8 @@ def model_build_script(tmp_path_factory):
     (True, "DM5", "", True, True), (False, "DM5", "", True, False),
     (True, "DM6", "", True, True), (False, "DM6", "", True, False),
     (True, "DM7", "", True, True), (False, "DM7", "", True, False),
+    (True, "DM8", "", True, True), (False, "DM8", "", True, False),
+    (True, "DM9", "", True, True), (False, "DM9", "", True, False),
     (True, "unknown_rule", "", False, False), (True, "HC1", "", False, False),
     (False, None, '--cfg\x1fsumeragi_model_mutation="DM1"', False, False),
     (True, "DM1", '--cfg\x1fsumeragi_model_mutation="DM2"', False, False),
@@ -2894,3 +2898,383 @@ def test_native_amx_worker_retry_rules_have_exact_owning_selectors(mutation, nam
     assert "fn " + name + "(" in control
     implementation = (ROOT / "crates/iroha_core/src/sumeragi/amx/native/retry.rs").read_text()
     assert 'all(test, sumeragi_core_mutation = "' + mutation + '")' in implementation
+
+
+@pytest.mark.parametrize("mutation,names", [
+    ("HC153", ("state::storage_transactions::authority::tests::original_publication_pair_matches_real_advance_replace_and_repeat",)),
+    ("HC154", ("state::storage_transactions::authority::tests::original_publication_pair_matches_real_advance_replace_and_repeat",)),
+    ("HC155", (
+        "state::storage_transactions::block::capture::publication_capture_phase_tests::original_membership_cut_refuses_started_published_unwind_and_completed_phases",
+        "state::storage_transactions::block::detached_publication::publication_capture_phase_tests::detached_membership_cut_refuses_started_published_unwind_and_released_phases",
+    )),
+    ("HC156", ("state::authority_registry::complete::transaction_membership::tests::original_membership_scope_partial_foreign_and_released_owners_refuse",)),
+    ("HC157", ("state::authority_registry::complete::transaction_membership::tests::original_membership_scope_partial_foreign_and_released_owners_refuse",)),
+    ("HC158", ("state::authority_registry::complete::transaction_membership::tests::original_membership_scope_partial_foreign_and_released_owners_refuse",)),
+])
+def test_original_membership_capture_mutations_have_exact_owning_hooks_and_controls(mutation, names):
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mutation]
+    assert rule.tests == names
+    assert not rule.scenarios
+    assert gate.has_switch(mutation, core=True)
+    assert not gate.has_switch(mutation)
+    assert not gate.has_switch(mutation, model=True)
+    assert not gate.has_switch(mutation, daemon=True)
+    source = ROOT / "crates/iroha_core/src"
+    hook_owners = {path.relative_to(source).as_posix() for path in source.rglob("*.rs")
+                   if re.search(r'sumeragi_core_mutation\s*=\s*"' + mutation + r'"', path.read_text())}
+    implementation_path = "state/authority_registry/complete/transaction_membership.rs" if mutation in {"HC156", "HC157", "HC158"} else "state/storage_transactions.rs"
+    assert hook_owners == {implementation_path}
+    if mutation == "HC155":
+        source_files = (
+            "state/storage_transactions/block/capture.rs",
+            "state/storage_transactions/block/detached_publication.rs",
+        )
+    elif mutation in {"HC156", "HC157", "HC158"}:
+        source_files = ("state/authority_registry/complete/transaction_membership_tests.rs",)
+    else:
+        source_files = ("state/storage_transactions/authority/tests.rs",)
+    for name, path in zip(names, source_files, strict=True):
+        assert "fn " + name.rsplit("::", 1)[-1] + "(" in (source / path).read_text()
+    implementation = (source / implementation_path).read_text()
+    assert 'all(test, sumeragi_core_mutation = "' + mutation + '")' in implementation
+    row = re.search(r"^\| " + mutation + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert row is not None
+    assert all(name.rsplit("::", 1)[-1] in row.group() for name in names)
+
+
+
+def test_completed_native_amx_proof_has_original_graph_retry_mutation():
+    name = "persisted_amx_completed_proof_retains_exact_graph_through_final_namespace_refusal"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC159"]
+    assert rule.tests == ("sumeragi::amx::proof_tests::" + name,)
+    assert not rule.scenarios
+    assert gate.has_switch("HC159", core=True)
+    assert not gate.has_switch("HC159")
+    assert not gate.has_switch("HC159", model=True)
+    assert not gate.has_switch("HC159", daemon=True)
+    implementation = (ROOT / "crates/iroha_core/src/query/native_receipts/amx_read.rs").read_text()
+    assert "portable: Option<Option<AllocatedAmxRecordProofV1>>" in implementation
+    assert 'all(test, sumeragi_core_mutation = "HC159")' in implementation
+    assert "if namespace.is_err()" in implementation
+    assert implementation.index("namespace?;") < implementation.index('.take()\n            .ok_or(Error::Source("completed portable proof is not retained"))')
+    control = (ROOT / "crates/iroha_core/src/sumeragi/amx/proof_tests.rs").read_text()
+    assert "fn " + name + "(" in control
+    assert "NativeContextArchiveError::Io" in control
+    assert "crate::test_allocations::allocations_during" in control
+    assert "norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX)" in control
+    assert "completed proof fields must refund only after their last owner" in control
+    assert "fs::rename(&self.retained, &self.original)" in control
+
+
+
+def test_pending_penalty_physical_key_refusal_has_exact_original_owner_and_control():
+    name = "pending_penalty_peer_key_allocator_refusal_preserves_original_source_and_retries"
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC160"]
+    assert rule.tests == ("sumeragi::penalties::tests::" + name,)
+    assert not rule.scenarios
+    assert gate.has_switch("HC160", core=True)
+    assert not gate.has_switch("HC160")
+    assert not gate.has_switch("HC160", model=True)
+    assert not gate.has_switch("HC160", daemon=True)
+    source = (ROOT / "crates/iroha_core/src/sumeragi/penalties.rs").read_text()
+    implementation = source.split("    fn parent_snapshot(", 1)[1].split("    fn ", 1)[0]
+    assert "offender.peer_id.clone()" not in implementation
+    assert ".try_clone_from_charge(budget, charge)" in implementation
+    assert 'all(test, sumeragi_core_mutation = "HC160")' in implementation
+    assert "requested_bytes: layout.size()" in implementation
+    assert "PeerId::new(peer_key)" in implementation
+    assert "unsafe { owned.into_allocation_parts() }" in implementation
+    assert "fn " + name + "(" in source
+    control = source.split("    fn " + name + "() {", 1)[1].split("    #[test]", 1)[0]
+    assert "crate::test_allocations::refuse_one_layout_during(layout" in control
+    assert "EvidencePreparationError::Allocator { requested_bytes }" in control
+    assert "charge.belongs_to(budget)" in control
+    assert "charge.layout(), layout" in control
+    assert "last-owner drop refunds actual pending fields" in control
+    assert "original_pointer" in control
+
+# These families belong to actual SDK/Deploy unit-test compilations. The production
+# registry/feature hooks below never inject a cfg into Core or a dependency.
+MANAGED_BOOTSTRAP_OWNERS = (
+    ("sdk", "iroha", "SDK", "sumeragi_sdk_mutation", "SUMERAGI_SDK_MUTATION"),
+    ("deploy", "iroha_deploy", "DEP", "sumeragi_deploy_mutation", "SUMERAGI_DEPLOY_MUTATION"),
+)
+
+
+def test_managed_bootstrap_owned_registry_has_real_hooks_and_original_named_controls():
+    expected = {
+        "sdk": {"SDK1": "public_norito_reads_refuse_missing_foreign_media_and_elapsed_requests"},
+        "deploy": {
+            "DEP1": "managed_amx_sources_refuse_partial_removed_and_substituted_custody_without_http_repair",
+            "DEP2": "managed_amx_sources_bind_original_file_identity_and_exact_capsule_inventory",
+            "DEP3": "managed_amx_sources_recheck_release_after_retained_authentication_without_refetch",
+            "DEP4": "managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publication",
+        },
+    }
+    for owner, package, _, cfg, environment in MANAGED_BOOTSTRAP_OWNERS:
+        source = ROOT / "crates" / package
+        table = getattr(gate, owner.upper() + "_MUTATIONS")
+        indexed = gate.index_mutations(table)
+        assert {identifier: rule.tests[0].rsplit("::", 1)[-1] for identifier, rule in indexed.items()} == expected[owner]
+        texts = "\n".join(path.read_text() for path in (source / "src").rglob("*.rs"))
+        assert set(re.findall(rf'{cfg}\s*=\s*"([^"]+)"', texts)) == set(indexed)
+        for identifier, rule in indexed.items():
+            assert rule.tests and rule.scenarios == ()
+            assert gate.has_switch(identifier, **{owner: True})
+            for selector in rule.tests:
+                assert f'fn {selector.rsplit("::", 1)[-1]}(' in texts
+            assert f'all(test, {cfg} = "{identifier}")' in texts
+            assert not gate.has_switch(identifier, **{"deploy" if owner == "sdk" else "sdk": True})
+        baseline_names = {selector.rsplit("::", 1)[-1] for rule in table for selector in rule.tests}
+        assert baseline_names == set(expected[owner].values()) | (
+            {"public_norito_reads_select_only_fixed_media_and_retain_original_public_policies"}
+            if owner == "sdk" else {
+                "managed_amx_sources_keep_original_g1_h2_across_advanced_checkpoint_and_reopen",
+                "managed_amx_sources_feed_real_private_staging_and_exact_retained_generation",
+            }
+        )
+        manifest = (source / "Cargo.toml").read_text()
+        assert "mutation-testing = []" in manifest
+        assert "/mutation-testing" not in manifest
+        build = (source / "build.rs").read_text()
+        assert f'const ENV: &str = "{environment}";' in build
+        assert f'const CFG: &str = "{cfg}";' in build
+        assert 'CARGO_ENCODED_RUSTFLAGS' in build and '!rustflags.contains(CFG)' in build
+        assert 'CARGO_FEATURE_MUTATION_TESTING' in build
+        assert 'IDS.contains(&id.as_str())' in build and 'mentions(Path::new("src"), &needle)' in build
+        guard = (source / "src" / f"{owner}_mutation_guard.rs").read_text()
+        assert '#[cfg(all(feature = "mutation-testing", not(test)))]' in guard
+        assert "mutation-testing is test-only" in guard and "compile_error!" in guard
+        assert f'mod {owner}_mutation_guard;' in (source / "src/lib.rs").read_text()
+
+
+@pytest.mark.parametrize("owner,package,prefix,cfg,environment", MANAGED_BOOTSTRAP_OWNERS)
+@pytest.mark.parametrize("selected", [False, True])
+def test_managed_bootstrap_cargo_preserves_exact_owner_profile_caps_and_isolates_all_selectors(
+    monkeypatch, tmp_path, owner, package, prefix, cfg, environment, selected
+):
+    identifier = prefix + "1" if selected else None
+    captured = {}
+    class Process:
+        returncode = 0
+        def communicate(self, *, timeout):
+            assert timeout == 900
+            return "original isolated native output", None
+    def popen(command, **options):
+        captured.update(command=command, options=options)
+        return Process()
+    variables = ("SUMERAGI_MUTATION", "SUMERAGI_CORE_MUTATION", "SUMERAGI_DAEMON_MUTATION",
+                 "SUMERAGI_MODEL_MUTATION", "SUMERAGI_SDK_MUTATION", "SUMERAGI_DEPLOY_MUTATION")
+    for variable in variables:
+        monkeypatch.setenv(variable, "foreign-inherited-rule")
+    for variable in ("SUMERAGI_SIM_SEED", "SUMERAGI_SIM_SEED_BASE", "SUMERAGI_SIM_SEEDS"):
+        monkeypatch.setenv(variable, "7")
+    monkeypatch.setattr(gate.subprocess, "Popen", popen)
+    args = SimpleNamespace(**{owner: True})
+    code, output, elapsed = gate.cargo_test(args, tmp_path, identifier, ["original::named"], None, 900, tmp_path / "run.log")
+    assert code == 0 and output == "original isolated native output" and elapsed >= 0
+    assert captured["command"] == ["cargo", "test", "--locked", "-p", package, "--profile", "test",
+                                   "--features", "mutation-testing", "--lib", "--", "original::named"]
+    options = captured["options"]
+    assert options["cwd"] == ROOT and options["start_new_session"] is True
+    assert options["env"]["CARGO_TARGET_DIR"] == str(tmp_path)
+    for variable in variables:
+        assert options["env"].get(variable) == (identifier if variable == environment else None)
+    assert all(variable not in options["env"] for variable in ("SUMERAGI_SIM_SEED", "SUMERAGI_SIM_SEED_BASE", "SUMERAGI_SIM_SEEDS"))
+    assert cfg not in " ".join(captured["command"])
+
+
+@pytest.mark.parametrize("owner,package,prefix,cfg,environment", MANAGED_BOOTSTRAP_OWNERS)
+@pytest.mark.parametrize("status,verdict", [("fail", "killed_by_test"), ("pass", "survived"),
+    ("execution-error", "error"), ("build-error", "error"), ("missing-test", "error"), ("timeout", "error")])
+def test_managed_bootstrap_kill_requires_actual_complete_named_failure(
+    monkeypatch, tmp_path, owner, package, prefix, cfg, environment, status, verdict
+):
+    observed = []
+    def switch(identifier, **owners):
+        observed.append(owners)
+        return owners == {owner: True} and identifier == prefix + "1"
+    monkeypatch.setattr(gate, "has_switch", switch)
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    calls = []
+    def named(*args):
+        calls.append(args)
+        return gate.Step(status=status)
+    monkeypatch.setattr(gate, "run_step", named)
+    args = SimpleNamespace(**{owner: True}, target_dir=tmp_path, timeout_test=900, fast=False)
+    rule = getattr(gate, owner.upper() + "_MUTATIONS")[0]
+    result = gate.evaluate(args, tmp_path, rule)
+    assert result["verdict"] == verdict and result["id"] == prefix + "1"
+    assert observed == [{owner: True}] and len(calls) == 1
+    assert calls[0][2:6] == (rule.id, rule.tests, None, 900)
+    assert "scenario" not in result
+
+
+@pytest.mark.parametrize("owner,package,prefix,cfg,environment", MANAGED_BOOTSTRAP_OWNERS)
+@pytest.mark.parametrize("baseline,expected", [("pass", 0), ("fail", 1), ("error", 1)])
+def test_managed_bootstrap_main_keeps_baseline_all_rules_default_caps_and_truthful_report(
+    monkeypatch, tmp_path, owner, package, prefix, cfg, environment, baseline, expected
+):
+    target = tmp_path / owner
+    monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", "--" + owner, "--jobs", "1", "--strict", "--target-dir", str(target)])
+    calls = []
+    def positive(args, directory, rules):
+        calls.append((args, directory, tuple(rule.id for rule in rules)))
+        return {"id": "baseline", "verdict": baseline}
+    monkeypatch.setattr(gate, "evaluate_baseline", positive)
+    monkeypatch.setattr(gate, "evaluate", lambda args, directory, rule: {"id": rule.id, "verdict": "killed_by_test"})
+    assert gate.main() == expected
+    assert len(calls) == 1
+    args, directory, identifiers = calls[0]
+    assert identifiers == tuple(rule.id for rule in getattr(gate, owner.upper() + "_MUTATIONS"))
+    assert directory == target / "job0"
+    assert (args.timeout_build, args.timeout_test, args.timeout_scenario, args.seeds) == (1200, 900, 3600, 200)
+    assert not args.fast and not args.skip_baseline
+    report = json.loads((target / "report.json").read_text())
+    assert report["package"] == package and report["profile"] == "test"
+    assert report["summary"]["baseline"] == baseline
+    assert [row["id"] for row in report["mutations"]] == list(identifiers)
+    assert report["summary"]["mutations"] == len(identifiers)
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--sdk", "--deploy"], ["--sdk", "--core"], ["--sdk", "--model"], ["--sdk", "--daemon"],
+    ["--deploy", "--core"], ["--deploy", "--model"], ["--deploy", "--daemon"],
+    ["--sdk", "--core-profile", "test"], ["--deploy", "--core-profile", "test"],
+    ["--sdk", "--only", "DEP1"], ["--deploy", "--only", "SDK1"],
+    ["--core", "--only", "DEP1"], ["--model", "--only", "SDK1"], ["--only", "SDK1"],
+    ["--sdk", "--strict", "--skip-baseline"], ["--deploy", "--strict", "--skip-baseline"],
+])
+def test_managed_bootstrap_cli_refuses_cross_owner_and_skipped_baseline_before_native_launch(monkeypatch, tmp_path, arguments):
+    target = tmp_path / "refused"
+    monkeypatch.setattr(sys, "argv", ["sumeragi_mutation_gate.py", *arguments, "--target-dir", str(target)])
+    with pytest.raises(SystemExit) as error:
+        gate.main()
+    assert error.value.code == 2 and not target.exists()
+
+
+@pytest.mark.parametrize("owner,package,prefix,cfg,environment", MANAGED_BOOTSTRAP_OWNERS)
+def test_managed_bootstrap_nightly_owns_all_rules_and_ordinary_feature_policy_remains_closed(owner, package, prefix, cfg, environment):
+    source = (ROOT / ".github/workflows/nightly_sumeragi.yml").read_text()
+    match = re.search(rf"(?ms)^  {owner}_mutation_gate:\n(.*?)(?=^  [a-z_]+:|\Z)", source)
+    assert match is not None
+    job = match.group(1)
+    assert f"run: python3 scripts/sumeragi_mutation_gate.py --{owner} --jobs 1 --strict\n" in job
+    assert not any(argument in job for argument in ("--only", "--skip-baseline", "--fast", "--timeout-build", "--timeout-test", "--timeout-scenario"))
+    assert f"target/sumeragi-{owner}-mutants/report.json" in job
+    assert f"target/sumeragi-{owner}-mutants/logs" in job
+    assert 'CARGO_BUILD_JOBS: "2"' in job and "if: always()" in job
+    require_pinned_sumeragi_toolchain(job)
+    ci_spec = importlib.util.spec_from_file_location("managed_bootstrap_rust_ci", ROOT / "scripts/rust_ci.py")
+    module = importlib.util.module_from_spec(ci_spec)
+    sys.modules[ci_spec.name] = module
+    ci_spec.loader.exec_module(module)
+    assert module.MUTATION_FEATURE_OWNERS == {"iroha_data_model", "iroha_core", "irohad_lib", "iroha_sumeragi", "iroha", "iroha_deploy"}
+
+
+# Genuine standalone compiler guard checks are part of the subsequent owner gate review.
+# They are intentionally not executed by an ignored source-only preparation.
+@pytest.mark.parametrize("owner,package,prefix,cfg,environment", MANAGED_BOOTSTRAP_OWNERS)
+@pytest.mark.parametrize("test_build,mutation_feature,accepted", [
+    (False, False, True), (True, False, True), (True, True, True), (False, True, False),
+])
+def test_managed_bootstrap_compiler_guard_rejects_mutation_feature_in_dependencies(tmp_path, owner, package, prefix, cfg, environment, test_build, mutation_feature, accepted):
+    guard = ROOT / "crates" / package / "src" / f"{owner}_mutation_guard.rs"
+    command = ["rustc", "--edition=2024", "--crate-type=lib", "--emit=metadata", str(guard), "-o", str(tmp_path / "guard.rmeta")]
+    if test_build:
+        command += ["--cfg", "test"]
+    if mutation_feature:
+        command += ["--cfg", 'feature="mutation-testing"']
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) == accepted, result.stderr
+    if not accepted:
+        assert "mutation-testing is test-only" in result.stderr
+
+
+@pytest.fixture(scope="session", params=MANAGED_BOOTSTRAP_OWNERS)
+def managed_bootstrap_compiler_build_script(request, tmp_path_factory):
+    owner, package, prefix, cfg, environment = request.param
+    executable = tmp_path_factory.mktemp(owner + "-build-guard") / "build-script"
+    result = subprocess.run(["rustc", "--edition=2024", str(ROOT / "crates" / package / "build.rs"), "-o", str(executable)], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    return request.param, executable
+
+
+@pytest.mark.parametrize("feature,selection,flags,accepted,emitted", [
+    (False, None, "", True, False), (False, "first", "", True, False),
+    (False, "unknown", "", True, False), (True, None, "", True, False),
+    (True, "", "", True, False), (True, "first", "", True, True),
+    (True, "unknown", "", False, False), (False, None, "injected", False, False),
+    (True, "first", "injected", False, False),
+])
+def test_managed_bootstrap_compiler_build_script_selects_only_registered_owning_cfg(managed_bootstrap_compiler_build_script, feature, selection, flags, accepted, emitted):
+    (owner, package, prefix, cfg, environment), executable = managed_bootstrap_compiler_build_script
+    identifier = prefix + "1" if selection == "first" else selection
+    variables = dict(os.environ)
+    variables.pop("CARGO_FEATURE_MUTATION_TESTING", None)
+    variables.pop(environment, None)
+    variables["CARGO_ENCODED_RUSTFLAGS"] = f'--cfg\x1f{cfg}="{prefix}1"' if flags else ""
+    if feature:
+        variables["CARGO_FEATURE_MUTATION_TESTING"] = "1"
+    if identifier is not None:
+        variables[environment] = identifier
+    result = subprocess.run([str(executable)], cwd=ROOT / "crates" / package, env=variables, capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) == accepted, result.stderr
+    assert (f'cargo:rustc-cfg={cfg}="{identifier}"' in result.stdout) == emitted
+    assert "cargo:rustc-check-cfg=" in result.stdout
+
+@pytest.mark.parametrize("owner,package,prefix,cfg,environment", MANAGED_BOOTSTRAP_OWNERS)
+@pytest.mark.parametrize("forwarded", [False, True])
+def test_managed_bootstrap_ordinary_feature_matrix_excludes_only_the_owned_selector(tmp_path, owner, package, prefix, cfg, environment, forwarded):
+    spec = importlib.util.spec_from_file_location("managed_bootstrap_feature_matrix", ROOT / "scripts/rust_ci.py")
+    ci = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = ci
+    spec.loader.exec_module(ci)
+    (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers = ["owner"]\n')
+    directory = tmp_path / "owner"
+    directory.mkdir()
+    (directory / "Cargo.toml").write_text(
+        f'[package]\nname = "{package}"\nversion = "1.0.0"\n'
+        '[features]\nmutation-testing = []\n'
+        'default = ["production"]\nproduction = []\ntest-fixtures = []\n'
+        + ('forbidden = ["dependency/mutation-testing"]\n' if forwarded else '')
+    )
+    if forwarded:
+        with pytest.raises(ci.ClassificationError, match="forwards a test-only mutation"):
+            ci.workspace_check_features(tmp_path)
+    else:
+        assert ci.workspace_check_features(tmp_path) == {package: ("default", "production", "test-fixtures")}
+
+
+@pytest.mark.parametrize("owners", [
+    {"sdk": True, "core": True}, {"sdk": True, "model": True},
+    {"sdk": True, "daemon": True}, {"sdk": True, "deploy": True},
+    {"deploy": True, "core": True}, {"deploy": True, "model": True},
+    {"deploy": True, "daemon": True},
+])
+def test_managed_bootstrap_source_selector_refuses_more_than_one_actual_owner(owners):
+    with pytest.raises(ValueError, match="exactly one implementation owner"):
+        gate.has_switch("SDK1", **owners)
+
+
+@pytest.mark.parametrize("mutation,name,core", [
+    ('DM8', 'sumeragi_amx::tests::sumeragi_amx_expiry_refusal_and_unwind_preserve_original_pending_graph', False),
+    ('DM9', 'sumeragi_amx::tests::sumeragi_amx_encoding_keeps_exact_physical_allocator_refusal', False),
+    ('HC161', 'sumeragi::amx::tests::amx_deadline_record_refusal_keeps_original_pending_state_and_typed_retry', True),
+    ("HC162", "block::valid::tests::amx_deadline_finalizer_preserves_exact_local_refusal_without_rejection", True),
+])
+def test_amx_deadline_retry_mutations_have_exact_owner_and_native_control(mutation, name, core):
+    rules = gate.CORE_MUTATIONS if core else gate.MODEL_MUTATIONS
+    rule = gate.index_mutations(rules)[mutation]
+    assert rule.tests == (name,)
+    assert not rule.scenarios
+    assert gate.has_switch(mutation, core=core, model=not core)
+    assert not gate.has_switch(mutation, core=not core, model=core)
+    assert not gate.has_switch(mutation)
+    assert not gate.has_switch(mutation, daemon=True)
+    owner = "iroha_core" if core else "iroha_data_model"
+    source = "\n".join(p.read_text() for p in (ROOT / "crates" / owner / "src").rglob("*.rs"))
+    assert "fn " + name.rsplit("::", 1)[-1] + "(" in source
+    rows = re.findall(r"^\| " + mutation + r" \| (.+)$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
+    assert len(rows) == 1
+    assert name.rsplit("::", 1)[-1] in rows[0]

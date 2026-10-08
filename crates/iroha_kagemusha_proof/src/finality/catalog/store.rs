@@ -253,11 +253,14 @@ fn publish_exact(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), Error> {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|_| Error::Artifact)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary).map_err(|_| Error::Artifact)?;
     file.write_all(bytes).map_err(|_| Error::Artifact)?;
     file.sync_all().map_err(|_| Error::Artifact)?;
     // Hard-link publication refuses replacement, including concurrent changes.
@@ -284,7 +287,15 @@ impl DirectoryCatalog {
     /// Invalid finite bounds, existing path or filesystem failure.
     pub fn create(root: impl AsRef<Path>, limits: ImportLimits) -> Result<Self, Error> {
         check_limits(limits)?;
-        fs::create_dir(root.as_ref()).map_err(|_| Error::Artifact)?;
+        let mut directory = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt as _;
+            directory.mode(0o700);
+        }
+        directory
+            .create(root.as_ref())
+            .map_err(|_| Error::Artifact)?;
         Ok(Self {
             root: root.as_ref().to_path_buf(),
             limits,

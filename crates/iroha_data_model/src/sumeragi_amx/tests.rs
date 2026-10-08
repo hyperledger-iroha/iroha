@@ -871,8 +871,8 @@ fn sumeragi_amx_commit_needs_every_yes_by_the_deadline() {
         state.relay_prepared(40, &no).unwrap(),
         AmxRelayOutcome::Ignored
     );
-    assert!(state.expire(40).is_empty());
-    assert!(state.expire(41).is_empty());
+    assert!(expire_records(&mut state, 40).is_empty());
+    assert!(expire_records(&mut state, 41).is_empty());
     assert!(state.transaction(&x).is_none());
     // The dropped id can never be begun again: its deadline passed.
     assert!(state.begin(41, &tx).is_err());
@@ -881,6 +881,19 @@ fn sumeragi_amx_commit_needs_every_yes_by_the_deadline() {
         state.relay_prepared(42, &yes(DS1)).unwrap(),
         AmxRelayOutcome::Ignored
     );
+}
+
+/// Collect records only in the test oracle; production expiration streams them.
+fn expire_records(state: &mut SumeragiAmxState, height: u64) -> Vec<AmxDecisionV1> {
+    let mut records = Vec::new();
+    let count = state
+        .expire(height, |record| {
+            records.push(record);
+            Ok::<(), std::convert::Infallible>(())
+        })
+        .unwrap();
+    assert_eq!(count, records.len());
+    records
 }
 
 #[test]
@@ -926,8 +939,8 @@ fn sumeragi_amx_first_no_or_the_deadline_aborts() {
             .unwrap(),
         AmxRelayOutcome::Voted
     );
-    assert!(state.expire(30).is_empty());
-    let mut aborted = state.expire(31);
+    assert!(expire_records(&mut state, 30).is_empty());
+    let mut aborted = expire_records(&mut state, 31);
     aborted.sort();
     let mut expected = vec![
         AmxDecisionV1 {
@@ -943,7 +956,7 @@ fn sumeragi_amx_first_no_or_the_deadline_aborts() {
     assert_eq!(aborted, expected);
     assert!(state.transaction(&late_yes.id().unwrap()).is_none());
     assert!(state.transaction(&aborted_by_no.id().unwrap()).is_some());
-    assert!(state.expire(41).is_empty());
+    assert!(expire_records(&mut state, 41).is_empty());
     assert!(state.transactions.is_empty());
 }
 
@@ -1764,4 +1777,93 @@ pub fn allocated_amx_instruction_fixture() -> (
     .unwrap();
     assert_eq!(original.canonical(), &expected);
     (transaction, original, pool)
+}
+
+#[test]
+fn sumeragi_amx_expiry_refusal_and_unwind_preserve_original_pending_graph() {
+    let mut state = state_with(&[DS1, DS2]);
+    for (deadline, nonce) in [(20, 11), (20, 12), (30, 13)] {
+        state
+            .begin(10, &transaction(&[DS1, DS2], deadline, nonce))
+            .unwrap();
+    }
+    let before = state.clone();
+    let original_pointer = state.transactions.as_ptr();
+    let original_capacity = state.transactions.capacity();
+    let participants = state
+        .transactions
+        .iter()
+        .map(|entry| {
+            (
+                entry.begin.participants.as_ptr(),
+                entry.begin.participants.capacity(),
+                entry.yes.as_ptr(),
+                entry.yes.capacity(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = before
+        .transactions
+        .iter()
+        .filter(|entry| entry.begin.deadline < 21)
+        .map(|entry| AmxDecisionV1 {
+            tx: entry.begin.tx,
+            outcome: AmxOutcomeV1::Abort,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(expected.len(), 2);
+    let refusal = [0x19_u8, 0x96];
+    for fail_at in 0..2 {
+        let mut observed = Vec::new();
+        let error = state
+            .expire(21, |record| {
+                if observed.len() == fail_at {
+                    return Err(&refusal);
+                }
+                observed.push(record);
+                Ok(())
+            })
+            .expect_err("record refusal must preserve all original pending entries");
+        assert!(std::ptr::eq(error, &refusal));
+        assert_eq!(observed, expected[..fail_at]);
+        assert_eq!(state, before);
+        assert_eq!(state.transactions.as_ptr(), original_pointer);
+        assert_eq!(state.transactions.capacity(), original_capacity);
+        for (entry, (pointer, capacity, yes_pointer, yes_capacity)) in
+            state.transactions.iter().zip(&participants)
+        {
+            assert_eq!(entry.begin.participants.as_ptr(), *pointer);
+            assert_eq!(entry.begin.participants.capacity(), *capacity);
+            assert_eq!(entry.yes.as_ptr(), *yes_pointer);
+            assert_eq!(entry.yes.capacity(), *yes_capacity);
+        }
+    }
+    let mut observed = 0;
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = state.expire(21, |_| {
+            observed += 1;
+            assert!(observed != 2, "record writer unwind");
+            Ok::<(), std::convert::Infallible>(())
+        });
+    }));
+    assert!(unwind.is_err());
+    assert_eq!(state, before);
+    assert_eq!(state.transactions.as_ptr(), original_pointer);
+    assert_eq!(expire_records(&mut state, 21), expected);
+    assert_eq!(state.transactions.len(), 1);
+    assert_eq!(state.transactions[0].begin.deadline, 30);
+    assert!(expire_records(&mut state, 21).is_empty());
+}
+
+#[test]
+fn sumeragi_amx_encoding_keeps_exact_physical_allocator_refusal() {
+    let error = norito::Error::AllocationFailed { bytes: 57 };
+    assert_eq!(
+        super::encoding(&error),
+        AmxError::Resource(norito::core::DecodeResourceError::AllocationFailed { bytes: 57 })
+    );
+    assert!(matches!(
+        super::encoding(norito::Error::LengthMismatch),
+        AmxError::Encoding(_)
+    ));
 }

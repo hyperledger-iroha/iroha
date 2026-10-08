@@ -100,8 +100,8 @@ pub enum AmxError {
     /// A Norito encoding or decoding failure.
     #[error("AMX encoding: {0}")]
     Encoding(String),
-    /// The original decoder scope or allocator refused; no protocol verdict was produced.
-    #[error("local AMX decoder resource refusal: {0}")]
+    /// The original codec scope or allocator refused; no protocol verdict was produced.
+    #[error("local AMX codec resource refusal: {0}")]
     Resource(norito::core::DecodeResourceError),
 }
 
@@ -123,7 +123,14 @@ fn commitment_error(error: &crate::sumeragi_finality::CommitmentError) -> AmxErr
     }
 }
 
-fn encoding(error: impl std::fmt::Display) -> AmxError {
+fn encoding(error: impl std::borrow::Borrow<norito::Error>) -> AmxError {
+    let error = error.borrow();
+    if !cfg!(all(test, sumeragi_model_mutation = "DM9"))
+        && matches!(error, norito::Error::AllocationFailed { .. })
+        && let Some(resource) = error.decode_resource_error()
+    {
+        return AmxError::Resource(resource);
+    }
     AmxError::Encoding(error.to_string())
 }
 

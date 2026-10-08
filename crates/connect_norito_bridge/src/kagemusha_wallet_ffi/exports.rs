@@ -14,7 +14,7 @@ pub struct WalletResult {
     /// CloseLoads30; FeeClaim31/absent32; selected ledger tip33/absent34; fee payout acknowledged35.
     /// FeeClaim transport36; enrollment selection37/Apple originals38/custody acknowledgement39.
     /// Ledger instruction40/Unload confirmation42; retired result kinds41/43 are rejected.
-    /// Activation confirmed44/verifying45/not started46; UnloadClaim48.
+    /// Activation confirmed44/verifying45/not started46/rejected49; UnloadClaim48.
     /// Background29: phase/eligibility/backlog-known in detail; sequence is last observed backlog.
     /// CreditProjection47: exact typed header92 plus receiver original up to10000 bytes.
     /// Negative is failure.
@@ -465,6 +465,10 @@ mod setup_boundary_tests {
                     assert_eq!(signed, [0, 255, 7]);
                     (44, u128::from(u64::MAX), vec![10; 32])
                 }
+                setup::Setup::RetainActivationAttempt(signed) => {
+                    assert!(!signed.is_empty());
+                    (46, 0, Vec::new())
+                }
                 setup::Setup::ActivationProofProgress(signed) => {
                     assert_eq!(signed, [0, 255, 7]);
                     (46, 0, vec![])
@@ -599,6 +603,7 @@ mod setup_boundary_tests {
             (35, 44, u64::MAX, vec![10; 32]),
             (36, 45, u64::MAX, vec![11; 32]),
             (37, 46, 0, vec![]),
+            (46, 46, 0, vec![]),
             (38, 12, 0, vec![0xf3; 64]),
             (43, 47, 0, vec![0xc3; 92]),
             (
@@ -622,7 +627,8 @@ mod setup_boundary_tests {
                     high: u64::MAX,
                 };
             }
-            if matches!(selector, 2 | 3 | 16 | 17 | 21..=23 | 25 | 26 | 29 | 30 | 33..=37 | 45) {
+            if matches!(selector, 2 | 3 | 16 | 17 | 21..=23 | 25 | 26 | 29 | 30 | 33..=37 | 45 | 46)
+            {
                 request.first = original.as_ptr();
                 request.first_length = original.len();
             }
@@ -653,7 +659,7 @@ mod setup_boundary_tests {
                 crate::connect_norito_free(out.bytes);
             }
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 27);
+        assert_eq!(calls.load(Ordering::SeqCst), 28);
         let mut status = WalletResult::default();
         assert_eq!(
             unsafe {
@@ -664,7 +670,7 @@ mod setup_boundary_tests {
         assert_eq!((status.status, status.detail, status.length), (29, 0, 0));
         assert_eq!(
             calls.load(Ordering::SeqCst),
-            27,
+            28,
             "worker status does not acquire the wallet"
         );
         assert_failure(handle, &request(&zero, 19), INVALID);
@@ -673,7 +679,7 @@ mod setup_boundary_tests {
         }
         close(handle).unwrap();
         assert_failure(handle, &request(&zero, 0), CLOSED);
-        assert_eq!(calls.load(Ordering::SeqCst), 27);
+        assert_eq!(calls.load(Ordering::SeqCst), 28);
     }
     #[test]
     fn setup_c_routes_cancellation_and_every_envelope_form_to_the_same_owner() {

@@ -31,9 +31,10 @@ use iroha_core_zk::{
     },
 };
 use iroha_data_model::{
-    account::AccountId, block::decode_framed_signed_block,
+    account::AccountId,
+    block::decode_framed_signed_block,
     isi::kagemusha_wallet::KagemushaWalletLoadReceiptV1,
-    kagemusha::KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1,
+    kagemusha::{KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1, kagemusha_wallet_account_digest_v1},
     sumeragi_finality::SumeragiFinalityVerifier,
 };
 
@@ -67,8 +68,21 @@ impl Queue {
                 self.entries.remove(&key);
                 Err("previous proof attempt unavailable")
             }
-            None if self.entries.len() >= self.maximum => Err("proof worker capacity unavailable"),
             None => {
+                if self.entries.len() >= self.maximum {
+                    // Completed originals already live in the immutable journal. A
+                    // client that stopped polling must not permanently fill the queue.
+                    // Re-requesting an evicted result reacquires and verifies it again.
+                    let completed = self.entries.iter().find_map(|(key, status)| {
+                        (!matches!(status, Status::Pending)).then_some(*key)
+                    });
+                    if let Some(completed) = completed {
+                        self.entries.remove(&completed);
+                    }
+                }
+                if self.entries.len() >= self.maximum {
+                    return Err("proof worker capacity unavailable");
+                }
                 self.entries.insert(key, Status::Pending);
                 Ok(None)
             }
@@ -77,8 +91,9 @@ impl Queue {
 }
 
 /// One optional configured source owner, one proving worker and a finite request queue.
-/// Completed output stays bounded until read. Every subsequent retry reacquires and
-/// re-verifies the durable terminal original; no unbounded response cache is maintained.
+/// Completed output stays bounded and may be evicted to admit another request.
+/// Retries reacquire and reverify the durable terminal original; pending work is
+/// never evicted and there is no unbounded response cache.
 pub(super) struct FinalityService {
     scheme: [u8; 32],
     maximum_height: u64,
@@ -132,6 +147,9 @@ impl FinalityService {
         receipt: KagemushaWalletLoadReceiptV1,
     ) -> Result<Option<Vec<u8>>> {
         if receipt.scheme_id != self.scheme
+            || receipt.payer_account_digest
+                != kagemusha_wallet_account_digest_v1(&payer)
+                    .map_err(|_| "payer identity differs")?
             || !(2..=self.maximum_height).contains(&receipt.block_height)
         {
             return Err("receipt selection differs");
@@ -198,6 +216,9 @@ fn mount(
     if verifier.initial_epoch().network_id != *view.network_id() {
         return Err("actual network differs");
     }
+    // The verifier owns the exact signed genesis; do not pin the live ledger
+    // view throughout the independently authenticated proof-graph import.
+    drop(view);
     running(stop)?;
     ServerFinalityV1::open(
         &verifier,
@@ -335,6 +356,117 @@ fn prove(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test(flavor = "current_thread")]
+    async fn scheduling_binds_exact_payer_scheme_height_and_receipt_before_queueing() {
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_futures::supervisor::ShutdownSignal;
+        use std::{
+            sync::{atomic::AtomicUsize, mpsc},
+            time::Duration,
+        };
+        let payer = AccountId::new(
+            KeyPair::from_seed(vec![0x61; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let other = AccountId::new(
+            KeyPair::from_seed(vec![0x62; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        // DATA fixture only. The real worker has no production proving authority.
+        let receipt = KagemushaWalletLoadReceiptV1 {
+            version: 1,
+            scheme_id: [1; 32],
+            asset_digest: [2; 32],
+            wallet_id: [3; 32],
+            request_id: [4; 32],
+            ordinal: 1,
+            amount: 7,
+            online_charge: 0,
+            charge_quote: [0; 32],
+            transaction_hash: [5; 32],
+            block_height: 2,
+            payer_account_digest: kagemusha_wallet_account_digest_v1(&payer).unwrap(),
+        };
+        let (observed, receiver) = mpsc::sync_channel(1);
+        let (release, released) = mpsc::sync_channel(1);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let worker_calls = Arc::clone(&calls);
+        let worker = Arc::new(
+            worker::Worker::start(1, ServerFinalityCancellationV1::default(), move |job, _| {
+                worker_calls.fetch_add(1, Ordering::AcqRel);
+                observed
+                    .send((job.payer.clone(), job.receipt.clone(), job.key))
+                    .map_err(|_| "fixture observer stopped")?;
+                released.recv().map_err(|_| "fixture release stopped")?;
+                Ok(vec![7])
+            })
+            .unwrap(),
+        );
+        let shutdown = ShutdownSignal::new();
+        let supervisor = worker.supervise(shutdown.clone()).unwrap();
+        let service = FinalityService {
+            scheme: [1; 32],
+            maximum_height: 10,
+            worker,
+        };
+        assert!(service.read_or_schedule(other, receipt.clone()).is_err());
+        for changed in [
+            KagemushaWalletLoadReceiptV1 {
+                scheme_id: [6; 32],
+                ..receipt.clone()
+            },
+            KagemushaWalletLoadReceiptV1 {
+                block_height: 1,
+                ..receipt.clone()
+            },
+            KagemushaWalletLoadReceiptV1 {
+                block_height: 11,
+                ..receipt.clone()
+            },
+            KagemushaWalletLoadReceiptV1 {
+                amount: 0,
+                ..receipt.clone()
+            },
+        ] {
+            assert!(service.read_or_schedule(payer.clone(), changed).is_err());
+        }
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+        assert!(receiver.try_recv().is_err());
+        // Invalid selections must leave the sole queue slot available to the valid receipt.
+        assert_eq!(
+            service
+                .read_or_schedule(payer.clone(), receipt.clone())
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            service
+                .read_or_schedule(payer.clone(), receipt.clone())
+                .unwrap(),
+            None
+        );
+        let (actual_payer, actual_receipt, key) =
+            receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(actual_payer, payer);
+        assert_eq!(actual_receipt, receipt);
+        assert_eq!(key, receipt.receipt_digest().unwrap());
+        assert!(receiver.try_recv().is_err());
+        shutdown.send();
+        release.send(()).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), supervisor)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            result,
+            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+        ));
+        assert!(service.read_or_schedule(payer, receipt).is_err());
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        assert!(receiver.try_recv().is_err());
+    }
     #[test]
     fn queue_keeps_pending_exact_and_bounds_active_plus_unread_results() {
         let mut queue = Queue {
@@ -345,9 +477,18 @@ mod tests {
         assert_eq!(queue.observe([1; 32]).unwrap(), Some(None));
         assert!(queue.observe([2; 32]).is_err());
         queue.entries.insert([1; 32], Status::Ready(vec![1, 2, 3]));
-        assert!(queue.observe([2; 32]).is_err());
-        assert_eq!(queue.observe([1; 32]).unwrap(), Some(Some(vec![1, 2, 3])));
         assert_eq!(queue.observe([2; 32]).unwrap(), None);
+        assert!(
+            !queue.entries.contains_key(&[1; 32]),
+            "abandoned completed results do not exhaust capacity"
+        );
+        assert!(
+            queue.observe([1; 32]).is_err(),
+            "pending work is never evicted"
+        );
+        queue.entries.insert([2; 32], Status::Ready(vec![4, 5, 6]));
+        assert_eq!(queue.observe([2; 32]).unwrap(), Some(Some(vec![4, 5, 6])));
+        assert_eq!(queue.observe([1; 32]).unwrap(), None);
     }
     #[test]
     fn failed_work_is_not_completed_evidence_and_requires_an_explicit_retry() {
@@ -359,5 +500,11 @@ mod tests {
         assert!(queue.observe([1; 32]).is_err());
         assert!(queue.entries.is_empty());
         assert_eq!(queue.observe([1; 32]).unwrap(), None);
+        queue.entries.insert([1; 32], Status::Failed);
+        assert_eq!(queue.observe([2; 32]).unwrap(), None);
+        assert!(
+            !queue.entries.contains_key(&[1; 32]),
+            "abandoned failed work does not exhaust capacity"
+        );
     }
 }

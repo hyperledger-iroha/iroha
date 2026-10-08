@@ -13,6 +13,17 @@ use std::{
 
 const OWNER: &[u8] = b"KAGEMUSHA offline regenerable proving keys v1\n";
 
+fn private_new_file(path: &Path) -> Result<File, Error> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options.open(path).map_err(|_| Error::Artifact)
+}
+
 /// Driver-owned offline original inventory with an explicitly bounded PK working set.
 /// Descriptor/VK bytes and all original hashes/lengths remain immutable. Only
 /// regenerable PK payloads are evicted; a regenerated payload must match every
@@ -38,11 +49,7 @@ impl StreamingCatalog {
         Self::bounds(limits, working_bytes)?;
         let directory = DirectoryCatalog::create(&root, limits)?;
         let root = root.as_ref().to_path_buf();
-        let mut owner = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(root.join("offline-owner"))
-            .map_err(|_| Error::Artifact)?;
+        let mut owner = private_new_file(&root.join("offline-owner"))?;
         owner
             .write_all(OWNER)
             .and_then(|()| owner.sync_all())
@@ -140,11 +147,7 @@ impl StreamingCatalog {
             }
             fs::remove_file(&temporary).map_err(|_| Error::Artifact)?;
         }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|_| Error::Artifact)?;
+        let mut file = private_new_file(&temporary)?;
         file.write_all(&bytes)
             .and_then(|()| file.sync_all())
             .map_err(|_| Error::Artifact)?;

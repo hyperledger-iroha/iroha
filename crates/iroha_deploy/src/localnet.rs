@@ -108,7 +108,10 @@ mod private_root;
 pub(crate) use custody::sync_private_tree;
 pub(crate) use private_root::private_fee_policy;
 pub use private_root::{PrivateRootSpec, prepare_private_root};
-pub(crate) use private_root::{prepare_private_root_at, verify_retained as verify_private_root};
+pub(crate) use private_root::{
+    prepare_private_root_at, prepare_private_root_with_amx_at,
+    verify_retained as verify_private_root,
+};
 
 /// User-facing options for generating a bare-metal localnet.
 pub struct LocalnetOptions {

@@ -5462,6 +5462,20 @@ pub(crate) mod valid {
                 }
             }
         }
+        fn amx_deadline_error(
+            error: iroha_data_model::sumeragi_amx::AmxError,
+        ) -> BlockValidationError {
+            match error {
+                iroha_data_model::sumeragi_amx::AmxError::Resource(original)
+                    if !cfg!(all(test, sumeragi_core_mutation = "HC162")) =>
+                {
+                    BlockValidationError::StateStorageAdmission(
+                        crate::state::StateStorageAdmissionError::AmxDecode(original),
+                    )
+                }
+                other => Self::execution_context_error(other.to_string()),
+            }
+        }
         fn execution_context_error(message: impl Into<String>) -> BlockValidationError {
             BlockValidationError::ExecutionContextInvalid(message.into())
         }
@@ -6434,7 +6448,7 @@ pub(crate) mod valid {
                 // AMX deadline decisions (`specs/sumeragi.md` §11.5) are World writes too.
                 state
                     .advance_sumeragi_amx()
-                    .map_err(Self::execution_context_error)?;
+                    .map_err(Self::amx_deadline_error)?;
                 Self::validate_native_genesis_policy(source, state)?;
                 Self::finalize_owned_execution_metadata(
                     source,
@@ -6906,6 +6920,48 @@ pub(crate) mod valid {
         }
         include!("block/post_execution_tail_tests.rs");
         include!("block/sccp_call_site_tests.rs");
+        #[test]
+        fn amx_deadline_finalizer_preserves_exact_local_refusal_without_rejection() {
+            use iroha_data_model::sumeragi_amx::AmxError;
+            use norito::core::DecodeResourceError;
+
+            for original in [
+                DecodeResourceError::AllocationFailed { bytes: 57 },
+                DecodeResourceError::TotalAllocationExceeded {
+                    attempted: 99,
+                    limit: 73,
+                },
+            ] {
+                let mapped = ValidBlock::amx_deadline_error(AmxError::Resource(original));
+                assert!(matches!(
+                    &mapped,
+                    BlockValidationError::StateStorageAdmission(
+                        crate::state::StateStorageAdmissionError::AmxDecode(retained)
+                    ) if *retained == original
+                ));
+                assert_eq!(
+                    map_block_err_to_reason(&mapped),
+                    None,
+                    "unfinished local deadline output cannot emit a protocol rejection"
+                );
+            }
+            for semantic in [
+                AmxError::Encoding("invalid canonical decision".into()),
+                AmxError::Record("malformed decision"),
+            ] {
+                let expected = semantic.to_string();
+                let mapped = ValidBlock::amx_deadline_error(semantic);
+                assert!(matches!(
+                    &mapped,
+                    BlockValidationError::ExecutionContextInvalid(retained) if *retained == expected
+                ));
+                assert_eq!(
+                    map_block_err_to_reason(&mapped),
+                    Some(Reason::TransactionValidationFailed)
+                );
+            }
+        }
+
         fn checked_block_signature(
             private_key: &PrivateKey,
             block_hash: HashOf<BlockHeader>,

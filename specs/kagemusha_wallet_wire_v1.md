@@ -966,7 +966,26 @@ carries one byte.
 
 Exactly-once payouts per nullifier and per `credit_id`, recording activation and
 closure, and rejecting Abandon after Activate (and Activate or loads after
-Abandon) are ledger state: design only, TODO(G6).
+Abandon) are ledger state. The current ledger implements idempotent activation
+for the same asset and Bootstrap digest and rejects conflicting or abandoned
+incarnations; complete G6 qualification remains open.
+
+Activation recovery may retain additional ordinary account-signed transaction
+envelopes containing the exact same Activation frame. This does not alter the
+Activation wire, payment key, account identity or Bootstrap proof. Each envelope
+has its own exact transaction identity, admission and fee checks, transport DATA
+and Native finality cursor. App time can schedule a retry but cannot prove that
+an earlier attempt did not commit. Successful authenticated inclusion of any
+retained attempt confirms the same wallet; it does not imply that other attempts
+succeeded. Preserve all signed attempts, each selected verification checkpoint
+and the winning finality original. Superseded checkpoints may be retired only
+after durable replacement within the same attempt. Native/app/Core integration
+and installed execution of this recovery path remain under qualification.
+An attempt may be marked rejected only after Native authenticates its exact
+transaction and rejected execution output in a verified finalized block. A proof,
+storage or transport error never supplies that verdict. Rejection does not enable
+Load and does not prevent another retained same-Activation attempt from proving
+successful inclusion.
 
 ## 4. Measured sizes
 

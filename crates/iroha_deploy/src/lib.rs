@@ -29,6 +29,8 @@
 // Operator P2 adds `plan`, `converge` and gates G0-G8/G11; P3 adds SSH and edge renderers
 // (specs/network_deployment.md §13).
 
+mod deploy_mutation_guard;
+
 pub mod attachment;
 pub mod bootstrap;
 pub mod definition;

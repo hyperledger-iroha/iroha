@@ -1,4 +1,4 @@
-//! Authenticated verifier originals and bounded exact compiled PK regeneration.
+//! Exact offline archive reads and authenticated bounded compiled PK regeneration.
 
 use super::{
     Result, ServerFinalityErrorV1,
@@ -9,11 +9,11 @@ use iroha_fs::PrivateDirectory;
 use iroha_kagemusha_proof::finality::{
     catalog::{ArtifactRecord, ServerRecipes, VerifierBlobSource},
     continuity::{producer::Error, tree::OriginalBytes},
-    native::{ArtifactId, ArtifactSource},
+    native::{ArtifactId, ArtifactSource, ImportLimits},
 };
 use iroha_pasta::CancellationToken;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::{self, Cursor, Read},
     path::Path,
 };
@@ -163,5 +163,113 @@ impl ArtifactSource for Originals {
                 Err(status)
             }
         }
+    }
+}
+
+/// Offline byte source for complete immutable compiler archives. Serving separately
+/// authenticates its selected verifier graph and uses bounded compiled regeneration.
+pub(super) struct ArchiveOriginals {
+    directory: PrivateDirectory,
+    records: Vec<ArtifactRecord>,
+    maximum_key_bytes: usize,
+    visited: BTreeSet<Vec<u8>>,
+    failure: Option<ServerFinalityErrorV1>,
+}
+impl ArchiveOriginals {
+    pub(super) fn from_records(
+        records: &[ArtifactRecord],
+        path: &Path,
+        limits: ImportLimits,
+    ) -> Result<Self> {
+        if !(1..=65_536).contains(&limits.maximum_artifacts)
+            || !(1..=1 << 30).contains(&limits.key.maximum_bytes)
+            || limits.maximum_original_bytes == 0
+            || limits.maximum_original_bytes == usize::MAX
+            || records.is_empty()
+            || records.len() > limits.maximum_artifacts
+        {
+            return Err(ServerFinalityErrorV1::Binding);
+        }
+        let mut previous: Option<&[u8]> = None;
+        let mut total = 0_usize;
+        for record in records {
+            record.validate_identity()?;
+            if previous.is_some_and(|name| name >= record.name.as_slice()) {
+                return Err(ServerFinalityErrorV1::Binding);
+            }
+            previous = Some(&record.name);
+            for (role, cap) in [
+                DESCRIPTOR_MAX_BYTES_V1,
+                VERIFYING_KEY_MAX_BYTES_V1,
+                limits.key.maximum_bytes,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let size = usize::try_from(record.lengths[role])
+                    .map_err(|_| ServerFinalityErrorV1::Binding)?;
+                if size == 0 || size > cap || record.sha256[role] == [0; 32] {
+                    return Err(ServerFinalityErrorV1::Binding);
+                }
+                total = total
+                    .checked_add(size)
+                    .filter(|n| *n <= limits.maximum_original_bytes)
+                    .ok_or(ServerFinalityErrorV1::Binding)?;
+            }
+        }
+        Ok(Self {
+            directory: PrivateDirectory::open_exact(path)?,
+            records: records.to_vec(),
+            maximum_key_bytes: limits.key.maximum_bytes,
+            visited: BTreeSet::new(),
+            failure: None,
+        })
+    }
+
+    pub(super) fn require_complete(&self) -> Result<()> {
+        if self.visited.len() != self.records.len() {
+            return Err(ServerFinalityErrorV1::Binding);
+        }
+        Ok(())
+    }
+
+    pub(super) fn take_failure(&mut self) -> Option<ServerFinalityErrorV1> {
+        self.failure.take()
+    }
+
+    fn original(&self, record: &ArtifactRecord, role: usize, cap: usize) -> Result<Vec<u8>> {
+        read_original(
+            &self.directory,
+            record.sha256[role],
+            record.lengths[role],
+            cap,
+            None,
+        )?
+        .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound).into())
+    }
+
+    fn load_originals(&mut self, id: &ArtifactId) -> Result<OriginalBytes> {
+        let mut selected = None;
+        for record in &self.records {
+            if record.matches_identity(id)? && selected.replace(record).is_some() {
+                return Err(ServerFinalityErrorV1::Binding);
+            }
+        }
+        let record = selected.ok_or(ServerFinalityErrorV1::Binding)?;
+        let bytes = OriginalBytes {
+            descriptor: self.original(record, 0, DESCRIPTOR_MAX_BYTES_V1)?,
+            verifying_key: self.original(record, 1, VERIFYING_KEY_MAX_BYTES_V1)?,
+            proving_key: self.original(record, 2, self.maximum_key_bytes)?,
+        };
+        self.visited.insert(record.name.clone());
+        Ok(bytes)
+    }
+}
+impl ArtifactSource for ArchiveOriginals {
+    fn load(&mut self, id: &ArtifactId) -> std::result::Result<OriginalBytes, Error> {
+        self.load_originals(id).map_err(|error| {
+            self.failure = Some(error);
+            Error::Artifact
+        })
     }
 }

@@ -357,3 +357,183 @@ fn changed_cache_bytes_or_role_selection_are_refused_without_replacement() {
     assert!(cache.put(&record, b"firstkey", None).is_err());
     assert_eq!(fs::read(target).unwrap(), b"badbytes");
 }
+
+#[test]
+fn archive_inventory_requires_all_selected_records_and_every_original_role() {
+    use crate::kagemusha_wallet_artifacts_v1::producer_inventory::{BlobV1, DirectoryOriginalsV1};
+    use iroha_kagemusha_proof::finality::{
+        catalog::{ArtifactSink, DirectoryCatalog},
+        continuity::tree::OriginalBytes,
+        native::{ArtifactId, ArtifactSource, NodeId},
+    };
+    let (_temp, path) = root();
+    let directory = PrivateDirectory::open_exact(&path).unwrap();
+    let archive_directory = directory.create_child("archive").unwrap();
+    let mut archive =
+        DirectoryOriginalsV1::open_existing(archive_directory.path(), 1 << 20).unwrap();
+    let imports = limits().imports().unwrap();
+    let mut compiler =
+        DirectoryCatalog::create(path.join("metadata-only-compiler"), imports).unwrap();
+    let ids = [
+        ArtifactId::Source(NodeId::Genesis),
+        ArtifactId::Source(NodeId::Append),
+    ];
+    for (index, id) in ids.iter().enumerate() {
+        // Deliberately opaque DATA. Loading these bytes establishes no proof authority.
+        let bytes = OriginalBytes {
+            descriptor: vec![index as u8 + 1; 5],
+            verifying_key: vec![index as u8 + 3; 7],
+            proving_key: vec![index as u8 + 5; 11],
+        };
+        compiler.store(id, &bytes).unwrap();
+        for original in [&bytes.descriptor, &bytes.verifying_key, &bytes.proving_key] {
+            archive
+                .store_original(BlobV1::of(original), original)
+                .unwrap();
+        }
+    }
+    let records: Vec<ArtifactRecord> =
+        norito::decode_canonical(&compiler.inventory().unwrap()).unwrap();
+    let mut source =
+        artifacts::ArchiveOriginals::from_records(&records, archive_directory.path(), imports)
+            .unwrap();
+    assert!(source.require_complete().is_err());
+    source.load(&ids[0]).unwrap();
+    assert!(
+        source.require_complete().is_err(),
+        "a well-formed unused record must fail completeness"
+    );
+    source.load(&ids[1]).unwrap();
+    source.require_complete().unwrap();
+    for role in 0..3 {
+        let mut changed = records.clone();
+        changed[0].lengths[role] = 0;
+        assert!(
+            artifacts::ArchiveOriginals::from_records(&changed, archive_directory.path(), imports)
+                .is_err()
+        );
+        changed[0].lengths[role] = records[0].lengths[role];
+        changed[0].sha256[role] = [0; 32];
+        assert!(
+            artifacts::ArchiveOriginals::from_records(&changed, archive_directory.path(), imports)
+                .is_err()
+        );
+    }
+    let mut duplicate = records.clone();
+    duplicate.push(records[0].clone());
+    assert!(
+        artifacts::ArchiveOriginals::from_records(&duplicate, archive_directory.path(), imports)
+            .is_err()
+    );
+    assert!(
+        artifacts::ArchiveOriginals::from_records(
+            &records,
+            archive_directory.path(),
+            ImportLimits {
+                maximum_artifacts: 1,
+                ..imports
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        artifacts::ArchiveOriginals::from_records(
+            &records,
+            archive_directory.path(),
+            ImportLimits {
+                maximum_original_bytes: 1,
+                ..imports
+            }
+        )
+        .is_err()
+    );
+    let mut unordered = records.clone();
+    unordered.reverse();
+    assert!(
+        artifacts::ArchiveOriginals::from_records(&unordered, archive_directory.path(), imports)
+            .is_err()
+    );
+    let mut malformed = records.clone();
+    malformed[0].name.clear();
+    assert!(
+        artifacts::ArchiveOriginals::from_records(&malformed, archive_directory.path(), imports)
+            .is_err()
+    );
+    let mut changed = records.clone();
+    changed[0].sha256[2] = [0x7f; 32];
+    let mut missing =
+        artifacts::ArchiveOriginals::from_records(&changed, archive_directory.path(), imports)
+            .unwrap();
+    assert!(missing.load(&ids[0]).is_err() || missing.load(&ids[1]).is_err());
+    assert!(missing.require_complete().is_err());
+    assert!(matches!(
+        missing.take_failure(),
+        Some(ServerFinalityErrorV1::Storage(error)) if error.kind() == std::io::ErrorKind::NotFound
+    ));
+    assert!(missing.take_failure().is_none());
+}
+
+#[test]
+fn offline_archive_refuses_changed_bytes_without_repairing_or_counting_them() {
+    use crate::kagemusha_wallet_artifacts_v1::producer_inventory::{BlobV1, DirectoryOriginalsV1};
+    use iroha_kagemusha_proof::finality::{
+        catalog::{ArtifactSink, DirectoryCatalog},
+        continuity::tree::OriginalBytes,
+        native::{ArtifactId, ArtifactSource, NodeId},
+    };
+    for role in 0..3 {
+        let (_temp, path) = root();
+        let directory = PrivateDirectory::open_exact(&path).unwrap();
+        let archive_directory = directory.create_child("archive").unwrap();
+        let mut archive =
+            DirectoryOriginalsV1::open_existing(archive_directory.path(), 1 << 20).unwrap();
+        let imports = limits().imports().unwrap();
+        let mut compiler = DirectoryCatalog::create(path.join("compiler"), imports).unwrap();
+        let id = ArtifactId::Source(NodeId::Genesis);
+        let bytes = OriginalBytes {
+            descriptor: vec![1; 5],
+            verifying_key: vec![3; 7],
+            proving_key: vec![5; 11],
+        };
+        compiler.store(&id, &bytes).unwrap();
+        for original in [&bytes.descriptor, &bytes.verifying_key, &bytes.proving_key] {
+            archive
+                .store_original(BlobV1::of(original), original)
+                .unwrap();
+        }
+        let records: Vec<ArtifactRecord> =
+            norito::decode_canonical(&compiler.inventory().unwrap()).unwrap();
+        let record = &records[0];
+        let name = hex::encode(record.sha256[role]);
+        let target = archive_directory.path().join(&name);
+        fs::remove_file(&target).unwrap();
+        let changed = vec![0xff; record.lengths[role] as usize];
+        let mut writer = archive_directory
+            .create_retained_private(&name, changed.len())
+            .unwrap();
+        writer.write_all(&changed).unwrap();
+        writer.seal_read_only().unwrap();
+        let mut source =
+            artifacts::ArchiveOriginals::from_records(&records, archive_directory.path(), imports)
+                .unwrap();
+        assert!(source.load(&id).is_err());
+        assert!(source.require_complete().is_err());
+        assert!(matches!(
+            source.take_failure(),
+            Some(ServerFinalityErrorV1::Binding)
+        ));
+        assert_eq!(fs::read(target).unwrap(), changed);
+    }
+}
+
+#[test]
+fn offline_archive_qualification_cannot_replace_missing_originals_with_metadata() {
+    use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
+    let (_temp, path) = root();
+    let fixture = NativeFinalityFixture::new_with_explicit_parameters();
+    assert!(
+        qualify_server_archive(&fixture.verifier(), &[], &path, limits().imports().unwrap())
+            .is_err()
+    );
+    assert_eq!(fs::read_dir(path).unwrap().count(), 0);
+}

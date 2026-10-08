@@ -43,7 +43,7 @@ internal class KagemushaWalletSetupInputV1(
             25 -> intArrayOf(32 * 1024 * 1024, 1024, 0)
             26 -> intArrayOf(21_024, 16_384, 0)
             45 -> intArrayOf(16_384, 0, 0)
-            29, 30, 33, 35, 37 -> intArrayOf(65_536, 0, 0)
+            29, 30, 33, 35, 37, 46 -> intArrayOf(65_536, 0, 0)
             34, 36 -> intArrayOf(65_536, 36 * 1024 * 1024, 0)
             2 -> intArrayOf(10_000, 1_024, 512)
             3, in 7..14, in 16..17, 41, 42 -> intArrayOf(10_000, 0, 0)
@@ -60,7 +60,7 @@ internal class KagemushaWalletSetupInputV1(
         require((selector in listOf(1, 2, 19, 20, 25, 27, 30, 33, 34, 39, 41, 42, 43, 44, 45)) == id.any { it != 0.toByte() }) { "setup identity" }
         require((selector in listOf(1, 27)) == (amount.low != 0L || amount.high != 0L)) { "Offer or Load amount" }
         require(token >= 0 && ((selector in listOf(5, 6, 29)) == (token != 0L))) { "native setup token" }
-        require(selector !in listOf(30, 33, 34, 35, 36, 37) || a.isNotEmpty()) { "ledger original" }
+        require(selector !in listOf(30, 33, 34, 35, 36, 37, 46) || a.isNotEmpty()) { "ledger original" }
         require(selector != 29 || (token in 1L..3L && a.isNotEmpty())) { "ledger transport kind and original" }
         require(selector !in listOf(2, 39) || (a.isNotEmpty() && b.isEmpty() == c.isEmpty())) { "Request originals" }
         require(selector != 40 || (a.isNotEmpty() && b.isNotEmpty())) { "fee PolicyData pair" }

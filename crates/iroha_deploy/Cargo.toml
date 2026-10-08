@@ -17,6 +17,10 @@ categories.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Owning unit-test selectors only; never forwarded to SDK or Core dependencies.
+mutation-testing = []
+
 [dependencies]
 iroha_allocation = { workspace = true }
 iroha_torii_shared = { workspace = true }

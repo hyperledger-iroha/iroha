@@ -62,6 +62,8 @@ fn optional_service_stays_disabled_until_exact_installation_is_selected() {
         .torii
         .kagemusha_load_finality
         .unwrap();
+    // Torii's optional section uses JSON decoding instead of the direct ReadConfig path.
+    assert_eq!(actual, read(table()).checked().unwrap());
     assert_eq!(actual.scheme_id, [1; 32]);
     assert_eq!(actual.manifest_digest, [2; 32]);
     assert_eq!(

@@ -197,6 +197,35 @@ pub(crate) fn prepare_private_root_at(
     spec: &PrivateRootSpec,
     publication_root: Option<&Path>,
 ) -> crate::managed::Result<PreparedLocalnet> {
+    prepare_private_root_selected(name, directory, ports, spec, publication_root, None)
+}
+
+pub(crate) fn prepare_private_root_with_amx_at(
+    name: &str,
+    directory: &Path,
+    ports: &LocalnetPorts,
+    spec: &PrivateRootSpec,
+    publication_root: Option<&Path>,
+    sources: &crate::bootstrap::ParentBootstrapSources,
+) -> crate::managed::Result<PreparedLocalnet> {
+    prepare_private_root_selected(
+        name,
+        directory,
+        ports,
+        spec,
+        publication_root,
+        Some(sources),
+    )
+}
+
+fn prepare_private_root_selected(
+    name: &str,
+    directory: &Path,
+    ports: &LocalnetPorts,
+    spec: &PrivateRootSpec,
+    publication_root: Option<&Path>,
+    amx: Option<&crate::bootstrap::ParentBootstrapSources>,
+) -> crate::managed::Result<PreparedLocalnet> {
     spec.validate().map_err(|error| {
         Error::Invalid(format!("private-root SNS identity is invalid: {error}"))
     })?;
@@ -217,12 +246,17 @@ pub(crate) fn prepare_private_root_at(
                     ));
                 }
                 verify_retained(root.path(), &retained.prepared, spec)?;
+                if let Some(sources) = amx {
+                    sources
+                        .require_signed_generation(&retained.prepared)
+                        .map_err(|error| Error::Invalid(error.to_string()))?;
+                }
                 return Ok(retained.prepared);
             }
             None => {}
         }
     }
-    let mut prepared = prepare_fresh(name, directory, ports, spec, publication_root)
+    let mut prepared = prepare_fresh(name, directory, ports, spec, publication_root, amx)
         .map_err(|error| Error::Invalid(format!("private-root preparation failed: {error:#}")))?;
     verify_retained(&directory.canonicalize()?, &prepared, spec)?;
     if let Some(root) = publication_root {
@@ -393,6 +427,7 @@ fn prepare_fresh(
     ports: &LocalnetPorts,
     spec: &PrivateRootSpec,
     publication_root: Option<&Path>,
+    amx: Option<&crate::bootstrap::ParentBootstrapSources>,
 ) -> Result<PreparedLocalnet> {
     init_instruction_registry();
     // Parent SDK work can carry a different address-rendering scope on this thread. A fresh
@@ -450,6 +485,10 @@ fn prepare_fresh(
         LocalnetServiceProfile::Standard,
         &owner.account_id,
     )?;
+    let genesis = match amx {
+        Some(sources) => sources.append_to(genesis)?,
+        None => genesis,
+    };
     copy_rans_tables(&root)?;
     let signed_path = root.join("genesis.signed.nrt");
     let trusted = peers

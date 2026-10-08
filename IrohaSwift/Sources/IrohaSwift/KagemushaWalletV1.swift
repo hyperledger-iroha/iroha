@@ -14,9 +14,10 @@ public struct KagemushaWalletCallV1: Sendable {
   /// background29, closure30, retainedFee31, noFee32, ledgerTip33, noTip34, payoutRecorded35,
   /// feeClaimTransport36, authenticatedEnrollmentSelection37, appleOriginals38, appleCustodyAcknowledged39,
   /// ledgerInstruction40, confirmedUnload42, confirmedActivation44, activationProgress45,
-  /// activationNotStarted46, creditProjection47, unloadClaimTransport48; retired kinds41/43 are rejected.
+  /// activationNotStarted46, creditProjection47, unloadClaimTransport48, activationRejected49;
+  /// retired kinds41/43 are rejected.
   /// Enrollment18...28 is projected by the separate enrollment owner.
-  static let statusRange: ClosedRange<Int32> = 0...48
+  static let statusRange: ClosedRange<Int32> = 0...49
   public let status: Int32
   public let sequenceLow: UInt64
   public let sequenceHigh: UInt64
@@ -28,15 +29,15 @@ public struct KagemushaWalletCallV1: Sendable {
   init(status: Int32, sequenceLow: UInt64, sequenceHigh: UInt64, detail: UInt32, bytes: Data) throws
   {
     guard Self.statusRange.contains(status), ![41, 43].contains(status), bytes.count <= kagemushaWalletOutputBoundV1(status),
-      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36, 37, 38, 40, 42, 44, 45, 47, 48].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
+      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36, 37, 38, 40, 42, 44, 45, 47, 48, 49].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
       ![12, 14, 17, 30, 31, 32, 34, 35, 36, 40, 46, 47, 48].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
       !([13, 15, 16].contains(status) || (18...28).contains(status) || (37...39).contains(status))
         || (sequenceLow > 0 && sequenceLow <= UInt64(Int64.max) && sequenceHigh == 0 && detail == 0),
       ![13, 15, 18, 23].contains(status) || bytes.count == 32,
       status != 13 || bytes.contains(where: { $0 != 0 }),
       status != 19 || bytes.count == 161,
-      ![42, 44].contains(status) || sequenceLow > 1,
-      ![33, 42, 44, 45].contains(status) || (sequenceLow != 0 && sequenceHigh == 0 && detail == 0 && bytes.count == 32 && bytes.contains(where: { $0 != 0 }))
+      ![42, 44, 49].contains(status) || sequenceLow > 1,
+      ![33, 42, 44, 45, 49].contains(status) || (sequenceLow != 0 && sequenceHigh == 0 && detail == 0 && bytes.count == 32 && bytes.contains(where: { $0 != 0 }))
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     self.status = status
     self.sequenceLow = sequenceLow
@@ -657,7 +658,7 @@ func kagemushaWalletOutputBoundV1(_ status: Int32) -> Int {
   case 37: return 1028
   case 38: return 73_740
   case 31: return 21_024
-  case 33, 42, 44, 45: return 32
+  case 33, 42, 44, 45, 49: return 32
   case 47: return 10_092
   default: return 10_000
   }

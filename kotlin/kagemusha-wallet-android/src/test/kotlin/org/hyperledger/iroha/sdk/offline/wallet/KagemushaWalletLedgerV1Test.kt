@@ -42,19 +42,25 @@ class KagemushaWalletLedgerV1Test {
         val wire = ByteArray(65_536) { 9 }; val proof = byteArrayOf(7)
         val read = KagemushaWalletSetupInputV1(37, first = wire)
         val confirm = KagemushaWalletSetupInputV1(35, first = wire)
+        val retained = KagemushaWalletSetupInputV1(46, first = wire)
         val ingest = KagemushaWalletSetupInputV1(36, first = wire, second = proof)
         wire.fill(0); proof.fill(0)
         assertContentEquals(ByteArray(65_536) { 9 }, read.first())
         assertContentEquals(read.first(), confirm.first())
+        assertContentEquals(read.first(), retained.first())
+        retained.first().fill(0)
+        assertContentEquals(read.first(), retained.first())
         assertContentEquals(byteArrayOf(7), ingest.second())
-        for (selector in 35..37) {
+        for (selector in listOf(35, 36, 37, 46)) {
             val second = if (selector == 36) byteArrayOf(1) else byteArrayOf()
             assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector, second = second) }
             assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector, first = ByteArray(65_537), second = second) }
             assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector, first = wire, second = second, identity = ByteArray(32) { 1 }) }
             assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector, first = wire, second = second, token = 1) }
             assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector, first = wire, second = second, amount = KagemushaWalletUInt128V1(1, 0)) }
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector, first = wire, second = second, third = byteArrayOf(1)) }
         }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(46, first = wire, second = byteArrayOf(1)) }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(36, first = wire) }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(36, first = wire, second = ByteArray(36 * 1024 * 1024 + 1)) }
     }
@@ -67,6 +73,34 @@ class KagemushaWalletLedgerV1Test {
         assertEquals(-1L, progress.verifiedHeightBits); assertEquals(null, progress.confirmation)
         assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletActivationConfirmationV1(result) }
         assertFailsWith<KagemushaWalletExceptionV1> { result.completion() }
+    }
+
+    @Test fun `Only exact typed Native rejection skips one outer without confirming its family`() {
+        val hash = ByteArray(32) { 7 }
+        val result = KagemushaWalletCallV1(49, -1, 0, 2, 0, 0, hash)
+        hash.fill(0)
+        val rejected = KagemushaWalletActivationFinalityV1(result)
+        assertEquals(true, rejected.rejected); assertEquals(null, rejected.confirmation)
+        assertEquals(2L, rejected.verifiedHeightBits)
+        rejected.blockHash()!!.fill(0)
+        assertContentEquals(ByteArray(32) { 7 }, rejected.blockHash())
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletActivationConfirmationV1(result) }
+        assertFailsWith<KagemushaWalletExceptionV1> { result.completion() }
+        for (height in listOf(0L, 1L)) assertFailsWith<KagemushaWalletExceptionV1> {
+            KagemushaWalletCallV1(49, -1, 0, height, 0, 0, ByteArray(32) { 7 })
+        }
+        for (hashBytes in listOf(ByteArray(0), ByteArray(31), ByteArray(32), ByteArray(33))) {
+            assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(49, -1, 0, 2, 0, 0, hashBytes) }
+        }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(49, -1, 0, 2, 1, 0, ByteArray(32) { 7 }) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(49, -1, 0, 2, 0, 1, ByteArray(32) { 7 }) }
+        val confirmed = KagemushaWalletActivationFinalityV1(KagemushaWalletCallV1(44, -1, 0, 3, 0, 0, ByteArray(32) { 8 }))
+        assertEquals(false, confirmed.rejected); assertEquals(3L, confirmed.confirmation!!.heightBits)
+        for (status in listOf(46, 45)) {
+            val call = if (status == 46) KagemushaWalletCallV1(status, -1, 0, 0, 0, 0, byteArrayOf())
+                else KagemushaWalletCallV1(status, -1, 0, 1, 0, 0, ByteArray(32) { 3 })
+            assertEquals(false, KagemushaWalletActivationFinalityV1(call).rejected)
+        }
     }
 
     @Test fun `Activate confirmation retains the Native hash and rejects malformed result authority`() {

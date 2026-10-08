@@ -330,3 +330,239 @@ fn persisted_amx_original_read_retains_acquired_inode_and_exact_pool_through_dec
     // All job fields and their actual charges are destroyed with the original job; the State
     // view and authenticated history remain independent owners until their own normal drops.
 }
+
+// Replace only the name of the archive directory. The reader still owns its original
+// descriptor and original file; restoration installs that exact inode, never a copy.
+struct ReplacedAmxArchiveNamespace {
+    original: PathBuf,
+    retained: PathBuf,
+    replaced: std::cell::Cell<bool>,
+}
+impl ReplacedAmxArchiveNamespace {
+    fn new(chain: &CertifiedTestChain) -> Self {
+        let original = chain.kura().store_root().join("native-contexts");
+        let retained = chain
+            .kura()
+            .store_root()
+            .join("native-contexts-original-test");
+        assert!(!retained.exists());
+        Self {
+            original,
+            retained,
+            replaced: std::cell::Cell::new(false),
+        }
+    }
+    fn replace(&self) {
+        assert!(!self.replaced.get());
+        fs::rename(&self.original, &self.retained).unwrap();
+        self.replaced.set(true);
+        fs::create_dir(&self.original).unwrap();
+    }
+    fn restore(&self) {
+        assert!(self.replaced.get());
+        fs::remove_dir(&self.original).unwrap();
+        fs::rename(&self.retained, &self.original).unwrap();
+        self.replaced.set(false);
+    }
+}
+impl Drop for ReplacedAmxArchiveNamespace {
+    fn drop(&mut self) {
+        if self.replaced.get() {
+            // Best-effort fixture cleanup also runs when a causal assertion unwinds.
+            let _ = fs::remove_dir(&self.original);
+            let _ = fs::rename(&self.retained, &self.original);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AmxProofBackingIdentity {
+    pointers: [usize; 5],
+    capacities: [usize; 5],
+    allocation_bytes: usize,
+}
+fn amx_proof_backing_identity(proof: &AllocatedAmxRecordProofV1) -> AmxProofBackingIdentity {
+    let canonical = proof.canonical();
+    let AmxRecordV1::Begin(begin) = &canonical.record else {
+        panic!("genuinely committed original Begin fixture");
+    };
+    AmxProofBackingIdentity {
+        pointers: [
+            canonical.block.consensus_header.as_ptr() as usize,
+            canonical.block.commit_qc.as_ptr() as usize,
+            canonical.block.result_preimage.as_ptr() as usize,
+            canonical.write.siblings.as_ptr() as usize,
+            begin.participants.as_ptr() as usize,
+        ],
+        capacities: [
+            canonical.block.consensus_header.capacity(),
+            canonical.block.commit_qc.capacity(),
+            canonical.block.result_preimage.capacity(),
+            canonical.write.siblings.capacity(),
+            begin.participants.capacity(),
+        ],
+        allocation_bytes: proof.allocation_bytes().unwrap(),
+    }
+}
+
+#[test]
+fn persisted_amx_completed_proof_retains_exact_graph_through_final_namespace_refusal() {
+    use crate::query::{
+        native_context_archive::NativeContextArchiveError,
+        native_receipts::NativeAmxRecordProofErrorV1,
+    };
+    use iroha_allocation::AllocationRefusal;
+    use std::cell::Cell;
+
+    let (chain, tx) = chain();
+    let replacement = ReplacedAmxArchiveNamespace::new(&chain);
+    #[cfg(unix)]
+    let original_directory_identity = {
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = fs::metadata(&replacement.original).unwrap();
+        (metadata.dev(), metadata.ino())
+    };
+    let archive = path(&chain);
+    let original_file = fs::read(&archive).unwrap();
+    let view = chain.state().view();
+    let budget = chain.state().ivm_execution_budget();
+    let observed_backing = Cell::new(None);
+    let observed_reserved = Cell::new(0);
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let mut read = amx_record_proof(&view, 2, AmxRecordKind::Begin, tx);
+    read.probe_portable_prepared_once(|proof| {
+        let proof = proof.as_ref().expect("actual complete funded Begin proof");
+        assert!(proof.belongs_to(&budget));
+        observed_backing.set(Some(amx_proof_backing_identity(proof)));
+        observed_reserved.set(budget.reserved_bytes());
+        replacement.replace();
+    })
+    .unwrap();
+    let refusal = read.complete().unwrap_err();
+    let NativeAmxRecordProofErrorV1::Archive(NativeContextArchiveError::Io(error)) = refusal else {
+        panic!("final original archive namespace refusal: {refusal:?}");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::Other);
+    assert_eq!(error.to_string(), "native context record identity changed");
+    drop(error);
+    let original = observed_backing
+        .get()
+        .expect("construction seam was reached");
+    assert!(original.allocation_bytes > 0);
+    assert_eq!(
+        budget.reserved_bytes(),
+        observed_reserved.get(),
+        "a failed final namespace guard must retain the completed original graph"
+    );
+    replacement.restore();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = fs::metadata(&replacement.original).unwrap();
+        assert_eq!(
+            (metadata.dev(), metadata.ino()),
+            original_directory_identity
+        );
+    }
+    assert_eq!(fs::read(&archive).unwrap(), original_file);
+
+    // Neither a new tree nor a new portable graph can be admitted while all remaining
+    // original pool credit is occupied, and the caller grants no new decode allocation.
+    let pressure = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let refusal = budget.try_reserve_bytes(1).unwrap_err();
+    let AllocationRefusal::Capacity { release, .. } = refusal else {
+        panic!("actual occupied original pool: {refusal:?}");
+    };
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(registration.poll_wait(&release, &mut context).is_pending());
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+    let mut retry = None;
+    let allocations = norito::with_decode_limits_scope(limits, || {
+        crate::test_allocations::allocations_during(|| retry = Some(read.complete()))
+    });
+    let proof = retry.unwrap().unwrap().unwrap();
+    assert_eq!(
+        allocations, 0,
+        "same completed graph retry allocates nothing"
+    );
+    assert!(proof.belongs_to(&budget));
+    assert_eq!(amx_proof_backing_identity(&proof), original);
+    let tracker =
+        AmxForeignInstanceV1::new(chain.instance().0, genesis_epoch(chain.genesis()).unwrap())
+            .unwrap();
+    assert_eq!(tracker.verify_record(proof.canonical()).unwrap().height, 2);
+    assert!(matches!(&proof.canonical().record, AmxRecordV1::Begin(begin) if begin.tx == tx));
+    assert!(
+        read.complete().is_err(),
+        "completed proof delivers exactly once"
+    );
+    let retained = budget.reserved_bytes();
+    assert_eq!(retained, budget.limit_bytes());
+    assert!(registration.poll_wait(&release, &mut context).is_pending());
+    drop(proof);
+    assert_eq!(
+        budget.reserved_bytes(),
+        retained - original.allocation_bytes,
+        "completed proof fields must refund only after their last owner"
+    );
+    assert!(registration.poll_wait(&release, &mut context).is_ready());
+    drop(pressure);
+    drop(registration);
+    drop(read);
+}
+
+#[test]
+fn persisted_amx_authenticated_absence_retains_final_guard_and_one_shot_delivery() {
+    use crate::query::{
+        native_context_archive::NativeContextArchiveError,
+        native_receipts::NativeAmxRecordProofErrorV1,
+    };
+    use std::cell::Cell;
+
+    let (chain, tx) = chain();
+    let replacement = ReplacedAmxArchiveNamespace::new(&chain);
+    let view = chain.state().view();
+    let budget = chain.state().ivm_execution_budget();
+    let observed = Cell::new(0);
+    let retained = Cell::new(0);
+    let mut read = amx_record_proof(&view, 2, AmxRecordKind::Decision, tx);
+    read.probe_portable_prepared_once(|proof| {
+        assert!(
+            proof.is_none(),
+            "the certified original height has no Decision"
+        );
+        observed.set(observed.get() + 1);
+        retained.set(budget.reserved_bytes());
+        replacement.replace();
+    })
+    .unwrap();
+    assert!(matches!(
+        read.complete(),
+        Err(NativeAmxRecordProofErrorV1::Archive(
+            NativeContextArchiveError::Io(_)
+        ))
+    ));
+    assert_eq!(observed.get(), 1);
+    assert_eq!(budget.reserved_bytes(), retained.get());
+    replacement.restore();
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+    let mut retry = None;
+    let allocations = norito::with_decode_limits_scope(limits, || {
+        crate::test_allocations::allocations_during(|| retry = Some(read.complete()))
+    });
+    assert!(retry.unwrap().unwrap().is_none());
+    assert_eq!(allocations, 0);
+    assert_eq!(
+        observed.get(),
+        1,
+        "authenticated absence is not a fresh construction"
+    );
+    assert_eq!(budget.reserved_bytes(), retained.get());
+    assert!(
+        read.complete().is_err(),
+        "authenticated absence delivers exactly once"
+    );
+    assert_eq!(budget.reserved_bytes(), retained.get());
+}

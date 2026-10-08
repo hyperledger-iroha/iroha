@@ -272,6 +272,7 @@ fn minimal_config_inherits_large_application_rate_budgets() {
     }
     assert_eq!(torii.recipient_lookup.requests_per_minute, 60_000_000);
     assert!(torii.kagemusha_enrollment.is_none());
+    assert!(torii.kagemusha_load_finality.is_none());
     assert_eq!(
         torii
             .proof_api
