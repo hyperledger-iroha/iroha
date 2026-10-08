@@ -335,7 +335,8 @@ fn portable_replay_rejects_gaps_carrier_changes_and_forged_applied_observations(
             2 => peer.transactions[0].committed.as_mut().unwrap().hash = "0".repeat(64),
             3 => {
                 let committed = &mut peer.transactions[0].committed.as_mut().unwrap().transaction;
-                let changed = HashOf::from_untyped_unchecked(Hash::new(b"tampered output commitment"));
+                let changed =
+                    HashOf::from_untyped_unchecked(Hash::new(b"tampered output commitment"));
                 assert_ne!(committed.output_hash, changed);
                 committed.output_hash = changed;
             }
@@ -358,7 +359,11 @@ fn portable_replay_rejects_gaps_carrier_changes_and_forged_applied_observations(
                     .kind = "Rejected".into();
             }
         }
-        assert_ne!(json::to_vec(&fixture.completion.value).unwrap(), original, "mutation {mutation} must change the original");
+        assert_ne!(
+            json::to_vec(&fixture.completion.value).unwrap(),
+            original,
+            "mutation {mutation} must change the original"
+        );
         assert!(fixture.replay().is_err(), "mutation {mutation}");
     }
     fixture.completion.value = json::from_slice(&original).unwrap();

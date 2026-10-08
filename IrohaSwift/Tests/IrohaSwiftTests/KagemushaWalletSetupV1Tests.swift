@@ -130,6 +130,7 @@ final class KagemushaWalletSetupV1Tests: XCTestCase {
       }
       let result = try driver.result { output in
         output.pointee.status = status
+        // Native WalletResult::default uses -1 for an absent failure reason.
         output.pointee.reason = -1
         // Confirmed Unload and confirmed or rejected Activation require a post-genesis height.
         output.pointee.sequence_low = [42, 44, 49].contains(status) ? 2 : ([33, 37, 38, 39, 45, 53].contains(status) ? 1 : 0)
@@ -149,6 +150,26 @@ final class KagemushaWalletSetupV1Tests: XCTestCase {
       XCTAssertThrowsError(try driver.result { output in
         output.pointee.status = status
         output.pointee.reason = -1
+        return 0
+      }) { error in
+        XCTAssertEqual(error as? KagemushaWalletErrorV1, .invalidNativeOutput)
+      }
+    }
+  }
+
+  func testActualDriverRejectsFailureMetadataOnSuccessfulSetupResult() throws {
+    let driver = try KagemushaWalletNativeDriverV1()
+    let valid = try driver.result { output in
+      output.pointee.status = 32 // A valid no-fee reply has no payload or sequence.
+      output.pointee.reason = -1
+      return 0
+    }
+    XCTAssertEqual(valid.status, 32)
+    for (reason, platformCode) in [(Int32(0), Int32(0)), (1, 0), (-2, 0), (-1, 1), (-1, -1)] {
+      XCTAssertThrowsError(try driver.result { output in
+        output.pointee.status = 32
+        output.pointee.reason = reason
+        output.pointee.platform_code = platformCode
         return 0
       }) { error in
         XCTAssertEqual(error as? KagemushaWalletErrorV1, .invalidNativeOutput)

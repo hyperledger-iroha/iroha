@@ -4617,17 +4617,8 @@ pub(crate) mod valid {
                     Ok(source) => source,
                     Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
                 };
-            if amx_legs
-                .as_ref()
-                .is_some_and(|bank| !bank.parent_is_current(source.generation()))
-            {
-                return WithEvents::new(Err((
-                    Box::new(block),
-                    Box::new(BlockValidationError::ExecutionDeferred(
-                        ivm::error::ExecutionDeferral::LocalInvariantViolation.into(),
-                    )),
-                )));
-            }
+            // Completed AMX legs retain canonical byte custody only. The fresh native
+            // source and pristine StateBlock authenticate current authority on every attempt.
             if !block.has_consensus_work() {
                 let header = source.header();
                 return WithEvents::new(Err((

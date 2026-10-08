@@ -412,9 +412,10 @@ Starting points, not evidence that this protocol has passed:
 
 ### Current implementation checkpoint (2026-10-08)
 
-The resumed `optimizations` checkout advanced from `ad75acfe2a` to `7f14c2389c`
-and another concurrent merge while checks were running. Four new conflicts were
-resolved, but consumed CoreZk, bridge, data-model and filesystem sources changed.
+The resumed `optimizations` checkout advanced from `ad75acfe2a` through
+`7f14c2389c` to `505a5bd87d` and another concurrent merge while checks were
+running. Merge conflicts were resolved, but consumed CoreZk, bridge, data-model
+and filesystem sources changed.
 SDK and component results below belong to their captured pre-merge inputs;
 the merged candidate requires rebuilt checks. A commit hash alone does not
 reproduce the continuing edits.
@@ -544,6 +545,24 @@ The retained result is
 The two earlier producer refusals remain recorded. This is a local component
 result; the clean-source release packaging guard remains unchanged and no
 release, wallet exchange or phone qualification follows.
+
+The next JavaScript capture executes all six original native cases successfully,
+but post-run admission rejects a data-model finality source change. Its original
+`passed: false` result remains in
+`target/qualification/js-native-current-abi27-2/runtime/result.json`.
+The new Core/CoreZk capture passes 24 explicitly selected setup, registration and
+finality diagnostics (14 Core and ten CoreZk). Its binaries and original
+mixed-source verdict remain unchanged in
+`target/qualification/monetary-pipeline-capture-1/diagnostic-runtime-1`.
+These checks do not qualify the merged source or complete monetary exchange.
+
+The first real-network daemon/CLI capture passes its stock-feature audit and
+independent compiler-input review, including exact reproduction of generated
+tables. The companion harness builds successfully but its consumed data-model
+source changes during compilation, so source admission refuses it before
+network execution. Both original verdicts remain under
+`target/qualification/real-network-monetary-{stock,harness}-capture-1`.
+A matching merged-source rebuild is required before the four-validator run.
 
 All eight native Send control masks and both Receive variants complete their
 measurement and separate one-key footprint processes: 20 processes pass, with

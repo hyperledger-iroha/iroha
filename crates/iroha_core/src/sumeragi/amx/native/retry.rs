@@ -41,7 +41,8 @@ pub(crate) struct NativeAmxLegPreparations {
     wire_len: usize,
     inputs: usize,
     input_count: usize,
-    generation: u64,
+    #[cfg(all(test, sumeragi_core_mutation = "HC167"))]
+    original_publication: Option<u64>,
     capacity: Option<usize>,
 }
 impl NativeAmxLegPreparations {
@@ -51,7 +52,6 @@ impl NativeAmxLegPreparations {
         block: &SignedBlock,
         source: &AvailableBody,
         pool: &AllocationBudget,
-        generation: u64,
     ) -> Self {
         let inputs = block.external_entrypoints_slice();
         let capacity = inputs.iter().try_fold(0_usize, |sum, input| {
@@ -78,19 +78,20 @@ impl NativeAmxLegPreparations {
             wire_len: source.payload().as_slice().len(),
             inputs: inputs.as_ptr() as usize,
             input_count: inputs.len(),
-            generation,
+            #[cfg(all(test, sumeragi_core_mutation = "HC167"))]
+            original_publication: None,
             capacity,
         }
     }
 
-    /// A same-content substituted source or changed parent is never reusable.
+    /// A same-content substituted source or foreign pool is never reusable.
+    /// State authority is reacquired by the native validator on every execution attempt.
     pub(crate) fn matches_original(
         &self,
         block: &SignedBlock,
         retained_source: &AvailableBody,
         source: &AvailableBody,
         pool: &AllocationBudget,
-        generation: u64,
     ) -> bool {
         let Some(payload) = self.payload.charged_source(pool) else {
             return false;
@@ -122,7 +123,6 @@ impl NativeAmxLegPreparations {
             && (cfg!(all(test, sumeragi_core_mutation = "HC151"))
                 || inputs.as_ptr() as usize == self.inputs)
             && inputs.len() == self.input_count
-            && crate::state::is_stable_state_view_generation(self.generation, generation)
             && self
                 .staged
                 .as_ref()
@@ -136,8 +136,11 @@ impl NativeAmxLegPreparations {
             })
     }
 
-    pub(crate) fn parent_is_current(&self, generation: u64) -> bool {
-        crate::state::is_stable_state_view_generation(self.generation, generation)
+    /// Mutant restores the erroneous binding of immutable decoded bytes to the first State cut.
+    #[cfg(all(test, sumeragi_core_mutation = "HC167"))]
+    pub(crate) fn matches_original_publication(&mut self, generation: u64) -> bool {
+        let original = *self.original_publication.get_or_insert(generation);
+        crate::state::is_stable_state_view_generation(original, generation)
     }
 
     fn occurrence(

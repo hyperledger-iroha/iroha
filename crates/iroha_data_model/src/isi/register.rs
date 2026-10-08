@@ -687,13 +687,20 @@ mod tests {
             "0504726f73650100010001000400000000010008000000000000000004000000000100"
         ))
         .expect("captured original asset registration");
-        let decoded: RegisterBox = norito::decode_from_bytes(&frame).expect("decode original frame");
+        let decoded: RegisterBox =
+            norito::decode_from_bytes(&frame).expect("decode original frame");
         let RegisterBox::AssetDefinition(registration) = &decoded else {
             panic!("capture must remain the original asset registration variant")
         };
         assert_eq!(registration.object.owning_domain, None);
-        assert_eq!(registration.object.balance_scope_policy, crate::asset::AssetBalancePolicy::Global);
-        assert_eq!(norito::to_bytes(&decoded).expect("reencode original frame"), frame);
+        assert_eq!(
+            registration.object.balance_scope_policy,
+            crate::asset::AssetBalancePolicy::Global
+        );
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("reencode original frame"),
+            frame
+        );
         assert_eq!(RegisterBox::WIRE_ID, "iroha.register");
     }
     fn register_peer_with_pop() -> RegisterPeerWithPop {

@@ -391,8 +391,7 @@ fn install_monthly_policy(
         .execute(&deployer, transaction)
         .unwrap();
     let (code, manifest) = minimal_bound_contract_artifact();
-    let manifest_signing =
-        crate::manifest_signing_test_support::ManifestSigningFixture::new();
+    let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let code_hash = crate::smartcontracts::code::register_code_bytes(
         &deployer,
         DataSpaceId::UNIVERSAL,

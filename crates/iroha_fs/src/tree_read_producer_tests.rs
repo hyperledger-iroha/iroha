@@ -114,7 +114,7 @@ fn closed_tree_read_keeps_native_caps_inventory_comparison_lazy_order_and_origin
                         "typed body refusal",
                     ))
                 })??;
-                let _ = reader.read("../must-not-read", 0, |_| consumed.set(100))?;
+                reader.read("../must-not-read", 0, |_| consumed.set(100))?;
                 Ok::<_, io::Error>(())
             })
         })
@@ -164,7 +164,7 @@ fn closed_tree_read_initial_absence_and_late_named_loss_keep_distinct_native_out
     );
     assert_eq!(
         root.read_tree_scope(|tree| tree.read_scope(&row, |reader| {
-            reader.read_optional("record", 8, |bytes| bytes.len())
+            reader.read_optional("record", 8, <[u8]>::len)
         }))
         .unwrap(),
         Some(8)
@@ -225,7 +225,7 @@ fn closed_tree_read_anchor_and_suffix_exit_win_every_ordinary_result_then_restor
                 root.read_tree_scope(|tree| tree.read_scope(&row, |reader| reader.read(
                     "record",
                     8,
-                    |bytes| bytes.len()
+                    <[u8]>::len
                 )))
                 .unwrap(),
                 8
@@ -265,7 +265,7 @@ fn closed_tree_read_replaced_entry_and_suffix_exit_refuse_without_visiting_later
         let refusal = root
             .read_tree_scope(|tree| {
                 tree.read_scope(&row, |reader| {
-                    assert_eq!(reader.read("record", 8, |bytes| bytes.len())?, 8);
+                    assert_eq!(reader.read("record", 8, <[u8]>::len)?, 8);
                     fs::rename(path, &displaced).unwrap();
                     fs::create_dir(path).unwrap();
                     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
@@ -298,7 +298,7 @@ fn closed_tree_read_full_fallback_and_restored_suffix_changes_have_explicit_limi
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).unwrap();
         // A retained descendant shares the anchor, but the anchor itself must still use full checks.
         assert_eq!(
-            tree.read_scope(&row, |reader| reader.read("record", 8, |bytes| bytes.len()))?,
+            tree.read_scope(&row, |reader| reader.read("record", 8, <[u8]>::len))?,
             8
         );
         assert_eq!(
@@ -338,7 +338,7 @@ fn closed_tree_read_full_fallback_and_restored_suffix_changes_have_explicit_limi
             );
             // The leaf remains genuine. Fully restored intermediate suffix changes are outside
             // the endpoint observation contract; no atomic-snapshot guarantee is asserted.
-            assert_eq!(reader.read("record", 8, |bytes| bytes.len())?, 8);
+            assert_eq!(reader.read("record", 8, <[u8]>::len)?, 8);
             fs::set_permissions(row.path(), fs::Permissions::from_mode(0o700)).unwrap();
             Ok::<_, io::Error>(())
         })
