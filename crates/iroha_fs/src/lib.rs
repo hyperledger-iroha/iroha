@@ -59,7 +59,30 @@ impl FileIdentity {
     pub fn of(file: &File) -> io::Result<Self> {
         platform::identity(file)
     }
+
+    /// Project native volume and object values for an owner-private local custody record.
+    ///
+    /// These machine-local values identify this object across a directory rename and reopen.
+    /// They do not authenticate record contents, confer filesystem authority, or belong in
+    /// signed consensus artifacts. The record owner supplies its canonical encoding and must
+    /// independently validate the current native object and private-directory custody. The
+    /// first value identifies Unix (1) or Windows (2); values are not portable between hosts
+    /// and do not prevent reuse of a native object identifier after all handles close.
+    #[must_use]
+    pub const fn local_parts(self) -> (u8, u64, [u8; 16]) {
+        (if cfg!(unix) { 1 } else { 2 }, self.volume, self.object)
+    }
 }
+
+/// Primitive projection of a native file snapshot for owner-private local records.
+///
+/// Values are host kind (Unix 1 or Windows 2), native volume/object identity, length,
+/// custody metadata, last modification and last change. Unix custody is mode/user/group/link
+/// count and timestamps are seconds/nanoseconds; Windows custody is attributes/link count/0/0
+/// and timestamps are native ticks/0. No codec or authentication policy is supplied here.
+/// Native identifiers and timestamps may be reused after handles close; filesystem/media
+/// honesty and a private unchanged record remain the caller's trust assumptions.
+pub type LocalFileSnapshot = (u8, (u64, [u8; 16]), u64, [u64; 4], [i64; 2], [i64; 2]);
 
 /// Exact native file snapshot for comparing separately retained opens without retaining all files.
 ///
@@ -71,6 +94,14 @@ pub struct FileSnapshot {
 }
 
 impl FileSnapshot {
+    /// Project all existing native snapshot fields without allocating or adding authority.
+    ///
+    /// See [`LocalFileSnapshot`] for the host-local field meanings and trust limits. This is
+    /// not a permanent non-reusable physical identifier or a cryptographic commitment.
+    #[must_use]
+    pub fn local_parts(self) -> LocalFileSnapshot {
+        self.inner.local_parts()
+    }
     /// Capture exact writable private journal custody (Unix mode 0600, or the actual
     /// protected current-user Windows DACL and non-read-only native object).
     /// # Errors

@@ -876,7 +876,8 @@ SDK_MUTATIONS = [
 DEPLOY_MUTATIONS = [
     m("DEP1", "Managed AMX sources: reconstruct a lost published capsule over HTTP",
       ["bootstrap::amx_sources::tests::managed_amx_sources_refuse_partial_removed_and_substituted_custody_without_http_repair",
-       "bootstrap::amx_sources::tests::managed_amx_sources_keep_original_g1_h2_across_advanced_checkpoint_and_reopen"]),
+       "bootstrap::amx_sources::tests::managed_amx_sources_keep_original_g1_h2_across_advanced_checkpoint_and_reopen",
+       "bootstrap::amx_sources::tests::managed_amx_sources_refuse_incomplete_staging_without_refetch_or_new_deadline"]),
     m("DEP2", "Managed AMX sources: accept same bytes from a replaced original file inode",
       ["bootstrap::amx_sources::tests::managed_amx_sources_bind_original_file_identity_and_exact_capsule_inventory",
        "bootstrap::amx_sources::tests::managed_amx_sources_feed_real_private_staging_and_exact_retained_generation"]),
@@ -884,6 +885,9 @@ DEPLOY_MUTATIONS = [
       ["bootstrap::amx_sources::tests::managed_amx_sources_recheck_release_after_retained_authentication_without_refetch"]),
     m("DEP4", "Managed AMX sources: publish a new capsule after original acquisition expires",
       ["bootstrap::amx_sources::tests::managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publication"]),
+    m("DEP5", "Managed AMX sources: reopen replaced G1/H2 from an unchanged local record",
+      ["bootstrap::amx_sources::tests::managed_amx_sources_reopen_refuses_identical_g1_h2_replacement_without_http_repair",
+       "bootstrap::amx_sources::tests::managed_amx_sources_reopen_preserves_original_native_pair_and_directory_without_new_reads"]),
 ]
 
 

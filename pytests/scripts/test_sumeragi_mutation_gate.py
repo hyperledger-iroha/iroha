@@ -3009,6 +3009,7 @@ def test_managed_bootstrap_owned_registry_has_real_hooks_and_original_named_cont
             "DEP2": "managed_amx_sources_bind_original_file_identity_and_exact_capsule_inventory",
             "DEP3": "managed_amx_sources_recheck_release_after_retained_authentication_without_refetch",
             "DEP4": "managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publication",
+            "DEP5": "managed_amx_sources_reopen_refuses_identical_g1_h2_replacement_without_http_repair",
         },
     }
     for owner, package, _, cfg, environment in MANAGED_BOOTSTRAP_OWNERS:
@@ -3031,12 +3032,17 @@ def test_managed_bootstrap_owned_registry_has_real_hooks_and_original_named_cont
             if owner == "sdk" else {
                 "managed_amx_sources_keep_original_g1_h2_across_advanced_checkpoint_and_reopen",
                 "managed_amx_sources_feed_real_private_staging_and_exact_retained_generation",
+                "managed_amx_sources_reopen_preserves_original_native_pair_and_directory_without_new_reads",
+                "managed_amx_sources_refuse_incomplete_staging_without_refetch_or_new_deadline",
             }
         )
         manifest = (source / "Cargo.toml").read_text()
         assert "mutation-testing = []" in manifest
         assert "/mutation-testing" not in manifest
         build = (source / "build.rs").read_text()
+        declared_ids = re.search(r'const IDS: &\[&str\] = &\[(.*?)\];', build, re.S)
+        assert declared_ids is not None
+        assert set(re.findall(r'"([A-Z]+[0-9]+)"', declared_ids.group(1))) == set(indexed)
         assert f'const ENV: &str = "{environment}";' in build
         assert f'const CFG: &str = "{cfg}";' in build
         assert 'CARGO_ENCODED_RUSTFLAGS' in build and '!rustflags.contains(CFG)' in build
@@ -3142,6 +3148,7 @@ def test_managed_bootstrap_main_keeps_baseline_all_rules_default_caps_and_truthf
     ["--deploy", "--core"], ["--deploy", "--model"], ["--deploy", "--daemon"],
     ["--sdk", "--core-profile", "test"], ["--deploy", "--core-profile", "test"],
     ["--sdk", "--only", "DEP1"], ["--deploy", "--only", "SDK1"],
+    ["--sdk", "--only", "DEP5"], ["--core", "--only", "DEP5"],
     ["--core", "--only", "DEP1"], ["--model", "--only", "SDK1"], ["--only", "SDK1"],
     ["--sdk", "--strict", "--skip-baseline"], ["--deploy", "--strict", "--skip-baseline"],
 ])
