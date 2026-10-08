@@ -7,7 +7,8 @@ std::thread_local! {
     static EXIT_HOOK: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
 }
 
-pub(super) fn before_exit() {
+/// Run the one-shot test hook before leaving a private-file removal.
+pub fn before_exit() {
     let hook = EXIT_HOOK.with(|slot| slot.borrow_mut().take());
     if let Some(hook) = hook {
         hook();

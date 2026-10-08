@@ -157,7 +157,7 @@ impl RetainedFile {
                 to,
             )?,
         }
-        self.name = to.to_owned();
+        to.clone_into(&mut self.name);
         self.publication = PublicationAuthority::None;
         self.revalidate()
             .map_err(|error| io::Error::other(format!("native rename completed: {error}")))

@@ -80,8 +80,13 @@ refusal, deduplication and retry remain required, alongside the remaining safety
 custody and liveness controls.
 
 Discover test names and ignores from the actual built executable. Match libtest's
-substring filter semantics, account for every selected test, and reject missing
-or ignored required controls. Derive World coverage from the current authoritative
+substring filter semantics and account for every selected test. Mutation controls
+must exist under their exact qualified test path or exact final path segment;
+every resolved required control must execute nonignored. Only a failed declared
+control can establish a named or scenario kill. Failures of additional substring
+matches remain errors when the declared controls pass; they cannot replace a
+missing control or hide behind another scenario's failure. Baselines still require
+every selected test to pass. Derive World coverage from the current authoritative
 field inventory; never restore retired fields or pin an obsolete test count.
 Direct native logger output may split a serial libtest name from its terminal
 status. Libtest's `- should panic` annotation retains that same test identity;

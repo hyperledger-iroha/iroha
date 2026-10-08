@@ -93,8 +93,11 @@ pub struct Directory {
 }
 
 #[cfg(test)]
+type NamedOpenHook = (&'static str, Box<dyn FnOnce()>);
+
+#[cfg(test)]
 std::thread_local! {
-    static READONLY_NAMED_HOOK: std::cell::RefCell<Option<(&'static str, Box<dyn FnOnce()>)>> = const { std::cell::RefCell::new(None) };
+    static READONLY_NAMED_HOOK: std::cell::RefCell<Option<NamedOpenHook>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -115,8 +118,9 @@ fn before_readonly_named_open(name: &OsStr) {
     }
 }
 
+/// Run one named readonly-open race hook, clearing it on return or unwind.
 #[cfg(test)]
-pub(super) fn with_readonly_named_hook<T>(
+pub fn with_readonly_named_hook<T>(
     name: &'static str,
     hook: impl FnOnce() + 'static,
     read: impl FnOnce() -> T,
@@ -139,7 +143,7 @@ pub(super) fn with_readonly_named_hook<T>(
 
 #[cfg(test)]
 std::thread_local! {
-    static CHILD_NAMED_HOOK: std::cell::RefCell<Option<(&'static str, Box<dyn FnOnce()>)>> = const { std::cell::RefCell::new(None) };
+    static CHILD_NAMED_HOOK: std::cell::RefCell<Option<NamedOpenHook>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -160,8 +164,9 @@ fn before_child_named_validation(name: &OsStr) {
     }
 }
 
+/// Run one named child-validation race hook, clearing it on return or unwind.
 #[cfg(test)]
-pub(super) fn with_child_named_hook<T>(
+pub fn with_child_named_hook<T>(
     name: &'static str,
     hook: impl FnOnce() + 'static,
     open: impl FnOnce() -> T,

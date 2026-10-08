@@ -1183,14 +1183,11 @@ impl OwnerDirectory {
                 return Err(invalid("duplicate completed private directory filename"));
             }
         }
-        match self.inner.child_optional(name)? {
-            Some(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "private destination already exists",
-                ));
-            }
-            None => {}
+        if self.inner.child_optional(name)?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "private destination already exists",
+            ));
         }
         let mut staging = None;
         for _ in 0..32 {

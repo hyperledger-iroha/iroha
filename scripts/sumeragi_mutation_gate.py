@@ -20,7 +20,7 @@ Purpose
       killed_by_scenario_only  its named tests passed, a listed scenario failed;
       survived                 nothing failed;
       error                    build/execution failed, timed out, or a filter matched no
-                               executed test. A process failure is not a mutation kill.
+                               declared control. A process failure is not a mutation kill.
 
     Deadlines classify execution as an error. After a deadline the runner waits for
     its owned Cargo child to exit naturally and retains the output without sending
@@ -30,6 +30,9 @@ Purpose
     the original step deadline; ignored or incomplete controls cannot establish a kill.
     A named step is a mutation's exact selector tuple. Baselines run each distinct
     tuple once; baseline and mutant randomized steps run one distinct scenario each.
+    Qualified selectors require their exact full test path; leaf selectors require
+    every exact final path segment in discovery. Cargo substring-selected extras
+    remain fully accounted, but their failures cannot replace a declared control.
     These independent invocations retain the configured per-step deadlines, and any
     step error prevents the aggregate result from qualifying.
 
@@ -812,6 +815,9 @@ CORE_MUTATIONS = [
     m("HC162", "AMX deadline finalizer: turn local resource refusal into protocol rejection",
       ["block::valid::tests::amx_deadline_finalizer_preserves_exact_local_refusal_without_rejection"]),
 
+    m("HC167", "native AMX Worker retry: bind immutable decoded legs to a stale State visibility publication",
+      ["sumeragi::executor::amx_retry_tests::original_paid_amx_post_decode_refusal_retains_worker_leg_and_exact_retry"]),
+
 ]
 
 
@@ -1025,6 +1031,17 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     return code, out or "", elapsed
 
 
+def test_selector_matches(selector, name):
+    """Resolve a full test path or every exact leaf, without a substring substitute."""
+    return name == selector if "::" in selector else name.rsplit("::", 1)[-1] == selector
+
+
+def required_test_failures(filters, failed):
+    """Retain only failures of declared controls, separately from selected extras."""
+    return sorted(name for name in failed
+                  if any(test_selector_matches(selector, name) for selector in filters))
+
+
 def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
     """Account for the actual substring selection within one original deadline."""
     started = time.monotonic()
@@ -1045,6 +1062,14 @@ def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
         step.status = "execution-error"
         step.detail.append("test discovery did not complete exactly one unique libtest inventory")
         return step
+    missing = [selector for selector in filters
+               if not any(test_selector_matches(selector, name) for name in selected)]
+    if missing:
+        step.status = "missing-test"
+        step.detail.append(f"no discovered declared control: {missing}")
+        return step
+    required = {name for name in selected
+                if any(test_selector_matches(selector, name) for selector in filters)}
     remaining = max(0.0, timeout - elapsed) if timeout else 0
     code, out, runtime_elapsed = cargo_test(
         args, target_dir, mutation,
@@ -1057,7 +1082,7 @@ def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
     failed = sorted({name for name, verdict in results if verdict == "FAILED"})
     step = Step(status="pass", seconds=round(elapsed, 1), failed=failed, ran=ran,
                 selected=selected, log=str(log_path), discovery_log=str(discovery_log))
-    missing = [flt for flt in filters if not any(flt in name for name in ran)]
+    missing = sorted(required - set(ran))
     if code is None or (timeout and elapsed > timeout):
         step.status = "timeout"
         step.detail.append(f"timed out after {timeout}s")
@@ -1074,7 +1099,7 @@ def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
         panics = re.findall(r"panicked at [^\n]*\n([^\n]*)", out)
         step.detail = (seeds_failed[:3] + violations[:3] + panics[:3])[:6]
     if missing and step.status in ("pass", "fail"):
-        step.detail.append(f"no executed test matched: {missing}")
+        step.detail.append(f"no executed declared control: {missing}")
         step.status = "missing-test"
     if step.status in ("pass", "fail"):
         expected = "FAILED" if step.status == "fail" else "ok"
@@ -1138,13 +1163,15 @@ def run_grouped_steps(args, target_dir, mutation, groups, seeds, timeout, logs, 
         else:
             step = run_step(args, target_dir, mutation, filters, seeds, timeout, log)
         steps.append({"filters": list(filters), "deadline_seconds": timeout,
-                      "seeds": seeds, **step.__dict__})
+                      "seeds": seeds, **step.__dict__,
+                      "required_failed": required_test_failures(filters, step.failed)})
     errors = [step["status"] for step in steps if step["status"] not in ("pass", "fail")]
     status = (errors[0] if errors else "fail" if any(step["status"] == "fail" for step in steps)
               else "pass" if steps else "missing-test")
     return {"status": status,
             "seconds": round(sum(step["seconds"] for step in steps), 1),
             "failed": sorted({name for step in steps for name in step["failed"]}),
+            "required_failed": sorted({name for step in steps for name in step["required_failed"]}),
             "ran": sorted({name for step in steps for name in step["ran"]}),
             "selected": sorted({name for step in steps for name in step["selected"]}),
             "steps": steps}
@@ -1178,19 +1205,25 @@ def evaluate(args, target_dir, mu):
         return result
     named = run_step(args, target_dir, mu.id, mu.tests, None, args.timeout_test,
                      logs / f"{mu.id}.named.log")
-    result["named"] = named.__dict__
-    killed_by_test = named.status == "fail"
+    named_failed = required_test_failures(mu.tests, named.failed)
+    result["named"] = {**named.__dict__, "required_failed": named_failed}
+    killed_by_test = named.status == "fail" and bool(named_failed)
     scen = None
     if mu.scenarios and not args.fast:
         groups = [(scenario,) for scenario in dict.fromkeys(SCENARIOS[s] for s in mu.scenarios)]
         scen = run_grouped_steps(args, target_dir, mu.id, groups, args.seeds,
                                  args.timeout_scenario, logs, f"{mu.id}.scenario")
         result["scenario"] = scen
-    killed_by_scenario = scen is not None and scen["status"] == "fail"
+    killed_by_scenario = scen is not None and scen["status"] == "fail" and bool(scen["required_failed"])
     if named.status not in ("pass", "fail"):
         result.update(verdict="error", reason=f"named tests: {named.status}")
+    elif named.status == "fail" and not killed_by_test:
+        result.update(verdict="error", reason="named tests: only additional substring-selected tests failed")
     elif scen is not None and scen["status"] not in ("pass", "fail"):
         result.update(verdict="error", reason=f"scenarios: {scen['status']}")
+    elif scen is not None and any(step["status"] == "fail" and not step["required_failed"]
+                                  for step in scen["steps"]):
+        result.update(verdict="error", reason="scenarios: only additional substring-selected tests failed")
     elif killed_by_test:
         result["verdict"] = "killed_by_test"
     elif killed_by_scenario:

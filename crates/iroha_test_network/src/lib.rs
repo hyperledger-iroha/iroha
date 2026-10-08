@@ -132,7 +132,7 @@ use tokio::{
     net::{TcpListener as TokioTcpListener, TcpStream},
     process::Child,
     runtime::{self, Runtime},
-    sync::{Mutex, Notify, broadcast, oneshot, watch},
+    sync::{Mutex, Notify, OwnedRwLockWriteGuard, RwLock, broadcast, oneshot, watch},
     task::{JoinHandle, JoinSet, spawn_blocking},
     time::timeout,
 };
@@ -3549,14 +3549,15 @@ impl Network {
             .as_ref()?
             .stats_for(observer)
     }
-    /// Pause or resume validator-to-observer forwarding on every transparent
-    /// slow-reader relay. Returns `false` when this network has no relay hook.
-    pub fn set_observer_slow_reader_relays_paused(&self, paused: bool) -> bool {
-        let Some(relays) = &self.observer_slow_reader_relays else {
-            return false;
-        };
-        relays.set_paused(paused);
-        true
+    /// Pause validator-to-observer forwarding on every transparent slow-reader relay.
+    ///
+    /// Acknowledgement waits for every in-flight delayed write and its byte-counter
+    /// update to retire. New connections use the same gate. Dropping the returned
+    /// owner resumes forwarding; shutdown can join connections while it is held.
+    /// The caller must bound this acquisition with its existing test deadline.
+    /// Returns `None` when this network has no relay hook.
+    pub async fn pause_observer_slow_reader_relays(&self) -> Option<ObserverSlowReaderRelayPause> {
+        Some(self.observer_slow_reader_relays.as_ref()?.pause().await)
     }
     /// Iterate over global validators, committee validators, then observers.
     pub fn all_peers(&self) -> impl Iterator<Item = &NetworkPeer> {
@@ -5403,6 +5404,15 @@ impl ObserverSlowReaderRelayConfig {
         self.read_delay
     }
 }
+/// Exclusive forwarding hold for every observer relay in one test network.
+///
+/// This owns the acknowledged pause boundary. Dropping it resumes ciphertext
+/// forwarding. It changes no consensus message, node configuration, or counter.
+#[derive(Debug)]
+#[must_use = "dropping the pause owner resumes observer forwarding"]
+pub struct ObserverSlowReaderRelayPause {
+    _forwarding: OwnedRwLockWriteGuard<()>,
+}
 /// Snapshot of transparent observer-relay activity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObserverSlowReaderRelayStats {
@@ -5455,7 +5465,7 @@ struct ObserverSlowReaderRelays {
     routes: Vec<ObserverSlowReaderRelayRoute>,
     published_addresses: HashMap<PeerId, SocketAddr>,
     running: AtomicBool,
-    paused: watch::Sender<bool>,
+    forwarding: Arc<RwLock<()>>,
     runtime: StdMutex<ObserverSlowReaderRelayRuntime>,
 }
 impl ObserverSlowReaderRelays {
@@ -5478,13 +5488,12 @@ impl ObserverSlowReaderRelays {
             .iter()
             .map(|route| (route.peer_id.clone(), route.published_address.clone()))
             .collect();
-        let (paused, _) = watch::channel(false);
         Self {
             config,
             routes,
             published_addresses,
             running: AtomicBool::new(false),
-            paused,
+            forwarding: Arc::new(RwLock::new(())),
             runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
         }
     }
@@ -5520,8 +5529,10 @@ impl ObserverSlowReaderRelays {
             .find(|route| &route.peer_id == peer_id)
             .map(|route| route.counters.snapshot())
     }
-    fn set_paused(&self, paused: bool) {
-        self.paused.send_replace(paused);
+    async fn pause(&self) -> ObserverSlowReaderRelayPause {
+        ObserverSlowReaderRelayPause {
+            _forwarding: Arc::clone(&self.forwarding).write_owned().await,
+        }
     }
     async fn start(&self) -> Result<()> {
         let mut runtime = self
@@ -5555,7 +5566,7 @@ impl ObserverSlowReaderRelays {
                 let counters = Arc::clone(&route.counters);
                 let config = self.config;
                 let shutdown_rx = shutdown_rx.clone();
-                let paused = self.paused.subscribe();
+                let forwarding = Arc::clone(&self.forwarding);
                 let peer_id = route.peer_id.clone();
                 let published_address = route.published_address.clone();
                 let upstream_address = route.upstream_address.clone();
@@ -5568,7 +5579,7 @@ impl ObserverSlowReaderRelays {
                         config,
                         counters,
                         shutdown_rx,
-                        paused,
+                        forwarding,
                     )
                     .await;
                 })
@@ -5615,7 +5626,7 @@ async fn run_observer_slow_reader_listener(
     config: ObserverSlowReaderRelayConfig,
     counters: Arc<ObserverSlowReaderRelayCounters>,
     mut shutdown: watch::Receiver<bool>,
-    paused: watch::Receiver<bool>,
+    forwarding: Arc<RwLock<()>>,
 ) {
     let mut connections = JoinSet::new();
     loop {
@@ -5646,7 +5657,7 @@ async fn run_observer_slow_reader_listener(
             .fetch_add(1, Ordering::Relaxed);
         let connection_counters = Arc::clone(&counters);
         let connection_shutdown = shutdown.clone();
-        let connection_paused = paused.clone();
+        let connection_forwarding = Arc::clone(&forwarding);
         let connection_peer_id = peer_id.clone();
         let connection_upstream = upstream_address.clone();
         connections.spawn(async move {
@@ -5657,7 +5668,7 @@ async fn run_observer_slow_reader_listener(
                 config,
                 connection_counters,
                 connection_shutdown,
-                connection_paused,
+                connection_forwarding,
             )
             .await;
         });
@@ -5671,7 +5682,7 @@ async fn run_observer_slow_reader_connection(
     config: ObserverSlowReaderRelayConfig,
     counters: Arc<ObserverSlowReaderRelayCounters>,
     mut shutdown: watch::Receiver<bool>,
-    paused: watch::Receiver<bool>,
+    forwarding: Arc<RwLock<()>>,
 ) {
     let upstream = loop {
         let connect = TcpStream::connect(upstream_address.to_string());
@@ -5711,7 +5722,7 @@ async fn run_observer_slow_reader_connection(
         config,
         Arc::clone(&counters),
         shutdown.clone(),
-        paused,
+        forwarding,
     );
     let returned = tokio::io::copy(&mut upstream_read, &mut client_write);
     tokio::pin!(delayed);
@@ -5738,7 +5749,7 @@ async fn slow_copy_observer_ciphertext<R, W>(
     config: ObserverSlowReaderRelayConfig,
     counters: Arc<ObserverSlowReaderRelayCounters>,
     mut shutdown: watch::Receiver<bool>,
-    mut paused: watch::Receiver<bool>,
+    forwarding: Arc<RwLock<()>>,
 ) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
@@ -5759,24 +5770,16 @@ where
             return Ok(());
         }
         counters.delayed_reads.fetch_add(1, Ordering::Relaxed);
-        loop {
-            let forwarding_is_paused = *paused.borrow();
-            if !forwarding_is_paused {
-                break;
+        // A writer queues ahead of subsequent readers, so a requested pause
+        // drains earlier complete writes without admitting another forwarding
+        // operation. The read owner also covers the completed-byte increment.
+        let forwarding_owner = tokio::select! {
+            changed = shutdown.changed() => {
+                let _ = changed;
+                return Ok(());
             }
-            tokio::select! {
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        return Ok(());
-                    }
-                }
-                changed = paused.changed() => {
-                    if changed.is_err() {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+            owner = Arc::clone(&forwarding).read_owned() => owner,
+        };
         tokio::select! {
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
@@ -5796,6 +5799,7 @@ where
         counters
             .forwarded_to_observers_bytes
             .fetch_add(u64::try_from(read).unwrap_or(u64::MAX), Ordering::Relaxed);
+        drop(forwarding_owner);
     }
 }
 #[derive(Clone)]
@@ -13470,10 +13474,16 @@ mod tests {
             .observer_slow_reader_relays
             .as_ref()
             .expect("relay harness is present");
-        assert!(network.set_observer_slow_reader_relays_paused(true));
-        assert!(*relays.paused.borrow());
-        assert!(network.set_observer_slow_reader_relays_paused(false));
-        assert!(!*relays.paused.borrow());
+        let runtime = runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("relay control runtime");
+        let paused = runtime
+            .block_on(network.pause_observer_slow_reader_relays())
+            .expect("relay hook returns a pause owner");
+        assert!(relays.forwarding.try_read().is_err());
+        drop(paused);
+        assert!(relays.forwarding.try_read().is_ok());
         assert_eq!(relays.routes.len(), network.observers().len());
         assert_eq!(
             network.observer_slow_reader_relay_stats(),
@@ -13592,7 +13602,6 @@ mod tests {
             .expect("bounded relay config");
         let counters = Arc::new(ObserverSlowReaderRelayCounters::default());
         let peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
-        let (paused, _) = watch::channel(false);
         let relays = ObserverSlowReaderRelays {
             config,
             routes: vec![ObserverSlowReaderRelayRoute {
@@ -13604,7 +13613,7 @@ mod tests {
             }],
             published_addresses: HashMap::from([(peer_id.clone(), published_address.clone())]),
             running: AtomicBool::new(false),
-            paused,
+            forwarding: Arc::new(RwLock::new(())),
             runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
         };
         relays.start().await.expect("start transparent relay");
@@ -13643,7 +13652,7 @@ mod tests {
         let mut client = TcpStream::connect(published_address.to_string())
             .await
             .expect("connect validator side to relay");
-        relays.set_paused(true);
+        let paused = relays.pause().await;
         client
             .write_all(&payload)
             .await
@@ -13665,7 +13674,7 @@ mod tests {
             0,
             "paused relay must not forward a byte it has already read",
         );
-        relays.set_paused(false);
+        drop(paused);
         let mut received_reply = vec![0_u8; reply.len()];
         timeout(
             Duration::from_secs(5),
@@ -13699,12 +13708,215 @@ mod tests {
         );
         assert_eq!(relays.stats_for(&peer_id), Some(stats));
     }
+    #[tokio::test]
+    async fn observer_relay_pause_acknowledges_only_after_inflight_write_and_counter_retire() {
+        // A one-byte output buffer makes a real write_all remain partially
+        // complete. No mock counter or sleep stands in for the write owner.
+        let (mut validator, reader) = tokio::io::duplex(16);
+        let (writer, mut observer) = tokio::io::duplex(1);
+        let config = ObserverSlowReaderRelayConfig::new(8, Duration::from_millis(1))
+            .expect("bounded relay config");
+        let counters = Arc::new(ObserverSlowReaderRelayCounters::default());
+        let relays = ObserverSlowReaderRelays {
+            config,
+            routes: Vec::new(),
+            published_addresses: HashMap::new(),
+            running: AtomicBool::new(false),
+            forwarding: Arc::new(RwLock::new(())),
+            runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
+        };
+        let (shutdown, shutdown_rx) = watch::channel(false);
+        let copy = tokio::spawn(slow_copy_observer_ciphertext(
+            reader,
+            writer,
+            config,
+            Arc::clone(&counters),
+            shutdown_rx,
+            Arc::clone(&relays.forwarding),
+        ));
+        validator
+            .write_all(b"ABCD")
+            .await
+            .expect("first opaque read");
+        let mut first = [0_u8; 1];
+        timeout(Duration::from_secs(2), observer.read_exact(&mut first))
+            .await
+            .expect("first write began")
+            .expect("first byte forwarded");
+        assert_eq!(first, *b"A");
+        assert_eq!(counters.snapshot().forwarded_to_observers_bytes, 0);
+        let pause = relays.pause();
+        tokio::pin!(pause);
+        assert!(
+            futures::poll!(&mut pause).is_pending(),
+            "pause must not acknowledge a partially completed write_all"
+        );
+        let mut rest = [0_u8; 3];
+        timeout(Duration::from_secs(2), observer.read_exact(&mut rest))
+            .await
+            .expect("old write finishes")
+            .expect("remaining opaque bytes");
+        assert_eq!(rest, *b"BCD");
+        let paused = timeout(Duration::from_secs(2), &mut pause)
+            .await
+            .expect("pause follows old write retirement");
+        assert_eq!(
+            counters.snapshot().forwarded_to_observers_bytes,
+            4,
+            "the read owner must retain the completed-byte update until acknowledgement"
+        );
+        validator
+            .write_all(b"EF")
+            .await
+            .expect("new opaque read during hold");
+        timeout(Duration::from_secs(2), async {
+            while counters.snapshot().delayed_reads != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("copy read the new ciphertext before blocking at the same gate");
+        assert_eq!(counters.snapshot().forwarded_to_observers_bytes, 4);
+        assert!(relays.forwarding.try_read().is_err());
+        drop(paused);
+        let mut fresh = [0_u8; 2];
+        timeout(Duration::from_secs(2), observer.read_exact(&mut fresh))
+            .await
+            .expect("release forwards new read")
+            .expect("new opaque bytes");
+        assert_eq!(fresh, *b"EF");
+        timeout(Duration::from_secs(2), async {
+            while counters.snapshot().forwarded_to_observers_bytes != 6 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("released write and counter retire");
+        shutdown
+            .send(true)
+            .expect("copy still owns shutdown receiver");
+        timeout(Duration::from_secs(2), copy)
+            .await
+            .expect("copy joins")
+            .expect("copy does not panic")
+            .expect("copy shutdown succeeds");
+    }
+
+    #[tokio::test]
+    async fn observer_relay_pause_covers_new_connections_and_shutdown_joins_while_held() {
+        let upstream_listener = TokioTcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock observer listener");
+        let upstream_address = SocketAddr::from(upstream_listener.local_addr().unwrap());
+        let published_port = AllocatedPort::new();
+        let published_address = socket_addr!(127.0.0.1:*published_port);
+        let config = ObserverSlowReaderRelayConfig::new(8, Duration::from_millis(1))
+            .expect("bounded relay config");
+        let counters = Arc::new(ObserverSlowReaderRelayCounters::default());
+        let peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
+        let relays = ObserverSlowReaderRelays {
+            config,
+            routes: vec![ObserverSlowReaderRelayRoute {
+                peer_id: peer_id.clone(),
+                published_address: published_address.clone(),
+                upstream_address,
+                counters: Arc::clone(&counters),
+                _published_port: published_port,
+            }],
+            published_addresses: HashMap::from([(peer_id, published_address.clone())]),
+            running: AtomicBool::new(false),
+            forwarding: Arc::new(RwLock::new(())),
+            runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
+        };
+        relays.start().await.expect("start transparent relay");
+        let mut first = TcpStream::connect(published_address.to_string())
+            .await
+            .unwrap();
+        let (mut first_observer, _) = timeout(Duration::from_secs(2), upstream_listener.accept())
+            .await
+            .expect("first connection bounded")
+            .unwrap();
+        first.write_all(b"warm").await.unwrap();
+        let mut warm = [0_u8; 4];
+        timeout(Duration::from_secs(2), first_observer.read_exact(&mut warm))
+            .await
+            .expect("established forwarding bounded")
+            .unwrap();
+        assert_eq!(warm, *b"warm");
+        let paused = timeout(Duration::from_secs(2), relays.pause())
+            .await
+            .expect("pause established connection");
+        let before = counters.snapshot();
+        assert_eq!(before.forwarded_to_observers_bytes, 4);
+        assert_eq!(before.upstream_connections, 1);
+        // The connection did not exist at acknowledgement; it must share the
+        // same exclusive gate rather than obtain a new unpaused authority.
+        let mut late = TcpStream::connect(published_address.to_string())
+            .await
+            .unwrap();
+        let (mut late_observer, _) = timeout(Duration::from_secs(2), upstream_listener.accept())
+            .await
+            .expect("late connection bounded")
+            .unwrap();
+        late.write_all(b"new").await.unwrap();
+        timeout(Duration::from_secs(2), async {
+            loop {
+                let stats = counters.snapshot();
+                if stats.upstream_connections == 2 && stats.delayed_reads > before.delayed_reads {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("late connection reader reached held forwarding gate");
+        assert_eq!(counters.snapshot().forwarded_to_observers_bytes, 4);
+        timeout(Duration::from_secs(2), relays.shutdown())
+            .await
+            .expect("shutdown cancels gate waiters and joins every connection while held");
+        let mut trailing = [0_u8; 1];
+        assert_eq!(
+            timeout(Duration::from_secs(2), first_observer.read(&mut trailing))
+                .await
+                .expect("old upstream closes")
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            timeout(Duration::from_secs(2), late_observer.read(&mut trailing))
+                .await
+                .expect("new upstream closes")
+                .unwrap(),
+            0
+        );
+        let stats = counters.snapshot();
+        assert_eq!(stats.accepted_connections, 2);
+        assert_eq!(stats.upstream_connections, 2);
+        assert_eq!(stats.forwarded_to_observers_bytes, 4);
+        assert!(!relays.running.load(Ordering::Acquire));
+        assert!(
+            TcpStream::connect(published_address.to_string())
+                .await
+                .is_err()
+        );
+        drop(paused);
+        assert!(relays.forwarding.try_read().is_ok());
+    }
+
     #[test]
     fn default_builder_has_no_observers_and_preserves_validator_peer_semantics() {
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         assert_eq!(network.peers().as_slice(), network.validators());
         assert!(network.observers().is_empty());
-        assert!(!network.set_observer_slow_reader_relays_paused(true));
+        let runtime = runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("relay control runtime");
+        assert!(
+            runtime
+                .block_on(network.pause_observer_slow_reader_relays())
+                .is_none()
+        );
         assert_eq!(network.all_peers().count(), network.peers().len());
         assert_eq!(network.torii_urls().len(), network.peers().len());
         assert_eq!(network.topology_entries().len(), network.peers().len());

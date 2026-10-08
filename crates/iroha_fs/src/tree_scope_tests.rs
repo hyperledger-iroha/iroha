@@ -68,7 +68,7 @@ fn tree_records_keep_native_inventory_bounds_lazy_errors_and_original_retry() {
                     ))
                 })?;
                 nested?;
-                let _ = reader.read("later", 8, |_| visits.set(visits.get() + 1))?;
+                reader.read("later", 8, |_| visits.set(visits.get() + 1))?;
                 Ok::<_, io::Error>(())
             })?;
             tree.read_scope(&second, |_| {
@@ -113,7 +113,7 @@ fn tree_shared_native_prefix_is_required_and_restored_changes_have_explicit_temp
         );
         for row in [&first, &retained, &second] {
             assert_eq!(
-                tree.read_scope(row, |reader| reader.read("record", 8, |bytes| bytes.len()))?,
+                tree.read_scope(row, |reader| reader.read("record", 8, <[u8]>::len))?,
                 8
             );
         }
@@ -342,7 +342,7 @@ fn tree_persistent_ancestor_result_and_suffix_leaf_refusals_restore_exact_origin
             root.read_tree_scope(|tree| tree.read_scope(&first, |reader| reader.read(
                 "record",
                 8,
-                |bytes| bytes.len()
+                <[u8]>::len
             )))
             .unwrap(),
             8

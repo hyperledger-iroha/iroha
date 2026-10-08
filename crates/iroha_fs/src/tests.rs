@@ -3,7 +3,7 @@
 use super::*;
 use std::{
     fs,
-    io::{Seek as _, SeekFrom, Write as _},
+    io::{SeekFrom, Write as _},
 };
 
 fn store() -> (tempfile::TempDir, PrivateDirectory) {

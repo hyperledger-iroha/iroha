@@ -29,8 +29,13 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 ## Immediate blockers
 
 The Nexus proposal/status repairs and original invocation binding are preserved.
-The merged ordinary-Load cutover requires fresh daemon and Nexus harness qualification;
-the retired publisher-custody fixture cannot supply current admission evidence.
+The paid Nexus workload exposed an AMX retry defect: a completed State visibility
+publication incorrectly invalidated retained decoded bytes and halted the node.
+The repair separates immutable decode custody from State authority; every retry
+still authenticates the current committed parent. Native retry and parent
+authentication controls pass; rebuilt daemon/Nexus qualification remains pending.
+The retired publisher-custody fixture
+cannot supply current admission evidence.
 Paid settlement, serial all-seat restart/readback and disjoint-lane isolation must
 run on the same rebuilt candidate. Full fault/leakage campaigns and the complete
 original funded execution graph remain open.

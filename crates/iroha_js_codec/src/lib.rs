@@ -1395,7 +1395,9 @@ pub fn value_to_instruction(value: json::Value) -> CodecResult<InstructionBox> {
             || instruction.as_any().is::<RegisterSmartContractCode>()
             || instruction.as_any().is::<RegisterSmartContractBytes>()
             || instruction.as_any().is::<RemoveSmartContractBytes>()
-            || instruction.as_any().is::<RegisterDataspaceAssetDefinition>()
+            || instruction
+                .as_any()
+                .is::<RegisterDataspaceAssetDefinition>()
         {
             return Err(CodecError::new(
                 CodecErrorKind::InvalidArgument,

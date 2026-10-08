@@ -52,7 +52,7 @@ fn scoped_reads_are_lazy_and_preserve_native_bounds_names_and_nested_semantic_er
                 "semantic missing source"
             );
             nested?;
-            let _ = reader.read("../unreachable", 6, |_| visits.set(visits.get() + 1))?;
+            reader.read("../unreachable", 6, |_| visits.set(visits.get() + 1))?;
             Ok::<_, io::Error>(())
         })
         .unwrap_err();
@@ -62,7 +62,7 @@ fn scoped_reads_are_lazy_and_preserve_native_bounds_names_and_nested_semantic_er
     for (name, maximum) in [("missing", 5), ("first", 4), ("../escape", 5)] {
         let expected = directory.read(name, maximum).unwrap_err();
         let actual = directory
-            .read_scope(|reader| reader.read(name, maximum, |bytes| bytes.len()))
+            .read_scope(|reader| reader.read(name, maximum, <[u8]>::len))
             .unwrap_err();
         assert_eq!(actual.kind(), expected.kind());
         assert_eq!(actual.to_string(), expected.to_string());
@@ -110,7 +110,7 @@ fn scoped_leaf_checks_refuse_real_links_and_permissions_then_retry_original_obje
         }
         assert_eq!(
             directory
-                .read_scope(|reader| reader.read("first", 5, |bytes| bytes.len()))
+                .read_scope(|reader| reader.read("first", 5, <[u8]>::len))
                 .unwrap(),
             5
         );
@@ -172,7 +172,7 @@ fn scoped_exit_custody_overrides_actual_success_absence_native_and_semantic_erro
         fs::rename(&displaced, &original).unwrap();
         assert_eq!(
             directory
-                .read_scope(|reader| reader.read("first", 5, |bytes| bytes.len()))
+                .read_scope(|reader| reader.read("first", 5, <[u8]>::len))
                 .unwrap(),
             5
         );
@@ -218,7 +218,7 @@ fn scoped_absence_cannot_mask_real_missing_ancestor_or_exit_permission_refusal()
         }
         assert_eq!(
             directory
-                .read_scope(|reader| reader.read("first", 5, |bytes| bytes.len()))
+                .read_scope(|reader| reader.read("first", 5, <[u8]>::len))
                 .unwrap(),
             5
         );
