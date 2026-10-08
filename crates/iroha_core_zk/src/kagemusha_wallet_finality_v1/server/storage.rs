@@ -1,13 +1,12 @@
 //! Bounded immutable proof DATA. Restoring bytes never establishes proof authority.
 
 use std::{
-    fs::File,
     io::{self, Read as _, Write as _},
     path::Path,
 };
 
+use super::custody::{Custody, LOCK, Mode, SELECTION};
 use ff::PrimeField as _;
-use iroha_fs::{FileIdentity, PrivateDirectory};
 use iroha_kagemusha_proof::finality::continuity::{
     SourceNodeEvidence,
     checkpoint::{ProofCheckpointStore, ProofIdentity},
@@ -20,8 +19,6 @@ use rand::rand_core::TryRngCore as _;
 use sha2::{Digest as _, Sha256};
 
 const MAX_RECORD: usize = 1 << 20;
-const LOCK: &str = "owner.lock";
-const SELECTION: &str = "selection";
 
 #[derive(Encode, Decode, NoritoSchema)]
 #[norito_schema(name = "iroha.core_zk.kagemusha.server.proof_checkpoint.v1")]
@@ -36,9 +33,7 @@ struct Record {
 }
 
 pub(super) struct Journal {
-    directory: PrivateDirectory,
-    owner: File,
-    identity: FileIdentity,
+    custody: Custody,
     maximum_entries: usize,
     maximum_bytes: u64,
 }
@@ -49,56 +44,37 @@ fn invalid() -> io::Error {
     )
 }
 impl Journal {
-    pub(super) fn open(
+    pub(super) fn acquire(
         path: &Path,
         selection: &[u8],
         maximum_entries: usize,
         maximum_bytes: u64,
+        mode: Mode,
     ) -> io::Result<Self> {
-        if maximum_entries < 3
-            || maximum_entries > 1_000_000
+        if !(3..=1_000_000).contains(&maximum_entries)
             || maximum_bytes == 0
             || maximum_bytes == u64::MAX
         {
             return Err(invalid());
         }
-        let directory = PrivateDirectory::open_exact(path)?;
-        let owner = directory.open_ownership_lock(LOCK)?;
-        owner.try_lock().map_err(io::Error::other)?;
-        let identity = FileIdentity::of(&owner)?;
-        let mut journal = Self {
-            directory,
-            owner,
-            identity,
+        let journal = Self {
+            custody: Custody::acquire(path, selection, mode)?,
             maximum_entries,
             maximum_bytes,
         };
         journal.inventory()?;
-        // A previously initialized namespace cannot adopt a different release or root.
-        if journal.read(SELECTION, MAX_RECORD)?.is_none() {
-            let (entries, _) = journal.inventory()?;
-            if entries != 1 {
-                return Err(invalid());
-            }
-        }
-        journal.put(SELECTION, selection)?;
         Ok(journal)
     }
 
     fn guard(&self) -> io::Result<()> {
-        self.directory.revalidate()?;
-        if FileIdentity::of(&self.owner)? != self.identity
-            || FileIdentity::of(&self.directory.open_existing_lock(LOCK)?)? != self.identity
-        {
-            return Err(invalid());
-        }
-        Ok(())
+        self.custody.guard()
     }
     fn inventory(&self) -> io::Result<(usize, u64)> {
         self.guard()?;
         let mut entries = 0_usize;
         let mut bytes = 0_u64;
-        self.directory
+        self.custody
+            .directory
             .visit_private_files(self.maximum_entries, |name, metadata| {
                 let name = name.to_str().ok_or_else(invalid)?;
                 let digest_name = |prefix: &str| {
@@ -140,6 +116,7 @@ impl Journal {
     pub(super) fn read(&self, name: &str, maximum: usize) -> io::Result<Option<Vec<u8>>> {
         self.guard()?;
         let Some(mut original) = self
+            .custody
             .directory
             .open_retained_read_only_optional(name, maximum)?
         else {
@@ -169,7 +146,7 @@ impl Journal {
         }
         if let Some(existing) = self.read(name, MAX_RECORD)? {
             return if existing == bytes {
-                self.directory.sync()
+                self.custody.directory.sync()
             } else {
                 Err(invalid())
             };
@@ -187,6 +164,7 @@ impl Journal {
             .try_fill_bytes(&mut nonce)
             .map_err(io::Error::other)?;
         let mut pending = self
+            .custody
             .directory
             .create_retained_private(format!("pending-{}", hex::encode(nonce)), bytes.len())?;
         pending.write_all(bytes)?;
@@ -197,7 +175,7 @@ impl Journal {
         if self.read(name, MAX_RECORD)?.as_deref() != Some(bytes) {
             return Err(invalid());
         }
-        self.directory.sync()?;
+        self.custody.directory.sync()?;
         self.guard()
     }
 }

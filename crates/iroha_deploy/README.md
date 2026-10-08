@@ -26,6 +26,27 @@ What exists so far:
   requires one signed transaction to be applied by every validator. Kagami and
   Mochi call this owner directly. Explicit deployment/recovery targets preserve the
   workspace selection; ordinary startup and default auto-creation select their environment.
+  Startup transfers the original runtime lock through inherited stdin, preserving ownership
+  through worker loading and into its validator children. Unix retains the shared native file
+  lock; Windows relies on the trusted inherited handle's writer exclusion.
+  Binary verification, worker loading, activation and Ready publication share the original
+  startup budget. A same-boot continuous deadline includes suspend across the handoff;
+  clock failures refuse startup. Later renewal and maintenance turns have separate budgets.
+  Within worker admission, the current executable reuses the retained launcher's content hash
+  only after a fresh native open rejoins its exact path, identity and unchanged snapshot.
+  Both opened files are revalidated; different paths still receive full content admission.
+  Readiness submission reuses peer zero's transport after checking its endpoint against the
+  selected client configuration. The rebuilt submission context performs fresh compatibility
+  checks and retains the original deadline, signer, fee limits and four-validator proof checks.
+  After ownership and generation admission, failures before IPC publish Failed with zero
+  children. Rejected IPC clients do not terminate the listener. Later supervisor errors
+  cancel work and stop owned children before retaining a closed failure; cleanup and
+  status-publication errors remain explicit. `down` waits for native ownership to close;
+  missing IPC while ownership remains
+  does not prove stopped. An unavailable endpoint is reconciled only against its unchanged
+  admitted session, the original generation and explicit terminal zero-peer status.
+  A new start retires the stale session and endpoint while holding both environment locks.
+  These changes still require matching installed-runtime and native-platform validation.
   Unix sockets stay under the private managed store when the complete pathname fits the
   native limit; longer paths use the short owner-bound namespace. Reset removes a validated
   stale socket only while holding both environment locks. Windows uses owner-restricted native named pipes;
@@ -157,6 +178,26 @@ plan commitment, retains the original finite interval and exact empty external-f
 revalidates all sidecars on reopen. Original trust does not establish a promoted catalog, current
 operator permission, acknowledgements, runtime admission or serving readiness. Standard profiles
 have no generated compliance plan.
+Bootstrap recovery, child inventories, runtime custody selection and gateway plan lookups reuse
+the parent's immutable decoded profile. Gateway projections refuse another prepared generation.
+Runtime selection and startup polling reopen only existing bootstrap custody; explicit startup
+initialization owns its creation. Polling uses the retained renderer's exact generation and closes
+its original profile checks on successful and failed child admission. Missing bootstrap state is
+refused without reconstruction.
+Each existing child acquires its own operation lock and rechecks the retained files and native
+paths; the constructor also rechecks the parent before returning. Active Norito decode budgets, and
+parents opened under those budgets, retain the complete profile-capture path.
+Each read-only bootstrap traversal and child census owns a separate cache of up to three
+immutable checkpoint imports, keyed by their complete bytes, network and chain. Fresh custody
+and transaction checks still run for every child. Each cache ends with its traversal; active
+decode budgets always perform the original import and do not reuse cached results.
+Each traversal also retains at most two complete validated epoch contexts for reuse by that
+same importer. This separate bounded workspace supplies no source or current-state verdict.
+Recovery rechecks the caller's deadline after its final inventory read. Startup also rechecks
+cancellation before publishing original intent and validates each newly issued authorization
+before returning it. Shared live-authorization checks close cancellation after the original
+and epoch reads, while preserving custody and expiry errors. Failed attempts retain their
+original intent and epoch history for retry.
 The ordinary CLI and Mochi global creation paths share this default; their private-root request
 constructors select `Standard`. Restart preserves the exact retained profile. Profile changes
 require a new context, and private roots reject the global service profile. Explicit unmanaged

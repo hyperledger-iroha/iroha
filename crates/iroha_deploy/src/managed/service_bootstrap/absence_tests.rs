@@ -64,6 +64,11 @@ impl Fixture {
             deadline,
             mode,
             authorization,
+            checkpoint_import_scope: if mode == Mode::Advance {
+                None
+            } else {
+                CheckpointImportScope::for_original(&self.authority)
+            },
         }
         .reserve()
     }
@@ -147,8 +152,8 @@ fn present_first_reserve_keeps_empty_dirty_link_and_native_lock_owner_refusals()
     assert_absent(empty.unwrap());
     assert_eq!(
         (opens, parses),
-        (1, 1),
-        "present pre-lock prefix keeps full standalone capture"
+        (1, 0),
+        "present prefix keeps fresh native admission without reparsing the original profile"
     );
     assert!(purpose.entries(1).unwrap().is_empty());
     purpose
@@ -160,7 +165,7 @@ fn present_first_reserve_keeps_empty_dirty_link_and_native_lock_owner_refusals()
         .unwrap();
     let (dirty, opens, parses) = measured(|| fixture.reserve(Mode::Local, None, deadline));
     assert!(dirty.is_err());
-    assert_eq!((opens, parses), (1, 1));
+    assert_eq!((opens, parses), (1, 0));
     assert_eq!(
         purpose.read("unknown.nrt", 64).unwrap().as_slice(),
         b"retained presence only"
@@ -170,11 +175,11 @@ fn present_first_reserve_keeps_empty_dirty_link_and_native_lock_owner_refusals()
     let held = ManagedInitialReservePolicy::open(&fixture.authority.prepared).unwrap();
     let (locked, opens, parses) = measured(|| fixture.reserve(Mode::Local, None, deadline));
     assert!(locked.is_err());
-    assert_eq!((opens, parses), (1, 1));
+    assert_eq!((opens, parses), (1, 0));
     drop(held);
     let (retried, opens, parses) = measured(|| fixture.reserve(Mode::Local, None, deadline));
     assert_absent(retried.unwrap());
-    assert_eq!((opens, parses), (1, 1));
+    assert_eq!((opens, parses), (1, 0));
     assert!(!purpose.path().join("set").exists());
     #[cfg(unix)]
     {
@@ -183,7 +188,7 @@ fn present_first_reserve_keeps_empty_dirty_link_and_native_lock_owner_refusals()
         std::os::unix::fs::symlink(fixture.authority.directory.path(), purpose.path()).unwrap();
         let (linked, opens, parses) = measured(|| fixture.reserve(Mode::Local, None, deadline));
         assert!(linked.is_err());
-        assert_eq!((opens, parses), (1, 1));
+        assert_eq!((opens, parses), (1, 0));
         std::fs::remove_file(purpose.path()).unwrap();
         let (retried, opens, parses) = measured(|| fixture.reserve(Mode::Local, None, deadline));
         assert_absent(retried.unwrap());

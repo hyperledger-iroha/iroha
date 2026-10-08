@@ -209,6 +209,7 @@ impl From<TableError> for Error {
 impl From<CsError> for Error {
     fn from(error: CsError) -> Self {
         match error {
+            CsError::Cancelled => Self::Cancelled,
             CsError::NotEnoughRows { k, .. } => Self::NotEnoughRowsAvailable { current_k: k },
             other => Self::ConstraintSystem(Box::new(other)),
         }

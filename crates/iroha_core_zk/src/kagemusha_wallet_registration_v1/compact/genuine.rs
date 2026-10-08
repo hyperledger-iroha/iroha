@@ -23,7 +23,7 @@ fn pinned_input(directory: &PrivateDirectory, role: &str, maximum: usize) -> Vec
     .unwrap()
 }
 
-fn same_registration(
+pub(super) fn same_registration(
     native: &FinalizedKagemushaWalletRegistrationV1,
     compact: &FinalizedKagemushaWalletRegistrationV1,
 ) {
@@ -54,6 +54,11 @@ fn genuine_native_and_compact_registration_agree_and_reject_mutations() {
         "COMPACT_REGISTRATION",
         COMPACT_REGISTRATION_MAX_BYTES_V1,
     );
+    let later_history = pinned_input(
+        &directory,
+        "LATER_REGISTRATION_HISTORY",
+        HISTORY_ORIGINAL_MAX_BYTES_V1,
+    );
     let native_source = RegistrationSourceV1::decode_canonical(&native_bytes).unwrap();
     let original = CompactRegistrationOriginalV1::decode_canonical(&compact_bytes).unwrap();
     assert_eq!(native_source.inventory.asset_digest, original.asset_digest);
@@ -69,7 +74,9 @@ fn genuine_native_and_compact_registration_agree_and_reject_mutations() {
     // This facade reauthenticates exact persisted signed originals and runs the ordinary
     // complete descriptor/VK graph qualification. It neither imports wallet PKs nor
     // constructs a wallet-open grant. Missing inputs fail; there is no component fallback.
-    let output = tempfile::tempdir().unwrap();
+    let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/qualification");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let output = tempfile::tempdir_in(scratch).unwrap();
     let (installed, graph, genesis, _originals) =
         crate::kagemusha_wallet_artifacts_v1::producer_inventory::open_pinned_engineering_finality_sources(
             &output.path().join("finality-admission")
@@ -93,6 +100,18 @@ fn genuine_native_and_compact_registration_agree_and_reject_mutations() {
         .unwrap()
         .restore_qualified(&graph, budget, None)
         .unwrap();
+    let later = HistoryOriginalV1::decode_canonical(&later_history)
+        .unwrap()
+        .restore_qualified(&graph, budget, None)
+        .unwrap();
+    assert_eq!(later.state().next_height, prefix.state().next_height + 1);
+    assert_ne!(later.state().result, prefix.state().result);
+    let mut earlier_registration = original.clone();
+    earlier_registration.history = later_history;
+    assert!(
+        verify(&earlier_registration).is_err(),
+        "a valid later prefix cannot open an earlier Register"
+    );
     let block = decode_framed_signed_block(&original.block).unwrap();
     let committed = decode(&original.committed).unwrap();
     let rebuilt = CompactRegistrationOriginalV1::from_terminal(

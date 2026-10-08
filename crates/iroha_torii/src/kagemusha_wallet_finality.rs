@@ -8,9 +8,8 @@ use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU64},
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
     time::Instant,
 };
@@ -27,7 +26,8 @@ use iroha_core_zk::{
         InstallationV1, VERIFIER_PACK_MAX_BYTES_V1, producer_inventory::CATALOG_MAX_BYTES_V1,
     },
     kagemusha_wallet_finality_v1::server::{
-        ServerFinalityCancellationV1, ServerFinalityLimitsV1, ServerFinalityV1,
+        ServerFinalityCancellationV1, ServerFinalityLimitsV1, ServerFinalityStorageV1,
+        ServerFinalityV1,
     },
 };
 use iroha_data_model::{
@@ -97,17 +97,9 @@ impl Queue {
 pub(super) struct FinalityService {
     scheme: [u8; 32],
     maximum_height: u64,
-    sender: mpsc::SyncSender<Job>,
-    queue: Arc<Mutex<Queue>>,
-    stop: Arc<AtomicBool>,
-    cancel: ServerFinalityCancellationV1,
+    worker: Arc<worker::Worker>,
 }
-impl Drop for FinalityService {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        self.cancel.cancel();
-    }
-}
+mod worker;
 impl FinalityService {
     pub(super) fn open(
         state: Arc<CoreState>,
@@ -116,71 +108,34 @@ impl FinalityService {
         if !(1..=64).contains(&config.max_pending_requests) {
             return Err(std::io::Error::other("invalid finality queue bound"));
         }
-        // Preflight custody without creating directories or claiming source qualification.
-        iroha_fs::PrivateDirectory::open_exact(&config.server_originals)?;
+        iroha_fs::PrivateDirectory::open_exact(&config.verifier_originals)?;
+        iroha_fs::PrivateDirectory::open_exact(&config.proving_cache)?;
         iroha_fs::PrivateDirectory::open_exact(&config.journal_dir)?;
         iroha_fs::SelectedRegularFile::capture(&config.verifier_pack)?;
         iroha_fs::SelectedRegularFile::capture(&config.producer_inventory)?;
-        let queue = Arc::new(Mutex::new(Queue {
-            entries: BTreeMap::new(),
-            maximum: config.max_pending_requests,
-        }));
-        let stop = Arc::new(AtomicBool::new(false));
         let cancel = ServerFinalityCancellationV1::default();
-        let (sender, receiver) = mpsc::sync_channel::<Job>(config.max_pending_requests);
-        let worker_queue = queue.clone();
-        let worker_stop = stop.clone();
         let worker_cancel = cancel.clone();
         let scheme = config.scheme_id;
         let maximum_height = config.maximum_receipt_height;
-        std::thread::Builder::new()
-            .name("kagemusha-load-finality".into())
-            .spawn(move || {
-                let mut producer = None;
-                while let Ok(job) = receiver.recv() {
-                    if worker_stop.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let result = (|| {
-                        if producer.is_none() {
-                            producer = Some(mount(&state, &config, worker_cancel.clone())?);
-                        }
-                        prove(
-                            &state,
-                            &config,
-                            producer.as_mut().ok_or("producer absent")?,
-                            &job,
-                            &worker_stop,
-                        )
-                    })();
-                    if worker_stop.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let status = match result {
-                        Ok(bytes) => Status::Ready(bytes),
-                        Err(reason) => {
-                            iroha_logger::warn!(
-                                reason,
-                                "KAGEMUSHA terminal Load proof unavailable"
-                            );
-                            Status::Failed
-                        }
-                    };
-                    let Ok(mut queue) = worker_queue.lock() else {
-                        break;
-                    };
-                    if let Some(entry) = queue.entries.get_mut(&job.key) {
-                        *entry = status;
-                    }
+        let worker = worker::Worker::start_with(config.max_pending_requests, cancel, move || {
+            let mut producer = None;
+            move |job: &Job, stop: &AtomicBool| {
+                if producer.is_none() {
+                    producer = Some(mount(&state, &config, worker_cancel.clone(), stop)?);
                 }
-            })?;
+                prove(
+                    &state,
+                    &config,
+                    producer.as_mut().ok_or("producer absent")?,
+                    job,
+                    stop,
+                )
+            }
+        })?;
         Ok(Self {
             scheme,
             maximum_height,
-            sender,
-            queue,
-            stop,
-            cancel,
+            worker: Arc::new(worker),
         })
     }
 
@@ -200,23 +155,34 @@ impl FinalityService {
             return Err("receipt selection differs");
         }
         let key = receipt.receipt_digest().map_err(|_| "invalid receipt")?;
-        let mut queue = self.queue.lock().map_err(|_| "worker queue unavailable")?;
-        if let Some(result) = queue.observe(key)? {
-            return Ok(result);
-        }
-        if self
-            .sender
-            .try_send(Job {
-                payer,
-                receipt,
-                key,
-            })
-            .is_err()
-        {
-            queue.entries.remove(&key);
-            return Err("worker unavailable");
-        }
-        Ok(None)
+        self.worker.read_or_schedule(Job {
+            payer,
+            receipt,
+            key,
+        })
+    }
+}
+
+/// Retain the proof owner in normal startup, rollback and test-router shutdown.
+pub(super) fn register_worker(
+    app: &crate::AppState,
+    shutdown: iroha_futures::supervisor::ShutdownSignal,
+    workers: &mut Vec<crate::ToriiCriticalWorker>,
+) -> std::result::Result<(), &'static str> {
+    if let Some(service) = app.kagemusha_load_finality.as_ref() {
+        workers.push(crate::ToriiCriticalWorker {
+            name: "kagemusha_load_finality",
+            task: service.worker.supervise(shutdown)?,
+        });
+    }
+    Ok(())
+}
+
+fn running(stop: &AtomicBool) -> Result<()> {
+    if stop.load(Ordering::Acquire) {
+        Err("owner stopped")
+    } else {
+        Ok(())
     }
 }
 
@@ -224,13 +190,17 @@ fn mount(
     state: &CoreState,
     config: &KagemushaLoadFinality,
     cancel: ServerFinalityCancellationV1,
+    stop: &AtomicBool,
 ) -> Result<ServerFinalityV1> {
+    running(stop)?;
     let pack = iroha_fs::SelectedRegularFile::capture(&config.verifier_pack)
         .and_then(|file| file.read(VERIFIER_PACK_MAX_BYTES_V1))
         .map_err(|_| "verifier pack custody unavailable")?;
+    running(stop)?;
     let inventory = iroha_fs::SelectedRegularFile::capture(&config.producer_inventory)
         .and_then(|file| file.read(CATALOG_MAX_BYTES_V1))
         .map_err(|_| "producer inventory custody unavailable")?;
+    running(stop)?;
     let view = state.view();
     // This original comes from Core's actual configured signed genesis, never a request,
     // producer inventory anchor, remote checkpoint or an operator-supplied result projection.
@@ -249,6 +219,7 @@ fn mount(
     // The verifier owns the exact signed genesis; do not pin the live ledger
     // view throughout the independently authenticated proof-graph import.
     drop(view);
+    running(stop)?;
     ServerFinalityV1::open(
         &verifier,
         InstallationV1 {
@@ -257,10 +228,14 @@ fn mount(
         },
         &pack,
         &inventory,
-        &config.server_originals,
-        &config.journal_dir,
+        ServerFinalityStorageV1 {
+            verifier_originals: &config.verifier_originals,
+            proving_cache: &config.proving_cache,
+            journal: &config.journal_dir,
+        },
         ServerFinalityLimitsV1 {
             maximum_key_bytes: config.maximum_key_bytes,
+            maximum_resident_proving_key_bytes: config.maximum_resident_proving_key_bytes,
             maximum_original_bytes: config.maximum_original_bytes,
             maximum_artifacts: config.maximum_artifacts,
             msm_bytes: config.msm_bytes,
@@ -381,9 +356,14 @@ fn prove(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn scheduling_binds_exact_payer_scheme_height_and_receipt_before_queueing() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn scheduling_binds_exact_payer_scheme_height_and_receipt_before_queueing() {
         use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_futures::supervisor::ShutdownSignal;
+        use std::{
+            sync::{atomic::AtomicUsize, mpsc},
+            time::Duration,
+        };
         let payer = AccountId::new(
             KeyPair::from_seed(vec![0x61; 32], Algorithm::Ed25519)
                 .public_key()
@@ -394,7 +374,7 @@ mod tests {
                 .public_key()
                 .clone(),
         );
-        // DATA fixture only. There is no worker or production proving authority in this test.
+        // DATA fixture only. The real worker has no production proving authority.
         let receipt = KagemushaWalletLoadReceiptV1 {
             version: 1,
             scheme_id: [1; 32],
@@ -409,17 +389,27 @@ mod tests {
             block_height: 2,
             payer_account_digest: kagemusha_wallet_account_digest_v1(&payer).unwrap(),
         };
-        let (sender, receiver) = mpsc::sync_channel(1);
+        let (observed, receiver) = mpsc::sync_channel(1);
+        let (release, released) = mpsc::sync_channel(1);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let worker_calls = Arc::clone(&calls);
+        let worker = Arc::new(
+            worker::Worker::start(1, ServerFinalityCancellationV1::default(), move |job, _| {
+                worker_calls.fetch_add(1, Ordering::AcqRel);
+                observed
+                    .send((job.payer.clone(), job.receipt.clone(), job.key))
+                    .map_err(|_| "fixture observer stopped")?;
+                released.recv().map_err(|_| "fixture release stopped")?;
+                Ok(vec![7])
+            })
+            .unwrap(),
+        );
+        let shutdown = ShutdownSignal::new();
+        let supervisor = worker.supervise(shutdown.clone()).unwrap();
         let service = FinalityService {
             scheme: [1; 32],
             maximum_height: 10,
-            sender,
-            queue: Arc::new(Mutex::new(Queue {
-                entries: BTreeMap::new(),
-                maximum: 1,
-            })),
-            stop: Arc::new(AtomicBool::new(false)),
-            cancel: ServerFinalityCancellationV1::default(),
+            worker,
         };
         assert!(service.read_or_schedule(other, receipt.clone()).is_err());
         for changed in [
@@ -442,8 +432,9 @@ mod tests {
         ] {
             assert!(service.read_or_schedule(payer.clone(), changed).is_err());
         }
-        assert!(service.queue.lock().unwrap().entries.is_empty());
+        assert_eq!(calls.load(Ordering::Acquire), 0);
         assert!(receiver.try_recv().is_err());
+        // Invalid selections must leave the sole queue slot available to the valid receipt.
         assert_eq!(
             service
                 .read_or_schedule(payer.clone(), receipt.clone())
@@ -456,15 +447,25 @@ mod tests {
                 .unwrap(),
             None
         );
-        let job = receiver.try_recv().unwrap();
-        assert_eq!(job.payer, payer);
-        assert_eq!(job.receipt, receipt);
-        assert_eq!(job.key, receipt.receipt_digest().unwrap());
+        let (actual_payer, actual_receipt, key) =
+            receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(actual_payer, payer);
+        assert_eq!(actual_receipt, receipt);
+        assert_eq!(key, receipt.receipt_digest().unwrap());
         assert!(receiver.try_recv().is_err());
-        service.queue.lock().unwrap().entries.clear();
-        drop(receiver);
+        shutdown.send();
+        release.send(()).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), supervisor)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            result,
+            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+        ));
         assert!(service.read_or_schedule(payer, receipt).is_err());
-        assert!(service.queue.lock().unwrap().entries.is_empty());
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        assert!(receiver.try_recv().is_err());
     }
     #[test]
     fn queue_keeps_pending_exact_and_bounds_active_plus_unread_results() {

@@ -115,7 +115,11 @@ fn three_paid_originals_reuse_fifo_without_caching_source_or_outer_admission() {
     assert_eq!(fourth, originals[3]);
     assert_eq!(attempts(&authority), 4);
     {
-        let selected = authority.checkpoint_cache.entry.try_lock().unwrap();
+        let selected = authority
+            .effective_checkpoint_cache()
+            .entry
+            .try_lock()
+            .unwrap();
         assert_eq!(selected.len, SLOTS);
         assert!(
             selected
@@ -169,7 +173,7 @@ fn three_paid_originals_reuse_fifo_without_caching_source_or_outer_admission() {
     assert_eq!(attempts(&authority), before + 2);
     assert!(
         authority
-            .checkpoint_cache
+            .effective_checkpoint_cache()
             .entry
             .try_lock()
             .unwrap()
@@ -233,7 +237,7 @@ fn three_paid_originals_reuse_fifo_without_caching_source_or_outer_admission() {
         }
         assert!(
             authority
-                .checkpoint_cache
+                .effective_checkpoint_cache()
                 .entry
                 .try_lock()
                 .unwrap()
@@ -285,7 +289,11 @@ fn three_paid_originals_reuse_fifo_without_caching_source_or_outer_admission() {
     // A maximum incoming envelope evicts the actual small memo owners before decode;
     // escaped caller Arcs remain caller-owned and cannot be claimed as released memory.
     {
-        let mut selected = authority.checkpoint_cache.entry.try_lock().unwrap();
+        let mut selected = authority
+            .effective_checkpoint_cache()
+            .entry
+            .try_lock()
+            .unwrap();
         assert!(!selected.is_empty());
         let ceiling = retained_import_envelope(MAX_CHECKPOINT_BYTES).unwrap();
         assert!(selected.make_room(MAX_CHECKPOINT_BYTES, ceiling));

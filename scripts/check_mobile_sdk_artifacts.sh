@@ -497,6 +497,9 @@ REQUIRED_PROTOCOL_C_SYMBOLS=(
   connect_norito_kagemusha_wallet_installation_register_v1
   connect_norito_kagemusha_wallet_installation_close_v1
   connect_norito_kagemusha_wallet_registration_source_relocate_v1
+  connect_norito_kagemusha_wallet_observe_v1
+  connect_norito_kagemusha_wallet_account_original_v1
+  connect_norito_kagemusha_wallet_account_display_v1
   connect_norito_kagemusha_wallet_enrollment_v1
 )
 REQUIRED_WALLET_JNI_SYMBOLS=(

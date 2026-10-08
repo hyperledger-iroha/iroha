@@ -20,10 +20,14 @@ pub(super) enum Phase {
     ProviderAdvertisement,
     Discovery,
     CustodyRenewal,
+    ProgramAdmission,
 }
 impl Phase {
     fn description(self) -> &'static str {
         match self {
+            Self::ProgramAdmission => {
+                "verifying the installed runtime and opening its control session"
+            }
             Self::Selection => "retaining the original generated service selection",
             Self::InitialReadiness => "proving the original readiness transaction",
             Self::Bootstrap => "recovering and advancing the original native service bootstrap",
@@ -66,6 +70,7 @@ impl Progress {
             11 => Phase::ProviderAdvertisement,
             12 => Phase::Discovery,
             13 => Phase::CustodyRenewal,
+            14 => Phase::ProgramAdmission,
             _ => Phase::Selection,
         }
     }

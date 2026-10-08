@@ -1536,6 +1536,7 @@ async fn signed_owner_prepare_and_claim_retain_exact_native_opening() {
         prepared.output_opening.payload.expires_at_ms
     );
 }
+
 #[cfg(feature = "app_api")]
 fn identifier_beneficiary_fixture(
     beneficiary_uaid: bool,

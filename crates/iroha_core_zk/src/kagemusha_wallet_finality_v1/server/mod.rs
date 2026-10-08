@@ -38,6 +38,8 @@ use super::{block_witness, derive_history_anchor, load_witness, retain_load_fina
 use crate::kagemusha_wallet_artifacts_v1::{InstallationV1, InstalledVerifierPackV1};
 
 mod artifacts;
+mod cache;
+mod custody;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -48,6 +50,9 @@ pub enum ServerFinalityErrorV1 {
     /// A configured finite bound, independent installation or exact original differs.
     #[error("server finality installation or source binding differs")]
     Binding,
+    /// Complete compiled D/V graph reconstruction refused identity, bounds or cancellation.
+    #[error(transparent)]
+    Catalog(#[from] iroha_kagemusha_proof::finality::catalog::CompileError),
     /// Existing immutable proof custody is unavailable or changed.
     #[error(transparent)]
     Storage(#[from] std::io::Error),
@@ -61,6 +66,17 @@ pub enum ServerFinalityErrorV1 {
     #[error(transparent)]
     Retention(#[from] super::FinalityRetentionError),
 }
+impl ServerFinalityErrorV1 {
+    /// Whether the operation ended due to typed cooperative cancellation.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Proof(error) => error.is_cancelled(),
+            Self::Catalog(error) => error.is_cancelled(),
+            _ => false,
+        }
+    }
+}
+
 type Result<T> = std::result::Result<T, ServerFinalityErrorV1>;
 
 /// Explicit server resource ceilings. These are limits, never trusted proof inputs.
@@ -68,6 +84,9 @@ type Result<T> = std::result::Result<T, ServerFinalityErrorV1>;
 pub struct ServerFinalityLimitsV1 {
     /// Maximum one original server proving key, up to 1 GiB.
     pub maximum_key_bytes: usize,
+    /// Maximum resident cache PK and interrupted PK staging bytes; 512 MiB by default.
+    /// Must hold one maximum-sized key and be finite at or below 16 GiB.
+    pub maximum_resident_proving_key_bytes: usize,
     /// Maximum aggregate original graph extent, including all D/V/PK entries.
     pub maximum_original_bytes: usize,
     /// Maximum source graph entries.
@@ -82,6 +101,9 @@ pub struct ServerFinalityLimitsV1 {
 impl ServerFinalityLimitsV1 {
     fn imports(self) -> Result<ImportLimits> {
         if !(1..=1 << 30).contains(&self.maximum_key_bytes)
+            || self.maximum_resident_proving_key_bytes < self.maximum_key_bytes
+            || self.maximum_resident_proving_key_bytes == usize::MAX
+            || self.maximum_resident_proving_key_bytes as u64 > 16u64 << 30
             || self.maximum_original_bytes == 0
             || self.maximum_original_bytes == usize::MAX
             || !(1..=65_536).contains(&self.maximum_artifacts)
@@ -105,7 +127,7 @@ impl ServerFinalityLimitsV1 {
     }
 }
 
-/// Reimport a complete offline server archive using the same original reader as serving.
+/// Reimport a complete offline compiler archive through the shared immutable byte reader.
 /// Records are unadmitted compiler DATA; success returns only the terminal source identity.
 /// It does not create a runtime, authenticate a release, sign an inventory or prove a Load.
 /// The serving owner separately requires its independently selected signed verifier pack
@@ -120,7 +142,7 @@ pub fn qualify_server_archive(
 ) -> Result<SourceIdentity> {
     let imports = limits;
     let anchor = derive_history_anchor(verifier).map_err(|_| ServerFinalityErrorV1::Binding)?;
-    let mut originals = artifacts::Originals::from_records(records, path, imports)?;
+    let mut originals = artifacts::ArchiveOriginals::from_records(records, path, imports)?;
     let installed = InstalledFinality::from_original_artifacts(
         anchor,
         &mut originals,
@@ -129,7 +151,12 @@ pub fn qualify_server_archive(
             vesta: PinnedParams::derive(16).map_err(|_| ServerFinalityErrorV1::Binding)?,
         },
         imports,
-    )?;
+    )
+    .map_err(|error| {
+        originals
+            .take_failure()
+            .unwrap_or(ServerFinalityErrorV1::Proof(error))
+    })?;
     originals.require_complete()?;
     let source = installed.qualified_source();
     Ok(SourceIdentity {
@@ -160,7 +187,25 @@ struct Selection {
     verifier_pack_sha256: [u8; 32],
     producer_inventory_sha256: [u8; 32],
     anchor: [u8; 32],
+    parameters: [[u8; 32]; 2],
     chain: String,
+}
+
+/// Distinct existing private namespaces for immutable inputs, regenerable PKs and proofs.
+/// Initialization never adopts a populated cache or journal. Normal opening never creates
+/// missing selection records, directories or ownership locks.
+#[derive(Clone, Copy)]
+pub struct ServerFinalityStorageV1<'a> {
+    /// Independently authenticated content-addressed descriptor and verifying-key originals.
+    pub verifier_originals: &'a Path,
+    /// Exclusively owned regenerable proving-key cache, separate from proof custody.
+    pub proving_cache: &'a Path,
+    /// Exclusively owned durable proof/checkpoint originals.
+    pub journal: &'a Path,
+}
+struct MountStorage<'a> {
+    paths: ServerFinalityStorageV1<'a>,
+    mode: custody::Mode,
 }
 
 /// One server installation and exclusively owned immutable recovery journal.
@@ -175,24 +220,88 @@ pub struct ServerFinalityV1 {
     cancellation: ServerFinalityCancellationV1,
 }
 impl ServerFinalityV1 {
-    /// Mount real server proving originals under independently selected signed installation
-    /// and actual native genesis. All paths must be existing exact owner-private directories.
-    /// No keys, directories, receipt authority or fallback profile are generated here.
+    /// Initialize fresh empty private cache and journal namespaces after full authenticated
+    /// D/V reconstruction. Generated PKs must match signed bytes and pass strict import.
     /// # Errors
-    /// Refuses changed signatures/source graph/genesis, missing PKs, competing ownership,
-    /// incompatible recovery selection and exhausted finite resource limits.
-    #[allow(clippy::too_many_arguments)]
+    /// Invalid installation, populated namespace, custody/resource/source failure or cancellation.
+    pub fn initialize(
+        verifier: &SumeragiFinalityVerifier,
+        installation: InstallationV1,
+        verifier_pack: &[u8],
+        producer_inventory: &[u8],
+        storage: ServerFinalityStorageV1<'_>,
+        limits: ServerFinalityLimitsV1,
+        cancellation: ServerFinalityCancellationV1,
+    ) -> Result<Self> {
+        Self::mount(
+            verifier,
+            installation,
+            verifier_pack,
+            producer_inventory,
+            MountStorage {
+                paths: storage,
+                mode: custody::Mode::Initialize,
+            },
+            limits,
+            cancellation,
+        )
+    }
+
+    /// Reopen existing exact selections; missing cache/journal selections never initialize.
+    /// Proving tables may be regenerated only from the fully matched compiled recipes.
+    /// # Errors
+    /// Invalid installation, lost/substituted custody, source/resource failure or cancellation.
     pub fn open(
         verifier: &SumeragiFinalityVerifier,
         installation: InstallationV1,
         verifier_pack: &[u8],
         producer_inventory: &[u8],
-        server_originals: &Path,
-        journal: &Path,
+        storage: ServerFinalityStorageV1<'_>,
+        limits: ServerFinalityLimitsV1,
+        cancellation: ServerFinalityCancellationV1,
+    ) -> Result<Self> {
+        Self::mount(
+            verifier,
+            installation,
+            verifier_pack,
+            producer_inventory,
+            MountStorage {
+                paths: storage,
+                mode: custody::Mode::Open,
+            },
+            limits,
+            cancellation,
+        )
+    }
+
+    fn mount(
+        verifier: &SumeragiFinalityVerifier,
+        installation: InstallationV1,
+        verifier_pack: &[u8],
+        producer_inventory: &[u8],
+        storage: MountStorage<'_>,
         limits: ServerFinalityLimitsV1,
         cancellation: ServerFinalityCancellationV1,
     ) -> Result<Self> {
         let imports = limits.imports()?;
+        iroha_pasta::CancellationToken::checkpoint(Some(&cancellation.0))
+            .map_err(|_| iroha_kagemusha_proof::finality::continuity::producer::Error::Cancelled)?;
+        let paths = storage.paths;
+        let roots = [paths.verifier_originals, paths.proving_cache, paths.journal]
+            .map(iroha_fs::PrivateDirectory::open_exact);
+        let [verifiers, cache_root, journal_root] = roots;
+        let roots = [verifiers?, cache_root?, journal_root?];
+        let identities = [
+            roots[0].identity()?,
+            roots[1].identity()?,
+            roots[2].identity()?,
+        ];
+        if identities[0] == identities[1]
+            || identities[0] == identities[2]
+            || identities[1] == identities[2]
+        {
+            return Err(ServerFinalityErrorV1::Binding);
+        }
         let anchor = derive_history_anchor(verifier).map_err(|_| ServerFinalityErrorV1::Binding)?;
         let chain = verifier.chain_id().to_owned();
         if chain.is_empty() || chain.len() > 1024 {
@@ -219,11 +328,38 @@ impl ServerFinalityV1 {
         ) {
             return Err(ServerFinalityErrorV1::Binding);
         }
-        let mut originals = artifacts::Originals::open(&inventory, server_originals, imports)?;
         let params = Parameters {
-            pallas: PinnedParams::derive(16).map_err(|_| ServerFinalityErrorV1::Binding)?,
-            vesta: PinnedParams::derive(16).map_err(|_| ServerFinalityErrorV1::Binding)?,
+            pallas: pack.verifier().pallas_parameters().as_ref().clone(),
+            vesta: pack
+                .verifier()
+                .vesta_parameters(16)
+                .map_err(|_| ServerFinalityErrorV1::Binding)?
+                .as_ref()
+                .clone(),
         };
+        let mut verifier_originals = artifacts::VerifierOriginals::open(
+            paths.verifier_originals,
+            &selected.originals,
+            cancellation.0.clone(),
+        )?;
+        let recipes = iroha_kagemusha_proof::finality::catalog::qualify_server_recipes(
+            anchor,
+            &selected.originals,
+            &mut verifier_originals,
+            params.clone(),
+            iroha_kagemusha_proof::finality::catalog::VerifierLimits {
+                maximum_artifacts: limits.maximum_artifacts,
+                maximum_verifier_bytes: 512 << 20,
+                msm_budget: MemoryBudget::new(limits.msm_bytes),
+            },
+            imports,
+            Some(&cancellation.0),
+        )
+        .map_err(|error| {
+            verifier_originals
+                .take_failure()
+                .unwrap_or(ServerFinalityErrorV1::Catalog(error))
+        })?;
         let selection = norito::to_bytes(&Selection {
             version: 1,
             scheme: installation.scheme_id,
@@ -231,20 +367,55 @@ impl ServerFinalityV1 {
             verifier_pack_sha256: Sha256::digest(verifier_pack).into(),
             producer_inventory_sha256: Sha256::digest(producer_inventory).into(),
             anchor: anchor.digest().to_repr(),
+            parameters: [params.pallas.digest(), params.vesta.digest()],
             chain: chain.clone(),
         })
         .map_err(|_| ServerFinalityErrorV1::Binding)?;
-        let journal = storage::Journal::open(
-            journal,
-            &selection,
+        // Namespaces are selected only after complete D/V closure. They bind their role
+        // as well as installation/anchor/parameter identity, preventing cache/journal swaps.
+        let mut cache_selection = b"kagemusha-server-proving-cache-v1".to_vec();
+        cache_selection.extend_from_slice(&selection);
+        let mut journal_selection = b"kagemusha-server-proof-journal-v1".to_vec();
+        journal_selection.extend_from_slice(&selection);
+        for root in &roots {
+            root.revalidate()?;
+        }
+        let cache = cache::Cache::acquire(
+            paths.proving_cache,
+            &cache_selection,
+            &selected.originals,
+            limits.maximum_key_bytes,
+            limits.maximum_resident_proving_key_bytes,
+            storage.mode,
+        )?;
+        let journal = storage::Journal::acquire(
+            paths.journal,
+            &journal_selection,
             limits.maximum_journal_entries,
             limits.maximum_journal_bytes,
+            storage.mode,
         )?;
-        iroha_pasta::CancellationToken::checkpoint(Some(&cancellation.0))
-            .map_err(|_| ServerFinalityErrorV1::Binding)?;
-        let installed =
-            InstalledFinality::from_original_artifacts(anchor, &mut originals, params, imports)?;
-        originals.require_complete()?;
+        for root in &roots {
+            root.revalidate()?;
+        }
+        let mut originals = artifacts::Originals::new(
+            verifier_originals,
+            selected.originals.clone(),
+            recipes,
+            cache,
+        );
+        let installed = InstalledFinality::from_original_artifacts_cancellable(
+            anchor,
+            &mut originals,
+            params,
+            imports,
+            Some(&cancellation.0),
+        )
+        .map_err(|error| {
+            originals
+                .take_failure()
+                .unwrap_or(ServerFinalityErrorV1::Proof(error))
+        })?;
         Ok(Self {
             installed,
             originals,
@@ -289,7 +460,13 @@ impl ServerFinalityV1 {
             &fold,
         )
         .with_checkpoints(&mut self.journal);
-        Ok(operation(&self.installed, &mut context)?)
+        let result = operation(&self.installed, &mut context);
+        drop(context);
+        result.map_err(|error| {
+            self.originals
+                .take_failure()
+                .unwrap_or(ServerFinalityErrorV1::Proof(error))
+        })
     }
 
     /// Start or fully reverify the exact immutable genesis proof checkpoint.

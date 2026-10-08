@@ -307,6 +307,7 @@ fn actual_genesis_and_history_verifiers_match_strict_import_without_pk_reads() {
         }
     }
     let mut qualifier = Qualification::new(&records, &mut blobs, params(), limits()).unwrap();
+    qualifier.recipe_limits = Some(import_limits);
     let body = qualifier.source(NodeId::Genesis, &layout).unwrap();
     let history = qualifier.history(anchor(), body).unwrap();
     qualifier.complete().unwrap();
@@ -318,6 +319,21 @@ fn actual_genesis_and_history_verifiers_match_strict_import_without_pk_reads() {
         history.layout_metadata().1.to_bytes(),
         imported_history.layout_metadata().1.to_bytes()
     );
+    // Recipes retain compiled source shapes and exact qualified children only.
+    // Rebuilding them must recover byte-identical PKs on both curves, including
+    // the shared two-source history wrapper; these partial fixtures grant no graph.
+    for id in [
+        ArtifactId::Source(NodeId::Genesis),
+        ArtifactId::Source(NodeId::Append),
+        ArtifactId::HistoryWrapper,
+    ] {
+        let (_, recipe) = qualifier.recipes.get(&store::name(&id).unwrap()).unwrap();
+        let restored = recipe.regenerate_cancellable(None).unwrap();
+        let original = store.load(&id).unwrap();
+        assert_eq!(restored.descriptor, original.descriptor);
+        assert_eq!(restored.verifying_key, original.verifying_key);
+        assert_eq!(restored.proving_key, original.proving_key);
+    }
     drop(qualifier);
     assert!(
         records
@@ -327,4 +343,38 @@ fn actual_genesis_and_history_verifiers_match_strict_import_without_pk_reads() {
     println!(
         "VERIFIER_ONLY_GENESIS_HISTORY exact_sources_and_wrappers=true PK_reads=0 mutations=true complete_receipt_graph=false"
     );
+}
+
+#[test]
+fn cancelled_qualification_never_opens_originals_or_publishes_recipes() {
+    let token = iroha_pasta::CancellationToken::new();
+    token.cancel();
+    let mut blobs = Blobs::default();
+    let records = [sample_record()];
+    let error = qualify_receipt_cancellable(
+        anchor(),
+        &records,
+        &mut blobs,
+        params(),
+        limits(),
+        Some(&token),
+    )
+    .err()
+    .unwrap();
+    assert!(error.is_cancelled());
+    assert!(blobs.opened.is_empty());
+    let mut qualifier = Qualification::new(&records, &mut blobs, params(), limits()).unwrap();
+    qualifier.recipe_limits = Some(ImportLimits {
+        key: ReadConfig {
+            maximum_bytes: 128 << 20,
+            maximum_rows: 1 << 16,
+            coset_cache: CosetCachePolicy::OnDemand,
+            msm_budget: MemoryBudget::DEFAULT,
+        },
+        maximum_artifacts: 16,
+        maximum_original_bytes: 1 << 30,
+    });
+    qualifier.consumed.insert(records[0].name.clone());
+    assert!(qualifier.complete().is_err());
+    assert!(qualifier.recipes.is_empty());
 }

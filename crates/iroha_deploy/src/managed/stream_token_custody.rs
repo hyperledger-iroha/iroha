@@ -11,7 +11,9 @@ use super::{
         MAX_CHECKPOINT_BYTES, ManagedTransactionFinality, Terms, checkpoint_bytes, encode, invalid,
         now_ms, read_optional, read_selected_peers, require_deadline, require_empty,
     },
-    service_authority::{CheckpointImports, ProviderPurpose, ServiceAuthority},
+    service_authority::{
+        CheckpointImportScope, CheckpointImports, ProviderPurpose, ServiceAuthority,
+    },
 };
 use crate::{
     localnet::service_authorities::StreamTokenAuthorityRole, verify::finality::FinalityVerifier,
@@ -171,6 +173,22 @@ impl ManagedStreamTokenCustody {
     ) -> Result<Option<Self>> {
         ServiceAuthority::open_provider_existing(prepared, provider, ProviderPurpose::Custody)
             .map(|authority| authority.map(|authority| Self { authority }))
+    }
+
+    /// Retain fresh purpose custody using the immutable original read-only parent profile.
+    /// Optional lexical import work supplies no source, transaction or current-state verdict.
+    pub(super) fn open_existing_from_original(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        scope: Option<&CheckpointImportScope>,
+    ) -> Result<Option<Self>> {
+        ServiceAuthority::open_provider_existing_from_original(
+            parent,
+            provider,
+            ProviderPurpose::Custody,
+            scope,
+        )
+        .map(|authority| authority.map(|authority| Self { authority }))
     }
     fn wallet(&self) -> Result<AccountService> {
         #[cfg(test)]
@@ -1135,13 +1153,66 @@ impl ManagedStreamTokenCustody {
 }
 
 /// Reuse the held purpose lock for a complete read-only enrollment reference census.
+///
+/// Outside active decode limits, two fresh bounded namespace observations select only slots
+/// with a body or selection reference. Every selected slot uses the original full body reader.
+/// The same names, retained directory, operation lock and complete profile close every ordinary
+/// outcome. This consolidates absence observations; it is not an atomic snapshot. Material
+/// appearing and disappearing between both observations is not observed. Closing custody or
+/// namespace errors can supersede an earlier body error. Active limits retain the original
+/// ordered 64-slot reader, including its allocation and error order.
 pub(in crate::managed) fn validate_enrollment_inventory(authority: ServiceAuthority) -> Result<()> {
     let owner = ManagedStreamTokenCustody { authority };
-    BodyHistory::open(&owner, CustodyPurpose::InitialEnroll)?;
-    for sequence in 2..=64 {
-        BodyHistory::open(&owner, CustodyPurpose::Renewal(sequence))?;
+    validate_enrollment_slots(&owner, |owner, purpose| {
+        BodyHistory::open(owner, purpose).map(|_| ())
+    })
+}
+
+fn validate_enrollment_slots(
+    owner: &ManagedStreamTokenCustody,
+    mut inspect: impl FnMut(&ManagedStreamTokenCustody, CustodyPurpose) -> Result<()>,
+) -> Result<()> {
+    if norito::core::decode_limits_active() {
+        inspect(owner, CustodyPurpose::InitialEnroll)?;
+        for sequence in 2..=64 {
+            inspect(owner, CustodyPurpose::Renewal(sequence))?;
+        }
+        return Ok(());
     }
-    Ok(())
+
+    // The outer bootstrap census still owns unknown-name and dependency-order admission.
+    // This independent fresh census shares only joint absence, never present-body validation.
+    let result = owner.authority.directory.read_scope(|scope| {
+        let names = scope.entries(131)?;
+        let result = (|| {
+            for purpose in std::iter::once(CustodyPurpose::InitialEnroll)
+                .chain((2..=64).map(CustodyPurpose::Renewal))
+            {
+                let body = purpose.directory_name()?;
+                let reference = format!("{body}-selection.nrt");
+                if names
+                    .binary_search_by(|name| name.as_os_str().cmp(std::ffi::OsStr::new(&body)))
+                    .is_ok()
+                    || names
+                        .binary_search_by(|name| {
+                            name.as_os_str().cmp(std::ffi::OsStr::new(&reference))
+                        })
+                        .is_ok()
+                {
+                    inspect(owner, purpose)?;
+                }
+            }
+            Ok(())
+        })();
+        if scope.entries(131)? != names {
+            return Err(invalid(
+                "custody enrollment census changed during inspection",
+            ));
+        }
+        result
+    });
+    owner.authority.validate_profile()?;
+    result
 }
 
 fn matches_predecessor(
@@ -1212,3 +1283,7 @@ mod recovery_scope_tests;
 #[cfg(test)]
 #[path = "stream_token_custody/borrowed_tip_tests.rs"]
 mod borrowed_tip_tests;
+
+#[cfg(test)]
+#[path = "stream_token_custody/enrollment_inventory_tests.rs"]
+mod enrollment_inventory_tests;

@@ -793,6 +793,81 @@ fn private_operation_http_deadline_cannot_be_extended() {
 }
 
 #[test]
+fn wallet_deadline_view_keeps_identity_cancellation_and_signed_journal_after_drop() {
+    let (source, transport) = service();
+    let signal = Arc::new(AtomicBool::new(false));
+    let source = source.with_cancellation(Arc::clone(&signal)).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let bounded = source.with_deadline(deadline).unwrap();
+    assert_eq!(source.deadline, None);
+    assert_eq!(bounded.deadline, Some(deadline));
+    assert!(Arc::ptr_eq(
+        source.cancellation.as_ref().unwrap(),
+        bounded.cancellation.as_ref().unwrap()
+    ));
+    assert_eq!(
+        source.client.account_client().authority(),
+        bounded.client.account_client().authority()
+    );
+    assert_eq!(
+        source.client.account_client().network_id(),
+        bounded.client.account_client().network_id()
+    );
+    assert_eq!(
+        source.client.account_client().endpoint(),
+        bounded.client.account_client().endpoint()
+    );
+    assert_eq!(
+        source.client.account_client().signing_capability(),
+        bounded.client.account_client().signing_capability()
+    );
+    assert_eq!(
+        source.client.client().key_pair().public_key(),
+        bounded.client.client().key_pair().public_key()
+    );
+    assert_eq!(
+        source.client.client().headers(),
+        bounded.client.client().headers()
+    );
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("deadline-transfer");
+    let expected = request();
+    let prepared = bounded.prepare_transfer(&expected, &path).unwrap();
+    assert_eq!(prepared.status, OperationStatus::Prepared);
+    let signed = std::fs::read(path.join("operation.json")).unwrap();
+    let retained = bounded
+        .inspect_transfer_preparation(&path, &expected)
+        .unwrap();
+    let original_hash = retained.signed_transaction().unwrap().hash();
+    assert_eq!(retained.phase(), NativePreparationPhase::Signed);
+    drop(bounded);
+    let before = transport.requests.load(Ordering::SeqCst);
+    let inspected = source
+        .inspect_transfer_preparation(&path, &expected)
+        .unwrap();
+    assert_eq!(inspected.phase(), NativePreparationPhase::Signed);
+    assert_eq!(
+        inspected.signed_transaction().unwrap().hash(),
+        original_hash
+    );
+    assert!(source.with_deadline(std::time::Instant::now()).is_err());
+    let shorter = source
+        .with_deadline(deadline - Duration::from_secs(10))
+        .unwrap();
+    signal.store(true, Ordering::Release);
+    assert!(
+        shorter
+            .prepare_transfer(&expected, &temporary.path().join("cancelled"))
+            .is_err()
+    );
+    assert_eq!(transport.requests.load(Ordering::SeqCst), before);
+    assert_eq!(transport.quote_count.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.dispatch_count.load(Ordering::SeqCst), 0);
+    assert_eq!(std::fs::read(path.join("operation.json")).unwrap(), signed);
+    assert_eq!(source.deadline, None);
+}
+
+#[test]
 fn bounded_alias_preserves_exact_request_fee_limits_and_wire_through_recovery() {
     let (service, transport) = service();
     let (request, plan) = alias_fixture(&service.config, false, 5);

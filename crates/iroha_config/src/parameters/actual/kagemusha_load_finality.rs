@@ -14,8 +14,10 @@ pub struct KagemushaLoadFinality {
     pub verifier_pack: PathBuf,
     /// Existing producer-inventory original file.
     pub producer_inventory: PathBuf,
-    /// Existing private directory of complete server originals.
-    pub server_originals: PathBuf,
+    /// Existing private directory of immutable verifier D/V originals.
+    pub verifier_originals: PathBuf,
+    /// Separately initialized private proving-key cache; serving never adopts an empty cache.
+    pub proving_cache: PathBuf,
     /// Existing private retention journal; startup never creates it.
     pub journal_dir: PathBuf,
     /// Maximum queued, active and unread terminal results.
@@ -24,6 +26,8 @@ pub struct KagemushaLoadFinality {
     pub maximum_receipt_height: u64,
     /// Maximum individual proving-key original extent.
     pub maximum_key_bytes: usize,
+    /// Finite resident proving-key bound, at least maximum_key_bytes and at most 16 GiB.
+    pub maximum_resident_proving_key_bytes: usize,
     /// Maximum aggregate original graph extent.
     pub maximum_original_bytes: usize,
     /// Maximum graph entries.

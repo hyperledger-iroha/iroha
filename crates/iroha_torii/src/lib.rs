@@ -41663,6 +41663,13 @@ impl Torii {
             &mut workers,
         )
         .expect("prepared test enrollment service must retain its worker handle");
+        #[cfg(feature = "app_api")]
+        kagemusha_wallet_finality::register_worker(
+            app_state.as_ref(),
+            shutdown_signal.clone(),
+            &mut workers,
+        )
+        .expect("prepared test finality service must retain its worker handle");
         Ok(TestApiRouterRuntime {
             router,
             shutdown_signal,
@@ -41780,6 +41787,20 @@ impl Torii {
         }
         #[cfg(feature = "app_api")]
         if let Err(reason) = kagemusha_enrollment::register_worker(
+            app_state.as_ref(),
+            shutdown_signal.clone(),
+            &mut critical_workers,
+        ) {
+            let failure = Report::new(Error::StartServer).attach(reason);
+            return Err(rollback_torii_startup_workers(
+                &shutdown_signal,
+                critical_workers,
+                failure,
+            )
+            .await);
+        }
+        #[cfg(feature = "app_api")]
+        if let Err(reason) = kagemusha_wallet_finality::register_worker(
             app_state.as_ref(),
             shutdown_signal.clone(),
             &mut critical_workers,

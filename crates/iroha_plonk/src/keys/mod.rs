@@ -36,8 +36,8 @@ pub mod vk;
 
 pub use keygen::{
     KeygenConfig, KeygenConfigV2, keygen_from_tables, keygen_from_tables_v2, keygen_pk,
-    keygen_pk_v2, keygen_vk, keygen_vk_v2, keygen_vk_with_binding_v2, permutation_values,
-    source_fingerprint_v2,
+    keygen_pk_v2, keygen_pk_v2_cancellable, keygen_vk, keygen_vk_v2, keygen_vk_with_binding_v2,
+    keygen_vk_with_binding_v2_cancellable, permutation_values, source_fingerprint_v2,
 };
 pub use pk::{
     CosetCachePolicy, CosetMasks, CosetPolynomial, KeyConstraintSystem, ProvingKey, QuotientDomain,
@@ -197,7 +197,9 @@ impl KeyError {
     /// Whether this failure is cooperative cancellation, never an invalid proof.
     pub fn is_cancelled(&self) -> bool {
         match self {
-            Self::Cancelled => true,
+            Self::Cancelled | Self::ConstraintSystem(CsError::Cancelled) => true,
+            Self::Descriptor(error) => error.is_cancelled(),
+            Self::VerifyingKey(error) => error.is_cancelled(),
             Self::Synthesis(error) => matches!(error, frontend::Error::Cancelled),
             Self::Msm(error) => matches!(error, MsmError::Cancelled),
             Self::Fft(error) => matches!(error, FftError::Cancelled),
@@ -256,13 +258,21 @@ impl From<frontend::Error> for KeyError {
 
 impl From<CsError> for KeyError {
     fn from(error: CsError) -> Self {
-        Self::ConstraintSystem(error)
+        if matches!(error, CsError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::ConstraintSystem(error)
+        }
     }
 }
 
 impl From<DescriptorError> for KeyError {
     fn from(error: DescriptorError) -> Self {
-        Self::Descriptor(error)
+        if error.is_cancelled() {
+            Self::Cancelled
+        } else {
+            Self::Descriptor(error)
+        }
     }
 }
 
@@ -275,6 +285,7 @@ impl From<PermutationError> for KeyError {
 impl From<VkError> for KeyError {
     fn from(error: VkError) -> Self {
         match error {
+            VkError::Cancelled => Self::Cancelled,
             VkError::Point {
                 index,
                 error: crate::transcript::TranscriptError::IdentityPoint,

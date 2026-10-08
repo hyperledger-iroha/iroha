@@ -28,15 +28,18 @@ impl<C: SourceCircuit> Mounted<C> {
         artifacts: &mut dyn ArtifactSource,
         params: &Parameters,
         limits: ImportLimits,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let pair = load_pair(artifacts, &id)?;
-        let prover = Prover::from_original_artifacts(
+        let prover = Prover::from_original_artifacts_cancellable(
             layout,
             borrowed(&pair.source),
             borrowed(&pair.wrapper),
             params.pallas.clone(),
             params.vesta.clone(),
             limits.key,
+            cancellation,
         )?;
         Ok(Self {
             id,
@@ -127,7 +130,9 @@ impl<C: SourceCircuit> InstalledProgram<C> {
         artifacts: &mut dyn ArtifactSource,
         params: &Parameters,
         limits: ImportLimits,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let count_usize = usize::try_from(count).map_err(|_| Error::Artifact)?;
         if !(2..=crate::finality::continuity::tree::MAX_PROGRAM_LEAVES).contains(&count_usize) {
             return Err(Error::Artifact);
@@ -135,6 +140,7 @@ impl<C: SourceCircuit> InstalledProgram<C> {
         let mut leaves = BTreeMap::new();
         let mut sequence = Vec::with_capacity(count_usize);
         for cursor in 0..count {
+            iroha_pasta::CancellationToken::checkpoint(cancellation)?;
             // This map comes only from the compiled program owner below. In
             // particular no offered VK, descriptor or proof selects a source class.
             let (class, source) = layout(cursor)?;
@@ -148,11 +154,12 @@ impl<C: SourceCircuit> InstalledProgram<C> {
                     artifacts,
                     params,
                     limits,
+                    cancellation,
                 )?);
             }
             sequence.push(class);
         }
-        let tree = IntervalTree::from_original_artifacts(
+        let tree = IntervalTree::from_original_artifacts_cancellable(
             sequence
                 .iter()
                 .map(|class| leaves[class].source.clone())
@@ -165,6 +172,7 @@ impl<C: SourceCircuit> InstalledProgram<C> {
                 maximum_keys: limits.maximum_artifacts,
                 maximum_original_bytes: limits.maximum_original_bytes,
             },
+            cancellation,
         )?;
         Ok(Self {
             program,

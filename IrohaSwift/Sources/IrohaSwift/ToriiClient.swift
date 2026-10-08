@@ -22921,7 +22921,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     /// Read counted event-path DATA for the same canonically authenticated payer and Load.
-    /// Native verifies the original event commitment and produces the complete recursive proof.
+    /// Server proving consumes this original; the wallet verifies the returned terminal proof.
     public func getKagemushaWalletLoadEventProofOriginalV1(
         selection: ToriiKagemushaWalletLoadSelectionV1,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -22935,6 +22935,64 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         request.httpShouldUsePipelining = false
         return try await readKagemushaLedgerOriginal(request, maximum: 8192,
             requireCurrentOwner: requireCurrentOwner)
+    }
+
+    /// Receive the complete canonical Load terminal proof from the authenticated payer route.
+    /// These bytes remain DATA until the installed Native wallet verifies them with the exact receipt.
+    public func getKagemushaWalletLoadFinalityOriginalV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        requireCurrentOwner: @escaping @Sendable () async throws -> Void
+    ) async throws -> Data {
+        while true {
+            try Task.checkCancellation()
+            try await requireCurrentOwner()
+            let request = try makeKagemushaWalletLoadFinalityRequestV1(selection: selection, canonicalAuth: canonicalAuth)
+            try await requireCurrentOwner()
+            let (bytes, response) = try await sendBoundedResponse(request,
+                context: "KAGEMUSHA Load finality", maximumBytes: 16_384)
+            try await requireCurrentOwner()
+            if response.statusCode != 202 {
+                return try validateKagemushaLedgerOriginal(request, response: response,
+                    bytes: bytes, maximum: 16_384)
+            }
+            // Pending is transport progress only. Keep the exact Load selection and
+            // re-sign each poll; neither this status nor its headers admit value.
+            let delay = try Self.kagemushaLoadFinalityRetryDelay(request,
+                response: response, bytes: bytes)
+            try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000)
+            try await requireCurrentOwner()
+        }
+    }
+
+    static func kagemushaLoadFinalityRetryDelay(_ request: URLRequest,
+        response: HTTPURLResponse, bytes: Data) throws -> Int {
+        let encoding = response.value(forHTTPHeaderField: "Content-Encoding")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard response.statusCode == 202, let expected = request.url,
+            response.url?.absoluteString == expected.absoluteString, bytes.isEmpty,
+            encoding == nil || encoding == "identity",
+            contentType == nil || contentType == "application/x-norito",
+            let retry = response.value(forHTTPHeaderField: "Retry-After"),
+            let delay = Int(retry), (1...30).contains(delay), String(delay) == retry
+        else { throw ToriiClientError.invalidResponse }
+        if let length = response.value(forHTTPHeaderField: "Content-Length"), length != "0" {
+            throw ToriiClientError.invalidResponse
+        }
+        return delay
+    }
+
+    /// Sign the exact terminal-proof target afresh; a receipt signature cannot authorize it.
+    func makeKagemushaWalletLoadFinalityRequestV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) throws -> URLRequest {
+        var request = try makeCanonicalAccountRequest(path: selection.path + "/finality", method: .get,
+            headers: ["Accept": "application/x-norito", "Accept-Encoding": "identity",
+                      "Cache-Control": "no-cache, no-store"], canonicalAuth: canonicalAuth)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.httpShouldUsePipelining = false
+        return request
     }
 
     /// Fetch one original ordinary finality proof by height. The height is only a locator;
@@ -22960,6 +23018,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let (bytes, response) = try await sendBoundedResponse(request,
             context: "KAGEMUSHA ledger original", maximumBytes: maximum)
         try await requireCurrentOwner()
+        return try validateKagemushaLedgerOriginal(request, response: response, bytes: bytes, maximum: maximum)
+    }
+
+    private func validateKagemushaLedgerOriginal(_ request: URLRequest, response: HTTPURLResponse,
+        bytes: Data, maximum: Int) throws -> Data {
         try ensureStatus(response, equals: 200, responseBody: bytes)
         guard let expected = request.url, response.url?.absoluteString == expected.absoluteString,
             response.value(forHTTPHeaderField: "Content-Type")?.trimmingCharacters(in: .whitespacesAndNewlines) == "application/x-norito",

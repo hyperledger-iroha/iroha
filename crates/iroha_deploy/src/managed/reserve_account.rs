@@ -10,7 +10,7 @@ use super::{
         ManagedTransactionFinality, Terms, checkpoint_bytes, encode, invalid, now_ms,
         read_optional, require_deadline, require_empty,
     },
-    service_authority::{ProviderPurpose, ServiceAuthority},
+    service_authority::{CheckpointImportScope, ProviderPurpose, ServiceAuthority},
 };
 use crate::{
     localnet::service_authorities::StreamTokenAuthorityRole, verify::finality::FinalityVerifier,
@@ -98,6 +98,22 @@ impl ManagedReserveAccountRegistration {
             prepared,
             provider,
             ProviderPurpose::ReserveAccountRegistration,
+        )
+        .map(|authority| authority.map(|authority| Self { authority }))
+    }
+
+    /// Retain fresh purpose custody using the immutable original read-only parent profile.
+    /// Optional lexical import work supplies no source, transaction or current-state verdict.
+    pub(super) fn open_existing_from_original(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        scope: Option<&CheckpointImportScope>,
+    ) -> Result<Option<Self>> {
+        ServiceAuthority::open_provider_existing_from_original(
+            parent,
+            provider,
+            ProviderPurpose::ReserveAccountRegistration,
+            scope,
         )
         .map(|authority| authority.map(|authority| Self { authority }))
     }

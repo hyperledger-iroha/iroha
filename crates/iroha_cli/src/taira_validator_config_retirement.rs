@@ -482,10 +482,7 @@ fn vacant(
             );
         }
     }
-    require_no_live_path_references(
-        &[&scope.config, &scope.state, &scope.previous_daemon],
-        deadline,
-    )
+    require_no_live_path_references(&scope.vacant_paths(), deadline)
 }
 
 #[cfg(target_os = "linux")]
@@ -500,12 +497,14 @@ fn run(action: Action, request: &maintenance::MaintenanceRequest) -> Result<json
             && crate::compiled_build_identity()?.release_source_commit()? == text(&plan, "commit")?,
         "retirement executable differs from planned candidate"
     );
+    let previous_daemons = maintenance::PreviousDaemonsGuard::admit(&scope, deadline)?;
     let check = || -> Result<()> {
         maintenance::verify_owner(request, &scope, deadline, action == Action::Restore)?;
         ensure!(
             maintenance::public_bytes(&directory.join("intent.json"), 8 * LIMIT)? == plan_bytes,
             "retirement plan changed"
         );
+        previous_daemons.revalidate(deadline)?;
         for role in super::super::VALIDATOR_SLUGS {
             let (source, _, _) = config_paths(&plan, role)?;
             let target = source
@@ -522,7 +521,7 @@ fn run(action: Action, request: &maintenance::MaintenanceRequest) -> Result<json
         if action != Action::Prepare {
             vacant(&plan, &scope, deadline)?;
         }
-        Ok(())
+        previous_daemons.revalidate(deadline)
     };
     check()?;
     if action == Action::Install {
@@ -687,7 +686,7 @@ fn run(action: Action, request: &maintenance::MaintenanceRequest) -> Result<json
         Action::Install => "installed",
         Action::Restore => "restored",
     };
-    let receipt = norito::json!({"schema":(format!("{PREFIX}.{kind}.v1")), "operation":(scope.operation), "source_commit":(text(&plan,"commit")?), "network_id":(text(&plan,"network_id")?), "rows":result_rows});
+    let receipt = norito::json!({"schema":(format!("{PREFIX}.{kind}.v1")), "operation":(scope.operation.clone()), "source_commit":(text(&plan,"commit")?), "network_id":(text(&plan,"network_id")?), "rows":result_rows});
     validate_receipt(&receipt, &plan, kind)?;
     write_private(&directory.join(name), &json::to_vec(&receipt)?)?;
     Ok(receipt)

@@ -73,6 +73,7 @@ impl Schedule {
         Ok(Budget {
             started,
             timeout,
+            startup_deadline_ns: None,
             utc_ceiling_unix_ms: Some(self.expiry.utc_ceiling()),
             cancelled,
             progress,

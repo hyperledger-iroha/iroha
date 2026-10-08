@@ -1,7 +1,8 @@
-//! Offline compilation of the exact ordinary-finality source catalog.
+//! Compilation and exact qualification of the ordinary-finality source catalog.
 //!
-//! Compilation is explicit tooling, never part of wallet opening or proof
-//! production. Originals are emitted to bounded storage and reimported against
+//! Full catalog compilation is explicit tooling. Server-only regeneration requires
+//! independently authenticated metadata and complete fixed-source qualification;
+//! wallets never obtain regeneration capability. Originals are reimported against
 //! their concrete compiled owners. A successful build grants no signed-genesis,
 //! artifact-admission or finality authority and proves no live statement.
 
@@ -40,7 +41,10 @@ pub use builder::{Compilation, compile};
 pub use recipe::OriginalRecipe;
 pub use store::{ArtifactRecord, DirectoryCatalog};
 pub use streaming::StreamingCatalog;
-pub use verification::{ReceiptVerifier, VerifierBlobSource, VerifierLimits, qualify_receipt};
+pub use verification::{
+    ReceiptVerifier, ServerRecipes, VerifierBlobSource, VerifierLimits, qualify_receipt,
+    qualify_receipt_cancellable, qualify_server_recipes,
+};
 
 /// Exact offline compiler phase failure. It is retained for diagnosis and never
 /// converted into a partial successful catalog or an alternate source profile.

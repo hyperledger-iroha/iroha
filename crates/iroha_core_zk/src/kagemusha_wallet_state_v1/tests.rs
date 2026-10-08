@@ -664,7 +664,10 @@ pub(super) struct TestProofs {
     advance_checks: Arc<AtomicUsize>,
     capsule_writes: Option<Arc<AtomicUsize>>,
     expire_during_publication: bool,
+    fold_pause: Option<Arc<folding_preemption_tests::Pause>>,
 }
+
+mod folding_preemption_tests;
 
 #[path = "lifecycle/delivery_tests.rs"]
 mod bound_delivery;
@@ -786,6 +789,9 @@ impl NativeProofs for TestProofs {
     ) -> Result<FoldProgress, Error> {
         cancellation.check()?;
         self.folds.fetch_add(1, Ordering::SeqCst);
+        if let Some(pause) = &self.fold_pause {
+            pause.run(checkpoints, cancellation)?;
+        }
         let original = |stage: usize| {
             if self.checkpoint_bytes == 0 {
                 vec![9, 8, 7 - u8::try_from(stage).expect("test stage")]
@@ -879,6 +885,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         ledger_checkpoint: None,
         ledger_retired: None,
         ledger_load_plans: IndexRoot::default(),
+        ledger_load_ordinals: IndexRoot::default(),
         ledger_unload_confirmations: IndexRoot::default(),
         ledger_unload_proofs: IndexRoot::default(),
         ledger_unload_retired: None,

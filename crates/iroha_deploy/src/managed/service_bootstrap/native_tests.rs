@@ -367,10 +367,13 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
                     .as_millis(),
             );
             let advance_started = Instant::now();
-            assert_eq!(
-                finalities(owner.advance(authorization, fresh.deadline).unwrap()),
-                expected
-            );
+            let (_, passes) = phases::test_passes::count(|| {
+                assert_eq!(
+                    finalities(owner.advance(authorization, fresh.deadline).unwrap()),
+                    expected
+                );
+            });
+            assert_eq!(passes, [1, 0, 0]); // One fresh local graph, no dispatch graph.
             eprintln!(
                 "parent offline recovery timing: advance_elapsed_ms={} fresh_remaining_ms={}",
                 advance_started.elapsed().as_millis(),

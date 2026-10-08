@@ -165,11 +165,33 @@ impl IntervalTree {
     /// Wrong bounds, parameter profile, artifact/source/key mismatch or resource refusal.
     pub fn from_original_artifacts(
         leaf_sources: Vec<SourceVerifier>,
-        mut artifacts: impl FnMut([SourceIdentity; 2]) -> Result<OriginalPair, Error>,
+        artifacts: impl FnMut([SourceIdentity; 2]) -> Result<OriginalPair, Error>,
         pallas: PinnedParams<Ep>,
         vesta: PinnedParams<Eq>,
         config: TreeImportConfig,
     ) -> Result<Self, Error> {
+        Self::from_original_artifacts_cancellable(
+            leaf_sources,
+            artifacts,
+            pallas,
+            vesta,
+            config,
+            None,
+        )
+    }
+
+    /// Import every fixed tree original with typed cooperative cancellation.
+    /// # Errors
+    /// Wrong original/source/parameter identity, resource refusal or cancellation.
+    pub fn from_original_artifacts_cancellable(
+        leaf_sources: Vec<SourceVerifier>,
+        mut artifacts: impl FnMut([SourceIdentity; 2]) -> Result<OriginalPair, Error>,
+        pallas: PinnedParams<Ep>,
+        vesta: PinnedParams<Eq>,
+        config: TreeImportConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         if pallas.k() != 16
             || vesta.k() != 16
             || config.maximum_keys == 0
@@ -184,6 +206,7 @@ impl IntervalTree {
         let mut original_bytes = 0usize;
         let mut merges = Vec::with_capacity(shape.len());
         for children in shape {
+            iroha_pasta::CancellationToken::checkpoint(cancellation)?;
             let selected = children.map(|i| sources[i].clone());
             let identity = [
                 SourceIdentity::of(&selected[0])?,
@@ -203,13 +226,14 @@ impl IntervalTree {
                     .checked_add(original.byte_length()?)
                     .filter(|n| *n <= config.maximum_original_bytes)
                     .ok_or(Error::Artifact)?;
-                let prover = Prover::from_original_artifacts(
+                let prover = Prover::from_original_artifacts_cancellable(
                     &blank,
                     original.source.borrowed(),
                     original.wrapper.borrowed(),
                     pallas.clone(),
                     vesta.clone(),
                     config.key,
+                    cancellation,
                 )?;
                 let source = prover.qualified_source()?;
                 cache.insert(identity, source.clone());

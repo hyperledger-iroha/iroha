@@ -92,10 +92,11 @@ inventory limit. The source catalog creates private directories and files with
 explicit permissions; it does not change the process umask.
 
 Before completion, a fresh import reads every graph member exclusively from the
-server archive through the serving reader, requires that every selected record
-was consumed, and compares the genuine terminal source identity to the compiler's
-result. The archive is mandatory server material; it is never regenerated while
-serving a proof. The completed canonical inventory retains all three roles' hash
+server archive through the shared immutable byte reader, requires that every
+selected record was consumed, and compares the genuine terminal source identity
+to the compiler's result. This archive retains offline compilation evidence;
+serving uses the separately selected verifier originals and bounded proving cache
+described below. The completed canonical inventory retains all three roles' hash
 and length commitments, while `finality-originals` copies only descriptor/VK
 originals. That verifier directory and `finality-inventory.norito` feed `--request`
 directly. No server PK enters wallet packaging. Incomplete output is retained but
@@ -107,14 +108,14 @@ reused as production inputs.
 
 The optional `torii.kagemusha_load_finality` configuration selects exact nonzero
 Scheme and signed manifest digests, the signed verifier pack, authenticated
-producer inventory, complete `server-originals` archive and an existing private
-immutable journal. These identities and paths are mandatory when the service is
-configured. Finite configurable bounds with shared defaults cover keys, total
-original bytes, artifact count, MSM scratch, journal files/bytes, worker queue, native allocation,
-per-height native deadline and maximum receipt height. Absence supplies no
-replacement finality provider. The runtime independently authenticates this
-installation against Core's actual configured signed genesis and verifies the
-complete graph before proving.
+producer inventory, descriptor/VK originals, bounded proving cache and an existing
+private immutable journal. These identities and paths are mandatory when the
+service is configured. Finite configurable bounds with shared defaults cover
+individual and resident proving keys, total original bytes, artifact count, MSM
+scratch, journal files/bytes, worker queue, native allocation, per-height native
+deadline and maximum receipt height. Absence supplies no replacement finality
+provider. The runtime independently authenticates this installation against Core's
+actual configured signed genesis and verifies the complete graph before proving.
 
 `GET /v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality-proof`
 requires canonical payer authentication for the selected network, an empty body
@@ -128,8 +129,39 @@ reacquire and verify the exact retained proof. Pending work is never evicted.
 
 Source and custody/component tests do not establish a successful full signed
 installation or an actual financial proof response. Those executions and phone
-qualification remain open. Proof work observes cancellation; complete graph
-mounting does not currently provide mid-import cancellation.
+qualification remain open. Complete graph reconstruction, PK regeneration/import
+and proof work observe typed cooperative cancellation.
+
+## Server storage selection
+
+`--initialize-finality-server /absolute/private/inputs/request.json` selects fresh
+server custody from an already signed pack and producer inventory. The closed
+`iroha.kagemusha.finality-server-initialization.v1` request carries the same native
+genesis fields, independently selected `scheme_id_hex` and
+`manifest_digest_hex`, and `verifier_pack` / `producer_inventory` originals with
+`path` and `sha256`. It names three distinct existing private directories:
+`verifier_originals_directory` (the content-addressed D/V export),
+`proving_cache_directory`, and `journal_directory`. Both latter directories must
+be empty. Ordinary server startup uses existing-only opening; missing selections
+or locks are custody failures and never trigger initialization.
+
+The request supplies finite `maximum_key_bytes` (at most 1 GiB),
+`maximum_resident_proving_key_bytes` (at least one maximum key, at most 16 GiB;
+512 MiB is the configured default), `maximum_original_bytes` (at most 1 TiB),
+`maximum_artifacts` (at most 65,536), `maximum_journal_entries` (3–1,000,000), and
+`maximum_journal_bytes` (at most 1 TiB). The initializer uses 64 MiB MSM scratch.
+These storage limits are separate from process RSS and phone qualification.
+
+The server reconstructs every exact descriptor/VK from the fixed compiled graph
+before retaining opaque regeneration recipes. Each cache hit or regenerated PK
+must match the signed original bytes and pass source-specific strict import.
+Only the exclusively owned regenerable PK cache may evict selected entries;
+checkpoint and terminal proof originals live in the separate durable journal.
+A successful initializer imports the complete graph but produces no live proof.
+Cancellation or failed initialization retains partial evidence; it never mints a
+partial graph or permits ordinary startup to adopt a missing selection. If first-use
+publication fails between the two namespace selections, preserve that evidence and
+initialize a new pair of empty namespaces; do not reset or adopt the partial pair.
 
 ## Shared packaging ownership
 

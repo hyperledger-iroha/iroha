@@ -180,6 +180,21 @@ fn terminal_operation_error(status: &ManagedAttachmentStatus) -> Option<Error> {
         })
 }
 
+// A blocking status observation consumes the same foreground budget. Retain terminal
+// operation failure precedence, then reject an otherwise complete reply received too late.
+fn attachment_complete(status: &ManagedAttachmentStatus, deadline: Instant) -> Result<bool> {
+    if let Some(error) = terminal_operation_error(status) {
+        return Err(error);
+    }
+    let complete = status.stage == ManagedAttachmentPhase::Attached
+        && status.failure.is_none()
+        && status.parent_confirmed.is_some();
+    if complete {
+        remaining(deadline).map_err(|_| attachment_deadline(status))?;
+    }
+    Ok(complete)
+}
+
 fn record_wallet_status(
     public: &mut ManagedAttachmentStatus,
     status: Option<OperationStatus>,
@@ -577,13 +592,7 @@ impl ManagedStore {
             let status = self
                 .dataspace_status(&request.name)?
                 .ok_or_else(|| Error::Invalid("worker has no bound attachment".into()))?;
-            if let Some(error) = terminal_operation_error(&status.attachment) {
-                return Err(error);
-            }
-            if status.attachment.stage == ManagedAttachmentPhase::Attached
-                && status.attachment.failure.is_none()
-                && status.attachment.parent_confirmed.is_some()
-            {
+            if attachment_complete(&status.attachment, deadline)? {
                 return Ok(status);
             }
             if status.local.phase != ManagedPhase::Ready {

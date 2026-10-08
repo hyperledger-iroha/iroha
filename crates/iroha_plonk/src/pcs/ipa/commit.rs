@@ -223,6 +223,27 @@ impl<C: PastaCurve> CommitmentTables<C> {
         }
     }
 
+    /// Build optional public tables while preserving typed cancellation.
+    ///
+    /// # Errors
+    /// [`MsmError::Cancelled`] after construction tasks join. Budget refusal keeps the
+    /// corresponding table absent, exactly as [`Self::build`].
+    pub fn build_cancellable(
+        params: &ParamsIpa<C>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, MsmError> {
+        let table = |bases| match FixedBaseTable::new_cancellable(bases, budget, cancellation) {
+            Ok(table) => Ok(Some(table)),
+            Err(MsmError::Budget(_)) => Ok(None),
+            Err(error) => Err(error),
+        };
+        let g_lagrange = table(params.g_lagrange())?;
+        let g = table(params.g())?;
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        Ok(Self { g, g_lagrange })
+    }
+
     /// Whether the `g` and `g_lagrange` tables exist.
     #[must_use]
     pub fn present(&self) -> (bool, bool) {

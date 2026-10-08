@@ -2,6 +2,7 @@
 //! The existing fixture executes all accounts, permissions and asset state from signed genesis.
 
 use super::*;
+mod export;
 use iroha_core_zk::kagemusha_wallet_registration_v1::verify_finalized_kagemusha_wallet_registration_v1;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -55,10 +56,21 @@ fn balance(setup: &ExecutedKagemushaSetup, account: &AccountId) -> Quantity {
         .map_or_else(Quantity::zero, |value| value.as_ref().clone())
 }
 
-#[test]
-fn executed_universal_registration_authenticates_exact_asset_without_parliament() {
-    let mut setup = start();
-    let scheme = scheme(&setup);
+struct ExecutedRegistration {
+    setup: ExecutedKagemushaSetup,
+    scheme: KagemushaWalletSchemeV1,
+    proofs: Vec<SumeragiFinalityProof>,
+    committed: CommittedTransaction,
+}
+
+// Both the regression and exporter execute identical refusals and successful Register
+// through StateExecutor. No execution output, World row or finality verdict is injected.
+fn execute_registration(
+    mut setup: ExecutedKagemushaSetup,
+    scheme: KagemushaWalletSchemeV1,
+) -> ExecutedRegistration {
+    scheme.validate().unwrap();
+    assert_eq!(scheme.network_id, *setup.chain.network_id().as_bytes());
     let scheme_original = scheme.to_canonical_bytes().unwrap();
     let asset_original = norito::encode_canonical(&setup.asset).unwrap();
     let registration = KagemushaWalletLedgerV1::new(
@@ -71,9 +83,11 @@ fn executed_universal_registration_authenticates_exact_asset_without_parliament(
         },
     );
     let mut verifier = native(&setup);
-    for proof in registration_proofs(&setup) {
-        verifier.verify(&proof).unwrap();
+    let mut proofs = registration_proofs(&setup).to_vec();
+    for proof in &proofs {
+        verifier.verify(proof).unwrap();
     }
+    let mut terminal = None;
     // Both failures are actual ordinary execution results, never injected output rows.
     for change in 0..3 {
         let mut instruction = registration.clone();
@@ -96,6 +110,7 @@ fn executed_universal_registration_authenticates_exact_asset_without_parliament(
         let proof =
             crate::sumeragi::finality::build_proof(&setup.chain.state().view(), height).unwrap();
         let verified = verifier.verify(&proof).unwrap();
+        proofs.push(proof);
         let committed = committed(&verified);
         let selected = verify_finalized_kagemusha_wallet_registration_v1(
             &verified,
@@ -130,6 +145,7 @@ fn executed_universal_registration_authenticates_exact_asset_without_parliament(
             assert_eq!(selected.transaction_hash(), *transaction_hash.as_ref());
             assert_eq!(selected.instruction_index(), 0);
             assert_eq!(selected.block_hash(), *committed.block_hash().as_ref());
+            terminal = Some(committed);
         }
         assert_eq!(
             balance(&setup, &setup.account),
@@ -137,4 +153,23 @@ fn executed_universal_registration_authenticates_exact_asset_without_parliament(
         );
         assert_eq!(balance(&setup, &setup.reserve), Quantity::zero());
     }
+    assert_eq!(proofs.len(), 5);
+    assert_eq!(setup.chain.height(), 5);
+    ExecutedRegistration {
+        setup,
+        scheme,
+        proofs,
+        committed: terminal.expect("actual successful terminal Register"),
+    }
+}
+
+#[test]
+fn executed_universal_registration_authenticates_exact_asset_without_parliament() {
+    let setup = start();
+    let selected = scheme(&setup);
+    let executed = execute_registration(setup, selected);
+    assert_eq!(
+        *executed.committed.block_hash(),
+        executed.setup.chain.committed(5).block().hash()
+    );
 }

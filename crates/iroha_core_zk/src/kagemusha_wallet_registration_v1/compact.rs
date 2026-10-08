@@ -266,3 +266,6 @@ fn terminal_data(
 mod genuine;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod generator;

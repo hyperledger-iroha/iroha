@@ -849,6 +849,22 @@ impl Directory {
         result
     }
 
+    // The public removal bracket owns full entry and every-result exit custody.
+    pub(super) fn remove_private_native(&self, name: &OsStr) -> io::Result<bool> {
+        let Some(file) = self.open_readonly_native(name, true)? else {
+            return Ok(false);
+        };
+        let before = journal_snapshot(&file)?;
+        self.revalidate()?;
+        if journal_snapshot(&file)? != before || journal_snapshot(&self.open_read(name)?)? != before
+        {
+            return Err(changed());
+        }
+        rustix::fs::unlinkat(&self.current().file, name, AtFlags::empty())?;
+        self.current().sync()?;
+        Ok(true)
+    }
+
     pub(super) fn reconcile_atomic_staging(
         &self,
         required: &[&str],

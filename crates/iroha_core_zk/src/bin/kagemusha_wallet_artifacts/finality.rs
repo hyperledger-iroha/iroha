@@ -140,7 +140,7 @@ fn export_verifiers(
     Ok(())
 }
 
-pub(super) fn run(path: &str) -> io::Result<()> {
+pub fn run(path: &str) -> io::Result<()> {
     let request_original = Original::open(path, REQUEST_MAX, None)?;
     let request = parse(&request_original.bytes)?;
     let genesis = Original::open(

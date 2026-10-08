@@ -9,6 +9,49 @@ use std::{
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 
+// Availability is observed only at the direct endpoint or stream-I/O boundaries below.
+// Native directory custody, peer authentication and decoding remain strict refusals.
+pub(crate) enum RequestFailure {
+    Unavailable(Error),
+    Refused(Error),
+}
+
+impl RequestFailure {
+    fn into_error(self) -> Error {
+        match self {
+            Self::Unavailable(error) | Self::Refused(error) => error,
+        }
+    }
+
+    fn stream(error: Error) -> Self {
+        if let Error::Io(native) = &error
+            && matches!(
+                native.kind(),
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::UnexpectedEof
+            )
+        {
+            return Self::Unavailable(error);
+        }
+        Self::Refused(error)
+    }
+}
+
+impl From<Error> for RequestFailure {
+    fn from(error: Error) -> Self {
+        Self::Refused(error)
+    }
+}
+
+impl From<std::io::Error> for RequestFailure {
+    fn from(error: std::io::Error) -> Self {
+        Self::Refused(error.into())
+    }
+}
+
 fn write_frame(stream: &mut impl Write, bytes: &[u8]) -> Result<()> {
     if bytes.len() > MAX_METADATA {
         return Err(Error::Invalid(
@@ -101,8 +144,21 @@ mod native {
     }
 
     fn validate_endpoint(directory: &PrivateDirectory) -> Result<(u64, u64)> {
+        endpoint_observation(directory).map_err(RequestFailure::into_error)
+    }
+
+    fn endpoint_observation(
+        directory: &PrivateDirectory,
+    ) -> std::result::Result<(u64, u64), RequestFailure> {
         directory.revalidate()?;
-        let metadata = fs::symlink_metadata(endpoint(directory))?;
+        let metadata = match fs::symlink_metadata(endpoint(directory)) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                directory.revalidate()?;
+                return Err(RequestFailure::Unavailable(error.into()));
+            }
+            Err(error) => return Err(error.into()),
+        };
         if !metadata.file_type().is_socket()
             || metadata.uid() != rustix::process::geteuid().as_raw()
             || metadata.permissions().mode() & 0o777 != 0o600
@@ -110,7 +166,8 @@ mod native {
         {
             return Err(Error::Invalid(
                 "managed socket must be one direct owner-only socket".into(),
-            ));
+            )
+            .into());
         }
         Ok((metadata.dev(), metadata.ino()))
     }
@@ -208,13 +265,22 @@ mod native {
         pub(crate) fn accept(&self) -> Result<Option<Connection>> {
             match self.listener.accept() {
                 Ok((stream, _)) => {
-                    authenticate_peer(&stream)?;
-                    // BSD/macOS accept inherits the listener's nonblocking mode. A client
-                    // may not have written its frame yet, so restore blocking I/O before
-                    // applying the finite per-connection timeouts below.
-                    stream.set_nonblocking(false)?;
-                    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-                    stream.set_write_timeout(Some(IO_TIMEOUT))?;
+                    let admission = (|| -> Result<()> {
+                        authenticate_peer(&stream)?;
+                        // BSD/macOS accept inherits the listener's nonblocking mode. A client
+                        // may not have written its frame yet, so restore blocking I/O before
+                        // applying the finite per-connection timeouts below.
+                        stream.set_nonblocking(false)?;
+                        stream.set_read_timeout(Some(IO_TIMEOUT))?;
+                        stream.set_write_timeout(Some(IO_TIMEOUT))?;
+                        Ok(())
+                    })();
+                    // Admission belongs to this accepted connection, not the listener.
+                    // In particular, Darwin can reject timeout options after a queued
+                    // client closes. Drop every refused stream without yielding it.
+                    if admission.is_err() {
+                        return Ok(None);
+                    }
                     Ok(Some(Connection(stream)))
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
@@ -249,28 +315,100 @@ mod native {
         directory: &PrivateDirectory,
         request: &ControlRequest,
     ) -> Result<T> {
+        request_observed_as(directory, request).map_err(RequestFailure::into_error)
+    }
+
+    pub(crate) fn request_observed_as<T: JsonDeserialize>(
+        directory: &PrivateDirectory,
+        request: &ControlRequest,
+    ) -> std::result::Result<T, RequestFailure> {
         let directory = ipc_directory(directory, false)?;
-        let before = validate_endpoint(&directory)?;
-        let mut stream = UnixStream::connect(endpoint(&directory))?;
-        authenticate_peer(&stream)?;
-        stream.set_read_timeout(Some(if request.action == "down" {
-            Duration::from_secs(10)
+        let mut original = None;
+        let result = (|| -> std::result::Result<T, RequestFailure> {
+            let before = endpoint_observation(&directory)?;
+            original = Some(before);
+            let mut stream = UnixStream::connect(endpoint(&directory))
+                .map_err(|error| RequestFailure::stream(error.into()))?;
+            authenticate_peer(&stream)?;
+            stream.set_read_timeout(Some(if request.action == "down" {
+                Duration::from_secs(10)
+            } else {
+                IO_TIMEOUT
+            }))?;
+            stream.set_write_timeout(Some(IO_TIMEOUT))?;
+            if endpoint_observation(&directory)? != before {
+                return Err(Error::Invalid(
+                    "managed control endpoint changed during connection".into(),
+                )
+                .into());
+            }
+            let bytes = encode(request)?;
+            write_frame(&mut stream, &bytes).map_err(RequestFailure::stream)?;
+            let reply = read_frame(&mut stream).map_err(RequestFailure::stream)?;
+            decode(&reply).map_err(Into::into)
+        })();
+        let result = if matches!(&result, Err(RequestFailure::Unavailable(_))) {
+            // A peer may close its exact socket, but a new or unsafe endpoint is not exit
+            // evidence. Retain this original IPC child through every ordinary outcome.
+            match endpoint_observation(&directory) {
+                Ok(current) if original == Some(current) => result,
+                Err(RequestFailure::Unavailable(_)) => result,
+                Ok(_) => Err(Error::Invalid(
+                    "managed control endpoint changed during unavailable exchange".into(),
+                )
+                .into()),
+                Err(refusal) => Err(refusal),
+            }
         } else {
-            IO_TIMEOUT
-        }))?;
-        stream.set_write_timeout(Some(IO_TIMEOUT))?;
-        if validate_endpoint(&directory)? != before {
-            return Err(Error::Invalid(
-                "managed control endpoint changed during connection".into(),
-            ));
-        }
-        write_frame(&mut stream, &encode(request)?)?;
-        decode(&read_frame(&mut stream)?)
+            result
+        };
+        directory.revalidate()?;
+        result
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn cleanup_availability_distinguishes_absent_socket_from_unsafe_or_missing_parent() {
+            let _resources = super::super::super::native_test_guard();
+            let temporary = tempfile::tempdir().unwrap();
+            let directory =
+                PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
+            let request = ControlRequest {
+                token: "d".repeat(64),
+                action: "down".into(),
+            };
+            let listener = Listener::bind(&directory).unwrap();
+            drop(listener);
+            assert!(matches!(
+                request_observed_as::<ManagedStatus>(&directory, &request),
+                Err(RequestFailure::Unavailable(Error::Io(error))) if error.kind() == std::io::ErrorKind::NotFound
+            ));
+            let ipc = ipc_directory(&directory, false).unwrap();
+            ipc.write_atomic("s", b"unsafe endpoint", iroha_fs::PublishMode::CreateNew)
+                .unwrap();
+            assert!(matches!(
+                request_observed_as::<ManagedStatus>(&directory, &request),
+                Err(RequestFailure::Refused(Error::Invalid(_)))
+            ));
+            fs::remove_file(endpoint(&ipc)).unwrap();
+            let path = ipc.path().to_owned();
+            drop(ipc);
+            fs::remove_dir(path).unwrap();
+            assert!(matches!(
+                request_observed_as::<ManagedStatus>(&directory, &request),
+                Err(RequestFailure::Refused(Error::Io(error))) if error.kind() == std::io::ErrorKind::NotFound
+            ));
+            let listener = Listener::bind(&directory).unwrap();
+            drop(listener);
+            assert!(matches!(
+                request_observed_as::<ManagedStatus>(&directory, &request),
+                Err(RequestFailure::Unavailable(Error::Io(error))) if error.kind() == std::io::ErrorKind::NotFound
+            ));
+            directory.revalidate().unwrap();
+        }
 
         #[cfg(target_os = "linux")]
         #[test]
@@ -393,6 +531,44 @@ mod native {
             assert!(!socket.exists());
         }
 
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn abandoned_control_client_keeps_listener_for_authenticated_retry() {
+            let _resources = super::super::super::native_test_guard();
+            let temporary = tempfile::tempdir().unwrap();
+            let directory =
+                PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
+            let listener = Listener::bind(&directory).unwrap();
+            let identity = validate_endpoint(&listener._directory).unwrap();
+
+            // Close a real queued client before the server accepts it. Darwin can still
+            // authenticate this stream, but rejects its timeout options with EINVAL.
+            drop(UnixStream::connect(&listener.path).unwrap());
+            assert!(listener.accept().unwrap().is_none());
+            assert_eq!(validate_endpoint(&listener._directory).unwrap(), identity);
+
+            let mut client = UnixStream::connect(&listener.path).unwrap();
+            authenticate_peer(&client).unwrap();
+            let mut connection = listener.accept().unwrap().unwrap();
+            assert_eq!(connection.0.read_timeout().unwrap(), Some(IO_TIMEOUT));
+            assert_eq!(connection.0.write_timeout().unwrap(), Some(IO_TIMEOUT));
+            let request = ControlRequest {
+                token: "d".repeat(64),
+                action: "status".into(),
+            };
+            write_frame(&mut client, &encode(&request).unwrap()).unwrap();
+            let actual = connection.receive().unwrap();
+            assert_eq!(actual.token, request.token);
+            assert_eq!(actual.action, request.action);
+            connection.reply(&actual).unwrap();
+            let reply: ControlRequest = decode(&read_frame(&mut client).unwrap()).unwrap();
+            assert_eq!(reply.token, request.token);
+            assert_eq!(reply.action, request.action);
+            assert!(listener.accept().unwrap().is_none());
+            assert_eq!(validate_endpoint(&listener._directory).unwrap(), identity);
+            directory.revalidate().unwrap();
+        }
+
         #[test]
         fn accepted_control_connection_waits_for_delayed_and_partial_frames() {
             let _resources = super::super::super::native_test_guard();
@@ -483,6 +659,12 @@ mod native {
     ) -> Result<T> {
         Err(Error::Invalid("native IPC unavailable".into()))
     }
+    pub(crate) fn request_observed_as<T: JsonDeserialize>(
+        _: &PrivateDirectory,
+        _: &ControlRequest,
+    ) -> std::result::Result<T, RequestFailure> {
+        Err(Error::Invalid("native IPC unavailable".into()).into())
+    }
 }
 
 pub(crate) use native::{Listener, detach, request_as, supported};
@@ -506,6 +688,13 @@ pub(crate) fn request(
     request: &ControlRequest,
 ) -> Result<ManagedStatus> {
     request_as(directory, request)
+}
+
+pub(crate) fn request_observed(
+    directory: &PrivateDirectory,
+    request: &ControlRequest,
+) -> std::result::Result<ManagedStatus, RequestFailure> {
+    native::request_observed_as(directory, request)
 }
 
 #[cfg(test)]

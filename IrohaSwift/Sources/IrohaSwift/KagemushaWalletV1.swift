@@ -80,6 +80,33 @@ public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @uncheck
     let value = try handle()
     return try driver.result { out in input.withRequest { driver.setup(value, $0, out) } }
   }
+  /// Read bounded DATA from the existing Native owner; no observation creates a monetary intent.
+  func observeProjection(selector: UInt32, identity: Data = Data()) throws -> Data {
+    guard (0...3).contains(selector),
+      selector == 0 ? identity.isEmpty : (identity.count == 32 && identity.contains(where: { $0 != 0 }))
+    else { throw KagemushaWalletErrorV1.invalidInput }
+    let owner = try handle()
+    return try driver.observation(selector: selector) { result in
+      identity.withUnsafeBytes {
+        driver.observe(owner, selector, $0.bindMemory(to: UInt8.self).baseAddress, $0.count, result)
+      }
+    }
+  }
+  /// Exact Native-authenticated admission originals and authoritative atomic scale.
+  public func metadata() throws -> KagemushaWalletMetadataV1 {
+    let result = try observeProjection(selector: 0)
+    return try .init(result)
+  }
+  /// Observe a completed local request through its retained Native operation mapping.
+  public func releasedOutput(requestId: Data) throws -> KagemushaWalletReleasedOutputV1 {
+    let result = try observeProjection(selector: 1, identity: requestId)
+    return try .init(result)
+  }
+  /// Read an already known Native operation's retained output without executing it again.
+  public func releasedOutput(operationId: Data) throws -> KagemushaWalletReleasedOutputV1 {
+    let result = try observeProjection(selector: 2, identity: operationId)
+    return try .init(result)
+  }
   /// Complete restart-safe native enrollment Bootstrap.
   public func bootstrap() throws -> KagemushaWalletCallV1 { try setup(.init(selector: 0)).completion() }
   /// Exact retained Activate frame for ledger submission; this is not activation confirmation.
@@ -405,6 +432,9 @@ struct KagemushaWalletOperationInputV1 {
 
 final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
   typealias Output = connect_norito_kagemusha_wallet_result_v1
+  typealias AccountDisplay = @convention(c) (UnsafePointer<UInt8>?, Int, UInt16, UnsafeMutablePointer<Output>?) -> Int32
+  typealias AccountOriginal = @convention(c) (UnsafePointer<UInt8>?, Int, UnsafeMutablePointer<Output>?) -> Int32
+  typealias Observe = @convention(c) (UInt64, UInt32, UnsafePointer<UInt8>?, Int, UnsafeMutablePointer<Output>?) -> Int32
   typealias OpenBegin = @convention(c) (UInt64, UnsafePointer<connect_norito_kagemusha_wallet_open_request_v1>?, UnsafeMutablePointer<Output>?) -> Int32
   typealias OpenFinish = @convention(c) (UInt64, UnsafePointer<UInt8>?, Int, UnsafeMutablePointer<Output>?) -> Int32
   typealias Close = @convention(c) (UInt64) -> Int32
@@ -426,6 +456,9 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
   typealias Snapshot = @convention(c) (UInt64, UnsafeMutablePointer<connect_norito_kagemusha_wallet_snapshot_v1_t>?) -> Int32
   typealias Free = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
   let openBegin: OpenBegin
+  let accountDisplay: AccountDisplay
+  let accountOriginal: AccountOriginal
+  let observe: Observe
   let openFinish: OpenFinish
   let openCancel: Close
   let close: Close
@@ -454,6 +487,9 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
     let revision = try symbol(
       "connect_norito_kagemusha_wallet_revision_v1", (@convention(c) () -> UInt32).self)
     guard revision() == 1 else { throw KagemushaWalletErrorV1.bridgeUnavailable }
+    accountDisplay = try symbol("connect_norito_kagemusha_wallet_account_display_v1", AccountDisplay.self)
+    accountOriginal = try symbol("connect_norito_kagemusha_wallet_account_original_v1", AccountOriginal.self)
+    observe = try symbol("connect_norito_kagemusha_wallet_observe_v1", Observe.self)
     openBegin = try symbol("connect_norito_kagemusha_wallet_open_begin_v1", OpenBegin.self)
     openFinish = try symbol("connect_norito_kagemusha_wallet_open_finish_v1", OpenFinish.self)
     openCancel = try symbol("connect_norito_kagemusha_wallet_open_cancel_v1", Close.self)
@@ -495,12 +531,28 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
     return .init(status: value.status, reason: value.reason, platformCode: value.platform_code,
       sequenceLow: value.sequence_low, sequenceHigh: value.sequence_high, detail: value.detail, bytes: Data(bytes: bytes, count: value.length))
   }
+  /// Observation has a separate, selector-bound DATA geometry. No financial result kind
+  /// or global setup output bound is reinterpreted to carry these larger public originals.
+  func observation(selector: UInt32, _ action: (UnsafeMutablePointer<Output>) -> Int32) throws -> Data {
+    let caps = [5_268, 20_066, 20_066, 65_756]
+    guard Int(selector) < caps.count else { throw KagemushaWalletErrorV1.invalidInput }
+    var value = Output()
+    let status = action(&value)
+    defer { if let bytes = value.bytes { free(bytes) } }
+    try Self.check(status, reason: value.reason, platform: value.platform_code)
+    guard value.status == 12, value.reason == -1, value.platform_code == 0,
+      value.sequence_low == 0, value.sequence_high == 0, value.detail == 0,
+      value.length > 0, value.length <= caps[Int(selector)], let bytes = value.bytes
+    else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return Data(bytes: bytes, count: value.length)
+  }
   func result(_ action: (UnsafeMutablePointer<Output>) -> Int32) throws -> KagemushaWalletCallV1 {
     var value = Output()
     let status = action(&value)
     defer { if let bytes = value.bytes { free(bytes) } }
     try Self.check(status, reason: value.reason, platform: value.platform_code)
-    guard KagemushaWalletCallV1.statusRange.contains(value.status), value.length >= 0,
+    guard value.reason == -1, value.platform_code == 0,
+      KagemushaWalletCallV1.statusRange.contains(value.status), value.length >= 0,
       value.length <= kagemushaWalletOutputBoundV1(value.status), value.length == 0 || value.bytes != nil
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     return try KagemushaWalletCallV1(

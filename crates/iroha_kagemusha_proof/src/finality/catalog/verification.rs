@@ -7,7 +7,9 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::finality::{
-    continuity::producer::verification::{DerivedSource, derive_wrapper},
+    continuity::producer::verification::{
+        DerivedSource, compiled_wrapper, derive_wrapper_cancellable,
+    },
     history::{GenesisSourceCircuit, HistoryAppendCircuit, HistoryAppendPlan},
 };
 
@@ -104,6 +106,9 @@ struct Qualification<'a> {
     limits: VerifierLimits,
     cache: BTreeMap<NodeId, SourceVerifier>,
     history: Option<SourceVerifier>,
+    cancellation: Option<iroha_pasta::CancellationToken>,
+    recipe_limits: Option<ImportLimits>,
+    recipes: BTreeMap<Vec<u8>, (ArtifactRecord, OriginalRecipe)>,
 }
 impl<'a> Qualification<'a> {
     fn new(
@@ -152,6 +157,9 @@ impl<'a> Qualification<'a> {
             limits,
             cache: BTreeMap::new(),
             history: None,
+            cancellation: None,
+            recipe_limits: None,
+            recipes: BTreeMap::new(),
         })
     }
 
@@ -171,12 +179,29 @@ impl<'a> Qualification<'a> {
             {
                 return Err(Error::Artifact);
             }
-            let reader = self.originals.open(&record.sha256[index])?;
-            let mut bytes = Vec::with_capacity(length);
-            reader
-                .take(u64::try_from(length).map_err(|_| Error::Artifact)? + 1)
-                .read_to_end(&mut bytes)
+            iroha_pasta::CancellationToken::checkpoint(self.cancellation.as_ref())?;
+            let mut reader = self.originals.open(&record.sha256[index])?;
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(length)
                 .map_err(|_| Error::Artifact)?;
+            let mut chunk = vec![0; 64 * 1024].into_boxed_slice();
+            loop {
+                iroha_pasta::CancellationToken::checkpoint(self.cancellation.as_ref())?;
+                let remaining = length + 1 - bytes.len();
+                let bound = remaining.min(chunk.len());
+                let count = reader
+                    .read(&mut chunk[..bound])
+                    .map_err(|_| Error::Artifact)?;
+                if count == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&chunk[..count]);
+                if bytes.len() > length {
+                    return Err(Error::Artifact);
+                }
+            }
+            iroha_pasta::CancellationToken::checkpoint(self.cancellation.as_ref())?;
             if bytes != expected {
                 return Err(Error::Artifact);
             }
@@ -185,24 +210,67 @@ impl<'a> Qualification<'a> {
         Ok(())
     }
 
-    fn derive<C: SourceCircuit>(
+    fn derive<C: SourceCircuit + 'static>(
         &mut self,
         id: NodeId,
         source: &C,
     ) -> Result<DerivedSource, CompileError> {
-        let derived = DerivedSource::derive(source, &self.params.vesta, self.limits.msm_budget)
-            .map_err(|error| failure(Some(id.clone()), "source VK derivation", error))?;
+        let derived = DerivedSource::derive_cancellable(
+            source,
+            &self.params.vesta,
+            self.limits.msm_budget,
+            self.cancellation.as_ref(),
+        )
+        .map_err(|error| failure(Some(id.clone()), "source VK derivation", error))?;
         self.check(
             &ArtifactId::Source(id.clone()),
             derived.binding(),
             derived.key(),
         )
-        .map_err(|error| failure(Some(id), "source VK original", error))?;
+        .map_err(|error| failure(Some(id.clone()), "source VK original", error))?;
+        if let Some(limits) = self.recipe_limits {
+            self.retain_recipe(
+                &ArtifactId::Source(id),
+                OriginalRecipe::source(source, &self.params, limits),
+            )?;
+        }
         Ok(derived)
     }
 
+    fn retain_recipe(&mut self, id: &ArtifactId, recipe: OriginalRecipe) -> Result<(), Error> {
+        let name = store::name(id)?;
+        let record = (*self.records.get(&name).ok_or(Error::Artifact)?).clone();
+        if !self.consumed.contains(&name) {
+            return Err(Error::Artifact);
+        }
+        self.recipes.entry(name).or_insert((record, recipe));
+        Ok(())
+    }
+
+    fn wrapper(
+        &mut self,
+        id: &ArtifactId,
+        derived: &[DerivedSource],
+    ) -> Result<SourceVerifier, Error> {
+        let (source, binding, key) = derive_wrapper_cancellable(
+            derived,
+            &self.params.pallas,
+            &self.params.vesta,
+            self.limits.msm_budget,
+            self.cancellation.as_ref(),
+        )?;
+        self.check(id, &binding, &key)?;
+        if let Some(limits) = self.recipe_limits {
+            let circuit = compiled_wrapper(derived, &self.params.vesta)?;
+            self.retain_recipe(id, OriginalRecipe::wrapper(&circuit, &self.params, limits))?;
+        }
+        Ok(source)
+    }
+
     fn complete(&self) -> Result<(), Error> {
-        if self.consumed.len() != self.records.len() {
+        if self.consumed.len() != self.records.len()
+            || (self.recipe_limits.is_some() && self.recipes.len() != self.records.len())
+        {
             return Err(Error::Artifact);
         }
         Ok(())
@@ -223,14 +291,8 @@ impl builder::Assembler for Qualification<'_> {
             return Ok(previous.clone());
         }
         let derived = self.derive(id.clone(), source)?;
-        let (source, binding, key) = derive_wrapper(
-            &[derived],
-            &self.params.pallas,
-            &self.params.vesta,
-            self.limits.msm_budget,
-        )
-        .map_err(|error| failure(Some(id.clone()), "wrapper VK derivation", error))?;
-        self.check(&ArtifactId::Wrapper(id.clone()), &binding, &key)
+        let source = self
+            .wrapper(&ArtifactId::Wrapper(id.clone()), &[derived])
             .map_err(|error| failure(Some(id.clone()), "wrapper VK original", error))?;
         self.cache.insert(id, source.clone());
         Ok(source)
@@ -252,18 +314,12 @@ impl builder::Assembler for Qualification<'_> {
             NodeId::Append,
             &layout(HistoryAppendCircuit::for_source(plan.clone()))?,
         )?;
-        let (source, binding, key) = derive_wrapper(
-            &[genesis, append],
-            &self.params.pallas,
-            &self.params.vesta,
-            self.limits.msm_budget,
-        )
-        .map_err(|error| failure(None, "history wrapper VK derivation", error))?;
-        if &binding != plan.wrapper_binding() {
+        let source = self
+            .wrapper(&ArtifactId::HistoryWrapper, &[genesis, append])
+            .map_err(|error| failure(None, "history wrapper VK original", error))?;
+        if source.binding() != plan.wrapper_binding() {
             return Err(Error::Artifact.into());
         }
-        self.check(&ArtifactId::HistoryWrapper, &binding, &key)
-            .map_err(|error| failure(None, "history wrapper VK original", error))?;
         if self.history.replace(source.clone()).is_some() {
             return Err(Error::Artifact.into());
         }
@@ -286,7 +342,23 @@ pub fn qualify_receipt(
     params: Parameters,
     limits: VerifierLimits,
 ) -> Result<ReceiptVerifier, CompileError> {
+    qualify_receipt_cancellable(anchor, records, originals, params, limits, None)
+}
+
+/// Reconstruct the verifier graph with typed cooperative cancellation.
+/// # Errors
+/// The same exact-source errors as [`qualify_receipt`], or cancellation.
+pub fn qualify_receipt_cancellable(
+    anchor: HistoryAnchor,
+    records: &[ArtifactRecord],
+    originals: &mut dyn VerifierBlobSource,
+    params: Parameters,
+    limits: VerifierLimits,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<ReceiptVerifier, CompileError> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(Error::from)?;
     let mut qualifier = Qualification::new(records, originals, params, limits)?;
+    qualifier.cancellation = cancellation.cloned();
     let source = builder::assemble(&mut qualifier, anchor)?;
     qualifier
         .complete()
@@ -296,6 +368,111 @@ pub fn qualify_receipt(
         source,
         history: qualifier.history.ok_or(Error::Artifact)?,
         vesta: qualifier.params.vesta.clone(),
+    })
+}
+
+/// Server-only compiled regeneration capability for one completely matched graph.
+/// Construction verifies D/V identity, but grants neither signed installation authority
+/// nor strict proving-key admission. Every regenerated original still requires import.
+pub struct ServerRecipes {
+    receipt: ReceiptVerifier,
+    recipes: BTreeMap<Vec<u8>, (ArtifactRecord, OriginalRecipe)>,
+}
+impl ServerRecipes {
+    /// Complete verifier graph whose exact metadata selected these recipes.
+    pub const fn receipt(&self) -> &ReceiptVerifier {
+        &self.receipt
+    }
+
+    /// Regenerate one selected compiled source and compare all canonical original bytes
+    /// against its inventory. The caller must strictly import before proof production.
+    /// # Errors
+    /// Unknown source, cancellation, resource refusal or differing exact original identity.
+    pub fn regenerate(
+        &self,
+        id: &ArtifactId,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<OriginalBytes, Error> {
+        let (record, recipe) = self.recipes.get(&store::name(id)?).ok_or(Error::Artifact)?;
+        let originals = recipe.regenerate_cancellable(cancellation)?;
+        for (role, bytes) in [
+            &originals.descriptor,
+            &originals.verifying_key,
+            &originals.proving_key,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+            if u64::try_from(bytes.len()).map_err(|_| Error::Artifact)? != record.lengths[role] {
+                return Err(Error::Artifact);
+            }
+            let mut hash = Sha256::new();
+            for chunk in bytes.chunks(64 * 1024) {
+                iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+                hash.update(chunk);
+            }
+            if <[u8; 32]>::from(hash.finalize()) != record.sha256[role] {
+                return Err(Error::Artifact);
+            }
+        }
+        Ok(originals)
+    }
+}
+
+/// Reconstruct exact D/V and compiled recipes without reading or generating any PK.
+/// The installation owner authenticates records, genesis and parameter pins first.
+/// No recipe escapes until every expected record is consumed by the fixed graph.
+/// # Errors
+/// Invalid bounds, missing/unused/duplicate records, source mismatch or cancellation.
+pub fn qualify_server_recipes(
+    anchor: HistoryAnchor,
+    records: &[ArtifactRecord],
+    originals: &mut dyn VerifierBlobSource,
+    params: Parameters,
+    limits: VerifierLimits,
+    imports: ImportLimits,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<ServerRecipes, CompileError> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(Error::from)?;
+    if imports.maximum_artifacts < records.len()
+        || imports.key.maximum_rows != 1 << 16
+        || imports.key.maximum_bytes == 0
+        || imports.key.maximum_bytes > 1 << 30
+    {
+        return Err(Error::Artifact.into());
+    }
+    if records
+        .iter()
+        .any(|record| record.lengths[2] > imports.key.maximum_bytes as u64)
+    {
+        return Err(Error::Artifact.into());
+    }
+    let total = records.iter().try_fold(0usize, |sum, record| {
+        record.lengths.iter().try_fold(sum, |sum, &length| {
+            sum.checked_add(usize::try_from(length).map_err(|_| Error::Artifact)?)
+                .ok_or(Error::Artifact)
+        })
+    })?;
+    if total > imports.maximum_original_bytes {
+        return Err(Error::Artifact.into());
+    }
+    let mut qualifier = Qualification::new(records, originals, params, limits)?;
+    qualifier.cancellation = cancellation.cloned();
+    qualifier.recipe_limits = Some(imports);
+    let source = builder::assemble(&mut qualifier, anchor)?;
+    qualifier
+        .complete()
+        .map_err(|error| failure(None, "server recipe closure", error))?;
+    let receipt = ReceiptVerifier {
+        anchor,
+        source,
+        history: qualifier.history.ok_or(Error::Artifact)?,
+        vesta: qualifier.params.vesta.clone(),
+    };
+    Ok(ServerRecipes {
+        receipt,
+        recipes: qualifier.recipes,
     })
 }
 

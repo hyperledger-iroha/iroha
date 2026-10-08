@@ -33,6 +33,12 @@ mod background;
 mod closing;
 pub(crate) mod enrollment;
 mod exports;
+mod observation;
+pub use observation::{
+    connect_norito_kagemusha_wallet_account_display_v1,
+    connect_norito_kagemusha_wallet_account_original_v1,
+    connect_norito_kagemusha_wallet_observe_v1,
+};
 mod installed;
 pub(crate) use installed::relocate_registration_source;
 pub use installed::{WalletInstallationAttempt, WalletRuntimeOriginals};
@@ -225,6 +231,9 @@ trait Wallet: Send {
     fn discard_review(&mut self, _token: u64) -> Result<()> {
         Err(Failure::code(INVALID))
     }
+    fn observe(&mut self, _selector: u32, _identity: &[u8]) -> Result<Response> {
+        Err(Failure::code(INVALID))
+    }
     fn setup(&mut self, input: setup::Setup) -> Result<Response>;
     fn execute(&mut self, request: state::OperationRequestV1) -> Result<Response>;
     fn request_status(&mut self, request: &[u8; 32]) -> Result<Response>;
@@ -242,6 +251,9 @@ struct NativeWallet<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 +
 impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
     for NativeWallet<P, S>
 {
+    fn observe(&mut self, selector: u32, identity: &[u8]) -> Result<Response> {
+        self.observe_inner(selector, identity)
+    }
     fn setup(&mut self, input: setup::Setup) -> Result<Response> {
         self.setup_inner(input)
     }

@@ -790,6 +790,29 @@ impl PrivateDirectory {
             .reconcile_atomic_staging(required_names, maximum_staged, maximum_bytes)
     }
 
+    /// Remove one exact writable private regular file and durably publish its absence.
+    ///
+    /// Returns `false` only when the first native open observes absence under stable retained
+    /// directory custody. The caller must hold its exclusive operation and runtime ownership
+    /// gates so cooperative writers cannot replace the selected name during removal. Every
+    /// admitted file must remain owner-private, regular and single-linked; no bytes are read.
+    /// This is not an atomic Unix check-and-unlink against hostile same-user replacement.
+    /// Windows compatible read handles may retain native pending deletion until they close.
+    ///
+    /// # Errors
+    /// Refuses invalid names, unsafe or changed files/ancestors and native I/O errors. Late
+    /// disappearance is an error. An error after removal can mean durability is uncertain;
+    /// deletion is never rolled back. Exit custody refusal overrides every ordinary result.
+    pub fn remove_private(&self, name: impl AsRef<OsStr>) -> io::Result<bool> {
+        let name = checked_name(name.as_ref())?;
+        self.revalidate()?;
+        let result = self.inner.remove_private_native(name);
+        #[cfg(test)]
+        private_remove_tests::before_exit();
+        self.revalidate()?;
+        result
+    }
+
     /// Open or create a private read/write lock file without truncation or taking its lock.
     ///
     /// The caller uses [`File::try_lock`] and retains the handle for the ownership lifetime.
@@ -1841,3 +1864,6 @@ mod tree_read_producer_tests;
 
 #[cfg(test)]
 mod owner_private_child_tests;
+
+#[cfg(test)]
+mod private_remove_tests;

@@ -1,6 +1,6 @@
-//! Three bounded immutable checkpoint imports per live authority; no current-state evidence.
+//! Bounded immutable imports and lexical pure epoch work; no current-state evidence.
 
-use super::ServiceAuthority;
+use super::{AuthorityProfile, ServiceAuthority};
 #[cfg(test)]
 use crate::managed::native_operation::decode_checkpoint;
 use crate::{
@@ -17,7 +17,7 @@ use iroha_data_model::{
 };
 use std::{
     mem::size_of,
-    sync::{Mutex, OnceLock, TryLockError},
+    sync::{Arc, Mutex, OnceLock, TryLockError},
 };
 
 const SLOTS: usize = 3;
@@ -130,15 +130,70 @@ impl Entries {
 #[derive(Default)]
 pub(super) struct CheckpointCache {
     entry: Mutex<Entries>,
+    // Only a lexical graph/census owns this boxed two-context workspace. Standalone authorities
+    // retain only this optional pointer, keeping the existing large orchestration frames small.
+    epoch_validation: Option<Box<Mutex<EpochValidationScope>>>,
     #[cfg(test)]
     decode_attempts: std::sync::atomic::AtomicUsize,
 }
 
+/// One explicit lexical graph/census owner of the existing immutable import memo and at most
+/// two complete validated epoch contexts. The epoch workspace is separate from the unchanged
+/// checkpoint-entry retention envelope; it is not another checkpoint cache or authority verdict.
+/// Fresh source, purpose, transaction and current-state checks remain with each caller.
+#[derive(Clone)]
+pub(in crate::managed) struct CheckpointImportScope {
+    cache: Arc<CheckpointCache>,
+}
+
+impl CheckpointImportScope {
+    /// Begin cold pure-import work only for an inactive shared original graph.
+    /// Owned profiles and active caller admission keep their original independent recipes.
+    pub(in crate::managed) fn for_original(parent: &ServiceAuthority) -> Option<Self> {
+        if norito::core::decode_limits_active()
+            || !matches!(&parent.profile, AuthorityProfile::Shared(_))
+        {
+            return None;
+        }
+        Some(Self {
+            cache: Arc::new(CheckpointCache {
+                epoch_validation: Some(Box::new(Mutex::new(EpochValidationScope::new()))),
+                ..CheckpointCache::default()
+            }),
+        })
+    }
+}
+
 impl ServiceAuthority {
+    // Always select the actual memo, including inside an active decode scope. Its original
+    // active branch clears warmed slots and performs the physical producer without reuse.
+    fn effective_checkpoint_cache(&self) -> &CheckpointCache {
+        self.checkpoint_import_scope
+            .as_ref()
+            .map_or(&self.checkpoint_cache, |scope| scope.cache.as_ref())
+    }
+
+    /// Borrow only this transient graph's explicitly installed import owner for nested children.
+    pub(in crate::managed) fn checkpoint_import_scope(&self) -> Option<&CheckpointImportScope> {
+        self.checkpoint_import_scope.as_ref()
+    }
+
+    #[cfg(test)]
+    /// Observe cold imports across temporary child owners without retaining any cache or result.
+    pub(in crate::managed) fn test_begin_graph_import_counts() -> impl Drop {
+        graph_import_counts::Counter::begin()
+    }
+
+    #[cfg(test)]
+    /// Read the explicitly installed scalar observer; cache hits do not increment it.
+    pub(in crate::managed) fn test_graph_import_snapshot() -> Option<usize> {
+        graph_import_counts::snapshot()
+    }
+
     #[cfg(test)]
     /// Count attempted canonical imports without changing the optional cache.
     pub(in crate::managed) fn test_checkpoint_import_attempts(&self) -> usize {
-        self.checkpoint_cache
+        self.effective_checkpoint_cache()
             .decode_attempts
             .load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -146,12 +201,16 @@ impl ServiceAuthority {
     /// Import an exact independently selected checkpoint, retaining only successful immutable work.
     /// Callers still read and authenticate their original custody before supplying these bytes.
     pub(in crate::managed) fn decode_checkpoint(&self, bytes: &[u8]) -> Result<FinalityVerifier> {
-        self.checkpoint_cache
-            .decode(bytes, self.config.network_id, self.config.chain.as_str())
+        self.effective_checkpoint_cache().decode(
+            bytes,
+            self.config.network_id,
+            self.config.chain.as_str(),
+        )
     }
 }
 
-/// A borrowed pure workspace for one retained prerequisite; never stored in authority or History.
+/// A borrowed pure workspace for one retained prerequisite; never stored in History.
+/// A lexical graph/census workspace takes precedence, leaving freshly created local scopes empty.
 /// Each decode still selects its current original bytes, source and enclosing admission owner.
 pub(in crate::managed) struct CheckpointImports<'a, 'v> {
     authority: &'a ServiceAuthority,
@@ -170,12 +229,14 @@ impl<'a, 'v> CheckpointImports<'a, 'v> {
     }
 
     pub(in crate::managed) fn decode(&mut self, bytes: &[u8]) -> Result<FinalityVerifier> {
-        self.authority.checkpoint_cache.decode_with_validation(
-            bytes,
-            self.authority.config.network_id,
-            self.authority.config.chain.as_str(),
-            self.validation.as_deref_mut(),
-        )
+        self.authority
+            .effective_checkpoint_cache()
+            .decode_for_scope(
+                bytes,
+                self.authority.config.network_id,
+                self.authority.config.chain.as_str(),
+                self.validation.as_deref_mut(),
+            )
     }
 
     pub(in crate::managed) fn retained_finality(
@@ -191,7 +252,41 @@ impl<'a, 'v> CheckpointImports<'a, 'v> {
 
 impl CheckpointCache {
     fn decode(&self, bytes: &[u8], network: NetworkId, chain: &str) -> Result<FinalityVerifier> {
-        self.decode_with_validation(bytes, network, chain, None)
+        self.decode_for_scope(bytes, network, chain, None)
+    }
+
+    // Select only the existing canonical producer's borrowed pure workspace. Scoped contention
+    // and poison never wait or populate a second caller-local pair. A prewarmed external caller
+    // workspace remains separately caller-owned; ordinary graph/prerequisite locals start empty.
+    // An active owner clears the accessible selected epoch workspace and keeps its physical
+    // producer and cumulative charges, even when the lexical scope was warmed before entry.
+    fn decode_for_scope(
+        &self,
+        bytes: &[u8],
+        network: NetworkId,
+        chain: &str,
+        validation: Option<&mut EpochValidationScope>,
+    ) -> Result<FinalityVerifier> {
+        let Some(shared) = &self.epoch_validation else {
+            return self.decode_with_validation(bytes, network, chain, validation);
+        };
+        match shared.try_lock() {
+            Ok(mut selected) => {
+                if norito::core::decode_limits_active() {
+                    *selected = EpochValidationScope::new();
+                    self.decode_with_validation(bytes, network, chain, None)
+                } else {
+                    self.decode_with_validation(bytes, network, chain, Some(&mut selected))
+                }
+            }
+            Err(TryLockError::Poisoned(mut poisoned)) => {
+                **poisoned.get_mut() = EpochValidationScope::new();
+                self.decode_with_validation(bytes, network, chain, None)
+            }
+            Err(TryLockError::WouldBlock) => {
+                self.decode_with_validation(bytes, network, chain, None)
+            }
+        }
     }
 
     fn decode_with_validation(
@@ -332,6 +427,8 @@ impl CheckpointCache {
         validation: Option<&mut EpochValidationScope>,
     ) -> Result<FinalityVerifier> {
         #[cfg(test)]
+        graph_import_counts::record();
+        #[cfg(test)]
         self.decode_attempts
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         #[cfg(test)]
@@ -349,9 +446,73 @@ impl CheckpointCache {
 }
 
 #[cfg(test)]
+mod graph_import_counts {
+    //! Scalar counts at the actual cold producer; no bytes, owners or verdicts are retained.
+
+    use std::cell::Cell;
+
+    std::thread_local! {
+        static IMPORTS: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn record() {
+        IMPORTS.with(|value| {
+            if let Some(count) = value.get() {
+                value.set(count.checked_add(1));
+            }
+        });
+    }
+
+    pub(super) fn snapshot() -> Option<usize> {
+        IMPORTS.with(Cell::get)
+    }
+
+    pub(super) struct Counter(Option<usize>);
+
+    impl Counter {
+        pub(super) fn begin() -> Self {
+            Self(IMPORTS.with(|value| value.replace(Some(0))))
+        }
+    }
+
+    impl Drop for Counter {
+        fn drop(&mut self) {
+            IMPORTS.with(|value| value.set(self.0));
+        }
+    }
+
+    #[test]
+    fn graph_import_counts_are_explicit_scalar_observations_and_restore_the_prior_scope() {
+        assert_eq!(snapshot(), None);
+        record();
+        assert_eq!(snapshot(), None);
+        {
+            let _counter = Counter::begin();
+            record();
+            assert_eq!(snapshot(), Some(1));
+            {
+                let _nested = Counter::begin();
+                record();
+                record();
+                assert_eq!(snapshot(), Some(2));
+            }
+            assert_eq!(snapshot(), Some(1));
+            IMPORTS.with(|value| value.set(Some(usize::MAX)));
+            record();
+            assert_eq!(snapshot(), None, "overflow declines observation only");
+        }
+        assert_eq!(snapshot(), None);
+    }
+}
+
+#[cfg(test)]
 #[path = "checkpoint_cache/tests.rs"]
 mod tests;
 
 #[cfg(test)]
 #[path = "checkpoint_cache/bounded_tests.rs"]
 mod bounded_tests;
+
+#[cfg(test)]
+#[path = "checkpoint_cache/graph_scope_tests.rs"]
+mod graph_scope_tests;

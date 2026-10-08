@@ -69,8 +69,11 @@ a different origin, choose its HTTP and operator credentials explicitly.
 Bind account operations with `client.account_client()?` and privileged operations
 with `client.operator_client(operator_key_pair)?`. Synchronous applications use
 `iroha::blocking`, which owns a reusable runtime and rejects calls from an async
-runtime. Remaining synchronous capability methods and authority-owned operations
-are tracked in the repository's first-release architecture redesign record.
+runtime. `blocking::Client::with_request_deadline` retains that runtime and its HTTP
+pools while binding the account context to the shorter deadline. Either view may
+outlive the other; an expired deadline refuses HTTP dispatch. Remaining synchronous
+capability methods and authority-owned operations are tracked in the repository's
+first-release architecture redesign record.
 
 Signed Iroha queries use `account.query_single(query).await?` for singular
 lookups such as `FindAccountById`. Iterable signed queries

@@ -26,8 +26,9 @@ use iroha_data_model::{
 };
 use std::collections::BTreeMap;
 
+/// Prove the admitted executed history using the exact selected source originals.
 #[path = "executed_load/production.rs"]
-mod production;
+pub mod production;
 #[path = "executed_load/target.rs"]
 mod target;
 #[cfg(test)]
@@ -376,5 +377,3 @@ pub fn check(selection: &Selection<'_>) {
         selected.receipt.block_height
     );
 }
-
-pub use production::{SourceSelection, run};

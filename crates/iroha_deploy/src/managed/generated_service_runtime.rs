@@ -25,6 +25,7 @@ use zeroize::Zeroizing;
 mod carriers;
 mod components;
 mod config;
+mod projections;
 mod recovery;
 use carriers::{RequiredTransaction, RequiredTransactions};
 use components::{ComponentIdentity, PreparedProviderComponent, ProviderComponent};
@@ -92,7 +93,8 @@ impl RuntimeSelection {
         {
             return Err(invalid("original publication selection differs"));
         }
-        let parent = ManagedServiceBootstrap::open(&authority.prepared)?;
+        let parent = ManagedServiceBootstrap::open_existing_from_original(authority)?
+            .ok_or_else(|| invalid("original service bootstrap intent is absent"))?;
         let policies = parent.selected_policies()?;
         drop(parent);
         let mut initial = Vec::with_capacity(3);
@@ -105,9 +107,10 @@ impl RuntimeSelection {
                 return Err(invalid("original generated provider slot differs"));
             }
             policies.provider(plan.provider_id())?;
-            let selected = match ManagedStreamTokenCustody::open_existing(
-                &authority.prepared,
+            let selected = match ManagedStreamTokenCustody::open_existing_from_original(
+                authority,
                 plan.provider_id(),
+                None,
             )? {
                 Some(custody) => custody.inspect_local_initial_interval_if_present(
                     &policies.provider(plan.provider_id())?.custody,

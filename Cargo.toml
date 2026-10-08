@@ -433,6 +433,30 @@ debug = 0
 codegen-units = 256
 strip = "none"
 
+# Native runtime admission and package publication stream complete executable
+# contents through BLAKE3 and SHA-256. Normal debug bundles can exceed 2 GB;
+# optimize the existing Rust/native hash implementations, preserving all byte
+# reads, custody fences, debug assertions and overflow checks in both profiles.
+[profile.dev.package.blake3]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
+[profile.test.package.blake3]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
+[profile.dev.package.sha2]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
+[profile.test.package.sha2]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
 # Closed renewal profiling found per-byte zeroization and private-filesystem
 # helper overhead in unoptimized local builds. Keep the same volatile wipes,
 # native custody checks and assertion policy; optimize only their code generation.

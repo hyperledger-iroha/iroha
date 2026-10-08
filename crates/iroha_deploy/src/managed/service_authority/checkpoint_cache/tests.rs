@@ -24,13 +24,17 @@ use std::{
 
 pub(super) fn attempts(authority: &ServiceAuthority) -> usize {
     authority
-        .checkpoint_cache
+        .effective_checkpoint_cache()
         .decode_attempts
         .load(Ordering::Relaxed)
 }
 
 pub(super) fn assert_entry(authority: &ServiceAuthority, bytes: &[u8]) {
-    let slot = authority.checkpoint_cache.entry.try_lock().unwrap();
+    let slot = authority
+        .effective_checkpoint_cache()
+        .entry
+        .try_lock()
+        .unwrap();
     let entry = slot
         .slots
         .iter()
@@ -82,7 +86,7 @@ pub(super) fn assert_refused(authority: &ServiceAuthority, bytes: &[u8], actual_
     assert_eq!(attempts(authority), before + actual_imports);
     assert!(
         authority
-            .checkpoint_cache
+            .effective_checkpoint_cache()
             .entry
             .try_lock()
             .unwrap()
@@ -265,7 +269,11 @@ fn authenticated_single_checkpoint_reuse_preserves_scope_mutation_and_custody_ch
     authority.validate_profile().unwrap();
 
     // Optional cache synchronization cannot return a stale success or replace canonical errors.
-    let held = authority.checkpoint_cache.entry.try_lock().unwrap();
+    let held = authority
+        .effective_checkpoint_cache()
+        .entry
+        .try_lock()
+        .unwrap();
     let before = attempts(&authority);
     assert_eq!(authority.decode_checkpoint(&bytes).unwrap(), original);
     assert!(authority.decode_checkpoint(&changed).is_err());
@@ -274,7 +282,7 @@ fn authenticated_single_checkpoint_reuse_preserves_scope_mutation_and_custody_ch
     assert_entry(&authority, &bytes);
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _held = authority.checkpoint_cache.entry.lock().unwrap();
+            let _held = authority.effective_checkpoint_cache().entry.lock().unwrap();
             panic!("poison only the optional checkpoint memo");
         }))
         .is_err()
@@ -283,7 +291,7 @@ fn authenticated_single_checkpoint_reuse_preserves_scope_mutation_and_custody_ch
     assert!(authority.decode_checkpoint(&changed).is_err());
     assert_eq!(authority.decode_checkpoint(&bytes).unwrap(), original);
     assert_eq!(attempts(&authority), before + 2);
-    let poisoned = match authority.checkpoint_cache.entry.try_lock() {
+    let poisoned = match authority.effective_checkpoint_cache().entry.try_lock() {
         Err(TryLockError::Poisoned(poisoned)) => poisoned,
         _ => panic!("optional memo remains poisoned"),
     };
@@ -376,7 +384,7 @@ fn warm_checkpoint_import_rechecks_active_caller_admission_and_retries_original_
     );
     assert!(
         authority
-            .checkpoint_cache
+            .effective_checkpoint_cache()
             .entry
             .try_lock()
             .unwrap()
@@ -393,7 +401,7 @@ fn warm_checkpoint_import_rechecks_active_caller_admission_and_retries_original_
     assert_eq!(attempts(&authority), before + 1);
     assert!(
         authority
-            .checkpoint_cache
+            .effective_checkpoint_cache()
             .entry
             .try_lock()
             .unwrap()
@@ -450,7 +458,7 @@ fn warm_checkpoint_import_rechecks_active_caller_admission_and_retries_original_
         );
         assert!(
             authority
-                .checkpoint_cache
+                .effective_checkpoint_cache()
                 .entry
                 .try_lock()
                 .unwrap()
@@ -491,7 +499,11 @@ fn warm_checkpoint_import_rechecks_active_caller_admission_and_retries_original_
 
     // Nonwaiting held/poisoned gates keep the original cold path. An active
     // successful import must not populate a second retained cache graph.
-    let held = authority.checkpoint_cache.entry.try_lock().unwrap();
+    let held = authority
+        .effective_checkpoint_cache()
+        .entry
+        .try_lock()
+        .unwrap();
     let before = attempts(&authority);
     let held_budget = DecodeBudgetContext::new(limits(usize::try_from(charge).unwrap()));
     let held_admitted = held_budget
@@ -520,7 +532,7 @@ fn warm_checkpoint_import_rechecks_active_caller_admission_and_retries_original_
     assert_entry(&authority, &bytes);
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _held = authority.checkpoint_cache.entry.lock().unwrap();
+            let _held = authority.effective_checkpoint_cache().entry.lock().unwrap();
             panic!("poison only the optional active-owner memo");
         }))
         .is_err()
@@ -539,7 +551,7 @@ fn warm_checkpoint_import_rechecks_active_caller_admission_and_retries_original_
             .is_err()
     );
     assert_eq!(attempts(&authority), before + 2);
-    let poisoned = match authority.checkpoint_cache.entry.try_lock() {
+    let poisoned = match authority.effective_checkpoint_cache().entry.try_lock() {
         Err(TryLockError::Poisoned(poisoned)) => poisoned,
         _ => panic!("original poisoned memo must remain poisoned"),
     };
@@ -619,7 +631,7 @@ fn borrowed_epoch_imports_keep_late_outer_admission_and_exact_single_cache_entry
     assert!(!std::ptr::eq(admitted.checkpoint(), warm.checkpoint()));
     assert!(
         authority
-            .checkpoint_cache
+            .effective_checkpoint_cache()
             .entry
             .try_lock()
             .unwrap()
@@ -676,7 +688,7 @@ fn borrowed_epoch_imports_keep_late_outer_admission_and_exact_single_cache_entry
         assert_eq!(attempts(&authority), before + 1);
         assert!(
             authority
-                .checkpoint_cache
+                .effective_checkpoint_cache()
                 .entry
                 .try_lock()
                 .unwrap()
@@ -686,7 +698,11 @@ fn borrowed_epoch_imports_keep_late_outer_admission_and_exact_single_cache_entry
         assert_eq!(retry, original);
         assert_entry(&authority, &bytes);
     }
-    let held = authority.checkpoint_cache.entry.try_lock().unwrap();
+    let held = authority
+        .effective_checkpoint_cache()
+        .entry
+        .try_lock()
+        .unwrap();
     let before = attempts(&authority);
     let held_budget = DecodeBudgetContext::new(limits(usize::try_from(charge).unwrap()));
     assert_eq!(
@@ -699,7 +715,7 @@ fn borrowed_epoch_imports_keep_late_outer_admission_and_exact_single_cache_entry
     assert_entry(&authority, &bytes);
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _held = authority.checkpoint_cache.entry.lock().unwrap();
+            let _held = authority.effective_checkpoint_cache().entry.lock().unwrap();
             panic!("poison only the optional borrowed-epoch memo");
         }))
         .is_err()
@@ -712,7 +728,7 @@ fn borrowed_epoch_imports_keep_late_outer_admission_and_exact_single_cache_entry
     let refused_budget = DecodeBudgetContext::new(limits(cap));
     assert!(refused_budget.with(|| imports.decode(&bytes)).is_err());
     assert_eq!(attempts(&authority), before + 2);
-    let poisoned = match authority.checkpoint_cache.entry.try_lock() {
+    let poisoned = match authority.effective_checkpoint_cache().entry.try_lock() {
         Err(TryLockError::Poisoned(poisoned)) => poisoned,
         _ => panic!("original optional memo remains poisoned"),
     };

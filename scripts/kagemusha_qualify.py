@@ -23,9 +23,16 @@ import platform
 import random
 import re
 import shlex
+import shutil
 import statistics
+import stat
 import subprocess
 import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python3.10 uses the already pinned scripts dependency.
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIGS = {
@@ -40,6 +47,9 @@ CONFIGS = {
 }
 PREFIX = "M3_GATE_JSON "
 GIB = 1 << 30
+SOURCE_POLICY = "cargo-local-input-closure-v1"
+MEMORY_ACTIVITY_POLICY = "unchanged-compressions-pageouts-swapouts;monotonic-swapins"
+QUIET_MEMORY_COUNTERS = ("Compressions", "Pageouts", "Swapouts")
 PROBES = {
     "pressure": ["sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
     "vm": ["vm_stat"], "power": ["pmset", "-g", "custom"],
@@ -57,39 +67,217 @@ def write_json(path: Path, value: object) -> None:
 
 
 def file_hash(path: Path) -> str:
+    """Hash one unchanged regular file without following its final symlink."""
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"not a regular file: {path}")
     digest = hashlib.sha256()
-    with path.open("rb") as source:
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as source:
+        opened = os.fstat(source.fileno())
         for block in iter(lambda: source.read(1 << 20), b""):
             digest.update(block)
+        finished = os.fstat(source.fileno())
+    fields = lambda value: (value.st_dev, value.st_ino, value.st_size,
+                            value.st_mtime_ns, value.st_ctime_ns)
+    if len({fields(value) for value in (before, opened, finished, path.lstat())}) != 1:
+        raise ValueError(f"file changed while hashing: {path}")
     return digest.hexdigest()
 
 
-def source_manifest() -> dict[str, str]:
-    """Snapshot tracked and non-ignored files, including dirty and deleted files."""
+def local_path(value: str | Path, *, missing: bool = False) -> Path:
+    """Validate every lexical component before normalizing parent traversals."""
+    path = Path(value)
+    relative = path.relative_to(ROOT) if path.is_absolute() else path
+    parts = []
+    for part in relative.parts:
+        if part == "..":
+            if not parts:
+                raise ValueError(f"input leaves checkout: {value}")
+            parts.pop()
+            continue
+        if part == ".":
+            continue
+        parts.append(part)
+        current = ROOT.joinpath(*parts)
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            if missing:
+                continue
+            raise ValueError(f"missing source input: {value}") from None
+        if stat.S_ISLNK(mode):
+            raise ValueError(f"symlinked source input: {value}")
+    return ROOT.joinpath(*parts)
+
+
+def scan_local_root(name: str) -> dict[str, str]:
+    """Include ignored package files; only root build/admin directories are excluded."""
+    root = local_path(name)
+    if not root.is_dir():
+        raise ValueError(f"local source root is not a directory: {name}")
+    result = {}
+    def unavailable(error):
+        raise error
+
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=unavailable):
+        base = Path(directory)
+        for child in list(dirs):
+            path = local_path(base / child)
+            if child in ("target", ".git") and base == root:
+                dirs.remove(child)
+        for child in files:
+            path = local_path(base / child)
+            result[path.relative_to(ROOT).as_posix()] = "file:" + file_hash(path)
+    return result
+
+
+def source_manifest(roots: list[str] | tuple = ()) -> dict[str, str]:
+    """Snapshot Git entries plus complete local packages, including ignored files."""
     result = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=ROOT, capture_output=True, check=True,
     )
     manifest = {}
-    for name in sorted(set(result.stdout.split(b"\0")) - {b""}):
-        path = ROOT / os.fsdecode(name)
+    for raw in sorted(set(result.stdout.split(b"\0")) - {b""}):
+        name = os.fsdecode(raw)
+        path = ROOT / name
+        # Unconsumed Git symlinks may remain in the broad diagnostic snapshot.
+        # Selected package and compiler inputs must pass local_path instead.
         if path.is_symlink():
             data = "symlink:" + os.readlink(path)
         elif path.is_file():
-            data = "file:" + file_hash(path)
+            data = "file:" + file_hash(local_path(path))
         else:
             data = "deleted"
-        manifest[os.fsdecode(name)] = data
+        manifest[name] = data
+    for root in roots:
+        manifest.update(scan_local_root(root))
     return manifest
+
+
+def cargo_metadata() -> dict:
+    result = command(["cargo", "metadata", "--locked", "--offline", "--format-version=1"])
+    result.check_returncode()
+    return json.loads(result.stdout)
+
+
+def metadata_roots(metadata: dict) -> list[str]:
+    roots = set()
+    for package in metadata["packages"]:
+        if package["source"] is None:
+            manifest = local_path(package["manifest_path"])
+            file_hash(manifest)
+            root = manifest.parent.relative_to(ROOT).as_posix()
+            if root == ".":
+                raise ValueError("root package requires an explicit bounded source scan")
+            roots.add(root)
+    if (ROOT / ".cargo").exists():
+        roots.add(".cargo")
+    return sorted(roots)
+
+
+def cargo_configuration() -> dict:
+    """Pin Cargo's config hierarchy, including absent optional candidates.
+
+    Both filename spellings are retained even where Cargo gives `config`
+    precedence. Compiler overrides and Cargo-provided environment require a
+    separately reviewed tool disposition; this M3 profile admits neither.
+    Only hashes are retained, never configuration contents or credentials.
+    """
+    home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+    if not home.is_absolute():
+        home = ROOT / home
+    directories = {base / ".cargo" for base in (ROOT, *ROOT.parents)} | {home}
+    result = {}
+    for directory in sorted(directories):
+        for name in ("config", "config.toml"):
+            path = directory / name
+            # Inspect each lexical ancestor so a symlink cannot conceal an
+            # alternate configuration, even if its final leaf is absent.
+            for parent in (*reversed(path.parents), path):
+                try:
+                    mode = parent.lstat().st_mode
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISLNK(mode):
+                    raise ValueError(f"symlinked Cargo configuration: {path}")
+            try:
+                before = file_hash(path)
+            except FileNotFoundError:
+                result[str(path)] = None
+                continue
+            original = path.read_bytes()
+            if hashlib.sha256(original).hexdigest() != before or file_hash(path) != before:
+                raise ValueError(f"Cargo configuration changed while reading: {path}")
+            config = tomllib.loads(original.decode("utf-8"))
+            if "include" in config:
+                raise ValueError("Cargo configuration include needs an explicit input policy")
+            build = config.get("build", {})
+            if not isinstance(build, dict):
+                raise ValueError("malformed Cargo build configuration")
+            if any(build.get(key) for key in ("rustc", "rustc-wrapper", "rustc-workspace-wrapper")):
+                raise ValueError("configured compiler/wrapper needs an explicit tool-input policy")
+            if config.get("env"):
+                raise ValueError("Cargo configuration environment needs an explicit tool-input policy")
+            result[str(path)] = before
+    return result
+
+
+def tool_identity() -> dict:
+    """Bind selected Rust tools and build controls, without claiming OS closure."""
+    tools = {"cargo_configuration": cargo_configuration()}
+    for name in ("bash", "git", "python3", "cargo", "rustc", "rustup"):
+        selected = shutil.which(name)
+        if selected is None:
+            raise ValueError(f"missing build tool: {name}")
+        path = Path(selected).resolve(strict=True)
+        tools["launcher:" + name] = {"path": str(path), "sha256": file_hash(path)}
+    interpreter = Path(sys.executable).resolve(strict=True)
+    tools["python"] = {"path": str(interpreter), "sha256": file_hash(interpreter)}
+    wrapper = shutil.which("sccache")
+    tools["automatic_sccache"] = None
+    if wrapper:
+        path = Path(wrapper).resolve(strict=True)
+        tools["automatic_sccache"] = {"path": str(path), "sha256": file_hash(path)}
+    for name in ("cargo", "rustc"):
+        selected = command(["rustup", "which", name])
+        selected.check_returncode()
+        path = Path(selected.stdout.strip()).resolve(strict=True)
+        version = command([str(path), "-Vv"])
+        version.check_returncode()
+        tools[name] = {"path": str(path), "sha256": file_hash(path), "version": version.stdout}
+    tools["environment"] = {key: os.environ.get(key) for key in (
+        "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_PROFILE_RELEASE_LTO",
+        "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTUP_TOOLCHAIN",
+        "CARGO_HOME", "RUSTUP_HOME", "CARGO_BUILD_TARGET", "CARGO_TARGET_DIR", "CARGO_FAST_TARGET_ROOT",
+        "CARGO_BUILD_RUSTC", "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+        "DOCS_RS", "NORITO_CHECK_BINDINGS_SYNC", "NORITO_SKIP_BINDINGS_SYNC",
+        "ENABLE_CABAC", "ENABLE_TRELLIS",
+    )}
+    if any(tools["environment"][key] for key in (
+        "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC",
+        "CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+    )):
+        raise ValueError("custom compiler/wrapper needs an explicit tool-input policy")
+    if os.environ.get("NORITO_CHECK_BINDINGS_SYNC") is not None and os.environ.get("NORITO_SKIP_BINDINGS_SYNC") is None:
+        raise ValueError("bindings-sync subprocess needs an explicit tool-input policy")
+    return tools
 
 
 def selected_sources(manifest: dict, scope: dict | None) -> dict:
     if scope is None:
         return manifest
-    if scope.get("kind") != "cargo_component":
+    if scope.get("kind") not in ("cargo_component", "whole_checkout"):
         raise ValueError("unknown source scope")
-    return {name: value for name, value in manifest.items() if name in scope["files"] or
-            any(name == root or name.startswith(root + "/") for root in scope["roots"])}
+    for name in scope["required_inputs"]:
+        if not manifest.get(name, "").startswith("file:"):
+            raise ValueError(f"mandatory compiler input was not captured: {name}")
+    selected = {name: value for name, value in manifest.items()
+                if scope["kind"] == "whole_checkout" or name in scope["files"] or
+                any(name == root or name.startswith(root + "/") for root in scope["roots"])}
+    if any(value.startswith("symlink:") for value in selected.values()):
+        raise ValueError("selected source contains a symlink")
+    return selected
 
 
 def manifest_digest(manifest: dict) -> str:
@@ -97,48 +285,146 @@ def manifest_digest(manifest: dict) -> str:
 
 
 def source_digest(scope: dict | None = None) -> str:
-    """Bind the complete selected source set, detecting additions and deletions."""
-    return manifest_digest(selected_sources(source_manifest(), scope))
+    """Rescan the same roots, required inputs, metadata and tools at runtime."""
+    if scope is None:
+        raise ValueError("candidate lacks a captured Cargo source scope")
+    selected = selected_sources(source_manifest(scope["roots"]), scope)
+    selected["@cargo_metadata"] = manifest_digest(cargo_metadata())
+    selected["@tools"] = manifest_digest(tool_identity())
+    selected["@build_environment"] = manifest_digest({key: os.environ.get(key) for key in scope["build_environment"]})
+    return manifest_digest(selected)
 
 
-def component_scope(metadata: dict, artifacts: list[dict]) -> dict:
-    """Use Cargo's actual artifacts, including build/dev dependencies, not guesses."""
+def depfile_inputs(depinfo: Path, artifact: Path) -> set[str]:
+    """Require a rule for the exact emitted artifact, never a nearby stale .d."""
+    text = depinfo.read_text().replace("\\\n", " ")
+    inputs = set()
+    matched = False
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        left, separator, right = line.partition(": ")
+        if not separator:
+            continue
+        targets = [local_path(name) for name in shlex.split(left)]
+        if artifact not in targets:
+            continue
+        matched = True
+        inputs.update(local_path(name).relative_to(ROOT).as_posix() for name in shlex.split(right))
+    if not matched or not inputs:
+        raise ValueError(f"depfile does not bind artifact: {artifact}")
+    return inputs
+
+
+def component_scope(metadata: dict, artifacts: list[dict], build_scripts: list[dict] = ()) -> dict:
+    """Bind actual local artifacts and fail closed on uncovered/generated inputs."""
     packages = {package["id"]: package for package in metadata["packages"]}
-    roots = {".cargo"}
+    roots = {".cargo"} if (ROOT / ".cargo").exists() else set()
     files = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain",
              "scripts/cargo_fast.sh", "scripts/check_cargo_target_owner.py",
              "scripts/kagemusha_qualify.py"}
-    compiled = {}
+    compiled, depfiles, aliases, required = {}, {}, [], set()
+    compiler_environment = {}
+    script_packages = set()
     for artifact in artifacts:
         package = packages[artifact["package_id"]]
-        compiled[package["id"]] = {"name": package["name"], "version": package["version"],
-                                    "source": package["source"], "manifest_path": package["manifest_path"]}
+        compiled[package["id"]] = {key: package[key] for key in ("name", "version", "source", "manifest_path")}
         if package["source"] is not None:
             continue
-        directory = Path(package["manifest_path"]).resolve().parent.relative_to(ROOT)
-        roots.add(directory.as_posix())
-        # Rust dep-info includes source/fixture includes outside the crate root.
-        # Generated target files are bound by the executable; their generators
-        # and build-script packages are already members of this artifact set.
-        for filename in artifact.get("filenames", []):
-            path = Path(filename)
+        manifest = local_path(package["manifest_path"])
+        if artifact.get("manifest_path") and local_path(artifact["manifest_path"]) != manifest:
+            raise ValueError("artifact differs from metadata manifest")
+        if artifact.get("target", {}).get("kind") == ["custom-build"]:
+            script_packages.add(package["id"])
+        roots.add(manifest.parent.relative_to(ROOT).as_posix())
+        required.add(manifest.relative_to(ROOT).as_posix())
+        if not artifact.get("filenames"):
+            raise ValueError("local artifact has no emitted files")
+        for filename in artifact["filenames"]:
+            path = local_path(filename)
+            artifact_hash = file_hash(path)
             stem = path.stem.removeprefix("lib") if path.suffix in (".rlib", ".rmeta", ".dylib", ".so") else path.stem
             depinfo = path.with_name(stem + ".d")
-            if not depinfo.is_file():
-                continue
+            actual = path
+            if path.name == "build-script-build":
+                matches = [p for p in path.parent.glob("build_script_build-*")
+                           if p.suffix == "" and p.with_suffix(".d").is_file() and file_hash(local_path(p)) == artifact_hash]
+                if len(matches) != 1:
+                    raise ValueError("missing or ambiguous exact build-script alias")
+                actual = matches[0]
+                depinfo = actual.with_suffix(".d")
+                aliases.append({"alias": str(path), "actual": str(actual), "sha256": artifact_hash})
+            depinfo = local_path(depinfo)
+            inputs = depfile_inputs(depinfo, actual)
+            generated = sorted(name for name in inputs if name.startswith("target/"))
+            if generated:
+                # M3 currently has no generated Rust inputs. Do not grant a
+                # blanket target/ exemption; a future producer needs a reviewed
+                # reproducible transform and independently captured prerequisites.
+                raise ValueError(f"generated compiler input has no verified disposition: {generated}")
+            required.update(inputs)
+            derived_environment = {}
             for line in depinfo.read_text().splitlines():
-                _, separator, dependencies = line.partition(": ")
-                if not separator or line.startswith("#"):
+                if not line.startswith("# env-dep:"):
                     continue
-                for dependency in shlex.split(dependencies):
-                    source = Path(dependency)
-                    source = (ROOT / source).resolve() if not source.is_absolute() else source.resolve()
-                    if source.is_relative_to(ROOT) and not source.is_relative_to(ROOT / "target"):
-                        files.add(source.relative_to(ROOT).as_posix())
+                name, separator, value = line.removeprefix("# env-dep:").partition("=")
+                expected = value if separator else None
+                if name == "CARGO_MANIFEST_DIR":
+                    if expected != str(manifest.parent):
+                        raise ValueError("depfile has foreign manifest environment")
+                    derived_environment[name] = expected
+                elif name == "CARGO_TARGET_TMPDIR":
+                    if expected is None or not local_path(expected, missing=True).is_relative_to(ROOT / "target"):
+                        raise ValueError("depfile has foreign temporary directory")
+                    derived_environment[name] = expected
+                elif name.startswith("CARGO_"):
+                    raise ValueError(f"derived compiler environment has no disposition: {name}")
+                else:
+                    if os.environ.get(name) != expected:
+                        raise ValueError(f"compiler environment differs: {name}")
+                    compiler_environment[name] = expected
+            depfiles[str(depinfo)] = {"sha256": file_hash(depinfo), "inputs": sorted(inputs),
+                                     "derived_environment": derived_environment}
     if not any(package["name"] == "iroha_plonk_gadgets" for package in compiled.values()):
         raise ValueError("component artifact set omits its measurement driver")
+    outputs, environment = [], compiler_environment
+    observed_scripts = set()
+    for item in build_scripts:
+        package = packages[item["package_id"]]
+        if package["source"] is not None:
+            continue
+        if package["id"] not in script_packages:
+            raise ValueError("build script lacks captured compiler artifact")
+        observed_scripts.add(package["id"])
+        out = local_path(item["out_dir"])
+        output = local_path(out.parent / "output")
+        generated = scan_local_root(out.relative_to(ROOT).as_posix())
+        if generated:
+            raise ValueError("local generated build output has no verified disposition")
+        text = output.read_text()
+        for line in text.splitlines():
+            directive = line.removeprefix("cargo::").removeprefix("cargo:")
+            if directive.startswith("rerun-if-changed="):
+                name = directive.partition("=")[2]
+                base = local_path(package["manifest_path"]).parent
+                path = local_path(base / name)
+                if path.is_dir():
+                    roots.add(path.relative_to(ROOT).as_posix())
+                    required.update(scan_local_root(path.relative_to(ROOT).as_posix()))
+                else:
+                    required.add(path.relative_to(ROOT).as_posix())
+            elif directive.startswith("rerun-if-env-changed="):
+                name = directive.partition("=")[2]
+                environment[name] = os.environ.get(name)
+        outputs.append({"record": item, "path": str(output), "sha256": file_hash(output), "text": text,
+                        "generated_disposition": "empty output directory; no generated compiler inputs"})
+    if observed_scripts != script_packages:
+        raise ValueError("local build script lacks its executed output record")
+    files.update(required)
     return {"kind": "cargo_component", "roots": sorted(roots), "files": sorted(files),
-            "packages": [compiled[key] for key in sorted(compiled)]}
+            "required_inputs": sorted(required), "packages": [compiled[key] for key in sorted(compiled)],
+            "depfiles": depfiles, "build_script_aliases": aliases, "build_script_outputs": outputs,
+            "build_environment": environment}
 
 
 def ignored_output(path: Path) -> Path:
@@ -161,14 +447,14 @@ def prepare(output: Path, *, component: bool = False, target_slot: str = "m3b") 
     candidate_path = output / "candidate.json"
     if candidate_path.exists():
         raise ValueError("candidate.json already exists; use a fresh output directory")
-    before_manifest = source_manifest() if component else None
-    before = source_digest() if not component else manifest_digest(before_manifest)
-    metadata = None
-    if component:
-        metadata_result = command(["cargo", "metadata", "--locked", "--offline", "--format-version=1"])
-        metadata_result.check_returncode()
-        metadata = json.loads(metadata_result.stdout)
-        write_json(output / "cargo-metadata.json", metadata)
+    metadata = cargo_metadata()
+    roots = metadata_roots(metadata)
+    before_tools = tool_identity()
+    before_manifest = source_manifest(roots)
+    before = manifest_digest(before_manifest)
+    write_json(output / "cargo-metadata-before.json", metadata)
+    write_json(output / "tools-before.json", before_tools)
+    write_json(output / "source-before.json", before_manifest)
     argv = [
         "scripts/cargo_fast.sh", "--stable-local-metadata", "--jobs", "2", "--target-slot", target_slot, "--",
         "test", "--locked", "--offline", "--release", "-p", "iroha_plonk_gadgets",
@@ -181,32 +467,55 @@ def prepare(output: Path, *, component: bool = False, target_slot: str = "m3b") 
         raise RuntimeError(f"build failed ({result.returncode}); see build.stderr.log")
     executables = set()
     artifacts = []
+    build_scripts = []
     for line in result.stdout.splitlines():
         try:
             item = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if item.get("reason") == "build-script-executed":
+            build_scripts.append(item)
         if item.get("reason") == "compiler-artifact":
             artifacts.append(item)
             if item.get("target", {}).get("name") == "m3_gates" and item.get("executable"):
                 executables.add(item["executable"])
     if len(executables) != 1:
         raise ValueError(f"expected one m3_gates executable, found {len(executables)}")
-    scope = component_scope(metadata, artifacts) if component else None
-    if component:
-        after_manifest = source_manifest()
-        source_files = selected_sources(after_manifest, scope)
-        before_selected = selected_sources(before_manifest, scope)
-        write_json(output / "source-provenance.json", {
-            "scope": scope, "before": before_selected, "after": source_files,
-            "whole_checkout_before": before, "whole_checkout_after": manifest_digest(after_manifest),
-            "changed_in_scope": sorted(name for name in before_selected.keys() | source_files.keys()
-                                       if before_selected.get(name) != source_files.get(name)),
-        })
-        before = manifest_digest(before_selected)
-        after = manifest_digest(source_files)
-    else:
-        after = source_digest()
+    after_metadata = cargo_metadata()
+    after_tools = tool_identity()
+    after_manifest = source_manifest(metadata_roots(after_metadata))
+    write_json(output / "cargo-metadata-after.json", after_metadata)
+    write_json(output / "tools-after.json", after_tools)
+    write_json(output / "source-after.json", after_manifest)
+    if metadata != after_metadata or before_tools != after_tools:
+        raise ValueError("metadata or tools changed during build")
+    scope = component_scope(metadata, artifacts, build_scripts)
+    if not component:
+        scope["kind"] = "whole_checkout"
+        scope["roots"] = roots
+    source_files = selected_sources(after_manifest, scope)
+    before_selected = selected_sources(before_manifest, scope)
+    for values in (source_files, before_selected):
+        values["@cargo_metadata"] = manifest_digest(metadata)
+        values["@tools"] = manifest_digest(before_tools)
+        values["@build_environment"] = manifest_digest(scope["build_environment"])
+    write_json(output / "source-provenance.json", {
+        "source_policy": SOURCE_POLICY, "scope": scope,
+        "before": before_selected, "after": source_files,
+        "whole_checkout_before": before, "whole_checkout_after": manifest_digest(after_manifest),
+        "changed_in_scope": sorted(name for name in before_selected.keys() | source_files.keys()
+                                   if before_selected.get(name) != source_files.get(name)),
+    })
+    retained = output / "dep-info"
+    retained.mkdir()
+    for path, record in scope["depfiles"].items():
+        original = local_path(path)
+        data = original.read_bytes()
+        if hashlib.sha256(data).hexdigest() != record["sha256"]:
+            raise ValueError("depfile changed before retention")
+        (retained / (record["sha256"] + ".d")).write_bytes(data)
+    before = manifest_digest(before_selected)
+    after = manifest_digest(source_files)
     if before != after:
         raise ValueError("source changed during build; candidate is not frozen")
     binary = Path(executables.pop()).resolve()
@@ -226,16 +535,17 @@ def prepare(output: Path, *, component: bool = False, target_slot: str = "m3b") 
     (output / "layouts.stderr.log").write_text(inventory.stderr)
     inventory.check_returncode()
     layouts = parse_layouts(inventory.stdout)
-    if (source_digest(scope) if component else source_digest()) != after:
+    if source_digest(scope) != after:
         raise ValueError("source changed during descriptor inventory; candidate is not frozen")
     if file_hash(binary) != binary_sha256:
         raise ValueError("executable changed during descriptor inventory; candidate is not frozen")
     write_json(candidate_path, {
-        "schema": "kagemusha.m3.candidate.v1", "source_sha256": after,
+        "schema": "kagemusha.m3.candidate.v1", "source_policy": SOURCE_POLICY, "source_sha256": after,
         "source_scope": scope, "qualification_scope": "component" if component else "whole_checkout",
         "binary": str(binary), "binary_sha256": binary_sha256,
         "compiler": compiler.stdout, "build_command": argv,
         "profile": "release", "features": "default",
+        "memory_activity_policy": MEMORY_ACTIVITY_POLICY,
         "layouts": layouts,
         "platform": platform.platform(), "machine": platform.machine(),
         "build_flags": {key: os.environ.get(key) for key in (
@@ -247,7 +557,7 @@ def prepare(output: Path, *, component: bool = False, target_slot: str = "m3b") 
 
 def parse_vm_stat(text: str) -> dict[str, int]:
     counters = {}
-    for label in ("Compressions", "Pageouts", "Swapouts", "Swapins"):
+    for label in (*QUIET_MEMORY_COUNTERS, "Swapins"):
         match = re.search(rf"^{label}:\s+(\d+)\.", text, re.MULTILINE)
         if not match:
             raise ValueError(f"missing vm_stat counter {label}")
@@ -290,6 +600,7 @@ def environment_counters(value: dict) -> dict:
 
 
 def environment_reasons(before: dict, after: dict) -> list[str]:
+    """Enforce the specified quiet-memory counters, retaining swap-ins as diagnostics."""
     reasons = []
     counters = []
     for name, value in (("before", before), ("after", after)):
@@ -300,7 +611,9 @@ def environment_reasons(before: dict, after: dict) -> list[str]:
     if reasons:
         return reasons
     for name, count in counters[0].items():
-        if counters[1][name] != count:
+        if counters[1][name] < count:
+            reasons.append(f"memory counter decreased: {name}")
+        elif name in QUIET_MEMORY_COUNTERS and counters[1][name] != count:
             reasons.append(f"memory counter changed: {name}")
     if before["raw"]["power"]["stdout"] != after["raw"]["power"]["stdout"]:
         reasons.append("power policy changed")
@@ -451,9 +764,11 @@ def observation_reasons(value: dict, config: dict, candidate: dict, seed: int) -
 
 
 def candidate_boundary(candidate: dict) -> dict:
-    scope = candidate.get("source_scope")
-    return {"source_sha256": source_digest(scope) if scope else source_digest(),
-            "binary_sha256": file_hash(Path(candidate["binary"]))}
+    try:
+        return {"source_sha256": source_digest(candidate["source_scope"]),
+                "binary_sha256": file_hash(Path(candidate["binary"]))}
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        return {"source_sha256": None, "binary_sha256": None, "error": str(error)}
 
 
 def attempt_reasons(item: dict, config: dict, candidate: dict) -> list[str]:
@@ -528,6 +843,10 @@ def summarize(path: Path) -> dict:
     ledger_reasons = []
     if ledger.get("schema") != "kagemusha.m3.runs.v1":
         ledger_reasons.append("missing complete qualification ledger schema")
+    if ledger["candidate"].get("source_policy") != SOURCE_POLICY:
+        ledger_reasons.append("candidate does not bind the current source policy")
+    if ledger["candidate"].get("memory_activity_policy") != MEMORY_ACTIVITY_POLICY:
+        ledger_reasons.append("candidate does not bind the current memory activity policy")
     seed = ledger.get("shuffle_seed")
     if type(seed) is not int or ledger.get("schedule") != schedule(random.Random(seed)):
         ledger_reasons.append("invalid predeclared configuration schedule")
@@ -594,11 +913,15 @@ def schedule(rng: random.Random) -> list[list[str]]:
 
 def run(candidate_path: Path, seed: int, *, stop_on_hard_failure: bool = False) -> dict:
     candidate = json.loads(candidate_path.read_text())
+    if candidate.get("source_policy") != SOURCE_POLICY:
+        raise ValueError("candidate does not bind the current source policy; prepare a fresh candidate")
+    if candidate.get("memory_activity_policy") != MEMORY_ACTIVITY_POLICY:
+        raise ValueError("candidate does not bind the current memory activity policy; prepare a fresh candidate")
     output = candidate_path.parent
     if (output / "runs.json").exists():
         raise ValueError("runs.json already exists; retained attempts may not be overwritten")
     boundary = candidate_boundary(candidate)
-    if any(candidate[key] != boundary[key] for key in boundary):
+    if any(candidate.get(key) != boundary[key] for key in boundary):
         raise ValueError("source or executable differs from frozen candidate")
     rng = random.Random(seed)
     order = schedule(rng)
@@ -613,7 +936,7 @@ def run(candidate_path: Path, seed: int, *, stop_on_hard_failure: bool = False) 
             attempts = ledger["attempts"][name]
             while sum(not value["reasons"] and value["block"] == block for value in attempts) < 3 and len(attempts) < 18:
                 before = candidate_boundary(candidate)
-                if any(before[key] != candidate[key] for key in before):
+                if any(before[key] != candidate.get(key) for key in before):
                     raise ValueError("candidate changed during qualification; retained results cannot qualify the new source")
                 number = len(attempts)
                 prefix = output / f"{name}-b{block + 1}-attempt{number + 1:02}"
@@ -623,7 +946,7 @@ def run(candidate_path: Path, seed: int, *, stop_on_hard_failure: bool = False) 
                 measured = run_process(candidate, config, rng.randrange(1 << 64), prefix)
                 post = run_process(candidate, calibration, 0, prefix.with_name(prefix.name + "-post"))
                 after = candidate_boundary(candidate)
-                changed = any(after[key] != candidate[key] for key in after)
+                changed = any(after[key] != candidate.get(key) for key in after)
                 attempt = {"block": block, "seed": measured["seed"], "report": measured["report"],
                            "sequence": sum(len(rows) for rows in ledger["attempts"].values()),
                            "pre": pre, "measured": measured, "post": post,

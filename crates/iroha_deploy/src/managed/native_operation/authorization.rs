@@ -234,10 +234,14 @@ impl Lease {
                 "generated capability no longer selects its retained epoch",
             ));
         }
-        self.epoch
-            .terms
-            .signing_deadline(deadline)
-            .map_err(|_| ManagedBootstrapFailure::AuthorizationExpired.into())
+        #[cfg(test)]
+        cancellation_tests::after_native_reads();
+        let deadline = self.epoch.terms.signing_deadline(deadline).map_err(|_| {
+            crate::managed::Error::Bootstrap(ManagedBootstrapFailure::AuthorizationExpired)
+        })?;
+        // Preserve native/retained and expiry refusals before closing a successful live check.
+        require_active(&self.cancelled)?;
+        Ok(deadline)
     }
     fn origin(&self) -> Result<Origin> {
         Ok(Origin::Generated {
@@ -564,3 +568,7 @@ pub(in crate::managed) fn require_active(cancelled: &AtomicBool) -> Result<()> {
 #[cfg(test)]
 #[path = "authorization/reader_tests.rs"]
 mod reader_tests;
+
+#[cfg(test)]
+#[path = "authorization/cancellation_tests.rs"]
+mod cancellation_tests;

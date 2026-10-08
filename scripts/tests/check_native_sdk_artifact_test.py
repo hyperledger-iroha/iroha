@@ -80,7 +80,7 @@ def test_native_c_contracts_exclude_retired_kagemusha_exports() -> None:
 def test_current_wallet_export_contract_matches_every_apple_inventory() -> None:
     """Keep the independently reviewed publication and admission inventories exact."""
     expected = MODULE.KAGEMUSHA_WALLET_C_EXPORTS
-    assert len(expected) == len(set(expected)) == 23
+    assert len(expected) == len(set(expected)) == 26
     for relative, start, end in (
         ("scripts/build_norito_xcframework.sh", '"required_symbols": [', '"forbidden_symbols": ['),
         ("scripts/validate_norito_bridge_xcframework.py", "EXPECTED_REQUIRED_SYMBOLS = [", "EXPECTED_FORBIDDEN_SYMBOLS = ["),
@@ -101,7 +101,7 @@ def test_current_wallet_exports_are_accepted_and_unknown_names_are_rejected() ->
         + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS
         + MODULE.KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS
     )
-    assert len(current) == len(set(current)) == 42
+    assert len(current) == len(set(current)) == 45
     for sdk in ("c-jni", "csharp"):
         MODULE.validate_retired_protocol_symbols(current, sdk=sdk)
         for symbol in (*current, "connect_norito_free"):
@@ -139,7 +139,7 @@ def test_current_wallet_exports_are_accepted_and_unknown_names_are_rejected() ->
 
 def test_current_new_wallet_exports_are_each_mandatory_and_optional_aliases_are_rejected() -> None:
     new_c = tuple("connect_norito_kagemusha_wallet_" + suffix + "_v1"
-                  for suffix in ("review", "execute_reviewed", "discard_review", "installation_begin", "installation_register", "installation_close", "registration_source_relocate", "enrollment"))
+                  for suffix in ("review", "execute_reviewed", "discard_review", "installation_begin", "installation_register", "installation_close", "registration_source_relocate", "observe", "account_original", "account_display", "enrollment"))
     new_jni = tuple("Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
                     for method in ("review", "executeReviewed", "discardReview", "enrollment")) + (
         "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_beginInstallation",
