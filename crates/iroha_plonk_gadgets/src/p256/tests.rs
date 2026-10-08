@@ -2598,7 +2598,31 @@ fn protocol_signatures() -> Vec<ProtocolSignature> {
 #[test]
 fn p256_protocol_signature_fixtures_verify_from_the_digest() {
     let vectors = protocol_signatures();
-    assert_eq!(vectors.len(), 18);
+    assert_eq!(
+        vectors
+            .iter()
+            .map(|vector| vector.object.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "payer issuer certificate",
+            "payer credential",
+            "Offer",
+            "Request",
+            "Send receipt",
+            "Receive receipt binding the Payment digest",
+            "Close session control",
+            "scheme policy",
+            "fee schedule",
+            "blacklist",
+            "quota share",
+            "time anchor",
+            "Activate ledger control",
+            "renewal possession",
+            "Android renewal key binding",
+            "artifact manifest",
+            "load charge quote",
+        ]
+    );
     let mut cases = Vec::with_capacity(vectors.len() + 1);
     let mut big_endian_out_of_range = 0;
     for vector in &vectors {

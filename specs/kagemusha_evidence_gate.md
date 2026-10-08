@@ -413,7 +413,7 @@ Starting points, not evidence that this protocol has passed:
 ### Current implementation checkpoint (2026-10-08)
 
 The resumed `optimizations` checkout advanced from `ad75acfe2a` through
-`7f14c2389c` and `505a5bd87d` to `28499f4150` while checks were
+`7f14c2389c`, `505a5bd87d` and `28499f4150` to `99f7ebf0bc` while checks were
 running. Merge conflicts were resolved, but consumed CoreZk, bridge, data-model
 and filesystem sources changed.
 SDK and component results below belong to their captured pre-merge inputs;
@@ -434,8 +434,11 @@ qualify the current candidate. The interrupted canonical source and full52 jobs
 have no terminal receipts or signed complete wallet grant. Independent recovery
 rereads all 1,043 surviving content-addressed originals (65,074,847,520 bytes),
 with unchanged custody and no surviving producer or terminal output. A fresh
-full52 run reconstructs the complete descriptor/key graph before strictly
-importing any reusable proving key. It uses the preserved captured compiler;
+full52 run has reconstructed all 2,495 descriptor/key records, reread all 4,990
+originals and rejected missing, unused or duplicate records without reading a
+proving key. It has indexed 512 reusable sources and is assembling the complete
+wallet catalog; no terminal receipt or signed wallet grant has been produced.
+It uses the preserved captured compiler;
 current-owner qualification remains mandatory. Records are retained in
 `canonical-complete52-interruption-review-2` and
 `canonical-complete52-after-interruption-1` under `target/qualification`.
@@ -463,8 +466,40 @@ and release of the dead denominator allocation. Both-field regression tests are
 added. All six optimized engine test targets now compile. Independent review
 checks 73 actual compiler depfiles, 1,461 source inputs, 4,135 package files and
 five cfg-only generators; the 22 concurrent Deploy/Wallet edits are outside
-that compiled graph. Correctness execution, strict lint and complete proof-byte
-parity remain required before measuring this candidate. Captured binaries and
+that compiled graph. The copied executable passes all 94 Pasta and 268 Plonk
+cases, including the new both-field regressions. Its gadget selection finishes
+with 284 passing cases, one stale fixture-count failure and eight explicit
+ignores. Subsequent test-only lint fixes and removal of an unused
+private wiping helper are recorded as source changes, so these results remain
+bound to the copied executable. Strict lint exposed 45 gadget test diagnostics,
+then a feature-subset unused X25519 wrapper and three Torii-shared diagnostics.
+Those repairs are applied. Plonk, Gadgets and KagemushaProof library/test targets
+pass strict Clippy with `--no-deps`; the dependency-inclusive command still
+fails on eight unrelated configuration diagnostics. The gadget run also exposes
+a stale 18-signature assertion after the standalone Load-voucher signature was
+removed. Its repair checks the exact 17 current signed objects against the
+canonical generator, retaining the native/circuit and swapped-message checks.
+The rebuilt oracle independently passes all 42 ordinary and eight explicit
+correctness cases, including exact proof-byte comparisons. Actual component
+inputs and tools are unchanged; the original HEAD-only drift refusal remains
+in `target/qualification/engine23-oracle-capture-1/correctness`.
+The matching current x86_64 Mach-O executable also passes all 50 correctness
+cases under Rosetta, including all eight explicit large cases and exact
+native/vendored proof bytes. All 1,864 package files, 400 ordinary compiler
+inputs, the independently reproduced generated include, tools, retained
+originals and binary stay unchanged. The receipt is
+`engine23-oracle-x86-capture-1/correctness/result.json`, SHA
+`1b275b1a0bd0bce6375f98601efbc3aa50ae7bde88097c3dd093eca7bb93784a`.
+This is x86 instruction-path correctness, not physical x86 performance.
+The second engine capture passes the repaired 17-object P-256 fixture, twelve
+targeted lookup/allocation/owned-witness controls, four ordinary BLS controls
+and eight M3 harness correctness cases. Its three explicit BLS cases also pass,
+including a complete 1,084-leaf proof/verification trace. Source, binary,
+tools and retained inputs stay unchanged
+(`engine23-capture-2/correctness/result.json`). Strict gadget library/test lint
+passes. The remaining 308 ordinary proof cases are running separately; the four
+already passed BLS cases are not repeated. These are
+correctness checks, not M3 performance qualification. Captured binaries and
 the original broad source-drift verdict are retained in
 `target/qualification/engine23-capture-1`. The source port is recorded in
 `target/qualification/engine23-production-port-1`. Earlier records are under
@@ -482,8 +517,65 @@ edits are recorded separately; the original broad build verdict and first
 overbroad runtime refusal are preserved. These are transport component results,
 not finality proof or monetary-network results
 (`rust-sdk-kagemusha-capture-1/runtime-2`). The same-network controller passes
-21 local orchestration controls. Its first build with the new continuation
-stopped on a missing module-path declaration; no live monetary campaign ran.
+23 local orchestration controls, including exact typed rejection evidence;
+its helper selector separately passes three local controls. Neither selection
+is a live-network result. The continuation's missing module paths and five API
+compile errors are repaired; the first native settlement test build's three
+Norito JSON mutation errors are also repaired. Each failed build is preserved.
+The corrected native owner builds and its copied inventory test passes; two
+consumed data-model files changed during compilation, so its original
+current-source refusal remains. The next harness build identifies a missing
+iterator conversion and two unparenthesized Norito JSON expressions; those
+errors are repaired and the failed build is retained.
+Source tracing then found that both proposed malformed Unload cases fail
+canonical decoding during routing, before certified execution. They cannot
+establish the intended native-proof rejection check. The native fixture now
+increments the canonical final IPA blinding scalar, re-signs its receipt with
+the retained simulated C key and requires model acceptance plus an installed
+native `Proof` rejection. It checks that the genuine claim, wallet snapshot and
+provider signing count remain unchanged. The ledger continuation independently
+checks that fixture and requires the exact certified proof failure even after
+the successful claim's nullifier was paid. Account fee-quote/routing refusals
+remain separately inconclusive and cannot invent a signed transaction or
+certified failure. The corrected native binary builds and passes all three
+ordinary controls, including canonical scalar mutation and malformed-tail
+rejection. All actual compiler inputs, generated inputs, tools and the copied
+binary remain unchanged through execution
+(`corezk-native-network-capture-3/runtime-controls-1`). The sixth network harness
+also builds; its 97 compiler depfiles bind 4,127 inputs across 84 local packages,
+and all five missing generated inputs are reproduced exactly. Its broad drift
+record covers unrelated developer-profile and documentation edits, while its
+actual package and compiler inputs remain unchanged. All seven ordinary helper
+controls pass with unchanged source, tools and retained originals
+(`real-network-monetary-harness-capture-6/helpers-runtime-1`). The revised
+controller passes 26 local controls and
+keeps account-specific network rejection separate from the certified proof
+rejection gate.
+The sixth stock node/CLI capture builds with no source drift and passes the
+stock-feature audit; all five generated compiler inputs are reproduced exactly
+(`real-network-monetary-stock-capture-6`). A subsequent change to a compiled
+Deploy transport input requires a fresh stock capture; the stable historical
+capture is retained. The seventh stock build also compiles, but that input
+changes again during compilation; its explicit source refusal is preserved.
+Further stock rebuilding waits for the coordinated compact cutover. The
+current optimized Core test build is preparing the matching pre-cutover
+Register/H6 producer and ledger tests. No live monetary campaign has run. Workspace format,
+retired-codec guards and patch whitespace checks pass on the resumed checkout.
+
+The broader current-source native wallet selection completes with 723 passing
+cases, two failing fixtures and zero ignored tests; all source, binary, tool and
+retained-input checks pass (`corezk-native-network-capture-3/runtime-wallet-ordinary-2`).
+The session-renewal fixture now permits the conservative one-millisecond ceiling
+at acceptance and still expires on the next monotonic tick. The unsafe-file-mode
+fixture explicitly sets mode 0644 instead of relying on the process umask.
+Production deadline/custody checks and every rejection assertion are unchanged.
+The fresh native capture compiles and both corrected cases pass with unchanged
+inputs and binary. The exact combined inventory covers all 728 ordinary wallet
+cases: 723 broad-run passes, three earlier controls and these two repairs. Its
+compiler-input comparison changes only the two reviewed test fixtures; metadata,
+tools and all 1,031 compiled case names remain equal. The coverage record is
+`corezk-ordinary-wallet-fixture-repairs-1/ordinary-coverage-receipt.json`.
+All 27 artifact-dependent or heavy ignored wallet cases remain separate and unqualified.
 
 The copied six-executable component capture passes server cache 13, artifact CLI
 11, verifier recipes 10, catalog intake 10, continuity cancellation 2, Torii

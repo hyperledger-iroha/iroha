@@ -132,31 +132,26 @@ fn refused(
     network: &Network,
     output: &Path,
     seed: u8,
-    instruction: KagemushaWalletLedgerV1,
+    signed: SignedTransaction,
+    expected: &TransactionRejectionReason,
     name: &str,
 ) -> Result<norito::json::Value> {
-    let Action::Unload(bytes) = &instruction.action else {
-        bail!("negative case must be an exact Unload")
-    };
-    // Reconstruct the exact typed mapping used by the ordinary ISI boundary, without
-    // parsing transport/display text. Both selected mutations fail canonical validation
-    // before proof-quota reservation or unrelated ledger operations.
-    let model_error = KagemushaWalletUnloadClaimV1::decode_canonical(bytes, &instruction.scheme)
-        .expect_err("negative claim must fail the exact canonical decoder");
-    let expected = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
-        InstructionExecutionError::InvariantViolation(
-            format!("KAGEMUSHA ledger: {model_error}").into(),
-        ),
-    ));
     let before = committed_height(network)?;
-    let signed = signed(network, seed, vec![instruction.into()])?;
     let signed_original = canonical_observation(
         output,
         &format!("{name}-signed.norito"),
         &signed,
         ORIGINAL_MAX,
     )?;
-    let mut originals = vec![signed_original];
+    let mut originals = vec![
+        signed_original,
+        canonical_observation(
+            output,
+            &format!("{name}-expected-reason.norito"),
+            expected,
+            16 << 10,
+        )?,
+    ];
     File::open(output)?.sync_all()?;
     let client = running_peer(network)?.client_for(&account(seed), key(seed).private_key().clone());
     let error = client
@@ -179,15 +174,13 @@ fn refused(
         &submission_error,
     )?);
     let mut statuses = Vec::new();
-    let mut rejected_by_all_peers = true;
     let mut state_heights = Vec::new();
-    for (index, peer) in network.peers().enumerate() {
+    for (index, peer) in network.peers().iter().enumerate() {
         let status = peer
             .client()
             .client()
             .get_transaction_status_response_global(signed.hash())?;
         let state_height = state_rejection(signed.hash(), status.as_ref())?;
-        rejected_by_all_peers &= state_height.is_some();
         state_heights.extend(state_height);
         originals.push(canonical_observation(
             output,
@@ -195,7 +188,7 @@ fn refused(
             &status,
             16 << 10,
         )?);
-        statuses.push(norito::json!({"peer_id":peer.id().to_string(), "response":status, "state_rejection_height":state_height}));
+        statuses.push(norito::json!({"peer_id":(peer.id().to_string()), "response":status, "state_rejection_height":state_height}));
     }
     let after = committed_height(network)?;
     let history = prefix(network, after)?;
@@ -203,7 +196,7 @@ fn refused(
     let mut committed_failure = None;
     for proof in history {
         let verified = verifier.verify(&proof)?;
-        if let Some(committed) = failed_execution(&verified, network, &signed, &expected)? {
+        if let Some(committed) = failed_execution(&verified, network, &signed, expected)? {
             ensure!(committed_failure.is_none(), "duplicate foreign transaction");
             committed_failure = Some(verified.height());
             originals.push(canonical_observation(
@@ -215,7 +208,7 @@ fn refused(
             originals.push(canonical_observation(
                 output,
                 &format!("{name}-reason.norito"),
-                claim_failure(committed.result(), &expected)?,
+                claim_failure(committed.result(), expected)?,
                 16 << 10,
             )?);
         }
@@ -227,8 +220,21 @@ fn refused(
         "state rejection does not match native-certified failure"
     );
     let snapshots = balances(network, [900, 0, 100, 0])?;
+    let qualified = committed_failure.is_some();
+    let observation = norito::json::to_vec(&norito::json!({
+        "name":name, "phase":"submitted", "transaction_hash_hex":(hex::encode(signed.hash().as_ref())),
+        "height_before":before, "height_after":after, "committed_failure_height":committed_failure,
+        "originals":originals, "peer_statuses":statuses, "balances":snapshots,
+        "authoritative_rejection_observed":qualified, "adversarial_input_rejection_qualified":qualified,
+        "scope":"Certified exact execution reason qualifies rejection. Redacted pre-route errors remain observations; their local canonical decoder failure is recorded separately and never creates network authority."
+    }))?;
+    ensure!(
+        observation.len() <= 16 << 10,
+        "negative observation manifest bound"
+    );
+    let original = publish(output, &format!("{name}-observation.json"), &observation)?;
     Ok(
-        norito::json!({"name":name, "transaction_hash_hex":(hex::encode(signed.hash().as_ref())), "height_before":before, "height_after":after, "committed_failure_height":committed_failure, "originals":originals, "peer_statuses":statuses, "balances":snapshots, "authoritative_rejection_observed":(committed_failure.is_some() || rejected_by_all_peers), "adversarial_input_rejection_qualified":committed_failure.is_some(), "scope":"Exact signed input and typed instruction-invariant failure authenticated by the complete native Global prefix. State status is checked against certified failure height; cache/queue status and generic transport errors cannot qualify the adversarial gate."}),
+        norito::json!({"name":name, "transaction_hash_hex":(hex::encode(signed.hash().as_ref())), "qualified":qualified, "observation_original":original}),
     )
 }
 
@@ -303,6 +309,65 @@ pub(super) fn run(
         (paid.amount, paid.account_payout, paid.online_charge) == (100, 100, 0),
         "exact C payout required"
     );
+    // Admit all negative DATA before the successful payout. The signed fixture uses
+    // C's existing software test key, but is never a provider transition or released claim.
+    let bad_source = &exchange["c_unload_bad_sigma_claim"];
+    ensure!(
+        bad_source["name"].as_str() == Some("c-unload-bad-sigma-claim.norito")
+            && bad_source["mutation"].as_str() == Some("sigma_ipa_f_plus_one")
+            && bad_source["model_verified"].as_bool() == Some(true)
+            && bad_source["native_proof_rejected"].as_bool() == Some(true)
+            && bad_source["adversarial_fixture_signatures"].as_u64() == Some(1),
+        "native bad-sigma fixture grammar"
+    );
+    let bad_sigma_bytes = read(
+        &source.join("c-unload-bad-sigma-claim.norito"),
+        KAGEMUSHA_WALLET_UNLOAD_CLAIM_MAX_BYTES_V1,
+        bad_source["sha256"]
+            .as_str()
+            .ok_or_else(|| eyre!("negative claim pin"))?,
+    )?;
+    ensure!(
+        bad_source["bytes"].as_u64() == Some(bad_sigma_bytes.len() as u64),
+        "negative claim extent differs"
+    );
+    let bad_sigma = KagemushaWalletUnloadClaimV1::decode_canonical(&bad_sigma_bytes, &scheme_id)?;
+    let mut bad_payout = bad_sigma.verify(installed.verifier().scheme())?;
+    ensure!(
+        bad_payout.package != paid.package,
+        "negative proof must change its package digest"
+    );
+    bad_payout.package = paid.package; // Only the proof/receipt-dependent identity changes.
+    ensure!(
+        bad_payout == paid,
+        "negative fixture changed payout or its public binding"
+    );
+    ensure!(
+        bad_sigma.package.step_proof.bytes.len() == claim.package.step_proof.bytes.len()
+            && bad_sigma.package.step_proof.bytes != claim.package.step_proof.bytes,
+        "same-length actual sigma mutation required"
+    );
+    let mut normalized = bad_sigma.clone();
+    normalized.package.step_proof.bytes = claim.package.step_proof.bytes.clone();
+    normalized.package.receipt = claim.package.receipt.clone();
+    ensure!(
+        norito::encode_canonical(&normalized)? == claim_bytes,
+        "negative fixture changed unrelated claim fields"
+    );
+    installed
+        .verifier()
+        .verify_package_proofs(&claim.package, None, Default::default())?;
+    ensure!(
+        matches!(
+            installed.verifier().verify_package_proofs(
+                &bad_sigma.package,
+                None,
+                Default::default()
+            ),
+            Err(iroha_core_zk::kagemusha_wallet_proofs_v1::Error::Proof)
+        ),
+        "model-valid negative must fail the actual installed proof verifier"
+    );
     balances(network, [900, 0, 0, 100])?;
     let output = root.join("settlement");
     private_directory(&output)?;
@@ -338,41 +403,91 @@ pub(super) fn run(
         changed.verify(installed.verifier().scheme()).is_err(),
         "foreign-account mutation remained valid"
     );
-    let foreign_account = refused(
-        network,
-        &output,
-        43,
-        KagemushaWalletLedgerV1::new(
-            scheme_id,
-            Action::Unload(norito::encode_canonical(&changed)?),
+    let foreign_bytes = norito::encode_canonical(&changed)?;
+    let model_error = KagemushaWalletUnloadClaimV1::decode_canonical(&foreign_bytes, &scheme_id)
+        .expect_err("changed account must fail canonical model validation");
+    let expected_account = TransactionRejectionReason::Validation(
+        ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(
+            format!("KAGEMUSHA ledger: {model_error}").into(),
+        )),
+    );
+    let foreign_instruction =
+        KagemushaWalletLedgerV1::new(scheme_id, Action::Unload(foreign_bytes));
+    let foreign_account = match signed(network, 43, vec![foreign_instruction.clone().into()]) {
+        Ok(transaction) => refused(
+            network,
+            &output,
+            43,
+            transaction,
+            &expected_account,
+            "foreign-account",
+        )?,
+        Err(error) => {
+            // Fee quoting performs ordinary routing first. A pre-route refusal has
+            // no signed identity and cannot provide transaction or execution authority.
+            let error_bytes = format!("{error:#}").into_bytes();
+            ensure!(error_bytes.len() <= ORIGINAL_MAX, "preparation error bound");
+            let originals = vec![
+                canonical_observation(
+                    &output,
+                    "foreign-account-instruction.norito",
+                    &foreign_instruction,
+                    ORIGINAL_MAX,
+                )?,
+                canonical_observation(
+                    &output,
+                    "foreign-account-expected-reason.norito",
+                    &expected_account,
+                    16 << 10,
+                )?,
+                publish(
+                    &output,
+                    "foreign-account-preparation-error.txt",
+                    &error_bytes,
+                )?,
+            ];
+            let snapshots = balances(network, [900, 0, 100, 0])?;
+            let observation = norito::json::to_vec(&norito::json!({
+                "name":"foreign-account", "phase":"preparation", "transaction_hash_hex":null,
+                "committed_failure_height":null, "originals":originals, "peer_statuses":[], "balances":snapshots,
+                "authoritative_rejection_observed":false, "adversarial_input_rejection_qualified":false,
+                "scope":"Account signing preparation failed before a transaction existed. Exact local model refusal is retained separately. The preparation error is an inconclusive observation, never authenticated network rejection."
+            }))?;
+            ensure!(
+                observation.len() <= 16 << 10,
+                "negative observation manifest bound"
+            );
+            let original = publish(&output, "foreign-account-observation.json", &observation)?;
+            norito::json!({"name":"foreign-account", "transaction_hash_hex":null, "qualified":false, "observation_original":original})
+        }
+    };
+    let expected_proof = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+        InstructionExecutionError::InvariantViolation(
+            format!(
+                "KAGEMUSHA ledger: {}",
+                iroha_core::kagemusha_wallet_v1::Error::Proof
+            )
+            .into(),
         ),
-        "foreign-account",
-    )?;
-    let mut changed = claim.clone();
-    ensure!(
-        !changed.package.step_proof.bytes.is_empty(),
-        "actual proof required"
-    );
-    changed.package.step_proof.bytes[0] ^= 1;
-    ensure!(
-        changed.verify(installed.verifier().scheme()).is_err(),
-        "proof mutation remained valid"
-    );
+    ));
     let altered_proof = refused(
         network,
         &output,
         43,
-        KagemushaWalletLedgerV1::new(
-            scheme_id,
-            Action::Unload(norito::encode_canonical(&changed)?),
-        ),
-        "altered-proof",
+        signed(
+            network,
+            43,
+            vec![KagemushaWalletLedgerV1::new(scheme_id, Action::Unload(bad_sigma_bytes)).into()],
+        )?,
+        &expected_proof,
+        "bad-sigma",
     )?;
-    // The public status API intentionally discloses no failure reason. Require the
-    // exact certified execution result; transport failure alone remains incomplete.
-    let adversarial_qualified = foreign_account["adversarial_input_rejection_qualified"].as_bool()
-        == Some(true)
-        && altered_proof["adversarial_input_rejection_qualified"].as_bool() == Some(true);
+    let account_specific_network_rejection_qualified =
+        foreign_account["qualified"].as_bool() == Some(true);
+    let native_proof_rejection_qualified = altered_proof["qualified"].as_bool() == Some(true);
+    // Routing rejects the account mutation before execution and redacts its precise error.
+    // Keep that observation inconclusive; it never blocks actual C confirmation/restart.
+    let adversarial_qualified = native_proof_rejection_qualified;
     let through = committed_height(network)?;
     let history = prefix(network, through)?;
     let mut verifier = native(network)?;
@@ -405,9 +520,9 @@ pub(super) fn run(
         "source_pins":(exchange["source_pins"].clone()), "network_hex":(hex::encode(network.network_id().as_bytes())), "chain_id":(network.chain_id().to_string()), "instance_hex":(hex::encode(native(network)?.instance().0)),
         "target_sha256":(exchange["target_sha256"].clone()), "receipt_sha256":(funded["receipt_sha256"].clone()), "exchange_sha256":(hash(&exchange_bytes)), "claim_sha256":(hash(&claim_bytes)),
         "settlement_height":settled_height, "last_certified_height":through, "settlement_transaction_hash_hex":(hex::encode(transaction.hash().as_ref())), "settlement_block_hash_hex":(settled_hash.ok_or_else(|| eyre!("settlement absent"))?),
-        "adversarial_qualified":adversarial_qualified, "instruction_retry_height":instruction_retry_height, "exact_transaction_retry_returned_original":true,
+        "adversarial_qualified":adversarial_qualified, "native_proof_rejection_qualified":native_proof_rejection_qualified, "account_specific_network_rejection_qualified":account_specific_network_rejection_qualified, "account_binding_model_refusal":true, "instruction_retry_height":instruction_retry_height, "exact_transaction_retry_returned_original":true,
         "settled_balances":settled_balances, "foreign_account_observation":foreign_account, "altered_proof_observation":altered_proof,
-        "originals":originals, "scope":"Actual four-validator ledger settlement and authenticated complete observed prefix. Early refusals and exact transaction retries need not create blocks. Same native C confirmation and actual node-store restart follow separately."
+        "originals":originals, "scope":"Actual four-validator settlement, replay and native proof-negative execution. Account binding is checked locally; redacted pre-route refusal does not qualify account-specific network evidence. Same native C confirmation and node-store restart follow separately."
     }))?;
     ensure!(
         result.len() <= 16 << 10,

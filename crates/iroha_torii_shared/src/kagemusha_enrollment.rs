@@ -41,9 +41,9 @@ pub struct EnrollmentServiceRequestV1 {
     pub version: u16,
     /// Exact operation covered by the account signature.
     pub action: EnrollmentServiceActionV1,
-    /// Exact native PreKeyDispatchV1 original used at every recovery boundary.
+    /// Exact native `PreKeyDispatchV1` original used at every recovery boundary.
     pub dispatch_original: Vec<u8>,
-    /// Exact native account-signed RequestV1, required only for Evidence.
+    /// Exact native account-signed `RequestV1`, required only for Evidence.
     pub evidence_original: Vec<u8>,
 }
 fn invalid() -> norito::Error {
@@ -59,7 +59,7 @@ impl EnrollmentServiceRequestV1 {
             || self.dispatch_original.len() > ENROLLMENT_DISPATCH_MAX_BYTES_V1
             || self.evidence_original.len() > ENROLLMENT_EVIDENCE_REQUEST_MAX_BYTES_V1
             || (self.action == EnrollmentServiceActionV1::Evidence)
-                != !self.evidence_original.is_empty()
+                == self.evidence_original.is_empty()
         {
             return Err(invalid());
         }

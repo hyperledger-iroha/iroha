@@ -1229,7 +1229,11 @@ mod std_fs {
         assert!(!temp.path().join("root/d/published").exists());
         assert!(fs.write_all(&mut file, OTHER).is_err());
         assert!(fs.sync_staged(&file).is_err());
-        std::fs::write(temp.path().join("root/d/shared"), OTHER).expect("shared mode");
+        let shared = temp.path().join("root/d/shared");
+        std::fs::write(&shared, OTHER).expect("shared mode");
+        // The unsafe-mode fixture must remain shared under a private process umask.
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o644))
+            .expect("explicit shared mode");
         assert!(matches!(
             store.read(&dir(), &name("shared"), 1024),
             KagemushaWalletReadV1::Unavailable(_)
