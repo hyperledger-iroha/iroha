@@ -21,6 +21,7 @@ fn budget() -> Budget {
     Budget {
         started: Instant::now(),
         timeout: Duration::from_secs(120),
+        startup_deadline_ns: None,
         utc_ceiling_unix_ms: None,
         cancelled: Arc::new(AtomicBool::new(false)),
         progress: Arc::new(Progress::default()),

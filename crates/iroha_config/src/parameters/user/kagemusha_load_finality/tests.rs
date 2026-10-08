@@ -14,9 +14,10 @@ fn table() -> toml::Table {
             "/var/lib/iroha/finality/inventory".into(),
         ),
         (
-            "server_originals",
+            "verifier_originals",
             "/var/lib/iroha/finality/originals".into(),
         ),
+        ("proving_cache", "/var/lib/iroha/finality/cache".into()),
         ("journal_dir", "/var/lib/iroha/finality/journal".into()),
     ] {
         table.insert(name.into(), toml::Value::String(value));
@@ -72,7 +73,7 @@ fn optional_service_stays_disabled_until_exact_installation_is_selected() {
         Path::new("/var/lib/iroha/finality/inventory")
     );
     assert_eq!(
-        actual.server_originals,
+        actual.verifier_originals,
         Path::new("/var/lib/iroha/finality/originals")
     );
     assert_eq!(
@@ -84,6 +85,11 @@ fn optional_service_stays_disabled_until_exact_installation_is_selected() {
         defaults::torii::kagemusha_load_finality::MAX_PENDING_REQUESTS
     );
     assert_eq!(actual.native_step_timeout, Duration::from_millis(5_000));
+    assert_eq!(
+        actual.proving_cache,
+        Path::new("/var/lib/iroha/finality/cache")
+    );
+    assert_eq!(actual.maximum_resident_proving_key_bytes, 512 << 20);
 }
 
 #[test]
@@ -135,7 +141,8 @@ fn custody_paths_reject_aliases_traversal_and_unbounded_text_without_io() {
         for key in [
             "verifier_pack",
             "producer_inventory",
-            "server_originals",
+            "verifier_originals",
+            "proving_cache",
             "journal_dir",
         ] {
             let mut input = table();
@@ -147,13 +154,16 @@ fn custody_paths_reject_aliases_traversal_and_unbounded_text_without_io() {
 
 #[test]
 fn all_resource_limits_refuse_zero_infinity_and_out_of_range_values() {
-    let edits: [fn(&mut KagemushaLoadFinality); 21] = [
+    let edits: [fn(&mut KagemushaLoadFinality); 24] = [
         |c| c.max_pending_requests = 0,
         |c| c.max_pending_requests = 65,
         |c| c.maximum_receipt_height = 1,
         |c| c.maximum_receipt_height = u64::MAX,
         |c| c.maximum_key_bytes = 0,
         |c| c.maximum_key_bytes = (1 << 30) + 1,
+        |c| c.maximum_resident_proving_key_bytes = 0,
+        |c| c.maximum_resident_proving_key_bytes = c.maximum_key_bytes - 1,
+        |c| c.maximum_resident_proving_key_bytes = usize::MAX,
         |c| c.maximum_original_bytes = 0,
         |c| c.maximum_original_bytes = usize::MAX,
         |c| c.maximum_artifacts = 0,
@@ -189,6 +199,7 @@ fn explicit_resource_selection_reaches_actual_without_replacement() {
         ("max_pending_requests", 64),
         ("maximum_receipt_height", 2),
         ("maximum_key_bytes", 1 << 30),
+        ("maximum_resident_proving_key_bytes", 1 << 30),
         ("maximum_original_bytes", 1 << 30),
         ("maximum_artifacts", 65_536),
         ("msm_bytes", 1 << 20),
@@ -207,6 +218,7 @@ fn explicit_resource_selection_reaches_actual_without_replacement() {
     assert_eq!(actual.max_pending_requests, 64);
     assert_eq!(actual.maximum_receipt_height, 2);
     assert_eq!(actual.maximum_key_bytes, 1 << 30);
+    assert_eq!(actual.maximum_resident_proving_key_bytes, 1 << 30);
     assert_eq!(actual.maximum_original_bytes, 1 << 30);
     assert_eq!(actual.maximum_artifacts, 65_536);
     assert_eq!(actual.msm_bytes, 1 << 20);
@@ -221,4 +233,38 @@ fn debug_does_not_disclose_custody_paths() {
     let input = read(table());
     assert!(!format!("{input:?}").contains("/var/lib"));
     assert!(!format!("{:?}", input.checked().unwrap()).contains("/var/lib"));
+}
+
+#[test]
+fn retired_original_directory_name_and_shared_namespaces_refuse() {
+    let mut old = table();
+    let value = old.remove("verifier_originals").unwrap();
+    old.insert("server_originals".into(), value);
+    assert!(root(Some(old)).is_err());
+    for (left, right) in [
+        ("verifier_originals", "proving_cache"),
+        ("verifier_originals", "journal_dir"),
+        ("proving_cache", "journal_dir"),
+    ] {
+        let mut same = table();
+        same.insert(left.into(), same[right].clone());
+        assert!(root(Some(same)).is_err());
+    }
+}
+#[test]
+fn resident_key_limit_preserves_the_exact_finite_upper_boundary() {
+    if let Ok(maximum) = usize::try_from(16_u64 << 30) {
+        let mut selected = read(table());
+        selected.maximum_resident_proving_key_bytes = maximum;
+        assert_eq!(
+            selected
+                .checked()
+                .unwrap()
+                .maximum_resident_proving_key_bytes,
+            maximum
+        );
+        let mut selected = read(table());
+        selected.maximum_resident_proving_key_bytes = maximum + 1;
+        assert!(selected.checked().is_err());
+    }
 }

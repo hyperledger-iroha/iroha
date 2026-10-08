@@ -39,10 +39,14 @@ impl Branch {
 
 /// Borrowed original parent and retained branch identities for one read-only census.
 ///
-/// Only present purpose custody reaches the ordinary full authority constructor. No decoded
-/// profile, directory name, or absence observation becomes signing or native state evidence.
+/// Present purpose custody borrows only the parent's immutable original constructor bundle,
+/// after fresh whole-profile admission. Active decode limits retain the full capture recipe.
+/// A separate cold three-slot import memo lives only for this census; child owners still read
+/// their fresh sources, and every namespace, profile and lock check remains independent.
+/// Names and absence observations never become signing or native state evidence.
 pub(in crate::managed) struct ServiceChildInventory<'a> {
     parent: &'a ServiceAuthority,
+    checkpoint_import_scope: Option<CheckpointImportScope>,
     branches: Vec<Branch>,
     network: usize,
     providers: [Option<usize>; 3],
@@ -102,6 +106,7 @@ impl<'a> ServiceChildInventory<'a> {
         }
         let value = Self {
             parent,
+            checkpoint_import_scope: CheckpointImportScope::for_original(parent),
             branches,
             network: 2,
             providers,
@@ -158,7 +163,12 @@ impl<'a> ServiceChildInventory<'a> {
             return Ok(None);
         }
         let retained = branch.directory.open_child(purpose)?;
-        let result = ServiceAuthority::open(&self.parent.prepared, provider, purpose, false);
+        let result = ServiceAuthority::open_existing_from_original(
+            self.parent,
+            provider,
+            purpose,
+            self.checkpoint_import_scope.as_ref(),
+        );
         retained.revalidate()?;
         self.revalidate()?;
         let owner = result?;

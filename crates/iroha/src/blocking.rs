@@ -289,6 +289,28 @@ impl Client {
         })
     }
 
+    /// Clone this exact context with one absolute HTTP deadline and its original runtime owner.
+    ///
+    /// Connection pools and compatibility state remain shared with the source. The immutable
+    /// account context is freshly bound to the bounded asynchronous client. Reapplying a deadline
+    /// can only shorten it; dropping either view leaves the other view's I/O driver alive.
+    /// CPU work and polling sleeps require their own bounds.
+    ///
+    /// # Errors
+    /// Returns an error if account authority binding fails. An elapsed deadline is retained and
+    /// causes subsequent HTTP dispatch to fail without contacting the transport.
+    pub fn with_request_deadline(&self, deadline: std::time::Instant) -> Result<Self> {
+        let inner = self.inner.with_request_deadline(deadline);
+        let account = inner
+            .account_client()
+            .wrap_err("failed to bind blocking account authority")?;
+        Ok(Self {
+            inner,
+            account,
+            runtime: Arc::clone(&self.runtime),
+        })
+    }
+
     /// Borrow the underlying asynchronous client for local transaction builders
     /// and context inspection.
     #[must_use]
@@ -840,6 +862,212 @@ mod tests {
         let threads = runtime_threads.lock().expect("runtime thread log");
         assert_eq!(threads.len(), 3);
         assert!(threads.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn deadline_views_keep_original_driver_alive_in_both_lifetime_directions() {
+        use std::{sync::mpsc, time::Duration};
+
+        struct NotifyDrop(mpsc::Sender<()>);
+        impl Drop for NotifyDrop {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+
+        let (source, _, _) = accepting_client();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let temporary = source.with_request_deadline(deadline).unwrap();
+        assert!(Arc::ptr_eq(&source.runtime, &temporary.runtime));
+        assert!(
+            source
+                .inner
+                .http_transport
+                .shares_pools_with(&temporary.inner.http_transport)
+        );
+        let owner = Arc::downgrade(&source.runtime);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (first_tx, first_rx) = tokio::sync::oneshot::channel();
+        let (second_tx, second_rx) = tokio::sync::oneshot::channel();
+        let (progress_tx, progress_rx) = mpsc::channel();
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        #[allow(clippy::async_yields_async)]
+        let task = temporary
+            .runtime
+            .block_on(async move {
+                let task = tokio::spawn(async move {
+                    let _notify_drop = NotifyDrop(dropped_tx);
+                    started_tx.send(()).unwrap();
+                    first_rx.await.unwrap();
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    progress_tx.send(1).unwrap();
+                    second_rx.await.unwrap();
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    progress_tx.send(2).unwrap();
+                    std::future::pending::<()>().await;
+                });
+                started_rx.await.unwrap();
+                task
+            })
+            .unwrap();
+        drop(temporary);
+        first_tx.send(()).unwrap();
+        assert_eq!(
+            progress_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            1,
+            "the source must keep driving work opened by the temporary view"
+        );
+        let retained = source.with_request_deadline(deadline).unwrap();
+        assert!(Arc::ptr_eq(&source.runtime, &retained.runtime));
+        drop(source);
+        assert!(owner.upgrade().is_some());
+        second_tx.send(()).unwrap();
+        assert_eq!(
+            progress_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            2,
+            "the deadline view must keep driving work after its source drops"
+        );
+        assert!(matches!(
+            dropped_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        drop(retained);
+        dropped_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(owner.upgrade().is_none());
+        let external = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert!(
+            external
+                .block_on(async { tokio::time::timeout(Duration::from_secs(2), task).await })
+                .unwrap()
+                .unwrap_err()
+                .is_cancelled()
+        );
+    }
+
+    #[test]
+    fn deadline_views_preserve_account_dispatch_bounds_and_leave_source_unchanged() {
+        use std::time::{Duration, Instant};
+
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&requests);
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("x-deadline-fixture".to_owned(), "retained".to_owned());
+        let asynchronous = AsyncClient::builder(config_factory())
+            .headers(headers)
+            .build()
+            .unwrap()
+            .with_test_http_transport(crate::http_default::DefaultHttpTransport::mock(Arc::new(
+                move |request| {
+                    let body = if request.url.path() == "/v1/node/capabilities" {
+                        crate::client::compatible_capabilities_body().into_bytes()
+                    } else {
+                        Vec::new()
+                    };
+                    observed.lock().unwrap().push(request);
+                    Ok(Response::builder()
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(body)
+                        .unwrap())
+                },
+            )));
+        let source = Client::from_client(asynchronous).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let bounded = source.with_request_deadline(deadline).unwrap();
+        let repeated = bounded
+            .with_request_deadline(deadline + Duration::from_secs(30))
+            .unwrap();
+        let shortened_deadline = deadline - Duration::from_secs(10);
+        let shortened = repeated.with_request_deadline(shortened_deadline).unwrap();
+        for view in [&bounded, &repeated, &shortened] {
+            assert!(Arc::ptr_eq(&source.runtime, &view.runtime));
+            assert!(
+                source
+                    .inner
+                    .http_transport
+                    .shares_pools_with(&view.inner.http_transport)
+            );
+            assert!(Arc::ptr_eq(
+                &source.inner.data_model_compatibility,
+                &view.inner.data_model_compatibility
+            ));
+            assert!(Arc::ptr_eq(
+                &source.inner.compatibility_probe,
+                &view.inner.compatibility_probe
+            ));
+            assert_eq!(source.account.authority(), view.account.authority());
+            assert_eq!(source.account.network_id(), view.account.network_id());
+            assert_eq!(source.account.endpoint(), view.account.endpoint());
+            assert_eq!(
+                source.account.signing_capability(),
+                view.account.signing_capability()
+            );
+            assert_eq!(
+                source.inner.key_pair().public_key(),
+                view.inner.key_pair().public_key()
+            );
+            assert_eq!(source.inner.headers(), view.inner.headers());
+        }
+        assert_eq!(source.inner.http_transport.deadline(), None);
+        assert_eq!(bounded.inner.http_transport.deadline(), Some(deadline));
+        assert_eq!(repeated.inner.http_transport.deadline(), Some(deadline));
+        assert_eq!(
+            shortened.inner.http_transport.deadline(),
+            Some(shortened_deadline)
+        );
+        let transaction = shortened
+            .account
+            .prepare_transaction(crate::client::AccountTransactionDraft::new(
+                Vec::<iroha_data_model::isi::InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| shortened.account.sign_transaction(payload))
+            .unwrap();
+        shortened.submit_transaction(&transaction).unwrap();
+        {
+            let requests = requests.lock().unwrap();
+            assert_eq!(
+                requests.len(),
+                2,
+                "fresh compatibility probe and account submission"
+            );
+            assert_eq!(requests[0].url.path(), "/v1/node/capabilities");
+            assert_eq!(
+                requests[1].url.path(),
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION.path()
+            );
+            for request in requests.iter() {
+                let timeout = request.timeout.expect("bounded account dispatch");
+                assert!(!timeout.is_zero() && timeout <= Duration::from_secs(20));
+                assert!(
+                    request
+                        .headers
+                        .iter()
+                        .any(|(name, value)| name == "x-deadline-fixture" && value == "retained")
+                );
+            }
+        }
+        let expired = source.with_request_deadline(Instant::now()).unwrap();
+        assert!(expired.refresh_capabilities().is_err());
+        assert!(expired.submit_transaction(&transaction).is_err());
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            2,
+            "expired dispatch never reaches HTTP"
+        );
+        drop(expired);
+        source.refresh_capabilities().unwrap();
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            requests[2].timeout,
+            Some(source.inner.torii_request_timeout())
+        );
+        assert_eq!(source.inner.http_transport.deadline(), None);
+        assert_eq!(bounded.inner.http_transport.deadline(), Some(deadline));
     }
 
     #[test]

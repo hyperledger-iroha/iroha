@@ -94,10 +94,17 @@ fn required_bytes<C: PastaCurve>(n: usize, c: usize) -> Option<usize> {
 
 /// Fills `out` (layout `[row * nw + w]`) with `2^(c w) * rows[row]`, through a
 /// projective scratch of `out.len()` points normalised with one inversion.
-fn build_chunk<C: PastaCurve>(rows: &[C::AffineExt], c: usize, out: &mut [C::AffineExt]) {
+fn build_chunk<C: PastaCurve, E>(
+    rows: &[C::AffineExt],
+    c: usize,
+    out: &mut [C::AffineExt],
+    checkpoint: &impl Fn() -> Result<(), E>,
+) -> Result<(), E> {
+    checkpoint()?;
     let nw = out.len() / rows.len().max(1);
     let mut projective = Vec::with_capacity(out.len());
     for base in rows {
+        checkpoint()?;
         let mut cur = base.to_curve();
         for w in 0..nw {
             projective.push(cur);
@@ -108,7 +115,9 @@ fn build_chunk<C: PastaCurve>(rows: &[C::AffineExt], c: usize, out: &mut [C::Aff
             }
         }
     }
+    checkpoint()?;
     crate::curve::normalize_vartime_into(&projective, out);
+    checkpoint()
 }
 
 impl<C: PastaCurve> FixedBaseTable<C> {
@@ -135,6 +144,33 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         budget: MemoryBudget,
         shared: &SharedMemoryBudget,
     ) -> Result<Self, BudgetExceeded> {
+        Self::new_impl(bases, budget, shared, &|| Ok::<(), BudgetExceeded>(()))
+    }
+
+    /// Build public fixed-base tables with cancellation at bounded construction tasks.
+    ///
+    /// # Errors
+    /// Budget refusal as [`Self::new`], or [`MsmError::Cancelled`] after all tasks join.
+    pub fn new_cancellable(
+        bases: &[C::AffineExt],
+        budget: MemoryBudget,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Self, MsmError> {
+        Self::new_impl(
+            bases,
+            budget,
+            &SharedMemoryBudget::process_default(),
+            &|| CancellationToken::checkpoint(cancellation).map_err(MsmError::from),
+        )
+    }
+
+    fn new_impl<E: From<BudgetExceeded> + Send>(
+        bases: &[C::AffineExt],
+        budget: MemoryBudget,
+        shared: &SharedMemoryBudget,
+        checkpoint: &(impl Fn() -> Result<(), E> + Sync),
+    ) -> Result<Self, E> {
+        checkpoint()?;
         let n = bases.len();
         let mut best: Option<(u128, usize)> = None;
         let mut smallest = usize::MAX;
@@ -158,9 +194,10 @@ impl<C: PastaCurve> FixedBaseTable<C> {
             return Err(BudgetExceeded {
                 required: smallest,
                 budget: budget.bytes(),
-            });
+            }
+            .into());
         };
-        Self::with_window_and_shared_budget(bases, c, budget, shared)
+        Self::with_window_impl(bases, c, budget, shared, checkpoint)
     }
 
     /// Builds a table with window width `c` (clamped to `2..=15`).
@@ -197,6 +234,17 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         budget: MemoryBudget,
         shared: &SharedMemoryBudget,
     ) -> Result<Self, BudgetExceeded> {
+        Self::with_window_impl(bases, c, budget, shared, &|| Ok::<(), BudgetExceeded>(()))
+    }
+
+    fn with_window_impl<E: From<BudgetExceeded> + Send>(
+        bases: &[C::AffineExt],
+        c: usize,
+        budget: MemoryBudget,
+        shared: &SharedMemoryBudget,
+        checkpoint: &(impl Fn() -> Result<(), E> + Sync),
+    ) -> Result<Self, E> {
+        checkpoint()?;
         let c = c.clamp(2, MAX_WINDOW);
         let n = bases.len();
         let nw = num_windows(255, c);
@@ -205,7 +253,8 @@ impl<C: PastaCurve> FixedBaseTable<C> {
             return Err(BudgetExceeded {
                 required: usize::MAX,
                 budget: budget.bytes(),
-            });
+            }
+            .into());
         };
         budget.check(fixed.saturating_add(chunk))?;
         // Chunks built at the same time: as many as the budget leaves room
@@ -227,12 +276,16 @@ impl<C: PastaCurve> FixedBaseTable<C> {
                 .chunks_mut(rows * nw * concurrency)
                 .zip(bases.chunks(rows * concurrency))
             {
+                checkpoint()?;
                 out.par_chunks_mut(rows * nw)
                     .zip(wave_bases.par_chunks(rows))
-                    .for_each(|(out, chunk_bases)| build_chunk::<C>(chunk_bases, c, out));
+                    .try_for_each(|(out, chunk_bases)| {
+                        build_chunk::<C, E>(chunk_bases, c, out, checkpoint)
+                    })?;
             }
         } else {
             for (out, base) in points.chunks_mut(nw).zip(bases) {
+                checkpoint()?;
                 let mut point = base.to_curve();
                 for (window, slot) in out.iter_mut().enumerate() {
                     *slot = point.to_affine();
@@ -244,7 +297,18 @@ impl<C: PastaCurve> FixedBaseTable<C> {
                 }
             }
         }
-        let skip = bases.iter().map(|b| bool::from(b.is_identity())).collect();
+        checkpoint()?;
+        let skip = bases
+            .iter()
+            .enumerate()
+            .map(|(index, base)| {
+                if index % 1024 == 0 {
+                    checkpoint()?;
+                }
+                Ok(bool::from(base.is_identity()))
+            })
+            .collect::<Result<Vec<_>, E>>()?;
+        checkpoint()?;
         Ok(Self {
             c,
             nw,
@@ -481,6 +545,82 @@ impl<C: PastaCurve> FixedBaseTable<C> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn cancelled_table_construction_joins_tasks_releases_scratch_and_retries() {
+        fn check<C: PastaCurve>() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            let mut rng = ChaCha20Rng::seed_from_u64(197);
+            let bases = (0..450)
+                .map(|_| C::random(&mut rng).to_affine())
+                .collect::<Vec<_>>();
+            // More than two chunks; both the shared-scratch path and its zero-budget
+            // scalar fallback must unwind before this call returns.
+            for shared_limit in [0, MemoryBudget::DEFAULT.bytes()] {
+                let shared = SharedMemoryBudget::new(shared_limit);
+                let token = CancellationToken::new();
+                let calls = AtomicUsize::new(0);
+                let result = pool(4).install(|| {
+                    FixedBaseTable::<C>::with_window_impl(
+                        &bases,
+                        13,
+                        MemoryBudget::DEFAULT,
+                        &shared,
+                        &|| {
+                            if calls.fetch_add(1, Ordering::AcqRel) == 17 {
+                                token.cancel();
+                            }
+                            token.check().map_err(MsmError::from)
+                        },
+                    )
+                });
+                assert!(matches!(result, Err(MsmError::Cancelled)));
+                assert!(calls.load(Ordering::Acquire) >= 18);
+                assert_eq!(shared.in_use_bytes(), 0);
+                if shared_limit == 0 {
+                    assert_eq!(shared.peak_bytes(), 0);
+                } else {
+                    assert!(shared.peak_bytes() > 0);
+                }
+                let retry = pool(4)
+                    .install(|| {
+                        FixedBaseTable::<C>::with_window_and_shared_budget(
+                            &bases,
+                            13,
+                            MemoryBudget::DEFAULT,
+                            &shared,
+                        )
+                    })
+                    .unwrap();
+                let expected =
+                    FixedBaseTable::<C>::with_window(&bases, 13, MemoryBudget::DEFAULT).unwrap();
+                assert_eq!(retry.points, expected.points);
+                assert_eq!(retry.skip, expected.skip);
+                assert_eq!(shared.in_use_bytes(), 0);
+                assert!(matches!(
+                    FixedBaseTable::<C>::new_cancellable(
+                        &bases,
+                        MemoryBudget::DEFAULT,
+                        Some(&token)
+                    ),
+                    Err(MsmError::Cancelled)
+                ));
+                let fresh = CancellationToken::new();
+                let ordinary = FixedBaseTable::<C>::new(&bases, MemoryBudget::DEFAULT).unwrap();
+                let cancellable = FixedBaseTable::<C>::new_cancellable(
+                    &bases,
+                    MemoryBudget::DEFAULT,
+                    Some(&fresh),
+                )
+                .unwrap();
+                assert_eq!(ordinary.points, cancellable.points);
+                assert_eq!(ordinary.skip, cancellable.skip);
+            }
+        }
+        check::<crate::Ep>();
+        check::<crate::Eq>();
+    }
+
     use super::*;
     use crate::curve::{Eq, EqAffine};
     use crate::field::Fp;

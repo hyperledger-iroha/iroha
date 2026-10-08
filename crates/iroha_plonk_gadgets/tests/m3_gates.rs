@@ -86,6 +86,8 @@ use rand_chacha::{
 };
 use sha2::{Digest as _, Sha256};
 
+#[path = "m3_gates/advice_schedule.rs"]
+mod advice_schedule;
 #[path = "m3_gates/export_descriptors.rs"]
 mod export_descriptors;
 

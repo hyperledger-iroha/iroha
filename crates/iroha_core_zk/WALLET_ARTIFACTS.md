@@ -85,13 +85,45 @@ The command derives the current anchor from the selected signed genesis and
 compiles the complete fixed source topology. It never selects a retired test
 fixture, substitutes an unproved descriptor, or issues a finality proof. The
 maintained compiler reconstructs and strictly imports its output graph before
-returning. Server PK bytes stay in a dedicated `server-originals` directory
-with bounded regeneration managed by the existing compiler. Only the completed
+returning. Compiler PK bytes stay in a dedicated `server-originals` engineering
+workspace with bounded regeneration. This mutable, evicting compiler directory
+is not a runtime installation directory. Only the completed
 canonical inventory and exact descriptor/VK originals are copied into
 `finality-inventory.norito` and `finality-originals`. They feed `--request`
 directly. Incomplete output is retained but has no completion record or wallet
 authority. Compilation must be executed for the actual fresh genesis; existing
 engineering graph outputs are not silently reused as production inputs.
+
+## Server storage selection
+
+`--initialize-finality-server /absolute/private/inputs/request.json` selects fresh
+server custody from an already signed pack and producer inventory. The closed
+`iroha.kagemusha.finality-server-initialization.v1` request carries the same native
+genesis fields, independently selected `scheme_id_hex` and
+`manifest_digest_hex`, and `verifier_pack` / `producer_inventory` originals with
+`path` and `sha256`. It names three distinct existing private directories:
+`verifier_originals_directory` (the content-addressed D/V export),
+`proving_cache_directory`, and `journal_directory`. Both latter directories must
+be empty. Ordinary server startup uses existing-only opening; missing selections
+or locks are custody failures and never trigger initialization.
+
+The request supplies finite `maximum_key_bytes` (at most 1 GiB),
+`maximum_resident_proving_key_bytes` (at least one maximum key, at most 16 GiB;
+512 MiB is the configured default), `maximum_original_bytes` (at most 1 TiB),
+`maximum_artifacts` (at most 65,536), `maximum_journal_entries` (3–1,000,000), and
+`maximum_journal_bytes` (at most 1 TiB). The initializer uses 64 MiB MSM scratch.
+These storage limits are separate from process RSS and phone qualification.
+
+The server reconstructs every exact descriptor/VK from the fixed compiled graph
+before retaining opaque regeneration recipes. Each cache hit or regenerated PK
+must match the signed original bytes and pass source-specific strict import.
+Only the exclusively owned regenerable PK cache may evict selected entries;
+checkpoint and terminal proof originals live in the separate durable journal.
+A successful initializer imports the complete graph but produces no live proof.
+Cancellation or failed initialization retains partial evidence; it never mints a
+partial graph or permits ordinary startup to adopt a missing selection. If first-use
+publication fails between the two namespace selections, preserve that evidence and
+initialize a new pair of empty namespaces; do not reset or adopt the partial pair.
 
 ## Shared packaging ownership
 

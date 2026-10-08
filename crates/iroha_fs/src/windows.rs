@@ -1278,6 +1278,53 @@ impl Directory {
         Ok(self)
     }
 
+    // The public removal bracket owns full entry and every-result exit custody.
+    pub(super) fn remove_private_native(&self, name: &OsStr) -> io::Result<bool> {
+        let path = self.path().join(name);
+        let file = match open_file(
+            &path,
+            GENERIC_READ | DELETE,
+            FILE_SHARE_READ,
+            OPEN_EXISTING,
+            false,
+            false,
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let before = journal_snapshot(&file)?;
+        self.revalidate()?;
+        // This observer permits the original handle's DELETE access, without acquiring
+        // write or delete authority itself. The original excludes replacement sharing.
+        let named = open_file(
+            &path,
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            OPEN_EXISTING,
+            false,
+            false,
+        )?;
+        if journal_snapshot(&file)? != before || journal_snapshot(&named)? != before {
+            return Err(changed());
+        }
+        drop(named);
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: this exact no-reparse private regular single-link file owns DELETE
+        // access and excludes write/delete sharing; no pathname deletion is performed.
+        unsafe {
+            win_ok(SetFileInformationByHandle(
+                file.as_raw_handle(),
+                FileDispositionInfo,
+                from_ref(&disposition).cast(),
+                native_size::<FILE_DISPOSITION_INFO>()?,
+            ))?;
+        }
+        drop(file);
+        sync_directory_metadata(&self.current().file)?;
+        Ok(true)
+    }
+
     pub(super) fn reconcile_atomic_staging(
         &self,
         required: &[&str],

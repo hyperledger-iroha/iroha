@@ -1,7 +1,9 @@
 //! Only directly owned child handles may witness a generated gateway or undergo restart.
 
 use super::*;
-use crate::localnet::service_authorities::RetainedGatewayCompliancePlan;
+use crate::localnet::service_authorities::{
+    RetainedGatewayCompliancePlan, RetainedProviderServicePlan,
+};
 use crate::managed::{
     gateway_compliance::LiveGatewayProcess,
     generated_service_runtime::{GeneratedServiceRuntime, GeneratedServiceRuntimeRevision},
@@ -98,6 +100,7 @@ impl PeerProcesses {
         ownership: &File,
         daemon: &super::super::program::NativeProgram,
         launch: Option<Arc<GeneratedLaunch>>,
+        budget: &activation::Budget,
     ) -> Result<()> {
         if !self.children.is_empty() || self.launch.is_some() {
             return Err(invalid("the owned generation must stop before restarting"));
@@ -140,6 +143,7 @@ impl PeerProcesses {
                     index,
                     &mut command,
                     daemon,
+                    budget,
                 )?)));
         }
         if let Some(launch) = &self.launch {
@@ -159,8 +163,8 @@ impl PeerProcesses {
         }
         launch.validate()?;
         let plan = launch
-            .original
-            .provider_service_plan(provider)?
+            .owner
+            .original_provider_plan(&launch.original, provider)?
             .ok_or_else(|| invalid("original provider plan absent"))?;
         let gateway = OwnedGateway {
             child: self
@@ -181,8 +185,8 @@ impl PeerProcesses {
             .as_ref()
             .ok_or_else(|| invalid("generated launch absent"))?;
         let plans = launch
-            .original
-            .provider_service_plans()?
+            .owner
+            .original_provider_plans(&launch.original)?
             .ok_or_else(|| invalid("original provider plans absent"))?;
         plans
             .iter()
@@ -276,6 +280,24 @@ impl OwnedGateway {
     pub(super) fn provider(&self) -> ProviderId {
         self.provider
     }
+    /// Pure original intent; this does not replace the caller's live child/revision checks.
+    pub(super) fn original_provider_plans(
+        &self,
+        prepared: &PreparedLocalnet,
+    ) -> Result<Option<[RetainedProviderServicePlan; 3]>> {
+        self.launch.owner.original_provider_plans(prepared)
+    }
+
+    /// Pure original trust; native ownership and current serving remain independent.
+    pub(super) fn original_gateway_compliance_plan(
+        &self,
+        prepared: &PreparedLocalnet,
+    ) -> Result<Option<RetainedGatewayCompliancePlan>> {
+        self.launch
+            .owner
+            .original_gateway_compliance_plan(prepared, self.provider)
+    }
+
     pub(super) fn required_transactions(&self) -> Result<&[ManagedTransactionFinality]> {
         self.require_running()?;
         self.launch.validate()?;
@@ -356,8 +378,8 @@ impl LiveGatewayProcess for OwnedGateway {
             ));
         }
         self.launch.validate()?;
-        let expected = prepared
-            .gateway_compliance_plan(self.provider)?
+        let expected = self
+            .original_gateway_compliance_plan(prepared)?
             .ok_or_else(|| invalid("original gateway plan absent"))?;
         if expected.network_id() != plan.network_id()
             || expected.original_commitment() != plan.original_commitment()

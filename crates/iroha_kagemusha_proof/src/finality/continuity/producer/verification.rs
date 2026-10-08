@@ -1,17 +1,28 @@
 //! Derive verifier metadata from sealed sources without retaining or generating PKs.
 
 use super::*;
-use iroha_plonk::keys::{CosetCachePolicy, KeygenConfigV2, keygen_vk_with_binding_v2};
+use iroha_plonk::keys::{CosetCachePolicy, KeygenConfigV2, keygen_vk_with_binding_v2_cancellable};
 
 /// Opaque result of actual sealed-source VK derivation, never decoded metadata.
 pub(in crate::finality) struct DerivedSource(QualifiedSourceKey);
 
 impl DerivedSource {
+    #[cfg(test)]
     pub(in crate::finality) fn derive<C: SourceCircuit>(
         source: &C,
         vesta: &PinnedParams<Eq>,
         budget: MemoryBudget,
     ) -> Result<Self, Error> {
+        Self::derive_cancellable(source, vesta, budget, None)
+    }
+
+    pub(in crate::finality) fn derive_cancellable<C: SourceCircuit>(
+        source: &C,
+        vesta: &PinnedParams<Eq>,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         if vesta.k() != 16 {
             return Err(Error::Artifact);
         }
@@ -19,8 +30,13 @@ impl DerivedSource {
         config.compress_selectors = false;
         config.coset_cache = CosetCachePolicy::OnDemand;
         config.msm_budget = budget;
-        let (binding, key) = keygen_vk_with_binding_v2(vesta, &source.without_witnesses(), &config)
-            .map_err(|_| Error::Artifact)?;
+        let (binding, key) = keygen_vk_with_binding_v2_cancellable(
+            vesta,
+            &source.without_witnesses(),
+            &config,
+            cancellation,
+        )
+        .map_err(|error| key_error(&error))?;
         Ok(Self(QualifiedSourceKey { binding, key }))
     }
 
@@ -35,25 +51,45 @@ impl DerivedSource {
 
 /// The wrapper is derived from opaque compiled source keys in their exact order.
 /// No public/raw-metadata constructor can mint a qualified `SourceVerifier`.
+#[cfg(test)]
 pub(in crate::finality) fn derive_wrapper(
     sources: &[DerivedSource],
     pallas: &PinnedParams<Ep>,
     vesta: &PinnedParams<Eq>,
     budget: MemoryBudget,
 ) -> Result<(SourceVerifier, DescriptorBinding, VerifyingKey<Ep>), Error> {
-    if pallas.k() != 16 || vesta.k() != 16 {
-        return Err(Error::Artifact);
-    }
+    derive_wrapper_cancellable(sources, pallas, vesta, budget, None)
+}
+
+pub(in crate::finality) fn compiled_wrapper(
+    sources: &[DerivedSource],
+    vesta: &PinnedParams<Eq>,
+) -> Result<OmegaCircuit, Error> {
     let catalog = sources
         .iter()
         .map(|source| source.0.clone())
         .collect::<Vec<_>>();
-    let (_, circuit) = wrapper_source(&catalog, vesta.clone())?;
+    Ok(wrapper_source(&catalog, vesta.clone())?.1)
+}
+
+pub(in crate::finality) fn derive_wrapper_cancellable(
+    sources: &[DerivedSource],
+    pallas: &PinnedParams<Ep>,
+    vesta: &PinnedParams<Eq>,
+    budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<(SourceVerifier, DescriptorBinding, VerifyingKey<Ep>), Error> {
+    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+    if pallas.k() != 16 || vesta.k() != 16 {
+        return Err(Error::Artifact);
+    }
+    let circuit = compiled_wrapper(sources, vesta)?;
     let mut config = KeygenConfigV2::pipa_r(OmegaPlan::instance_types().to_vec());
     config.coset_cache = CosetCachePolicy::OnDemand;
     config.msm_budget = budget;
     let (binding, key) =
-        keygen_vk_with_binding_v2(pallas, &circuit, &config).map_err(|_| Error::Artifact)?;
+        keygen_vk_with_binding_v2_cancellable(pallas, &circuit, &config, cancellation)
+            .map_err(|error| key_error(&error))?;
     let source = SourceVerifier {
         verifier: Arc::new(
             VerifierPlan::new(binding.clone(), pallas.clone()).map_err(|_| Error::Artifact)?,
@@ -61,6 +97,14 @@ pub(in crate::finality) fn derive_wrapper(
         key: Arc::new(key.clone()),
     };
     Ok((source, binding, key))
+}
+
+fn key_error(error: &iroha_plonk::keys::KeyError) -> Error {
+    if error.is_cancelled() {
+        Error::Cancelled
+    } else {
+        Error::Artifact
+    }
 }
 
 #[cfg(test)]

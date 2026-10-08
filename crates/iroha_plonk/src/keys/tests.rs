@@ -1120,3 +1120,189 @@ fn wallet_digest_binds_native_fields_and_v2_keys_on_both_curves() {
     wallet_digest::<Ep>();
     wallet_digest::<Eq>();
 }
+
+#[test]
+fn cancellable_keygen_preserves_originals_and_fresh_retry_on_both_curves() {
+    fn check<C: PastaCurve>() {
+        use iroha_pasta::CancellationToken;
+        let params = PinnedParams::<C>::derive(6).unwrap();
+        let circuit = TestCircuit { rows: ROWS };
+        for (coset_cache, table_budget) in [
+            (CosetCachePolicy::Eager, Some(MemoryBudget::DEFAULT)),
+            (CosetCachePolicy::OnDemand, None),
+            (CosetCachePolicy::OnDemand, Some(MemoryBudget::new(0))),
+        ] {
+            let mut config = KeygenConfigV2::pipa_r(vec![crate::cs::InstanceType::Field]);
+            config.coset_cache = coset_cache;
+            config.table_budget = table_budget;
+            let expected = keygen_pk_v2(&params, &circuit, &config).unwrap();
+            let token = CancellationToken::new();
+            token.cancel();
+            assert!(matches!(
+                keygen_pk_v2_cancellable(&params, &circuit, &config, Some(&token)),
+                Err(KeyError::Cancelled)
+            ));
+            assert!(matches!(
+                keygen_vk_with_binding_v2_cancellable(&params, &circuit, &config, Some(&token)),
+                Err(KeyError::Cancelled)
+            ));
+            let fresh = CancellationToken::new();
+            let retry = keygen_pk_v2_cancellable(&params, &circuit, &config, Some(&fresh)).unwrap();
+            let (binding, vk) =
+                keygen_vk_with_binding_v2_cancellable(&params, &circuit, &config, Some(&fresh))
+                    .unwrap();
+            assert_eq!(
+                retry.artifact_bytes_v2().unwrap(),
+                expected.artifact_bytes_v2().unwrap()
+            );
+            assert_eq!(
+                retry.commitment_tables().present(),
+                expected.commitment_tables().present()
+            );
+            assert_eq!(retry.has_coset_cache(), expected.has_coset_cache());
+            assert_eq!(&binding, expected.binding());
+            assert_eq!(vk.to_bytes(), expected.vk().to_bytes());
+            assert_eq!(
+                VerifyingKey::<C>::read_cancellable(vk.to_bytes(), &binding, Some(&fresh)).unwrap(),
+                vk
+            );
+            assert!(matches!(
+                VerifyingKey::<C>::read_cancellable(vk.to_bytes(), &binding, Some(&token)),
+                Err(VkError::Cancelled)
+            ));
+            assert!(matches!(
+                VerifyingKey::<C>::from_parts_cancellable(
+                    &binding,
+                    vk.fixed_commitments().to_vec(),
+                    vk.permutation_commitments().to_vec(),
+                    vk.selectors().to_vec(),
+                    Some(&token)
+                ),
+                Err(VkError::Cancelled)
+            ));
+            assert!(
+                binding
+                    .descriptor()
+                    .check_selector_plan_cancellable(vk.selectors(), Some(&token))
+                    .unwrap_err()
+                    .is_cancelled()
+            );
+            assert_eq!(
+                binding
+                    .descriptor()
+                    .check_selector_plan_cancellable(vk.selectors(), Some(&fresh)),
+                Ok(())
+            );
+            if table_budget.is_some_and(|budget| budget.bytes() == 0) {
+                assert_eq!(retry.commitment_tables().present(), (false, false));
+            }
+        }
+    }
+    check::<Ep>();
+    check::<Eq>();
+}
+
+#[test]
+fn keygen_cancellation_after_real_synthesis_is_typed_and_operation_local() {
+    #[derive(Clone)]
+    struct CancelAfterSynthesis {
+        circuit: TestCircuit,
+        token: iroha_pasta::CancellationToken,
+    }
+    impl<F: PastaField> Circuit<F> for CancelAfterSynthesis {
+        type Config = TestConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            self.clone()
+        }
+        fn configure(meta: &mut ConstraintSystem<F>) -> TestConfig {
+            TestCircuit::configure(meta)
+        }
+        fn synthesize(&self, config: TestConfig, layouter: impl Layouter<F>) -> Result<(), Error> {
+            self.circuit.synthesize(config, layouter)?;
+            self.token.cancel();
+            Ok(())
+        }
+    }
+    fn check<C: PastaCurve>() {
+        let params = PinnedParams::<C>::derive(6).unwrap();
+        let config = KeygenConfigV2::pipa_r(vec![crate::cs::InstanceType::Field]);
+        let circuit = TestCircuit { rows: ROWS };
+        for verifier_only in [false, true] {
+            let token = iroha_pasta::CancellationToken::new();
+            let interrupted = CancelAfterSynthesis {
+                circuit,
+                token: token.clone(),
+            };
+            let result = if verifier_only {
+                keygen_vk_with_binding_v2_cancellable(&params, &interrupted, &config, Some(&token))
+                    .map(|_| ())
+            } else {
+                keygen_pk_v2_cancellable(&params, &interrupted, &config, Some(&token)).map(|_| ())
+            };
+            assert!(matches!(result, Err(KeyError::Cancelled)));
+            let fresh = iroha_pasta::CancellationToken::new();
+            let retry = keygen_pk_v2_cancellable(&params, &circuit, &config, Some(&fresh)).unwrap();
+            assert_eq!(
+                retry.artifact_bytes_v2().unwrap(),
+                keygen_pk_v2(&params, &circuit, &config)
+                    .unwrap()
+                    .artifact_bytes_v2()
+                    .unwrap()
+            );
+        }
+        assert!(KeyError::from(crate::cs::CsError::Cancelled).is_cancelled());
+        assert!(matches!(
+            Error::from(crate::cs::CsError::Cancelled),
+            Error::Cancelled
+        ));
+    }
+    check::<Ep>();
+    check::<Eq>();
+}
+
+#[test]
+fn cancellable_vk_hash_matches_every_transcript_profile() {
+    fn check<C: PastaCurve>() {
+        use crate::{cs::TranscriptV2, transcript::TranscriptRepr};
+        use iroha_pasta::CancellationToken;
+        let bytes = (0_u32..12_345)
+            .map(|index| u8::try_from(index % 251).unwrap())
+            .collect::<Vec<_>>();
+        let fresh = CancellationToken::new();
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        for v2 in [false, true] {
+            for profile in [
+                TranscriptV2::Blake2bChallenge255,
+                TranscriptV2::KagemushaPoseidonRp57,
+                TranscriptV2::KagemushaPoseidonRp57Base,
+            ] {
+                assert_eq!(
+                    TranscriptRepr::<C>::derive_cancellable(
+                        v2,
+                        profile,
+                        &[19; 32],
+                        &bytes,
+                        Some(&fresh)
+                    )
+                    .unwrap(),
+                    TranscriptRepr::<C>::derive(v2, profile, &[19; 32], &bytes)
+                );
+                assert_eq!(
+                    TranscriptRepr::<C>::derive_cancellable(
+                        v2,
+                        profile,
+                        &[19; 32],
+                        &bytes,
+                        Some(&cancelled)
+                    ),
+                    Err(iroha_pasta::Cancelled)
+                );
+            }
+        }
+    }
+    check::<Ep>();
+    check::<Eq>();
+}

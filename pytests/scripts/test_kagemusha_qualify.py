@@ -171,10 +171,41 @@ def test_vm_counters_require_complete_valid_evidence():
     after = deepcopy(before)
     after["raw"]["vm"]["stdout"] = text.replace("123", "124")
     assert qualify.environment_reasons(before, after)
-    # Old compressed pages/counters are not a rejection; only new activity is.
+    # Existing counters are not a rejection; failed probes still invalidate.
     after = deepcopy(before)
     after["raw"]["pressure"]["code"] = 1
     assert qualify.environment_reasons(before, after)
+
+
+def test_swapins_alone_are_diagnostic_under_the_declared_memory_policy():
+    before = environment_fixture()
+    after = deepcopy(before)
+    after["raw"]["vm"]["stdout"] = after["raw"]["vm"]["stdout"].replace("Swapins: 3.", "Swapins: 999.")
+    assert not qualify.environment_reasons(before, after)
+
+
+@pytest.mark.parametrize("counter", qualify.QUIET_MEMORY_COUNTERS)
+def test_every_required_quiet_memory_counter_invalidates_on_increase(counter):
+    before = environment_fixture()
+    after = deepcopy(before)
+    value = qualify.environment_counters(before)[counter]
+    after["raw"]["vm"]["stdout"] = after["raw"]["vm"]["stdout"].replace(
+        f"{counter}: {value}.", f"{counter}: {value + 1}.",
+    )
+    assert qualify.environment_reasons(before, after) == [f"memory counter changed: {counter}"]
+
+
+@pytest.mark.parametrize("counter", (*qualify.QUIET_MEMORY_COUNTERS, "Swapins"))
+def test_counter_reset_invalidates_even_diagnostic_evidence(counter):
+    before = environment_fixture()
+    before["raw"]["vm"]["stdout"] = "".join(
+        f"{label}: 10.\n" for label in (*qualify.QUIET_MEMORY_COUNTERS, "Swapins")
+    )
+    after = deepcopy(before)
+    after["raw"]["vm"]["stdout"] = after["raw"]["vm"]["stdout"].replace(
+        f"{counter}: 10.", f"{counter}: 9.",
+    )
+    assert qualify.environment_reasons(before, after) == [f"memory counter decreased: {counter}"]
 
 
 def environment_fixture():
@@ -199,7 +230,9 @@ def refresh_raw(observation):
 
 
 def ledger_fixture():
-    candidate = {"binary_sha256": "ab" * 32, "source_sha256": "ef" * 32, "layouts": {}}
+    candidate = {"binary_sha256": "ab" * 32, "source_sha256": "ef" * 32, "layouts": {},
+                 "memory_activity_policy": qualify.MEMORY_ACTIVITY_POLICY, "source_policy": qualify.SOURCE_POLICY,
+                 "source_scope": {"kind": "cargo_component"}}
     configs = {}
     for name, config in qualify.CONFIGS.items():
         layout = {key: report()[key] for key in
@@ -247,6 +280,40 @@ def test_summary_cannot_qualify_report_only_records(tmp_path):
     # No process exit, raw probe, calibration or candidate-boundary records
     # were retained. Empty reason strings are not evidence of validity.
     assert qualify.summarize(path)["status"] != "pass"
+
+
+@pytest.mark.parametrize("policy", [None, "all-vm-counters-unchanged", "unknown"])
+def test_changed_or_missing_policy_cannot_requalify_an_earlier_ledger(tmp_path, policy):
+    ledger = ledger_fixture()
+    if policy is None:
+        del ledger["candidate"]["memory_activity_policy"]
+    else:
+        ledger["candidate"]["memory_activity_policy"] = policy
+    path = tmp_path / "runs.json"
+    qualify.write_json(path, ledger)
+    assert qualify.summarize(path)["status"] == "inconclusive"
+    candidate_path = tmp_path / "candidate.json"
+    qualify.write_json(candidate_path, ledger["candidate"])
+    with pytest.raises(ValueError, match="prepare a fresh candidate"):
+        qualify.run(candidate_path, 123)
+
+
+def test_summary_preserves_recorded_swapin_refusal_and_valid_hard_failure(tmp_path):
+    ledger = ledger_fixture()
+    rejected, failed = ledger["attempts"]["q_chips-4"][:2]
+    rejected["reasons"] = ["memory counter changed: Swapins"]
+    rejected["measured"]["after"]["raw"]["vm"]["stdout"] = (
+        rejected["measured"]["after"]["raw"]["vm"]["stdout"].replace("Swapins: 3.", "Swapins: 4.")
+    )
+    failed["report"]["samples"][0]["total_ns"] = 10_000_000_001
+    failed["measured"]["report"] = deepcopy(failed["report"])
+    refresh_raw(failed["measured"])
+    path = tmp_path / "runs.json"
+    qualify.write_json(path, ledger)
+    result = qualify.summarize(path)["configurations"]["q_chips-4"]
+    assert result["status"] == "fail"
+    assert result["valid_processes"] == 8
+    assert result["invalid_attempts"][0]["reasons"] == ["memory counter changed: Swapins"]
 
 
 def test_summary_does_not_replace_failing_real_chips_with_passing_synthetic(tmp_path):
@@ -379,7 +446,7 @@ def test_run_retains_complete_recomputable_attempts(tmp_path, monkeypatch, sourc
     candidate = {**ledger_fixture()["candidate"], "binary": "/fixture-executable"}
     path = tmp_path / "candidate.json"
     qualify.write_json(path, candidate)
-    monkeypatch.setattr(qualify, "source_digest", lambda: candidate["source_sha256"])
+    monkeypatch.setattr(qualify, "source_digest", lambda *_args: candidate["source_sha256"])
     monkeypatch.setattr(qualify, "file_hash", lambda _path: candidate["binary_sha256"])
     calls = []
 
@@ -388,7 +455,7 @@ def test_run_retains_complete_recomputable_attempts(tmp_path, monkeypatch, sourc
         value = report(workers=config["workers"])
         value.update(candidate["layouts"][config["gate"]], seed=seed)
         if source_changes and len(calls) == 3:
-            monkeypatch.setattr(qualify, "source_digest", lambda: "changed-source")
+            monkeypatch.setattr(qualify, "source_digest", lambda *_args: "changed-source")
         return observation_fixture(value)
 
     monkeypatch.setattr(qualify, "run_process", measured)
@@ -444,17 +511,46 @@ def test_layout_inventory_binds_all_actual_descriptors():
             qualify.parse_layouts(invalid)
 
 
-@pytest.mark.parametrize("change", [None, "source", "executable"])
-def test_prepare_binds_inventory_to_unchanged_source_and_binary(tmp_path, monkeypatch, change):
-    binary = tmp_path / "benchmark"
+def source_fixture(tmp_path, monkeypatch):
+    """Create a real ignored vendor input and artifact depfile, without Cargo."""
+    monkeypatch.setattr(qualify, "ROOT", tmp_path)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("target/\nvendor/\nfixtures/ignored.txt\n")
+    package = tmp_path / "crates/iroha_plonk_gadgets"
+    vendor = tmp_path / "vendor/local"
+    for directory in (package, vendor, tmp_path / ".cargo", tmp_path / "fixtures", tmp_path / "target"):
+        directory.mkdir(parents=True)
+    for directory in (package, vendor):
+        (directory / "Cargo.toml").write_text("[package]\n")
+        (directory / "lib.rs").write_text("// source\n")
+    (tmp_path / "Cargo.toml").write_text("[workspace]\n")
+    (tmp_path / "Cargo.lock").write_text("# lock\n")
+    (tmp_path / "fixtures/shared input.txt").write_text("original")
+    binary = tmp_path / "target/m3_gates-fixture"
     binary.write_bytes(b"fixture executable")
-    source = ["ef" * 32]
-    monkeypatch.setattr(qualify, "source_digest", lambda: source[0])
+    library = tmp_path / "target/libvendor.rlib"
+    library.write_bytes(b"fixture library")
+    binary.with_suffix(".d").write_text(f"{binary}: crates/iroha_plonk_gadgets/lib.rs fixtures/shared\\ input.txt\n")
+    library.with_name("vendor.d").write_text(f"{library}: vendor/local/lib.rs\n")
+    packages = [dict(id=name, name=name, version="1", source=None, manifest_path=str(path / "Cargo.toml"))
+                for name, path in [("iroha_plonk_gadgets", package), ("vendor", vendor)]]
+    metadata = {"packages": packages}
+    artifacts = [dict(reason="compiler-artifact", package_id="iroha_plonk_gadgets",
+                      target={"name": "m3_gates"}, filenames=[str(binary)], executable=str(binary)),
+                 dict(reason="compiler-artifact", package_id="vendor", target={"name": "vendor"}, filenames=[str(library)])]
+    monkeypatch.setattr(qualify, "cargo_metadata", lambda: deepcopy(metadata))
+    monkeypatch.setattr(qualify, "tool_identity", lambda: {"rustc": "fixture", "cargo": "fixture"})
+    return metadata, artifacts, binary
 
+
+def mocked_build(monkeypatch, artifacts, binary, *, during_build=None, during_inventory=None):
     def command(argv, **_kwargs):
+        if argv[0] == "git":
+            return subprocess.run(argv, cwd=qualify.ROOT, text=True, capture_output=True)
         if argv[0] == "scripts/cargo_fast.sh":
-            output = json.dumps({"reason": "compiler-artifact", "target": {"name": "m3_gates"},
-                                 "executable": str(binary)})
+            if during_build:
+                during_build()
+            output = "\n".join(json.dumps(item) for item in artifacts)
         elif argv[0] == "rustc":
             output = "fixture compiler\n"
         elif "--list" in argv:
@@ -462,14 +558,22 @@ def test_prepare_binds_inventory_to_unchanged_source_and_binary(tmp_path, monkey
         else:
             output = "\n".join("M3_LAYOUT_JSON " + json.dumps(layout)
                                for layout in ledger_fixture()["candidate"]["layouts"].values())
-            if change == "source":
-                source[0] = "changed"
-            elif change == "executable":
-                binary.write_bytes(b"different executable")
+            if during_inventory:
+                during_inventory()
         return subprocess.CompletedProcess(argv, 0, output, "")
-
     monkeypatch.setattr(qualify, "command", command)
-    output = tmp_path / "qualification"
+
+
+@pytest.mark.parametrize("change", [None, "source", "executable"])
+def test_prepare_binds_inventory_to_unchanged_source_and_binary(tmp_path, monkeypatch, change):
+    _, artifacts, binary = source_fixture(tmp_path, monkeypatch)
+    def mutate():
+        if change == "source":
+            (tmp_path / "vendor/local/lib.rs").write_text("changed")
+        elif change == "executable":
+            binary.write_bytes(b"changed")
+    mocked_build(monkeypatch, artifacts, binary, during_inventory=mutate)
+    output = tmp_path / "target/qualification"
     if change:
         with pytest.raises(ValueError, match=f"{change} changed during descriptor inventory"):
             qualify.prepare(output)
@@ -478,84 +582,38 @@ def test_prepare_binds_inventory_to_unchanged_source_and_binary(tmp_path, monkey
         qualify.prepare(output)
         candidate = json.loads((output / "candidate.json").read_text())
         assert candidate["binary_sha256"] == qualify.file_hash(binary)
-        assert candidate["source_sha256"] == source[0]
+        assert candidate["source_sha256"] == qualify.source_digest(candidate["source_scope"])
+        assert candidate["source_policy"] == qualify.SOURCE_POLICY
 
 
 def test_component_scope_uses_actual_dependencies_and_cross_crate_inputs(tmp_path, monkeypatch):
-    monkeypatch.setattr(qualify, "ROOT", tmp_path)
-    driver = tmp_path / "crates/iroha_plonk_gadgets"
-    dependency = tmp_path / "crates/actual_dependency"
-    driver.mkdir(parents=True)
-    dependency.mkdir(parents=True)
-    binary = tmp_path / "target/driver"
-    binary.parent.mkdir()
-    binary.with_suffix(".d").write_text(
-        "target/driver: crates/iroha_plonk_gadgets/tests/m3_gates.rs fixtures/shared\\ input.json target/generated.rs\n"
-    )
-    packages = [
-        {"id": "driver", "name": "iroha_plonk_gadgets", "version": "1", "source": None,
-         "manifest_path": str(driver / "Cargo.toml")},
-        {"id": "dependency", "name": "actual_dependency", "version": "1", "source": None,
-         "manifest_path": str(dependency / "Cargo.toml")},
-        {"id": "unrelated", "name": "not_compiled", "version": "1", "source": None,
-         "manifest_path": str(tmp_path / "crates/unrelated/Cargo.toml")},
-        {"id": "registry", "name": "registry_dependency", "version": "1", "source": "registry",
-         "manifest_path": "/registry/dependency/Cargo.toml"},
-    ]
-    artifacts = [{"package_id": "driver", "filenames": [str(binary)]},
-                 {"package_id": "dependency", "filenames": []},
-                 {"package_id": "registry", "filenames": []}]
-    scope = qualify.component_scope({"packages": packages}, artifacts)
-    assert scope["roots"] == [".cargo", "crates/actual_dependency", "crates/iroha_plonk_gadgets"]
-    assert "fixtures/shared input.json" in scope["files"]
-    assert "target/generated.rs" not in scope["files"]
-    assert {package["name"] for package in scope["packages"]} == {
-        "iroha_plonk_gadgets", "actual_dependency", "registry_dependency"}
-    manifest = {"Cargo.lock": "lock", ".cargo/config.toml": "config",
-                "crates/actual_dependency/src/lib.rs": "dependency",
-                "crates/iroha_plonk_gadgets/tests/m3_gates.rs": "driver",
-                "fixtures/shared input.json": "fixture", "crates/unrelated/src/lib.rs": "old"}
+    metadata, artifacts, _ = source_fixture(tmp_path, monkeypatch)
+    scope = qualify.component_scope(metadata, artifacts)
+    assert scope["roots"] == [".cargo", "crates/iroha_plonk_gadgets", "vendor/local"]
+    assert "fixtures/shared input.txt" in scope["required_inputs"]
+    manifest = qualify.source_manifest(qualify.metadata_roots(metadata))
     expected = qualify.manifest_digest(qualify.selected_sources(manifest, scope))
     manifest["crates/unrelated/src/lib.rs"] = "concurrent unrelated edit"
     assert qualify.manifest_digest(qualify.selected_sources(manifest, scope)) == expected
-    for path in ("Cargo.lock", ".cargo/config.toml", "crates/actual_dependency/src/new.rs",
-                 "crates/iroha_plonk_gadgets/src/new.rs", "fixtures/shared input.json"):
-        changed = {**manifest, path: "changed"}
+    for path in ("Cargo.lock", ".cargo/config.toml", "vendor/local/new.rs",
+                 "crates/iroha_plonk_gadgets/src/new.rs", "fixtures/shared input.txt"):
+        changed = {**manifest, path: "file:changed"}
         assert qualify.manifest_digest(qualify.selected_sources(changed, scope)) != expected, path
     with pytest.raises(ValueError, match="omits"):
-        qualify.component_scope({"packages": packages}, artifacts[1:])
+        qualify.component_scope(metadata, artifacts[1:])
 
 
 @pytest.mark.parametrize("change", [None, "owned", "unrelated"])
 def test_component_prepare_keeps_captured_scope_distinct_from_release(tmp_path, monkeypatch, change):
-    binary = tmp_path / "benchmark"
-    binary.write_bytes(b"fixture executable")
-    manifest = {"crates/iroha_plonk_gadgets/src/lib.rs": "owned", "crates/unrelated/src/lib.rs": "other"}
-    monkeypatch.setattr(qualify, "source_manifest", lambda: dict(manifest))
-    package = {"id": "driver", "name": "iroha_plonk_gadgets", "version": "1", "source": None,
-               "manifest_path": str(qualify.ROOT / "crates/iroha_plonk_gadgets/Cargo.toml")}
-
-    def command(argv, **_kwargs):
-        if argv[0] == "cargo":
-            output = json.dumps({"packages": [package]})
-        elif argv[0] == "scripts/cargo_fast.sh":
-            if change:
-                path = "crates/iroha_plonk_gadgets/src/lib.rs" if change == "owned" else "crates/unrelated/src/lib.rs"
-                manifest[path] = "changed"
-            output = json.dumps({"reason": "compiler-artifact", "package_id": "driver",
-                                 "target": {"name": "m3_gates"}, "filenames": [str(binary)],
-                                 "executable": str(binary)})
-        elif argv[0] == "rustc":
-            output = "fixture compiler\n"
-        elif "--list" in argv:
-            output = "\n".join(f"{config['test']}: test" for config in qualify.CONFIGS.values())
-        else:
-            output = "\n".join("M3_LAYOUT_JSON " + json.dumps(layout)
-                               for layout in ledger_fixture()["candidate"]["layouts"].values())
-        return subprocess.CompletedProcess(argv, 0, output, "")
-
-    monkeypatch.setattr(qualify, "command", command)
-    output = tmp_path / "qualification"
+    _, artifacts, binary = source_fixture(tmp_path, monkeypatch)
+    unrelated = tmp_path / "unrelated.txt"
+    unrelated.write_text("before")
+    def mutate():
+        if change:
+            path = tmp_path / "vendor/local/lib.rs" if change == "owned" else unrelated
+            path.write_text("changed")
+    mocked_build(monkeypatch, artifacts, binary, during_build=mutate)
+    output = tmp_path / "target/qualification"
     if change == "owned":
         with pytest.raises(ValueError, match="source changed during build"):
             qualify.prepare(output, component=True)
@@ -570,11 +628,151 @@ def test_component_prepare_keeps_captured_scope_distinct_from_release(tmp_path, 
     assert (provenance["whole_checkout_before"] != provenance["whole_checkout_after"]) == bool(change)
 
 
+@pytest.mark.parametrize("change", ["edit", "add", "delete"])
+def test_ignored_local_package_files_are_bound_at_build_and_runtime(tmp_path, monkeypatch, change):
+    metadata, artifacts, binary = source_fixture(tmp_path, monkeypatch)
+    mocked_build(monkeypatch, artifacts, binary)
+    scope = qualify.component_scope(metadata, artifacts)
+    before = qualify.source_digest(scope)
+    old = tmp_path / "vendor/local/uncompiled.txt"
+    old.write_text("before")
+    before = qualify.source_digest(scope)
+    def mutate():
+        if change == "edit":
+            old.write_text("changed")
+        elif change == "add":
+            (old.parent / "new.txt").write_text("new")
+        else:
+            old.unlink()
+    mutate()
+    assert qualify.source_digest(scope) != before
+    # Same mutation during a build must refuse creating candidate.json.
+    old.write_text("before")
+    (old.parent / "new.txt").unlink(missing_ok=True)
+    mocked_build(monkeypatch, artifacts, binary, during_build=mutate)
+    with pytest.raises(ValueError, match="source changed during build"):
+        qualify.prepare(tmp_path / "target/output", component=True)
+
+
+def test_missing_prebuild_ignored_external_include_is_never_late_pinned(tmp_path, monkeypatch):
+    _, artifacts, binary = source_fixture(tmp_path, monkeypatch)
+    (tmp_path / "fixtures/ignored.txt").write_text("not in initial inventory")
+    with binary.with_suffix(".d").open("a") as stream:
+        stream.write(f"{binary}: fixtures/ignored.txt\n")
+    mocked_build(monkeypatch, artifacts, binary)
+    with pytest.raises(ValueError, match="mandatory compiler input was not captured"):
+        qualify.prepare(tmp_path / "target/output", component=True)
+    assert not (tmp_path / "target/output/candidate.json").exists()
+
+
+@pytest.mark.parametrize("kind", ["root", "file", "parent"])
+def test_symlinked_local_input_is_refused(tmp_path, monkeypatch, kind):
+    metadata, artifacts, _ = source_fixture(tmp_path, monkeypatch)
+    vendor = tmp_path / "vendor/local"
+    if kind == "root":
+        vendor.rename(tmp_path / "original")
+        vendor.symlink_to(tmp_path / "original", target_is_directory=True)
+    elif kind == "file":
+        (vendor / "lib.rs").unlink()
+        (vendor / "lib.rs").symlink_to(tmp_path / "Cargo.toml")
+    else:
+        (tmp_path / "link").symlink_to(vendor, target_is_directory=True)
+        with pytest.raises(ValueError, match="symlink"):
+            qualify.local_path("link/../Cargo.toml")
+        return
+    with pytest.raises(ValueError, match="symlink"):
+        qualify.source_manifest(qualify.metadata_roots(metadata))
+
+
+@pytest.mark.parametrize("failure", ["missing", "wrong-target", "generated"])
+def test_every_local_compiler_artifact_requires_exact_dep_info(tmp_path, monkeypatch, failure):
+    metadata, artifacts, binary = source_fixture(tmp_path, monkeypatch)
+    depfile = binary.with_suffix(".d")
+    if failure == "missing":
+        depfile.unlink()
+    elif failure == "wrong-target":
+        depfile.write_text("Cargo.toml: crates/iroha_plonk_gadgets/lib.rs\n")
+    else:
+        (binary.parent / "generated.rs").write_text("// unverified generated")
+        depfile.write_text(f"{binary}: target/generated.rs\n")
+    with pytest.raises(ValueError, match="missing source|does not bind|verified disposition"):
+        qualify.component_scope(metadata, artifacts)
+
+
+def build_script_fixture(tmp_path, artifacts):
+    base = tmp_path / "target/build/driver"
+    base.mkdir(parents=True)
+    alias = base / "build-script-build"
+    actual = base / "build_script_build-abc"
+    alias.write_bytes(b"script")
+    actual.write_bytes(b"script")
+    actual.with_suffix(".d").write_text(f"{actual}: crates/iroha_plonk_gadgets/lib.rs\n")
+    artifacts.append(dict(package_id="iroha_plonk_gadgets", filenames=[str(alias)],
+                          target={"kind": ["custom-build"]}))
+    output = base / "out"
+    output.mkdir()
+    (base / "output").write_text("cargo:rerun-if-env-changed=TEST_CONTROL\n")
+    scripts = [dict(package_id="iroha_plonk_gadgets", out_dir=str(output))]
+    return actual, scripts
+
+
+def test_build_script_alias_requires_unique_exact_executable_and_depfile(tmp_path, monkeypatch):
+    metadata, artifacts, _ = source_fixture(tmp_path, monkeypatch)
+    actual, scripts = build_script_fixture(tmp_path, artifacts)
+    scope = qualify.component_scope(metadata, artifacts, scripts)
+    assert scope["build_script_aliases"][0]["actual"] == str(actual)
+    actual.write_bytes(b"foreign script")
+    with pytest.raises(ValueError, match="exact build-script alias"):
+        qualify.component_scope(metadata, artifacts, scripts)
+    actual.write_bytes(b"script")
+    actual.with_suffix(".d").write_text("Cargo.toml: Cargo.lock\n")
+    with pytest.raises(ValueError, match="does not bind"):
+        qualify.component_scope(metadata, artifacts, scripts)
+
+
+def test_build_script_output_requires_explicit_generated_disposition(tmp_path, monkeypatch):
+    metadata, artifacts, _ = source_fixture(tmp_path, monkeypatch)
+    _, scripts = build_script_fixture(tmp_path, artifacts)
+    scope = qualify.component_scope(metadata, artifacts, scripts)
+    assert scope["build_script_outputs"][0]["generated_disposition"].startswith("empty")
+    assert scope["build_environment"] == {"TEST_CONTROL": None}
+    with pytest.raises(ValueError, match="executed output record"):
+        qualify.component_scope(metadata, artifacts)
+    output = Path(scripts[0]["out_dir"])
+    (output / "unknown.rs").write_text("// generated")
+    with pytest.raises(ValueError, match="verified disposition"):
+        qualify.component_scope(metadata, artifacts, scripts)
+
+
+@pytest.mark.parametrize("change", ["metadata", "tools"])
+def test_prepare_refuses_metadata_or_tool_drift(tmp_path, monkeypatch, change):
+    metadata, artifacts, binary = source_fixture(tmp_path, monkeypatch)
+    def mutate():
+        if change == "metadata":
+            metadata["changed"] = True
+        else:
+            monkeypatch.setattr(qualify, "tool_identity", lambda: {"rustc": "changed"})
+    mocked_build(monkeypatch, artifacts, binary, during_build=mutate)
+    with pytest.raises(ValueError, match="metadata or tools changed"):
+        qualify.prepare(tmp_path / "target/output", component=True)
+
+
+def test_old_source_policy_cannot_requalify_retained_ledger(tmp_path):
+    ledger = ledger_fixture()
+    del ledger["candidate"]["source_policy"]
+    qualify.write_json(tmp_path / "candidate.json", ledger["candidate"])
+    path = tmp_path / "runs.json"
+    qualify.write_json(path, ledger)
+    assert qualify.summarize(path)["status"] == "inconclusive"
+    with pytest.raises(ValueError, match="prepare a fresh candidate"):
+        qualify.run(tmp_path / "candidate.json", 123)
+
+
 def test_hard_failure_stop_keeps_complete_attempt_and_failing_partial_verdict(tmp_path, monkeypatch):
     candidate = {**ledger_fixture()["candidate"], "binary": "/fixture-executable"}
     path = tmp_path / "candidate.json"
     qualify.write_json(path, candidate)
-    monkeypatch.setattr(qualify, "source_digest", lambda: candidate["source_sha256"])
+    monkeypatch.setattr(qualify, "source_digest", lambda *_args: candidate["source_sha256"])
     monkeypatch.setattr(qualify, "file_hash", lambda _path: candidate["binary_sha256"])
 
     def measured(_candidate, config, seed, _path):
@@ -621,3 +819,87 @@ def test_workspace_evidence_must_show_exact_reuse(index, field, bad):
     value["samples"][index][field] = bad
     reasons = qualify.report_reasons(value, qualify.CONFIGS["q_exact-1"], candidate, 7)
     assert "quotient workspace not retained and reused between proofs" in reasons
+
+
+@pytest.mark.parametrize("name", ["CARGO_BUILD_RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"])
+def test_compiler_configuration_wrapper_override_is_refused(tmp_path, monkeypatch, name):
+    tool = tmp_path / "tool"
+    tool.write_bytes(b"selected binary")
+    monkeypatch.setattr(qualify.shutil, "which", lambda _name: str(tool))
+    monkeypatch.setattr(qualify.sys, "executable", str(tool))
+    monkeypatch.setattr(qualify, "command", lambda argv: subprocess.CompletedProcess(
+        argv, 0, str(tool) if argv[0] == "rustup" else "fixture version", ""))
+    monkeypatch.setenv(name, "/foreign/wrapper")
+    with pytest.raises(ValueError, match="custom compiler/wrapper"):
+        qualify.tool_identity()
+
+
+def test_tool_identity_binds_auto_cache_and_script_interpreters(tmp_path, monkeypatch):
+    tool = tmp_path / "tool"
+    tool.write_bytes(b"selected binary")
+    wrapper = tmp_path / "sccache"
+    wrapper.write_bytes(b"cache owner")
+    monkeypatch.setattr(qualify.shutil, "which", lambda name: str(wrapper if name == "sccache" else tool))
+    monkeypatch.setattr(qualify.sys, "executable", str(tool))
+    monkeypatch.setattr(qualify, "command", lambda argv: subprocess.CompletedProcess(
+        argv, 0, str(tool) if argv[0] == "rustup" else "fixture version", ""))
+    before = qualify.tool_identity()
+    assert before["automatic_sccache"]["sha256"] == qualify.file_hash(wrapper)
+    assert before["launcher:bash"] == before["launcher:python3"] == before["python"]
+    wrapper.write_bytes(b"changed cache owner")
+    assert qualify.tool_identity() != before
+    monkeypatch.setattr(qualify.shutil, "which", lambda name: None if name == "sccache" else str(tool))
+    assert qualify.tool_identity()["automatic_sccache"] is None
+
+
+def test_source_custody_error_after_measurement_preserves_failed_attempt(tmp_path, monkeypatch):
+    candidate = {**ledger_fixture()["candidate"], "binary": "/fixture-executable"}
+    path = tmp_path / "candidate.json"
+    qualify.write_json(path, candidate)
+    monkeypatch.setattr(qualify, "source_digest", lambda *_args: candidate["source_sha256"])
+    monkeypatch.setattr(qualify, "file_hash", lambda _path: candidate["binary_sha256"])
+    calls = []
+    def measured(_candidate, config, seed, _path):
+        calls.append(seed)
+        value = report(workers=config["workers"])
+        value.update(candidate["layouts"][config["gate"]], seed=seed)
+        if len(calls) == 3:
+            def unavailable(*_args):
+                raise ValueError("mandatory compiler input lost")
+            monkeypatch.setattr(qualify, "source_digest", unavailable)
+        return observation_fixture(value)
+    monkeypatch.setattr(qualify, "run_process", measured)
+    with pytest.raises(ValueError, match="raw evidence retained"):
+        qualify.run(path, 123)
+    ledger = json.loads((tmp_path / "runs.json").read_text())
+    rows = [row for values in ledger["attempts"].values() for row in values]
+    assert len(rows) == 1 and len(calls) == 3
+    assert rows[0]["candidate_after"]["error"] == "mandatory compiler input lost"
+    assert rows[0]["pre"]["process"]["code"] == rows[0]["post"]["process"]["code"] == 0
+    assert qualify.summarize(tmp_path / "runs.json")["status"] == "inconclusive"
+
+
+def test_unknown_or_missing_source_scope_has_no_git_only_fallback():
+    with pytest.raises(ValueError, match="captured Cargo source scope"):
+        qualify.source_digest()
+
+
+def test_compiler_environment_dependency_is_bound_or_explicitly_derived(tmp_path, monkeypatch):
+    metadata, artifacts, binary = source_fixture(tmp_path, monkeypatch)
+    original = binary.with_suffix(".d").read_text()
+    depfile = binary.with_suffix(".d")
+    monkeypatch.setenv("FIXTURE_BUILD_SETTING", "selected")
+    depfile.write_text(original + "# env-dep:FIXTURE_BUILD_SETTING=selected\n")
+    scope = qualify.component_scope(metadata, artifacts)
+    assert scope["build_environment"] == {"FIXTURE_BUILD_SETTING": "selected"}
+    before = qualify.source_digest(scope)
+    monkeypatch.setenv("FIXTURE_BUILD_SETTING", "foreign")
+    assert qualify.source_digest(scope) != before
+    with pytest.raises(ValueError, match="compiler environment differs"):
+        qualify.component_scope(metadata, artifacts)
+    depfile.write_text(original + "# env-dep:CARGO_MANIFEST_DIR=/foreign\n")
+    with pytest.raises(ValueError, match="foreign manifest"):
+        qualify.component_scope(metadata, artifacts)
+    depfile.write_text(original + "# env-dep:CARGO_UNKNOWN=value\n")
+    with pytest.raises(ValueError, match="no disposition"):
+        qualify.component_scope(metadata, artifacts)

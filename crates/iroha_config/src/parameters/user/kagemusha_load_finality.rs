@@ -15,8 +15,10 @@ pub struct KagemushaLoadFinality {
     pub verifier_pack: PathBuf,
     /// Absolute exact producer-inventory original path.
     pub producer_inventory: PathBuf,
-    /// Absolute existing private directory of complete server originals.
-    pub server_originals: PathBuf,
+    /// Absolute existing private directory of immutable verifier D/V originals.
+    pub verifier_originals: PathBuf,
+    /// Absolute separately initialized private proving-key cache directory.
+    pub proving_cache: PathBuf,
     /// Absolute existing private retention journal directory.
     pub journal_dir: PathBuf,
     /// Maximum queued, active and unread results; 1..=64.
@@ -31,6 +33,12 @@ pub struct KagemushaLoadFinality {
     #[config(default = "defaults::torii::kagemusha_load_finality::MAXIMUM_KEY_BYTES")]
     #[norito(default = "default_maximum_key_bytes")]
     pub maximum_key_bytes: usize,
+    /// Finite resident proving-key bound, at least maximum_key_bytes and at most 16 GiB.
+    #[config(
+        default = "defaults::torii::kagemusha_load_finality::MAXIMUM_RESIDENT_PROVING_KEY_BYTES"
+    )]
+    #[norito(default = "default_maximum_resident_proving_key_bytes")]
+    pub maximum_resident_proving_key_bytes: usize,
     /// Positive finite aggregate graph extent, excluding usize::MAX.
     #[config(default = "defaults::torii::kagemusha_load_finality::MAXIMUM_ORIGINAL_BYTES")]
     #[norito(default = "default_maximum_original_bytes")]
@@ -70,6 +78,9 @@ fn default_maximum_receipt_height() -> u64 {
 }
 fn default_maximum_key_bytes() -> usize {
     defaults::torii::kagemusha_load_finality::MAXIMUM_KEY_BYTES
+}
+fn default_maximum_resident_proving_key_bytes() -> usize {
+    defaults::torii::kagemusha_load_finality::MAXIMUM_RESIDENT_PROVING_KEY_BYTES
 }
 fn default_maximum_original_bytes() -> usize {
     defaults::torii::kagemusha_load_finality::MAXIMUM_ORIGINAL_BYTES
@@ -143,14 +154,25 @@ impl KagemushaLoadFinality {
         for path in [
             &self.verifier_pack,
             &self.producer_inventory,
-            &self.server_originals,
+            &self.verifier_originals,
+            &self.proving_cache,
             &self.journal_dir,
         ] {
             exact_path(path)?;
         }
+        if self.verifier_originals == self.proving_cache
+            || self.verifier_originals == self.journal_dir
+            || self.proving_cache == self.journal_dir
+        {
+            return Err("verifier originals, proving cache and journal must have distinct paths");
+        }
         if !(1..=64).contains(&self.max_pending_requests)
             || !(2..=u64::from(u32::MAX)).contains(&self.maximum_receipt_height)
             || !(1..=1 << 30).contains(&self.maximum_key_bytes)
+            || self.maximum_resident_proving_key_bytes < self.maximum_key_bytes
+            || self.maximum_resident_proving_key_bytes == usize::MAX
+            || u64::try_from(self.maximum_resident_proving_key_bytes).unwrap_or(u64::MAX)
+                > (16_u64 << 30)
             || self.maximum_original_bytes == 0
             || self.maximum_original_bytes == usize::MAX
             || !(1..=65_536).contains(&self.maximum_artifacts)
@@ -168,11 +190,13 @@ impl KagemushaLoadFinality {
             manifest_digest,
             verifier_pack: self.verifier_pack,
             producer_inventory: self.producer_inventory,
-            server_originals: self.server_originals,
+            verifier_originals: self.verifier_originals,
+            proving_cache: self.proving_cache,
             journal_dir: self.journal_dir,
             max_pending_requests: self.max_pending_requests,
             maximum_receipt_height: self.maximum_receipt_height,
             maximum_key_bytes: self.maximum_key_bytes,
+            maximum_resident_proving_key_bytes: self.maximum_resident_proving_key_bytes,
             maximum_original_bytes: self.maximum_original_bytes,
             maximum_artifacts: self.maximum_artifacts,
             msm_bytes: self.msm_bytes,

@@ -17,7 +17,7 @@ use super::{
         read_optional, require_deadline, require_empty,
     },
     provider_economics,
-    service_authority::{ProviderPurpose, ServiceAuthority},
+    service_authority::{CheckpointImportScope, ProviderPurpose, ServiceAuthority},
 };
 use super::{
     native_operation::attempts::Purpose, service_bootstrap::authorization::FundingAuthorization,
@@ -126,12 +126,30 @@ impl ProviderFundingBootstrap {
         prepared: &PreparedLocalnet,
         provider: iroha_data_model::sorafs::capacity::ProviderId,
     ) -> Result<Option<Self>> {
-        let Some(authority) = ServiceAuthority::open_provider_existing(
+        Self::from_existing_authority(ServiceAuthority::open_provider_existing(
             prepared,
             provider,
             ProviderPurpose::ProviderFundingBootstrap,
-        )?
-        else {
+        )?)
+    }
+
+    /// Preserve the existing plan postcondition while borrowing the original read-only profile.
+    /// Optional lexical import work supplies no source, transaction or current-state verdict.
+    pub(super) fn open_existing_from_original(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        scope: Option<&CheckpointImportScope>,
+    ) -> Result<Option<Self>> {
+        Self::from_existing_authority(ServiceAuthority::open_provider_existing_from_original(
+            parent,
+            provider,
+            ProviderPurpose::ProviderFundingBootstrap,
+            scope,
+        )?)
+    }
+
+    fn from_existing_authority(authority: Option<ServiceAuthority>) -> Result<Option<Self>> {
+        let Some(authority) = authority else {
             return Ok(None);
         };
         let owner = Self { authority };
@@ -300,10 +318,15 @@ impl ProviderFundingBootstrap {
             ..
         } = phase;
         if let Some(intent) = original.top_up() {
-            let mut request = match ManagedReserveTopUpRequest::open_existing(
-                &self.authority.prepared,
-                provider,
-            )? {
+            let mut request = match (if mode == Mode::Advance {
+                ManagedReserveTopUpRequest::open_existing(&self.authority.prepared, provider)
+            } else {
+                ManagedReserveTopUpRequest::open_existing_from_original(
+                    &self.authority,
+                    provider,
+                    self.authority.checkpoint_import_scope(),
+                )
+            })? {
                 Some(owner) => owner,
                 None if mode == Mode::Advance => {
                     self.require_no_later_material(FundingStep::Request)?;
@@ -412,22 +435,29 @@ impl ProviderFundingBootstrap {
             ..
         } = phase;
         let intent = approval_selection.approval(original)?;
-        let mut approval =
-            match ManagedReserveTopUpApproval::open_existing(&self.authority.prepared, provider)? {
-                Some(owner) => owner,
-                None if mode == Mode::Advance => {
-                    self.require_no_later_material(FundingStep::Approval)?;
-                    authorization
-                        .ok_or_else(|| invalid("funding startup authorization absent"))?
-                        .validate(&self.authority, deadline)?;
-                    ManagedReserveTopUpApproval::open(&self.authority.prepared, provider)?
-                }
-                None => {
-                    return self
-                        .unprepared_step(FundingStep::Approval)
-                        .map(|step| Some(RequestApprovalIncomplete::Unprepared(step)));
-                }
-            };
+        let mut approval = match (if mode == Mode::Advance {
+            ManagedReserveTopUpApproval::open_existing(&self.authority.prepared, provider)
+        } else {
+            ManagedReserveTopUpApproval::open_existing_from_original(
+                &self.authority,
+                provider,
+                self.authority.checkpoint_import_scope(),
+            )
+        })? {
+            Some(owner) => owner,
+            None if mode == Mode::Advance => {
+                self.require_no_later_material(FundingStep::Approval)?;
+                authorization
+                    .ok_or_else(|| invalid("funding startup authorization absent"))?
+                    .validate(&self.authority, deadline)?;
+                ManagedReserveTopUpApproval::open(&self.authority.prepared, provider)?
+            }
+            None => {
+                return self
+                    .unprepared_step(FundingStep::Approval)
+                    .map(|step| Some(RequestApprovalIncomplete::Unprepared(step)));
+            }
+        };
         let mut result = recover_progress(if mode == Mode::Local {
             approval.recover_local_selected_if_present(history, &intent, &original.fees, deadline)
         } else {
@@ -500,10 +530,15 @@ impl ProviderFundingBootstrap {
             None => return self.unprepared(FundingStep::Credit),
         };
         let intent = credit_selection.credit(original)?;
-        let mut credit = match ManagedInitialProviderCredit::open_existing(
-            &self.authority.prepared,
-            provider,
-        )? {
+        let mut credit = match (if mode == Mode::Advance {
+            ManagedInitialProviderCredit::open_existing(&self.authority.prepared, provider)
+        } else {
+            ManagedInitialProviderCredit::open_existing_from_original(
+                &self.authority,
+                provider,
+                self.authority.checkpoint_import_scope(),
+            )
+        })? {
             Some(owner) => owner,
             None if mode == Mode::Advance => {
                 self.require_no_later_material(FundingStep::Credit)?;
@@ -540,18 +575,25 @@ impl ProviderFundingBootstrap {
         if credit_finality.height <= minimum_height {
             return Err(invalid("funding credit carrier predates prerequisites"));
         }
-        let mut capacity =
-            match ManagedProviderCapacity::open_existing(&self.authority.prepared, provider)? {
-                Some(owner) => owner,
-                None if mode == Mode::Advance => {
-                    self.require_no_later_material(FundingStep::Capacity)?;
-                    authorization
-                        .ok_or_else(|| invalid("funding startup authorization absent"))?
-                        .validate(&self.authority, deadline)?;
-                    ManagedProviderCapacity::open(&self.authority.prepared, provider)?
-                }
-                None => return self.unprepared(FundingStep::Capacity),
-            };
+        let mut capacity = match (if mode == Mode::Advance {
+            ManagedProviderCapacity::open_existing(&self.authority.prepared, provider)
+        } else {
+            ManagedProviderCapacity::open_existing_from_original(
+                &self.authority,
+                provider,
+                self.authority.checkpoint_import_scope(),
+            )
+        })? {
+            Some(owner) => owner,
+            None if mode == Mode::Advance => {
+                self.require_no_later_material(FundingStep::Capacity)?;
+                authorization
+                    .ok_or_else(|| invalid("funding startup authorization absent"))?
+                    .validate(&self.authority, deadline)?;
+                ManagedProviderCapacity::open(&self.authority.prepared, provider)?
+            }
+            None => return self.unprepared(FundingStep::Capacity),
+        };
         let mut result = recover_progress(if mode == Mode::Local {
             capacity.recover_local_selected_if_present(
                 &original.policy,

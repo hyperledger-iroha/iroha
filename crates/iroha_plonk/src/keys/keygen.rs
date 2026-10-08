@@ -27,7 +27,7 @@
 //! depend on the thread count.
 
 use ff::PrimeField;
-use iroha_pasta::{PastaCurve, PastaField, fft::FftDomain, msm::MemoryBudget};
+use iroha_pasta::{CancellationToken, PastaCurve, PastaField, fft::FftDomain, msm::MemoryBudget};
 
 use super::{
     DescriptorBinding, KeyError, check_shape,
@@ -45,7 +45,7 @@ use crate::{
         curve_v1,
         ipa::{
             PinnedParams,
-            commit::{CommitmentTables, Secrecy, commit_lagrange, default_blind},
+            commit::{CommitmentTables, Secrecy, commit_lagrange_cancellable, default_blind},
         },
     },
 };
@@ -148,10 +148,22 @@ pub fn permutation_values<F: PastaField>(
     assembly: &PermutationAssembly,
     omega: F,
 ) -> Result<Vec<Vec<F>>, KeyError> {
+    permutation_values_cancellable(assembly, omega, None)
+}
+
+fn permutation_values_cancellable<F: PastaField>(
+    assembly: &PermutationAssembly,
+    omega: F,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Vec<Vec<F>>, KeyError> {
+    CancellationToken::checkpoint(cancellation)?;
     let n = assembly.rows();
     let mut omega_powers = Vec::with_capacity(n);
     let mut power = F::ONE;
-    for _ in 0..n {
+    for index in 0..n {
+        if index % 1024 == 0 {
+            CancellationToken::checkpoint(cancellation)?;
+        }
         omega_powers.push(power);
         power *= omega;
     }
@@ -164,8 +176,12 @@ pub fn permutation_values<F: PastaField>(
     }
     (0..columns)
         .map(|column| {
+            CancellationToken::checkpoint(cancellation)?;
             (0..n)
                 .map(|row| {
+                    if row % 1024 == 0 {
+                        CancellationToken::checkpoint(cancellation)?;
+                    }
                     let (target_column, target_row) =
                         assembly.mapping(column, row).ok_or(KeyError::Shape {
                             what: "permutation mapping",
@@ -199,27 +215,41 @@ fn check_usable_rows<F: PastaField>(
     fixed: &[Vec<F>],
     selectors: &[Vec<bool>],
     permutation: &PermutationAssembly,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<(), KeyError> {
     let unusable = |what, column, row| KeyError::UnusableRow { what, column, row };
     for (column, values) in fixed.iter().enumerate() {
-        if let Some(row) =
-            (usable_rows..values.len()).find(|row| !bool::from(values[*row].is_zero()))
-        {
-            return Err(unusable("fixed", column, row));
+        for (row, value) in values.iter().enumerate().skip(usable_rows) {
+            if row % 1024 == 0 {
+                CancellationToken::checkpoint(cancellation)?;
+            }
+            if !bool::from(value.is_zero()) {
+                return Err(unusable("fixed", column, row));
+            }
         }
     }
     for (selector, rows) in selectors.iter().enumerate() {
-        if let Some(row) = (usable_rows..rows.len()).find(|row| rows[*row]) {
-            return Err(unusable("selector", selector, row));
+        for (row, active) in rows.iter().enumerate().skip(usable_rows) {
+            if row % 1024 == 0 {
+                CancellationToken::checkpoint(cancellation)?;
+            }
+            if *active {
+                return Err(unusable("selector", selector, row));
+            }
         }
     }
     for column in 0..permutation.columns().len() {
-        if let Some(row) =
-            (usable_rows..permutation.rows()).find(|row| permutation.is_copied(column, *row))
-        {
-            return Err(unusable("copy", column, row));
+        CancellationToken::checkpoint(cancellation)?;
+        for row in usable_rows..permutation.rows() {
+            if row % 1024 == 0 {
+                CancellationToken::checkpoint(cancellation)?;
+            }
+            if permutation.is_copied(column, row) {
+                return Err(unusable("copy", column, row));
+            }
         }
     }
+    CancellationToken::checkpoint(cancellation)?;
     Ok(())
 }
 
@@ -233,6 +263,22 @@ fn prepare<C: PastaCurve>(
     config: &KeygenConfig,
     v2: Option<&KeygenConfigV2>,
 ) -> Result<Prepared<C::ScalarExt>, KeyError> {
+    prepare_cancellable(params, cs, fixed, selectors, permutation, config, v2, None)
+}
+
+// The original table inputs and protocol profile remain separate; cancellation is a resource control.
+#[allow(clippy::too_many_arguments)]
+fn prepare_cancellable<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    cs: ConstraintSystem<C::ScalarExt>,
+    fixed: Vec<Vec<C::ScalarExt>>,
+    selectors: Vec<Vec<bool>>,
+    permutation: &PermutationAssembly,
+    config: &KeygenConfig,
+    v2: Option<&KeygenConfigV2>,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Prepared<C::ScalarExt>, KeyError> {
+    CancellationToken::checkpoint(cancellation)?;
     let curve = curve_v1::<C>().ok_or(KeyError::UnknownCurve)?;
     let k = params.k();
     let domain = FftDomain::<C::ScalarExt>::new(k)?;
@@ -254,9 +300,10 @@ fn prepare<C: PastaCurve>(
         });
     }
     let usable_rows = cs.usable_rows(k)?;
-    check_usable_rows(usable_rows, &fixed, &selectors, permutation)?;
+    check_usable_rows(usable_rows, &fixed, &selectors, permutation, cancellation)?;
 
-    let finalized = cs.finalize(&selectors, config.compress_selectors)?;
+    let finalized = cs.finalize_cancellable(&selectors, config.compress_selectors, cancellation)?;
+    CancellationToken::checkpoint(cancellation)?;
     let descriptor = CircuitDescriptorV1::from_constraint_system(
         &finalized,
         DescriptorConfig {
@@ -267,6 +314,7 @@ fn prepare<C: PastaCurve>(
             proof_suffix: config.proof_suffix,
         },
     )?;
+    CancellationToken::checkpoint(cancellation)?;
     let binding = match v2 {
         Some(profile) => DescriptorBinding::new_v2(CircuitDescriptorV2::from_layout(
             descriptor,
@@ -280,8 +328,8 @@ fn prepare<C: PastaCurve>(
     let (constraint_system, selector_columns) = KeyConstraintSystem::split(finalized);
     let mut fixed = fixed;
     fixed.extend(selector_columns);
-    let sigma = permutation_values(permutation, domain.omega())?;
-    let copy_digest = permutation.mapping_digest();
+    let sigma = permutation_values_cancellable(permutation, domain.omega(), cancellation)?;
+    let copy_digest = permutation.mapping_digest_cancellable(cancellation)?;
     let vk_selectors = if config.compress_selectors {
         selectors
     } else {
@@ -303,25 +351,42 @@ fn verifying_key<C: PastaCurve>(
     prepared: &Prepared<C::ScalarExt>,
     budget: MemoryBudget,
 ) -> Result<VerifyingKey<C>, KeyError> {
+    verifying_key_cancellable(params, prepared, budget, None)
+}
+
+fn verifying_key_cancellable<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    prepared: &Prepared<C::ScalarExt>,
+    budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<VerifyingKey<C>, KeyError> {
+    CancellationToken::checkpoint(cancellation)?;
     let blind = default_blind::<C::ScalarExt>();
     let commit_all = |columns: &[Vec<C::ScalarExt>]| -> Result<Vec<C::AffineExt>, KeyError> {
         columns
             .iter()
             .map(|column| {
-                Ok(
-                    commit_lagrange(params.params(), column, &blind, Secrecy::Public, budget)?
-                        .to_affine(),
-                )
+                Ok(commit_lagrange_cancellable(
+                    params.params(),
+                    column,
+                    &blind,
+                    Secrecy::Public,
+                    budget,
+                    cancellation,
+                )?
+                .to_affine())
             })
             .collect()
     };
     let fixed = commit_all(&prepared.fixed)?;
     let sigma = commit_all(&prepared.sigma)?;
-    VerifyingKey::from_parts(
+    CancellationToken::checkpoint(cancellation)?;
+    VerifyingKey::from_parts_cancellable(
         &prepared.binding,
         fixed,
         sigma,
         prepared.vk_selectors.clone(),
+        cancellation,
     )
     .map_err(KeyError::from)
 }
@@ -334,11 +399,30 @@ fn finish_pk<C: PastaCurve>(
     table_budget: Option<MemoryBudget>,
     msm_budget: MemoryBudget,
 ) -> Result<ProvingKey<C>, KeyError> {
-    let vk = verifying_key(params, &prepared, msm_budget)?;
-    let tables = table_budget.map_or_else(CommitmentTables::none, |budget| {
-        CommitmentTables::build(params.params(), budget)
-    });
-    ProvingKey::new(
+    finish_pk_cancellable(
+        params,
+        prepared,
+        coset_cache,
+        table_budget,
+        msm_budget,
+        None,
+    )
+}
+
+fn finish_pk_cancellable<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    prepared: Prepared<C::ScalarExt>,
+    coset_cache: CosetCachePolicy,
+    table_budget: Option<MemoryBudget>,
+    msm_budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<ProvingKey<C>, KeyError> {
+    let vk = verifying_key_cancellable(params, &prepared, msm_budget, cancellation)?;
+    let tables = match table_budget {
+        Some(budget) => CommitmentTables::build_cancellable(params.params(), budget, cancellation)?,
+        None => CommitmentTables::none(),
+    };
+    ProvingKey::new_cancellable(
         vk,
         prepared.binding,
         prepared.constraint_system,
@@ -347,6 +431,7 @@ fn finish_pk<C: PastaCurve>(
         prepared.copy_digest,
         coset_cache,
         tables,
+        cancellation,
     )
 }
 
@@ -384,7 +469,7 @@ pub(super) fn import_artifact_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
     )
     .map_err(KeyError::from)?;
     let (source_fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
-    let source = prepare(
+    let source = prepare_cancellable(
         params,
         synthesized.cs,
         source_fixed,
@@ -392,6 +477,7 @@ pub(super) fn import_artifact_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
         &permutation,
         &profile.layout_options(),
         Some(&profile),
+        cancellation,
     )?;
     iroha_pasta::CancellationToken::checkpoint(cancellation)?;
     drop(permutation);
@@ -574,9 +660,24 @@ pub fn keygen_pk_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
     circuit: &Ci,
     config: &KeygenConfigV2,
 ) -> Result<ProvingKey<C>, KeyError> {
-    let synthesized = synthesize(circuit, params.k(), None)?;
+    keygen_pk_v2_cancellable(params, circuit, config, None)
+}
+
+/// Generate the same V2 key with cooperative cancellation and joined arithmetic tasks.
+///
+/// # Errors
+/// As [`keygen_pk_v2`], or [`KeyError::Cancelled`]. No partial key is returned.
+pub fn keygen_pk_v2_cancellable<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
+    params: &PinnedParams<C>,
+    circuit: &Ci,
+    config: &KeygenConfigV2,
+    cancellation: Option<&CancellationToken>,
+) -> Result<ProvingKey<C>, KeyError> {
+    CancellationToken::checkpoint(cancellation)?;
+    let synthesized =
+        crate::frontend::synthesize_cancellable(circuit, params.k(), None, cancellation)?;
     let (fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
-    let prepared = prepare(
+    let prepared = prepare_cancellable(
         params,
         synthesized.cs,
         fixed,
@@ -584,14 +685,16 @@ pub fn keygen_pk_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
         &permutation,
         &config.layout_options(),
         Some(config),
+        cancellation,
     )?;
     drop(permutation);
-    finish_pk(
+    finish_pk_cancellable(
         params,
         prepared,
         config.coset_cache,
         config.table_budget,
         config.msm_budget,
+        cancellation,
     )
 }
 
@@ -620,7 +723,7 @@ pub fn source_fingerprint_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
         cancellation,
     )?;
     let (fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
-    let prepared = prepare(
+    let prepared = prepare_cancellable(
         params,
         synthesized.cs,
         fixed,
@@ -628,6 +731,7 @@ pub fn source_fingerprint_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
         &permutation,
         &config.layout_options(),
         Some(config),
+        cancellation,
     )?;
     drop(permutation);
     let mut hash = super::source_fingerprint::SourceHasher::new(
@@ -673,9 +777,24 @@ pub fn keygen_vk_with_binding_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
     circuit: &Ci,
     config: &KeygenConfigV2,
 ) -> Result<(DescriptorBinding, VerifyingKey<C>), KeyError> {
-    let synthesized = synthesize(circuit, params.k(), None)?;
+    keygen_vk_with_binding_v2_cancellable(params, circuit, config, None)
+}
+
+/// Generate the same V2 key with cooperative cancellation and joined arithmetic tasks.
+///
+/// # Errors
+/// As [`keygen_vk_with_binding_v2`], or [`KeyError::Cancelled`]. No partial key is returned.
+pub fn keygen_vk_with_binding_v2_cancellable<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
+    params: &PinnedParams<C>,
+    circuit: &Ci,
+    config: &KeygenConfigV2,
+    cancellation: Option<&CancellationToken>,
+) -> Result<(DescriptorBinding, VerifyingKey<C>), KeyError> {
+    CancellationToken::checkpoint(cancellation)?;
+    let synthesized =
+        crate::frontend::synthesize_cancellable(circuit, params.k(), None, cancellation)?;
     let (fixed, selectors, permutation) = synthesized.tables.into_keygen_parts();
-    let prepared = prepare(
+    let prepared = prepare_cancellable(
         params,
         synthesized.cs,
         fixed,
@@ -683,8 +802,9 @@ pub fn keygen_vk_with_binding_v2<C: PastaCurve, Ci: Circuit<C::ScalarExt>>(
         &permutation,
         &config.layout_options(),
         Some(config),
+        cancellation,
     )?;
     drop(permutation);
-    let key = verifying_key(params, &prepared, config.msm_budget)?;
+    let key = verifying_key_cancellable(params, &prepared, config.msm_budget, cancellation)?;
     Ok((prepared.binding, key))
 }

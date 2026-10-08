@@ -4521,6 +4521,40 @@ pub fn quote_nexus_fee_admission(
         route_dataspace_id,
     )
 }
+#[cfg(test)]
+pub(crate) mod sorafs_admission_hash_probe {
+    //! Per-thread observation of the actual initializer helper's outer hash call.
+    use std::cell::Cell;
+
+    thread_local! {
+        static HASHES: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    /// Observe the next original outer hash only while this thread has an active probe.
+    pub(crate) fn note_outer_hash() {
+        HASHES.with(|hashes| {
+            if let Some(count) = hashes.get() {
+                hashes.set(Some(count + 1));
+            }
+        });
+    }
+
+    /// Count actual helper hashes in one lexical call, restoring prior state even on unwind.
+    pub(crate) fn count<R>(body: impl FnOnce() -> R) -> (R, usize) {
+        struct Restore(Option<usize>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                HASHES.with(|hashes| hashes.set(self.0));
+            }
+        }
+        let restore = Restore(HASHES.with(|hashes| hashes.replace(Some(0))));
+        let result = body();
+        let count = HASHES.with(|hashes| hashes.get().expect("active hash observation"));
+        drop(restore);
+        (result, count)
+    }
+}
+
 /// Return whether execution is running inside the chain's initial genesis block.
 ///
 /// The empty committed-block history keeps a genesis-shaped header replayed against live state
@@ -5675,18 +5709,26 @@ impl Executor {
         direct_body: bool,
     ) -> bool {
         use iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1;
-        if !direct_body || !is_initial_genesis_context(state_transaction) {
+        if !direct_body
+            || !is_initial_genesis_context(state_transaction)
+            || !instruction
+                .as_any()
+                .is::<InitializeSorafsProviderAdmissionV1>()
+        {
             return false;
         }
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return false;
         };
+        if instructions.get(index) != Some(instruction) {
+            return false;
+        }
+        // Authenticate the complete signed intent only for its exact initializer. This helper
+        // is called for every genesis instruction, including unrelated instructions.
+        #[cfg(test)]
+        sorafs_admission_hash_probe::note_outer_hash();
         let outer = transaction.hash_as_entrypoint();
-        instructions.get(index) == Some(instruction)
-            && instruction
-                .as_any()
-                .is::<InitializeSorafsProviderAdmissionV1>()
-            && state_transaction.current_network_entrypoint_hash == Some(outer)
+        state_transaction.current_network_entrypoint_hash == Some(outer)
             && state_transaction.tx_call_hash == Some(iroha_crypto::Hash::from(outer))
             && state_transaction.current_tx_hash == Some(transaction.hash())
             && state_transaction.current_entrypoint_index.is_some()

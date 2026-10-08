@@ -1186,3 +1186,69 @@ fn attachment_publication_refuses_public_container_without_repair_and_retries_or
     );
     assert!(original.read("request.lock", 0).unwrap().is_empty());
 }
+
+#[test]
+fn attached_reply_after_foreground_deadline_refuses_without_changing_receipt() {
+    let mut status = connecting("fixture".into());
+    status.stage = ManagedAttachmentPhase::Attached;
+    status.wallet_status = Some(OperationStatus::Applied.as_str().into());
+    status.parent_confirmed = Some(ManagedConfirmedAnchor {
+        parent_height: 13,
+        child: iroha_data_model::private_dataspace::PrivateDataspaceCursor {
+            height: 2,
+            consensus_hash: [1; 32],
+            result: [2; 32],
+        },
+    });
+    let original = status.clone();
+    // This is the production decision after blocking IPC: even exact Attached evidence
+    // cannot turn a reply after the caller's original cutoff into foreground success.
+    let elapsed = Instant::now() - Duration::from_secs(1);
+    assert!(matches!(
+        attachment_complete(&status, elapsed),
+        Err(Error::ParentProgressDeadline {
+            stage: ManagedAttachmentPhase::Attached,
+            failure: ManagedAttachmentFailure::AwaitingCompletion,
+        })
+    ));
+    assert_eq!(status, original);
+    assert!(attachment_complete(&status, Instant::now() + MAX_ATTACH).unwrap());
+    assert_eq!(status, original);
+}
+
+#[test]
+fn attached_reply_preserves_terminal_failure_priority_and_exact_completion_gate() {
+    let mut status = connecting("fixture".into());
+    status.stage = ManagedAttachmentPhase::Attached;
+    status.parent_confirmed = Some(ManagedConfirmedAnchor {
+        parent_height: 13,
+        child: iroha_data_model::private_dataspace::PrivateDataspaceCursor {
+            height: 2,
+            consensus_hash: [1; 32],
+            result: [2; 32],
+        },
+    });
+    let elapsed = Instant::now() - Duration::from_secs(1);
+    for failure in [
+        ManagedAttachmentFailure::OperationExpired,
+        ManagedAttachmentFailure::OperationRejected,
+    ] {
+        status.failure = Some(failure);
+        let expected = terminal_operation_error(&status).unwrap().to_string();
+        let original = status.clone();
+        let error = attachment_complete(&status, elapsed).unwrap_err();
+        assert!(matches!(&error, Error::Invalid(_)));
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(status, original);
+    }
+    status.failure = Some(ManagedAttachmentFailure::ParentUnavailable);
+    assert!(!attachment_complete(&status, elapsed).unwrap());
+    status.failure = None;
+    let confirmed = status.parent_confirmed.take();
+    assert!(!attachment_complete(&status, elapsed).unwrap());
+    status.parent_confirmed = confirmed;
+    status.stage = ManagedAttachmentPhase::Anchoring;
+    assert!(!attachment_complete(&status, elapsed).unwrap());
+    status.stage = ManagedAttachmentPhase::Attached;
+    assert!(attachment_complete(&status, Instant::now() + MAX_ATTACH).unwrap());
+}

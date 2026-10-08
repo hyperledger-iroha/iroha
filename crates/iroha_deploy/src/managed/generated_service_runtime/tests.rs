@@ -69,6 +69,26 @@ fn no_http(peers: &[TcpListener]) {
         assert_eq!(peer.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
     }
 }
+// Catalog creates the exact empty material skeleton needed by its derived configs.
+// This is not a token component, receipt journal or native enrollment publication.
+fn catalog_material_skeleton(
+    owner: &GeneratedServiceRuntime,
+) -> (iroha_fs::FileIdentity, [iroha_fs::FileIdentity; 3]) {
+    let providers = owner.authority.directory.open_child("providers").unwrap();
+    assert_eq!(
+        providers.entries(3).unwrap(),
+        (0..3)
+            .map(|index| std::ffi::OsString::from(index.to_string()))
+            .collect::<Vec<_>>()
+    );
+    let slots = std::array::from_fn(|index| {
+        let slot = providers.open_child(index.to_string()).unwrap();
+        assert!(slot.entries(1).unwrap().is_empty());
+        slot.identity().unwrap()
+    });
+    (providers.identity().unwrap(), slots)
+}
+
 fn actual(
     revision: &GeneratedServiceRuntimeRevision,
     index: usize,
@@ -330,6 +350,10 @@ impl Genuine {
         let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
         let mut selection = RuntimeSelection::read(&owner.authority).unwrap();
         let catalog = owner.prepare_catalog(options.deadline).unwrap();
+        // Authenticate the real Catalog skeleton before the expensive native setup begins.
+        // Only Copy identities cross that setup; no extra directory handles are retained.
+        let catalog_material =
+            retain_before_first_render.then(|| catalog_material_skeleton(&owner));
         let mut native = NativeFixture::from_generated(&prepared, &owner.authority);
         let log = quote_instructions(
             &native,
@@ -362,7 +386,8 @@ impl Genuine {
                 .unwrap()
         });
         let components = if retain_before_first_render {
-            assert!(!owner.authority.directory.path().join("providers").exists());
+            let catalog_material = catalog_material.unwrap();
+            assert_eq!(catalog_material_skeleton(&owner), catalog_material);
             let before = owner.authority.directory.entries(8).unwrap();
             let mut parent = ManagedServiceBootstrap::open(&prepared).unwrap();
             let ServiceBootstrapProgress::Complete(history) =
@@ -382,10 +407,15 @@ impl Genuine {
                 )
                 .unwrap();
             assert_eq!(required.originals(), carriers);
-            let mut expected = before;
-            expected.push("providers".into());
-            expected.sort();
-            assert_eq!(owner.authority.directory.entries(8).unwrap(), expected);
+            assert_eq!(owner.authority.directory.entries(8).unwrap(), before);
+            let providers = owner.authority.directory.open_child("providers").unwrap();
+            assert_eq!(providers.identity().unwrap(), catalog_material.0);
+            for (index, component) in components.iter().enumerate() {
+                assert_eq!(
+                    component.directory().identity().unwrap(),
+                    catalog_material.1[index]
+                );
+            }
             components
         } else {
             enrollments
@@ -536,15 +566,16 @@ fn catalog_first_launch_retains_exact_siblings_roles_topology_and_originals_with
         crate::localnet::service_authorities::count_profile_validations(|| {
             RuntimeSelection::read(&owner.authority).unwrap()
         });
-    // The bootstrap owner and three custody owners independently authenticate their profiles.
-    // Reading original provider/compliance/publication plans on this live owner adds no parse.
-    assert_eq!(parses, 4);
+    // Bootstrap and custody owners borrow the immutable original bundle while retaining
+    // their independent fresh profile, native directory and purpose lock checks.
+    assert_eq!(parses, 0);
     assert_eq!(
         selection.publication.configuration_table().unwrap(),
         expected_publication.configuration_table().unwrap()
     );
     assert!(selection.initial.iter().all(Option::is_none));
     let revision = owner.prepare_catalog(options().deadline).unwrap();
+    catalog_material_skeleton(&owner);
     assert_eq!(revision.stage(), GeneratedRuntimeStage::Catalog);
     assert!(revision.required_transactions().is_empty());
     assert!(revision.observation_floor().is_err());
@@ -2269,5 +2300,372 @@ fn catalog_material_preflight_preserves_original_heads_before_first_stream_rende
         fixture.owner.authority.directory.entries(8).unwrap(),
         before
     );
+    no_http(&peers);
+}
+
+fn standalone_custody_initials(
+    authority: &ServiceAuthority,
+    policies: &GeneratedServicePolicies,
+) -> [Option<ManagedCustodyEnrollmentInterval>; 3] {
+    std::array::from_fn(|index| {
+        let provider = policies.providers[index].provider_id;
+        ManagedStreamTokenCustody::open_existing(&authority.prepared, provider)
+            .unwrap()
+            .and_then(|custody| {
+                custody
+                    .inspect_local_initial_interval_if_present(&policies.providers[index].custody)
+                    .unwrap()
+            })
+    })
+}
+
+#[test]
+fn runtime_selection_borrows_custody_originals_without_reparse() {
+    use crate::localnet::service_authorities::count_profile_validations;
+    use crate::managed::service_authority::ProviderPurpose;
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-borrowed-selection");
+    let policies = select(&prepared);
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let (absent, parses) = count_profile_validations(|| RuntimeSelection::read(&owner.authority));
+    let absent = absent.unwrap();
+    assert_eq!(parses, 0);
+    assert!(absent.initial.iter().all(Option::is_none));
+
+    // Actual empty custody owners exercise the present constructor, without fabricating bodies.
+    let originals: Vec<_> = policies
+        .providers
+        .iter()
+        .map(|selected| {
+            let custody = ServiceAuthority::open_provider(
+                &prepared,
+                selected.provider_id,
+                ProviderPurpose::Custody,
+            )
+            .unwrap();
+            (
+                custody.directory.identity().unwrap(),
+                iroha_fs::FileIdentity::of(&custody._lock).unwrap(),
+            )
+        })
+        .collect();
+    let (expected, parses) =
+        count_profile_validations(|| standalone_custody_initials(&owner.authority, &policies));
+    assert_eq!(parses, 3, "the real standalone owners each recapture once");
+    let (selection, parses) =
+        count_profile_validations(|| RuntimeSelection::read(&owner.authority));
+    let selection = selection.unwrap();
+    assert_eq!(parses, 0, "all four owners borrow the original profile");
+    assert_eq!(selection.initial, expected);
+    assert_eq!(
+        encode(&selection.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&policies, MAX_POLICY_BYTES).unwrap()
+    );
+    for (index, selected) in policies.providers.iter().enumerate() {
+        assert!(
+            selection.identity(&owner.authority, index).unwrap()
+                == absent.identity(&owner.authority, index).unwrap()
+        );
+        let custody = ServiceAuthority::open_provider_existing(
+            &prepared,
+            selected.provider_id,
+            ProviderPurpose::Custody,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(custody.directory.identity().unwrap(), originals[index].0);
+        assert_eq!(
+            iroha_fs::FileIdentity::of(&custody._lock).unwrap(),
+            originals[index].1
+        );
+    }
+    let (revision, parses) =
+        count_profile_validations(|| owner.prepare_catalog(options().deadline));
+    let revision = revision.unwrap();
+    assert_eq!(
+        parses, 0,
+        "both independent selection reads keep fresh checks without recapture"
+    );
+    assert_eq!(revision.stage(), GeneratedRuntimeStage::Catalog);
+    assert!(revision.required_transactions().is_empty());
+    for index in 0..3 {
+        assert!(
+            revision.manifest.intent.providers[index]
+                == selection.identity(&owner.authority, index).unwrap()
+        );
+    }
+    no_http(&peers);
+}
+
+#[test]
+fn runtime_selection_borrowed_custody_refuses_changed_sources_and_lock_with_retry() {
+    use crate::managed::service_authority::ProviderPurpose;
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-borrowed-refusal");
+    let policies = select(&prepared);
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let expected = RuntimeSelection::read(&owner.authority).unwrap();
+    // The bootstrap purpose retains its own independent exclusive lock.
+    let bootstrap =
+        ServiceAuthority::open_network_existing(&prepared, NetworkPurpose::ServiceBootstrap)
+            .unwrap()
+            .unwrap();
+    let bootstrap_identity = bootstrap.directory.identity().unwrap();
+    let bootstrap_lock = iroha_fs::FileIdentity::of(&bootstrap._lock).unwrap();
+    assert!(RuntimeSelection::read(&owner.authority).is_err());
+    no_http(&peers);
+    drop(bootstrap);
+    let retried = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_eq!(retried.initial, expected.initial);
+    let bootstrap =
+        ServiceAuthority::open_network_existing(&prepared, NetworkPurpose::ServiceBootstrap)
+            .unwrap()
+            .unwrap();
+    assert_eq!(bootstrap.directory.identity().unwrap(), bootstrap_identity);
+    assert_eq!(
+        iroha_fs::FileIdentity::of(&bootstrap._lock).unwrap(),
+        bootstrap_lock
+    );
+    drop(bootstrap);
+    for selected in &policies.providers {
+        let custody = ServiceAuthority::open_provider(
+            &prepared,
+            selected.provider_id,
+            ProviderPurpose::Custody,
+        )
+        .unwrap();
+        let directory = custody.directory.identity().unwrap();
+        let lock = iroha_fs::FileIdentity::of(&custody._lock).unwrap();
+        assert!(RuntimeSelection::read(&owner.authority).is_err());
+        no_http(&peers);
+        drop(custody);
+        let retried = RuntimeSelection::read(&owner.authority).unwrap();
+        assert_eq!(retried.initial, expected.initial);
+        let original = ServiceAuthority::open_provider_existing(
+            &prepared,
+            selected.provider_id,
+            ProviderPurpose::Custody,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(original.directory.identity().unwrap(), directory);
+        assert_eq!(iroha_fs::FileIdentity::of(&original._lock).unwrap(), lock);
+    }
+    let root = PrivateDirectory::open_exact(generation_path(&prepared).unwrap()).unwrap();
+    let original = root.read("peer3.toml", MAX_CONFIG_BYTES).unwrap();
+    let mut changed = Zeroizing::new(original.to_vec());
+    changed.extend_from_slice(b"\n# changed original byte custody\n");
+    crate::secret_toml::parse_table(std::str::from_utf8(&changed).unwrap(), "changed peer")
+        .unwrap();
+    root.write_atomic("peer3.toml", &changed, PublishMode::Replace)
+        .unwrap();
+    assert!(RuntimeSelection::read(&owner.authority).is_err());
+    assert_eq!(
+        root.read("peer3.toml", MAX_CONFIG_BYTES)
+            .unwrap()
+            .as_slice(),
+        changed.as_slice()
+    );
+    no_http(&peers);
+    root.write_atomic("peer3.toml", &original, PublishMode::Replace)
+        .unwrap();
+    let restored = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_eq!(restored.initial, expected.initial);
+    assert_eq!(
+        encode(&restored.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&expected.policies, MAX_POLICY_BYTES).unwrap()
+    );
+    let generation_identity = root.identity().unwrap();
+    let saved = _temporary.path().join("saved-runtime-selection-generation");
+    #[cfg(unix)]
+    {
+        std::fs::rename(root.path(), &saved).unwrap();
+        assert!(RuntimeSelection::read(&owner.authority).is_err());
+        let replacement = PrivateDirectory::open_or_create(root.path()).unwrap();
+        assert!(RuntimeSelection::read(&owner.authority).is_err());
+        assert!(replacement.entries(8).unwrap().is_empty());
+        no_http(&peers);
+        drop(replacement);
+        std::fs::remove_dir(root.path()).unwrap();
+        std::fs::rename(&saved, root.path()).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        // Native sharing forbids moving this retained generation on Windows.
+        assert!(std::fs::rename(root.path(), &saved).is_err());
+    }
+    assert_eq!(root.identity().unwrap(), generation_identity);
+    let retried = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_eq!(retried.initial, expected.initial);
+    assert_eq!(
+        encode(&retried.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&expected.policies, MAX_POLICY_BYTES).unwrap()
+    );
+    owner.authority.validate_profile().unwrap();
+    no_http(&peers);
+}
+
+#[test]
+fn runtime_selection_active_and_owned_custody_keeps_full_admission() {
+    use crate::localnet::service_authorities::count_profile_validations;
+    use norito::core::DecodeBudgetContext;
+    fn limits(allocated: usize) -> norito::DecodeLimits {
+        let finite = 64 * 1024 * 1024;
+        norito::DecodeLimits::new(finite, finite, finite, allocated, 64)
+    }
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-borrowed-admission");
+    select(&prepared);
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let expected = RuntimeSelection::read(&owner.authority).unwrap();
+    let baseline = DecodeBudgetContext::new(limits(64 * 1024 * 1024));
+    let (selection, parses) =
+        count_profile_validations(|| baseline.with(|| RuntimeSelection::read(&owner.authority)));
+    let selection = selection.unwrap();
+    assert_eq!(parses, 4, "active admission keeps all four full captures");
+    assert_eq!(selection.initial, expected.initial);
+    let charge = usize::try_from(baseline.consumed_allocated_bytes()).unwrap();
+    assert!(charge > 0);
+    let exact = DecodeBudgetContext::new(limits(charge));
+    let (selection, parses) =
+        count_profile_validations(|| exact.with(|| RuntimeSelection::read(&owner.authority)));
+    let selection = selection.unwrap();
+    assert_eq!(parses, 4);
+    assert_eq!(exact.consumed_allocated_bytes(), charge as u64);
+    assert_eq!(
+        encode(&selection.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&expected.policies, MAX_POLICY_BYTES).unwrap()
+    );
+    for allocated in [0, charge - 1] {
+        let first = DecodeBudgetContext::new(limits(allocated));
+        let expected_error = first
+            .with(|| RuntimeSelection::read(&owner.authority))
+            .err()
+            .unwrap();
+        let retry = DecodeBudgetContext::new(limits(allocated));
+        let refused = retry
+            .with(|| RuntimeSelection::read(&owner.authority))
+            .err()
+            .unwrap();
+        assert_eq!(refused.to_string(), expected_error.to_string());
+        assert_eq!(
+            retry.consumed_allocated_bytes(),
+            first.consumed_allocated_bytes()
+        );
+    }
+    drop(owner);
+    let caller = DecodeBudgetContext::new(limits(64 * 1024 * 1024));
+    let owned = caller
+        .with(|| GeneratedServiceRuntime::open(&prepared))
+        .unwrap();
+    assert!(!norito::core::decode_limits_active());
+    let (selection, parses) =
+        count_profile_validations(|| RuntimeSelection::read(&owned.authority));
+    let selection = selection.unwrap();
+    assert_eq!(
+        parses, 4,
+        "an Owned parent outside its old scope still fully recaptures"
+    );
+    assert_eq!(selection.initial, expected.initial);
+    assert_eq!(
+        encode(&selection.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&expected.policies, MAX_POLICY_BYTES).unwrap()
+    );
+    owned.authority.validate_profile().unwrap();
+    no_http(&peers);
+}
+
+#[test]
+fn runtime_selection_missing_bootstrap_refuses_without_creating_purpose_state() {
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-missing-bootstrap");
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let network =
+        PrivateDirectory::open_exact(owner.authority.directory.path().parent().unwrap()).unwrap();
+    let before = network.entries(8).unwrap();
+    assert!(
+        network
+            .open_child_optional("service-bootstrap")
+            .unwrap()
+            .is_none()
+    );
+    assert!(RuntimeSelection::read(&owner.authority).is_err());
+    assert!(
+        network
+            .open_child_optional("service-bootstrap")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(network.entries(8).unwrap(), before);
+    no_http(&peers);
+
+    // Only the explicit startup producer may create and authorize the missing purpose.
+    let policies = select(&prepared);
+    let selection = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_eq!(
+        encode(&selection.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&policies, MAX_POLICY_BYTES).unwrap()
+    );
+    assert!(selection.initial.iter().all(Option::is_none));
+    owner.authority.validate_profile().unwrap();
+    no_http(&peers);
+}
+
+#[test]
+#[cfg(unix)]
+fn runtime_selection_missing_original_bootstrap_keeps_absence_and_same_original_retry() {
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, prepared, peers) = fixture("runtime-lost-bootstrap");
+    let policies = select(&prepared);
+    let owner = GeneratedServiceRuntime::open(&prepared).unwrap();
+    let expected = RuntimeSelection::read(&owner.authority).unwrap();
+    let (path, identity, lock, names, initial_identity, original, initial_names) = {
+        let bootstrap =
+            ServiceAuthority::open_network_existing(&prepared, NetworkPurpose::ServiceBootstrap)
+                .unwrap()
+                .unwrap();
+        let initial = bootstrap.directory.open_child("initial").unwrap();
+        (
+            bootstrap.directory.path().to_path_buf(),
+            bootstrap.directory.identity().unwrap(),
+            iroha_fs::FileIdentity::of(&bootstrap._lock).unwrap(),
+            bootstrap.directory.entries(8).unwrap(),
+            initial.identity().unwrap(),
+            initial.read("original.nrt", 512 * 1024).unwrap(),
+            initial.entries(8).unwrap(),
+        )
+    };
+    let network = PrivateDirectory::open_exact(path.parent().unwrap()).unwrap();
+    let saved = network.path().join("saved-original-service-bootstrap");
+    std::fs::rename(&path, &saved).unwrap();
+    let displaced_names = network.entries(8).unwrap();
+    assert!(RuntimeSelection::read(&owner.authority).is_err());
+    assert!(
+        !path.exists(),
+        "a selection read must not recreate the original purpose"
+    );
+    assert_eq!(network.entries(8).unwrap(), displaced_names);
+    no_http(&peers);
+
+    // Restore the same native directory, lock and original bytes, rather than new equivalents.
+    std::fs::rename(&saved, &path).unwrap();
+    let restored = RuntimeSelection::read(&owner.authority).unwrap();
+    assert_eq!(restored.initial, expected.initial);
+    assert_eq!(
+        encode(&restored.policies, MAX_POLICY_BYTES).unwrap(),
+        encode(&policies, MAX_POLICY_BYTES).unwrap()
+    );
+    let bootstrap =
+        ServiceAuthority::open_network_existing(&prepared, NetworkPurpose::ServiceBootstrap)
+            .unwrap()
+            .unwrap();
+    assert_eq!(bootstrap.directory.identity().unwrap(), identity);
+    assert_eq!(iroha_fs::FileIdentity::of(&bootstrap._lock).unwrap(), lock);
+    assert_eq!(bootstrap.directory.entries(8).unwrap(), names);
+    let initial = bootstrap.directory.open_child("initial").unwrap();
+    assert_eq!(initial.identity().unwrap(), initial_identity);
+    assert_eq!(initial.read("original.nrt", 512 * 1024).unwrap(), original);
+    assert_eq!(initial.entries(8).unwrap(), initial_names);
+    owner.authority.validate_profile().unwrap();
     no_http(&peers);
 }

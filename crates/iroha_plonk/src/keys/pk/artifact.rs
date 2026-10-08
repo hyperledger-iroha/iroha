@@ -142,6 +142,7 @@ fn original_parts<'a, C: PastaCurve>(
     original: &'a [u8],
     binding: &DescriptorBinding,
     vk_bytes: usize,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<OriginalParts<'a, C>, Error> {
     if original[..8] != MAGIC || original[8..40] != *binding.digest() {
         return Err(Error::Encoding);
@@ -155,7 +156,7 @@ fn original_parts<'a, C: PastaCurve>(
         return Err(Error::Length);
     }
     let vk_end = HEADER + vk_bytes;
-    let key = VerifyingKey::<C>::read(&original[HEADER..vk_end], binding)
+    let key = VerifyingKey::<C>::read_cancellable(&original[HEADER..vk_end], binding, cancellation)
         .map_err(|error| Error::Key(KeyError::VerifyingKey(error)))?;
     let copy_digest = original[vk_end..vk_end + COPY_BYTES]
         .try_into()
@@ -187,7 +188,7 @@ pub fn source_fingerprint_v2<C: PastaCurve>(
     use iroha_pasta::CancellationToken;
     CancellationToken::checkpoint(cancellation)?;
     let (vk_bytes, _) = bounded_dimensions(original, binding, config)?;
-    let parts = original_parts::<C>(original, binding, vk_bytes)?;
+    let parts = original_parts::<C>(original, binding, vk_bytes, cancellation)?;
     let mut hash = crate::keys::source_fingerprint::SourceHasher::new(
         binding,
         &parts.copy_digest,
@@ -283,7 +284,7 @@ impl<C: PastaCurve> ProvingKey<C> {
             key,
             copy_digest,
             evaluations,
-        } = original_parts::<C>(original, binding, vk_bytes)?;
+        } = original_parts::<C>(original, binding, vk_bytes, cancellation)?;
         let width = binding.n().checked_mul(32).ok_or(Error::Length)?;
         let mut values = Vec::with_capacity(columns);
         for column in evaluations.chunks_exact(width) {

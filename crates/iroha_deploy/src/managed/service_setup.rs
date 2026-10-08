@@ -10,7 +10,7 @@ use super::{
         ManagedTransactionFinality, Terms, checkpoint_bytes, encode, invalid, now_ms,
         require_deadline, require_empty,
     },
-    service_authority::{NetworkPurpose, ProviderPurpose, ServiceAuthority},
+    service_authority::{CheckpointImportScope, NetworkPurpose, ProviderPurpose, ServiceAuthority},
 };
 use crate::localnet::service_authorities::StreamTokenAuthorityRole;
 use iroha_data_model::{
@@ -127,6 +127,17 @@ impl ManagedInitialGatewaySetup {
         Setup::open_provider_existing(prepared, provider, Kind::Gateway)
             .map(|inner| inner.map(|inner| Self { inner }))
     }
+
+    /// Retain the fixed setup purpose from the immutable original read-only parent profile.
+    /// Optional lexical import work supplies no source, transaction or current-state verdict.
+    pub(super) fn open_existing_from_original(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+        scope: Option<&CheckpointImportScope>,
+    ) -> Result<Option<Self>> {
+        Setup::open_provider_existing_from_original(parent, provider, Kind::Gateway, scope)
+            .map(|inner| inner.map(|inner| Self { inner }))
+    }
 }
 
 /// Initial sole native recorder Set for the exact generated recorder and all three selected gateways.
@@ -205,6 +216,16 @@ impl ManagedInitialReputationPolicy {
     pub(super) fn open_existing(prepared: &PreparedLocalnet) -> Result<Option<Self>> {
         Setup::open_reputation_existing(prepared).map(|inner| inner.map(|inner| Self { inner }))
     }
+
+    /// Retain the fixed setup purpose from the immutable original read-only parent profile.
+    /// Optional lexical import work supplies no source, transaction or current-state verdict.
+    pub(super) fn open_existing_from_original(
+        parent: &ServiceAuthority,
+        scope: Option<&CheckpointImportScope>,
+    ) -> Result<Option<Self>> {
+        Setup::open_reputation_existing_from_original(parent, scope)
+            .map(|inner| inner.map(|inner| Self { inner }))
+    }
 }
 
 /// Initial owner-signed native authority Set for the exact generated dedicated completion role.
@@ -281,6 +302,17 @@ impl ManagedInitialProviderIngestAuthority {
         Setup::open_provider_existing(prepared, provider, Kind::ProviderIngest)
             .map(|inner| inner.map(|inner| Self { inner }))
     }
+
+    /// Retain the fixed setup purpose from the immutable original read-only parent profile.
+    /// Optional lexical import work supplies no source, transaction or current-state verdict.
+    pub(super) fn open_existing_from_original(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+        scope: Option<&CheckpointImportScope>,
+    ) -> Result<Option<Self>> {
+        Setup::open_provider_existing_from_original(parent, provider, Kind::ProviderIngest, scope)
+            .map(|inner| inner.map(|inner| Self { inner }))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -348,13 +380,26 @@ impl Setup {
         provider: ProviderId,
         kind: Kind,
     ) -> Result<Option<Self>> {
-        let purpose = match kind {
+        let purpose = Self::provider_purpose(kind)?;
+        ServiceAuthority::open_provider_existing(prepared, provider, purpose)
+            .map(|authority| authority.map(|authority| Self { authority, kind }))
+    }
+    fn open_provider_existing_from_original(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+        kind: Kind,
+        scope: Option<&CheckpointImportScope>,
+    ) -> Result<Option<Self>> {
+        let purpose = Self::provider_purpose(kind)?;
+        ServiceAuthority::open_provider_existing_from_original(parent, provider, purpose, scope)
+            .map(|authority| authority.map(|authority| Self { authority, kind }))
+    }
+    fn provider_purpose(kind: Kind) -> Result<ProviderPurpose> {
+        Ok(match kind {
             Kind::ProviderIngest => ProviderPurpose::InitialProviderIngestAuthority,
             Kind::Gateway => ProviderPurpose::InitialGatewaySetup,
             Kind::Reputation => return Err(invalid("recorder setup requires network scope")),
-        };
-        ServiceAuthority::open_provider_existing(prepared, provider, purpose)
-            .map(|authority| authority.map(|authority| Self { authority, kind }))
+        })
     }
     fn open_reputation_existing(prepared: &PreparedLocalnet) -> Result<Option<Self>> {
         ServiceAuthority::open_network_existing(prepared, NetworkPurpose::InitialReputationPolicy)
@@ -364,6 +409,22 @@ impl Setup {
                     kind: Kind::Reputation,
                 })
             })
+    }
+    fn open_reputation_existing_from_original(
+        parent: &ServiceAuthority,
+        scope: Option<&CheckpointImportScope>,
+    ) -> Result<Option<Self>> {
+        ServiceAuthority::open_network_existing_from_original(
+            parent,
+            NetworkPurpose::InitialReputationPolicy,
+            scope,
+        )
+        .map(|authority| {
+            authority.map(|authority| Self {
+                authority,
+                kind: Kind::Reputation,
+            })
+        })
     }
     fn purpose(&self) -> Result<Purpose> {
         Ok(match self.kind {

@@ -137,10 +137,10 @@ fn executed_load_proves_complete_history_and_exports_exact_receipt() {
         std::env::var_os("KAGEMUSHA_FINALITY_OUTPUT").expect("exclusive proof/checkpoint output");
     let sources = std::env::var_os("KAGEMUSHA_CANONICAL_FINALITY_SOURCES")
         .expect("completed source-only directory");
-    driver::executed_load::run(
+    driver::executed_load::production::run(
         std::path::Path::new(&output),
         &executed_load_selection(&paths),
-        &driver::executed_load::SourceSelection {
+        &driver::executed_load::production::SourceSelection {
             root: std::path::Path::new(&sources),
             completion_sha256: environment_pin("KAGEMUSHA_CANONICAL_FINALITY_COMPLETION_SHA256"),
         },

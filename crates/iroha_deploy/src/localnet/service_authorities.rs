@@ -1383,7 +1383,7 @@ pub(crate) struct RetainedServiceProfile {
     address_discriminant: u16,
 }
 
-/// Move typed constructor outputs into the existing operation owner without duplicating genesis.
+/// Typed original constructor outputs retained by one canonical profile validation.
 pub(crate) struct ValidatedServiceProfile {
     pub(crate) retained: RetainedServiceProfile,
     pub(crate) config: iroha::config::Config,

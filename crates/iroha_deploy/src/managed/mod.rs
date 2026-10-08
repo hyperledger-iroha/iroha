@@ -124,10 +124,11 @@ pub enum Error {
     /// The original native I/O budget elapsed; retained custody remains unresolved.
     #[error("native operation I/O deadline elapsed; retain original journals")]
     NativeDeadline,
-    /// Startup failed at its original closed stage, and cleanup or status publication also failed.
+    /// A local worker failure occurred, and owned cleanup or status publication also failed.
     #[error("{failure}{}", worker_failure_followup(cleanup, publication))]
     WorkerFailure {
-        /// Original closed startup or service failure, excluding remote bodies and credentials.
+        /// Original local startup or service cause, including native I/O diagnostics.
+        /// Retained status uses a separate closed classification, never this cause's text.
         failure: String,
         /// Exact error from stopping this worker's directly owned validator handles.
         cleanup: Option<Box<Error>>,

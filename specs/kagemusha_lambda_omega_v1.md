@@ -1002,6 +1002,11 @@ normal memory pressure and no new compression, pageout or swapout episode from
 before process creation through exit. A fresh process starts without compressed
 pages; unchanged global compression counters also exclude compression of that
 process. Existing compressed pages of other processes do not invalidate a run.
+Swap-in increases are retained as diagnostics, not an additional veto: the
+three required unchanged counters above define this memory-activity rule.
+A decreasing counter or failed/missing probe invalidates the evidence. The
+prepared candidate binds this exact policy; a changed policy requires a fresh
+candidate and schedule, and never upgrades a retained invalid attempt.
 Keep failed attempts/reasons; at most 18 attempts per configuration may be used
 to collect nine valid samples, otherwise the result is inconclusive.
 An optional stop after a valid hard-limit breach retains the failing partial

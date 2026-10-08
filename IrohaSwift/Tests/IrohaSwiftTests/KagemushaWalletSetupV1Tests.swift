@@ -81,7 +81,8 @@ final class KagemushaWalletSetupV1Tests: XCTestCase {
       }
       let result = try driver.result { output in
         output.pointee.status = status
-        output.pointee.sequence_low = status == 44 ? 2 : ([33, 37, 38, 39, 42, 45].contains(status) ? 1 : 0)
+        // Confirmed Unload and Activation require a post-genesis height.
+        output.pointee.sequence_low = [42, 44].contains(status) ? 2 : ([33, 37, 38, 39, 45].contains(status) ? 1 : 0)
         output.pointee.length = bytes.count
         if !bytes.isEmpty {
           let allocation = malloc(bytes.count)!.assumingMemoryBound(to: UInt8.self)

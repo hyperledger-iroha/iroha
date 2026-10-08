@@ -35,8 +35,11 @@ impl Programs {
         artifacts: &mut dyn ArtifactSource,
         params: &Parameters,
         limits: ImportLimits,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Self, Error> {
         use super::source_layout as layout;
+
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let bls = InstalledProgram::mount(
             Program::Bls,
             layout::length(Program::Bls),
@@ -44,6 +47,7 @@ impl Programs {
             artifacts,
             params,
             limits,
+            cancellation,
         )?;
         let aggregation = InstalledProgram::mount(
             Program::Aggregation,
@@ -52,6 +56,7 @@ impl Programs {
             artifacts,
             params,
             limits,
+            cancellation,
         )?;
         let result = InstalledProgram::mount(
             Program::Result,
@@ -60,6 +65,7 @@ impl Programs {
             artifacts,
             params,
             limits,
+            cancellation,
         )?;
         let schedule = InstalledProgram::mount(
             Program::Schedule,
@@ -68,6 +74,7 @@ impl Programs {
             artifacts,
             params,
             limits,
+            cancellation,
         )?;
         let context = InstalledProgram::mount(
             Program::Context,
@@ -76,6 +83,7 @@ impl Programs {
             artifacts,
             params,
             limits,
+            cancellation,
         )?;
         let load = InstalledProgram::mount(
             Program::Load,
@@ -84,6 +92,7 @@ impl Programs {
             artifacts,
             params,
             limits,
+            cancellation,
         )?;
         Ok(Self {
             bls,
@@ -108,7 +117,9 @@ impl<C: SourceCircuit> Pair<C> {
         artifacts: &mut dyn ArtifactSource,
         params: &Parameters,
         limits: ImportLimits,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         let plan = circuit(SourcePairPlan::new(children, &params.pallas))?;
         let node = Mounted::mount(
             NodeId::Composition(kind),
@@ -116,6 +127,7 @@ impl<C: SourceCircuit> Pair<C> {
             artifacts,
             params,
             limits,
+            cancellation,
         )?;
         Ok(Self { node, plan })
     }
@@ -132,8 +144,17 @@ impl History {
         artifacts: &mut dyn ArtifactSource,
         params: &Parameters,
         limits: ImportLimits,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Self, Error> {
-        let prover = Self::import(anchor, body.clone(), artifacts, params, limits, None)?;
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        let prover = Self::import(
+            anchor,
+            body.clone(),
+            artifacts,
+            params,
+            limits,
+            cancellation,
+        )?;
         Ok(Self {
             source: prover.qualified_source()?,
             body,
@@ -218,11 +239,26 @@ impl InstalledFinality {
         params: Parameters,
         limits: ImportLimits,
     ) -> Result<Self, Error> {
+        Self::from_original_artifacts_cancellable(anchor, artifacts, params, limits, None)
+    }
+
+    /// Strictly import the complete fixed graph with cooperative cancellation.
+    /// No readiness is granted for a partial graph or cancelled mount.
+    /// # Errors
+    /// Missing/mutated originals, source/child/profile mismatch, bounds or cancellation.
+    pub fn from_original_artifacts_cancellable(
+        anchor: HistoryAnchor,
+        artifacts: &mut dyn ArtifactSource,
+        params: Parameters,
+        limits: ImportLimits,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         if params.pallas.k() != 16 || params.vesta.k() != 16 {
             return Err(Error::Artifact);
         }
         let mut artifacts = Admission::new(artifacts, limits)?;
-        let programs = Programs::mount(&mut artifacts, &params, limits)?;
+        let programs = Programs::mount(&mut artifacts, &params, limits, cancellation)?;
         let certificate = Pair::mount(
             Composition::Certificate,
             [programs.aggregation.source(), programs.bls.source()],
@@ -230,6 +266,7 @@ impl InstalledFinality {
             &mut artifacts,
             &params,
             limits,
+            cancellation,
         )?;
         let certified = Pair::mount(
             Composition::CertifiedResult,
@@ -238,6 +275,7 @@ impl InstalledFinality {
             &mut artifacts,
             &params,
             limits,
+            cancellation,
         )?;
         let schedule = Pair::mount(
             Composition::Schedule,
@@ -246,6 +284,7 @@ impl InstalledFinality {
             &mut artifacts,
             &params,
             limits,
+            cancellation,
         )?;
         let scheduled = Pair::mount(
             Composition::ScheduledResult,
@@ -254,6 +293,7 @@ impl InstalledFinality {
             &mut artifacts,
             &params,
             limits,
+            cancellation,
         )?;
         let step = Pair::mount(
             Composition::HistoryStep,
@@ -262,6 +302,7 @@ impl InstalledFinality {
             &mut artifacts,
             &params,
             limits,
+            cancellation,
         )?;
         let history = History::mount(
             anchor,
@@ -269,6 +310,7 @@ impl InstalledFinality {
             &mut artifacts,
             &params,
             limits,
+            cancellation,
         )?;
         let receipt = Pair::mount(
             Composition::Receipt,
@@ -277,6 +319,7 @@ impl InstalledFinality {
             &mut artifacts,
             &params,
             limits,
+            cancellation,
         )?;
         Ok(Self {
             anchor,

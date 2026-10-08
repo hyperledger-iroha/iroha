@@ -35,6 +35,7 @@ use std::{
 pub(super) struct Budget {
     pub(super) started: Instant,
     pub(super) timeout: Duration,
+    pub(super) startup_deadline_ns: Option<u128>,
     pub(super) utc_ceiling_unix_ms: Option<u64>,
     pub(super) cancelled: Arc<AtomicBool>,
     pub(super) progress: Arc<Progress>,
@@ -49,6 +50,15 @@ impl Budget {
             .checked_sub(self.started.elapsed())
             .filter(|value| !value.is_zero())
             .ok_or_else(|| self.progress.deadline())?;
+        let remaining = if let Some(deadline) = self.startup_deadline_ns {
+            remaining.min(
+                super::continuous_remaining(deadline)
+                    .map_err(|_| self.progress.unconfirmed())?
+                    .ok_or_else(|| self.progress.deadline())?,
+            )
+        } else {
+            remaining
+        };
         let Some(ceiling) = self.utc_ceiling_unix_ms else {
             return Ok(remaining);
         };
@@ -62,12 +72,13 @@ impl Budget {
         Ok(remaining.min(utc_remaining))
     }
     pub(super) fn deadline(&self) -> std::result::Result<Instant, Failure> {
+        let observed = Instant::now();
         let remaining = self.check()?;
         let original = self
             .started
             .checked_add(self.timeout)
             .ok_or_else(|| self.progress.unconfirmed())?;
-        Ok(Instant::now()
+        Ok(observed
             .checked_add(remaining)
             .ok_or_else(|| self.progress.unconfirmed())?
             .min(original))
@@ -192,7 +203,11 @@ pub(super) fn initial(
     let receipt = Arc::new(readiness::prove(
         prepared,
         budget.started,
-        budget.timeout,
+        budget
+            .deadline()?
+            .checked_duration_since(budget.started)
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| budget.progress.deadline())?,
         &budget.cancelled,
         &budget.progress.readiness,
     )?);
@@ -204,7 +219,7 @@ pub(super) fn initial(
     let bootstrap = loop {
         validate_gateways(prepared, &mut live, budget)?;
         let result = {
-            let mut parent = budget.call(|_| ManagedServiceBootstrap::open(prepared))?;
+            let mut parent = budget.call(|_| owner.open_original_bootstrap(prepared))?;
             match &authorization {
                 Some(authorization) => parent.advance(authorization, budget.deadline()?),
                 None => parent.recover(budget.deadline()?),
@@ -361,7 +376,11 @@ impl Recheck {
             prepared,
             &self.receipt,
             budget.started,
-            budget.timeout,
+            budget
+                .deadline()?
+                .checked_duration_since(budget.started)
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(|| budget.progress.deadline())?,
             &budget.cancelled,
             &budget.progress.readiness,
         )?;
@@ -450,8 +469,8 @@ fn validate_gateways(
     budget: &Budget,
 ) -> std::result::Result<(), Failure> {
     let plans = budget.call(|_| {
-        prepared
-            .provider_service_plans()?
+        live[0]
+            .original_provider_plans(prepared)?
             .ok_or_else(|| invalid("original provider plans absent"))
     })?;
     for (plan, gateway) in plans.iter().zip(live) {
@@ -535,8 +554,8 @@ pub(super) fn validate_live(
     budget: &Budget,
 ) -> std::result::Result<(), Failure> {
     budget.call(|_| {
-        let plan = prepared
-            .gateway_compliance_plan(live.provider())?
+        let plan = live
+            .original_gateway_compliance_plan(prepared)?
             .ok_or_else(|| invalid("generated gateway plan absent"))?;
         live.validate(prepared, &plan)
     })

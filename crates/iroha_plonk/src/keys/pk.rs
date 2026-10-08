@@ -382,31 +382,8 @@ impl<C: PastaCurve> ProvingKey<C> {
     /// # Errors
     ///
     /// [`KeyError::Shape`] when the columns do not match the descriptor;
-    /// [`KeyError::UnsupportedDegree`] or [`KeyError::Fft`] from the domains.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        vk: VerifyingKey<C>,
-        binding: DescriptorBinding,
-        constraint_system: KeyConstraintSystem<C::ScalarExt>,
-        fixed_values: Vec<Vec<C::ScalarExt>>,
-        permutation_values: Vec<Vec<C::ScalarExt>>,
-        copy_digest: [u8; 32],
-        policy: CosetCachePolicy,
-        tables: CommitmentTables<C>,
-    ) -> Result<Self, KeyError> {
-        Self::new_cancellable(
-            vk,
-            binding,
-            constraint_system,
-            fixed_values,
-            permutation_values,
-            copy_digest,
-            policy,
-            tables,
-            None,
-        )
-    }
-
+    /// [`KeyError::UnsupportedDegree`] or [`KeyError::Fft`] from the domains,
+    /// or [`KeyError::Cancelled`] after all arithmetic tasks join.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_cancellable(
         vk: VerifyingKey<C>,

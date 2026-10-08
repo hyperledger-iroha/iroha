@@ -6,8 +6,9 @@
 //! of the descriptor (the bytes that are hashed, spec section 4) into one
 //! expression DAG: every node is hash-consed, so a subexpression shared by
 //! several gates or lookups, or repeated inside one, is evaluated once per
-//! row. Nodes are stored in topological order and evaluated into a scratch
-//! vector, one row at a time. A query reads its column at `(row + rotation)
+//! row. Nodes are stored in topological order and evaluated into scratch for
+//! four adjacent rows when the shared scratch budget admits the extra lanes;
+//! otherwise the evaluator uses one row. A query reads its column at `(row + rotation)
 //! mod n` of whatever domain the columns are given on: the base domain for
 //! the lookup compression, a quotient coset for `h`.
 //!

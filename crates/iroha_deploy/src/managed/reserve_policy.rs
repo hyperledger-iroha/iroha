@@ -10,7 +10,7 @@ use super::{
         ManagedTransactionFinality, Terms, checkpoint_bytes, encode, invalid, now_ms,
         read_optional, read_selected_peers, require_deadline, require_empty,
     },
-    service_authority::{NetworkPurpose, ServiceAuthority},
+    service_authority::{CheckpointImportScope, NetworkPurpose, ServiceAuthority},
 };
 use crate::verify::finality::FinalityVerifier;
 use iroha_crypto::Hash;
@@ -121,6 +121,20 @@ impl ManagedInitialReservePolicy {
     pub(super) fn open_existing(prepared: &PreparedLocalnet) -> Result<Option<Self>> {
         ServiceAuthority::open_network_existing(prepared, NetworkPurpose::InitialReservePolicy)
             .map(|authority| authority.map(|authority| Self { authority }))
+    }
+
+    /// Retain fresh purpose custody using the immutable original read-only parent profile.
+    /// Optional lexical import work supplies no source, transaction or current-state verdict.
+    pub(super) fn open_existing_from_original(
+        parent: &ServiceAuthority,
+        scope: Option<&CheckpointImportScope>,
+    ) -> Result<Option<Self>> {
+        ServiceAuthority::open_network_existing_from_original(
+            parent,
+            NetworkPurpose::InitialReservePolicy,
+            scope,
+        )
+        .map(|authority| authority.map(|authority| Self { authority }))
     }
 
     /// Retain the initial policy and explicit original authorization, then advance that intent.

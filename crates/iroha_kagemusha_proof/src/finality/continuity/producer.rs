@@ -269,7 +269,8 @@ impl<C: SourceCircuit> ImportedSource<C> {
             &[InstanceType::Bounded],
             config,
         )?;
-        VerifyingKey::<Eq>::read(artifact.verifying_key, &binding).map_err(|_| Error::Artifact)?;
+        VerifyingKey::<Eq>::read_cancellable(artifact.verifying_key, &binding, cancellation)
+            .map_err(verifying_key_error)?;
         let key = ProvingKey::from_artifact_v2_cancellable(
             artifact.proving_key,
             &binding,
@@ -396,8 +397,8 @@ impl<C: SourceCircuit> Prover<C> {
             &OmegaPlan::instance_types(),
             config,
         )?;
-        VerifyingKey::<Ep>::read(wrapper.verifying_key, &wrapper_binding)
-            .map_err(|_| Error::Artifact)?;
+        VerifyingKey::<Ep>::read_cancellable(wrapper.verifying_key, &wrapper_binding, cancellation)
+            .map_err(verifying_key_error)?;
         let (plan, blank) = wrapper_source(catalog, vesta.clone())?;
         let wrapper_key = ProvingKey::from_artifact_v2_cancellable(
             wrapper.proving_key,
@@ -771,5 +772,29 @@ mod cancellation_tests {
         for error in [Error::Artifact, Error::Input, Error::Proof, Error::Prover] {
             assert!(!error.is_cancelled());
         }
+    }
+}
+
+fn verifying_key_error(error: iroha_plonk::keys::VkError) -> Error {
+    if error.is_cancelled() {
+        Error::Cancelled
+    } else {
+        Error::Artifact
+    }
+}
+
+#[cfg(test)]
+mod verifier_read_cancellation_tests {
+    use super::*;
+    #[test]
+    fn verifier_original_cancellation_is_never_an_artifact_verdict() {
+        assert_eq!(
+            verifying_key_error(iroha_plonk::keys::VkError::Cancelled),
+            Error::Cancelled
+        );
+        assert_eq!(
+            verifying_key_error(iroha_plonk::keys::VkError::Version { found: 0 }),
+            Error::Artifact
+        );
     }
 }

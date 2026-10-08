@@ -173,7 +173,6 @@ trait Backend {
 }
 
 struct Native {
-    config: iroha::config::Config,
     clients: Vec<Client>,
     deadline: Instant,
     fee_payment: FeePaymentIntent,
@@ -194,12 +193,7 @@ impl Backend for Native {
     }
 
     fn submit_and_confirm(&mut self, remaining: Duration) -> Result<Self::Hash, ()> {
-        self.config.transaction_status_timeout = remaining;
-        let native = iroha::client::Client::builder(self.config.clone())
-            .build()
-            .map_err(|_| ())?
-            .with_request_deadline(self.deadline);
-        let submitter = Client::from_client(native).map_err(|_| ())?;
+        let submitter = self.submitter(remaining)?;
         let signed = smoke_transaction(submitter.account_client(), self.fee_payment.clone())?;
         submitter
             .submit_transaction_and_wait(&signed)
@@ -222,6 +216,24 @@ impl Backend for Native {
             )
             .map(|_| hash)
             .map_err(|_| ())
+    }
+}
+
+impl Native {
+    fn submitter(&self, remaining: Duration) -> Result<Client, ()> {
+        // Peer 0 owns the original submission settings and its already-warmed transport.
+        // Rebuilding revalidates that immutable context with fresh compatibility/probe state;
+        // only this call's remaining confirmation budget changes.
+        if remaining.is_zero() || Instant::now() >= self.deadline {
+            return Err(());
+        }
+        let mut builder = self.clients.first().ok_or(())?.client().to_builder();
+        builder.transaction_status_timeout = remaining;
+        let native = builder
+            .build()
+            .map_err(|_| ())?
+            .with_request_deadline(self.deadline);
+        Client::from_client(native).map_err(|_| ())
     }
 }
 
@@ -329,19 +341,25 @@ fn native(
     config.torii_request_timeout = Duration::from_millis(750);
     config.transaction_status_timeout = budget.timeout;
     config.transaction_ttl = budget.timeout.max(Duration::from_secs(60));
+    // The loader and SDK builder apply the same canonical endpoint normalization.
+    // Status peer 0 must be the original selected submission endpoint before its transport
+    // can serve a freshly rebuilt submission context.
+    let submission_endpoint = config.torii_api_url.clone();
     let mut clients = Vec::with_capacity(4);
-    for peer in &prepared.peers {
+    for (index, peer) in prepared.peers.iter().enumerate() {
         let mut peer_config = config.clone();
         peer_config.torii_api_url = peer.torii_url.parse().map_err(|_| budget.unconfirmed())?;
         let native = iroha::client::Client::builder(peer_config)
             .build()
             .map_err(|_| budget.unconfirmed())?
             .with_request_deadline(deadline);
+        if index == 0 && native.endpoint() != &submission_endpoint {
+            return Err(budget.unconfirmed());
+        }
         clients.push(Client::from_client(native).map_err(|_| budget.unconfirmed())?);
     }
     Ok((
         Native {
-            config,
             clients,
             deadline,
             fee_payment: selected.payment,
@@ -873,3 +891,7 @@ mod tests {
 #[cfg(test)]
 #[path = "readiness/fee_tests.rs"]
 mod fee_tests;
+
+#[cfg(test)]
+#[path = "readiness/transport_tests.rs"]
+mod transport_tests;

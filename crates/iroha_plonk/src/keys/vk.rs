@@ -49,6 +49,8 @@ pub const VK_HEADER_BYTES: usize = 10;
 /// A verifying key could not be decoded against its descriptor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VkError {
+    /// The caller cancelled key construction or decoding.
+    Cancelled,
     /// The descriptor names another curve.
     CurveMismatch {
         /// The descriptor's curve.
@@ -110,6 +112,7 @@ pub enum VkError {
 impl fmt::Display for VkError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("verifying key operation cancelled"),
             Self::CurveMismatch { descriptor } => {
                 write!(f, "the descriptor is for {descriptor:?}")
             }
@@ -142,6 +145,17 @@ impl fmt::Display for VkError {
 }
 
 impl std::error::Error for VkError {}
+impl From<iroha_pasta::Cancelled> for VkError {
+    fn from(_: iroha_pasta::Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
+impl VkError {
+    /// Whether this error is cooperative cancellation, never malformed key input.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+}
 
 /// A verifying key bound to its descriptor.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -263,6 +277,27 @@ impl<C: PastaCurve> VerifyingKey<C> {
         permutation_commitments: Vec<C::AffineExt>,
         selectors: Vec<Vec<bool>>,
     ) -> Result<Self, VkError> {
+        Self::from_parts_cancellable(
+            binding,
+            fixed_commitments,
+            permutation_commitments,
+            selectors,
+            None,
+        )
+    }
+
+    /// Assemble identical key parts with cancellation through encoding and selector admission.
+    ///
+    /// # Errors
+    /// As [`Self::from_parts`], or [`VkError::Cancelled`].
+    pub fn from_parts_cancellable(
+        binding: &DescriptorBinding,
+        fixed_commitments: Vec<C::AffineExt>,
+        permutation_commitments: Vec<C::AffineExt>,
+        selectors: Vec<Vec<bool>>,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, VkError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         check_curve::<C>(binding)?;
         let descriptor = binding.descriptor();
         let n = binding.n();
@@ -289,6 +324,7 @@ impl<C: PastaCurve> VerifyingKey<C> {
             .chain(&permutation_commitments)
             .enumerate()
         {
+            iroha_pasta::CancellationToken::checkpoint(cancellation)?;
             let encoded = encode_point::<C>(point);
             if encoded == [0_u8; MESSAGE_BYTES] {
                 return Err(VkError::Point {
@@ -299,7 +335,10 @@ impl<C: PastaCurve> VerifyingKey<C> {
             bytes.extend_from_slice(&encoded);
         }
         for rows in &selectors {
-            for chunk in rows.chunks(8) {
+            for (index, chunk) in rows.chunks(8).enumerate() {
+                if index % 512 == 0 {
+                    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+                }
                 let mut byte = 0_u8;
                 for (bit, active) in chunk.iter().enumerate() {
                     byte |= u8::from(*active) << bit;
@@ -309,16 +348,23 @@ impl<C: PastaCurve> VerifyingKey<C> {
         }
         if compress {
             descriptor
-                .check_selector_plan(&selectors)
-                .map_err(|_| VkError::SelectorPlan)?;
+                .check_selector_plan_cancellable(&selectors, cancellation)
+                .map_err(|error| {
+                    if error.is_cancelled() {
+                        VkError::Cancelled
+                    } else {
+                        VkError::SelectorPlan
+                    }
+                })?;
         }
-        Ok(Self::bind(
+        Self::bind(
             binding,
             fixed_commitments,
             permutation_commitments,
             selectors,
             bytes,
-        ))
+            cancellation,
+        )
     }
 
     /// Computes `transcript_repr` and stores the parts.
@@ -328,23 +374,25 @@ impl<C: PastaCurve> VerifyingKey<C> {
         permutation_commitments: Vec<C::AffineExt>,
         selectors: Vec<Vec<bool>>,
         bytes: Vec<u8>,
-    ) -> Self {
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, VkError> {
         let descriptor = binding.descriptor();
-        Self {
+        Ok(Self {
             k: u32::from(descriptor.k),
             compress_selectors: descriptor.selectors.compress,
             fixed_commitments,
             permutation_commitments,
             selectors,
-            transcript_repr: TranscriptRepr::derive(
+            transcript_repr: TranscriptRepr::derive_cancellable(
                 binding.is_v2(),
                 descriptor.transcript,
                 binding.digest(),
                 &bytes,
-            ),
+                cancellation,
+            )?,
             bytes,
             descriptor_digest: *binding.digest(),
-        }
+        })
     }
 
     /// Decodes `bytes` strictly against `binding` (see the module
@@ -354,6 +402,19 @@ impl<C: PastaCurve> VerifyingKey<C> {
     ///
     /// The first failed [`VkError`] rule.
     pub fn read(bytes: &[u8], binding: &DescriptorBinding) -> Result<Self, VkError> {
+        Self::read_cancellable(bytes, binding, None)
+    }
+
+    /// Strictly decode a key with cancellation through point and selector admission.
+    ///
+    /// # Errors
+    /// As [`Self::read`], or [`VkError::Cancelled`].
+    pub fn read_cancellable(
+        bytes: &[u8],
+        binding: &DescriptorBinding,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, VkError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         check_curve::<C>(binding)?;
         let descriptor = binding.descriptor();
         let expected = expected_len(binding).ok_or(VkError::Length {
@@ -398,6 +459,7 @@ impl<C: PastaCurve> VerifyingKey<C> {
         let point_count = descriptor.num_fixed_columns as usize + descriptor.permutation.len();
         let mut points = Vec::with_capacity(point_count);
         for index in 0..point_count {
+            iroha_pasta::CancellationToken::checkpoint(cancellation)?;
             let offset = VK_HEADER_BYTES + MESSAGE_BYTES * index;
             let mut message = [0_u8; MESSAGE_BYTES];
             message.copy_from_slice(&bytes[offset..offset + MESSAGE_BYTES]);
@@ -416,6 +478,9 @@ impl<C: PastaCurve> VerifyingKey<C> {
             for (selector, chunk) in bytes[start..].chunks(width).enumerate() {
                 let mut rows = Vec::with_capacity(n);
                 for (byte_index, byte) in chunk.iter().enumerate() {
+                    if byte_index % 512 == 0 {
+                        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+                    }
                     for bit in 0..8 {
                         let row = 8 * byte_index + bit;
                         let active = (byte >> bit) & 1 == 1;
@@ -429,16 +494,23 @@ impl<C: PastaCurve> VerifyingKey<C> {
                 selectors.push(rows);
             }
             descriptor
-                .check_selector_plan(&selectors)
-                .map_err(|_| VkError::SelectorPlan)?;
+                .check_selector_plan_cancellable(&selectors, cancellation)
+                .map_err(|error| {
+                    if error.is_cancelled() {
+                        VkError::Cancelled
+                    } else {
+                        VkError::SelectorPlan
+                    }
+                })?;
         }
-        Ok(Self::bind(
+        Self::bind(
             binding,
             fixed_commitments,
             permutation_commitments,
             selectors,
             bytes.to_vec(),
-        ))
+            cancellation,
+        )
     }
 
     /// Replaces `transcript_repr` with the vendored value (oracle builds

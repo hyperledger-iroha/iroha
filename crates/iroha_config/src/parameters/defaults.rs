@@ -2616,6 +2616,8 @@ pub mod torii {
         pub const MAXIMUM_RECEIPT_HEIGHT: u64 = 1_000_000;
         /// Maximum individual server proving-key original (256 MiB).
         pub const MAXIMUM_KEY_BYTES: usize = 256 << 20;
+        /// Maximum resident proving-key cache (512 MiB).
+        pub const MAXIMUM_RESIDENT_PROVING_KEY_BYTES: usize = 512 << 20;
         /// Maximum aggregate original graph extent (1 GiB).
         pub const MAXIMUM_ORIGINAL_BYTES: usize = 1 << 30;
         /// Maximum original graph entries.

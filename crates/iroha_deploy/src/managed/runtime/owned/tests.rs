@@ -157,8 +157,16 @@ fn owned_start_refuses_an_unselected_or_changed_daemon_before_logs_and_launch_ma
     let unselected =
         crate::managed::program::NativeProgram::capture(&std::env::current_exe().unwrap()).unwrap();
     let mut processes = PeerProcesses::default();
+    let budget = activation::Budget {
+        started: Instant::now(),
+        timeout: Duration::from_secs(30),
+        startup_deadline_ns: None,
+        utc_ceiling_unix_ms: None,
+        cancelled: Arc::new(AtomicBool::new(false)),
+        progress: Arc::new(progress::Progress::default()),
+    };
     assert!(matches!(
-        processes.start(&directory, &retained, &ownership, &unselected, None),
+        processes.start(&directory, &retained, &ownership, &unselected, None, &budget),
         Err(Error::Invalid(message)) if message == "daemon differs from the retained runtime path"
     ));
     std::fs::OpenOptions::new()
@@ -169,12 +177,12 @@ fn owned_start_refuses_an_unselected_or_changed_daemon_before_logs_and_launch_ma
         .unwrap();
     assert!(
         processes
-            .start(&directory, &retained, &ownership, &selected, None)
+            .start(&directory, &retained, &ownership, &selected, None, &budget)
             .is_err()
     );
     let changed = crate::managed::program::NativeProgram::capture(&path).unwrap();
     assert!(matches!(
-        processes.start(&directory, &retained, &ownership, &changed, None),
+        processes.start(&directory, &retained, &ownership, &changed, None, &budget),
         Err(Error::Invalid(message)) if message == "daemon differs from the retained runtime contents"
     ));
     assert!(processes.children.is_empty());

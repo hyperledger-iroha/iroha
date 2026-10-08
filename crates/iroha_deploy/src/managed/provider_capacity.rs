@@ -9,7 +9,7 @@ use super::{
         now_ms, read_optional, require_deadline, require_empty,
     },
     provider_economics,
-    service_authority::{ProviderPurpose, ServiceAuthority},
+    service_authority::{CheckpointImportScope, ProviderPurpose, ServiceAuthority},
 };
 use crate::{
     localnet::service_authorities::{RetainedProviderServicePlan, StreamTokenAuthorityRole},
@@ -133,12 +133,30 @@ impl ManagedProviderCapacity {
         prepared: &PreparedLocalnet,
         provider: iroha_data_model::sorafs::capacity::ProviderId,
     ) -> Result<Option<Self>> {
-        let Some(authority) = ServiceAuthority::open_provider_existing(
+        Self::from_existing_authority(ServiceAuthority::open_provider_existing(
             prepared,
             provider,
             ProviderPurpose::ProviderCapacityDeclaration,
-        )?
-        else {
+        )?)
+    }
+
+    /// Preserve the existing plan postcondition while borrowing the original read-only profile.
+    /// Optional lexical import work supplies no source, transaction or current-state verdict.
+    pub(super) fn open_existing_from_original(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        scope: Option<&CheckpointImportScope>,
+    ) -> Result<Option<Self>> {
+        Self::from_existing_authority(ServiceAuthority::open_provider_existing_from_original(
+            parent,
+            provider,
+            ProviderPurpose::ProviderCapacityDeclaration,
+            scope,
+        )?)
+    }
+
+    fn from_existing_authority(authority: Option<ServiceAuthority>) -> Result<Option<Self>> {
+        let Some(authority) = authority else {
             return Ok(None);
         };
         let owner = Self { authority };

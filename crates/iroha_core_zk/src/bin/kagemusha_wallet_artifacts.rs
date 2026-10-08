@@ -46,6 +46,8 @@ use sha2::{Digest as _, Sha256};
 
 #[path = "kagemusha_wallet_artifacts/finality.rs"]
 mod finality;
+#[path = "kagemusha_wallet_artifacts/server.rs"]
+mod server;
 
 const REQUEST_MAX: usize = 65_536;
 const GENESIS_MAX: usize = 64 << 20;
@@ -270,7 +272,9 @@ fn scope(key: KagemushaDevicePublicKeyV1) -> io::Result<SourceScopeV1> {
     )
 }
 
-fn records(bytes: &[u8]) -> io::Result<(Vec<ArtifactRecord>, BTreeMap<[u8; 32], BlobV1>, usize)> {
+type FinalityRecords = (Vec<ArtifactRecord>, BTreeMap<[u8; 32], BlobV1>, usize);
+
+fn records(bytes: &[u8]) -> io::Result<FinalityRecords> {
     let records: Vec<ArtifactRecord> = checked(
         norito::decode_canonical_with_limits(bytes, norito::canonical_decode_limits(bytes.len())),
         "canonical finality inventory required",
@@ -365,7 +369,7 @@ fn copy_closed(
         )?;
         let mut hash = Sha256::new();
         let mut total = 0_u64;
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
         loop {
             let count = reader.read(&mut buffer)?;
             if count == 0 {
@@ -485,16 +489,22 @@ fn certificate(
     )
 }
 
+#[derive(Clone, Copy)]
+struct CompilerStores<'a> {
+    wallet: &'a DirectoryOriginalsV1,
+    finality: &'a DirectoryOriginalsV1,
+}
+
 fn finish(
     request: &Request,
     draft: WalletArtifactDraftV1,
     output: &PrivateDirectory,
-    wallet: &DirectoryOriginalsV1,
-    finality: &DirectoryOriginalsV1,
+    stores: CompilerStores<'_>,
     native: &SumeragiFinalityVerifier,
     config: ReadConfig,
     verifier_bytes: usize,
 ) -> io::Result<()> {
+    let CompilerStores { wallet, finality } = stores;
     let custody = PrivateDirectory::open_exact(&request.custody_directory)?;
     let root = private_key(
         &custody,
@@ -506,7 +516,7 @@ fn finish(
         "artifact.pkcs8.der",
         point(&request.artifact_public_key_hex)?,
     )?;
-    let scheme = draft.scheme().clone();
+    let scheme = *draft.scheme();
     let artifact_certificate = certificate(
         &scheme,
         &root,
@@ -702,7 +712,9 @@ fn run(path: &str) -> io::Result<()> {
             source.open_original(blob.sha256),
             "finality original unavailable",
         )?;
-        let mut bytes = Vec::with_capacity(blob.bytes as usize);
+        let length =
+            usize::try_from(blob.bytes).map_err(|_| invalid("finality original extent"))?;
+        let mut bytes = Vec::with_capacity(length);
         (&mut reader).take(blob.bytes + 1).read_to_end(&mut bytes)?;
         finality.store_original(*blob, &bytes)?;
     }
@@ -750,8 +762,10 @@ fn run(path: &str) -> io::Result<()> {
         &request,
         draft,
         &output,
-        &wallet,
-        &finality,
+        CompilerStores {
+            wallet: &wallet,
+            finality: &finality,
+        },
         &native,
         config,
         metadata_bytes,
@@ -776,12 +790,13 @@ fn main() {
     let result = match args.as_slice() {
         [help] if help == "--help" => {
             println!(
-                "kagemusha_wallet_artifacts --request ABSOLUTE_IMMUTABLE_PUBLIC_JSON\nkagemusha_wallet_artifacts --compile-finality ABSOLUTE_IMMUTABLE_PUBLIC_JSON\nConstructs complete native originals and signs protocol certificates/manifest using the selected private recovery role keys. No network actions or installation."
+                "kagemusha_wallet_artifacts --request ABSOLUTE_IMMUTABLE_PUBLIC_JSON\nkagemusha_wallet_artifacts --compile-finality ABSOLUTE_IMMUTABLE_PUBLIC_JSON\nkagemusha_wallet_artifacts --initialize-finality-server ABSOLUTE_IMMUTABLE_PUBLIC_JSON\nConstructs complete native originals and signs protocol certificates/manifest using the selected private recovery role keys. No network actions. Server initialization only selects authenticated storage and imports its graph."
             );
             Ok(())
         }
         [flag, path] if flag == "--request" => run(path),
         [flag, path] if flag == "--compile-finality" => finality::run(path),
+        [flag, path] if flag == "--initialize-finality-server" => server::run(path),
         _ => Err(invalid(
             "usage: kagemusha_wallet_artifacts --request ABSOLUTE_IMMUTABLE_PUBLIC_JSON",
         )),

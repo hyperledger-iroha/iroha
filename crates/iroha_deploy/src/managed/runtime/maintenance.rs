@@ -169,6 +169,7 @@ impl ProviderObservation {
             Budget {
                 started,
                 timeout,
+                startup_deadline_ns: None,
                 utc_ceiling_unix_ms: Some(self.timing.expiry.utc_ceiling()),
                 cancelled,
                 progress: Arc::new(Progress::default()),
