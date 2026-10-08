@@ -398,6 +398,7 @@ private object NativeBridgeBuildContract {
                 candidate.toString(),
                 "-I",
                 "-S",
+                "-B",
                 "-c",
                 "import os,pathlib,stat,sys; " +
                     "p=pathlib.Path(sys.executable).resolve(strict=True); " +
@@ -526,6 +527,7 @@ private object NativeBridgeBuildContract {
                 python.toString(),
                 "-I",
                 "-S",
+                "-B",
                 "-c",
                 "import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)",
             ),
@@ -643,7 +645,7 @@ private object NativeBridgeBuildContract {
             commandOutput(
                 execOperations, irohaRoot,
                 baseToolEnvironment(home, temporaryDirectory, "${python.parent}:/usr/bin:/bin"),
-                listOf(python.toString(), "-I", "-S", owner.toString(),
+                listOf(python.toString(), "-I", "-S", "-B", owner.toString(),
                     "--root", canonicalIrohaRoot.toString(), "--role", role,
                     "--path", invocation, "--cargo-home", selectedCargoHome) +
                     if (armv7Diagnostic) listOf("--local-integration") else emptyList(),
@@ -789,6 +791,7 @@ private object NativeBridgeBuildContract {
                 python.toString(),
                 "-I",
                 "-S",
+                "-B",
                 "-c",
                 "import platform; print(platform.python_version())",
             ),
@@ -1035,6 +1038,7 @@ private object NativeBridgeBuildContract {
                 tools.python.toString(),
                 "-I",
                 "-S",
+                "-B",
                 sourceSealScript.absolutePath,
                 "snapshot",
                 "--root",
@@ -1074,6 +1078,7 @@ private object NativeBridgeBuildContract {
                 tools.python.toString(),
                 "-I",
                 "-S",
+                "-B",
                 sourceSealScript.absolutePath,
                 "verify",
                 "--root",
@@ -1255,6 +1260,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                         tools.python.toString(),
                         "-I",
                         "-S",
+                        "-B",
                         tools.hermeticRunner.toString(),
                         "--profile",
                         if (tools.diagnosticConfiguration == null) "android-cargo"
@@ -1526,7 +1532,7 @@ abstract class InspectArmv7DiagnosticTask @Inject constructor(
         val result = execOperations.exec {
             workingDir(root)
             setEnvironment(mapOf("PATH" to "/usr/bin:/bin", "LANG" to "C", "LC_ALL" to "C"))
-            commandLine(tools.python.toString(), "-I", "-S", inspectScript.absolutePath,
+            commandLine(tools.python.toString(), "-I", "-S", "-B", inspectScript.absolutePath,
                 "--library", libraries.single().absolutePath,
                 "--symbol-inspector", inspector.absolutePath)
             standardOutput = output
@@ -2103,7 +2109,7 @@ fun validateLocalAndroidArtifactDirectory(root: Path, artifacts: Path) {
         "MOBILE_SDK_PYTHON_BINARY must be one canonical regular executable"
     }
     val process = ProcessBuilder(
-        python.toString(), "-I", "-S",
+        python.toString(), "-I", "-S", "-B",
         root.resolve("scripts/mobile_sdk_android_artifacts.py").toString(),
         "--root", root.toString(), "--artifact-dir", artifacts.toString(),
         "--validate-local-root",

@@ -956,7 +956,7 @@ mkdir -p "$MOBILE_SDK_ANDROID_ARTIFACT_DIR"
 This Gradle task (and every `client-android` release assembly):
 1. Reads `iroha.dir` from `local.properties`
 2. Captures the exact Android-target dependency-closure source seal, then runs
-   locked `cargo ndk` separately for `arm64-v8a` and `x86_64`, checking that
+   locked `cargo ndk` separately for `arm64-v8a`, `armeabi-v7a` and `x86_64`, checking that
    seal after every ABI build. Each cargo-ndk destination is transient because
    Cargo can copy unrelated workspace `cdylib` outputs there; only the exact
    `libconnect_norito_bridge.so` name is promoted into the authoritative raw
@@ -979,6 +979,9 @@ This Gradle task (and every `client-android` release assembly):
    closure `source_fingerprint_sha256`, toolchain identity, and raw/stripped
    sizes and hashes
 
+The isolated Python helpers use `-B` to prevent bytecode cache writes from
+changing the authenticated source inventory during configuration and validation.
+
 AGP 9.0.1 registers both generated directories through
 `addGeneratedSourceDirectory`, so the release AAR preserves those exact bytes
 and embeds the provenance at
@@ -999,7 +1002,7 @@ For local device integration inside this checkout, create the ignored
 `MOBILE_SDK_ANDROID_ARTIFACT_DIR` to that exact absolute canonical path. Set
 `MOBILE_SDK_PYTHON_BINARY` to a canonical Python 3.12 executable and add
 `-PirohaAndroidLocalIntegration=true` to the same normal Gradle command. This
-developer routing keeps the regular locked two-ABI native build, source seal,
+developer routing keeps the regular locked three-ABI native build, source seal,
 stripping, export and byte checks. It requires an owned directory with no tracked
 files and never falls back to source-tree JNI copies. Its embedded provenance
 has `artifact_scope: local-integration`; publication and release packaging reject
