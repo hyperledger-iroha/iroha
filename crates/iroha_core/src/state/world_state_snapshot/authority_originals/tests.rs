@@ -824,6 +824,88 @@ fn identifier_originals_refuse_missing_wrong_key_oversized_and_changed_program_r
 }
 
 #[test]
+fn identifier_originals_refuse_oversized_rows_from_the_same_cut() {
+    for oversized_program in [false, true] {
+        let (world, id) = identifier_world();
+        let budget = AllocationBudget::new(16 * 1024 * 1024);
+        let mut block = world.block();
+        let mut policy = block.identifier_policies.get(&id).unwrap().clone();
+        let mut program = block
+            .ram_lfe_program_policies
+            .get(&policy.program_id)
+            .unwrap()
+            .clone();
+        let field = if oversized_program {
+            program.note = Some("x".repeat(ROW_BYTES_LIMIT + 1));
+            block
+                .ram_lfe_program_policies
+                .insert(policy.program_id.clone(), program);
+            "world.ram_lfe_program_policies"
+        } else {
+            policy.note = Some("x".repeat(ROW_BYTES_LIMIT + 1));
+            block.identifier_policies.insert(id.clone(), policy);
+            "world.identifier_policies"
+        };
+        // Capture after inserting the oversized row: a post-cut hash mismatch
+        // must not make this row-size regression test pass accidentally.
+        let captured = snapshot(&block, &budget);
+        let before = budget.reserved_bytes();
+        let policy = block.identifier_policies.get(&id).unwrap();
+        let program = block
+            .ram_lfe_program_policies
+            .get(&policy.program_id)
+            .unwrap();
+        let row_bytes = if oversized_program {
+            norito::codec::encode_adaptive_into(program, &mut std::io::sink()).unwrap()
+        } else {
+            norito::codec::encode_adaptive_into(policy, &mut std::io::sink()).unwrap()
+        };
+        assert!(row_bytes > ROW_BYTES_LIMIT, "{field}");
+        for (row_field, key_hash, value_hash) in [
+            (
+                "world.identifier_policies",
+                hash_value(&id).unwrap(),
+                hash_value(policy).unwrap(),
+            ),
+            (
+                "world.ram_lfe_program_policies",
+                hash_value(&policy.program_id).unwrap(),
+                hash_value(program).unwrap(),
+            ),
+        ] {
+            require_target(
+                &captured.snapshot,
+                row_field,
+                WorldStateElementKindV1::Table,
+                Some(key_hash),
+                value_hash,
+            )
+            .unwrap();
+        }
+        let called = Cell::new(false);
+        let error = consume_identifier(
+            &captured.snapshot,
+            &block,
+            &id,
+            &budget,
+            |_, _, _| {
+                called.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            format!("World authority original {field} row exceeds its bound")
+        );
+        assert!(!called.get(), "{field}");
+        assert_eq!(budget.reserved_bytes(), before, "{field}");
+        drop(captured);
+        assert_eq!(budget.reserved_bytes(), 0, "{field}");
+    }
+}
+
+#[test]
 fn certified_identifier_originals_keep_read_root_budget_and_tip_fences() {
     let (mut world, id) = identifier_world();
     let reader = world.identifier_policies.get(&id).unwrap().owner.clone();

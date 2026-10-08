@@ -308,6 +308,7 @@ pub(super) fn verify_public_originals(
         previous = Some((records, receipt.receipt_sha256["intent.json"].clone()));
         trust = next;
     }
+    retained_tip_claims(value, originals)?;
     require(
         trust == *effective && text(chain.updates.last().unwrap(), "source_commit")? == source,
         "runtime chain terminal source or trust differs",
@@ -347,21 +348,24 @@ fn validate_adjacency(
             && text(old, "network_id")? == text(new, "network_id")?,
         "runtime chain predecessor producer identity differs",
     )?;
-    for key in [
-        "runtime_root",
-        "config_root",
-        "state_root",
-        "config_release",
-    ] {
-        require(
-            field(old_deployment, key)? == field(new_deployment, key)?,
-            "runtime chain retained deployment differs",
-        )?;
-    }
+    // The producer's successor deployment copies all metadata except `current`.
+    // Keep genesis, Kura location, config and routing bound to the original installation.
+    let mut prior_deployment = old_deployment.clone();
+    let mut next_deployment = new_deployment.clone();
+    prior_deployment
+        .as_object_mut()
+        .ok_or_else(|| eyre!("runtime deployment is not an object"))?
+        .remove("current");
+    next_deployment
+        .as_object_mut()
+        .ok_or_else(|| eyre!("runtime deployment is not an object"))?
+        .remove("current");
     require(
-        config_filename(old_deployment)? == config_filename(new_deployment)?,
-        "runtime chain retained config filename differs",
+        prior_deployment == next_deployment,
+        "runtime chain retained deployment differs",
     )?;
+    config_filename(old_deployment)?;
+    config_filename(new_deployment)?;
     let old_units = rows(field(old, "units")?)?;
     let new_units = rows(field(new, "units")?)?;
     let final_rows = rows(field(&previous["cohort-ready.json"], "observations")?)?;
@@ -405,6 +409,152 @@ fn validate_adjacency(
         )?;
     }
     Ok(())
+}
+
+/// Runtime receipt claims awaiting comparison with an authenticated protocol prefix.
+/// These values do not authenticate blocks or establish host custody themselves.
+#[derive(Default)]
+pub(super) struct RetainedTips {
+    hashes: BTreeMap<u64, Hash>,
+    peer_heights: [u64; 4],
+    checkpoint_count: usize,
+}
+
+fn checkpoint_tips(record: &json::Value) -> Result<Vec<(u64, Hash)>> {
+    let records = rows(record)?;
+    require(records.len() == 4, "runtime retained tip cohort differs")?;
+    records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            require(
+                text(record, "role")? == format!("taira-validator-{}", index + 1),
+                "runtime retained tip role differs",
+            )?;
+            let tip = field(record, "kura_tip")?;
+            let height = number(tip, "height")?;
+            let raw = text(tip, "hash")?;
+            require(
+                height > 0
+                    && raw.len() == 64
+                    && raw
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "runtime retained tip height or hash is malformed",
+            )?;
+            let mut bytes = [0u8; Hash::LENGTH];
+            hex::decode_to_slice(raw, &mut bytes)?;
+            let hash = Hash::from_marked_bytes(bytes)
+                .ok_or_else(|| eyre!("runtime retained block hash has no Iroha marker"))?;
+            Ok((height, hash))
+        })
+        .collect()
+}
+
+impl RetainedTips {
+    /// Collect bounded chronological checkpoint claims without granting authority.
+    pub(super) fn from_checkpoint_records<'a>(
+        records: impl IntoIterator<Item = &'a json::Value>,
+    ) -> Result<Self> {
+        let mut value = Self::default();
+        for record in records {
+            value.append_checkpoint(record)?;
+        }
+        Ok(value)
+    }
+
+    fn append_checkpoint(&mut self, record: &json::Value) -> Result<()> {
+        require(
+            self.checkpoint_count < MAX_UPDATES,
+            "runtime retained tip chain exceeds bound",
+        )?;
+        for (peer, (height, hash)) in checkpoint_tips(record)?.into_iter().enumerate() {
+            require(
+                height >= self.peer_heights[peer],
+                "runtime retained tip regressed",
+            )?;
+            if let Some(prior) = self.hashes.insert(height, hash) {
+                require(
+                    prior == hash,
+                    "runtime retained tips conflict at one height",
+                )?;
+            }
+            self.peer_heights[peer] = height;
+        }
+        self.checkpoint_count += 1;
+        Ok(())
+    }
+
+    /// Heights that portable replay must retain from its authenticated proof walk.
+    pub(super) fn heights(&self) -> impl Iterator<Item = u64> + '_ {
+        self.hashes.keys().copied()
+    }
+
+    /// Match all claims only after the existing genesis/QC verifier authenticated
+    /// this prefix. Missing historical heights fail; no receipt extends the prefix.
+    pub(super) fn verify_authenticated_prefix(
+        &self,
+        proofs: &BTreeMap<u64, iroha_data_model::sumeragi_finality::SumeragiFinalityProof>,
+        current_peer_heights: impl IntoIterator<Item = u64>,
+    ) -> Result<()> {
+        let current = current_peer_heights.into_iter().collect::<Vec<_>>();
+        require(
+            current.len() == 4
+                && self
+                    .peer_heights
+                    .iter()
+                    .zip(&current)
+                    .all(|(retained, current)| retained <= current),
+            "runtime retained tip exceeds its peer's signed current height",
+        )?;
+        for (&height, expected) in &self.hashes {
+            let proof = proofs
+                .get(&height)
+                .ok_or_else(|| eyre!("runtime retained tip is outside the authenticated prefix"))?;
+            require(
+                proof.block_header.height().get() == height
+                    && Hash::from(proof.block_header.hash()) == *expected,
+                "runtime retained block hash differs from authenticated finality",
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Read claims from the exact hash-bound checkpoint originals. The caller first
+/// verifies all runtime semantic joins; these claims still require protocol proofs.
+pub(super) fn retained_tip_claims(
+    value: &json::Value,
+    originals: &BTreeMap<String, Vec<u8>>,
+) -> Result<RetainedTips> {
+    let names = portable_record_names(value)?;
+    require(
+        originals.len() == names.len() && names.iter().all(|name| originals.contains_key(name)),
+        "runtime retained tip original closure differs",
+    )?;
+    let chain = chain_receipt(value)?;
+    let steps = chain.as_ref().map_or_else(
+        || std::slice::from_ref(value),
+        |chain| chain.updates.as_slice(),
+    );
+    let mut claims = RetainedTips::default();
+    for (index, step) in steps.iter().enumerate() {
+        let receipt: PublicReceipt = json::from_value(step.clone())?;
+        let name = if chain.is_some() {
+            chain_name(index, "checkpoint-stopped.json")
+        } else {
+            "checkpoint-stopped.json".into()
+        };
+        let bytes = &originals[&name];
+        require(
+            bytes.len() <= MAX_BYTES
+                && digest(bytes) == receipt.receipt_sha256["checkpoint-stopped.json"],
+            "runtime retained checkpoint original changed",
+        )?;
+        let checkpoint = json::from_slice::<json::Value>(bytes)?;
+        claims.append_checkpoint(&checkpoint)?;
+    }
+    Ok(claims)
 }
 
 fn config_filename(deployment: &json::Value) -> Result<&str> {
@@ -647,6 +797,7 @@ fn validate_records(
             "runtime update artifact identity differs",
         )?;
     }
+    let retained_tips = checkpoint_tips(&records["checkpoint-stopped.json"])?;
     let final_rows = rows(field(&records["cohort-ready.json"], "observations")?)?;
     for name in [
         "retained-entry.json",
@@ -720,6 +871,11 @@ fn validate_records(
             "runtime unit transition exceeds the daemon argument",
         )?;
         flag(stopped, "cohort_stopped", true)?;
+        require(
+            retained_tips[index].0 >= number(stopped, "checkpoint_height")?
+                && retained_tips[index].0 >= number(field(before, "public")?, "height")?,
+            "runtime stopped tip predates its retained observation",
+        )?;
         let strict = verify_restored_record(restored, stopped, after, source, network, modern)?;
         if !strict {
             let final_ready = field(&final_rows[index], "cohort_observation")?;
@@ -1215,6 +1371,23 @@ impl Verified {
         }
     }
 
+    /// Retained producer claims, compared with authenticated finality before completion.
+    pub(super) fn retained_tip_claims(&self) -> Result<RetainedTips> {
+        #[cfg(not(target_os = "linux"))]
+        {
+            eyre::bail!("runtime retained tips require admitted Linux custody");
+        }
+        #[cfg(target_os = "linux")]
+        {
+            RetainedTips::from_checkpoint_records(
+                self.historical
+                    .iter()
+                    .chain(std::iter::once(self))
+                    .map(|step| &step.records["checkpoint-stopped.json"]),
+            )
+        }
+    }
+
     pub(super) fn revalidate(&self) -> Result<()> {
         #[cfg(not(target_os = "linux"))]
         {
@@ -1379,6 +1552,11 @@ pub(super) fn test_transition_trust() -> DeploymentTrustV1 {
 }
 
 #[cfg(test)]
+pub(super) fn test_chain_retained_tip_claims(height: u64, hash: Hash) -> Result<RetainedTips> {
+    tests::chain_retained_tip_claims(height, hash)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1421,7 +1599,7 @@ mod tests {
                 "systemd":{"MainPID":"123","InvocationID":"actual","NRestarts":"0"}});
             before.push(row.clone());
             after.push(row);
-            stopped.push(norito::json!({"role":(role.clone()),"cohort_stopped":true,"checkpoint_height":12,"kura_tip":{"height":12}}));
+            stopped.push(norito::json!({"role":(role.clone()),"cohort_stopped":true,"checkpoint_height":12,"kura_tip":{"height":12,"hash":(hex::encode(Hash::new(b"retained fixture block").as_ref()))}}));
             restored.push(norito::json!({"role":role,"native_strict_checkpoint_verified":true,"restored_height":12}));
         }
         let artifacts: Vec<_> = ["iroha3d_taira", "iroha", "kagami"]
@@ -1432,7 +1610,9 @@ mod tests {
             "network_id":(network.to_string()),"secret_contents_read":false,"transaction_submission":false,
             "python_transaction_submission":false,"units":units,"artifacts":artifacts,
             "deployment":{"runtime_root":BASE,"config_root":"/srv/taira","state_root":"/var/lib/taira",
-                "network_id":(network.to_string()),"current":{"commit":PREVIOUS,"daemon":old}}});
+                "network_id":(network.to_string()),"genesis_manifest":"/srv/taira/genesis-manifest.json",
+                "kura_hash_journal":"storage/kura/blocks/canonical/blocks.hashes",
+                "current":{"commit":PREVIOUS,"daemon":old}}});
         let result = norito::json!({"schema":"taira.daemon-update.result.v2","commit":SOURCE,"network_id":(network.to_string()),
             "runtime_update_complete":true,"state_preserved":true,"retained_native_snapshot_verified":true,
             "retained_native_state_verified":true,"historical_genesis_replay_supported":false,
@@ -1877,6 +2057,8 @@ mod tests {
             "state_root",
             "config_release",
             "config_filename",
+            "genesis_manifest",
+            "kura_hash_journal",
         ] {
             let mut fixture = chain_fixture(2);
             fixture.change_record(1, "intent.json", |record| {
@@ -1919,6 +2101,121 @@ mod tests {
             });
             assert!(fixture.verify().is_err(), "{key}");
         }
+    }
+
+    pub(super) fn chain_retained_tip_claims(height: u64, hash: Hash) -> Result<RetainedTips> {
+        let mut fixture = chain_fixture(2);
+        for index in 0..2 {
+            fixture.change_record(index, "checkpoint-stopped.json", |record| {
+                for row in record.as_array_mut().unwrap() {
+                    put(row, "checkpoint_height", norito::json!(height));
+                    put(
+                        row,
+                        "kura_tip",
+                        norito::json!({"height":height,"hash":(hex::encode(hash.as_ref()))}),
+                    );
+                }
+            });
+            fixture.change_record(index, "checkpoint-restored.json", |record| {
+                for row in record.as_array_mut().unwrap() {
+                    put(row, "restored_height", norito::json!(height));
+                }
+            });
+            for name in ["retained-entry.json", "after.json", "cohort-ready.json"] {
+                fixture.change_record(index, name, |record| {
+                    let rows = if name == "cohort-ready.json" {
+                        record.get_mut("observations").unwrap()
+                    } else {
+                        record
+                    };
+                    for row in rows.as_array_mut().unwrap() {
+                        put(
+                            row.get_mut("public").unwrap(),
+                            "height",
+                            norito::json!(height),
+                        );
+                    }
+                });
+            }
+        }
+        // Every changed receipt is consistently rehashed; proof mismatch must be
+        // caught by the authenticated prefix, never by a superficial digest check.
+        fixture.verify()?;
+        retained_tip_claims(&fixture.receipt, &fixture.originals)
+    }
+
+    #[test]
+    fn portable_runtime_chain_rejects_rehashed_missing_changed_and_decreasing_tips() {
+        for mutation in 0..5 {
+            let mut fixture = chain_fixture(3);
+            fixture.change_record(1, "checkpoint-stopped.json", |record| {
+                let tip = record.get_mut(0usize).unwrap().get_mut("kura_tip").unwrap();
+                match mutation {
+                    0 => {
+                        tip.as_object_mut().unwrap().remove("hash");
+                    }
+                    1 => put(
+                        tip,
+                        "hash",
+                        norito::json!(hex::encode(Hash::new(b"different middle block").as_ref())),
+                    ),
+                    2 => put(tip, "height", norito::json!(11)),
+                    3 => put(tip, "height", norito::json!(0)),
+                    _ => put(tip, "hash", norito::json!("0".repeat(64))),
+                }
+            });
+            assert!(
+                fixture.verify().is_err(),
+                "rehashed tip mutation {mutation}"
+            );
+        }
+        // A source-native replay claim must retain the same exact checkpoint hash.
+        let (mut records, operation, network, trust) = fixture();
+        records
+            .get_mut("checkpoint-stopped.json")
+            .unwrap()
+            .get_mut(0usize)
+            .unwrap()
+            .get_mut("kura_tip")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("hash");
+        assert!(validate_records(&records, &operation, network, SOURCE, &trust, VERSION).is_err());
+    }
+
+    #[test]
+    fn portable_runtime_chain_preserves_all_deployment_metadata_and_tip_inventory() {
+        for key in [
+            "genesis_manifest",
+            "kura_hash_journal",
+            "public_origin",
+            "renderer_sha256",
+        ] {
+            let mut fixture = chain_fixture(2);
+            fixture.change_record(1, "intent.json", |record| {
+                put(
+                    record.get_mut("deployment").unwrap(),
+                    key,
+                    norito::json!("changed"),
+                );
+            });
+            assert!(
+                fixture
+                    .verify()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("retained deployment"),
+                "{key}"
+            );
+        }
+        let fixture = chain_fixture(2);
+        fixture.verify().unwrap();
+        let claims = retained_tip_claims(&fixture.receipt, &fixture.originals).unwrap();
+        assert_eq!(claims.heights().collect::<Vec<_>>(), vec![12]);
+        let mut originals = fixture.originals.clone();
+        originals.remove(&chain_name(0, "checkpoint-stopped.json"));
+        assert!(retained_tip_claims(&fixture.receipt, &originals).is_err());
     }
 
     #[test]

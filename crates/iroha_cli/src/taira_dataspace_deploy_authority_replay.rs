@@ -102,6 +102,7 @@ impl OriginalCompletion {
         plan: &PlanV1,
         trust: &TrustV1,
         prepared: &[(PreparedV1, SignedTransaction)],
+        retained_tips: &runtime_update::RetainedTips,
         mut read: impl FnMut(&str, usize) -> Result<Vec<u8>>,
     ) -> Result<(Vec<json::Value>, Vec<json::Value>)> {
         let value = &self.value;
@@ -121,6 +122,11 @@ impl OriginalCompletion {
             needed.insert(peer.height);
             needed.extend(peer.carriers.iter().map(|c| c.height));
         }
+        needed.extend(retained_tips.heights());
+        require(
+            needed.iter().all(|height| *height <= maximum),
+            "runtime retained tip exceeds the completed authenticated prefix",
+        )?;
         let mut proofs = BTreeMap::new();
         let mut verifier = authority.verifier()?;
         for height in 1..=maximum {
@@ -140,6 +146,10 @@ impl OriginalCompletion {
                 proofs.insert(height, proof);
             }
         }
+        // Every retained historical height was included above and authenticated by
+        // the same native genesis/QC walk before any runtime claim is accepted.
+        retained_tips
+            .verify_authenticated_prefix(&proofs, value.peers.iter().map(|peer| peer.height))?;
         let genesis = &proofs[&1];
         let mut phases: Option<Vec<json::Value>> = None;
         let mut peers = Vec::new();

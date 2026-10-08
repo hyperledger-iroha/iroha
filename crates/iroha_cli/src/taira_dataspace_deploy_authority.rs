@@ -421,7 +421,7 @@ fn verify(
         effective == expected,
         "effective peer trust differs from selected target source",
     )?;
-    let runtime = if let Some(receipt) = &completion.runtime_update {
+    let (runtime, retained_tips) = if let Some(receipt) = &completion.runtime_update {
         let names = runtime_update::portable_record_names(receipt)?;
         let mut records = BTreeMap::new();
         for name in names {
@@ -430,7 +430,7 @@ fn verify(
                 read(&format!("runtime-update-{name}"), MAX_BYTES)?,
             );
         }
-        Some(runtime_update::verify_public_originals(
+        let projection = runtime_update::verify_public_originals(
             receipt,
             &records,
             &original,
@@ -438,9 +438,13 @@ fn verify(
             plan.manifest.network_id,
             target_commit,
             target_version,
-        )?)
+        )?;
+        (
+            Some(projection),
+            runtime_update::retained_tip_claims(receipt, &records)?,
+        )
     } else {
-        None
+        (None, runtime_update::RetainedTips::default())
     };
     let mut prepared = Vec::new();
     let mut budget = DeploymentBudget::new(&plan.manifest)?;
@@ -459,7 +463,8 @@ fn verify(
         )?;
         prepared.push((retained, transaction));
     }
-    let (phases, peers) = completion.replay(&plan, &effective, &prepared, &mut read)?;
+    let (phases, peers) =
+        completion.replay(&plan, &effective, &prepared, &retained_tips, &mut read)?;
     drop(read);
     require(
         consumed.len() == inventory.files.len(),
