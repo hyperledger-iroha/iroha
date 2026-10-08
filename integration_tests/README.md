@@ -19,6 +19,19 @@ This crate hosts cross-component tests for Iroha.
   behavior are covered by the deterministic simulator
   (`cargo test -p iroha_sumeragi --features sim`, `specs/sumeragi.md` §13).
 - Target a harness directly with `cargo test -p integration_tests --test <harness>`.
+- The explicit KAGEMUSHA network setup exporter is
+  `cargo test --locked -p integration_tests --test sumeragi kagemusha_network_setup::export_four_validator_kagemusha_setup -- --exact --ignored --nocapture --test-threads=1`.
+  Select same-candidate daemon and CLI binaries with `TEST_NETWORK_BIN_IROHAD`
+  and `TEST_NETWORK_BIN_IROHA`, require `IROHA_TEST_REQUIRE_NETWORK=1`, and set
+  `IROHA_TEST_SKIP_BUILD=1`. Supply a fresh `KAGEMUSHA_REAL_NETWORK_SETUP_OUTPUT`
+  under checkout-local `target/qualification`, with test-network and temporary
+  directories also under `target`. The exporter verifies each of four live
+  validators' native H1/H2 prefix, exact three-vote successor certificate,
+  registered supply, balances and reserve permission. The ordinary H2 transaction
+  transfers 1,000 whole fee-asset units from ALICE to each wallet/reserve role;
+  every validator must report those exact funded balances. It retains the original
+  signed genesis and setup inputs for that network's catalog. Its source-only
+  result does not establish genuine Load, offline exchange or Unload completion.
 - The focused `taira_consensus_contracts` target in `iroha_test_network` requires four real validators, three public routable lanes, and the exact signed Ordinary transaction to become state-resolved Applied while all four peers advance beyond genesis. It shares the existing multi-route NPoS/DA genesis fixture, keeps production proof defaults, and fails sandbox skips. Prebuild the native `iroha3d` daemon and `iroha` CLI and select them with `TEST_NETWORK_BIN_IROHAD` and `TEST_NETWORK_BIN_IROHA`; set `IROHA_TEST_SKIP_BUILD=1` and run `cargo test --locked -p iroha_test_network --test taira_consensus_contracts four_peer_multiroute_ordinary_transaction_reaches_applied -- --exact --nocapture`. The maintained Taira release gate supplies these binaries from the same warm native build before the Linux build.
 - Target a single test with `cargo test -p integration_tests --test <harness> <filter> -- --nocapture`.
 - Global candidate admission: `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_candidate::fresh_global_candidate_bonds_before_authenticated_committee_activation -- --exact --nocapture`. This required-network scenario starts four NPoS validators and a separate signed observer, transfers canonical XOR from funded Alice to its ordinary account, rejects foreign peer consent without custody changes, and admits the operator's valid self-bonded candidacy for the E+2 boundary. All five replicas must agree on registration, exact liquid/escrow balances and pending eligibility, while authenticated current finality remains exactly four equal voters and three commit signatures. It fails a sandbox skip. This fee-policy-disabled admission fixture does not qualify fee-enabled quoting, subsequent election, runtime credential installation, observer-to-voter promotion or withdrawal.

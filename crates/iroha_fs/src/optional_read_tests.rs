@@ -132,7 +132,7 @@ fn optional_admission_late_named_absence_stays_error_in_every_native_reader_then
         );
         assert_eq!(
             directory
-                .read_scope(|view| view.read_optional("record", 8, |bytes| bytes.len()))
+                .read_scope(|view| view.read_optional("record", 8, <[u8]>::len))
                 .unwrap(),
             Some(8)
         );

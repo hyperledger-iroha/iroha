@@ -15,6 +15,8 @@ pub struct WalletResult {
     /// FeeClaim transport36; enrollment selection37/Apple originals38/custody acknowledgement39.
     /// Ledger instruction40/Unload confirmation42; retired result kinds41/43 are rejected.
     /// Activation confirmed44/verifying45/not started46/rejected49; UnloadClaim48.
+    /// Collection idle50/progress51/collected52: no bytes/detail, sequence only for51/52.
+    /// Destructive review53: token+254 DATA bytes; deleted54: marker32; discarded55/not-deleted56 empty.
     /// Background29: phase/eligibility/backlog-known in detail; sequence is last observed backlog.
     /// CreditProjection47: exact typed header92 plus receiver original up to10000 bytes.
     /// Negative is failure.
@@ -52,6 +54,21 @@ pub(super) unsafe fn output(
     out: *mut WalletResult,
     action: impl FnOnce() -> Result<Response>,
 ) -> i32 {
+    unsafe { output_with(out, action, allocate_bytes) }
+}
+fn allocate_bytes(value: &mut WalletResult, bytes: &[u8]) -> std::result::Result<(), ()> {
+    let mut length = 0;
+    // Local initialized outputs and an exact borrowed slice; same bridge allocation owner.
+    unsafe { crate::write_bytes(&mut value.bytes, &mut length, bytes) }.map_err(|_| ())?;
+    value.length = length as usize;
+    Ok(())
+}
+// One serialization path lets tests inject a post-issuance allocator refusal without OOM.
+pub(super) unsafe fn output_with(
+    out: *mut WalletResult,
+    action: impl FnOnce() -> Result<Response>,
+    allocate: impl FnOnce(&mut WalletResult, &[u8]) -> std::result::Result<(), ()>,
+) -> i32 {
     if out.is_null() {
         return INVALID;
     }
@@ -67,15 +84,15 @@ pub(super) unsafe fn output(
                 detail: response.detail,
                 ..WalletResult::default()
             };
-            if !response.bytes.is_empty() {
-                let mut length = 0;
-                // SAFETY: valid local outputs; allocator is paired with bridge free.
-                if unsafe { crate::write_bytes(&mut value.bytes, &mut length, &response.bytes) }
-                    .is_err()
-                {
-                    return RESOURCE;
-                }
-                value.length = length as usize;
+            if !response.bytes.is_empty() && allocate(&mut value, &response.bytes).is_err() {
+                // Preserve the initialized failure geometry even after the owner issued DATA.
+                unsafe {
+                    out.write(WalletResult {
+                        status: RESOURCE,
+                        ..WalletResult::default()
+                    })
+                };
+                return RESOURCE;
             }
             value
         }
@@ -283,9 +300,10 @@ pub struct WalletSetupRequest {
     pub setup_id: *const u8,
     /// One fixed setup selector documented above.
     pub selector: u32,
-    /// Positive Offer or ledger Load amount; zero for every other selector.
+    /// Positive Offer/ledger Load amount, or historical sequence for collection47 (zero allowed).
+    /// Zero for every other selector.
     pub amount: WalletU128,
-    /// Native time token or ledger instruction kind, as selected by the operation.
+    /// Native time/destructive-review token or ledger instruction kind, selected by operation.
     pub token: u64,
     /// Complete canonical original according to the selected operation.
     pub first: *const u8,
@@ -313,39 +331,65 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_setup_v1(
     request: *const WalletSetupRequest,
     out: *mut WalletResult,
 ) -> i32 {
-    unsafe {
-        output(out, || {
-            if request.is_null() {
-                return Err(Failure::code(INVALID));
-            }
-            let request = &*request;
-            let bounds = setup::bounds(request.selector)?;
-            // Check all original lengths before creating any input slice.
-            if [
-                request.first_length,
-                request.second_length,
-                request.third_length,
-            ]
-            .into_iter()
-            .zip(bounds)
-            .any(|(length, bound)| length > bound)
-            {
-                return Err(Failure::code(INVALID));
-            }
-            let value = setup::request(
-                input(request.setup_id, 32, 32)?,
-                request.selector,
-                u128::from(request.amount.low) | (u128::from(request.amount.high) << 64),
-                request.token,
-                [
-                    input(request.first, request.first_length, bounds[0])?,
-                    input(request.second, request.second_length, bounds[1])?,
-                    input(request.third, request.third_length, bounds[2])?,
-                ],
-            )?;
-            setup(handle, value)
-        })
+    unsafe { setup_output_with(handle, request, out, allocate_bytes) }
+}
+// Shared exact C intake/delivery path; the allocator seam is private and never configurable.
+pub(super) unsafe fn setup_output_with(
+    handle: u64,
+    request: *const WalletSetupRequest,
+    out: *mut WalletResult,
+    allocate: impl FnOnce(&mut WalletResult, &[u8]) -> std::result::Result<(), ()>,
+) -> i32 {
+    let mut pending = None;
+    let status = unsafe {
+        output_with(
+            out,
+            || {
+                if request.is_null() {
+                    return Err(Failure::code(INVALID));
+                }
+                let request = &*request;
+                let bounds = setup::bounds(request.selector)?;
+                // Check all original lengths before creating any input slice.
+                if [
+                    request.first_length,
+                    request.second_length,
+                    request.third_length,
+                ]
+                .into_iter()
+                .zip(bounds)
+                .any(|(length, bound)| length > bound)
+                {
+                    return Err(Failure::code(INVALID));
+                }
+                let value = setup::request(
+                    input(request.setup_id, 32, 32)?,
+                    request.selector,
+                    u128::from(request.amount.low) | (u128::from(request.amount.high) << 64),
+                    request.token,
+                    [
+                        input(request.first, request.first_length, bounds[0])?,
+                        input(request.second, request.second_length, bounds[1])?,
+                        input(request.third, request.third_length, bounds[2])?,
+                    ],
+                )?;
+                let result = setup(handle, value);
+                pending = Some(terminal::ReviewDelivery::new(
+                    handle,
+                    request.selector,
+                    &result,
+                ));
+                result
+            },
+            allocate,
+        )
+    };
+    if status >= 0
+        && let Some(pending) = &mut pending
+    {
+        pending.delivered();
     }
+    status
 }
 #[cfg(test)]
 mod setup_boundary_tests {
@@ -363,6 +407,7 @@ mod setup_boundary_tests {
             let (kind, sequence, bytes) = match input {
                 setup::Setup::BackgroundStatus => panic!("status bypasses wallet lock"),
                 setup::Setup::Bootstrap => (1, 0, vec![0, 255, 1]),
+                setup::Setup::CollectRetained { sequence } => (51, sequence, vec![]),
                 setup::Setup::UnloadClaim {
                     request_id,
                     beneficiary,
@@ -478,6 +523,12 @@ mod setup_boundary_tests {
                     assert_eq!(original, [0, 255, 7]);
                     (45, u128::from(u64::MAX), vec![11; 32])
                 }
+                setup::Setup::ReviewCustodyDeletion
+                | setup::Setup::ConfirmCustodyDeletion { .. }
+                | setup::Setup::ResumeCustodyDeletion
+                | setup::Setup::DiscardCustodyDeletion { .. } => {
+                    panic!("separate terminal fixture")
+                }
                 setup::Setup::FinishTime { .. } => panic!("unexpected unsigned time fixture"),
                 setup::Setup::RequestFeeSelection => (12, 0, vec![0xf3; 64]),
                 setup::Setup::ValidateRequestFeePolicy { .. } => {
@@ -567,6 +618,61 @@ mod setup_boundary_tests {
         );
         assert!(out.bytes.is_null());
     }
+    #[test]
+    fn collection_c_preserves_full_sequence_and_refuses_foreign_authority() {
+        let (handle, calls) = installed(false);
+        let zero = [0; 32];
+        for sequence in [0, 1, u128::MAX] {
+            let mut input = request(&zero, 47);
+            input.amount = WalletU128 {
+                low: sequence as u64,
+                high: (sequence >> 64) as u64,
+            };
+            let mut out = WalletResult::default();
+            assert_eq!(
+                unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &input, &mut out) },
+                0
+            );
+            assert_eq!(
+                (
+                    out.status,
+                    out.sequence_low,
+                    out.sequence_high,
+                    out.detail,
+                    out.length
+                ),
+                (51, sequence as u64, (sequence >> 64) as u64, 0, 0)
+            );
+            assert!(out.bytes.is_null());
+        }
+        let mut input = request(&zero, 47);
+        input.token = 1;
+        assert_failure(handle, &input, INVALID);
+        let foreign = [7; 32];
+        assert_failure(handle, &request(&foreign, 47), INVALID);
+        for index in 0..3 {
+            let mut input = request(&zero, 47);
+            match index {
+                0 => {
+                    input.first = foreign.as_ptr();
+                    input.first_length = 1;
+                }
+                1 => {
+                    input.second = foreign.as_ptr();
+                    input.second_length = 1;
+                }
+                _ => {
+                    input.third = foreign.as_ptr();
+                    input.third_length = 1;
+                }
+            }
+            assert_failure(handle, &input, INVALID);
+        }
+        assert_failure(handle, &request(&zero, 52), INVALID);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(connect_norito_kagemusha_wallet_close_v1(handle), 0);
+    }
+
     #[test]
     fn setup_c_preserves_typed_owner_input_and_distinct_exact_original_results() {
         let (handle, calls) = installed(false);

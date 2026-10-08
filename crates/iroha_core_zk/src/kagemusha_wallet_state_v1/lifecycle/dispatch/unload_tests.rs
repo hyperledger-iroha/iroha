@@ -205,7 +205,7 @@ fn permanent_plan_projects_after_capsule_collection_and_restart_without_signing(
     w.fold_once().unwrap();
     w.fold_once().unwrap();
     while !matches!(
-        w.collect_step(1, None).unwrap(),
+        w.collect_retained_step(1).unwrap(),
         CollectionStatus::Collected(1)
     ) {}
     assert!(

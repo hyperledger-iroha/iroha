@@ -38,3 +38,7 @@
 
 # Original installation loader; Native authenticates its immutable application trust root.
 -keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletInstalledRuntimeNativeV1 { *; }
+
+# Rust constructs bounded observation DATA through its dedicated JNI reply domain.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletObservationNativeV1 { *; }
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletObservationReplyV1 { *; }

@@ -412,9 +412,13 @@ Starting points, not evidence that this protocol has passed:
 
 ### Current implementation checkpoint (2026-10-08)
 
-The resumed `optimizations` checkout is based on `cafedcdd35` with a further
-resolved merge and continuing coordinated edits; a commit hash alone does not
-reproduce the changing candidate.
+The resumed `optimizations` checkout advanced from `ad75acfe2a` through
+`7f14c2389c` to `505a5bd87d` and another concurrent merge while checks were
+running. Merge conflicts were resolved, but consumed CoreZk, bridge, data-model
+and filesystem sources changed.
+SDK and component results below belong to their captured pre-merge inputs;
+the merged candidate requires rebuilt checks. A commit hash alone does not
+reproduce the continuing edits.
 Earlier component results belong to their captured source and binary, not
 retroactively to this checkout. No authenticated artifact
 set, full-protocol qualification, phone result or completed offline payment is
@@ -465,6 +469,117 @@ drift remain retained in
 `target/qualification/finality-server-component-capture-1`; this evidence belongs
 to the preserved binaries, not the subsequent merged source.
 
+The current complete host Swift run passes 2,180 tests across three XCTest
+bundles (4, 2,104 and 72), with zero failures. The canonical local runner rebuilt
+its native bridge and completed both source/artifact admission checks, including
+verification after execution. This includes 191 KAGEMUSHA cases, the new
+collection/deletion APIs and five actual native confidential-prover cases.
+Logs and producer records are retained in `target/qualification/swift-local-zlwyzn1a`;
+the completion receipt and exact three test executables are retained under
+`native-terminal-sdk-swift-current-1`. The copied Mach-O files alone are not
+runnable XCTest bundles. The earlier 2,174-test pre-change capture remains in
+`swift-local-ee69gvae`. Neither host run establishes device or complete monetary
+protocol qualification.
+
+The current C# native-consumer selection passes 543 cases, including six actual
+confidential-prover cases, with zero failures or skips and the exact rebuilt
+ABI27 dylib observed by the loader. Source and compiled artifacts remain
+unchanged. The wrapper initially refused its 518-case discovery count: one
+selected theory expands into 26 data rows at execution. Independent review
+matches those 26 rows to the source and confirms every other method's count and
+filter membership. The original refusal and separate reconciliation are retained
+under `target/qualification/csharp-current-abi27-1`. This establishes the
+selected host consumers, not installed release-package or network readiness.
+
+The collection and custody-deletion SDK changes pass 16 focused
+managed Kotlin tests with JDK 21 and the JDK 8 API compile guard retained. The
+run binds unchanged SDK inputs, compiled classes and XML results under
+`target/qualification/native-terminal-sdk-kotlin-managed-2`. This covers typed
+status parsing, immutable collection values, owner-bound one-use deletion
+reviews and uncertain-outcome recovery; it excludes host JNI execution and
+physical custody. ABI/header parity and the no-legacy-codec guard also pass for
+the coordinated source changes. The rebuilt ABI27 host `b968de18…fda800` also
+passes 62 fresh Kotlin/Java JNI cases: nine wallet/deletion/collection probes,
+18 privacy cases, 25 SoraFS cases and ten signer cases, with zero failures or
+skips. SDK/fixture sources and the selected artifact are unchanged before and
+after execution. The loader receives the sole explicit library directory;
+independent mapped-library path observation was unavailable. The retained
+receipt is `target/qualification/native-terminal-sdk-kotlin-native-current-2`;
+its initial test-probe compile failure is retained separately. These host
+boundary checks do not open a genuine funded wallet or qualify a phone. The
+current captured Rust collection/deletion selection passes 47 of 48 cases,
+including all 26 bridge cases. Its one failure is a test expecting empty-map
+warnings from a fixture whose three map roots are nonempty. The narrowly
+corrected expectation awaits a rebuilt run; the original failure and unchanged
+runtime sources, tools and binaries are retained in
+`finality-per-use-compiler-capture-1/collection-terminal-runtime-1`.
+
+The merged wallet observation surface now shares one native C/JNI dispatcher
+for metadata, retained peer output and prepared Load data. Kotlin and Java
+consumers pass eight managed tests with the JDK 8 API guard retained
+(`target/qualification/kotlin-observation-managed-current-1`). The canonical
+Kotlin account codec remains the single owner. Mandatory ABI27 inventory now
+contains 88 C/JNI exports; header parity, 60 mismatch controls and 69 artifact
+tests with 347 subtests pass. Originals are retained under
+`observation-jni-inventory-check-3`, including earlier tooling failures.
+The previous ABI27 artifact lacks the newly required exports and is correctly
+refused. The rebuilt ABI27 host `37d3b93c…554dd9` passes 65 fresh Kotlin/Java
+JNI cases, including the new observation probe and both canonical account
+codec tests. Sources, fixtures and artifact bytes remain unchanged; the receipt
+is `target/qualification/kotlin-observation-jni-current-1`. The loader used the
+sole explicit artifact directory; an independent mapped-library observation
+was unavailable. This covers the host boundary, not a funded wallet or phone.
+The complete rebuilt Swift suite also passes 2,203 unique tests across three
+XCTest bundles (4, 2,127 and 72), with zero failures or skips. The canonical
+runner completes its post-execution artifact check against the same current
+ABI27 dylib. The receipt is
+`target/qualification/kotlin-observation-swift-current-1/completion-review.json`;
+the earlier 2,180-case capture remains evidence for its own preserved candidate.
+
+The fresh Python installed-wheel selection passes all five native consumer
+tests with zero failures or skips. The emitted native module, wheel payload
+and installed module have the same SHA `2117d3e4…63d14e`; source, actual Cargo
+inputs, tools and installed files remain unchanged through final verification.
+The retained result is
+`target/qualification/python-native-local-unit-current-abi27-3/artifact/result.json`.
+The two earlier producer refusals remain recorded. This is a local component
+result; the clean-source release packaging guard remains unchanged and no
+release, wallet exchange or phone qualification follows.
+
+The next JavaScript capture executes all six original native cases successfully,
+but post-run admission rejects a data-model finality source change. Its original
+`passed: false` result remains in
+`target/qualification/js-native-current-abi27-2/runtime/result.json`.
+The new Core/CoreZk capture passes 24 explicitly selected setup, registration and
+finality diagnostics (14 Core and ten CoreZk). Its binaries and original
+mixed-source verdict remain unchanged in
+`target/qualification/monetary-pipeline-capture-1/diagnostic-runtime-1`.
+These checks do not qualify the merged source or complete monetary exchange.
+
+The first real-network daemon/CLI capture passes its stock-feature audit and
+independent compiler-input review, including exact reproduction of generated
+tables. The companion harness builds successfully but its consumed data-model
+source changes during compilation, so source admission refuses it before
+network execution. Both original verdicts remain under
+`target/qualification/real-network-monetary-{stock,harness}-capture-1`.
+A matching merged-source rebuild is required before the four-validator run.
+
+All eight native Send control masks and both Receive variants complete their
+measurement and separate one-key footprint processes: 20 processes pass, with
+all 304 timed proofs independently verified. Locally generated step descriptors
+encode 3,296-byte proofs without quotas and 3,456-byte proofs with quotas.
+Four-worker observed proof p95 ranges from 391.7 to 1,378.1 ms; separate one-key
+kernel peak RSS ranges from 46.50 to 169.16 MiB. These are captured-binary step
+diagnostics, not durable-payment latency, complete-catalog or phone results.
+The broad wrapper retains its source-drift failure from the concurrent merge;
+the binary and measurement tools remained unchanged. Original samples and
+descriptor/key digests are under
+`target/qualification/monetary-selectors-capture-1/runtime-1`; its
+`selector-summary.json` pins each process result. Three measurement helper tests
+pass, and selected-package strict Clippy with `--no-deps` passes. The ordinary
+strict command still fails on the 570 gadget dependency diagnostics; fixes are
+staged separately from the active measurement sources.
+
 The revised measurement harness passes 114 focused tests. It binds the complete
 local package inputs, actual compiler depfiles, selected Rust tools, and both
 present and absent Cargo configuration files in checkout ancestors and
@@ -474,10 +589,23 @@ qualification. This is a local input and tool policy, not a hermetic operating
 system claim. Fresh preparation succeeds with 2,022 bound inputs across 20 local
 package roots and 23 actual compiler depfiles. Independent preflight confirms
 unchanged before/after inputs and the selected executable. The nine-process,
-three-block campaign is running under seed 20261008 with stop-on-hard-failure;
-its partial samples do not establish any configuration's qualification. Memory
-compression invalidates an attempt even when its two proofs verify. Candidate,
-preflight, raw attempts and the evolving verdict are retained in
+three-block campaign under seed 20261008 stopped on a hard failure.
+All four A configurations (synthetic and real chips, with one and four workers)
+have completed nine valid processes with passing verdicts. The real A
+one-worker block medians are 31.107561, 30.902561 and 31.939405 seconds of CPU
+time; its six invalid attempts remain recorded. The real Q four-worker
+configuration failed on its seventh valid process: 10.630025916 seconds of
+observed elapsed time exceeded the 10-second hard limit, with no invalidity
+reasons. The other three Q configurations are incomplete. No retry or
+replacement sample changes that failure. Memory
+compression invalidates an attempt even when its two proofs verify. The first
+real-chip Q one-worker block has a 27.049123-second CPU median: all three runs
+meet the 30-second hard limit, but the median misses the required 27-second
+margin. The second real-chip Q four-worker block has a 9.420910083-second
+elapsed median, inside the 10-second hard limit but outside the required
+9-second margin. These block failures remain even if later blocks are faster.
+Candidate,
+preflight, raw attempts and the terminal failure are retained in
 `target/qualification/m3-current-source-closure-candidate-20261008`. The source
 closure and configuration repair records are retained in
 `target/qualification/qualifier-source-closure` and
@@ -505,6 +633,24 @@ missing original compiler binary. It supplies no proving-key qualification,
 completed graph or wallet admission. The snapshot and independent review are in
 `target/qualification/canonical-finality-recovered-metadata-1` and
 `canonical-finality-recovered-metadata-review-1`.
+
+The optimized per-use artifact capture completes successfully. Independent
+review binds its three retained test executables to 78 emitted compiler
+depfiles, 3,651 ordinary source inputs, 67 local packages and 9,383 unchanged
+package files. All three generated inputs are reproduced exactly from the
+captured IVM and bridge generators; the bridge selects no installed runtime
+authority. The 20 changing files are outside the compiled packages and declared
+generator inputs. The original broad source-drift classification is preserved,
+with the narrower review retained separately under
+`target/qualification/finality-per-use-compiler-capture-1`.
+Its focused catalog/server/import selection passes 41 cases, including genuine
+both-curve cache proofs, exact regeneration after eviction, a real k16 original
+key import comparison, and recovered descriptor/key intake without reading or
+generating proving keys. Thirteen artifact-dependent cases remain ignored in
+those ordinary selections. The new complete52 run uses the independently
+reviewed binary and recovered originals, with its attempts retained at
+`target/qualification/canonical-complete52-per-use-1`. It has not produced a
+completed authenticated wallet catalog or a monetary acceptance result.
 
 **Artifact build-order correction.** `OwnPolicy` and `BootstrapPolicy` now fix
 only the independently selected provider and root key. They bind scheme identity

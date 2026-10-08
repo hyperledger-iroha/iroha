@@ -35,7 +35,7 @@ internal class KagemushaWalletSetupInputV1(
     private val c: ByteArray
     init {
         val limits = when (selector) {
-            0, 1, 4, 6, 15, 18, 19, 20, 24, 27, 38, 43 -> intArrayOf(0, 0, 0)
+            0, 1, 4, 6, 15, 18, 19, 20, 24, 27, 38, 43, 47, 48, 49, 50, 51 -> intArrayOf(0, 0, 0)
             39 -> intArrayOf(10_000, 10_000, 10_000)
             40, 44 -> intArrayOf(10_000, 10_000, 0)
             21, 22 -> intArrayOf(21_024, 0, 0)
@@ -58,8 +58,8 @@ internal class KagemushaWalletSetupInputV1(
         b = second.copyOf()
         c = third.copyOf()
         require((selector in listOf(1, 2, 19, 20, 25, 27, 30, 33, 34, 39, 41, 42, 43, 44, 45)) == id.any { it != 0.toByte() }) { "setup identity" }
-        require((selector in listOf(1, 27)) == (amount.low != 0L || amount.high != 0L)) { "Offer or Load amount" }
-        require(token >= 0 && ((selector in listOf(5, 6, 29)) == (token != 0L))) { "native setup token" }
+        require(selector == 47 || (selector in listOf(1, 27)) == (amount.low != 0L || amount.high != 0L)) { "Offer or Load amount" }
+        require(token >= 0 && ((selector in listOf(5, 6, 29, 49, 51)) == (token != 0L))) { "native setup token" }
         require(selector !in listOf(30, 33, 34, 35, 36, 37, 46) || a.isNotEmpty()) { "ledger original" }
         require(selector != 29 || (token in 1L..3L && a.isNotEmpty())) { "ledger transport kind and original" }
         require(selector !in listOf(2, 39) || (a.isNotEmpty() && b.isEmpty() == c.isEmpty())) { "Request originals" }
@@ -116,4 +116,37 @@ class KagemushaWalletLedgerProgressV1 internal constructor(result: KagemushaWall
         heightBits = result.sequenceLow; hash = result.bytes()
     }
     fun blockHash(): ByteArray = hash.copyOf()
+}
+
+/** Native collection result; never payment completion or permission to destroy custody. */
+sealed class KagemushaWalletCollectionStatusV1 {
+    /** No collection work occurred because payment has priority or background work is disabled. */
+    object Idle : KagemushaWalletCollectionStatusV1()
+    /** One durable collection action completed for this historical sequence. */
+    class Progress(val sequence: KagemushaWalletUInt128V1) : KagemushaWalletCollectionStatusV1() {
+        override fun equals(other: Any?): Boolean = other is Progress && sequence == other.sequence
+        override fun hashCode(): Int = 31 * 1 + sequence.hashCode()
+        override fun toString(): String = "Progress(sequence=[REDACTED])"
+    }
+    /** Witnesses collected; permanent replay records and required originals remain retained. */
+    class Collected(val sequence: KagemushaWalletUInt128V1) : KagemushaWalletCollectionStatusV1() {
+        override fun equals(other: Any?): Boolean = other is Collected && sequence == other.sequence
+        override fun hashCode(): Int = 31 * 2 + sequence.hashCode()
+        override fun toString(): String = "Collected(sequence=[REDACTED])"
+    }
+    internal companion object {
+        fun from(value: KagemushaWalletCallV1, expectedSequence: KagemushaWalletUInt128V1): KagemushaWalletCollectionStatusV1 {
+            fun invalid(): Nothing = throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+            if (value.bytes().isNotEmpty() || value.detail != 0) invalid()
+            val sequence = KagemushaWalletUInt128V1(value.sequenceLow, value.sequenceHigh)
+            return when (value.status) {
+                50 -> { if (sequence != KagemushaWalletUInt128V1(0, 0)) invalid(); Idle }
+                51, 52 -> {
+                    if (sequence != expectedSequence) invalid()
+                    if (value.status == 51) Progress(sequence) else Collected(sequence)
+                }
+                else -> invalid()
+            }
+        }
+    }
 }

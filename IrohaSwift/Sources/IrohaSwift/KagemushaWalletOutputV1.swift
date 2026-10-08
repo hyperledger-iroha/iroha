@@ -140,8 +140,4 @@ extension KagemushaWalletV1 {
     let result = try observeProjection(selector: 3, identity: requestId)
     return try KagemushaWalletPreparedLoadV1.observation(result, requestID: requestId)
   }
-  /// Complete original claim from the actual released Unload and retained owner originals.
-  public func unloadClaim(requestId: Data) throws -> Data {
-    try unloadClaimTransport(requestId: requestId)
-  }
 }

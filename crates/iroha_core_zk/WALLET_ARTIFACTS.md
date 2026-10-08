@@ -157,7 +157,16 @@ before retaining opaque regeneration recipes. Each cache hit or regenerated PK
 must match the signed original bytes and pass source-specific strict import.
 Only the exclusively owned regenerable PK cache may evict selected entries;
 checkpoint and terminal proof originals live in the separate durable journal.
-A successful initializer imports the complete graph but produces no live proof.
+A successful initializer authenticates the complete fixed descriptor/verifier graph
+and selects the cache and journal. It reads or generates no proving keys and produces
+no live proof. It does not claim that all proving keys are resident or ready. The fixed
+program, ordered child keys, anchor and both-curve obligations come only from the
+opaque completed qualifier; callers cannot supply an alternative verifier graph.
+Before each actual proof, the selected originals must match their signed D/V/PK
+lengths and hashes and pass strict source-specific import under those exact keys.
+Verified checkpoint reuse independently checks the original source, endpoints and
+both carried claims. Offline compiler archive qualification remains a separate
+complete strict-import check; it is not a serving fallback.
 Cancellation or failed initialization retains partial evidence; it never mints a
 partial graph or permits ordinary startup to adopt a missing selection. If first-use
 publication fails between the two namespace selections, preserve that evidence and

@@ -1,7 +1,9 @@
-//! Sequential original-bootstrap phases, each retaining its sole native child owner.
+//! Reserve-gated independent provider chains, each retaining its sole native child owners.
 
 use super::{super::service_policies::GeneratedProviderPolicies, *};
 use crate::managed::service_authority::CheckpointImportScope;
+#[cfg(test)]
+use crate::managed::service_authority::profile_validation_test_support as profiles;
 
 /// Only completed original evidence advances to the next child; all other progress returns intact.
 enum Phase<T> {
@@ -22,6 +24,15 @@ enum Incomplete {
 }
 
 impl Incomplete {
+    fn step(&self) -> ServiceBootstrapStep {
+        match self {
+            Self::Pending { step, .. } => *step,
+            Self::Funding { provider_id, .. } => ServiceBootstrapStep::ProviderFunding {
+                provider_id: *provider_id,
+            },
+        }
+    }
+
     /// Form the outer report only after the native child owner has returned.
     #[inline(never)]
     fn into_progress(self) -> Result<ServiceBootstrapProgress> {
@@ -64,14 +75,48 @@ macro_rules! open_child {
     }};
 }
 
-macro_rules! completed {
-    ($phase:expr) => {
-        match $phase? {
-            Phase::Complete(value) => value,
-            Phase::Incomplete(progress) => return progress.into_progress(),
-        }
-    };
-}
+// Test-only observations stay in the original phase frame. Counters are thread-local;
+// the parallel branch never reports a parent-thread count as the aggregate worker count.
+macro_rules! observed_phase {
+        ($run:expr, $call:expr, $stage:literal, $slot:expr) => {{
+            #[cfg(not(test))]
+            {
+                $call
+            }
+            #[cfg(test)]
+            {
+                let stage_started = Instant::now();
+                let profiles_start = profiles::snapshot();
+                let imports_start = ServiceAuthority::test_graph_import_snapshot();
+                let mode = match $run.mode {
+                    Mode::Local => "Local",
+                    Mode::Recover => "Recover",
+                    Mode::Advance => "Advance",
+                };
+                eprintln!(
+                    "bootstrap phase timing: mode={} stage={} provider_slot={:?} begin",
+                    mode, $stage, $slot
+                );
+                let result = $call;
+                eprintln!(
+                    "bootstrap phase timing: mode={} stage={} provider_slot={:?} end elapsed_ms={} remaining_ms={} result={} full_profile_validations={:?} cold_checkpoint_imports={:?}",
+                    mode,
+                    $stage,
+                    $slot,
+                    stage_started.elapsed().as_millis(),
+                    $run.deadline.saturating_duration_since(Instant::now()).as_millis(),
+                    match &result {
+                        Ok(Phase::Complete(_)) => "complete",
+                        Ok(Phase::Incomplete(_)) => "incomplete",
+                        Err(_) => "error",
+                    },
+                    profiles::snapshot().zip(profiles_start).and_then(|(now, start)| now.checked_sub(start)),
+                    ServiceAuthority::test_graph_import_snapshot().zip(imports_start).and_then(|(now, start)| now.checked_sub(start)),
+                );
+                result
+            }
+        }};
+    }
 
 struct Run<'a> {
     authority: &'a ServiceAuthority,
@@ -82,14 +127,15 @@ struct Run<'a> {
     checkpoint_import_scope: Option<CheckpointImportScope>,
 }
 
-/// Retain the original dependency order while each child owner occupies its own frame.
+/// Recover each provider frontier independently after reserve finality, retaining every
+/// original child and requiring all gateways before the reputation phase.
 pub(super) fn run(
     authority: &ServiceAuthority,
     original: &Original,
     deadline: Instant,
     mode: Mode,
     authorization: Option<&GeneratedBootstrapAuthorization>,
-) -> Result<ServiceBootstrapProgress> {
+) -> Result<RunOutcome> {
     #[cfg(test)]
     test_passes::record(mode);
     let checkpoint_import_scope = if mode == Mode::Advance {
@@ -105,8 +151,6 @@ pub(super) fn run(
         authorization,
         checkpoint_import_scope,
     };
-    #[cfg(test)]
-    use crate::managed::service_authority::profile_validation_test_support as profiles;
     // Preserve any enclosing counter owner. These guards retain only scalar previous values.
     #[cfg(test)]
     let _profile_counts = profiles::snapshot()
@@ -116,86 +160,150 @@ pub(super) fn run(
     let _import_counts = ServiceAuthority::test_graph_import_snapshot()
         .is_none()
         .then(ServiceAuthority::test_begin_graph_import_counts);
-    #[cfg(test)]
-    let graph_profiles_start = profiles::snapshot();
-    #[cfg(test)]
-    let graph_imports_start = ServiceAuthority::test_graph_import_snapshot();
-    // Macro expansion keeps the original call/result in this frame. Non-test builds evaluate
-    // the direct original expression; no generic wrapper owns a child, report or decoder graph.
-    macro_rules! observed_phase {
-        ($call:expr, $stage:literal, $slot:expr) => {{
-            #[cfg(not(test))]
-            {
-                $call
-            }
-            #[cfg(test)]
-            {
-                let stage_started = Instant::now();
-                let profiles_start = profiles::snapshot();
-                let imports_start = ServiceAuthority::test_graph_import_snapshot();
-                let mode = match run.mode {
-                    Mode::Local => "Local",
-                    Mode::Recover => "Recover",
-                    Mode::Advance => "Advance",
-                };
-                eprintln!(
-                    "bootstrap phase timing: mode={} stage={} provider_slot={:?} begin",
-                    mode, $stage, $slot
-                );
-                let result = $call;
-                eprintln!(
-                    "bootstrap phase timing: mode={} stage={} provider_slot={:?} end elapsed_ms={} remaining_ms={} result={} full_profile_validations={:?} cold_checkpoint_imports={:?} phases_total_profiles={:?} phases_total_imports={:?}",
-                    mode,
-                    $stage,
-                    $slot,
-                    stage_started.elapsed().as_millis(),
-                    run.deadline.saturating_duration_since(Instant::now()).as_millis(),
-                    match &result {
-                        Ok(Phase::Complete(_)) => "complete",
-                        Ok(Phase::Incomplete(_)) => "incomplete",
-                        Err(_) => "error",
-                    },
-                    profiles::snapshot().zip(profiles_start).and_then(|(now, start)| now.checked_sub(start)),
-                    ServiceAuthority::test_graph_import_snapshot().zip(imports_start).and_then(|(now, start)| now.checked_sub(start)),
-                    profiles::snapshot().zip(graph_profiles_start).and_then(|(now, start)| now.checked_sub(start)),
-                    ServiceAuthority::test_graph_import_snapshot().zip(graph_imports_start).and_then(|(now, start)| now.checked_sub(start)),
-                );
-                result
-            }
-        }};
-    }
-    let reserve_policy = completed!(observed_phase!(run.reserve(), "reserve", None::<usize>));
+    let reserve = observed_phase!(run, run.reserve(), "reserve", None::<usize>)?;
+    let reserve_policy = match reserve {
+        Phase::Complete(value) => value,
+        Phase::Incomplete(progress) => {
+            return Ok(RunOutcome {
+                progress: progress.into_progress()?,
+                dependencies: DependencyFrontiers::before_reserve(&original.policies),
+            });
+        }
+    };
+    // Absence is scheduling evidence only. Ordinary native child admission remains mandatory
+    // if material appears after the census; shared authorization claims are independently fenced.
+    let parallel = mode == Mode::Advance
+        && !norito::core::decode_limits_active()
+        && crate::managed::service_authority::ServiceChildInventory::begin(authority)?
+            .bootstrap_provider_purposes_absent()?;
+    let results: [Result<Phase<HistoricalProviderBootstrap>>; 3] = if parallel {
+        // Always join every successfully spawned child, including after launch failures or panics.
+        // No detached tasks, new deadlines, stack override or provider-specific authorization epoch.
+        std::thread::scope(|scope| {
+            let handles: [_; 3] = std::array::from_fn(|slot| {
+                let run = &run;
+                let selected = &original.policies.providers[slot];
+                std::thread::Builder::new()
+                    .name(format!("bootstrap-provider-{slot}"))
+                    .spawn_scoped(scope, move || {
+                        run.provider(slot, selected, reserve_policy.height)
+                    })
+            });
+            handles.map(|handle| match handle {
+                Ok(handle) => handle
+                    .join()
+                    .unwrap_or_else(|_| Err(invalid("bootstrap provider worker panicked"))),
+                Err(error) => Err(error.into()),
+            })
+        })
+    } else {
+        [
+            Ok(run.provider(0, &original.policies.providers[0], reserve_policy.height)?),
+            Ok(run.provider(1, &original.policies.providers[1], reserve_policy.height)?),
+            Ok(run.provider(2, &original.policies.providers[2], reserve_policy.height)?),
+        ]
+    };
     let mut histories = Vec::with_capacity(3);
-    let mut prior_height = reserve_policy.height;
-    for (slot, selected) in original.policies.providers.iter().enumerate() {
+    let mut first_incomplete = None;
+    let mut dependencies = DependencyFrontiers {
+        reserve_complete: true,
+        reputation_complete: false,
+        providers: [None; 3],
+    };
+    let mut maximum_gateway_height = reserve_policy.height;
+    for (slot, result) in results.into_iter().enumerate() {
+        match result? {
+            Phase::Complete(history) => {
+                maximum_gateway_height = maximum_gateway_height.max(history.gateway.height);
+                histories.push(history);
+            }
+            Phase::Incomplete(progress) => {
+                dependencies.providers[slot] = Some(progress.step());
+                if first_incomplete.is_none() {
+                    first_incomplete = Some(progress);
+                }
+            }
+        }
+    }
+    if let Some(progress) = first_incomplete {
+        return Ok(RunOutcome {
+            progress: progress.into_progress()?,
+            dependencies,
+        });
+    }
+    let reputation = observed_phase!(
+        run,
+        run.reputation(reserve_policy, histories, maximum_gateway_height),
+        "reputation",
+        None::<usize>
+    )?;
+    dependencies.reputation_complete = matches!(&reputation, Phase::Complete(_));
+    Ok(RunOutcome {
+        progress: match reputation {
+            Phase::Complete(history) => ServiceBootstrapProgress::Complete(history),
+            Phase::Incomplete(progress) => progress.into_progress()?,
+        },
+        dependencies,
+    })
+}
+
+impl Run<'_> {
+    #[inline(never)]
+    fn provider(
+        &self,
+        slot: usize,
+        selected: &GeneratedProviderPolicies,
+        prior_height: u64,
+    ) -> Result<Phase<HistoricalProviderBootstrap>> {
+        let run = self;
+        #[cfg(test)]
+        let _profile_counts = profiles::snapshot()
+            .is_none()
+            .then(profiles::Counter::begin);
+        #[cfg(test)]
+        let _import_counts = ServiceAuthority::test_graph_import_snapshot()
+            .is_none()
+            .then(ServiceAuthority::test_begin_graph_import_counts);
+        macro_rules! provider_completed {
+            ($phase:expr) => {
+                match $phase? {
+                    Phase::Complete(value) => value,
+                    Phase::Incomplete(progress) => return Ok(Phase::Incomplete(progress)),
+                }
+            };
+        }
         let provider_id = selected.provider_id;
-        let (custody_policy, custody_enrollment) = completed!(observed_phase!(
+        let (custody_policy, custody_enrollment) = provider_completed!(observed_phase!(
+            run,
             run.custody(selected, prior_height),
             "custody",
             Some(slot)
         ));
-        let reserve_account = completed!(observed_phase!(
+        let reserve_account = provider_completed!(observed_phase!(
+            run,
             run.account(slot, provider_id, custody_enrollment.height),
             "account",
             Some(slot)
         ));
-        let (funding_result, funding_height) = completed!(observed_phase!(
+        let (funding_result, funding_height) = provider_completed!(observed_phase!(
+            run,
             run.funding(provider_id, reserve_account.height),
             "funding",
             Some(slot)
         ));
-        let ingest_finality = completed!(observed_phase!(
+        let ingest_finality = provider_completed!(observed_phase!(
+            run,
             run.ingest(selected, funding_height),
             "ingest",
             Some(slot)
         ));
-        let gateway_finality = completed!(observed_phase!(
+        let gateway_finality = provider_completed!(observed_phase!(
+            run,
             run.gateway(selected, ingest_finality.height),
             "gateway",
             Some(slot)
         ));
-        prior_height = gateway_finality.height;
-        histories.push(HistoricalProviderBootstrap {
+        Ok(Phase::Complete(HistoricalProviderBootstrap {
             provider_id,
             custody_policy,
             custody_enrollment,
@@ -203,17 +311,9 @@ pub(super) fn run(
             funding: funding_result,
             provider_ingest: ingest_finality,
             gateway: gateway_finality,
-        });
+        }))
     }
-    let history = completed!(observed_phase!(
-        run.reputation(reserve_policy, histories, prior_height),
-        "reputation",
-        None::<usize>
-    ));
-    Ok(ServiceBootstrapProgress::Complete(history))
-}
 
-impl Run<'_> {
     fn may_submit(&self) -> Result<bool> {
         if self.mode != Mode::Advance {
             return Ok(false);
@@ -244,15 +344,25 @@ impl Run<'_> {
             if !self.may_submit()? {
                 return absent(ServiceBootstrapStep::ReservePolicy);
             }
-            // The fresh observation grants no signing/current-state authority. The ordinary
-            // new child still authenticates its own profile and lock after live authorization.
-            ManagedInitialReservePolicy::open(&self.authority.prepared)?
+            // The fresh observation grants no signing/current-state authority. The creator
+            // retains its own profile and lock after ordinary live authorization.
+            ManagedInitialReservePolicy::open_from_original(self.authority)?
         } else {
-            open_child!(
-                self,
-                ManagedInitialReservePolicy,
-                ServiceBootstrapStep::ReservePolicy
-            )
+            let existing = if self.mode == Mode::Advance {
+                ManagedInitialReservePolicy::open_existing(&self.authority.prepared)
+            } else {
+                ManagedInitialReservePolicy::open_existing_from_original(
+                    self.authority,
+                    self.checkpoint_import_scope.as_ref(),
+                )
+            };
+            match existing? {
+                Some(owner) => owner,
+                None if self.may_submit()? => {
+                    ManagedInitialReservePolicy::open_from_original(self.authority)?
+                }
+                None => return absent(ServiceBootstrapStep::ReservePolicy),
+            }
         };
         let mut result = incomplete(if mode == Mode::Local {
             reserve.recover_local_selected_if_present(&policies.network.reserve, fees, deadline)

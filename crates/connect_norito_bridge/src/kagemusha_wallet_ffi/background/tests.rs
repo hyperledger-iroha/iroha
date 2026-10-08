@@ -7,16 +7,22 @@ use std::sync::{
 };
 use std::time::Duration;
 
+type SetupScript = Box<dyn FnMut(setup::Setup) -> Result<Response> + Send>;
+
 struct ScriptWallet {
     base: TestWallet,
     fold: Box<dyn FnMut() -> Result<Response> + Send>,
+    setup: Option<SetupScript>,
 }
 impl Wallet for ScriptWallet {
     fn snapshot(&mut self) -> Result<state::Snapshot> {
         self.base.snapshot()
     }
     fn setup(&mut self, input: setup::Setup) -> Result<Response> {
-        self.base.setup(input)
+        match self.setup.as_mut() {
+            Some(run) => run(input),
+            None => self.base.setup(input),
+        }
     }
     fn execute(&mut self, input: state::OperationRequestV1) -> Result<Response> {
         self.base.execute(input)
@@ -49,6 +55,7 @@ fn scripted(
                 expected_request: None,
             },
             fold: Box::new(fold),
+            setup: None,
         }),
         state::Scheduler::new(),
     )
@@ -197,5 +204,64 @@ fn terminal_error_is_preserved_until_observed_then_explicit_wake_can_retry() {
         state.backlog.is_some() && !state.running && state.error.is_none()
     });
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+    close(id).unwrap();
+}
+
+#[test]
+fn collection_dispatch_does_not_reserve_payment_priority_against_itself() {
+    let selected = Arc::new(Mutex::new(Weak::<Owner>::new()));
+    let observed = selected.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let id = install(
+        Box::new(ScriptWallet {
+            base: TestWallet {
+                calls: calls.clone(),
+                drops: Arc::default(),
+                expected_request: None,
+            },
+            fold: Box::new(caught_up),
+            setup: Some(Box::new(move |input| {
+                let owner = observed.lock().unwrap().upgrade().unwrap();
+                let payments = owner.background.inner.lock().payments;
+                match input {
+                    setup::Setup::CollectRetained { sequence } => {
+                        assert_eq!(
+                            payments, 0,
+                            "collection must be able to start its scheduler"
+                        );
+                        Ok(Response {
+                            kind: 51,
+                            sequence,
+                            ..Response::default()
+                        })
+                    }
+                    setup::Setup::Bootstrap => {
+                        assert_eq!(payments, 1, "money setup still reserves priority");
+                        Ok(Response {
+                            kind: 1,
+                            ..Response::default()
+                        })
+                    }
+                    _ => panic!("unexpected test setup"),
+                }
+            })),
+        }),
+        state::Scheduler::new(),
+    )
+    .unwrap();
+    let owner = owner(id).unwrap();
+    *selected.lock().unwrap() = Arc::downgrade(&owner);
+    assert_eq!(
+        setup(
+            id,
+            setup::Setup::CollectRetained {
+                sequence: u128::MAX
+            }
+        )
+        .unwrap()
+        .sequence,
+        u128::MAX
+    );
+    assert_eq!(setup(id, setup::Setup::Bootstrap).unwrap().kind, 1);
     close(id).unwrap();
 }

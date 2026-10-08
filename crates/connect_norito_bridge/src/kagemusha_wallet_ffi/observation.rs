@@ -143,6 +143,12 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
         })
     }
 }
+/// Shared C/JNI observation dispatch under the same custody and deletion gate.
+pub(crate) fn observe(handle: u64, selector: u32, identity: &[u8]) -> Result<Response> {
+    require_identity(selector, identity)?;
+    with_wallet(handle, true, |wallet| wallet.observe(selector, identity))
+}
+
 /// Read bounded original DATA from the same admitted owner, without a monetary action.
 /// Metadata0 has no identity; Request1, Operation2 and preparedLoad3 use nonzero32.
 /// All observations return generic original DATA kind12 with zero sequence/detail.
@@ -162,8 +168,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_observe_v1(
     unsafe {
         output(out, || {
             let identity = input(identity, identity_length, 32)?;
-            require_identity(selector, identity)?;
-            with_wallet(handle, true, |wallet| wallet.observe(selector, identity))
+            observe(handle, selector, identity)
         })
     }
 }
@@ -171,6 +176,15 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_observe_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_observation_dispatch_rejects_invalid_data_before_unknown_owner() {
+        assert_eq!(observe(0, 0, &[]).unwrap_err().status, CLOSED);
+        for selector in 1..=3 {
+            assert_eq!(observe(0, selector, &[1; 32]).unwrap_err().status, CLOSED);
+            assert_eq!(observe(0, selector, &[0; 32]).unwrap_err().status, INVALID);
+        }
+        assert_eq!(observe(0, 4, &[]).unwrap_err().status, INVALID);
+    }
     #[test]
     fn observation_rejects_unused_identity_and_nonclosed_selectors() {
         assert!(require_identity(0, &[]).is_ok());

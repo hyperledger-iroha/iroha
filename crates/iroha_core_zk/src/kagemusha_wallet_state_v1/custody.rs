@@ -4,6 +4,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use iroha_data_model::kagemusha::*;
 
+mod deletion;
+pub use deletion::{CustodyDeletionProgressV1, CustodyDeletionReviewV1, ReviewedCustodyDeletionV1};
+
 use super::{AdvanceOutcome, AdvanceRequest, Lookup, ProviderError, SlotStatus};
 use crate::kagemusha_wallet_advance_v1::{
     KagemushaWalletFsV1, KagemushaWalletPlatformV1, KagemushaWalletProviderV1,
@@ -81,6 +84,8 @@ pub trait Custody {
 pub struct AdvanceHandle<F: KagemushaWalletFsV1, P> {
     provider: Arc<Mutex<KagemushaWalletProviderV1<F, P>>>,
     slot: KagemushaWalletSlotIdV1,
+    deletion_owner: Arc<()>,
+    deletion: deletion::DeletionState,
 }
 
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
@@ -90,14 +95,27 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
         Self {
             provider: Arc::new(Mutex::new(provider)),
             slot,
+            deletion_owner: Arc::new(()),
+            deletion: deletion::DeletionState::Open,
         }
     }
     pub(super) fn try_into_provider(self) -> Result<KagemushaWalletProviderV1<F, P>, Self> {
-        let Self { provider, slot } = self;
-        take_exclusive(provider).map_err(|provider| Self { provider, slot })
+        let Self {
+            provider,
+            slot,
+            deletion_owner,
+            deletion,
+        } = self;
+        take_exclusive(provider).map_err(|provider| Self {
+            provider,
+            slot,
+            deletion_owner,
+            deletion,
+        })
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, KagemushaWalletProviderV1<F, P>>, ProviderError> {
+        self.require_custody_operations()?;
         self.provider.lock().map_err(|_| ProviderError::Invalid {
             field: "provider handle poisoned",
         })

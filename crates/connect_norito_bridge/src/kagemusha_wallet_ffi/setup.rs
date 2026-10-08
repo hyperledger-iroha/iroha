@@ -4,6 +4,17 @@ use super::*;
 
 pub(crate) enum Setup {
     Bootstrap,
+    ReviewCustodyDeletion,
+    ConfirmCustodyDeletion {
+        token: u64,
+    },
+    ResumeCustodyDeletion,
+    DiscardCustodyDeletion {
+        token: u64,
+    },
+    CollectRetained {
+        sequence: u128,
+    },
     RequestFeeSelection,
     ValidateRequestFeePolicy {
         schedule: Vec<u8>,
@@ -137,7 +148,7 @@ fn unload_progress(value: state::UnloadFinalityProgressV1) -> Response {
 }
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
     Ok(match selector {
-        43 => [0; 3],
+        43 | 47 | 48 | 49 | 50 | 51 => [0; 3],
         44 => [
             KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
@@ -210,8 +221,8 @@ pub(crate) fn request(
         selector,
         1 | 2 | 19 | 20 | 25 | 27 | 30 | 33 | 34 | 39 | 41 | 42 | 43 | 44 | 45
     ) != (id != [0; 32]))
-        || (matches!(selector, 1 | 27) != (amount != 0))
-        || (matches!(selector, 5 | 6 | 29) != (token != 0))
+        || (selector != 47 && (matches!(selector, 1 | 27) != (amount != 0)))
+        || (matches!(selector, 5 | 6 | 29 | 49 | 51) != (token != 0))
         || (selector == 29 && !(1..=3).contains(&token))
         || originals
             .iter()
@@ -223,6 +234,11 @@ pub(crate) fn request(
     let [first, second, third] = originals;
     Ok(match selector {
         0 => Setup::Bootstrap,
+        48 => Setup::ReviewCustodyDeletion,
+        49 => Setup::ConfirmCustodyDeletion { token },
+        50 => Setup::ResumeCustodyDeletion,
+        51 => Setup::DiscardCustodyDeletion { token },
+        47 => Setup::CollectRetained { sequence: amount },
         38 => Setup::RequestFeeSelection,
         39 if !first.is_empty() && second.is_empty() == third.is_empty() => {
             Setup::RequestWithFeePolicy {
@@ -536,6 +552,22 @@ where
                 transport::credited(status, &original, &scheme)?
             }
             Setup::BackgroundStatus => return Err(Failure::code(INTERNAL)),
+            Setup::CollectRetained { sequence } => {
+                let (kind, sequence) = match self.wallet.collect_retained_step(sequence)? {
+                    state::CollectionStatus::Idle => (50, 0),
+                    state::CollectionStatus::Progress(sequence) => (51, sequence),
+                    state::CollectionStatus::Collected(sequence) => (52, sequence),
+                };
+                return Ok(Response {
+                    kind,
+                    sequence,
+                    ..Response::default()
+                });
+            }
+            Setup::ReviewCustodyDeletion => return self.review_deletion(),
+            Setup::ConfirmCustodyDeletion { token } => return self.confirm_deletion(token),
+            Setup::ResumeCustodyDeletion => return self.resume_deletion(),
+            Setup::DiscardCustodyDeletion { token } => return self.discard_deletion(token),
             Setup::Bootstrap => return Ok(completion(Some(self.wallet.bootstrap()?))),
             Setup::CloseLoads { id } => {
                 return Ok(Response {
@@ -599,14 +631,9 @@ where
                 if self.times.len() >= 32 {
                     return Err(Failure::code(RESOURCE));
                 }
-                let token = self
-                    .next_time
-                    .checked_add(1)
-                    .filter(|value| *value <= i64::MAX as u64)
-                    .ok_or(Failure::code(RESOURCE))?;
+                let token = review::allocate_token()?;
                 let exchange = self.wallet.begin_direct_time_exchange()?;
                 let nonce = exchange.nonce().to_vec();
-                self.next_time = token;
                 self.times.insert(token, exchange);
                 return Ok(Response {
                     kind: 13,
@@ -750,6 +777,24 @@ mod tests {
         }
     }
     #[test]
+    fn collection_intake_accepts_only_a_sequence_and_no_foreign_authority() {
+        for sequence in [0, 1, u128::MAX] {
+            assert!(
+                matches!(request(&[0; 32], 47, sequence, 0, [&[]; 3]).unwrap(),
+                Setup::CollectRetained { sequence: value } if value == sequence)
+            );
+            assert!(request(&[1; 32], 47, sequence, 0, [&[]; 3]).is_err());
+            assert!(request(&[0; 32], 47, sequence, 1, [&[]; 3]).is_err());
+            for index in 0..3 {
+                let mut originals: [&[u8]; 3] = [&[]; 3];
+                originals[index] = &[1];
+                assert!(request(&[0; 32], 47, sequence, 0, originals).is_err());
+            }
+        }
+        assert!(bounds(52).is_err());
+    }
+
+    #[test]
     fn setup_intake_rejects_unused_authority_fields_and_wrong_bounds() {
         for selector in [0, 1, 3, 4, 15, 18, 19] {
             let id = if matches!(selector, 1 | 19) {
@@ -777,7 +822,7 @@ mod tests {
             assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_ok());
             assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_err());
         }
-        assert!(bounds(47).is_err());
+        assert!(bounds(52).is_err());
     }
     #[test]
     fn unload_projection_requires_request_identity_and_only_optional_beneficiary() {

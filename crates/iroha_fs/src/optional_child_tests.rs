@@ -1,6 +1,8 @@
 //! Genuine optional-child admission distinguishes first absence from later custody refusal.
 
 use super::*;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 
 #[test]
 fn optional_child_keeps_first_absence_required_error_and_exact_present_identity() {
@@ -42,7 +44,6 @@ fn optional_child_refuses_post_open_disappearance_and_parent_loss_then_original_
                 std::fs::rename(&changed, &moved).unwrap();
                 if attack == "replacement" {
                     std::fs::create_dir(&changed).unwrap();
-                    use std::os::unix::fs::PermissionsExt as _;
                     std::fs::set_permissions(&changed, std::fs::Permissions::from_mode(0o700))
                         .unwrap();
                 }

@@ -1646,7 +1646,10 @@ fn collection_is_source_selected_bounded_restartable_and_keeps_credit_replay() {
 
     w.fold_once().unwrap();
     w.fold_once().unwrap();
-    assert!(matches!(w.collect_step(1, None), Err(Error::FoldRequired)));
+    assert!(matches!(
+        w.collect_retained_step(1),
+        Err(Error::FoldRequired)
+    ));
     let next = frozen(
         Some(&receive),
         KagemushaWalletEffectV1::Load {
@@ -1660,13 +1663,36 @@ fn collection_is_source_selected_bounded_restartable_and_keeps_credit_replay() {
     w.fold_once().unwrap();
     w.fold_once().unwrap();
     let signatures = w.custody.signatures;
+    w.scheduler().set_activity(false, false);
+    assert_eq!(w.collect_retained_step(1).unwrap(), CollectionStatus::Idle);
+    w.scheduler().set_activity(true, false);
+    let payment = w.scheduler().payment();
+    assert_eq!(w.collect_retained_step(1).unwrap(), CollectionStatus::Idle);
+    drop(payment);
+    assert!(matches!(
+        w.collect_retained_step(2),
+        Err(Error::FoldRequired)
+    ));
+    let covering = ArchiveKey::Fold(2);
+    let exact_fold = w.archive.get(covering, 100_000).unwrap().unwrap();
+    w.archive.remove(covering).unwrap();
+    assert!(w.collect_retained_step(1).is_err(), "missing covering fold");
+    let mut forged_fold = exact_fold.clone();
+    forged_fold[0] ^= 1;
+    w.archive.put(covering, &forged_fold).unwrap();
+    assert!(w.collect_retained_step(1).is_err(), "forged covering fold");
+    w.archive.remove(covering).unwrap();
+    w.archive.put(covering, &exact_fold).unwrap();
+    let (_, unchanged) = w.manifest().unwrap();
+    assert!(unchanged.collection.is_none());
+    assert!(!w.step_entry(&unchanged, 1).unwrap().collected);
     w.custody.fail_publication = Some(false);
-    assert!(w.collect_step(1, None).is_err());
+    assert!(w.collect_retained_step(1).is_err());
     let (_, manifest) = w.manifest().unwrap();
     assert!(!w.step_entry(&manifest, 1).unwrap().collected);
     assert!(manifest.collection.is_none());
     w.custody.fail_publication = Some(true);
-    assert!(w.collect_step(1, None).is_err());
+    assert!(w.collect_retained_step(1).is_err());
     let (_, manifest) = w.manifest().unwrap();
     assert!(w.step_entry(&manifest, 1).unwrap().collected);
     assert!(manifest.collection.is_some());
@@ -1680,6 +1706,12 @@ fn collection_is_source_selected_bounded_restartable_and_keeps_credit_replay() {
             .is_some(),
         "intent precedes deletion"
     );
+    w.archive.fail_remove = true;
+    assert!(
+        w.resume_collection().is_err(),
+        "removal failure keeps the selected intent"
+    );
+    assert!(w.manifest().unwrap().1.collection.is_some());
     for _ in 0..10 {
         let (custody, archive, proofs, scheme, wallet) =
             (w.custody, w.archive, w.proofs, w.scheme_id, w.wallet_id);
@@ -1693,7 +1725,7 @@ fn collection_is_source_selected_bounded_restartable_and_keeps_credit_replay() {
     }
     assert!(w.resume_collection().unwrap().is_none());
     assert_eq!(
-        w.collect_step(1, None).unwrap(),
+        w.collect_retained_step(1).unwrap(),
         CollectionStatus::Collected(1)
     );
     assert!(matches!(w.released_steps(), Err(Error::Collected)));
@@ -1881,6 +1913,21 @@ fn every_archive_collection_crash_resumes_only_the_selected_object() {
 
 #[test]
 fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
+    fn retain_map(w: &mut Wallet, pending: &map_tree::PersistentMapV1) {
+        // The explicit mock proof owner does not persist real fold map descriptors. Publish
+        // actual persistent-map DATA into its selected manifest for this boundary regression.
+        let (old, mut manifest) = w.manifest().unwrap();
+        let sequence = manifest.folded.unwrap();
+        let address = w
+            .archive
+            .write_object(&archive::encode(pending).unwrap(), 2048)
+            .unwrap();
+        manifest.fold_pending = manifest
+            .fold_pending
+            .set(&mut w.archive, manifest::sequence_key(sequence), &address)
+            .unwrap();
+        w.publish_manifest(old, &manifest).unwrap();
+    }
     fn rebind(value: &mut FrozenTransition) {
         let c = &mut value.capsule;
         c.statement.successor = c.successor_state.commitment().unwrap();
@@ -1953,13 +2000,29 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
     w.fold_once().unwrap();
     w.fold_once().unwrap();
     let empty = KagemushaWalletIndexedTreeV1::new();
-    let (low, opening) = empty.non_membership(&credit).unwrap();
-    let gap = OutgoingAbsent { low, opening };
-    assert!(w.collect_step(send_sequence, None).is_err());
     assert!(
-        w.collect_step(send_sequence, Some(&gap)).is_err(),
-        "generic absence under another root is not delivery evidence"
+        w.collect_retained_step(send_sequence).is_err(),
+        "missing selected map"
     );
+    let native_empty = map_tree::PersistentMapV1::default();
+    retain_map(&mut w, &native_empty);
+    assert!(
+        w.collect_retained_step(send_sequence).is_err(),
+        "map under another root"
+    );
+    let mut native_pending = native_empty.clone();
+    native_pending
+        .insert(&mut w.archive, credit, field(42))
+        .unwrap();
+    assert_eq!(native_pending.root(), pending.root());
+    retain_map(&mut w, &native_pending);
+    assert!(
+        w.collect_retained_step(send_sequence).is_err(),
+        "undelivered Send is present"
+    );
+    let (_, retained) = w.manifest().unwrap();
+    assert!(retained.collection.is_none());
+    assert!(!w.step_entry(&retained, send_sequence).unwrap().collected);
     assert_eq!(
         w.retry(&send.capsule.operation_id).unwrap(),
         Some(Completion::Complete(payment.clone()))
@@ -1981,8 +2044,13 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
     w.commit(cleared).unwrap();
     w.fold_once().unwrap();
     w.fold_once().unwrap();
+    assert!(
+        w.collect_retained_step(send_sequence).is_err(),
+        "prior map cannot cover a later fold"
+    );
+    retain_map(&mut w, &native_empty);
     assert_eq!(
-        w.collect_step(send_sequence, Some(&gap)).unwrap(),
+        w.collect_retained_step(send_sequence).unwrap(),
         CollectionStatus::Progress(send_sequence)
     );
     for _ in 0..10 {

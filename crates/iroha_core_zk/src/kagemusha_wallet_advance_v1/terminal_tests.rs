@@ -454,3 +454,205 @@ fn abandonment_selection_partial_write_and_uncertain_publication_recover_exact_o
             .with(|state| assert_eq!(state.sign_calls, calls));
     }
 }
+
+#[test]
+fn native_deletion_review_projects_actual_pending_and_released_custody() {
+    use crate::kagemusha_wallet_state_v1::{AdvanceHandle, CustodyDeletionProgressV1};
+    for pending in [false, true] {
+        let (device, f, slot) = enrolled_device(ANDROID, if pending { 0x31 } else { 0x32 });
+        let mut provider = device.open();
+        let before = provider.status(&slot).unwrap();
+        let capsule = bootstrap_capsule(&f);
+        device
+            .platform
+            .with(|state| state.sign_unavailable = pending);
+        provider
+            .advance(
+                &slot,
+                &TestOwnerV1,
+                &advance_request(before.marker().unwrap(), &capsule),
+            )
+            .unwrap();
+        let mut handle = AdvanceHandle::new(provider, slot);
+        assert!(
+            handle
+                .review_custody_deletion(&[1; 32], &f.wallet_id())
+                .is_err()
+        );
+        let review = handle
+            .review_custody_deletion(&f.scheme_id(), &f.wallet_id())
+            .unwrap();
+        let view = review.projection();
+        assert_eq!(view.pending, pending);
+        assert_eq!(view.slot, slot.0);
+        assert_eq!(view.operation_kind, capsule.kind);
+        assert_eq!(view.head, capsule.statement.successor.value);
+        assert_eq!(view.gross_balance, capsule.successor_state.core.balance);
+        assert_eq!(
+            view.core_burned_total,
+            capsule.successor_state.core.burned_total
+        );
+        assert_eq!(view.sequence, capsule.successor_state.core.sequence);
+        assert_eq!(view.lifecycle, capsule.successor_state.core.lifecycle);
+        // The shared Advance fixture deliberately retains nonempty outgoing, fee and
+        // Load/Unload roots (test_support::state_for); review must expose every warning.
+        assert!(view.pending_outgoing && view.fee_claims && view.load_redeem);
+        assert_eq!(
+            device.platform.with(|state| state.delete_calls),
+            0,
+            "review never deletes"
+        );
+        drop(review); // user cancelled the review
+        handle.require_custody_operations().unwrap();
+        let review = handle
+            .review_custody_deletion(&f.scheme_id(), &f.wallet_id())
+            .unwrap();
+        let result = handle.confirm_custody_deletion(review).unwrap();
+        assert!(matches!(result, CustodyDeletionProgressV1::Deleted { .. }));
+        assert!(handle.require_custody_operations().is_err());
+        assert!(
+            handle
+                .review_custody_deletion(&f.scheme_id(), &f.wallet_id())
+                .is_err()
+        );
+        assert_eq!(handle.resume_custody_deletion().unwrap(), result);
+        assert!(device.platform.key_of(&slot).is_none());
+        drop(handle);
+        device.fs.restart();
+        assert!(matches!(
+            device.open().status(&slot).unwrap(),
+            KagemushaWalletSlotStatusV1::Terminal(_)
+        ));
+    }
+}
+
+#[test]
+fn native_deletion_review_rejects_foreign_owner_and_stale_metadata_without_deleting() {
+    use crate::kagemusha_wallet_state_v1::{AdvanceHandle, Custody, CustodyDeletionProgressV1};
+    let (a, fa, sa, _) = bootstrapped_device(ANDROID, 0x33);
+    let (b, fb, sb, _) = bootstrapped_device(ANDROID, 0x34);
+    let mut ha = AdvanceHandle::new(a.open(), sa);
+    let mut hb = AdvanceHandle::new(b.open(), sb);
+    let ra = ha
+        .review_custody_deletion(&fa.scheme_id(), &fa.wallet_id())
+        .unwrap();
+    let rb = hb
+        .review_custody_deletion(&fb.scheme_id(), &fb.wallet_id())
+        .unwrap();
+    assert!(hb.confirm_custody_deletion(ra).is_err());
+    hb.require_custody_operations().unwrap();
+    assert_eq!(b.platform.with(|state| state.delete_calls), 0);
+    assert!(matches!(
+        hb.confirm_custody_deletion(rb).unwrap(),
+        CustodyDeletionProgressV1::Deleted { .. }
+    ));
+    let stale = ha
+        .review_custody_deletion(&fa.scheme_id(), &fa.wallet_id())
+        .unwrap();
+    ha.publish_archive_checkpoint([0; 32], b"actual newer metadata original")
+        .unwrap();
+    assert_eq!(
+        ha.confirm_custody_deletion(stale),
+        Err(KagemushaWalletProviderErrorV1::Invalid {
+            field: "custody.confirmation_stale"
+        })
+    );
+    assert!(
+        ha.status().is_err(),
+        "ordinary custody remains frozen until actual reconciliation"
+    );
+    assert_eq!(
+        ha.resume_custody_deletion().unwrap(),
+        CustodyDeletionProgressV1::NotDeleted
+    );
+    ha.status().unwrap();
+    assert_eq!(a.platform.with(|state| state.delete_calls), 0);
+    assert!(
+        ha.resume_custody_deletion().is_err(),
+        "no new deletion from resume"
+    );
+    let fresh = ha
+        .review_custody_deletion(&fa.scheme_id(), &fa.wallet_id())
+        .unwrap();
+    assert!(matches!(
+        ha.confirm_custody_deletion(fresh).unwrap(),
+        CustodyDeletionProgressV1::Deleted { .. }
+    ));
+}
+
+#[test]
+fn native_deletion_key_failure_keeps_terminal_custody_and_resumes_without_new_approval() {
+    use crate::kagemusha_wallet_state_v1::{AdvanceHandle, Custody, CustodyDeletionProgressV1};
+    let (device, f, slot, _) = bootstrapped_device(IOS, 0x35);
+    let mut handle = AdvanceHandle::new(device.open(), slot);
+    let review = handle
+        .review_custody_deletion(&f.scheme_id(), &f.wallet_id())
+        .unwrap();
+    device.platform.with(|state| state.delete_refused = true);
+    assert!(handle.confirm_custody_deletion(review).is_err());
+    assert!(handle.status().is_err());
+    assert!(
+        handle
+            .review_custody_deletion(&f.scheme_id(), &f.wallet_id())
+            .is_err()
+    );
+    assert!(handle.resume_custody_deletion().is_err());
+    assert!(device.platform.key_of(&slot).is_some());
+    let names = marker_names(&device, &slot);
+    assert_eq!(
+        names.len(),
+        1,
+        "only durable terminal marker survives before key deletion"
+    );
+    assert!(anchored(&device, &slot).is_some());
+    device.platform.with(|state| state.delete_refused = false);
+    let result = handle.resume_custody_deletion().unwrap();
+    assert!(matches!(result, CustodyDeletionProgressV1::Deleted { .. }));
+    assert_eq!(handle.resume_custody_deletion().unwrap(), result);
+    assert!(handle.status().is_err());
+    assert!(device.platform.key_of(&slot).is_none());
+    assert_eq!(marker_names(&device, &slot), names);
+}
+
+#[test]
+fn native_deletion_failed_publication_reconciles_without_automatically_retrying_it() {
+    use crate::kagemusha_wallet_state_v1::{AdvanceHandle, CustodyDeletionProgressV1};
+    let (device, f, slot, _) = bootstrapped_device(ANDROID, 0x36);
+    let baseline = device.fork();
+    let mut owner = AdvanceHandle::new(baseline.open(), slot);
+    let review = owner
+        .review_custody_deletion(&f.scheme_id(), &f.wallet_id())
+        .unwrap();
+    let start = baseline.fs.steps();
+    owner.confirm_custody_deletion(review).unwrap();
+    let trace = baseline.fs.trace_since(start);
+    let before_publication = trace
+        .iter()
+        .position(|step| *step == KagemushaWalletSimStepV1::CreateNew)
+        .unwrap();
+    let trial = device.fork();
+    let mut owner = AdvanceHandle::new(trial.open(), slot);
+    let review = owner
+        .review_custody_deletion(&f.scheme_id(), &f.wallet_id())
+        .unwrap();
+    trial.fs.inject(
+        trial.fs.steps() + before_publication as u64,
+        KagemushaWalletSimFaultV1::Error,
+    );
+    assert!(owner.confirm_custody_deletion(review).is_err());
+    trial.fs.clear_faults();
+    assert!(owner.require_custody_operations().is_err());
+    assert_eq!(
+        owner.resume_custody_deletion().unwrap(),
+        CustodyDeletionProgressV1::NotDeleted
+    );
+    assert_eq!(trial.platform.with(|state| state.delete_calls), 0);
+    assert!(trial.platform.key_of(&slot).is_some());
+    let review = owner
+        .review_custody_deletion(&f.scheme_id(), &f.wallet_id())
+        .unwrap();
+    assert!(matches!(
+        owner.confirm_custody_deletion(review).unwrap(),
+        CustodyDeletionProgressV1::Deleted { .. }
+    ));
+}

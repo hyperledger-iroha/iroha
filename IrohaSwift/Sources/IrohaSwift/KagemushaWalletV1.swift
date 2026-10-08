@@ -15,9 +15,10 @@ public struct KagemushaWalletCallV1: Sendable {
   /// feeClaimTransport36, authenticatedEnrollmentSelection37, appleOriginals38, appleCustodyAcknowledged39,
   /// ledgerInstruction40, confirmedUnload42, confirmedActivation44, activationProgress45,
   /// activationNotStarted46, creditProjection47, unloadClaimTransport48, activationRejected49;
-  /// retired kinds41/43 are rejected.
+  /// collectionIdle50, collectionProgress51, collected52, deletionReview53, deleted54,
+  /// deletionReviewDiscarded55, notDeleted56. Retired kinds41/43 are rejected.
   /// Enrollment18...28 is projected by the separate enrollment owner.
-  static let statusRange: ClosedRange<Int32> = 0...49
+  static let statusRange: ClosedRange<Int32> = 0...56
   public let status: Int32
   public let sequenceLow: UInt64
   public let sequenceHigh: UInt64
@@ -29,13 +30,16 @@ public struct KagemushaWalletCallV1: Sendable {
   init(status: Int32, sequenceLow: UInt64, sequenceHigh: UInt64, detail: UInt32, bytes: Data) throws
   {
     guard Self.statusRange.contains(status), ![41, 43].contains(status), bytes.count <= kagemushaWalletOutputBoundV1(status),
-      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36, 37, 38, 40, 42, 44, 45, 47, 48, 49].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
-      ![12, 14, 17, 30, 31, 32, 34, 35, 36, 40, 46, 47, 48].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
-      !([13, 15, 16].contains(status) || (18...28).contains(status) || (37...39).contains(status))
+      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36, 37, 38, 40, 42, 44, 45, 47, 48, 49, 53, 54].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
+      ![12, 14, 17, 30, 31, 32, 34, 35, 36, 40, 46, 47, 48, 50, 54, 55, 56].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
+      !([13, 15, 16, 53].contains(status) || (18...28).contains(status) || (37...39).contains(status))
         || (sequenceLow > 0 && sequenceLow <= UInt64(Int64.max) && sequenceHigh == 0 && detail == 0),
+      !(50...52).contains(status) || detail == 0,
       ![13, 15, 18, 23].contains(status) || bytes.count == 32,
       status != 13 || bytes.contains(where: { $0 != 0 }),
       status != 19 || bytes.count == 161,
+      status != 53 || bytes.count == 254,
+      status != 54 || (bytes.count == 32 && bytes.contains(where: { $0 != 0 })),
       ![42, 44, 49].contains(status) || sequenceLow > 1,
       ![33, 42, 44, 45, 49].contains(status) || (sequenceLow != 0 && sequenceHigh == 0 && detail == 0 && bytes.count == 32 && bytes.contains(where: { $0 != 0 }))
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
@@ -56,11 +60,12 @@ public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @uncheck
   private let lease: KagemushaWalletNativeLeaseV1
   private let driver: KagemushaWalletNativeDriverV1
   private let setupOrigin = KagemushaWalletSetupOriginV1()
+  private let deletionGate = KagemushaWalletDeletionGateV1()
   init(lease: KagemushaWalletNativeLeaseV1, driver: KagemushaWalletNativeDriverV1) {
     self.lease = lease; self.driver = driver
   }
   var cleanupLease: (any KagemushaWalletCleanupLeaseV1)? { lease }
-  private func handle() throws -> UInt64 { try lease.handle() }
+  private func handle() throws -> UInt64 { try deletionGate.requireOrdinary(); return try lease.handle() }
   /// Join cooperative work and release custody, without deleting keys, markers or Payments.
   /// Once close starts, operations stay blocked; another close can retry the same Native ID.
   public func close() throws { try lease.close() }
@@ -78,6 +83,27 @@ public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @uncheck
   }
   func setup(_ input: KagemushaWalletSetupInputV1) throws -> KagemushaWalletCallV1 {
     let value = try handle()
+    return try driver.result { out in input.withRequest { driver.setup(value, $0, out) } }
+  }
+  /// Obtain native-selected display DATA for explicit destructive confirmation.
+  public func reviewCustodyDeletion() throws -> KagemushaWalletDeletionReviewV1 {
+    try deletionGate.review { try setup(.init(selector: 48)) }
+  }
+  /// Permanently destroy payment-key custody. Display the review warning first.
+  /// Any failure freezes ordinary calls until resume proves a definitive outcome.
+  public func destructivelyDeleteCustody(_ review: KagemushaWalletDeletionReviewV1) throws -> Data {
+    try deletionGate.confirm(review) { token in try deletionSetup(.init(selector: 49, token: token)) }
+  }
+  /// Recover the retained owner’s attempted deletion; restart cleanup belongs to native custody reconciliation.
+  public func resumeCustodyDeletion() throws -> KagemushaWalletDeletionStatusV1 {
+    try deletionGate.resume { try deletionSetup(.init(selector: 50)) }
+  }
+  /// Discard an unused review; this cannot undo a deletion attempt.
+  public func discardCustodyDeletionReview(_ review: KagemushaWalletDeletionReviewV1) throws {
+    try deletionGate.discard(review) { token in try setup(.init(selector: 51, token: token)) }
+  }
+  private func deletionSetup(_ input: KagemushaWalletSetupInputV1) throws -> KagemushaWalletCallV1 {
+    let value = try lease.handle()
     return try driver.result { out in input.withRequest { driver.setup(value, $0, out) } }
   }
   /// Read bounded DATA from the existing Native owner; no observation creates a monetary intent.
@@ -130,6 +156,12 @@ public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @uncheck
       throw KagemushaWalletErrorV1.invalidInput
     }
     return try setup(.init(selector: 45, identity: requestId, first: chargeBeneficiary ?? Data())).unloadClaimOriginal()
+  }
+  /// Perform one bounded collection turn for a historical sequence. Native verifies the
+  /// selected covering fold and derives Send nonmembership; keys and fee/activation originals
+  /// remain retained. Repeat the same sequence after interruption until collected.
+  public func collectRetainedStep(sequence: KagemushaWalletUInt128V1) throws -> KagemushaWalletCollectionStatusV1 {
+    try .init(setup(.init(selector: 47, amount: sequence)), expectedSequence: sequence)
   }
   /// Read both exact fee-claim originals atomically from one native-retained frame.
   /// Nil means no pending claim; missing selected bytes are an error, never a paid verdict.
@@ -712,6 +744,9 @@ func kagemushaWalletOutputBoundV1(_ status: Int32) -> Int {
   case 31: return 21_024
   case 33, 42, 44, 45, 49: return 32
   case 47: return 10_092
+  case 53: return 254
+  case 54: return 32
+  case 55, 56: return 0
   default: return 10_000
   }
 }

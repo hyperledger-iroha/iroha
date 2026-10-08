@@ -4,6 +4,7 @@ use super::*;
 mod activation;
 pub use activation::ActivationFinalityProgressV1;
 mod close_loads;
+mod deletion;
 mod ledger;
 mod ledger_producer;
 mod unload;

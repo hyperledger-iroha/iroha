@@ -1,7 +1,7 @@
 //! Portable strict receipt custody and bounded inventory regressions.
 
 use super::*;
-use std::io::{Seek as _, SeekFrom, Write as _};
+use std::io::{SeekFrom, Write as _};
 
 fn store() -> (tempfile::TempDir, PrivateDirectory) {
     let temporary = tempfile::tempdir().unwrap();

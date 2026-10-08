@@ -216,6 +216,6 @@ class KagemushaWalletLedgerV1Test {
             assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(status, -1, 0, 0, 1, 0, byteArrayOf(1)) }
             assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(status, -1, 0, 0, 0, 1, byteArrayOf(1)) }
         }
-        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(49, -1, 0, 0, 0, 0, byteArrayOf()) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(53, -1, 0, 0, 0, 0, byteArrayOf()) }
     }
 }

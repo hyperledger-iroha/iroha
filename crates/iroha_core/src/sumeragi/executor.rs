@@ -1593,24 +1593,23 @@ impl<'s> Worker<'s> {
             .signature_decode
             .as_mut()
             .expect("original validation attempt");
-        let generation = state.state_view_generation();
         // Expansion legitimately appends/moves lane inputs. This first owner
         // retains only unexpanded originals; other calls use the same funded kernel.
         // TODO: compose retained leg identity with actual lane input ownership.
         let amx_legs = if iroha_block.lane_merge().is_none() {
             let original_source = &attempt.source;
             let bank = attempt.amx_legs.get_or_insert_with(|| {
-                super::amx::NativeAmxLegPreparations::new(
-                    &iroha_block,
-                    original_source,
-                    &budget,
-                    generation,
-                )
+                super::amx::NativeAmxLegPreparations::new(&iroha_block, original_source, &budget)
             });
-            if !bank.matches_original(&iroha_block, original_source, block, &budget, generation) {
+            let original_matches =
+                bank.matches_original(&iroha_block, original_source, block, &budget);
+            #[cfg(all(test, sumeragi_core_mutation = "HC167"))]
+            let original_matches = original_matches
+                && bank.matches_original_publication(state.state_view_generation());
+            if !original_matches {
                 attempt.decoded = Some(iroha_block);
                 return Err(PublicationError::RecoveryRequired(
-                    "completed AMX preparation changed its original block, parent or pool".into(),
+                    "completed AMX preparation changed its original block, source or pool".into(),
                 ));
             }
             Some(bank)

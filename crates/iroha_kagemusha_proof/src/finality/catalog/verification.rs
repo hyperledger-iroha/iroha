@@ -376,9 +376,43 @@ pub fn qualify_receipt_cancellable(
 /// nor strict proving-key admission. Every regenerated original still requires import.
 pub struct ServerRecipes {
     receipt: ReceiptVerifier,
+    params: Parameters,
+    imports: ImportLimits,
+    sources: BTreeMap<NodeId, SourceVerifier>,
     recipes: BTreeMap<Vec<u8>, (ArtifactRecord, OriginalRecipe)>,
 }
 impl ServerRecipes {
+    /// Construct the fixed proving graph from this complete source-qualified owner.
+    /// No proving key is read or generated. Every actual proof still strictly imports
+    /// its exact selected originals; this does not assert resident-key readiness.
+    /// The application separately authenticates this owner's inventory and anchor.
+    /// # Errors
+    /// Missing fixed graph metadata, inconsistent topology or cancellation.
+    pub fn installed_graph(
+        &self,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<InstalledFinality, Error> {
+        InstalledFinality::from_qualified_catalog(self, cancellation)
+    }
+
+    pub(in crate::finality) fn selected_source(
+        &self,
+        id: &NodeId,
+    ) -> Result<SourceVerifier, Error> {
+        self.sources.get(id).cloned().ok_or(Error::Artifact)
+    }
+
+    pub(in crate::finality) fn history_source(&self) -> SourceVerifier {
+        self.receipt.history.clone()
+    }
+
+    pub(in crate::finality) const fn parameters(&self) -> &Parameters {
+        &self.params
+    }
+
+    pub(in crate::finality) const fn import_limits(&self) -> ImportLimits {
+        self.imports
+    }
     /// Complete verifier graph whose exact metadata selected these recipes.
     pub const fn receipt(&self) -> &ReceiptVerifier {
         &self.receipt
@@ -435,7 +469,11 @@ pub fn qualify_server_recipes(
     cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<ServerRecipes, CompileError> {
     iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(Error::from)?;
-    if imports.maximum_artifacts < records.len()
+    if imports.maximum_artifacts == 0
+        || imports.maximum_artifacts == usize::MAX
+        || imports.maximum_original_bytes == 0
+        || imports.maximum_original_bytes == usize::MAX
+        || imports.maximum_artifacts < records.len()
         || imports.key.maximum_rows != 1 << 16
         || imports.key.maximum_bytes == 0
         || imports.key.maximum_bytes > 1 << 30
@@ -472,6 +510,9 @@ pub fn qualify_server_recipes(
     };
     Ok(ServerRecipes {
         receipt,
+        params: qualifier.params,
+        imports,
+        sources: qualifier.cache,
         recipes: qualifier.recipes,
     })
 }

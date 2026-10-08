@@ -33,7 +33,7 @@ mod background;
 mod closing;
 pub(crate) mod enrollment;
 mod exports;
-mod observation;
+pub(crate) mod observation;
 pub use observation::{
     connect_norito_kagemusha_wallet_account_display_v1,
     connect_norito_kagemusha_wallet_account_original_v1,
@@ -54,6 +54,7 @@ pub use open::{
 };
 pub(crate) mod requests;
 pub(crate) mod setup;
+pub(crate) mod terminal;
 mod transport;
 pub use exports::*;
 pub(crate) mod review;
@@ -221,6 +222,9 @@ fn completion(value: Option<state::Completion>) -> Response {
     }
 }
 trait Wallet: Send {
+    fn require_custody_operations(&self) -> Result<()> {
+        Ok(())
+    }
     fn snapshot(&mut self) -> Result<state::Snapshot>;
     fn review(&mut self, _input: review::Input) -> Result<Response> {
         Err(Failure::code(INVALID))
@@ -245,12 +249,15 @@ trait Wallet: Send {
 struct NativeWallet<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
     wallet: state::NativeWalletCoordinatorV1<advance::KagemushaWalletStdFsV1, P, S>,
     times: BTreeMap<u64, state::DirectTimeExchangeV1>,
-    next_time: u64,
     reviews: review::Tokens<state::ReviewedOperationV1>,
+    deletion_reviews: review::Tokens<state::ReviewedCustodyDeletionV1>,
 }
 impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
     for NativeWallet<P, S>
 {
+    fn require_custody_operations(&self) -> Result<()> {
+        Ok(self.wallet.require_custody_operations()?)
+    }
     fn observe(&mut self, selector: u32, identity: &[u8]) -> Result<Response> {
         self.observe_inner(selector, identity)
     }
@@ -289,6 +296,7 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
         Ok(completion(self.wallet.resume()?))
     }
     fn fold(&mut self) -> Result<Response> {
+        self.require_custody_operations()?;
         use state::FoldStatus as F;
         Ok(match self.wallet.fold_once()? {
             F::Idle => Response {
@@ -408,17 +416,26 @@ fn with_wallet_owner<T>(
     let _priority = payment.then(|| owner.background.payment(&owner.scheduler));
     let mut guard = owner.wallet.lock().map_err(|_| Failure::code(INTERNAL))?;
     owner.closing.require_open()?;
-    action(guard.as_deref_mut().ok_or(Failure::code(CLOSED))?)
+    let wallet = guard.as_deref_mut().ok_or(Failure::code(CLOSED))?;
+    wallet.require_custody_operations()?;
+    action(wallet)
 }
 pub(crate) fn snapshot(id: u64) -> Result<state::Snapshot> {
     // A view does not cancel a useful background fold. Call off the UI thread.
     with_wallet(id, false, |wallet| wallet.snapshot())
 }
 pub(crate) fn setup(id: u64, input: setup::Setup) -> Result<Response> {
+    if terminal::is_terminal_input(&input) {
+        return terminal::dispatch(id, input);
+    }
     if matches!(input, setup::Setup::BackgroundStatus) {
         return owner(id)?.background.status();
     }
-    with_wallet(id, true, |wallet| wallet.setup(input))
+    // Collection uses the same background scheduler as folding. A payment reservation
+    // here would make its own scheduler start return Idle forever; real payments still
+    // cancel/join collection before acquiring this wallet mutex.
+    let payment = !matches!(input, setup::Setup::CollectRetained { .. });
+    with_wallet(id, payment, |wallet| wallet.setup(input))
 }
 pub(crate) fn execute(id: u64, request: state::OperationRequestV1) -> Result<Response> {
     if matches!(

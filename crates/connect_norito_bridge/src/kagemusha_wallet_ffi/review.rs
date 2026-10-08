@@ -103,34 +103,51 @@ pub(crate) fn request(selector: u32, amount: u128, first: &[u8], second: &[u8]) 
         _ => return Err(Failure::code(INVALID)),
     })
 }
+// Financial review, deletion review and direct-time capabilities share one process sequence.
+// A numeric token from another owner or purpose cannot alias any outstanding capability.
+static NEXT_CAPABILITY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(super) fn allocate_token() -> Result<u64> {
+    allocate_from(&NEXT_CAPABILITY)
+}
+fn allocate_from(next: &std::sync::atomic::AtomicU64) -> Result<u64> {
+    use std::sync::atomic::Ordering;
+    next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        value
+            .checked_add(1)
+            .filter(|value| *value <= i64::MAX as u64)
+    })
+    .map(|value| value + 1)
+    .map_err(|_| Failure::code(RESOURCE))
+}
+
 /// This private owner-local table holds actual non-Clone Native capabilities.
 /// It never imports a capability from its copyable projection or token.
 pub(super) struct Tokens<T> {
-    next: u64,
     values: BTreeMap<u64, T>,
 }
 impl<T> Default for Tokens<T> {
     fn default() -> Self {
         Self {
-            next: 0,
             values: BTreeMap::new(),
         }
     }
 }
 impl<T> Tokens<T> {
-    fn capacity(&self) -> Result<()> {
-        if self.values.len() >= MAX_REVIEWS || self.next >= i64::MAX as u64 {
+    pub(super) fn capacity(&self) -> Result<()> {
+        if self.values.len() >= MAX_REVIEWS {
             Err(Failure::code(RESOURCE))
         } else {
             Ok(())
         }
     }
-    fn put(&mut self, value: T) -> Result<u64> {
+    pub(super) fn put(&mut self, value: T) -> Result<u64> {
         self.capacity()?;
-        let id = self.next.checked_add(1).ok_or(Failure::code(RESOURCE))?;
-        self.next = id;
+        let id = allocate_token()?;
         self.values.insert(id, value);
         Ok(id)
+    }
+    pub(super) fn clear(&mut self) {
+        self.values.clear();
     }
     pub(super) fn take(&mut self, token: u64) -> Result<T> {
         self.values.remove(&token).ok_or(Failure::code(INVALID))
@@ -455,14 +472,37 @@ mod tests {
     #[test]
     fn outstanding_reviews_are_bounded_without_reusing_tokens() {
         let mut tokens = Tokens::default();
-        for i in 1..=MAX_REVIEWS {
-            assert_eq!(tokens.put(i).unwrap(), i as u64);
-        }
+        let ids: Vec<_> = (0..MAX_REVIEWS).map(|i| tokens.put(i).unwrap()).collect();
+        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(tokens.put(9).unwrap_err().status, RESOURCE);
-        assert_eq!(tokens.take(3).unwrap(), 3);
-        assert_eq!(tokens.put(9).unwrap(), 9);
-        tokens.next = i64::MAX as u64;
-        assert_eq!(tokens.put(10).unwrap_err().status, RESOURCE);
+        assert_eq!(tokens.take(ids[2]).unwrap(), 2);
+        assert!(tokens.put(9).unwrap() > *ids.last().unwrap());
+        tokens.clear();
+        for id in ids {
+            assert!(tokens.take(id).is_err());
+        }
+        assert!(tokens.put(10).is_ok());
+        let exhausted = std::sync::atomic::AtomicU64::new(i64::MAX as u64 - 1);
+        assert_eq!(allocate_from(&exhausted).unwrap(), i64::MAX as u64);
+        assert_eq!(allocate_from(&exhausted).unwrap_err().status, RESOURCE);
+        assert_eq!(allocate_from(&exhausted).unwrap_err().status, RESOURCE);
+    }
+    #[test]
+    fn simultaneously_outstanding_owner_and_purpose_tokens_never_alias() {
+        let mut a = Tokens::default();
+        let mut b = Tokens::default();
+        let a_token = a.put("deletion A").unwrap();
+        let b_token = b.put("deletion B").unwrap();
+        let time = allocate_token().unwrap();
+        let mut financial = Tokens::default();
+        let financial_token = financial.put("financial").unwrap();
+        assert!(b.take(a_token).is_err());
+        assert!(a.take(b_token).is_err());
+        assert!(a.take(time).is_err());
+        assert!(a.take(financial_token).is_err());
+        assert_eq!(a.take(a_token).unwrap(), "deletion A");
+        assert_eq!(b.take(b_token).unwrap(), "deletion B");
+        assert_eq!(financial.take(financial_token).unwrap(), "financial");
     }
     #[test]
     fn raw_send_and_unload_cannot_reach_an_owner_without_review() {

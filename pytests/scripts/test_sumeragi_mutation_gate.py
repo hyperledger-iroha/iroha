@@ -2741,7 +2741,7 @@ def test_model_gate_requires_actual_named_failure_classification(monkeypatch, tm
     monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
     def run(*args):
         observed.append(args)
-        return gate.Step(status=status)
+        return gate.Step(status=status, failed=list(args[3]) if status == "fail" else [])
     monkeypatch.setattr(gate, "run_step", run)
     args = SimpleNamespace(model=True, target_dir=tmp_path, timeout_test=900, fast=False)
     result = gate.evaluate(args, tmp_path, gate.MODEL_MUTATIONS[0])
@@ -3009,6 +3009,7 @@ def test_managed_bootstrap_owned_registry_has_real_hooks_and_original_named_cont
             "DEP2": "managed_amx_sources_bind_original_file_identity_and_exact_capsule_inventory",
             "DEP3": "managed_amx_sources_recheck_release_after_retained_authentication_without_refetch",
             "DEP4": "managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publication",
+            "DEP5": "managed_amx_sources_reopen_refuses_identical_g1_h2_replacement_without_http_repair",
         },
     }
     for owner, package, _, cfg, environment in MANAGED_BOOTSTRAP_OWNERS:
@@ -3031,12 +3032,17 @@ def test_managed_bootstrap_owned_registry_has_real_hooks_and_original_named_cont
             if owner == "sdk" else {
                 "managed_amx_sources_keep_original_g1_h2_across_advanced_checkpoint_and_reopen",
                 "managed_amx_sources_feed_real_private_staging_and_exact_retained_generation",
+                "managed_amx_sources_reopen_preserves_original_native_pair_and_directory_without_new_reads",
+                "managed_amx_sources_refuse_incomplete_staging_without_refetch_or_new_deadline",
             }
         )
         manifest = (source / "Cargo.toml").read_text()
         assert "mutation-testing = []" in manifest
         assert "/mutation-testing" not in manifest
         build = (source / "build.rs").read_text()
+        declared_ids = re.search(r'const IDS: &\[&str\] = &\[(.*?)\];', build, re.S)
+        assert declared_ids is not None
+        assert set(re.findall(r'"([A-Z]+[0-9]+)"', declared_ids.group(1))) == set(indexed)
         assert f'const ENV: &str = "{environment}";' in build
         assert f'const CFG: &str = "{cfg}";' in build
         assert 'CARGO_ENCODED_RUSTFLAGS' in build and '!rustflags.contains(CFG)' in build
@@ -3099,7 +3105,7 @@ def test_managed_bootstrap_kill_requires_actual_complete_named_failure(
     calls = []
     def named(*args):
         calls.append(args)
-        return gate.Step(status=status)
+        return gate.Step(status=status, failed=list(args[3]) if status == "fail" else [])
     monkeypatch.setattr(gate, "run_step", named)
     args = SimpleNamespace(**{owner: True}, target_dir=tmp_path, timeout_test=900, fast=False)
     rule = getattr(gate, owner.upper() + "_MUTATIONS")[0]
@@ -3142,6 +3148,7 @@ def test_managed_bootstrap_main_keeps_baseline_all_rules_default_caps_and_truthf
     ["--deploy", "--core"], ["--deploy", "--model"], ["--deploy", "--daemon"],
     ["--sdk", "--core-profile", "test"], ["--deploy", "--core-profile", "test"],
     ["--sdk", "--only", "DEP1"], ["--deploy", "--only", "SDK1"],
+    ["--sdk", "--only", "DEP5"], ["--core", "--only", "DEP5"],
     ["--core", "--only", "DEP1"], ["--model", "--only", "SDK1"], ["--only", "SDK1"],
     ["--sdk", "--strict", "--skip-baseline"], ["--deploy", "--strict", "--skip-baseline"],
 ])
@@ -3278,3 +3285,212 @@ def test_amx_deadline_retry_mutations_have_exact_owner_and_native_control(mutati
     rows = re.findall(r"^\| " + mutation + r" \| (.+)$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
     assert len(rows) == 1
     assert name.rsplit("::", 1)[-1] in rows[0]
+
+
+def test_native_amx_retry_visibility_is_separate_from_original_byte_custody():
+    """The owning named mutation restores only stale-publication coupling."""
+    mutation = gate.index_mutations(gate.CORE_MUTATIONS)["HC167"]
+    assert mutation.tests == (
+        "sumeragi::executor::amx_retry_tests::original_paid_amx_post_decode_refusal_retains_worker_leg_and_exact_retry",
+    )
+    assert not mutation.scenarios
+    assert gate.has_switch("HC167", core=True)
+    assert not gate.has_switch("HC167")
+    assert not gate.has_switch("HC167", model=True)
+    assert not gate.has_switch("HC167", daemon=True)
+    retry = (ROOT / "crates/iroha_core/src/sumeragi/amx/native/retry.rs").read_text()
+    executor = (ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text()
+    validator = (ROOT / "crates/iroha_core/src/block.rs").read_text()
+    control = (ROOT / "crates/iroha_core/src/sumeragi/executor_amx_retry_tests.rs").read_text()
+    specification = (ROOT / "specs/sumeragi.md").read_text()
+    assert re.search(r'#\[cfg\(all\(test,\s*sumeragi_core_mutation\s*=\s*"HC167"\)\)\]\s*original_publication:', retry)
+    assert 'fn matches_original_publication' in retry
+    assert 'bank.matches_original_publication(state.state_view_generation())' in executor
+    assert 'parent_is_current' not in retry + validator
+    assert re.search(r'fn matches_original\([^)]*\) -> bool', retry, re.S)
+    signature = re.search(r'fn matches_original\(([^)]*)\) -> bool', retry, re.S).group(1)
+    assert 'generation' not in signature
+    assert 'with_held_view_publication_for_reader_test' in control
+    assert 'generation.checked_add(2)' in control
+    assert 'fn original_paid_amx_worker_retry_reauthenticates_changed_native_parent(' in control
+    assert 'fresh native successor authentication must reject a changed committed parent result' in control
+    assert 'match Self::native_header_source(&block, state, native_header, native_payload)' in validator
+    assert 'source_generation: source.generation' in validator
+    assert '.validate_native_pristine_control_owner(' in validator
+    assert '| HC167 |' in specification
+    assert 'original pool and completed parent generation' not in specification
+
+
+# These controls exercise the real parser/evaluator with mocked Cargo children.
+# They establish script classification only, never a native mutation kill.
+def exact_control_output(rows):
+    """Construct a complete serial libtest response for exact acceptance controls."""
+    passed = sum(status == "ok" for _, status in rows)
+    failed = sum(status == "FAILED" for _, status in rows)
+    ignored = sum(status == "ignored" for _, status in rows)
+    verdict = "FAILED" if failed else "ok"
+    output = (f"running {len(rows)} tests\n"
+              + "".join(f"test {name} ... {status}\n" for name, status in rows)
+              + f"test result: {verdict}. {passed} passed; {failed} failed; {ignored} ignored; "
+              "0 measured; 37 filtered out; finished in 0.01s\n")
+    return (101 if failed else 0), output
+
+
+def exact_control_evaluate(monkeypatch, tmp_path, filters, rows, scenarios=()):
+    """Keep actual discovery, run_step and evaluate, mocking only Cargo and build."""
+    mutation = gate.m("EXACT_CONTROL_FIXTURE", "parser classification", filters, scenarios)
+    monkeypatch.setattr(gate, "has_switch", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    code, output = exact_control_output(rows)
+    selected_cargo_results(monkeypatch, code, output, names=tuple(name for name, _ in rows))
+    args = SimpleNamespace(target_dir=tmp_path, timeout_test=5, fast=True)
+    return gate.evaluate(args, tmp_path, mutation)
+
+
+@pytest.mark.parametrize("selector", ["named", "tests::named"])
+@pytest.mark.parametrize("replacement", ["tests::named_unrelated_replacement", "foreign::tests::named"])
+def test_exact_control_missing_refuses_before_runtime_even_if_substring_replacement_fails(
+    monkeypatch, tmp_path, selector, replacement
+):
+    if selector == "named" and replacement == "foreign::tests::named":
+        # A real exact leaf in a different module is deliberately a named match.
+        replacement += "_extra"
+    calls = []
+    def cargo_test(*args):
+        calls.append(args[3])
+        if "--list" in args[3]:
+            return 0, f"{replacement}: test\n\n1 test, 0 benchmarks\n", 0.0
+        return exact_control_output([(replacement, "FAILED")]) + (1.0,)
+    monkeypatch.setattr(gate, "cargo_test", cargo_test)
+    monkeypatch.setattr(gate, "has_switch", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    result = gate.evaluate(SimpleNamespace(target_dir=tmp_path, timeout_test=5, fast=True),
+                           tmp_path, gate.m("EXACT_CONTROL_FIXTURE", "fixture", [selector]))
+    assert result["verdict"] == "error", result
+    assert result["reason"] == "named tests: missing-test"
+    assert result["named"]["selected"] == [replacement]
+    assert len(calls) == 1 and "--list" in calls[0]
+
+
+@pytest.mark.parametrize("selector", ["named", "tests::named"])
+def test_exact_control_pass_cannot_borrow_an_extra_failure_for_named_kill(
+    monkeypatch, tmp_path, selector
+):
+    rows = [("tests::named", "ok"), ("tests::named_unrelated_replacement", "FAILED")]
+    result = exact_control_evaluate(monkeypatch, tmp_path, [selector], rows)
+    assert result["verdict"] == "error", result
+    assert result["reason"] == "named tests: only additional substring-selected tests failed"
+    assert result["named"]["status"] == "fail"
+    assert result["named"]["failed"] == [rows[1][0]]
+    assert result["named"]["required_failed"] == []
+    assert result["named"]["ran"] == result["named"]["selected"] == [name for name, _ in rows]
+
+
+@pytest.mark.parametrize("selector", ["named", "tests::named"])
+@pytest.mark.parametrize("extra_status", ["ok", "FAILED"])
+def test_exact_control_failure_kills_without_dropping_selected_extra_results(
+    monkeypatch, tmp_path, selector, extra_status
+):
+    rows = [("tests::named", "FAILED"), ("tests::named_extra", extra_status)]
+    result = exact_control_evaluate(monkeypatch, tmp_path, [selector], rows)
+    assert result["verdict"] == "killed_by_test", result
+    assert result["named"]["required_failed"] == ["tests::named"]
+    assert result["named"]["failed"] == [name for name, status in rows if status == "FAILED"]
+    assert result["named"]["ran"] == result["named"]["selected"] == [name for name, _ in rows]
+
+
+@pytest.mark.parametrize("selector", ["named", "tests::named"])
+def test_exact_control_ignored_cannot_be_replaced_by_extra_failure(monkeypatch, tmp_path, selector):
+    rows = [("tests::named", "ignored"), ("tests::named_extra", "FAILED")]
+    result = exact_control_evaluate(monkeypatch, tmp_path, [selector], rows)
+    assert result["verdict"] == "error", result
+    assert result["reason"] == "named tests: missing-test"
+    assert result["named"]["failed"] == ["tests::named_extra"]
+    assert result["named"]["ran"] == ["tests::named_extra"]
+
+
+@pytest.mark.parametrize("second_status,expected", [("ok", "killed_by_test"), ("FAILED", "killed_by_test"),
+                                                       ("ignored", "error")])
+def test_exact_control_multi_declaration_requires_each_original_control(
+    monkeypatch, tmp_path, second_status, expected
+):
+    rows = [("tests::named", "FAILED"), ("tests::named_extra", "FAILED"),
+            ("tests::second", second_status)]
+    result = exact_control_evaluate(monkeypatch, tmp_path, ["tests::named", "tests::second"], rows)
+    assert result["verdict"] == expected, result
+    assert result["named"]["failed"] == [name for name, status in rows if status == "FAILED"]
+    if expected == "killed_by_test":
+        assert result["named"]["required_failed"] == [name for name, status in rows
+                                                      if status == "FAILED" and name != "tests::named_extra"]
+    else:
+        assert result["reason"] == "named tests: missing-test"
+
+
+@pytest.mark.parametrize("second_status,expected", [("ok", "killed_by_test"), ("FAILED", "killed_by_test"),
+                                                       ("ignored", "error")])
+def test_exact_control_leaf_duplicates_keep_each_exact_module_owner(monkeypatch, tmp_path, second_status, expected):
+    rows = [("machine::tests::named", "FAILED"), ("machine::tests::named_extra", "FAILED"),
+            ("pacemaker::tests::named", second_status)]
+    result = exact_control_evaluate(monkeypatch, tmp_path, ["named"], rows)
+    assert result["verdict"] == expected, result
+    if expected == "killed_by_test":
+        assert result["named"]["required_failed"] == [name for name, status in rows
+                                                      if status == "FAILED" and name.rsplit("::", 1)[-1] == "named"]
+        assert result["named"]["ran"] == result["named"]["selected"]
+    else:
+        assert result["reason"] == "named tests: missing-test"
+
+
+@pytest.mark.parametrize("named_status", ["ok", "FAILED"])
+@pytest.mark.parametrize("scenario_status", ["ok", "FAILED", "ignored", "missing"])
+def test_exact_control_scenario_extras_cannot_replace_declared_failure(
+    monkeypatch, tmp_path, named_status, scenario_status
+):
+    scenario_id = next(iter(gate.SCENARIOS))
+    scenario = gate.SCENARIOS[scenario_id]
+    mutation = gate.m("EXACT_CONTROL_FIXTURE", "parser fixture", ["tests::named"], [scenario_id])
+    monkeypatch.setattr(gate, "has_switch", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    calls = []
+    def cargo_test(*args):
+        selected_scenario = args[3][0] == scenario
+        rows = ([(scenario + "_extra", "FAILED")] if scenario_status == "missing" else
+                [(scenario, scenario_status), (scenario + "_extra", "FAILED")]) if selected_scenario else [("tests::named", named_status)]
+        calls.append((args[3][0], "--list" in args[3]))
+        if "--list" in args[3]:
+            return 0, "".join(name + ": test\n" for name, _ in rows) + f"\n{len(rows)} tests, 0 benchmarks\n", 0.0
+        return exact_control_output(rows) + (1.0,)
+    monkeypatch.setattr(gate, "cargo_test", cargo_test)
+    args = SimpleNamespace(target_dir=tmp_path, timeout_test=5, timeout_scenario=5, seeds=200, fast=False)
+    result = gate.evaluate(args, tmp_path, mutation)
+    expected = ("killed_by_test" if named_status == "FAILED" else "killed_by_scenario_only") if scenario_status == "FAILED" else "error"
+    assert result["verdict"] == expected, result
+    if scenario_status == "ok":
+        assert result["reason"] == "scenarios: only additional substring-selected tests failed"
+        assert result["scenario"]["required_failed"] == []
+    elif scenario_status in ("ignored", "missing"):
+        assert result["reason"] == "scenarios: missing-test"
+    else:
+        assert result["scenario"]["required_failed"] == [scenario]
+        assert result["scenario"]["failed"] == [scenario, scenario + "_extra"]
+    if scenario_status == "missing":
+        assert calls[-1] == (scenario, True), "absent exact scenario must stop before runtime"
+
+
+def test_exact_control_later_extra_scenario_failure_cannot_hide_behind_earlier_control_kill(monkeypatch, tmp_path):
+    scenarios = list(gate.SCENARIOS)[:2]
+    mutation = gate.m("EXACT_CONTROL_FIXTURE", "parser fixture", ["tests::named"], scenarios)
+    monkeypatch.setattr(gate, "has_switch", lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
+    def cargo_test(*args):
+        name = args[3][0]
+        rows = [(name, "ok")] if name == "tests::named" else [(name, "FAILED")] if name == gate.SCENARIOS[scenarios[0]] else [(name, "ok"), (name + "_extra", "FAILED")]
+        if "--list" in args[3]:
+            return 0, "".join(n + ": test\n" for n, _ in rows) + f"\n{len(rows)} tests, 0 benchmarks\n", 0.0
+        return exact_control_output(rows) + (1.0,)
+    monkeypatch.setattr(gate, "cargo_test", cargo_test)
+    args = SimpleNamespace(target_dir=tmp_path, timeout_test=5, timeout_scenario=5, seeds=200, fast=False)
+    result = gate.evaluate(args, tmp_path, mutation)
+    assert result["verdict"] == "error", result
+    assert result["reason"] == "scenarios: only additional substring-selected tests failed"
+    assert [step["required_failed"] for step in result["scenario"]["steps"]] == [[gate.SCENARIOS[scenarios[0]]], []]

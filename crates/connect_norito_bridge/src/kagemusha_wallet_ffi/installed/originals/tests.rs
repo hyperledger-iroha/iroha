@@ -240,7 +240,7 @@ fn finality_catalog_reader_never_requires_or_routes_server_pk() {
     )
     .unwrap();
     for original in &originals[..2] {
-        let digest = BlobV1::of(&original).sha256;
+        let digest = BlobV1::of(original).sha256;
         let mut bytes = Vec::new();
         OriginalSourceV1::open(&mut source, digest)
             .unwrap()

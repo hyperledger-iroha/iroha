@@ -1056,10 +1056,14 @@ mod validation_tests {
         for (policy, owning_domain) in [
             (AssetBalancePolicy::Global, None),
             (AssetBalancePolicy::Global, Some(domain.clone())),
-            (AssetBalancePolicy::DataspaceRestricted, Some(domain.clone())),
+            (
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(domain.clone()),
+            ),
         ] {
             let id = AssetDefinitionId::derive_from_components(
-                domain.clone(), "rose".parse().expect("asset name"),
+                domain.clone(),
+                "rose".parse().expect("asset name"),
             );
             let object = AssetDefinition::numeric(id, "Rose", policy, owning_domain);
             let original = OriginalNewAssetDefinitionV1 {

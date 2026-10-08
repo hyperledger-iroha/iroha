@@ -30,7 +30,15 @@ Generation leaves token services disabled. The startup worker composes one reser
 three independent funded provider/custody/gateway histories and one reputation policy through
 their native owners. It promotes each signed compliance catalog and restarts all four owned peers
 with the aggregate configuration. Every original transaction remains in the all-peer barrier;
-a maximum-height observation floor never replaces those receipts. This combined path still needs
+a maximum-height observation floor never replaces those receipts. Reserve-policy finality is the
+common prerequisite. Each provider then retains its own strict custody, registration, funded
+credit/capacity, ingest and gateway dependencies; there is no prerequisite from another provider's
+gateway. Reputation follows all three gateways. Equal-block originals from different providers remain
+distinct required transactions. Fresh histories may use three scoped, joined workers under the same
+finite authorization and deadline, while resumed work and active caller decode budgets use serial
+dispatch. Partial recovery validates each provider's frontier independently and refuses its later
+material without a completed prerequisite. One shared epoch retains its original replacement limit;
+parallelism creates no signing authority, budget extension or readiness from partial work. This combined path still needs
 native qualification. Reopen preserves each original finite interval, endpoint and profile;
 it never upgrades a retained generation in place.
 An attached private dataspace has four local validators with owner-only application

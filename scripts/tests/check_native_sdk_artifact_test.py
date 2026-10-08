@@ -101,7 +101,7 @@ def test_current_wallet_exports_are_accepted_and_unknown_names_are_rejected() ->
         + MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS
         + MODULE.KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS
     )
-    assert len(current) == len(set(current)) == 45
+    assert len(current) == len(set(current)) == 46
     for sdk in ("c-jni", "csharp"):
         MODULE.validate_retired_protocol_symbols(current, sdk=sdk)
         for symbol in (*current, "connect_norito_free"):
@@ -146,6 +146,7 @@ def test_current_new_wallet_exports_are_each_mandatory_and_optional_aliases_are_
         "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_registerInstallation",
         "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_closeInstallation",
         "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_relocateRegistrationSource",
+        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletObservationNativeV1_observe",
     )
     for sdk, added in (("csharp", new_c), ("c-jni", new_c + new_jni)):
         required = MODULE.REQUIRED_SYMBOLS[sdk]
@@ -771,6 +772,7 @@ def test_current_wallet_jni_inventory_matches_shipping_consumer_and_definitions(
     for filename, owner, methods, relative in (
         ("KagemushaWalletV1.kt", "KagemushaWalletNativeV1", {"revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "enrollment", "execute", "review", "executeReviewed", "discardReview", "snapshot"}, "platform_jni/kagemusha_wallet_advance.rs"),
         ("KagemushaWalletInstalledRuntimeV1.kt", "KagemushaWalletInstalledRuntimeNativeV1", {"beginInstallation", "registerInstallation", "closeInstallation", "relocateRegistrationSource"}, "kagemusha_wallet_ffi/installed/jni.rs"),
+        ("KagemushaWalletOutputV1.kt", "KagemushaWalletObservationNativeV1", {"observe"}, "platform_jni/kagemusha_wallet_observation.rs"),
     ):
         consumer = (REPO_ROOT / "kotlin/kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet" / filename).read_text()
         declared = re.findall(r"@JvmStatic\s+external\s+fun\s+(\w+)\s*\(", consumer)
@@ -782,7 +784,7 @@ def test_current_wallet_jni_inventory_matches_shipping_consumer_and_definitions(
     source = (REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/kagemusha_wallet_review.rs").read_text()
     defined_exports.extend(re.findall(r'pub\s+(?:unsafe\s+)?extern\s+"system"\s+fn\s+(Java_\w+)\s*\(', source))
     expected = MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS
-    assert len(expected) == len(set(expected)) == len(declared_exports) == 18
+    assert len(expected) == len(set(expected)) == len(declared_exports) == 19
     assert set(expected) == declared_exports
     assert len(defined_exports) == len(set(defined_exports)) == len(expected)
     assert set(defined_exports) == set(expected)

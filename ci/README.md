@@ -353,6 +353,17 @@ provision a fresh external snapshot; previous graph snapshots remain historical
 evidence and cannot authorize new builds. Retain locked metadata validation and
 independent root/external identity checks before and after it.
 
+The Python privacy guard includes the five original installed confidential-wallet
+native cases before its final artifact/source verification. For retained local
+CI evidence, set `PRIVACY_PYTHON_SDK_EVIDENCE_DIR` to a fresh absolute child of
+`target/qualification`. The guard copies the original wheels, installed native
+extension, artifact manifest, Cargo invocation transcript and JUnit result there
+before deleting its disposable build/venv. The receipt reports exact test results;
+the outer guard exit also includes final cleanup revalidation. Retention does not
+relax the clean committed source requirement or confer independent release or
+deployment authority. A missing, skipped or failed native case cannot produce a
+passing retained test receipt.
+
 The affected-lane Clippy and Rustdoc checks select every declared feature and
 implicit optional-dependency feature through `scripts/rust_ci.py`. The four
 `mutation-testing` owners are excluded from non-test compilation because their

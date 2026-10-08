@@ -6,6 +6,64 @@ import kotlin.test.assertFailsWith
 import org.junit.jupiter.api.Test
 
 class KagemushaWalletSetupV1Test {
+    @Test fun `collection result equality binds status and full sequence without rendering it`() {
+        val sequence = KagemushaWalletUInt128V1(-1, -1)
+        val same = KagemushaWalletUInt128V1(-1, -1)
+        val progress = KagemushaWalletCollectionStatusV1.Progress(sequence)
+        val collected = KagemushaWalletCollectionStatusV1.Collected(sequence)
+        assertEquals(progress, KagemushaWalletCollectionStatusV1.Progress(same))
+        assertEquals(progress.hashCode(), KagemushaWalletCollectionStatusV1.Progress(same).hashCode())
+        assertEquals(collected, KagemushaWalletCollectionStatusV1.Collected(same))
+        assertEquals(collected.hashCode(), KagemushaWalletCollectionStatusV1.Collected(same).hashCode())
+        for (other in listOf<Any?>(null, KagemushaWalletCollectionStatusV1.Idle, collected,
+            KagemushaWalletCollectionStatusV1.Progress(KagemushaWalletUInt128V1(0, -1)),
+            KagemushaWalletCollectionStatusV1.Progress(KagemushaWalletUInt128V1(-1, 0)))) {
+            assertEquals(false, progress.equals(other))
+        }
+        assertEquals(false, collected.equals(progress))
+        assertEquals(false, collected.equals(KagemushaWalletCollectionStatusV1.Collected(KagemushaWalletUInt128V1(0, -1))))
+        assertEquals(false, collected.equals(KagemushaWalletCollectionStatusV1.Collected(KagemushaWalletUInt128V1(-1, 0))))
+        assertEquals(2, setOf<KagemushaWalletCollectionStatusV1>(progress, collected,
+            KagemushaWalletCollectionStatusV1.Progress(same), KagemushaWalletCollectionStatusV1.Collected(same)).size)
+        assertEquals("Progress(sequence=[REDACTED])", progress.toString())
+        assertEquals("Collected(sequence=[REDACTED])", collected.toString())
+    }
+
+    @Test fun `collection carries only exact unsigned sequence and separate outcomes`() {
+        for (sequence in listOf(KagemushaWalletUInt128V1(0, 0), KagemushaWalletUInt128V1(-1, -1))) {
+            val input = KagemushaWalletSetupInputV1(47, amount = sequence)
+            assertEquals(sequence, input.amount)
+            assertContentEquals(ByteArray(32), input.identity())
+            for (status in 50..52) {
+                val call = KagemushaWalletCallV1(status, -1, 0, if (status == 50) 0 else sequence.low,
+                    if (status == 50) 0 else sequence.high, 0, byteArrayOf())
+                val expected = when (status) {
+                    50 -> KagemushaWalletCollectionStatusV1.Idle
+                    51 -> KagemushaWalletCollectionStatusV1.Progress(sequence)
+                    else -> KagemushaWalletCollectionStatusV1.Collected(sequence)
+                }
+                assertEquals(expected, KagemushaWalletCollectionStatusV1.from(call, sequence))
+                assertFailsWith<KagemushaWalletExceptionV1> { call.completion() }
+                assertFailsWith<KagemushaWalletExceptionV1> { call.original() }
+                assertFailsWith<KagemushaWalletExceptionV1> { call.unloadClaimOriginal() }
+                assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(status, -1, 0, 0, 0, 1, byteArrayOf()) }
+                assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(status, -1, 0, 0, 0, 0, byteArrayOf(1)) }
+            }
+        }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(47, identity = ByteArray(32) { 1 }) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(47, token = 1) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(47, first = byteArrayOf(1)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(47, second = byteArrayOf(1)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(47, third = byteArrayOf(1)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(52) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(50, -1, 0, 1, 0, 0, byteArrayOf()) }
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(53, -1, 0, 0, 0, 0, byteArrayOf()) }
+        val progress = KagemushaWalletCallV1(51, -1, 0, 1, 0, 0, byteArrayOf())
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCollectionStatusV1.from(progress, KagemushaWalletUInt128V1(2, 0)) }
+        val fold = KagemushaWalletCallV1(9, -1, 0, 1, 0, 0, byteArrayOf())
+        assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCollectionStatusV1.from(fold, KagemushaWalletUInt128V1(1, 0)) }
+    }
+
     @Test fun `Unload claim requires retained identity and preserves native DATA`() {
         val id = ByteArray(32) { 7 }
         KagemushaWalletSetupInputV1(45, identity = id)

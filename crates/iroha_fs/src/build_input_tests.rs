@@ -1,10 +1,7 @@
 //! Distinct Cargo input custody keeps legitimate hardlinks without installed authority.
 
 use super::*;
-use std::{
-    fs,
-    io::{Read as _, Seek as _, SeekFrom},
-};
+use std::{fs, io::SeekFrom};
 
 fn linked_input(root: &Path, name: &str, bytes: &[u8]) -> (PathBuf, PathBuf) {
     let path = root.join(name);

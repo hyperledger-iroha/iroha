@@ -17,7 +17,8 @@ use iroha_data_model::{
 };
 use iroha_kagemusha_proof::finality::{
     catalog::{
-        ArtifactRecord, SourceProvenance, VerifierBlobSource, VerifierLimits, qualify_receipt,
+        ArtifactRecord, SourceProvenance, VerifierBlobSource, VerifierLimits,
+        qualify_server_recipes,
     },
     continuity::producer::Error as FinalityError,
     native::Parameters,
@@ -354,7 +355,20 @@ fn complete_wallet_catalog_from_pinned_finality_metadata() {
         records.len(),
         metadata_bytes,
     );
-    let receipt = qualify_receipt(
+    let original_bytes = records
+        .iter()
+        .try_fold(0_u64, |sum, record| {
+            record
+                .lengths
+                .iter()
+                .try_fold(sum, |sum, length| sum.checked_add(*length))
+        })
+        .expect("finite full server inventory extent");
+    assert!(
+        original_bytes <= 1_u64 << 40,
+        "engineering server inventory ceiling"
+    );
+    let recipes = qualify_server_recipes(
         anchor,
         &records,
         &mut metadata,
@@ -367,8 +381,51 @@ fn complete_wallet_catalog_from_pinned_finality_metadata() {
             maximum_verifier_bytes: metadata_bytes,
             msm_budget: MemoryBudget::DEFAULT,
         },
+        iroha_kagemusha_proof::finality::native::ImportLimits {
+            key: ReadConfig {
+                maximum_bytes: 512 << 20,
+                maximum_rows: 1 << 16,
+                coset_cache: CosetCachePolicy::OnDemand,
+                msm_budget: MemoryBudget::DEFAULT,
+            },
+            maximum_artifacts: RECORDS,
+            maximum_original_bytes: usize::try_from(original_bytes).unwrap(),
+        },
+        None,
     )
     .unwrap();
+    let reads_before_graph = metadata.reads;
+    let graph = recipes.installed_graph(None).unwrap();
+    assert_eq!(graph.anchor(), &anchor);
+    let receipt_source = recipes.receipt().source().clone();
+    let mounted = graph.qualified_source();
+    assert_eq!(mounted.binding(), receipt_source.binding());
+    assert_eq!(
+        mounted.verifying_key().to_bytes(),
+        receipt_source.verifying_key().to_bytes()
+    );
+    assert_eq!(
+        metadata.reads, reads_before_graph,
+        "graph installation does not reopen any original"
+    );
+    let cancelled = iroha_pasta::CancellationToken::new();
+    cancelled.cancel();
+    assert!(
+        recipes
+            .installed_graph(Some(&cancelled))
+            .err()
+            .is_some_and(|error| error.is_cancelled())
+    );
+    assert_eq!(
+        recipes
+            .installed_graph(None)
+            .unwrap()
+            .qualified_source()
+            .binding(),
+        receipt_source.binding()
+    );
+    drop(graph);
+    drop(recipes);
     eprintln!(
         "WALLET_SOURCE_PHASE receipt_graph_reconstructed records={} descriptor_vk_bytes={} exact_original_reads={} missing_unused_duplicate_records_rejected=true server_pk_reads=0 genuine_receipt=false",
         records.len(),
@@ -426,7 +483,7 @@ fn complete_wallet_catalog_from_pinned_finality_metadata() {
     }
     let draft = compiler
         .wallet_pack(
-            ReceiptSourceRecipeV1::new(receipt.source(), &anchor),
+            ReceiptSourceRecipeV1::new(&receipt_source, &anchor),
             FinalityV1 {
                 network: anchor.network,
                 instance: anchor.instance,
@@ -536,3 +593,37 @@ fn native_finality_binds_each_supplied_signed_genesis_without_repository_substit
 
 #[path = "full_catalog/diagnostic.rs"]
 mod diagnostic;
+
+/// Decode independently pinned metadata and authenticate its native genesis before
+/// any graph key generation. Success is DATA intake only, never source qualification.
+#[test]
+#[ignore = "explicit recovered metadata intake; no keygen, PK read, proof or graph authority"]
+fn inspect_pinned_finality_metadata_without_key_generation() {
+    let snapshot = PathBuf::from(
+        std::env::var_os("KAGEMUSHA_FINALITY_METADATA_SNAPSHOT")
+            .expect("separate immutable metadata snapshot"),
+    );
+    let pins = Pins {
+        producer: pin("KAGEMUSHA_FINALITY_PRODUCER_SHA256"),
+        sources: pin("KAGEMUSHA_FINALITY_SOURCE_SHA256"),
+        fixture: pin("KAGEMUSHA_FINALITY_FIXTURE_SHA256"),
+        inventory: pin("KAGEMUSHA_FINALITY_INVENTORY_SHA256"),
+    };
+    let (records, fixture) = records(&snapshot, pins).unwrap();
+    let native = native_finality(&fixture);
+    crate::kagemusha_wallet_finality_v1::derive_history_anchor(&native).unwrap();
+    let mut metadata = VerifierFiles::new(&snapshot.join("originals"), &records).unwrap();
+    for record in &records {
+        for digest in &record.sha256[..2] {
+            // The bounded opener consumes and hashes the complete selected file.
+            drop(metadata.open(digest).unwrap());
+        }
+    }
+    assert_eq!(metadata.reads, records.len() * 2);
+    eprintln!(
+        "RECOVERED_METADATA_INTAKE records={} descriptor_vk_bytes={} exact_original_reads={} native_genesis=true pk_reads=0 keygen=false graph_qualified=false",
+        records.len(),
+        metadata.bytes,
+        metadata.reads,
+    );
+}
