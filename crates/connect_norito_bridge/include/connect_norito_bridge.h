@@ -1957,15 +1957,25 @@ typedef struct {
 // Missing inclusion is distinct from malformed/mismatched custody, which remains an error.
 // IngestUnloadProof34 adds second ordinary proof <=36MiB and returns kind33. Both use a separate
 // transaction+claim-bound cursor; ConfirmUnload30 consumes its selected block, independent of later global tips.
-// ConfirmActivation35(first exact signed Activate transaction <=65536) returns kind44 only after
-// Native verifies successful exact input/output inclusion and durably selects the confirmation.
+// RetainActivationAttempt46(first exact signed Activate transaction <=65536) durably registers
+// a same-account/network/inner-Activation outer attempt before its first POST. New intake after
+// family confirmation is rejected; exact registered intake is idempotent. No clock or non-inclusion
+// authority is inferred. Unsupported earlier DATA layouts are preserved and rejected, never reset.
+// ConfirmActivation35(first registered signed Activate transaction <=65536) returns kind44 only after
+// Native verifies successful exact input/output inclusion of a retained attempt and durably confirms
+// the shared wallet activation. Kind44 does not assert successful execution of every outer attempt.
 // IngestActivationProof36(first exact signed transaction <=65536, second complete finality <=36MiB)
-// verifies one next block in a separate Activate-bound cursor, independent of the ordinary ledger tip.
+// verifies one next block in that registered attempt's separate cursor, independent of other attempts
+// and the ordinary ledger tip. Each attempt retains its selected checkpoint; the winning actual finality
+// original remains independently retained. Cleanup may retire only that attempt's replaced prefix.
 // Matching successful execution is confirmed atomically before the cursor can pass its block.
 // ActivationProofProgress37(first exact signed transaction <=65536) reads that cursor after restart.
-// Results44 confirmed /45 verifying: sequence_low=verified height, sequence_high/detail=0, bytes=32-byte block hash.
+// Results44 family confirmed /45 verifying /49 this attempt authentically rejected:
+// sequence_low=verified height, sequence_high/detail=0, bytes=32-byte block hash.
+// Rejected49 retains exact authenticated failed input/output execution and its checkpoint, never
+// unlocks first Load, and does not prevent another retained attempt from proving activation.
 // Result46 not started: zero sequence/detail, empty bytes. Confirmed result44 requires height>=2.
-// Setup35..37 use zero setup_id/amount/token and no unused originals. No HTTP receipt is authority.
+// Setup35..37/46 use zero setup_id/amount/token and no unused originals. No HTTP receipt is authority.
 // RequestFeeSelection38(no inputs) returns kind12 bytes64 = asset digest32 || selected fee digest32.
 // Zero fee digest means Native-selected zero fee; this projection is DATA, never Request authority.
 // RequestWithFeePolicy39(nonzero setup_id, first Offer <=10000, optional paired second FeeSchedule

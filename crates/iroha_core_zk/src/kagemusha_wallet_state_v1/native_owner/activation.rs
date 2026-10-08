@@ -1,4 +1,4 @@
-//! One durable Activate transport derived from the selected sequence-zero Bootstrap.
+//! One durable inner Activate and independently retained signed outer transaction attempts.
 
 use super::*;
 mod confirmation;
@@ -19,8 +19,7 @@ struct Plan {
     nonce: [u8; 32],
     output: Option<[u8; 32]>,
     confirmation: Option<[u8; 32]>,
-    cursor: Option<[u8; 32]>,
-    retired_cursor: Option<[u8; 32]>,
+    attempts: IndexRoot,
 }
 impl Plan {
     fn body(&self) -> Result<KagemushaWalletLedgerControlBodyV1, Error> {
@@ -48,12 +47,8 @@ impl Plan {
             || self.completion == [0; 32]
             || self.output == Some([0; 32])
             || self.confirmation == Some([0; 32])
-            || self.cursor == Some([0; 32])
-            || self.retired_cursor == Some([0; 32])
-            || (self.retired_cursor.is_some() && self.retired_cursor == self.cursor)
-            || (self.cursor.is_some() && self.output.is_none())
+            || (self.attempts != IndexRoot::default() && self.output.is_none())
             || (self.confirmation.is_some() && self.output.is_none())
-            || (self.confirmation.is_some() && self.cursor.is_some())
             || &self.credential.body.scheme_id != scheme
             || &self.credential.body.wallet_id != wallet
             || self.asset != *asset
@@ -114,8 +109,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             nonce: NativeChoicesV1::fresh_nonce(&[0; 32])?,
             output: None,
             confirmation: None,
-            cursor: None,
-            retired_cursor: None,
+            attempts: IndexRoot::default(),
         };
         plan.require(&self.scheme_id, &self.wallet_id, asset)?;
         manifest.activation = Some(

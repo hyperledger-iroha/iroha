@@ -2608,6 +2608,30 @@ pub mod torii {
         pub const MAX_INFLIGHT: usize = 16;
     }
 
+    /// Local proof-service budgets; identities and custody paths have no defaults.
+    pub mod kagemusha_load_finality {
+        /// Maximum queued, active and unread terminal results.
+        pub const MAX_PENDING_REQUESTS: usize = 8;
+        /// Maximum committed receipt height eligible for replay from genesis.
+        pub const MAXIMUM_RECEIPT_HEIGHT: u64 = 1_000_000;
+        /// Maximum individual server proving-key original (256 MiB).
+        pub const MAXIMUM_KEY_BYTES: usize = 256 << 20;
+        /// Maximum aggregate original graph extent (1 GiB).
+        pub const MAXIMUM_ORIGINAL_BYTES: usize = 1 << 30;
+        /// Maximum original graph entries.
+        pub const MAXIMUM_ARTIFACTS: usize = 4_096;
+        /// Scratch budget for each proof operation (64 MiB).
+        pub const MSM_BYTES: usize = 64 << 20;
+        /// Maximum retained journal entries including partials and locks.
+        pub const MAXIMUM_JOURNAL_ENTRIES: usize = 100_000;
+        /// Maximum retained journal extent (1 GiB).
+        pub const MAXIMUM_JOURNAL_BYTES: u64 = 1 << 30;
+        /// Allocation budget for native history acquisition (64 MiB).
+        pub const NATIVE_WORKING_SET_BYTES: usize = 64 << 20;
+        /// Deadline for one native block acquisition, in milliseconds.
+        pub const NATIVE_STEP_TIMEOUT_MS: u64 = 5_000;
+    }
+
     /// Retail recipient lookup defaults (disabled unless routes are configured).
     pub mod recipient_lookup {
         /// HTTP request timeout applied to configured bank Core API lookups.

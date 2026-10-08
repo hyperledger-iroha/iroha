@@ -1080,6 +1080,7 @@ mod tests {
                 tx_history: None,
                 recipient_lookup: iroha_config::parameters::actual::ToriiRecipientLookup::default(),
                 kagemusha_enrollment: None,
+                kagemusha_load_finality: None,
                 public_dataspace_upstreams: Vec::new(),
                 events_buffer_capacity: NonZeroUsize::new(
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
