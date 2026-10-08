@@ -36608,10 +36608,32 @@ mod explorer_lookup_tests {
         let definition = dm::AssetDefinition::numeric(
             definition_id.clone(), "Invalid", iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted, None,
         ).build(&owner);
-        let world = World::with([], [dm::Account::new(owner.clone()).build(&owner)], [definition]);
-        let world = world.view();
-        assert!(world.asset_definition_home(&definition_id).is_err());
-        assert!(!DataspaceReadVisibility::new(BTreeSet::from([DataSpaceId::UNIVERSAL]), false).allows_asset_definition(&world, &definition_id));
+        let home = DataSpaceId::new(7);
+        let mut world = World::with([], [dm::Account::new(owner.clone()).build(&owner)], []);
+        world
+            .insert_direct_asset_definition_with_assets_for_testing(definition, home, [])
+            .expect("admitted direct-home fixture");
+        let visibility = DataspaceReadVisibility::new(BTreeSet::from([home, DataSpaceId::UNIVERSAL]), false);
+        assert!(visibility.allows_asset_definition(&world.view(), &definition_id));
+        {
+            // Seed corruption only inside an uncommitted test checkpoint. The
+            // production constructor correctly rejects this malformed home.
+            let mut block = world.block();
+            let mut tx = block.transaction_without_telemetry(
+                iroha_config::parameters::actual::LaneConfig::default(), 0,
+            );
+            let empty_registry = iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1 {
+                version: iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1::VERSION,
+                bindings: BTreeMap::new(),
+            };
+            tx.parameters_mut_for_testing().get_mut().set_parameter(
+                iroha_data_model::parameter::Parameter::Custom(empty_registry.into_custom_parameter().unwrap()),
+            );
+            assert!(tx.asset_definitions().get(&definition_id).is_some());
+            assert!(tx.asset_definition_home(&definition_id).is_err());
+            assert!(!visibility.allows_asset_definition(&*tx, &definition_id));
+        }
+        assert!(visibility.allows_asset_definition(&world.view(), &definition_id));
     }
 
     routing_test! { sync direct_dataspace_definition_visibility_uses_immutable_home

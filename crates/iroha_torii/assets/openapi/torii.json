@@ -77001,7 +77001,7 @@
         ],
         "summary": "Execute or recover a Kagemusha enrollment operation.",
         "tags": [
-          "Kagemusha"
+          "Contracts"
         ],
         "x-iroha-route-auth": {
           "admission": "authenticated_account",

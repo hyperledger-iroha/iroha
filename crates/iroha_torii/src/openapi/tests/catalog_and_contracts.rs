@@ -1312,7 +1312,7 @@ fn generated_spec_includes_documented_paths() {
     assert!(!paths.contains_key("/v1/attestation/issue"));
 }
 #[test]
-fn openapi_authorities_retire_kagemusha_transport_and_proposal_inputs() {
+fn openapi_authorities_preserve_native_enrollment_and_retire_wallet_transport_inputs() {
     for (variant, document) in [
         ("package-local", canonical_document()),
         ("compiled", generate_spec()),
@@ -1321,9 +1321,28 @@ fn openapi_authorities_retire_kagemusha_transport_and_proposal_inputs() {
             .get("paths")
             .and_then(Value::as_object)
             .expect("paths section");
-        assert!(
-            paths.keys().all(|path| !path.starts_with("/v1/kagemusha/")),
-            "retired KAGEMUSHA transport remains in {variant} OpenAPI"
+        assert_eq!(
+            paths
+                .keys()
+                .map(String::as_str)
+                .filter(|path| path.starts_with("/v1/kagemusha/"))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["/v1/kagemusha/enrollment"]),
+            "only current native enrollment remains in {variant} OpenAPI"
+        );
+        let enrollment = &paths["/v1/kagemusha/enrollment"]["post"];
+        assert_eq!(
+            enrollment["requestBody"]["content"]
+                .as_object()
+                .expect("native enrollment body")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["application/x-norito"])
+        );
+        assert_eq!(
+            enrollment["x-iroha-route-auth"]["stableRouteId"].as_str(),
+            Some("contracts.kagemusha_enrollment_post")
         );
         assert!(
             document
