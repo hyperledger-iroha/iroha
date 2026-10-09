@@ -509,7 +509,12 @@ fn admit_candidates(
             ]
         })
         .collect::<Vec<InstructionBox>>();
-    admin.submit_all(funding, FeePaymentIntent::authority(Vec::new(), None))?;
+    committee_status::submit_and_observe_until(
+        admin.clone(),
+        admin.clone(),
+        Instant::now() + WAIT,
+        |bounded| bounded.submit_all(funding, FeePaymentIntent::authority(Vec::new(), None)),
+    )?;
     for operator in candidates {
         let inclusion_height =
             committee_status::height_until_blocking(admin, Instant::now() + WAIT)? + 1;
@@ -548,10 +553,13 @@ fn admit_candidates(
                 &authorization,
             )?,
         };
-        operator
-            .client
-            .submit(candidate, FeePaymentIntent::authority(Vec::new(), None))
-            .wrap_err_with(|| format!("candidate {} admission failed", operator.peer))?;
+        committee_status::submit_and_observe_until(
+            operator.client.clone(),
+            admin.clone(),
+            Instant::now() + WAIT,
+            |bounded| bounded.submit(candidate, FeePaymentIntent::authority(Vec::new(), None)),
+        )
+        .wrap_err_with(|| format!("candidate {} admission failed", operator.peer))?;
     }
     Ok(())
 }
@@ -1751,14 +1759,23 @@ async fn run_custody_or_activation_scenario(
                 .get(peer)
                 .ok_or_else(|| eyre!("exiting candidate lacks a real owner"))?
                 .clone();
+            let deadline = Instant::now() + WAIT;
+            let observer = admin.clone();
             read_on_dedicated_thread(move || {
-                owner.client.submit(
-                    ExitPublicLaneValidator {
-                        lane_id: LaneId::SINGLE,
-                        validator: owner.account,
-                        release_at_ms: committee_staking::finite_release_deadline()?,
+                committee_status::submit_and_observe_until(
+                    owner.client,
+                    observer,
+                    deadline,
+                    |bounded| {
+                        bounded.submit(
+                            ExitPublicLaneValidator {
+                                lane_id: LaneId::SINGLE,
+                                validator: owner.account,
+                                release_at_ms: committee_staking::finite_release_deadline()?,
+                            },
+                            FeePaymentIntent::authority(Vec::new(), None),
+                        )
                     },
-                    FeePaymentIntent::authority(Vec::new(), None),
                 )
             })
             .await

@@ -56,6 +56,45 @@ fn citizenship_escrow() -> Result<AccountId> {
     ))
 }
 
+// The exact read peer must apply funding before a citizen's local fee quote and
+// apply a request before its local attempt read. Quote retains its existing 300s
+// bound; preparation, one submission and local completion share the 600s phase.
+async fn submit_and_observe(
+    admin: &Client,
+    instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
+    deadline: Instant,
+    acknowledgement: &'static str,
+) -> Result<SignedTransaction> {
+    let preparation_client = admin.with_request_deadline(deadline)?;
+    committee_status::submit_async_until(
+        preparation_client.client().clone(),
+        deadline,
+        |bounded| async move {
+            let transaction = parliament_submission::prepare_parliament_transaction(
+                &preparation_client,
+                instructions,
+            )
+            .await?;
+            let applied = bounded
+                .account_client()?
+                .submit_transaction_and_wait(&transaction)
+                .await?;
+            ensure!(applied == transaction.hash(), acknowledgement);
+            bounded
+                .wait_until_transaction_applied_local(
+                    transaction.hash(),
+                    iroha::client::TransactionWaitOptions {
+                        timeout: deadline.saturating_duration_since(Instant::now()),
+                        poll_interval: POLL,
+                    },
+                )
+                .await?;
+            Ok(transaction)
+        },
+    )
+    .await
+}
+
 /// Seed identities and permissions; real XOR funding waits for its signed genesis definition.
 pub(super) fn genesis(mut builder: NetworkBuilder) -> Result<NetworkBuilder> {
     let xor: AssetDefinitionId = defaults::nexus::staking::stake_asset_id().parse()?;
@@ -155,16 +194,13 @@ pub(super) async fn fund_and_register_citizens(
                 citizen.clone(),
             )
         });
-        let transaction =
-            parliament_submission::prepare_parliament_transaction(admin, transfers).await?;
-        let applied = admin
-            .account_client()
-            .submit_transaction_and_wait(&transaction)
-            .await?;
-        ensure!(
-            applied == transaction.hash(),
-            "citizen funding changed its exact signed source"
-        );
+        let transaction = submit_and_observe(
+            admin,
+            transfers,
+            Instant::now() + WAIT,
+            "citizen funding changed its exact signed source",
+        )
+        .await?;
         funding_transactions.push(transaction);
     }
     let mut registrations = Vec::new();
@@ -415,16 +451,13 @@ pub(super) async fn exercise(
         }
         .into(),
     ];
-    let request_transaction =
-        parliament_submission::prepare_parliament_transaction(admin, instructions).await?;
-    let applied = admin
-        .account_client()
-        .submit_transaction_and_wait(&request_transaction)
-        .await?;
-    ensure!(
-        applied == request_transaction.hash(),
-        "Parliament request acknowledgement changed its signed source"
-    );
+    let request_transaction = submit_and_observe(
+        admin,
+        instructions,
+        Instant::now() + WAIT,
+        "Parliament request acknowledgement changed its signed source",
+    )
+    .await?;
     let registered = attempt(admin, id).await?;
     let elections = registered
         .required_bodies()
@@ -681,6 +714,247 @@ pub(super) fn verify_boundary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use iroha::http::{HttpTransport, Method, Response, TransportFuture, TransportRequest};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Debug)]
+    struct SubmissionTransport {
+        requests: Mutex<Vec<(String, Duration)>>,
+        submitted: Mutex<Vec<Vec<u8>>>,
+        observations: Mutex<Vec<(String, String)>>,
+        budget: Duration,
+    }
+
+    impl HttpTransport for SubmissionTransport {
+        fn send_blocking(&self, _: TransportRequest) -> Result<Response<Vec<u8>>> {
+            panic!("Parliament submission must use the account-owned asynchronous transport")
+        }
+
+        fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+            Box::pin(async move {
+                assert_eq!(request.url.host_str(), Some("parliament-observer.invalid"));
+                let remaining = request
+                    .timeout
+                    .expect("every dispatch keeps its phase deadline");
+                assert!(remaining <= self.budget);
+                let path = request.url.path();
+                self.requests
+                    .lock()
+                    .unwrap()
+                    .push((path.to_owned(), remaining));
+                let (status, body) = match path {
+                    "/v1/fees/quote" => {
+                        assert_eq!(request.method, Method::POST);
+                        let quote: iroha_torii_shared::FeeQuoteRequest =
+                            norito::json::from_slice(&request.body)?;
+                        let response = iroha_torii_shared::FeeQuoteResponse {
+                            intent: quote.payload.fee_payment_intent().clone(),
+                            observation: iroha_torii_shared::FeeQuoteObservation {
+                                ledger_time_ms: 1,
+                                next_block_height: 143,
+                                route_dataspace_id:
+                                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                            },
+                            components: Vec::new(),
+                            capacities: Vec::new(),
+                            decision: iroha_torii_shared::FeeQuoteDecision::Accepted {
+                                debit_source: iroha_data_model::nexus::FeeDebitSource::Account(
+                                    quote.payload.authority().clone(),
+                                ),
+                                program_revision: None,
+                            },
+                        };
+                        (200, norito::json::to_vec(&response)?)
+                    }
+                    "/v1/node/capabilities" => {
+                        assert_eq!(request.method, Method::GET);
+                        (
+                            200,
+                            norito::json::to_vec(&norito::json!({
+                                "data_model_version": (iroha_data_model::DATA_MODEL_VERSION),
+                                "signed_transaction_schema_hash_hex": (hex::encode(
+                                    norito::schema::identity::frame_hash::<SignedTransaction>()
+                                )),
+                            }))?,
+                        )
+                    }
+                    "/v1/pipeline/transactions" => {
+                        assert_eq!(request.method, Method::POST);
+                        self.submitted.lock().unwrap().push(request.body);
+                        (202, Vec::new())
+                    }
+                    "/v1/pipeline/transactions/status" => {
+                        assert_eq!(request.method, Method::GET);
+                        let parameter = |name| {
+                            request
+                                .url
+                                .query_pairs()
+                                .find(|(key, _)| key == name)
+                                .unwrap()
+                                .1
+                                .into_owned()
+                        };
+                        let hash = parameter("hash");
+                        let scope = parameter("scope");
+                        let mut observations = self.observations.lock().unwrap();
+                        let local_reads = observations
+                            .iter()
+                            .filter(|(scope, _)| scope == "local")
+                            .count();
+                        let (kind, source) = match scope.as_str() {
+                            "global" => ("Applied", "state"),
+                            "local" => match local_reads {
+                                0 => ("Queued", "queue"),
+                                1 => ("Applied", "cache"),
+                                2 => ("Applied", "state"),
+                                _ => panic!("local completion must stop further polling"),
+                            },
+                            other => panic!("unexpected observation scope: {other}"),
+                        };
+                        observations.push((scope.clone(), hash.clone()));
+                        (
+                            200,
+                            norito::json::to_vec(&norito::json!({
+                                "hash": hash,
+                                "status": { "kind": kind, "block_height": 143 },
+                                "scope": scope,
+                                "resolved_from": source,
+                            }))?,
+                        )
+                    }
+                    other => panic!("unexpected Parliament dispatch: {other}"),
+                };
+                Ok(Response::builder()
+                    .status(status)
+                    .header("content-type", "application/json")
+                    .body(body)?)
+            })
+        }
+    }
+
+    fn submission_client(transport: Arc<SubmissionTransport>) -> Client {
+        let config = iroha::config::Config {
+            chain: "parliament-observation-test".into(),
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                Hash::prehashed([0xA6; Hash::LENGTH]),
+            )),
+            key_pair: iroha_test_samples::ALICE_KEYPAIR.clone(),
+            account: ALICE_ID.clone(),
+            account_chain_discriminant: iroha_torii_shared::MINAMOTO_CHAIN_DISCRIMINANT,
+            torii_api_url: "http://parliament-observer.invalid/".parse().unwrap(),
+            torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            basic_auth: None,
+            api_token: None,
+            transaction_add_nonce: false,
+            transaction_ttl: WAIT,
+            transaction_status_timeout: WAIT,
+            sorafs_alias_cache: iroha::config::AliasCache::default().into_policy(),
+            sorafs_anonymity_policy: Default::default(),
+            sorafs_rollout_phase: Default::default(),
+        };
+        Client::from_client(
+            iroha::client::Client::builder(config)
+                .http_transport(transport)
+                .build()
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn parliament_submission_requires_exact_local_state_after_one_signed_write() -> Result<()> {
+        init_instruction_registry();
+        let budget = Duration::from_secs(2);
+        let transport = Arc::new(SubmissionTransport {
+            requests: Mutex::new(Vec::new()),
+            submitted: Mutex::new(Vec::new()),
+            observations: Mutex::new(Vec::new()),
+            budget,
+        });
+        // Construct and retire the blocking holder outside its borrowed Tokio block.
+        let admin = submission_client(transport.clone());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let transaction = runtime.block_on(submit_and_observe(
+            &admin,
+            [Log::new(
+                Level::INFO,
+                "Parliament local visibility".to_owned(),
+            )],
+            Instant::now() + budget,
+            "Parliament request acknowledgement changed its signed source",
+        ))?;
+        assert_eq!(
+            *transport.submitted.lock().unwrap(),
+            vec![
+                iroha::client::PreparedTransactionPayload::from_transaction(&transaction)
+                    .as_bytes()
+                    .to_vec()
+            ],
+            "visibility must not replace or resubmit the original signed request"
+        );
+        let observations = transport.observations.lock().unwrap();
+        assert_eq!(
+            observations
+                .iter()
+                .map(|(scope, _)| scope.as_str())
+                .collect::<Vec<_>>(),
+            ["global", "local", "local", "local"],
+            "Parliament dependent reads require the exact local State, not global or cached success"
+        );
+        assert!(
+            observations
+                .iter()
+                .all(|(_, hash)| hash == &transaction.hash().to_string())
+        );
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(path, _)| path == "/v1/fees/quote")
+                .count(),
+            1
+        );
+        assert!(
+            requests.windows(2).all(|pair| pair[1].1 < pair[0].1),
+            "quote, submission and local visibility must consume the original phase deadline"
+        );
+        assert_eq!(admin.client().to_builder().transaction_status_timeout, WAIT);
+        Ok(())
+    }
+
+    #[test]
+    fn parliament_submission_refuses_expired_phase_before_quote_or_write() -> Result<()> {
+        init_instruction_registry();
+        let transport = Arc::new(SubmissionTransport {
+            requests: Mutex::new(Vec::new()),
+            submitted: Mutex::new(Vec::new()),
+            observations: Mutex::new(Vec::new()),
+            budget: Duration::from_secs(2),
+        });
+        let admin = submission_client(transport.clone());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let error = runtime
+            .block_on(submit_and_observe(
+                &admin,
+                [Log::new(Level::INFO, "expired Parliament phase".to_owned())],
+                Instant::now(),
+                "citizen funding changed its exact signed source",
+            ))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("committee submission deadline elapsed")
+        );
+        assert!(transport.requests.lock().unwrap().is_empty());
+        assert!(transport.submitted.lock().unwrap().is_empty());
+        Ok(())
+    }
 
     #[test]
     fn genesis_defines_real_xor_before_any_funding_and_leaves_citizen_bonds_for_signed_setup()

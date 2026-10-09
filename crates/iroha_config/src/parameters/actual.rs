@@ -1433,6 +1433,7 @@ fn min_nonzero_bytes(current: Bytes, limit: u64) -> Bytes {
 }
 pub(crate) fn sora_lane_catalog() -> LaneCatalog {
     let lane_count = NonZeroU32::new(3).expect("three lanes are non-zero");
+    // All workload lanes share the universal dataspace's public disclosure class.
     let lanes = vec![
         LaneConfigMetadata {
             id: LaneId::new(0),
@@ -1458,7 +1459,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "governance".to_string(),
             description: Some("Governance & parliament traffic".to_string()),
-            visibility: LaneVisibility::Restricted,
+            visibility: LaneVisibility::Public,
             lane_type: Some("governance".to_string()),
             governance: None,
             settlement: None,
@@ -1476,7 +1477,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "zk".to_string(),
             description: Some("Zero-knowledge attachments".to_string()),
-            visibility: LaneVisibility::Restricted,
+            visibility: LaneVisibility::Public,
             lane_type: Some("attachments".to_string()),
             governance: None,
             settlement: None,

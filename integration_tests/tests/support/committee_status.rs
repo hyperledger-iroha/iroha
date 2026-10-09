@@ -65,6 +65,62 @@ pub(super) fn submit_and_observe_until(
     Ok(hash)
 }
 
+/// Observe this peer's exact State rejection after a global terminal rejection.
+/// Public status exposes kind/height only; authenticated Network output owns its reason.
+/// Repeat only absence or pending hints. Every read error, including SDK backpressure,
+/// is preserved because its private retry representation is not a public harness API.
+pub(super) async fn observe_rejected_until(
+    observer: iroha::client::Client,
+    hash: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+    original: &iroha::client::TransactionFinalityFailure,
+    deadline: Instant,
+) -> Result<()> {
+    original.validate_for_hash(hash)?;
+    ensure!(
+        original.response().status.kind == "Rejected",
+        "local rejection observation requires an exact global State Rejected"
+    );
+    let bounded = observer.with_request_deadline(deadline);
+    loop {
+        ensure!(
+            Instant::now() < deadline,
+            "local rejection observation for {hash} exceeded the original deadline"
+        );
+        let local = bounded
+            .fetch_transaction_status_response_local(hash)
+            .await?;
+        ensure!(
+            Instant::now() < deadline,
+            "local rejection observation for {hash} exceeded the original deadline"
+        );
+        if let Some(local) = local
+            && local.resolved_from == "state"
+        {
+            match local.status.kind.as_str() {
+                "Rejected" => {
+                    ensure!(
+                        local.status == original.response().status,
+                        "local State rejection differs from the exact global terminal status for {hash}"
+                    );
+                    return Ok(());
+                }
+                "Applied" | "Expired" => {
+                    return Err(eyre::eyre!(
+                        "local State outcome differs from the exact global rejection for {hash}"
+                    ));
+                }
+                _ => {} // Canonically decoded nonterminal hints grant no completion.
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        ensure!(
+            RETRY_DELAY < remaining,
+            "local rejection observation for {hash} exceeded the original deadline"
+        );
+        tokio::time::sleep(RETRY_DELAY).await;
+    }
+}
+
 /// Submit once asynchronously under the original phase deadline.
 /// Preserve the SDK's unresolved transaction identity when its finality wait expires.
 pub(super) async fn submit_async_until<T, F, Fut>(
@@ -286,6 +342,7 @@ mod status_observation_tests {
     struct ApplicationTransport {
         responses: Mutex<VecDeque<(u16, Vec<u8>)>>,
         requests: Mutex<Vec<(String, Duration)>>,
+        consume_request_deadline: bool,
     }
 
     impl HttpTransport for ApplicationTransport {
@@ -320,6 +377,9 @@ mod status_observation_tests {
                         .timeout
                         .expect("local observation must retain the phase deadline"),
                 ));
+                if self.consume_request_deadline {
+                    std::thread::sleep(request.timeout.unwrap() + Duration::from_millis(1));
+                }
                 let (status, body) = self
                     .responses
                     .lock()
@@ -338,6 +398,25 @@ mod status_observation_tests {
         hash: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
         statuses: &[(&str, &str, &str)],
     ) -> (iroha::blocking::Client, Arc<ApplicationTransport>) {
+        let (observer, transport) = application_observer_client(hash, statuses);
+        (
+            iroha::blocking::Client::from_client(observer).unwrap(),
+            transport,
+        )
+    }
+
+    fn application_observer_client(
+        hash: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        statuses: &[(&str, &str, &str)],
+    ) -> (iroha::client::Client, Arc<ApplicationTransport>) {
+        application_observer_client_with_late_read(hash, statuses, false)
+    }
+
+    fn application_observer_client_with_late_read(
+        hash: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        statuses: &[(&str, &str, &str)],
+        consume_request_deadline: bool,
+    ) -> (iroha::client::Client, Arc<ApplicationTransport>) {
         let transport = Arc::new(ApplicationTransport {
             responses: Mutex::new(
                 statuses
@@ -357,13 +436,11 @@ mod status_observation_tests {
                     .collect(),
             ),
             requests: Mutex::new(Vec::new()),
+            consume_request_deadline,
         });
         let mut builder = client(transport.clone()).to_builder();
         builder.torii_url = "http://committee-observer.invalid/".parse().unwrap();
-        (
-            iroha::blocking::Client::from_client(builder.build().unwrap()).unwrap(),
-            transport,
-        )
+        (builder.build().unwrap(), transport)
     }
 
     #[test]
@@ -441,6 +518,140 @@ mod status_observation_tests {
             format!("original unresolved submission {hash}")
         );
         assert!(observations.requests.lock().unwrap().is_empty());
+    }
+
+    fn global_failure(
+        hash: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        kind: &str,
+    ) -> iroha::client::TransactionFinalityFailure {
+        let response = iroha_torii_shared::PipelineTransactionStatusResponse::new(
+            hash.to_string(),
+            iroha_torii_shared::PipelineTransactionStatus {
+                kind: kind.to_owned(),
+                block_height: Some(143),
+            },
+            "global".to_owned(),
+            "state".to_owned(),
+        );
+        iroha::client::TransactionFinalityFailure::from_response(hash, response)
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn monetary_rejection_waits_for_exact_local_state_after_global_completion() {
+        let hash = iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+            [0x75; iroha_crypto::Hash::LENGTH],
+        ));
+        let (observer, observations) = application_observer_client(
+            hash,
+            &[
+                ("Queued", "local", "queue"),
+                ("Rejected", "local", "cache"),
+                ("Rejected", "local", "state"),
+            ],
+        );
+        let budget = Duration::from_secs(2);
+        observe_rejected_until(
+            observer,
+            hash,
+            &global_failure(hash, "Rejected"),
+            Instant::now() + budget,
+        )
+        .await
+        .unwrap();
+        let requests = observations.requests.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            3,
+            "monetary readback requires the exact peer State rejection, not global or cached completion"
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|(actual, left)| actual == &hash.to_string() && *left <= budget)
+        );
+        assert!(requests.windows(2).all(|pair| pair[1].1 < pair[0].1));
+        assert!(observations.responses.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn monetary_rejection_refuses_foreign_terminal_or_read_error_without_retry() {
+        let hash = iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+            [0x77; iroha_crypto::Hash::LENGTH],
+        ));
+        let foreign_hash = iroha_crypto::HashOf::<iroha_data_model::transaction::SignedTransaction>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x7b; iroha_crypto::Hash::LENGTH]));
+        for (case, code, body) in [
+            ("applied", 200, json::to_vec(&json!({"hash": (hash.to_string()), "status": {"kind":"Applied", "block_height":143}, "scope":"local", "resolved_from":"state"})).unwrap()),
+            ("height", 200, json::to_vec(&json!({"hash": (hash.to_string()), "status": {"kind":"Rejected", "block_height":142}, "scope":"local", "resolved_from":"state"})).unwrap()),
+            ("scope", 200, json::to_vec(&json!({"hash": (hash.to_string()), "status": {"kind":"Rejected", "block_height":143}, "scope":"global", "resolved_from":"state"})).unwrap()),
+            ("hash", 200, json::to_vec(&json!({"hash": (foreign_hash.to_string()), "status": {"kind":"Rejected", "block_height":143}, "scope":"local", "resolved_from":"state"})).unwrap()),
+            ("malformed", 200, b"{malformed}".to_vec()),
+            ("backpressure", 429, b"original public backpressure".to_vec()),
+            ("read", 503, b"original read failure".to_vec()),
+        ] {
+            let (observer, observations) = application_observer_client(hash, &[]);
+            observations.responses.lock().unwrap().push_back((code, body));
+            let error = observe_rejected_until(observer, hash, &global_failure(hash, "Rejected"), Instant::now() + Duration::from_secs(2)).await.expect_err("a foreign outcome or original read refusal cannot authorize monetary readback");
+            if case == "hash" {
+                assert!(matches!(error.downcast_ref::<iroha::Error>(), Some(iroha::Error::ResponseBinding { operation: "pipeline.transaction_status", field: "hash" })));
+            }
+            if code != 200 {
+                assert!(error.to_string().contains(if code == 429 { "original public backpressure" } else { "original read failure" }), "the original SDK read refusal is preserved");
+            }
+            assert_eq!(observations.requests.lock().unwrap().len(), 1);
+        }
+        let (observer, observations) = application_observer_client(hash, &[]);
+        assert!(
+            observe_rejected_until(
+                observer,
+                hash,
+                &global_failure(hash, "Expired"),
+                Instant::now() + Duration::from_secs(2)
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            observations.requests.lock().unwrap().is_empty(),
+            "global expiry cannot become an executed rejection"
+        );
+    }
+
+    #[tokio::test]
+    async fn monetary_rejection_preserves_original_deadline_before_dispatch_and_late_admission() {
+        let hash = iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+            [0x79; iroha_crypto::Hash::LENGTH],
+        ));
+        let (observer, observations) = application_observer_client(hash, &[]);
+        assert!(
+            observe_rejected_until(
+                observer,
+                hash,
+                &global_failure(hash, "Rejected"),
+                Instant::now()
+            )
+            .await
+            .is_err()
+        );
+        assert!(observations.requests.lock().unwrap().is_empty());
+        let (observer, observations) = application_observer_client_with_late_read(
+            hash,
+            &[("Rejected", "local", "state")],
+            true,
+        );
+        let error = observe_rejected_until(
+            observer,
+            hash,
+            &global_failure(hash, "Rejected"),
+            Instant::now() + Duration::from_millis(20),
+        )
+        .await;
+        assert!(
+            error.is_err(),
+            "late exact State Rejected cannot extend the original monetary deadline"
+        );
+        assert_eq!(observations.requests.lock().unwrap().len(), 1);
     }
 
     #[derive(Debug)]
