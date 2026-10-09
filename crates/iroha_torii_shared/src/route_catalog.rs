@@ -2414,7 +2414,11 @@ pub mod streaming {
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "SSE transport endpoint; stream contract is not an ordinary resource",
     });
-    /// Contract-event SSE stream.
+    /// Call-derived contract-event SSE stream.
+    ///
+    /// Rows are projected from committed top-level `ContractCall` transactions and
+    /// the metadata consensus bound to them; contracts emit none of them, and
+    /// `provenance` is always `derived`.
     pub const CONTRACT_EVENTS_SSE: RouteDescriptor = RouteDescriptor::new(
         "contracts.events_stream_sse",
         HttpMethod::Get,
@@ -3981,9 +3985,13 @@ pub mod application_api {
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
     macro_rules! declare_routes {
-        ($($name:ident => $factory:ident($id:literal, $path:literal);)+) => {
+        ($(
+            $(#[doc = $doc:literal])*
+            $name:ident => $factory:ident($id:literal, $path:literal);
+        )+) => {
             $(
                 #[doc = concat!("Descriptor for `", $path, "`.")]
+                $(#[doc = $doc])*
                 pub const $name: RouteDescriptor = $factory($id, $path);
             )+
             /// Complete application API route family.
@@ -4006,9 +4014,21 @@ pub mod application_api {
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET => internal_get("application.internal_accounts_by_account_id_assets_by_asset_definition_id_get", "/v1/internal/accounts/{account_id}/assets/{asset_definition_id}");
         ACCOUNTS_BY_ACCOUNT_ID_HISTORY_QUERY_POST => dataspace_post("application.accounts_by_account_id_history_query_post", "/v1/accounts/{account_id}/history/query");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST => dataspace_post("application.accounts_by_account_id_transactions_query_post", "/v1/accounts/{account_id}/transactions/query");
+        ///
+        /// Call-derived: one row per committed top-level `ContractCall`, projected from the
+        /// signed invocation and its consensus-bound metadata; contracts emit no rows here.
         CONTRACTS_ACTIVITY_QUERY_POST => dataspace_post("application.contracts_activity_query_post", "/v1/contracts/activity/query");
+        ///
+        /// Call-derived: one row per committed top-level `ContractCall`, projected from the
+        /// signed invocation and its consensus-bound metadata; contracts emit no rows here.
         CONTRACTS_EVENTS_QUERY_POST => dataspace_post("application.contracts_events_query_post", "/v1/contracts/events/query");
+        ///
+        /// Call-derived: one row per committed top-level `ContractCall`, projected from the
+        /// signed invocation and its consensus-bound metadata; contracts emit no rows here.
         CONTRACTS_ACTIVITY_GET => dataspace_get("application.contracts_activity_get", "/v1/contracts/activity");
+        ///
+        /// Call-derived: one row per committed top-level `ContractCall`, projected from the
+        /// signed invocation and its consensus-bound metadata; contracts emit no rows here.
         CONTRACTS_EVENTS_GET => dataspace_get("application.contracts_events_get", "/v1/contracts/events");
         CONTRACTS_ROLLUPS_SWAPS_FILLS_GET => dataspace_get("application.contracts_rollups_swaps_fills_get", "/v1/contracts/rollups/swaps/fills");
         CONTRACTS_ROLLUPS_SWAPS_CANDLES_GET => dataspace_get("application.contracts_rollups_swaps_candles_get", "/v1/contracts/rollups/swaps/candles");

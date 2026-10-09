@@ -820,10 +820,14 @@ function normalizeLedgerEntryHash(value, context) {
   return normalized.toLowerCase();
 }
 
+/** The only provenance Torii's call-derived contract-event feed reports. */
+const CONTRACT_EVENT_PROVENANCE = "derived";
+
 function normalizeContractEventFilterParams(options, context) {
   const provenance = normalizeOptionalString(options.provenance, `${context}.provenance`);
-  if (provenance !== undefined && provenance !== "emitted" && provenance !== "derived") {
-    rejectType(`${context}.provenance must be emitted or derived`);
+  // Contract-event rows are derived from committed calls; nothing is contract-emitted.
+  if (provenance !== undefined && provenance !== CONTRACT_EVENT_PROVENANCE) {
+    rejectType(`${context}.provenance must be ${CONTRACT_EVENT_PROVENANCE}`);
   }
   return {
     authority: normalizeOptionalString(options.authority, `${context}.authority`),

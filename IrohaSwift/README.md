@@ -1086,9 +1086,12 @@ top-level `ToriiClientError.api` carrying Torii's stable error envelope.
 
 Wallets must use the two-step detached call flow when the signing key is held by
 the client. Build the invocation from a trusted contract artifact and argument
-schema, and commit to the exact final metadata (including deterministic
-`contract_module`/`contract_event_*` entries when the selected contract emits
-them) before asking Torii for signing bytes:
+schema, and commit to the exact final metadata before asking Torii for signing
+bytes. That metadata is the caller's own entries plus the consensus-bound call
+keys Torii adds (`contract_address`, `contract_code_hash`, `contract_alias` when
+targeting an alias, `contract_entrypoint`, and `contract_payload` when the
+entrypoint takes arguments); Torii adds no `contract_module` or
+`contract_event_*` entries, so a draft intent claiming them is rejected:
 
 ```swift
 let intent = try ToriiContractCallDraftIntent(

@@ -990,7 +990,8 @@ export interface ContractEventStreamOptions {
   eventKind?: string;
   participant?: string;
   assetId?: string;
-  provenance?: string;
+  /** Contract-event rows are call-derived; `"derived"` is the only provenance. */
+  provenance?: "derived";
   sinceTimestampMs?: NumericLike;
   untilTimestampMs?: NumericLike;
   resultOk?: boolean;
@@ -1028,7 +1029,8 @@ export interface ToriiBrowserContractEventStreamOptions {
   participant?: string;
   assetId?: string;
   asset_id?: string;
-  provenance?: "emitted" | "derived";
+  /** Contract-event rows are call-derived; `"derived"` is the only provenance. */
+  provenance?: "derived";
   sinceTimestampMs?: NumericLike;
   since_timestamp_ms?: NumericLike;
   untilTimestampMs?: NumericLike;
@@ -1586,7 +1588,11 @@ export interface ToriiContractEventItem {
   block_index: number;
   event_id: string;
   schema_version: number;
-  provenance: "emitted" | "derived";
+  /**
+   * Always `"derived"`: Torii projects the row from a committed `ContractCall` and
+   * the metadata consensus bound to it; contracts do not emit these events.
+   */
+  provenance: "derived";
   authority?: string;
   timestamp_ms?: number;
   tx_hash_hex: string;

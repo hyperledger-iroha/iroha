@@ -6564,7 +6564,7 @@
       },
       "ContractActivityRow": {
         "additionalProperties": false,
-        "description": "Committed contract calls; select may omit any field.",
+        "description": "Call-derived contract activity rows; select may omit any field.",
         "properties": {
           "authority": {
             "type": "string"
@@ -7787,7 +7787,7 @@
       },
       "ContractEventRow": {
         "additionalProperties": false,
-        "description": "Committed contract events; select may omit any field.",
+        "description": "Call-derived contract event rows; select may omit any field.",
         "properties": {
           "asset_ids": {
             "items": {
@@ -7832,6 +7832,8 @@
           },
           "payload": {},
           "provenance": {
+            "const": "derived",
+            "description": "Always `derived`: Torii projects the row from a committed call; contracts do not emit it.",
             "type": "string"
           },
           "result_ok": {
@@ -62388,7 +62390,7 @@
     },
     "/v1/contracts/activity": {
       "get": {
-        "description": "Committed contract calls in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "description": "Call-derived contract activity: one row per committed top-level `ContractCall`, with `contract_address` and `contract_entrypoint` from the signed invocation; `contract_alias` and `contract_payload` appear only when the call committed successfully, because only then has consensus bound that metadata to the invocation. Rows are in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
             "description": "Text filter, e.g. `owned_by = \"sorau…\" and quantity >= 10.5`.",
@@ -62464,7 +62466,7 @@
             "IrohaCanonicalWitness": []
           }
         ],
-        "summary": "List committed contract calls.",
+        "summary": "List call-derived contract activity.",
         "tags": [
           "Contracts"
         ],
@@ -62479,7 +62481,7 @@
     },
     "/v1/contracts/activity/query": {
       "post": {
-        "description": "Committed contract calls in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "description": "Call-derived contract activity: one row per committed top-level `ContractCall`, with `contract_address` and `contract_entrypoint` from the signed invocation; `contract_alias` and `contract_payload` appear only when the call committed successfully, because only then has consensus bound that metadata to the invocation. Rows are in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -62525,7 +62527,7 @@
             "IrohaCanonicalWitness": []
           }
         ],
-        "summary": "Query committed contract calls.",
+        "summary": "Query call-derived contract activity.",
         "tags": [
           "Contracts"
         ],
@@ -64103,7 +64105,7 @@
     },
     "/v1/contracts/events": {
       "get": {
-        "description": "Committed contract events in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "description": "Call-derived contract events: one row per committed top-level `ContractCall`, projected from the signed invocation and the metadata consensus bound to it; contracts do not emit these rows, `provenance` is always `derived`, and `contract_module`/`contract_event_*` transaction metadata is ignored. Rows are in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
         "parameters": [
           {
             "description": "Text filter, e.g. `owned_by = \"sorau…\" and quantity >= 10.5`.",
@@ -64179,7 +64181,7 @@
             "IrohaCanonicalWitness": []
           }
         ],
-        "summary": "List committed contract events.",
+        "summary": "List call-derived contract events.",
         "tags": [
           "Contracts"
         ],
@@ -64194,7 +64196,7 @@
     },
     "/v1/contracts/events/query": {
       "post": {
-        "description": "Committed contract events in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "description": "Call-derived contract events: one row per committed top-level `ContractCall`, projected from the signed invocation and the metadata consensus bound to it; contracts do not emit these rows, `provenance` is always `derived`, and `contract_module`/`contract_event_*` transaction metadata is ignored. Rows are in descending chain position order, with bounded authenticated history reads. Accepts shared filter, select, limit and cursor. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
         "parameters": [],
         "requestBody": {
           "content": {
@@ -64240,7 +64242,7 @@
             "IrohaCanonicalWitness": []
           }
         ],
-        "summary": "Query committed contract events.",
+        "summary": "Query call-derived contract events.",
         "tags": [
           "Contracts"
         ],
@@ -64255,7 +64257,7 @@
     },
     "/v1/contracts/events/sse": {
       "get": {
-        "description": "Stream live generic contract events via Server-Sent Events. Payload `event_id` values support deduplication only and are not replay cursors; `Last-Event-ID` is rejected. Lag emits one terminal `stream_error` event.",
+        "description": "Stream live call-derived contract events via Server-Sent Events: the same rows as `/v1/contracts/events`, projected from committed top-level `ContractCall` transactions, with `provenance` always `derived`. Payload `event_id` values support deduplication only and are not replay cursors; `Last-Event-ID` is rejected. Lag emits one terminal `stream_error` event.",
         "operationId": "streamContractEventsSse",
         "responses": {
           "200": {
@@ -64311,7 +64313,7 @@
             "IrohaCanonicalWitness": []
           }
         ],
-        "summary": "Subscribe to contract event stream.",
+        "summary": "Subscribe to call-derived contract event stream.",
         "tags": [
           "Streams"
         ],

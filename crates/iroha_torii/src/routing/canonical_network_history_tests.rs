@@ -15,27 +15,54 @@ use iroha_data_model::{
     trigger::DataTriggerStep,
 };
 
-fn carrier() -> SignedBlock {
+/// Signer, network and invoked contract of the carrier's sealed contract call.
+fn carrier_identity() -> (
+    KeyPair,
+    iroha_data_model::NetworkId,
+    iroha_data_model::smart_contract::ContractAddress,
+) {
     let key = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519).unwrap();
+    let network = iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+        Hash::new(b"routing query fixture"),
+    ));
+    let contract = iroha_data_model::smart_contract::ContractAddress::derive(
+        &network,
+        &AccountId::new(key.public_key().clone()),
+        1,
+        DataSpaceId::UNIVERSAL,
+    )
+    .unwrap();
+    (key, network, contract)
+}
+
+fn carrier() -> SignedBlock {
+    let (key, network, contract) = carrier_identity();
     let mut metadata = iroha_model_base::metadata::Metadata::default();
     metadata.insert(
         "contract_address".parse().unwrap(),
-        iroha_primitives::json::Json::new("contract"),
+        iroha_primitives::json::Json::new(contract.to_string()),
     );
     metadata.insert(
         "contract_entrypoint".parse().unwrap(),
         iroha_primitives::json::Json::new("submit"),
     );
-    let network = iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
-        Hash::new(b"routing query fixture"),
-    ));
     let mut tx = TransactionBuilder::new(
         network,
         AccountId::new(key.public_key().clone()),
         FeePaymentIntent::authority(vec![], None),
     );
     tx.set_creation_time(Duration::from_millis(900));
-    let signed = tx.with_metadata(metadata).sign(key.private_key());
+    let signed = tx
+        .with_metadata(metadata)
+        .with_executable(Executable::ContractCall(
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract,
+                expected_code_hash: Hash::new(b"routing contract"),
+                entrypoint: "submit".to_owned(),
+                arguments: None,
+            },
+        ))
+        .sign(key.private_key());
     let header = BlockHeader::new(
         std::num::NonZeroU64::new(2).unwrap(),
         Some(HashOf::from_untyped_unchecked(Hash::new(b"routing parent"))),
@@ -148,7 +175,8 @@ fn borrowed_history_projection_matches_real_typed_proof_dto_and_sealed_identity(
     let a = contract_activity_projection_from_tx(2, &borrowed).unwrap();
     let b = contract_activity_projection_from_tx(2, &owned).unwrap();
     assert_eq!(a.entrypoint_hash, b.entrypoint_hash);
-    assert_eq!(a.contract_address, "contract");
+    assert_eq!(a.contract_address, carrier_identity().2.to_string());
+    assert_eq!(a.contract_entrypoint, "submit");
     assert!(!a.result_ok);
     let event = contract_event_projection_from_tx(2, &borrowed).unwrap();
     assert_eq!(event.tx_hash_hex, source.hash().to_string());
