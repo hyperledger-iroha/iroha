@@ -200,3 +200,23 @@ fn checkpoint_codec_is_canonical_and_fixed_metadata_has_no_variable_size() {
         .is_err()
     );
 }
+
+#[test]
+fn rebuild_failure_preserves_cancellation_and_refuses_source_authority() {
+    use iroha_plonk::keys::KeyError;
+    assert_eq!(
+        rebuild_error(&RebuildError::Key(KeyError::Cancelled)),
+        Error::Cancelled
+    );
+    for error in [
+        RebuildError::Profile,
+        RebuildError::Source,
+        RebuildError::Key(KeyError::Shape {
+            what: "fixed rows",
+            expected: 64,
+            actual: 63,
+        }),
+    ] {
+        assert_eq!(rebuild_error(&error), Error::Artifact);
+    }
+}

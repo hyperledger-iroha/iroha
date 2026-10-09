@@ -1198,19 +1198,19 @@ mod tests {
     fn kagemusha_catalog_contains_only_enrollment_and_authenticated_load_originals() {
         let catalog = RouteCatalog::new(iroha_torii_shared::route_catalog::CATALOGED_ROUTES);
         let load_read = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_ISSUANCE_GET;
-        let event_read = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_EVENT_PROOF_GET;
-        let finality_read = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_FINALITY_PROOF_GET;
+        let finality_read = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_FINALITY_GET;
+        let epoch_read = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_EPOCH_GET;
         let enrollment = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_ENROLLMENT_POST;
         assert_eq!(finality_read.method(), HttpMethod::Get);
         assert_eq!(finality_read.effect(), RouteEffect::ReadOnly);
+        assert_eq!(epoch_read.method(), HttpMethod::Get);
+        assert_eq!(epoch_read.effect(), RouteEffect::ReadOnly);
         assert_eq!(
-            finality_read.authentication(),
+            epoch_read.authentication(),
             AuthenticationPolicy::CanonicalAccountSignature
         );
-        assert_eq!(event_read.method(), HttpMethod::Get);
-        assert_eq!(event_read.effect(), RouteEffect::ReadOnly);
         assert_eq!(
-            event_read.authentication(),
+            finality_read.authentication(),
             AuthenticationPolicy::CanonicalAccountSignature
         );
         assert_eq!(load_read.method(), HttpMethod::Get);
@@ -1232,8 +1232,8 @@ mod tests {
                         .iter()
                         .all(|route| !route.path().starts_with("/v1/kagemusha/")
                             || **route == load_read
-                            || **route == event_read
                             || **route == finality_read
+                            || **route == epoch_read
                             || **route == enrollment),
                     "retired KAGEMUSHA transport remains in {projection:?}"
                 );

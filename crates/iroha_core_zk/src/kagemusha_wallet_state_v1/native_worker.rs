@@ -1,8 +1,9 @@
 //! Bounded native fold execution from the sole complete authenticated source grant.
 //!
 //! The wallet owner lends its original store for one task. This worker retains
-//! metadata only, verifies every restored source in order, and releases the active
-//! proving key before yielding a durable checkpoint. Sealed custody selects inputs;
+//! borrowed sealed metadata, verifies every restored source in order, and releases the active
+//! proving key before verification and yielding a durable checkpoint. Sealed
+//! custody selects inputs;
 //! neither checkpoint metadata nor an operation caller supplies proof acceptance.
 
 use std::sync::Arc;

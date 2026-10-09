@@ -1786,3 +1786,20 @@ mod parse_tree_tests;
 
 #[path = "row_read_scope_tests.rs"]
 mod row_read_scope_tests;
+
+// Keep actual decoder counters private to the attempts tests while exposing only totals to
+// the genuine multi-body graph regression in the sole BodyHistory test fixture owner.
+pub(super) fn operation_record_work<T>(read: impl FnOnce() -> T) -> (T, [usize; 4]) {
+    let counter = parse_digest_tests::Counter::begin();
+    let result = read();
+    let counts = counter.finish();
+    (
+        result,
+        [
+            counts.reads,
+            counts.decoded,
+            counts.requested,
+            counts.computed,
+        ],
+    )
+}

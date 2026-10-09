@@ -3869,13 +3869,49 @@ fn builtin_argument_labels(
         } else {
             return Err(SemanticError {
                 code: "E_NAMED_ARGUMENTS_REQUIRED",
-                message: format!(
-                    "parameter `{parameter}` of `{call_name}` requires its label; write `{parameter}: ...` or pass a variable named `{parameter}`"
-                ),
+                message: misplaced_label_message(call_name, parameter, argument, parameter_names),
             });
         }
     }
     Ok((labels, labelled))
+}
+/// Message for an unlabelled argument in a builtin slot whose label is required.
+///
+/// A bare identifier spelled like a *different* parameter is a pun placed in
+/// the wrong slot; saying so keeps the message from asking for a variable the
+/// call already passes.
+fn misplaced_label_message(
+    call_name: &str,
+    parameter: &str,
+    argument: &Expr,
+    parameter_names: &[String],
+) -> String {
+    match argument.kind() {
+        Expr::Ident(name) if parameter_names.contains(name) => format!(
+            "parameter `{parameter}` of `{call_name}` requires its label; `{name}` is spelled like parameter `{name}`, and a bare identifier fills only the slot of the same name, so label the arguments or pass them in declaration order"
+        ),
+        _ => format!(
+            "parameter `{parameter}` of `{call_name}` requires its label; write `{parameter}: ...` or pass a variable named `{parameter}`"
+        ),
+    }
+}
+/// The `K2004` rejection of a source call to the runtime function `name` (a
+/// kotoage, view or lifecycle hook), with help attached at the call.
+fn runtime_function_call_error(
+    context: &SemanticContext,
+    call: &Expr,
+    name: &str,
+) -> SemanticError {
+    context.capture_help(
+        context.expression_source(call),
+        type_help::runtime_entrypoint_call_help(name),
+    );
+    SemanticError {
+        code: "K2004",
+        message: format!(
+            "seiyaku runtime function `{name}` cannot be called directly; move shared logic into a private `fn` or use the authorized inter-seiyaku call boundary"
+        ),
+    }
 }
 /// Reorder builtin call arguments after applying [`builtin_argument_labels`].
 fn reorder_builtin_call_arguments(
@@ -3947,7 +3983,20 @@ fn reorder_flexible_call_arguments(
         parameter_names,
         required,
         0,
-    )?;
+    )
+    .map_err(|mut error| {
+        // These intrinsics have no registry signature for help text to cite,
+        // so an unknown label names the declared ones directly.
+        if error.code == "E_UNKNOWN_NAMED_ARGUMENT" {
+            let declared = parameter_names
+                .iter()
+                .map(|parameter| format!("`{parameter}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            error.message = format!("{}; its parameters are {declared}", error.message);
+        }
+        error
+    })?;
     plan.is_named = labelled;
     Ok(plan)
 }
@@ -5389,6 +5438,18 @@ fn json_parse_literal_text(expr: &Expr) -> Option<&str> {
 /// exact `EntrypointArgumentSchemaV1`, the same boundary schema Torii and the CLIs enforce.
 ///
 /// Dynamic records are checked by the test runner when the call executes.
+/// Help for a literal argument record that does not match its target: the declared parameters
+/// and the canonical JSON encoding of the scalar types that most often go wrong.
+fn argument_record_help(target_name: &str, params: &[TypedParam]) -> String {
+    format!(
+        "`{target_name}` takes {}; write a JSON object keyed by parameter name, where `int`, `decimal`, and `quantity` values are canonical decimal strings (`\"30\"`) and `Option` values are `{{\"some\": value}}` or `{{\"none\": true}}`",
+        params
+            .iter()
+            .map(|param| format!("`{} {}`", render_type_name(&param.ty), param.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
 fn check_literal_argument_record(
     context: &SemanticContext,
     target_name: &str,
@@ -5432,6 +5493,10 @@ fn check_literal_argument_record(
     ivm_abi::arguments::argument_record_from_json_detailed(&schema, &json)
         .map(|_| ())
         .map_err(|error| {
+            context.capture_help(
+                context.expression_source(payload),
+                argument_record_help(target_name, &params),
+            );
             let mut message = format!("arguments for `{target_name}`: {error}");
             if let Some(number) = error.found.strip_prefix("JSON number ")
                 && error.expected.contains("decimal")
@@ -5487,7 +5552,7 @@ fn analyze_invoke_entrypoint_call(
             message: "test::invoke_kotoage expects a Json payload as its second argument".into(),
         });
     }
-    let ret_ty = runtime_entrypoint_return_type(context, &target_name)?;
+    let ret_ty = test_call_target_return_type(context, &target_name, &args[0])?;
     check_literal_argument_record(context, &target_name, &args[1])?;
     Ok(TypedExpr {
         expr: ExprKind::Call {
@@ -5543,9 +5608,8 @@ fn runtime_entrypoint_return_type(
         message: unknown_runtime_target_message(context, target_name),
     })
 }
-/// Explain an unknown `test::invoke_kotoage` target: a lifecycle keyword written as a selector,
-/// or the closest declared kotoage, view, or lifecycle declaration.
-fn unknown_runtime_target_message(context: &SemanticContext, target_name: &str) -> String {
+/// Selectors of the kotoage, view, and lifecycle declarations a `test::` helper can call, sorted.
+fn declared_runtime_targets(context: &SemanticContext) -> Vec<String> {
     let mut declared = context
         .function_modifiers
         .borrow()
@@ -5563,18 +5627,55 @@ fn unknown_runtime_target_message(context: &SemanticContext, target_name: &str) 
         .collect::<Vec<_>>();
     declared.sort_unstable();
     declared.dedup();
-    let mut message = format!("unknown runtime public or lifecycle target `{target_name}`");
+    declared
+}
+/// [`runtime_entrypoint_return_type`] for a `test::` helper call: a rejected target is reported
+/// at the selector the test wrote, with the callable selectors as help.
+fn test_call_target_return_type(
+    context: &SemanticContext,
+    target_name: &str,
+    selector: &Expr,
+) -> Result<Type, SemanticError> {
+    runtime_entrypoint_return_type(context, target_name).inspect_err(|_| {
+        context.capture_help(
+            context.expression_source(selector),
+            runtime_target_help(&declared_runtime_targets(context)),
+        );
+    })
+}
+/// Help for a rejected `test::` helper target: the selectors the seiyaku under test declares.
+fn runtime_target_help(declared: &[String]) -> String {
+    if declared.is_empty() {
+        return "the seiyaku under test declares no kotoage, view, or lifecycle hook, so there is nothing for `test::` call helpers to call".to_owned();
+    }
+    format!(
+        "call a kotoage, view, or lifecycle declaration of the seiyaku under test by its selector: {}; lifecycle hooks are selected as \"hajimari\" and \"kaizen\" whichever spelling declared them",
+        declared
+            .iter()
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+/// Explain an unknown `test::invoke_kotoage` target: a lifecycle keyword written as a selector,
+/// or the closest declared kotoage, view, or lifecycle declaration.
+fn unknown_runtime_target_message(context: &SemanticContext, target_name: &str) -> String {
+    let declared = declared_runtime_targets(context);
     // Lifecycle declarations are selected by their canonical selector whichever keyword spelling
     // declared them; the call site names the spelling the test wrote.
     if let Some(keyword) = crate::glossary::by_spelling(target_name)
         && target_name != keyword.romaji
         && declared.iter().any(|name| name == keyword.romaji)
     {
-        message.push_str(&format!(
-            "; the `{target_name}` declaration is selected as \"{}\"",
+        return format!(
+            "`{target_name}` is a lifecycle keyword, not a selector; the `{target_name}` declaration is selected as \"{}\"",
             keyword.romaji
-        ));
-    } else if let Some(closest) =
+        );
+    }
+    let mut message = format!(
+        "the seiyaku under test has no kotoage, view, or lifecycle declaration named `{target_name}`"
+    );
+    if let Some(closest) =
         crate::diagnostic::suggest::closest(target_name, declared.iter().map(String::as_str))
     {
         message.push_str(&format!("; did you mean \"{closest}\"?"));
@@ -5615,7 +5716,7 @@ fn analyze_invoke_entrypoint_as_call(
             message: "test::invoke_kotoage_as expects a Json payload as its third argument".into(),
         });
     }
-    let ret_ty = runtime_entrypoint_return_type(context, &target_name)?;
+    let ret_ty = test_call_target_return_type(context, &target_name, &args[1])?;
     check_literal_argument_record(context, &target_name, &args[2])?;
     Ok(TypedExpr {
         expr: ExprKind::Call {
@@ -5678,7 +5779,7 @@ fn analyze_rejection_expectation_call(
             message: "test::expect_reject_as expects a Json payload as its third argument".into(),
         });
     }
-    let _ = runtime_entrypoint_return_type(context, &target_name)?;
+    let _ = test_call_target_return_type(context, &target_name, &args[1])?;
     let expectation = if any {
         crate::testing::RejectionExpectation::Any
     } else if let Expr::Ident(name) = args[3].kind()
@@ -8070,7 +8171,7 @@ fn analyze_register_asset_call(
     {
         return Err(sem_err(
             "E_ASSET_NAME_INVALID",
-            format!("asset display name {error}"),
+            format!("invalid `name:` display name for ledger::asset::register: {error}"),
         ));
     }
     Ok(typed_call(builtin.name(), args, Type::Unit))
@@ -8105,6 +8206,21 @@ fn analyze_builtin_literal_argument(
                     nominal_argument_help(descriptor),
                 );
             });
+    }
+    if builtin == Builtin::RegisterAsset
+        && index == 1
+        && let Expr::String(raw) = argument.kind()
+        && let Err(error) = iroha_data_model::asset::definition::validate_asset_name(raw)
+    {
+        // Point at the literal; the host would reject the same name at runtime.
+        context.capture_help(
+            context.expression_source(argument),
+            "An asset display name is non-blank, at most 128 characters, and contains no `#`, `@`, or control characters.".to_owned(),
+        );
+        return Err(sem_err(
+            "E_ASSET_NAME_INVALID",
+            format!("invalid `name:` display name for ledger::asset::register: {error}"),
+        ));
     }
     if builtin.is_payload_helper()
         && builtin.surface() == BuiltinSurface::MethodOnly
@@ -11476,6 +11592,20 @@ fn analyze_expr_expected_inner(
             let source_name = name.clone();
             let name = normalize_namespaced(name);
             context.validate_call_target(expr, &source_name, &name, *implicit_receiver)?;
+            // A kotoage, view or lifecycle hook may reuse a builtin's internal
+            // lowering name (`view fn min`); a flat call to it is a runtime
+            // function call, never a non-canonical builtin spelling.
+            if !*implicit_receiver
+                && source_name == name
+                && Builtin::from_name(&name).is_some()
+                && context
+                    .function_modifiers
+                    .borrow()
+                    .get(&name)
+                    .is_some_and(|modifiers| modifiers.kind != FunctionKind::Private)
+            {
+                return Err(runtime_function_call_error(context, expr, &name));
+            }
             if let Some(result) = analyze_state_page_call(
                 context,
                 &name,
@@ -11941,16 +12071,7 @@ fn analyze_expr_expected_inner(
                             function_is_runtime_entrypoint(&signature.modifiers)
                         });
                     if local_runtime_entrypoint || external_runtime_entrypoint {
-                        context.capture_help(
-                            context.expression_source(expr),
-                            type_help::runtime_entrypoint_call_help(&name),
-                        );
-                        return Err(SemanticError {
-                            code: "K2004",
-                            message: format!(
-                                "seiyaku runtime function `{name}` cannot be called directly; move shared logic into a private `fn` or use the authorized inter-seiyaku call boundary"
-                            ),
-                        });
+                        return Err(runtime_function_call_error(context, expr, &name));
                     }
                     let Some(signature) =
                         context.function_params.borrow().get(&name).cloned()
@@ -16262,6 +16383,10 @@ mod tests {
             "fn reg(AssetDefinitionId asset) { ledger::asset::register(asset_definition: asset, name: \"a#b\", spec: NumericSpec::integer(), mintable: Mintable::Not); }",
         );
         assert_eq!(error.code, "E_ASSET_NAME_INVALID");
+        assert_eq!(
+            error.message,
+            "invalid `name:` display name for ledger::asset::register: asset name must not contain `#` or `@`"
+        );
     }
     #[test]
     fn signature_scheme_arguments_fold_to_host_codes() {
@@ -16386,6 +16511,78 @@ mod tests {
         assert!(!help.contains("account"), "{help}");
     }
     #[test]
+    fn invalid_asset_display_name_literals_point_at_the_name() {
+        let source = "seiyaku Probe { kotoage fn r(AssetDefinitionId asset) authorize(\"Probe\") { \
+                      ledger::asset::register(asset_definition: asset, name: \"ro@se\", \
+                      spec: NumericSpec::integer(), mintable: Mintable::Once); } }";
+        let (message, help, primary) = first_checked_diagnostic(source);
+        assert_eq!(
+            message,
+            "invalid `name:` display name for ledger::asset::register: asset name must not contain `#` or `@`"
+        );
+        assert_eq!(primary.as_deref(), Some("\"ro@se\""));
+        assert!(help.expect("display name help").contains("non-blank"));
+    }
+    #[test]
+    fn unknown_labels_on_receiver_intrinsics_name_the_declared_parameters() {
+        let error = analyze_error(
+            "fn f(quantity amount, decimal divisor) -> quantity { \
+             return amount.div_round(divisor, 2, rounding: Rounding::floor); }",
+        );
+        assert_eq!(error.code, "E_UNKNOWN_NAMED_ARGUMENT");
+        assert!(
+            error
+                .message
+                .ends_with("; its parameters are `divisor`, `scale`, `mode`"),
+            "{}",
+            error.message
+        );
+        // Declared labels and positional arguments both keep working.
+        analyze(
+            &parse(
+                "fn f(quantity amount, decimal divisor) -> quantity { \
+                 return amount.div_round(divisor: divisor, scale: 2, mode: Rounding::floor); }",
+            )
+            .expect("parse"),
+        )
+        .expect("declared labels are accepted");
+    }
+    #[test]
+    fn runtime_functions_reusing_lowering_names_keep_the_runtime_call_rule() {
+        for (declaration, call) in [
+            (
+                "view fn min(int a, int b) -> int { return a; }",
+                "view fn probe() -> int { return min(1, 2); }",
+            ),
+            (
+                "view fn block_height() -> int { return 4; }",
+                "view fn probe() -> int { return block_height(); }",
+            ),
+            (
+                "kotoage fn mint_asset() authorize(\"Mint\") { }",
+                "kotoage fn probe() authorize(\"Mint\") { mint_asset(); }",
+            ),
+        ] {
+            let error = analyze_error(&format!("seiyaku Probe {{ {declaration} {call} }}"));
+            assert_eq!(error.code, "K2004", "{}", error.message);
+            assert!(
+                error.message.starts_with("seiyaku runtime function `"),
+                "{}",
+                error.message
+            );
+        }
+        // The canonical builtin keeps working next to a view of the same
+        // lowering name.
+        analyze(
+            &parse(
+                "seiyaku Probe { view fn min(int a, int b) -> int { return a; } \
+                 view fn probe() -> int { return math::min(1, 2); } }",
+            )
+            .expect("parse"),
+        )
+        .expect("math::min resolves to the builtin");
+    }
+    #[test]
     fn unknown_state_map_methods_teach_the_documented_surface() {
         for (method, fragment) in [
             ("get_or", "map.get(key).unwrap_or(default)"),
@@ -16491,11 +16688,30 @@ mod tests {
         let error =
             analyze_error("fn f(NftId token, AccountId who) { ledger::nft::mint(token, who); }");
         assert_eq!(error.code, "E_NAMED_ARGUMENTS_REQUIRED");
+        assert!(
+            error.message.ends_with("pass a variable named `nft`"),
+            "{}",
+            error.message
+        );
         let error =
             analyze_error("fn f(NftId nft, AccountId owner) { ledger::nft::mint(owner, nft); }");
         assert_eq!(
             error.code, "E_NAMED_ARGUMENTS_REQUIRED",
             "punning follows the slot"
+        );
+        // A pun in another parameter's slot is named as such instead of
+        // asking for a variable the call already passes.
+        assert!(
+            error
+                .message
+                .contains("`owner` is spelled like parameter `owner`"),
+            "{}",
+            error.message
+        );
+        assert!(
+            !error.message.contains("pass a variable named"),
+            "{}",
+            error.message
         );
         // The fix for a swapped call labels each identifier by its own name
         // instead of encoding the swap.
@@ -17380,11 +17596,9 @@ mod tests {
             r#"test::invoke_kotoage(kotoage: "始まり", arguments: Json::parse("{\"start\":\"1\"}"));"#,
         );
         assert_eq!(err.code, "K2002");
-        assert!(
-            err.message
-                .ends_with("; the `始まり` declaration is selected as \"hajimari\""),
-            "{}",
-            err.message
+        assert_eq!(
+            err.message,
+            "`始まり` is a lifecycle keyword, not a selector; the `始まり` declaration is selected as \"hajimari\""
         );
         let err =
             analyze(r#"test::invoke_kotoage(kotoage: "withdrw", arguments: Json::parse("{}"));"#);

@@ -1,381 +1,257 @@
-//! Bounded server-only terminal Load proof worker over real committed native history.
-//!
-//! HTTP requests select no proving inputs or acceptance verdicts. The authenticated payer's
-//! committed receipt selects the job; the worker independently reacquires that receipt and
-//! its actual native event. Only the full installed finality graph produces output bytes.
+//! Bounded certificate DATA reads for native wallet finality verification.
+//! The phone's authenticated epoch owner, never this transport, grants finality.
 
-use std::{
-    collections::BTreeMap,
-    num::{NonZeroU16, NonZeroU64},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Instant,
-};
+use std::{num::NonZeroU64, time::Instant};
 
-use iroha_allocation::AllocationBudget;
-use iroha_config::parameters::actual::KagemushaLoadFinality;
+use iroha_allocation::{AllocationBudget, AllocationReservation, ChargedBuffer};
 use iroha_core::{
-    kagemusha_wallet_v1::CommittedLoadReceipts,
-    state::{State as CoreState, StateReadOnly as _},
-    sumeragi::finality::{self, NativeFinalityCursorV1},
+    kagemusha_wallet_v1::CommittedLoadReceipts, state::StateView, sumeragi::finality,
 };
-use iroha_core_zk::{
-    kagemusha_wallet_artifacts_v1::{
-        InstallationV1, VERIFIER_PACK_MAX_BYTES_V1, producer_inventory::CATALOG_MAX_BYTES_V1,
-    },
-    kagemusha_wallet_finality_v1::server::{
-        ServerFinalityCancellationV1, ServerFinalityLimitsV1, ServerFinalityStorageV1,
-        ServerFinalityV1,
-    },
-};
+use iroha_crypto::HashOf;
 use iroha_data_model::{
     account::AccountId,
-    block::decode_framed_signed_block,
+    events::EventBox,
     isi::kagemusha_wallet::KagemushaWalletLoadReceiptV1,
-    kagemusha::{KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1, kagemusha_wallet_account_digest_v1},
-    sumeragi_finality::SumeragiFinalityVerifier,
+    kagemusha::{
+        KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1, KagemushaWalletLoadFinalityV1,
+        kagemusha_wallet_account_digest_v1,
+    },
+    sumeragi::epoch::MAX_VALIDATORS,
+    sumeragi_finality::{
+        ExecutionResultCommitment, MAX_COMMIT_CERTIFICATE_BYTES_V1, MAX_RESULT_PREIMAGE_BYTES,
+        SumeragiCommitCertificateV1,
+    },
 };
+use iroha_model_base::peer::PeerId;
 
-const RECORD_BYTES: usize = 16 << 10;
 type Result<T> = std::result::Result<T, &'static str>;
-type Key = [u8; 32];
 
-struct Job {
-    payer: AccountId,
-    receipt: KagemushaWalletLoadReceiptV1,
-    key: Key,
-}
-enum Status {
-    Pending,
-    Ready(Vec<u8>),
-    Failed,
-}
-struct Queue {
-    entries: BTreeMap<Key, Status>,
-    maximum: usize,
-}
-impl Queue {
-    fn observe(&mut self, key: Key) -> Result<Option<Option<Vec<u8>>>> {
-        match self.entries.get(&key) {
-            Some(Status::Pending) => Ok(Some(None)),
-            Some(Status::Ready(_)) => match self.entries.remove(&key) {
-                Some(Status::Ready(bytes)) => Ok(Some(Some(bytes))),
-                _ => Err("proof result custody changed"),
-            },
-            Some(Status::Failed) => {
-                self.entries.remove(&key);
-                Err("previous proof attempt unavailable")
-            }
-            None => {
-                if self.entries.len() >= self.maximum {
-                    // Completed originals already live in the immutable journal. A
-                    // client that stopped polling must not permanently fill the queue.
-                    // Re-requesting an evicted result reacquires and verifies it again.
-                    let completed = self.entries.iter().find_map(|(key, status)| {
-                        (!matches!(status, Status::Pending)).then_some(*key)
-                    });
-                    if let Some(completed) = completed {
-                        self.entries.remove(&completed);
-                    }
-                }
-                if self.entries.len() >= self.maximum {
-                    return Err("proof worker capacity unavailable");
-                }
-                self.entries.insert(key, Status::Pending);
-                Ok(None)
-            }
-        }
-    }
+// The result decoder charges both reconstructed Ready epochs and the optional retained
+// validation contexts to its inherited cumulative Norito scope. The validation workspace
+// also briefly encodes one already validated epoch (at most 31 keys/PoPs and fixed fields,
+// bounded by the existing result-frame allowance) and projects one validator generation.
+// That projection owns 31 PeerIds and their compact 48-byte BLS keys plus algorithm byte;
+// validation bounds the roster/key shapes before making the projection. These two buffers
+// are not decoder allocations and need their own original-pool allowance.
+const VALIDATION_SCRATCH_BYTES: usize =
+    MAX_RESULT_PREIMAGE_BYTES + MAX_VALIDATORS * (size_of::<PeerId>() + 49);
+// KagemushaLoadEventPathV1::proof uses try_reserve_exact for at most 32 optional hashes.
+// Its validation proof is dropped before the returned evidence proof is constructed.
+const EVENT_PROOF_BYTES: usize = 32 * size_of::<Option<HashOf<EventBox>>>();
+
+fn reserve_event_proof(budget: &AllocationBudget) -> Result<AllocationReservation> {
+    budget
+        .try_reserve_bytes(EVENT_PROOF_BYTES)
+        .map_err(|_| "event proof allocation unavailable")
 }
 
-/// One optional configured source owner, one proving worker and a finite request queue.
-/// Completed output stays bounded and may be evicted to admit another request.
-/// Retries reacquire and reverify the durable terminal original; pending work is
-/// never evicted and there is no unbounded response cache.
-pub(super) struct FinalityService {
-    scheme: [u8; 32],
-    maximum_height: u64,
-    worker: Arc<worker::Worker>,
-}
-mod worker;
-impl FinalityService {
-    pub(super) fn open(
-        state: Arc<CoreState>,
-        config: KagemushaLoadFinality,
-    ) -> std::io::Result<Self> {
-        if !(1..=64).contains(&config.max_pending_requests) {
-            return Err(std::io::Error::other("invalid finality queue bound"));
-        }
-        iroha_fs::PrivateDirectory::open_exact(&config.verifier_originals)?;
-        iroha_fs::PrivateDirectory::open_exact(&config.proving_cache)?;
-        iroha_fs::PrivateDirectory::open_exact(&config.journal_dir)?;
-        iroha_fs::SelectedRegularFile::capture(&config.verifier_pack)?;
-        iroha_fs::SelectedRegularFile::capture(&config.producer_inventory)?;
-        let cancel = ServerFinalityCancellationV1::default();
-        let worker_cancel = cancel.clone();
-        let scheme = config.scheme_id;
-        let maximum_height = config.maximum_receipt_height;
-        let worker = worker::Worker::start_with(config.max_pending_requests, cancel, move || {
-            let mut producer = None;
-            move |job: &Job, stop: &AtomicBool| {
-                if producer.is_none() {
-                    producer = Some(mount(&state, &config, worker_cancel.clone(), stop)?);
-                }
-                prove(
-                    &state,
-                    &config,
-                    producer.as_mut().ok_or("producer absent")?,
-                    job,
-                    stop,
-                )
-            }
-        })?;
-        Ok(Self {
-            scheme,
-            maximum_height,
-            worker: Arc::new(worker),
-        })
-    }
-
-    /// Receipt must have just been obtained from CommittedLoadReceipts for this authenticated
-    /// payer. Worker reacquisition independently enforces that ownership before any proving.
-    pub(super) fn read_or_schedule(
-        &self,
-        payer: AccountId,
-        receipt: KagemushaWalletLoadReceiptV1,
-    ) -> Result<Option<Vec<u8>>> {
-        if receipt.scheme_id != self.scheme
-            || receipt.payer_account_digest
-                != kagemusha_wallet_account_digest_v1(&payer)
-                    .map_err(|_| "payer identity differs")?
-            || !(2..=self.maximum_height).contains(&receipt.block_height)
-        {
-            return Err("receipt selection differs");
-        }
-        let key = receipt.receipt_digest().map_err(|_| "invalid receipt")?;
-        self.worker.read_or_schedule(Job {
-            payer,
-            receipt,
-            key,
-        })
-    }
-}
-
-/// Retain the proof owner in normal startup, rollback and test-router shutdown.
-pub(super) fn register_worker(
-    app: &crate::AppState,
-    shutdown: iroha_futures::supervisor::ShutdownSignal,
-    workers: &mut Vec<crate::ToriiCriticalWorker>,
-) -> std::result::Result<(), &'static str> {
-    if let Some(service) = app.kagemusha_load_finality.as_ref() {
-        workers.push(crate::ToriiCriticalWorker {
-            name: "kagemusha_load_finality",
-            task: service.worker.supervise(shutdown)?,
-        });
+fn require_payer(payer: &AccountId, receipt: &KagemushaWalletLoadReceiptV1) -> Result<()> {
+    receipt
+        .validate()
+        .map_err(|_| "invalid committed receipt")?;
+    if receipt.payer_account_digest
+        != kagemusha_wallet_account_digest_v1(payer).map_err(|_| "invalid payer identity")?
+    {
+        return Err("committed receipt belongs to another payer");
     }
     Ok(())
 }
 
-fn running(stop: &AtomicBool) -> Result<()> {
-    if stop.load(Ordering::Acquire) {
-        Err("owner stopped")
-    } else {
-        Ok(())
-    }
-}
-
-fn mount(
-    state: &CoreState,
-    config: &KagemushaLoadFinality,
-    cancel: ServerFinalityCancellationV1,
-    stop: &AtomicBool,
-) -> Result<ServerFinalityV1> {
-    running(stop)?;
-    let pack = iroha_fs::SelectedRegularFile::capture(&config.verifier_pack)
-        .and_then(|file| file.read(VERIFIER_PACK_MAX_BYTES_V1))
-        .map_err(|_| "verifier pack custody unavailable")?;
-    running(stop)?;
-    let inventory = iroha_fs::SelectedRegularFile::capture(&config.producer_inventory)
-        .and_then(|file| file.read(CATALOG_MAX_BYTES_V1))
-        .map_err(|_| "producer inventory custody unavailable")?;
-    running(stop)?;
-    let view = state.view();
-    // This original comes from Core's actual configured signed genesis, never a request,
-    // producer inventory anchor, remote checkpoint or an operator-supplied result projection.
-    let proof = finality::build_proof(&view, 1).map_err(|_| "actual signed genesis unavailable")?;
-    let genesis = norito::core::with_decode_limits_scope(
-        norito::canonical_decode_limits(proof.block_wire.len()),
-        || decode_framed_signed_block(&proof.block_wire),
-    )
-    .map_err(|_| "actual signed genesis framing differs")?;
-    let verifier =
-        SumeragiFinalityVerifier::new(&genesis, view.chain_id().as_str(), proof.committee)
-            .map_err(|_| "actual signed genesis authority differs")?;
-    if verifier.initial_epoch().network_id != *view.network_id() {
-        return Err("actual network differs");
-    }
-    // The verifier owns the exact signed genesis; do not pin the live ledger
-    // view throughout the independently authenticated proof-graph import.
-    drop(view);
-    running(stop)?;
-    ServerFinalityV1::open(
-        &verifier,
-        InstallationV1 {
-            scheme_id: config.scheme_id,
-            manifest_digest: config.manifest_digest,
-        },
-        &pack,
-        &inventory,
-        ServerFinalityStorageV1 {
-            verifier_originals: &config.verifier_originals,
-            proving_cache: &config.proving_cache,
-            journal: &config.journal_dir,
-        },
-        ServerFinalityLimitsV1 {
-            maximum_key_bytes: config.maximum_key_bytes,
-            maximum_resident_proving_key_bytes: config.maximum_resident_proving_key_bytes,
-            maximum_original_bytes: config.maximum_original_bytes,
-            maximum_artifacts: config.maximum_artifacts,
-            msm_bytes: config.msm_bytes,
-            maximum_journal_entries: config.maximum_journal_entries,
-            maximum_journal_bytes: config.maximum_journal_bytes,
-        },
-        cancel,
-    )
-    .map_err(|_| "authenticated complete server proof graph unavailable")
-}
-
-fn receipts<'a, 'b>(
-    view: &'a iroha_core::state::StateView<'b>,
-) -> Result<CommittedLoadReceipts<'a, 'b>> {
-    CommittedLoadReceipts::new(
-        view,
-        RECORD_BYTES,
-        norito::DecodeLimits::new(
-            RECORD_BYTES,
-            RECORD_BYTES,
-            RECORD_BYTES * 8,
-            RECORD_BYTES * 8,
-            128,
-        ),
-    )
-    .map_err(|_| "actual committed Load source unavailable")
-}
-fn prove(
-    state: &CoreState,
-    config: &KagemushaLoadFinality,
-    producer: &mut ServerFinalityV1,
-    job: &Job,
-    stop: &AtomicBool,
-) -> Result<Vec<u8>> {
-    let selected = &job.receipt;
-    let actual = receipts(&state.view())?
-        .receipt_for(
-            &job.payer,
-            &selected.scheme_id,
-            &selected.wallet_id,
-            &selected.request_id,
-        )
-        .map_err(|_| "payer's original receipt unavailable")?;
-    if actual != *selected {
-        return Err("payer's original receipt changed");
-    }
-    if let Some(bytes) = producer
-        .retained(&actual)
-        .map_err(|_| "retained terminal proof refused")?
+fn require_selected_data(
+    certificate: &SumeragiCommitCertificateV1,
+    height: u64,
+    boundary: bool,
+) -> Result<()> {
+    if certificate
+        .height()
+        .map_err(|_| "certificate header differs")?
+        != height
     {
-        return Ok(bytes);
+        return Err("certificate height differs from selected original");
     }
-    let budget = AllocationBudget::new(config.native_working_set_bytes);
-    let mut cursor = NativeFinalityCursorV1::new();
-    let mut prefix = producer
-        .genesis()
-        .map_err(|_| "genesis proof unavailable")?;
-    for height in 2..=actual.block_height {
-        if stop.load(Ordering::Acquire) {
-            return Err("owner stopped");
-        }
-        let deadline = Instant::now()
-            .checked_add(config.native_step_timeout)
-            .ok_or("native deadline overflow")?;
-        let target = NonZeroU64::new(height).ok_or("zero height")?;
-        let native = loop {
-            let view = state.view();
-            let observation = cursor
-                .advance_to_height(
-                    &view,
-                    target,
-                    &budget,
-                    deadline,
-                    NonZeroU16::new(64).ok_or("zero native step bound")?,
-                )
-                .map_err(|_| "native original history refused")?;
-            if let Some(native) = observation {
-                break native;
-            }
-            if stop.load(Ordering::Acquire) {
-                return Err("owner stopped");
-            }
-        };
-        prefix = producer
-            .append(&prefix, native.block())
-            .map_err(|_| "genuine history proof unavailable")?;
-        if height == actual.block_height {
-            let view = state.view();
-            let evidence = receipts(&view)?
-                .event_evidence_for(
-                    &native,
-                    &job.payer,
-                    &actual.scheme_id,
-                    &actual.wallet_id,
-                    &actual.request_id,
-                )
-                .map_err(|_| "actual native event refused")?;
-            if evidence.verified().receipt() != &actual {
-                return Err("actual native event receipt differs");
-            }
-            let path = evidence
-                .path()
-                .proof()
-                .map_err(|_| "actual event path unavailable")?;
-            drop(view);
-            let bytes = producer
-                .prove(&prefix, native.block(), &actual, &path)
-                .map_err(|_| "genuine terminal receipt proof unavailable")?;
-            if bytes.is_empty() || bytes.len() > KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1 {
-                return Err("terminal proof extent differs");
-            }
-            return Ok(bytes);
-        }
+    let result = ExecutionResultCommitment::decode(&certificate.result_preimage)
+        .map_err(|_| "certificate result shape differs")?;
+    if result.height != height || (boundary && result.schedule.boundary.is_none()) {
+        return Err("certificate is not the selected boundary or receipt");
     }
-    Err("non-genesis receipt absent")
+    Ok(())
+}
+
+// Only a validation result may leave this lexical owner; no decoded graph or encoded Vec
+// can escape after its original pool reservation is refunded.
+fn certificate_decode(
+    certificate: &SumeragiCommitCertificateV1,
+    budget: &AllocationBudget,
+    decode: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    certificate
+        .validate_shape()
+        .map_err(|_| "certificate decode shape differs")?;
+    let extent = certificate
+        .consensus_header
+        .len()
+        .checked_add(certificate.commit_qc.len())
+        .and_then(|bytes| bytes.checked_add(certificate.result_preimage.len()))
+        .filter(|bytes| *bytes <= MAX_COMMIT_CERTIFICATE_BYTES_V1)
+        .ok_or("certificate decode extent differs")?;
+    let limits = norito::canonical_decode_limits(extent);
+    let bytes = limits
+        .max_total_allocated_bytes()
+        .checked_add(VALIDATION_SCRATCH_BYTES)
+        .ok_or("certificate decode allocation overflows")?;
+    let _charge = budget
+        .try_reserve_bytes(bytes)
+        .map_err(|_| "certificate decode allocation unavailable")?;
+    norito::with_decode_limits_scope(limits, decode)
+}
+
+fn selected_certificate(
+    view: &StateView<'_>,
+    receipt_height: u64,
+    boundary: Option<u64>,
+    budget: &AllocationBudget,
+    deadline: Instant,
+) -> Result<finality::NativeCommitCertificateDataV1> {
+    let height = boundary.unwrap_or(receipt_height);
+    if height < 2
+        || boundary.is_some_and(|height| height >= receipt_height)
+        || Instant::now() >= deadline
+    {
+        return Err("certificate selection deadline or height differs");
+    }
+    let original = finality::read_commit_certificate(
+        view,
+        NonZeroU64::new(height).ok_or("zero certificate height")?,
+        budget,
+        deadline,
+    )
+    .map_err(|_| "committed native certificate unavailable")?;
+    certificate_decode(original.certificate(), budget, || {
+        require_selected_data(original.certificate(), height, boundary.is_some())
+    })?;
+    if Instant::now() >= deadline {
+        return Err("native certificate read deadline expired");
+    }
+    Ok(original)
+}
+
+fn response_frame<T: norito::core::NoritoSerialize>(
+    value: &T,
+    maximum: usize,
+    budget: &AllocationBudget,
+    deadline: Instant,
+) -> Result<ChargedBuffer<u8>> {
+    if Instant::now() >= deadline {
+        return Err("native certificate response deadline expired");
+    }
+    // Count, acquire exact original-pool capacity, and serialize directly into that owner.
+    // There is no geometrically grown temporary Vec or post-encoding custody transfer.
+    let output = crate::native_projection_response::encode_canonical(
+        value,
+        maximum,
+        budget,
+        crate::native_projection_response::capacity,
+    )
+    .map_err(|_| "certificate response encoding or allocation unavailable")?;
+    if Instant::now() >= deadline {
+        return Err("native certificate response deadline expired");
+    }
+    Ok(output)
+}
+
+/// Read exactly one named boundary as DATA; no source-supplied successor is followed.
+pub(super) fn epoch(
+    view: &StateView<'_>,
+    payer: &AccountId,
+    receipt: &KagemushaWalletLoadReceiptV1,
+    boundary: u64,
+    budget: &AllocationBudget,
+    deadline: Instant,
+) -> Result<ChargedBuffer<u8>> {
+    require_payer(payer, receipt)?;
+    let original =
+        selected_certificate(view, receipt.block_height, Some(boundary), budget, deadline)?;
+    // selected_certificate already checked the canonical header and complete result.
+    // Preserve the epoch codec's remaining inner-QC canonical check before streaming DATA.
+    certificate_decode(original.certificate(), budget, || {
+        norito::decode_canonical_with_limits::<iroha_sumeragi::message::Qc>(
+            &original.certificate().commit_qc,
+            norito::canonical_decode_limits(original.certificate().commit_qc.len()),
+        )
+        .map_err(|_| "native epoch certificate QC differs")?;
+        Ok(())
+    })?;
+    response_frame(
+        original.certificate(),
+        MAX_COMMIT_CERTIFICATE_BYTES_V1,
+        budget,
+        deadline,
+    )
+}
+
+/// Return only the receipt certificate and counted event path as untrusted DATA.
+/// The phone must authenticate its retained epoch and BLS certificate before Advance.
+pub(super) fn evidence(
+    view: &StateView<'_>,
+    source: &CommittedLoadReceipts<'_, '_>,
+    payer: &AccountId,
+    receipt: &KagemushaWalletLoadReceiptV1,
+    budget: &AllocationBudget,
+    deadline: Instant,
+) -> Result<ChargedBuffer<u8>> {
+    require_payer(payer, receipt)?;
+    let original = selected_certificate(view, receipt.block_height, None, budget, deadline)?;
+    let receipt_digest = receipt.receipt_digest().map_err(|_| "invalid receipt")?;
+    // Prepay even event_path_for's temporary validation proof, then retain the same
+    // allowance until the final evidence proof has been destroyed after serialization.
+    let _event_charge = reserve_event_proof(budget)?;
+    let event = source
+        .event_path_for(
+            payer,
+            &receipt.scheme_id,
+            &receipt.wallet_id,
+            &receipt.request_id,
+        )
+        .map_err(|_| "committed Load event unavailable")?;
+    let event_proof = event
+        .proof()
+        .map_err(|_| "committed event path unavailable")?;
+    let (certificate, _certificate_charge) = original.into_parts();
+    // These constructors establish the codec's version, canonical receipt digest,
+    // bounded certificate and <=32-sibling invariants; response_frame enforces its cap.
+    // Calling to_canonical_bytes/validate here would allocate an extra unowned frame.
+    let evidence = KagemushaWalletLoadFinalityV1 {
+        version: 1,
+        receipt_digest,
+        certificate,
+        event_proof,
+    };
+    // The evidence graph drops before its certificate/proof reservations; the output keeps
+    // its own exact charge through the HTTP body's last byte.
+    response_frame(
+        &evidence,
+        KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1,
+        budget,
+        deadline,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[tokio::test(flavor = "current_thread")]
-    async fn scheduling_binds_exact_payer_scheme_height_and_receipt_before_queueing() {
-        use iroha_crypto::{Algorithm, KeyPair};
-        use iroha_futures::supervisor::ShutdownSignal;
-        use std::{
-            sync::{atomic::AtomicUsize, mpsc},
-            time::Duration,
-        };
-        let payer = AccountId::new(
-            KeyPair::from_seed(vec![0x61; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
-        let other = AccountId::new(
-            KeyPair::from_seed(vec![0x62; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
-        // DATA fixture only. The real worker has no production proving authority.
-        let receipt = KagemushaWalletLoadReceiptV1 {
+    use iroha_core::{
+        state::{StateReadOnly as _, World},
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        block::decode_framed_signed_block,
+        sumeragi_finality::{SumeragiCommitVerifierV1, SumeragiFinalityVerifier},
+    };
+    use std::{num::NonZeroUsize, time::Duration};
+
+    fn receipt_at(payer: &AccountId, height: u64) -> KagemushaWalletLoadReceiptV1 {
+        KagemushaWalletLoadReceiptV1 {
             version: 1,
             scheme_id: [1; 32],
             asset_digest: [2; 32],
@@ -386,125 +262,244 @@ mod tests {
             online_charge: 0,
             charge_quote: [0; 32],
             transaction_hash: [5; 32],
-            block_height: 2,
-            payer_account_digest: kagemusha_wallet_account_digest_v1(&payer).unwrap(),
-        };
-        let (observed, receiver) = mpsc::sync_channel(1);
-        let (release, released) = mpsc::sync_channel(1);
-        let calls = Arc::new(AtomicUsize::new(0));
-        let worker_calls = Arc::clone(&calls);
-        let worker = Arc::new(
-            worker::Worker::start(1, ServerFinalityCancellationV1::default(), move |job, _| {
-                worker_calls.fetch_add(1, Ordering::AcqRel);
-                observed
-                    .send((job.payer.clone(), job.receipt.clone(), job.key))
-                    .map_err(|_| "fixture observer stopped")?;
-                released.recv().map_err(|_| "fixture release stopped")?;
-                Ok(vec![7])
-            })
-            .unwrap(),
+            block_height: height,
+            payer_account_digest: kagemusha_wallet_account_digest_v1(payer).unwrap(),
+        }
+    }
+
+    fn verifier(view: &StateView<'_>) -> SumeragiCommitVerifierV1 {
+        let genesis = finality::build_proof(view, 1).unwrap();
+        let signed = decode_framed_signed_block(&genesis.block_wire).unwrap();
+        let native =
+            SumeragiFinalityVerifier::new(&signed, view.chain_id().as_str(), genesis.committee)
+                .unwrap();
+        SumeragiCommitVerifierV1::new(&native).unwrap()
+    }
+
+    #[test]
+    fn receipt_source_reads_one_exact_frame_without_genesis_or_history_replay() {
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::default(), 1_000)).unwrap();
+        chain.commit(Vec::new());
+        chain.commit(Vec::new());
+        let view = chain.state().view();
+        let mut phone = verifier(&view);
+        for height in [1, 2] {
+            chain
+                .kura()
+                .corrupt_native_frame_for_test(NonZeroUsize::new(height).unwrap());
+        }
+        let budget = AllocationBudget::new(128 << 20);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let original = selected_certificate(&view, 3, None, &budget, deadline).unwrap();
+        assert_eq!(phone.verify(original.certificate()).unwrap().height(), 3);
+        assert!(
+            certificate_decode(original.certificate(), &AllocationBudget::new(0), || Ok(()))
+                .is_err()
         );
-        let shutdown = ShutdownSignal::new();
-        let supervisor = worker.supervise(shutdown.clone()).unwrap();
-        let service = FinalityService {
-            scheme: [1; 32],
-            maximum_height: 10,
-            worker,
+        let mut tampered = original.certificate().clone();
+        *tampered.commit_qc.last_mut().unwrap() ^= 1;
+        // Shape-matched transport DATA is not an authority capability.
+        require_selected_data(&tampered, 3, false).unwrap();
+        assert!(phone.verify(&tampered).is_err());
+        drop(original);
+        assert_eq!(budget.reserved_bytes(), 0);
+        for (height, boundary, until) in [
+            (1, None, deadline),
+            (3, Some(3), deadline),
+            (3, Some(4), deadline),
+            (3, None, Instant::now()),
+        ] {
+            assert!(selected_certificate(&view, height, boundary, &budget, until).is_err());
+        }
+        assert!(selected_certificate(&view, 3, None, &AllocationBudget::new(0), deadline).is_err());
+    }
+
+    #[test]
+    fn epoch_source_requires_exact_boundary_before_receipt_without_following_successors() {
+        let mut chain = CertifiedTestChain::npos_boundary_fixture();
+        chain.commit(Vec::new());
+        let view = chain.state().view();
+        let mut phone = verifier(&view);
+        chain
+            .kura()
+            .corrupt_native_frame_for_test(NonZeroUsize::new(1).unwrap());
+        let budget = AllocationBudget::new(128 << 20);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        // H11 is not present: selecting H10 must not read its advertised successor.
+        let original = selected_certificate(&view, 11, Some(10), &budget, deadline).unwrap();
+        assert_eq!(phone.verify(original.certificate()).unwrap().height(), 10);
+        let payer = AccountId::new(
+            KeyPair::from_seed(vec![0x61; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let response = epoch(
+            &view,
+            &payer,
+            &receipt_at(&payer, 11),
+            10,
+            &budget,
+            deadline,
+        )
+        .unwrap();
+        assert_eq!(
+            response.as_slice(),
+            original.certificate().to_canonical_bytes().unwrap(),
+        );
+        let decoded = SumeragiCommitCertificateV1::decode_canonical(response.as_slice()).unwrap();
+        assert_eq!(&decoded, original.certificate());
+        assert_eq!(phone.verify(&decoded).unwrap().height(), 10);
+        assert!(require_selected_data(original.certificate(), 9, true).is_err());
+        assert!(selected_certificate(&view, 11, Some(2), &budget, deadline).is_err());
+        drop(response);
+        drop(original);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn response_custody_is_retained_and_all_bounds_refuse() {
+        let value = [1_u8, 2];
+        let expected = norito::encode_canonical(&value).unwrap();
+        let length = expected.len();
+        let budget = AllocationBudget::new(length);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        assert!(response_frame(&value, 0, &budget, deadline).is_err());
+        assert!(response_frame(&value, length - 1, &budget, deadline).is_err());
+        assert!(response_frame(&value, length, &budget, Instant::now()).is_err());
+        assert!(response_frame(&value, length, &AllocationBudget::new(0), deadline).is_err());
+        assert!(
+            response_frame(&value, length, &AllocationBudget::new(length - 1), deadline).is_err()
+        );
+        assert_eq!(budget.reserved_bytes(), 0);
+        let response = response_frame(&value, length, &budget, deadline).unwrap();
+        assert_eq!(response.as_slice(), expected);
+        assert_eq!(budget.reserved_bytes(), length);
+        assert!(response_frame(&value, length, &budget, deadline).is_err());
+        drop(response);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn certificate_decode_prepays_and_refunds_the_complete_lexical_allowance() {
+        // The closure is intentionally independent of cryptographic fixture work: it observes
+        // the pool at the actual admission seam and proves refusal precedes any decode work.
+        let certificate = SumeragiCommitCertificateV1 {
+            consensus_header: vec![1],
+            commit_qc: vec![2],
+            result_preimage: vec![3],
         };
-        assert!(service.read_or_schedule(other, receipt.clone()).is_err());
+        let bytes = norito::canonical_decode_limits(3).max_total_allocated_bytes()
+            + VALIDATION_SCRATCH_BYTES;
+        let small = AllocationBudget::new(bytes - 1);
+        let called = std::cell::Cell::new(false);
+        assert!(
+            certificate_decode(&certificate, &small, || {
+                called.set(true);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called.get());
+        assert_eq!(small.reserved_bytes(), 0);
+        let budget = AllocationBudget::new(bytes);
+        for reject in [false, true] {
+            let observed = certificate_decode(&certificate, &budget, || {
+                assert_eq!(budget.reserved_bytes(), bytes);
+                if reject {
+                    Err("injected decoder refusal")
+                } else {
+                    Ok(())
+                }
+            });
+            assert_eq!(observed.is_err(), reject);
+            assert_eq!(budget.reserved_bytes(), 0);
+        }
+        let missing = SumeragiCommitCertificateV1 {
+            consensus_header: Vec::new(),
+            ..certificate
+        };
+        assert!(
+            certificate_decode(&missing, &budget, || {
+                called.set(true);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called.get());
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn event_proof_reservation_and_receipt_frame_have_separate_live_charges() {
+        let payer = AccountId::new(
+            KeyPair::from_seed(vec![0x63; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        // This is codec DATA parity, not a finality/receipt-inclusion claim. The epoch test
+        // above separately compares a real certified boundary's complete canonical frame.
+        let evidence = KagemushaWalletLoadFinalityV1 {
+            version: 1,
+            receipt_digest: receipt_at(&payer, 2).receipt_digest().unwrap(),
+            certificate: SumeragiCommitCertificateV1 {
+                consensus_header: vec![1],
+                commit_qc: vec![2],
+                result_preimage: vec![3],
+            },
+            event_proof: iroha_crypto::MerkleProof::from_audit_path(0, vec![None; 32]),
+        };
+        let expected = evidence.to_canonical_bytes().unwrap();
+        let length = expected.len();
+        let small = AllocationBudget::new(EVENT_PROOF_BYTES - 1);
+        assert!(reserve_event_proof(&small).is_err());
+        assert_eq!(small.reserved_bytes(), 0);
+        let budget = AllocationBudget::new(EVENT_PROOF_BYTES + length);
+        let proof_charge = reserve_event_proof(&budget).unwrap();
+        assert_eq!(budget.reserved_bytes(), EVENT_PROOF_BYTES);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let output = response_frame(
+            &evidence,
+            KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1,
+            &budget,
+            deadline,
+        )
+        .unwrap();
+        assert_eq!(output.as_slice(), expected);
+        assert_eq!(budget.reserved_bytes(), EVENT_PROOF_BYTES + length);
+        drop(evidence);
+        drop(proof_charge);
+        assert_eq!(budget.reserved_bytes(), length);
+        drop(output);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn receipt_selection_requires_exact_payer_and_valid_non_genesis_load() {
+        let payer = AccountId::new(
+            KeyPair::from_seed(vec![0x61; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let other = AccountId::new(
+            KeyPair::from_seed(vec![0x62; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let receipt = receipt_at(&payer, 2);
+        require_payer(&payer, &receipt).unwrap();
+        assert!(require_payer(&other, &receipt).is_err());
         for changed in [
             KagemushaWalletLoadReceiptV1 {
-                scheme_id: [6; 32],
-                ..receipt.clone()
-            },
-            KagemushaWalletLoadReceiptV1 {
                 block_height: 1,
-                ..receipt.clone()
-            },
-            KagemushaWalletLoadReceiptV1 {
-                block_height: 11,
-                ..receipt.clone()
+                ..receipt
             },
             KagemushaWalletLoadReceiptV1 {
                 amount: 0,
-                ..receipt.clone()
+                ..receipt
             },
         ] {
-            assert!(service.read_or_schedule(payer.clone(), changed).is_err());
+            assert!(require_payer(&payer, &changed).is_err());
         }
-        assert_eq!(calls.load(Ordering::Acquire), 0);
-        assert!(receiver.try_recv().is_err());
-        // Invalid selections must leave the sole queue slot available to the valid receipt.
-        assert_eq!(
-            service
-                .read_or_schedule(payer.clone(), receipt.clone())
-                .unwrap(),
-            None
-        );
-        assert_eq!(
-            service
-                .read_or_schedule(payer.clone(), receipt.clone())
-                .unwrap(),
-            None
-        );
-        let (actual_payer, actual_receipt, key) =
-            receiver.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!(actual_payer, payer);
-        assert_eq!(actual_receipt, receipt);
-        assert_eq!(key, receipt.receipt_digest().unwrap());
-        assert!(receiver.try_recv().is_err());
-        shutdown.send();
-        release.send(()).unwrap();
-        let result = tokio::time::timeout(Duration::from_secs(5), supervisor)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(matches!(
-            result,
-            crate::ToriiCriticalWorkerExit::StoppedByShutdown
-        ));
-        assert!(service.read_or_schedule(payer, receipt).is_err());
-        assert_eq!(calls.load(Ordering::Acquire), 1);
-        assert!(receiver.try_recv().is_err());
-    }
-    #[test]
-    fn queue_keeps_pending_exact_and_bounds_active_plus_unread_results() {
-        let mut queue = Queue {
-            entries: BTreeMap::new(),
-            maximum: 1,
-        };
-        assert_eq!(queue.observe([1; 32]).unwrap(), None);
-        assert_eq!(queue.observe([1; 32]).unwrap(), Some(None));
-        assert!(queue.observe([2; 32]).is_err());
-        queue.entries.insert([1; 32], Status::Ready(vec![1, 2, 3]));
-        assert_eq!(queue.observe([2; 32]).unwrap(), None);
-        assert!(
-            !queue.entries.contains_key(&[1; 32]),
-            "abandoned completed results do not exhaust capacity"
-        );
-        assert!(
-            queue.observe([1; 32]).is_err(),
-            "pending work is never evicted"
-        );
-        queue.entries.insert([2; 32], Status::Ready(vec![4, 5, 6]));
-        assert_eq!(queue.observe([2; 32]).unwrap(), Some(Some(vec![4, 5, 6])));
-        assert_eq!(queue.observe([1; 32]).unwrap(), None);
-    }
-    #[test]
-    fn failed_work_is_not_completed_evidence_and_requires_an_explicit_retry() {
-        let mut queue = Queue {
-            entries: BTreeMap::new(),
-            maximum: 1,
-        };
-        queue.entries.insert([1; 32], Status::Failed);
-        assert!(queue.observe([1; 32]).is_err());
-        assert!(queue.entries.is_empty());
-        assert_eq!(queue.observe([1; 32]).unwrap(), None);
-        queue.entries.insert([1; 32], Status::Failed);
-        assert_eq!(queue.observe([2; 32]).unwrap(), None);
-        assert!(
-            !queue.entries.contains_key(&[1; 32]),
-            "abandoned failed work does not exhaust capacity"
-        );
     }
 }

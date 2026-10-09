@@ -800,13 +800,8 @@ fn archive_attachment_captures_exact_tip_once_before_executor_work_and_survives_
             reputation.health_generation().unwrap()
         )
     );
-    // A restart releases the actual filesystem writers; merely dropping a join handle
-    // would detach the worker and race its asynchronous release of the archive Arcs.
-    let StateExecutor {
-        requests, _thread, ..
-    } = executor;
-    drop(requests);
-    _thread.join().unwrap();
+    // The sole executor owner closes admission and joins before archive writers reopen.
+    drop(executor);
     drop(archives);
     let provider_reopened = ProviderIngestFinalizedArchiveV1::try_open(
         directory.path().join("provider"),

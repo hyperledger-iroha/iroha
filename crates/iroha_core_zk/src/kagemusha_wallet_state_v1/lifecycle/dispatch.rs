@@ -512,6 +512,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                 refresh,
                 manifest.issued_requests,
                 manifest.direct_anchors,
+                manifest.finality_epochs,
             )?;
             let native = self
                 .proofs
@@ -552,6 +553,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                 refresh,
                 manifest.issued_requests,
                 manifest.direct_anchors,
+                manifest.finality_epochs,
             )?;
             self.proofs
                 .validate_preparation(&request, &source, &mut custody, &plan.native)?;
@@ -570,6 +572,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                 refresh,
                 manifest.issued_requests,
                 manifest.direct_anchors,
+                manifest.finality_epochs,
             )?;
             let frozen =
                 self.proofs

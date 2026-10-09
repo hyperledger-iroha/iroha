@@ -7,6 +7,7 @@ use super::{
     progress::{Failure, Phase, Progress},
     readiness,
 };
+use crate::localnet::service_authorities::RetainedProviderServicePlan;
 use crate::managed::{
     ManagedStreamTokenCustody, PreparedLocalnet, Result,
     gateway_compliance::{ManagedGatewayCompliance, PromotedGeneratedCatalog},
@@ -91,17 +92,16 @@ pub(super) struct Continuation {
     schedule: Schedule,
 }
 impl Continuation {
+    /// Consume freshly selected original interval intent; the receipt and native enrollment
+    /// keep their independent owners and the caller's original observation clocks.
     pub(super) fn new(
-        prepared: &PreparedLocalnet,
-        provider: ProviderId,
+        plan: &RetainedProviderServicePlan,
         receipt: Arc<readiness::Receipt>,
         enrollment: &RetainedCustodyEnrollment,
         observed_at: Instant,
         observed_utc: u64,
     ) -> Result<Self> {
-        let provider_end = prepared
-            .provider_service_plan(provider)?
-            .ok_or_else(|| invalid("renewal requires original provider plan"))?
+        let provider_end = plan
             .admission_material()
             .retention_epoch
             .checked_mul(1_000)
@@ -109,7 +109,7 @@ impl Continuation {
         let statement = enrollment.statement();
         Ok(Self {
             receipt,
-            provider,
+            provider: plan.provider_id(),
             record_digest: enrollment.record_digest(),
             schedule: Schedule::select(
                 statement.sequence,

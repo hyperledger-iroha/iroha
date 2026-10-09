@@ -2,15 +2,12 @@
 //!
 //! Authentication establishes which originals the installation owner selected. It
 //! does not establish that those originals implement their declared sources. The
-//! native per-stage importers and complete finality graph must reconstruct and
+//! native per-stage importers must reconstruct and
 //! qualify every source before a wallet producer can be installed.
 
 use std::io::Read;
 
-use iroha_kagemusha_proof::{
-    a_relation::schedule::compiled::{OperationSchedule, compiled_routes},
-    finality::catalog::ArtifactRecord,
-};
+use iroha_kagemusha_proof::a_relation::schedule::compiled::{OperationSchedule, compiled_routes};
 use iroha_plonk_recursion::obligation::ledger::Variant;
 
 use super::*;
@@ -21,7 +18,7 @@ pub use directory::DirectoryOriginalsV1;
 
 #[path = "producer_inventory/recipe.rs"]
 mod recipe;
-pub use recipe::{ReceiptSourceRecipeV1, SourceScopeV1};
+pub use recipe::SourceScopeV1;
 
 #[path = "producer_inventory/compiler.rs"]
 mod compiler;
@@ -70,7 +67,7 @@ pub use wallet::{QualifiedWalletSourcesV1, WalletSourcesErrorV1};
 
 /// Canonical inventory metadata cap; original proving tables are stored separately.
 pub const CATALOG_MAX_BYTES_V1: usize = 16 << 20;
-/// Maximum distinct non-finality originals in one complete native inventory.
+/// Maximum distinct wallet circuit originals in one complete native inventory.
 pub const ARTIFACT_MAX_COUNT_V1: usize = 4_096;
 /// Absolute per-original PK envelope bound, independent of a smaller local reader limit.
 pub const PROVING_KEY_MAX_BYTES_V1: usize = 1 << 30;
@@ -147,26 +144,6 @@ pub struct OperationV1 {
     pub w: Vec<u32>,
 }
 
-/// Native signed-genesis policy and complete finality integrity inventory.
-/// Independent native genesis authentication remains mandatory at graph mount.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, NoritoSchema)]
-#[norito_schema(name = "iroha.core_zk.kagemusha.wallet.finality_originals.v1")]
-pub struct FinalityV1 {
-    /// Native network identity.
-    pub network: [u8; 32],
-    /// Global consensus instance identity.
-    pub instance: [u8; 32],
-    /// Exact initial epoch-context identity.
-    pub initial_context: [u8; 32],
-    /// Initial native scheduling epoch.
-    pub initial_epoch: u64,
-    /// Exact six native consensus parameters, in HistoryAnchor order.
-    pub parameters: [u64; 6],
-    /// Canonically ordered original source/wrapper integrity records.
-    /// Full graph mounting checks every exact compiled node/name and child key.
-    pub originals: Vec<ArtifactRecord>,
-}
-
 /// Complete canonical metadata preimage committed by the one signed artifact identity.
 /// Index references select only members of `originals`; none are storage paths.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, NoritoSchema)]
@@ -174,7 +151,7 @@ pub struct FinalityV1 {
 pub struct ProducerInventoryV1 {
     /// Exactly version one, with no retired profile decoder.
     pub version: u16,
-    /// Exact compiled native profile, including operation and finality leaf schedules.
+    /// Exact compiled native profile, including every wallet operation schedule.
     pub native_profile: [u8; 32],
     /// Unique original references, all consumed by this inventory.
     pub originals: Vec<OriginalV1>,
@@ -188,8 +165,6 @@ pub struct ProducerInventoryV1 {
     pub terminals: Vec<u32>,
     /// Sole final native Omega original.
     pub omega: u32,
-    /// Ordinary transaction/finality source originals; no publisher-key substitution.
-    pub finality: FinalityV1,
 }
 
 fn variant(tag: u8) -> Result<Variant, Error> {
@@ -320,40 +295,6 @@ impl ProducerInventoryV1 {
         if programs.contains(&false) {
             return Err(Error::Inventory);
         }
-        let finality = &self.finality;
-        if [
-            finality.network,
-            finality.instance,
-            finality.initial_context,
-        ]
-        .contains(&[0; 32])
-            || finality.originals.is_empty()
-            || finality.originals.len() > 65_536
-        {
-            return Err(Error::Inventory);
-        }
-        let mut previous: Option<&[u8]> = None;
-        for record in &finality.originals {
-            record.validate_identity().map_err(|_| Error::Inventory)?;
-            if record.name.is_empty()
-                || record.name.len() > 512
-                || previous.is_some_and(|p| p >= record.name.as_slice())
-            {
-                return Err(Error::Inventory);
-            }
-            for ((length, hash), cap) in record.lengths.iter().zip(&record.sha256).zip([
-                DESCRIPTOR_MAX_BYTES_V1,
-                VERIFYING_KEY_MAX_BYTES_V1,
-                PROVING_KEY_MAX_BYTES_V1,
-            ]) {
-                BlobV1 {
-                    bytes: *length,
-                    sha256: *hash,
-                }
-                .length(cap)?;
-            }
-            previous = Some(&record.name);
-        }
         Ok(())
     }
     /// Canonical bounded packaging bytes; structural validation is not source admission.
@@ -423,9 +364,6 @@ impl InstalledVerifierPackV1 {
         )
         .map_err(|_| Error::Inventory)?;
         inventory.validate()?;
-        if inventory.finality.network != self.verifier.scheme().network_id {
-            return Err(Error::Inventory);
-        }
         for (index, original) in inventory.sigma.into_iter().zip(&self.pack.steps) {
             if !inventory.member(index)?.matches(&original.artifact) {
                 return Err(Error::Inventory);
@@ -472,6 +410,26 @@ fn read_cancellable(
     cap: usize,
     cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<Vec<u8>, Error> {
+    scan_cancellable(
+        source,
+        blob,
+        cap,
+        cancellation,
+        Vec::with_capacity,
+        |bytes, chunk| bytes.extend_from_slice(chunk),
+    )
+}
+
+// Both collecting and hash-only callers consume the same bounded retained reader.
+// A successful scan authenticates exact bytes only; it grants no source capability.
+fn scan_cancellable<T>(
+    source: &mut dyn OriginalSourceV1,
+    blob: BlobV1,
+    cap: usize,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+    initialize: impl FnOnce(usize) -> T,
+    mut accept: impl FnMut(&mut T, &[u8]),
+) -> Result<T, Error> {
     let check =
         || iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled);
     check()?;
@@ -482,7 +440,8 @@ fn read_cancellable(
     let opened = source.open(blob.sha256);
     check()?;
     let mut reader = opened?.take(maximum);
-    let mut bytes = Vec::with_capacity(length);
+    let mut output = initialize(length);
+    let mut consumed = 0_usize;
     let mut hash = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
@@ -505,18 +464,19 @@ fn read_cancellable(
         if count == 0 {
             break;
         }
-        if count > length.saturating_sub(bytes.len()) {
+        if count > length.saturating_sub(consumed) {
             return Err(Error::Inventory);
         }
         hash.update(&buffer[..count]);
-        bytes.extend_from_slice(&buffer[..count]);
+        accept(&mut output, &buffer[..count]);
+        consumed += count;
     }
     check()?;
     let actual: [u8; 32] = hash.finalize().into();
-    if bytes.len() != length || actual != blob.sha256 {
+    if consumed != length || actual != blob.sha256 {
         return Err(Error::Inventory);
     }
-    Ok(bytes)
+    Ok(output)
 }
 
 impl AuthenticatedProducerInventoryV1 {
@@ -545,6 +505,41 @@ impl AuthenticatedProducerInventoryV1 {
             verifying_key: read(source, original.verifying_key, VERIFYING_KEY_MAX_BYTES_V1)?,
         })
     }
+    /// Revalidate all three selected originals without retaining their payloads.
+    ///
+    /// This checks signed content identity and current reader custody only. A
+    /// source-qualified owner must separately retain its opaque strict-import
+    /// authority and enforce the current row/profile limits before using it.
+    /// No key, source capability, or durable filesystem snapshot is returned.
+    /// # Errors
+    /// Invalid member or local limit, cancelled I/O, unavailable original, or a
+    /// length, digest or retained-custody mismatch. All role caps precede any open.
+    pub(crate) fn revalidate_original_cancellable(
+        &self,
+        index: u32,
+        source: &mut dyn OriginalSourceV1,
+        maximum_pk_bytes: usize,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        if maximum_pk_bytes == 0 || maximum_pk_bytes > PROVING_KEY_MAX_BYTES_V1 {
+            return Err(Error::Inventory);
+        }
+        let original = *self.inventory.member(index)?;
+        let roles = [
+            (original.descriptor, DESCRIPTOR_MAX_BYTES_V1),
+            (original.verifying_key, VERIFYING_KEY_MAX_BYTES_V1),
+            (original.proving_key, maximum_pk_bytes),
+        ];
+        for (blob, cap) in roles {
+            blob.length(cap)?;
+        }
+        for (blob, cap) in roles {
+            scan_cancellable(source, blob, cap, cancellation, |_| (), |(), _| {})?;
+        }
+        Ok(())
+    }
+
     /// Read and hash-check one original, with a finite local PK limit before allocation.
     /// The caller must pass these bytes to the exact source-specific native importer.
     /// # Errors

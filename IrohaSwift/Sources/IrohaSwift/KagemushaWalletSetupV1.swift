@@ -77,7 +77,8 @@ struct KagemushaWalletSetupInputV1 {
        first: Data = Data(), second: Data = Data(), third: Data = Data()) throws {
     let limits: [Int]
     switch selector {
-    case 0, 1, 4, 6, 15, 18, 19, 20, 24, 27, 38, 43, 47, 48, 49, 50, 51: limits = [0, 0, 0]
+    case 0, 1, 4, 6, 15, 18, 19, 20, 24, 27, 38, 43, 47, 48, 49, 50, 51, 52: limits = [0, 0, 0]
+    case 53: limits = [256 * 1024, 0, 0]
     case 21, 22: limits = [21_024, 0, 0]
     case 23: limits = [36 * 1024 * 1024, 0, 0]
     case 25: limits = [32 * 1024 * 1024, 1024, 0]
@@ -93,7 +94,8 @@ struct KagemushaWalletSetupInputV1 {
     default: throw KagemushaWalletErrorV1.invalidInput
     }
     guard identity.count == 32, ([1, 2, 19, 20, 25, 27, 30, 33, 34, 39, 41, 42, 43, 44, 45].contains(selector)) == identity.contains(where: { $0 != 0 }),
-      (selector == 47 || ([1, 27].contains(selector)) == (amount.low != 0 || amount.high != 0)), ([5, 6, 29, 49, 51].contains(selector)) == (token != 0),
+      ([47, 53].contains(selector) || ([1, 27].contains(selector)) == (amount.low != 0 || amount.high != 0)), ([5, 6, 29, 49, 51].contains(selector)) == (token != 0),
+      selector != 53 || (amount.high == 0 && !first.isEmpty),
       token <= UInt64(Int64.max), selector != 29 || ((1...3).contains(token) && !first.isEmpty), zip([first, second, third], limits).allSatisfy({ $0.count <= $1 }),
       ![30, 33, 35, 37, 41, 42, 44, 46].contains(selector) || !first.isEmpty,
       ![2, 39].contains(selector) || (!first.isEmpty && second.isEmpty == third.isEmpty),
@@ -177,6 +179,21 @@ public struct KagemushaWalletLedgerProgressV1: Sendable {
   init(_ result: KagemushaWalletCallV1) throws {
     guard result.status == 33 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     self.height = result.sequenceLow; self.blockHash = kagemushaWalletSetupCopyV1(result.bytes)
+  }
+}
+
+/// Protected native epoch progress. Older retained epochs continue to authorize old receipts.
+public struct KagemushaWalletEpochProgressV1: Equatable, Sendable {
+  public let epoch: UInt64
+  public let firstHeight: UInt64
+  public let boundaryHeight: UInt64
+  init(_ result: KagemushaWalletCallV1) throws {
+    guard result.status == 57, result.bytes.count == 16 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    func word(_ start: Int) -> UInt64 {
+      (0..<8).reduce(UInt64(0)) { $0 | UInt64(result.bytes[start + $1]) << ($1 * 8) }
+    }
+    epoch = result.sequenceLow; firstHeight = word(0); boundaryHeight = word(8)
+    guard firstHeight > 0, boundaryHeight >= firstHeight else { throw KagemushaWalletErrorV1.invalidNativeOutput }
   }
 }
 

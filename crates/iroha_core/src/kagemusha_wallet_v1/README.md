@@ -7,6 +7,8 @@ incarnation, scale, reserve account and balance scope. Exact retry does not incr
 permanent reference counts. Ordinary transfer, burn and account/asset teardown cannot
 spend or remove the reserve. Current and rollback snapshot validation checks the reserve
 indexes and each retained issuance's registration, wallet and ordinal bindings.
+Universal Dataspace assets use this same registration path without a token allowlist
+or Parliament approval; the asset-management and reserve-owner permissions still apply.
 
 `IssueLoad` is an ordinary signed transaction instruction. The payer commits the exact
 asset, wallet, request identity, expected next ordinal, amount and optional charge. The
@@ -89,10 +91,18 @@ E6 bytes are retained for delivery. Retries do not refresh issue time or replace
 Publication errors poison the live owner until reopening and reconciliation. Native reads
 distinguish initial absence from later custody failure. This local ordering component does
 not establish KYC, worker provenance, signer custody or protection from a privileged rollback
-of the entire filesystem. TODO: connect the journal to approved current eligibility,
-the authenticated verifier process, Enrollment-role signer and Torii service owner; retain
-the ledger's permanent activation claims at that boundary.
+of the entire filesystem.
 
-TODO(G3/G6): implement and qualify the compact offline Load relation consuming ordinary consensus evidence,
-complete producer artifacts and the end-to-end device/network flow. The online receipt
-alone grants no foreign wallet-open or proof-acceptance capability.
+The [enrollment issuer](enrollment_issuer/README.md) connects this journal to current
+signed bank or scheme-operator eligibility, the private verifier process and an
+Enrollment-role signer. The concrete Torii service owns the journal and these runtimes
+on a supervised thread. Its optional configured route authenticates the original account
+request and the registered asset before dispatch. Bank middleware supplies bank
+eligibility; a scheme operator supplies its selected policy without a mandatory
+Parliament gate. These implemented boundaries still require complete Linux launch,
+real platform evidence, shutdown and network qualification.
+
+The offline Load relation binds the receipt and credential-bound Advance signature. Native BLS certificate and authenticated epoch verification must succeed before the Advance is signed; the recursive finality prover and its artifact catalogs are retired. The selected released-app/uncompromised-OS assumption supplies this pre-signing trust boundary. See [native finality goals](../../../../specs/kagemusha_native_finality_goals.md).
+TODO(G3/G6): qualify their complete installed producer artifacts and the real
+end-to-end device/network flow. The online receipt alone grants no foreign wallet-open
+or proof-acceptance capability.

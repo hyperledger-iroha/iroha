@@ -152,6 +152,9 @@ pub(super) fn run_deploy(
     let activation_artifact = (args.activate && hook.is_some()).then(|| artifact_bytes.clone());
     let fee_payment = selected_fee_payment(&build.network)?;
     let _profile = ChainDiscriminantGuard::enter(build.network.chain_discriminant);
+    if args.activate {
+        check_activation_arguments(&artifact_bytes, hook.as_ref(), activation_payload.as_ref())?;
+    }
     let service = DeploymentService::new(build.network.load_client()?)
         .map_err(|error| deployment_diagnostic(&error))?;
     let slot = deployment_slot(
@@ -203,7 +206,7 @@ pub(super) fn run_deploy(
                                     "unverified"
                                 }),
                             ),
-                            ("entrypoint", Value::from(hook.clone())),
+                            ("entrypoint", Value::from(hook.name.clone())),
                             (
                                 "command",
                                 Value::from(activation_command(
@@ -212,6 +215,7 @@ pub(super) fn run_deploy(
                                     &artifact.package,
                                     &artifact.target,
                                     hook,
+                                    None,
                                 )),
                             ),
                         ]),
@@ -243,8 +247,9 @@ pub(super) fn run_deploy(
                 alias: receipt.contract_alias.clone(),
             },
             call::CallInput {
-                entrypoint: &hook,
+                entrypoint: &hook.name,
                 payload: activation_payload
+                    .clone()
                     .unwrap_or_else(|| Value::Object(norito::json::Map::new())),
                 gas_limit: args.gas_limit,
                 max_fee: args.max_fee_asset.as_ref().zip(args.max_fee.as_ref()),
@@ -268,13 +273,14 @@ pub(super) fn run_deploy(
                         &artifact.package,
                         &artifact.target,
                         &hook,
+                        activation_payload.as_ref(),
                     ),
                 )
         })?;
         return Ok(Success {
             message: format!(
-                "{}\nActivated with {hook}:\n{}",
-                deployed.message, activation.message
+                "{}\nActivated with {}:\n{}",
+                deployed.message, hook.name, activation.message
             ),
             data: object([
                 ("deployment", deployed.data),
@@ -441,8 +447,28 @@ fn hajimari_label() -> String {
     )
 }
 
-/// Return the selector of the artifact's activation hook, when it declares one.
-pub(super) fn lifecycle_hook(artifact: &[u8]) -> Option<String> {
+/// A seiyaku's activation hook as its verified artifact declares it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LifecycleHook {
+    /// Canonical entrypoint selector.
+    pub(super) name: String,
+    /// Declared parameter names and canonical type names, in declaration order.
+    pub(super) params: Vec<(String, String)>,
+}
+impl LifecycleHook {
+    /// Named JSON arguments for the activation command: `{}` for a hook without parameters,
+    /// otherwise every declared parameter with a `<type>` placeholder to replace.
+    fn arguments_template(&self) -> String {
+        let mut template = norito::json::Map::new();
+        for (name, type_name) in &self.params {
+            template.insert(name.clone(), Value::from(format!("<{type_name}>")));
+        }
+        norito::json::to_string(&Value::Object(template)).unwrap_or_else(|_| "{}".to_owned())
+    }
+}
+
+/// Return the artifact's activation hook, when it declares one.
+pub(super) fn lifecycle_hook(artifact: &[u8]) -> Option<LifecycleHook> {
     ivm::verify_contract_artifact(artifact)
         .ok()?
         .contract_interface
@@ -451,16 +477,70 @@ pub(super) fn lifecycle_hook(artifact: &[u8]) -> Option<String> {
         .find(|entrypoint| {
             entrypoint.kind == iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
         })
-        .map(|entrypoint| entrypoint.name)
+        .map(|entrypoint| LifecycleHook {
+            name: entrypoint.name,
+            params: entrypoint
+                .params
+                .into_iter()
+                .map(|param| (param.name, param.type_name))
+                .collect(),
+        })
+}
+
+/// Reject activation arguments that the hook cannot accept before anything is signed.
+///
+/// Arguments are checked against the verified artifact's hook schema in the network's address
+/// profile, so a deployment never completes only for its activation to fail on its arguments.
+fn check_activation_arguments(
+    artifact: &[u8],
+    hook: Option<&LifecycleHook>,
+    payload: Option<&Value>,
+) -> Result<(), Diagnostic> {
+    let empty = Value::Object(norito::json::Map::new());
+    match hook {
+        None if payload.is_some_and(|payload| payload != &empty) => Err(Diagnostic::new(
+            ErrorCode::Usage,
+            format!(
+                "--args are arguments for {}, which this seiyaku does not declare",
+                hajimari_label()
+            ),
+        )
+        .with_help("omit --args; the deployed instance is active without activation")),
+        None => Ok(()),
+        Some(hook) => iroha_contract_deploy::call::check_contract_arguments(
+            artifact,
+            &hook.name,
+            payload.unwrap_or(&empty),
+            false,
+        )
+        .map_err(|error| {
+            Diagnostic::new(
+                ErrorCode::Usage,
+                format!(
+                    "activation arguments do not match {}; nothing was signed or submitted",
+                    hajimari_label()
+                ),
+            )
+            .with_context("reason", error.to_string())
+            .with_help(format!(
+                "pass the hook's named arguments, for example --args '{}'",
+                hook.arguments_template()
+            ))
+        }),
+    }
 }
 
 /// Exact command that activates a deployed seiyaku through its hook.
+///
+/// `arguments` are the caller's activation arguments; without them the command carries the hook's
+/// [`LifecycleHook::arguments_template`].
 fn activation_command(
     manifest: &Path,
     network: &network::SelectedNetwork,
     package: &MusubiPackageSelectorV1,
     target: &str,
-    hook: &str,
+    hook: &LifecycleHook,
+    arguments: Option<&Value>,
 ) -> String {
     let mut command = format!(
         "musubi --manifest-path {} call --network {}",
@@ -474,12 +554,16 @@ fn activation_command(
             quote_cli_argument(&config.display().to_string())
         );
     }
+    let arguments = arguments
+        .and_then(|arguments| norito::json::to_string(arguments).ok())
+        .unwrap_or_else(|| hook.arguments_template());
     let _ = write!(
         command,
-        " --package {} --contract {} --entrypoint {} --args '{{}}'",
+        " --package {} --contract {} --entrypoint {} --args {}",
         quote_cli_argument(&package.to_string()),
         quote_cli_argument(target),
-        quote_cli_argument(hook),
+        quote_cli_argument(&hook.name),
+        quote_cli_argument(&arguments),
     );
     command
 }
@@ -489,25 +573,31 @@ fn activation_command(
 /// `known_pending` is true only when this command itself completed the deployment; a deployment
 /// that completed earlier may already have been activated, so the hint is then conditional.
 fn activation_hint(
-    hook: &str,
+    hook: &LifecycleHook,
     known_pending: bool,
     manifest: &Path,
     network: &network::SelectedNetwork,
     package: &MusubiPackageSelectorV1,
     target: &str,
 ) -> String {
-    let command = activation_command(manifest, network, package, target, hook);
+    let command = activation_command(manifest, network, package, target, hook, None);
+    let placeholders = if hook.params.is_empty() {
+        ""
+    } else {
+        "\nReplace each `<type>` placeholder with the argument value; int, decimal and quantity \
+         values are canonical decimal strings such as \"5\"."
+    };
     if known_pending {
         format!(
             "\nThis seiyaku declares {}; the deployed instance rejects every other call and view \
-             until it runs.\nNext: {command}\n(`musubi deploy --activate` deploys and activates in \
-             one step; pass the hook's arguments with --args.)",
+             until it runs.\nNext: {command}{placeholders}\n(`musubi deploy --activate` deploys and \
+             activates in one step; pass the hook's arguments with --args.)",
             hajimari_label(),
         )
     } else {
         format!(
             "\nThis seiyaku declares {}; until it has run once, the instance rejects every other \
-             call and view.\nIf it has not run yet: {command}",
+             call and view.\nIf it has not run yet: {command}{placeholders}",
             hajimari_label(),
         )
     }
@@ -1152,19 +1242,29 @@ mod tests {
 
     #[test]
     fn lifecycle_hook_is_found_in_either_keyword_spelling() {
+        let hook = |source: &str| lifecycle_hook(&compiled(source)).map(|hook| hook.name);
         assert_eq!(
-            lifecycle_hook(&compiled(
+            hook(
                 "seiyaku Counter { state int value; hajimari() { value = 0; } view fn current() -> int { return value; } }"
-            ))
+            )
+            .as_deref(),
+            Some("hajimari")
+        );
+        assert_eq!(
+            hook(
+                "誓約 Counter { state int value; 始まり() { value = 1; } view fn current() -> int { return value; } }"
+            )
             .as_deref(),
             Some("hajimari")
         );
         assert_eq!(
             lifecycle_hook(&compiled(
-                "誓約 Counter { state int value; 始まり() { value = 1; } view fn current() -> int { return value; } }"
-            ))
-            .as_deref(),
-            Some("hajimari")
+                "seiyaku Counter { state int value; 始まり(int start) { value = start; } view fn current() -> int { return value; } }"
+            )),
+            Some(LifecycleHook {
+                name: "hajimari".to_owned(),
+                params: vec![("start".to_owned(), "int".to_owned())],
+            })
         );
         assert_eq!(
             lifecycle_hook(&compiled(
@@ -1187,9 +1287,13 @@ mod tests {
             contracts: BTreeMap::new(),
         };
         let command = "musubi --manifest-path /projects/counter/Musubi.toml call --network taira --config '/runtime/owner wallet/client.toml' --package demo/counter --contract counter --entrypoint hajimari --args '{}'";
+        let parameterless = LifecycleHook {
+            name: "hajimari".to_owned(),
+            params: Vec::new(),
+        };
         let hint = |known_pending| {
             activation_hint(
-                "hajimari",
+                &parameterless,
                 known_pending,
                 Path::new("/projects/counter/Musubi.toml"),
                 &network,
@@ -1212,6 +1316,80 @@ mod tests {
             "{earlier}"
         );
         assert!(!earlier.contains("Next:"), "{earlier}");
+        assert!(!earlier.contains("placeholder"), "{earlier}");
+        let parameterized = LifecycleHook {
+            name: "hajimari".to_owned(),
+            params: vec![
+                ("start".to_owned(), "int".to_owned()),
+                ("owner".to_owned(), "AccountId".to_owned()),
+            ],
+        };
+        assert_eq!(
+            parameterized.arguments_template(),
+            r#"{"owner":"<AccountId>","start":"<int>"}"#
+        );
+        let package = "demo/counter".parse().expect("package");
+        let manifest = Path::new("/projects/counter/Musubi.toml");
+        let templated = activation_hint(
+            &parameterized,
+            true,
+            manifest,
+            &network,
+            &package,
+            "counter",
+        );
+        assert!(
+            templated.contains(r#"--args '{"owner":"<AccountId>","start":"<int>"}'"#),
+            "{templated}"
+        );
+        assert!(
+            templated.contains("Replace each `<type>` placeholder"),
+            "{templated}"
+        );
+        let supplied = norito::json!({"owner": "it's", "start": "5"});
+        assert!(
+            activation_command(
+                manifest,
+                &network,
+                &package,
+                "counter",
+                &parameterized,
+                Some(&supplied)
+            )
+            .ends_with(r#"--args '{"owner":"it'"'"'s","start":"5"}'"#)
+        );
+    }
+
+    #[test]
+    fn activation_arguments_are_checked_before_deployment() {
+        let _profile = ChainDiscriminantGuard::enter(753);
+        let artifact = compiled(
+            "seiyaku Counter { state int value; hajimari(int start) { value = start; } view fn current() -> int { return value; } }",
+        );
+        let hook = lifecycle_hook(&artifact).expect("declared hook");
+        let start = norito::json!({"start": "5"});
+        assert!(check_activation_arguments(&artifact, Some(&hook), Some(&start)).is_ok());
+        let missing = check_activation_arguments(&artifact, Some(&hook), None)
+            .expect_err("the hook needs its argument");
+        assert_eq!(missing.code(), ErrorCode::Usage);
+        let rendered = missing.render_human();
+        assert!(
+            rendered.contains("nothing was signed or submitted"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("argument `start`"), "{rendered}");
+        assert!(
+            rendered.contains(r#"--args '{"start":"<int>"}'"#),
+            "{rendered}"
+        );
+        let number = norito::json!({"start": 5});
+        assert!(check_activation_arguments(&artifact, Some(&hook), Some(&number)).is_err());
+        let plain = compiled("seiyaku Quote { view fn quote() -> int { return 30; } }");
+        assert!(check_activation_arguments(&plain, None, None).is_ok());
+        assert!(check_activation_arguments(&plain, None, Some(&norito::json!({}))).is_ok());
+        let unexpected = check_activation_arguments(&plain, None, Some(&start))
+            .expect_err("no hook takes these arguments");
+        assert!(unexpected.render_human().contains("hajimari (始まり)"));
     }
 
     #[test]

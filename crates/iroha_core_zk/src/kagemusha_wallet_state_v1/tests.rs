@@ -884,6 +884,8 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         close_loads: IndexRoot::default(),
         ledger_checkpoint: None,
         ledger_retired: None,
+        finality_epochs: IndexRoot::default(),
+        finality_epoch: None,
         ledger_load_plans: IndexRoot::default(),
         ledger_load_ordinals: IndexRoot::default(),
         ledger_unload_confirmations: IndexRoot::default(),

@@ -421,14 +421,18 @@ impl Recheck {
                         original.revalidate(provider, enrollment, &self.receipt)?;
                         Ok(original.clone())
                     }
-                    _ => renewal::Continuation::new(
-                        prepared,
-                        provider,
-                        Arc::clone(&self.receipt),
-                        enrollment,
-                        observed_at,
-                        observed_utc,
-                    ),
+                    _ => {
+                        let plan = gateway
+                            .original_provider_plan(prepared)?
+                            .ok_or_else(|| invalid("renewal requires original provider plan"))?;
+                        renewal::Continuation::new(
+                            &plan,
+                            Arc::clone(&self.receipt),
+                            enrollment,
+                            observed_at,
+                            observed_utc,
+                        )
+                    }
                 }
             })?;
             observations.push(budget.call(|_| {
@@ -446,7 +450,12 @@ impl Recheck {
         let observations = observations
             .try_into()
             .map_err(|_| budget.progress.unconfirmed())?;
-        let observation = budget.call(|_| maintenance::Observation::new(prepared, observations))?;
+        let observation = budget.call(|_| {
+            let plans = live[0]
+                .original_provider_plans(prepared)?
+                .ok_or_else(|| invalid("original provider plans absent"))?;
+            maintenance::Observation::new(&plans, observations)
+        })?;
         validate_gateways(prepared, &mut live, budget)?;
         budget.check()?;
         Ok(Outcome::Complete(Some(observation)))
@@ -650,21 +659,14 @@ fn confirm_carriers_with(
         })?;
         let original =
             original.get_or_insert_with(|| configure(iroha::client::Client::builder(config)));
-        for (index, (peer, phase)) in prepared
-            .peers
-            .iter()
-            .zip([
-                Phase::Carrier0,
-                Phase::Carrier1,
-                Phase::Carrier2,
-                Phase::Carrier3,
-            ])
-            .enumerate()
-        {
+        // Keep the caller's original sequential decode/admission recipe under active limits.
+        // Otherwise the four exact local reads for this one carrier are independent. The next
+        // carrier's private-file admission cannot begin until all four workers have closed.
+        let parallel = !norito::core::decode_limits_active();
+        for (index, (peer, phase)) in prepared.peers.iter().zip(CARRIER_PHASES).enumerate() {
             budget.progress.enter(phase);
             let remaining = budget.check()?;
             budget.call(|deadline| {
-                // Lazy construction preserves receipt/peer dispatch and failure order.
                 if clients.len() == index {
                     let mut selected = clients
                         .first()
@@ -682,35 +684,112 @@ fn confirm_carriers_with(
                             .map_err(|_| invalid("cannot construct original carrier client"))?,
                     );
                 }
-                let client = clients
-                    .get(index)
-                    .ok_or_else(|| invalid("carrier client disappeared"))?
-                    .with_request_deadline(deadline)
-                    .map_err(|_| invalid("cannot bound original carrier client"))?;
-                let applied = client
-                    .wait_for_transaction_applied_local(
-                        terminal.transaction_hash,
-                        iroha::client::TransactionWaitOptions {
-                            timeout: remaining,
-                            poll_interval: POLL,
-                        },
-                    )
-                    .map_err(|_| {
-                        invalid("original bootstrap transaction is not locally Applied")
-                    })?;
-                // SDK verifies exact hash, local scope and state-resolved Applied. Its optional
-                // carrier hint must also agree with the independently authenticated original.
-                if applied.block_height != Some(terminal.height) {
-                    return Err(invalid(
-                        "local bootstrap carrier height differs from original",
-                    ));
+                if !parallel {
+                    read_carrier_peer(&clients[index], terminal, remaining, deadline)?;
                 }
                 Ok(())
             })?;
         }
+        if parallel {
+            budget.progress.enter(Phase::CarrierPeers);
+            let result = join_carrier_peer_reads(|index| {
+                confirm_carrier_peer(&clients[index], terminal, budget, CARRIER_PHASES[index])
+            });
+            // A cancellation or late ordinary response must not succeed just because one peer
+            // returned earlier. All original transport runtimes remain alive through this join.
+            budget.check()?;
+            result?;
+        }
     }
     Ok(())
 }
+
+const CARRIER_PHASES: [Phase; 4] = [
+    Phase::Carrier0,
+    Phase::Carrier1,
+    Phase::Carrier2,
+    Phase::Carrier3,
+];
+
+fn confirm_carrier_peer(
+    client: &iroha::blocking::Client,
+    terminal: &ManagedTransactionFinality,
+    budget: &Budget,
+    phase: Phase,
+) -> std::result::Result<(), Failure> {
+    let result = (|| {
+        let remaining = budget.check()?;
+        budget.call(|deadline| read_carrier_peer(client, terminal, remaining, deadline))
+    })();
+    result.map_err(|failure| match failure {
+        Failure::Activation { cause, .. } => Failure::Activation { phase, cause },
+        other => other,
+    })
+}
+
+fn read_carrier_peer(
+    client: &iroha::blocking::Client,
+    terminal: &ManagedTransactionFinality,
+    remaining: Duration,
+    deadline: Instant,
+) -> Result<()> {
+    let client = client
+        .with_request_deadline(deadline)
+        .map_err(|_| invalid("cannot bound original carrier client"))?;
+    let applied = client
+        .wait_for_transaction_applied_local(
+            terminal.transaction_hash,
+            iroha::client::TransactionWaitOptions {
+                timeout: remaining,
+                poll_interval: POLL,
+            },
+        )
+        .map_err(|_| invalid("original bootstrap transaction is not locally Applied"))?;
+    // SDK verifies exact hash, local scope and state-resolved Applied. Its optional
+    // carrier hint must also agree with the independently authenticated original.
+    if applied.block_height != Some(terminal.height) {
+        return Err(invalid(
+            "local bootstrap carrier height differs from original",
+        ));
+    }
+    Ok(())
+}
+
+// Scheduling only: all four exact owners are borrowed and the first error is selected in
+// validator order after every started worker has exited. Nothing here creates finality.
+fn join_carrier_peer_reads(
+    read: impl Fn(usize) -> std::result::Result<(), Failure> + Sync,
+) -> std::result::Result<(), Failure> {
+    thread::scope(|scope| {
+        let read = &read;
+        let handles = std::array::from_fn::<_, 4, _>(|index| {
+            thread::Builder::new().spawn_scoped(scope, move || read(index))
+        });
+        let results = handles
+            .into_iter()
+            .enumerate()
+            .map(|(index, handle)| {
+                let failed = || Failure::Activation {
+                    phase: CARRIER_PHASES[index],
+                    cause: super::progress::Cause::Unconfirmed,
+                };
+                match handle {
+                    Ok(handle) => handle.join().unwrap_or_else(|_| Err(failed())),
+                    Err(_) => Err(failed()),
+                }
+            })
+            .collect::<Vec<_>>();
+        // Collecting consumes every handle even after an ordinary error, panic or spawn error.
+        for result in results {
+            result?;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+#[path = "activation/peer_round_tests.rs"]
+mod peer_round_tests;
 
 #[cfg(test)]
 mod tests;

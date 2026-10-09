@@ -132,7 +132,8 @@ pub(crate) fn diagnostic_load_omega(
 }
 
 /// Run the retained composition assertions with genuine native Load originals.
-#[allow(dead_code)] // Called by the full-finality qualification fixture once installed.
+/// The `load_omega` ignored integration test supplies the native BLS receipt fixture.
+#[allow(dead_code)] // Shared by integration harnesses selecting different component scopes.
 pub fn native_load_reaches_complete_outer_predicate(fixture: &LoadFixture) {
     let _ = diagnostic_load_omega(true, fixture);
 }
@@ -378,7 +379,8 @@ pub(crate) fn two_terminal_load_omega(fixture: &LoadFixture) -> TwoTerminalLoadO
     }
 }
 /// Run the retained composition assertions with genuine native Load originals.
-#[allow(dead_code)] // Called by the full-finality qualification fixture once installed.
+/// The `load_omega` ignored integration test supplies the native BLS receipt fixture.
+#[allow(dead_code)] // Shared by integration harnesses selecting different component scopes.
 pub fn common_bootstrap_load_catalog_rebinds_every_proof_and_key(fixture: &LoadFixture) {
     let output = two_terminal_load_omega(fixture);
     assert_eq!(

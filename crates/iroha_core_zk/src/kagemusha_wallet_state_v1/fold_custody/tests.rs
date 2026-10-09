@@ -50,6 +50,7 @@ fn sources(before: Option<SourceCustodyV1>, after: SourceCustodyV1) -> FoldSourc
         preparation: None,
         issued: IndexRoot::default(),
         anchors: IndexRoot::default(),
+        epochs: IndexRoot::default(),
     }
 }
 

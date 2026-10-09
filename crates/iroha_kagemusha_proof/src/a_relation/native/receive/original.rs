@@ -14,7 +14,7 @@ fn original_bounds(original: &[u8], rows: usize, config: ReadConfig) -> Result<(
 
 impl Prover {
     /// Import one original A key against this fixed owner's unknown source.
-    /// The producer retains neither the original bytes nor the returned PK.
+    /// The import drops its PK and returns only a compact source-admission seal.
     /// # Errors
     /// Wrong stage/cap, changed source/copy/selector tables or installed verifier.
     pub fn import_a(
@@ -22,7 +22,7 @@ impl Prover {
         stage: usize,
         original: &[u8],
         config: ReadConfig,
-    ) -> Result<ProvingKey<Eq>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Eq>, Error> {
         self.import_a_cancellable(stage, original, config, None)
     }
     /// Import the same original with an explicit operation cancellation signal.
@@ -34,7 +34,7 @@ impl Prover {
         original: &[u8],
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<ProvingKey<Eq>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Eq>, Error> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let artifact = self.a.get(stage).ok_or(Error::Artifact)?;
         original_bounds(original, artifact.binding().n(), config)?;
@@ -60,11 +60,20 @@ impl Prover {
             }
         })?;
         artifact.require_prover(&key).map_err(|_| Error::Artifact)?;
-        Ok(key)
+        let metadata =
+            SourceAdmissionSealV2::from_proving_key(&key, cancellation).map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })?;
+        drop(key);
+        Ok(metadata)
     }
 
     /// Import one original W key bound to its exact source A verifier and stage.
-    /// The caller owns the returned proving buffers and can release them at once.
+    /// The returned seal retains no proving buffers, descriptor or verifier copy.
     /// # Errors
     /// Wrong stage/cap, changed source tables, or another installed verifier.
     pub fn import_w(
@@ -72,7 +81,7 @@ impl Prover {
         stage: usize,
         original: &[u8],
         config: ReadConfig,
-    ) -> Result<ProvingKey<Ep>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Ep>, Error> {
         self.import_w_cancellable(stage, original, config, None)
     }
     /// Import the same original with an explicit operation cancellation signal.
@@ -84,7 +93,7 @@ impl Prover {
         original: &[u8],
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<ProvingKey<Ep>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Ep>, Error> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let artifact = self.w.get(stage).ok_or(Error::Artifact)?;
         original_bounds(original, artifact.binding().n(), config)?;
@@ -106,7 +115,16 @@ impl Prover {
             }
         })?;
         artifact.require_prover(&key).map_err(|_| Error::Artifact)?;
-        Ok(key)
+        let metadata =
+            SourceAdmissionSealV2::from_proving_key(&key, cancellation).map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })?;
+        drop(key);
+        Ok(metadata)
     }
 }
 

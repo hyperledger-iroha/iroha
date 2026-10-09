@@ -19,7 +19,7 @@ class KagemushaWalletLoadOriginalV1Test {
     @Test fun oversizedOrAbsentFinancialOriginalIsNeverSentToNative() {
         for (bad in listOf(byteArrayOf(), ByteArray(513)))
             assertThrows(IllegalArgumentException::class.java) { KagemushaWalletLoadOriginalInputV1(selection(), "x", bad, byteArrayOf(1)) }
-        for (bad in listOf(byteArrayOf(), ByteArray(16385)))
+        for (bad in listOf(byteArrayOf(), ByteArray(256 * 1024 + 1)))
             assertThrows(IllegalArgumentException::class.java) { KagemushaWalletLoadOriginalInputV1(selection(), "x", byteArrayOf(1), bad) }
     }
     @Test fun maintainedKanaI105PayerRetainsExactUtf8AndDefensiveCopies() {
@@ -61,7 +61,7 @@ class KagemushaWalletLoadOriginalV1Test {
         }
     }
     @Test fun independentRouteSelectorsStayExactAndDiagnosticOutputIsRedacted() {
-        val input = KagemushaWalletLoadOriginalInputV1(selection(), "secret-account", ByteArray(512), ByteArray(16384))
+        val input = KagemushaWalletLoadOriginalInputV1(selection(), "secret-account", ByteArray(512), ByteArray(256 * 1024))
         assertArrayEquals(ByteArray(32) { 1 }, input.schemeId()); assertArrayEquals(ByteArray(32) { 2 }, input.walletId())
         input.schemeId().fill(0); input.walletId().fill(0); input.payer().fill(0)
         assertArrayEquals(ByteArray(32) { 1 }, input.schemeId()); assertArrayEquals(ByteArray(32) { 2 }, input.walletId())

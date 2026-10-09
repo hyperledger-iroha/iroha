@@ -10114,7 +10114,7 @@ impl BlockStore {
     ///
     /// # Errors
     /// IO Error.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn write_block_data(
         &mut self,
         start_location_in_data_file: u64,

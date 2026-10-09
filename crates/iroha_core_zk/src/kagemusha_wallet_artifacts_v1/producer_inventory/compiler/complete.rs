@@ -29,37 +29,15 @@ impl OfflineCompilerV1<'_> {
     /// All A/W originals are strictly reconstructed under the completed catalog's
     /// final key before any inventory is returned. No temporary inventory is signed
     /// or installed, and no provisional key is retained in the returned inventory.
-    /// The supplied receipt source and integrity inventory must name the same exact
-    /// wrapper and genesis anchor. Independent finality qualification, authenticated
-    /// installation, actual proof bounds and performance qualification remain required.
+    /// Authenticated installation, actual proof bounds and performance qualification
+    /// remain required. Ordinary Load finality is verified directly from BLS certificates.
     /// Partial content-addressed outputs are preserved on failure.
     ///
     /// # Errors
-    /// Receipt/anchor mismatch, absent or ambiguous source class, any source or
+    /// Absent or ambiguous source class, any source or
     /// original failure, nonuniform/over-capacity terminal catalog, changed final
     /// descriptor, or failure to close any of the complete logical routes.
-    pub fn wallet(
-        &mut self,
-        receipt: ReceiptSourceRecipeV1<'_>,
-        finality: FinalityV1,
-    ) -> Result<ProducerInventoryV1, CompilationErrorV1> {
-        let anchor = iroha_kagemusha_proof::finality::history::HistoryAnchor {
-            network: finality.network,
-            instance: finality.instance,
-            initial_context: finality.initial_context,
-            initial_epoch: finality.initial_epoch,
-            parameters: finality.parameters,
-        };
-        if receipt.anchor != &anchor {
-            return Err(CompilationErrorV1::Closure);
-        }
-        closure::require_receipt(
-            &finality,
-            [
-                BlobV1::of(receipt.source.binding().encoded()),
-                BlobV1::of(receipt.source.verifying_key().to_bytes()),
-            ],
-        )?;
+    pub fn wallet(&mut self) -> Result<ProducerInventoryV1, CompilationErrorV1> {
         let sigmas = self.sigmas()?;
         let mut programs = Vec::new();
         let mut selectors = Vec::new();
@@ -116,7 +94,6 @@ impl OfflineCompilerV1<'_> {
                             .key(),
                     )
                 },
-                (route.variant == Variant::Load).then_some(receipt),
             )?;
             if route.variant == Variant::Bootstrap {
                 if provisional.is_some() {
@@ -140,14 +117,9 @@ impl OfflineCompilerV1<'_> {
         let omega = self.omega(&terminals)?;
         let mut closed = Vec::with_capacity(operations.len());
         for (operation, index) in operations.iter().zip(program_indices) {
-            closed.push(self.close_operation(
-                operation,
-                &programs[index],
-                &omega,
-                (operation.route.variant == Variant::Load).then_some(receipt),
-            )?);
+            closed.push(self.close_operation(operation, &programs[index], &omega)?);
         }
-        self.inventory(&sigmas, &closed, &omega, finality)
+        self.inventory(&sigmas, &closed, &omega)
     }
 }
 

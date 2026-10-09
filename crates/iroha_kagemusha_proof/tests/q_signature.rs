@@ -257,17 +257,105 @@ fn signature_actual_native_proof_binds_inputs_and_retains_opening() {
     .unwrap();
     assert_eq!(installed.binding(), key.binding());
     assert_eq!(installed.verifying_key().to_bytes(), key.vk().to_bytes());
-    assert_eq!(installed.proving_key().copy_digest(), key.copy_digest());
+    let (bound_d, bound_v, seal) = installed.into_metadata().into_parts();
+    let view = seal.bind(&bound_d, &bound_v, None).unwrap();
+    assert!(core::ptr::eq(view.binding(), &bound_d));
+    assert!(core::ptr::eq(view.verifying_key(), &bound_v));
+    let installed =
+        iroha_kagemusha_proof::q_signature::native::QSignatureProverView::from_source_bound(
+            c.plan(),
+            &params,
+            view,
+        )
+        .unwrap();
+    // Compare the actual rebuilt proof with this fresh key, using the same public
+    // test-only recovery stream. No PK accessor or cached proving material remains.
+    let direct_witness = iroha_plonk::Witness::from_circuit(&key, &c, &public).unwrap();
+    let direct = iroha_plonk::create_proof_owned(
+        &params,
+        &key,
+        direct_witness,
+        common::recovery(119),
+        ProverConfig::default(),
+    )
+    .unwrap();
+    iroha_plonk::verifier::verify_full(
+        &params,
+        key.binding(),
+        key.vk(),
+        &public,
+        &direct,
+        MemoryBudget::DEFAULT,
+    )
+    .unwrap();
+    let cancelled = iroha_pasta::CancellationToken::new();
+    cancelled.cancel();
+    let never_draw = || {
+        iroha_plonk::ProverRandomness::recovery(
+            |_: &[u8; 32]| -> Result<rand_chacha::ChaCha20Rng, ()> {
+                panic!("cancelled signature proof consumed recovery entropy")
+            },
+        )
+    };
+    let cancellation_config = ProverConfig {
+        cancellation: Some(&cancelled),
+        ..ProverConfig::default()
+    };
+    let error = installed
+        .prove(&[witness()], never_draw(), cancellation_config)
+        .unwrap_err();
+    assert!(error.is_cancelled());
+    let error = QSignatureProver::from_original_artifact_cancellable(
+        c.plan().clone(),
+        params.clone(),
+        key.binding().encoded(),
+        key.vk().to_bytes(),
+        &original,
+        signature_read_config(&original),
+        Some(&cancelled),
+    )
+    .err()
+    .unwrap();
+    assert!(error.is_cancelled());
     let mut invalid = witness();
     invalid.signature[1] = [0; 4];
     assert!(matches!(
         installed.prove(&[invalid], common::recovery(118), ProverConfig::default()),
         Err(QSignatureError::Signature)
     ));
+    // The recovery factory is reached only after actual reconstruction and witness
+    // assignment. Cancel there, then reuse this immutable owner successfully.
+    use rand_chacha::rand_core::SeedableRng as _;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let after_rebuild = iroha_pasta::CancellationToken::new();
+    let signal = after_rebuild.clone();
+    let callbacks = Arc::new(AtomicUsize::new(0));
+    let observed = callbacks.clone();
+    let randomness = iroha_plonk::ProverRandomness::recovery(move |_: &[u8; 32]| {
+        observed.fetch_add(1, Ordering::SeqCst);
+        signal.cancel();
+        Ok::<_, ()>(rand_chacha::ChaCha20Rng::from_seed([119; 32]))
+    });
+    let error = installed
+        .prove(
+            &[witness()],
+            randomness,
+            ProverConfig {
+                cancellation: Some(&after_rebuild),
+                ..ProverConfig::default()
+            },
+        )
+        .unwrap_err();
+    assert!(error.is_cancelled());
+    assert_eq!(callbacks.load(Ordering::SeqCst), 1);
     let proof = installed
         .prove(&[witness()], common::recovery(119), ProverConfig::default())
         .unwrap();
     assert_eq!(proof.instances, public);
+    assert_eq!(proof.bytes, direct);
     let claim = accumulate_generator(
         &params,
         key.binding(),

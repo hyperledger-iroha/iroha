@@ -3,9 +3,10 @@
 //! Each variant pins its source schedule, installed keys and every Q/map obligation.
 //! Checkpoints retain original proof bytes and full accumulator claims. No operation
 //! is monetarily complete before its admitted final Omega and durable wallet commit.
-//! TODO: qualify the borrowed-key producer and final wrappers under the full terminal
+//! TODO: qualify the metadata-rebuild producer and final wrappers under the full terminal
 //! catalog. Earlier eager-key component parity does not qualify current memory usage.
 
+use iroha_plonk::keys::{SourceAdmissionSealV2, SourceBoundViewV2};
 #[path = "refresh/checkpoint.rs"]
 mod checkpoint;
 pub use checkpoint::{CheckpointKind, CheckpointLayout};
@@ -22,8 +23,7 @@ use iroha_pasta::{
     Ep, Eq, EqAffine, Fp, Fq, PastaAffine, msm::MemoryBudget, poseidon::hash_with_domain,
 };
 use iroha_plonk::{
-    DescriptorBinding, ProverConfig, ProverRandomness, ProvingKey, VerifyingKey, Witness,
-    create_proof_owned_with_claim,
+    DescriptorBinding, ProverConfig, ProverRandomness, ProvingKey, VerifyingKey,
     cs::{Column, ConstraintSystem, Instance, InstanceType},
     frontend::{Circuit, Error as LayoutError, Layouter, Region, SimpleFloorPlanner, Value},
     pcs::ipa::PinnedParams,
@@ -66,6 +66,51 @@ use crate::{
     tree::IndexedInsert,
 };
 
+impl Prover {
+    /// Bind a previously source-admitted seal to this exact installed A stage.
+    /// This borrows existing metadata and retains no proving polynomials.
+    /// # Errors
+    /// Wrong stage, descriptor/verifier identity or cooperative cancellation.
+    pub fn bind_a<'a>(
+        &'a self,
+        stage: usize,
+        seal: &'a SourceAdmissionSealV2<Eq>,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<SourceBoundViewV2<'a, Eq>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        let artifact = self.a.get(stage).ok_or(Error::Artifact)?;
+        seal.bind(artifact.binding(), artifact.key(), cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })
+    }
+    /// Bind a previously source-admitted seal to this exact installed W stage.
+    /// This borrows existing metadata and retains no proving polynomials.
+    /// # Errors
+    /// Wrong stage, descriptor/verifier identity or cooperative cancellation.
+    pub fn bind_w<'a>(
+        &'a self,
+        stage: usize,
+        seal: &'a SourceAdmissionSealV2<Ep>,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<SourceBoundViewV2<'a, Ep>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        let artifact = self.w.get(stage).ok_or(Error::Artifact)?;
+        seal.bind(artifact.binding(), artifact.key(), cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })
+    }
+}
+
 #[cfg(test)]
 #[path = "refresh/tests.rs"]
 mod tests;
@@ -90,6 +135,15 @@ pub enum Error {
     Proof,
     /// Installed circuit assignment or proof production failed.
     Prover,
+}
+impl From<super::proving::Error> for Error {
+    fn from(error: super::proving::Error) -> Self {
+        match error {
+            super::proving::Error::Cancelled => Self::Cancelled,
+            super::proving::Error::Artifact => Self::Artifact,
+            super::proving::Error::Prover => Self::Prover,
+        }
+    }
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1421,7 +1475,7 @@ impl Session<'_> {
     /// Fixed artifact/circuit mismatch, failed fold, proof or complete decide.
     pub fn first(
         &self,
-        key: &ProvingKey<Eq>,
+        key: &SourceBoundViewV2<'_, Eq>,
         salt: Fp,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
@@ -1437,7 +1491,7 @@ impl Session<'_> {
         let fold = &normalized_fold;
 
         self.prover.a[0]
-            .require_prover(key)
+            .require_source_bound(key)
             .map_err(|_| Error::Artifact)?;
         let first = self.prepared.first(salt, fold)?;
         let public = first_public(&first)?;
@@ -1549,7 +1603,7 @@ impl Session<'_> {
     pub fn wrapper(
         &self,
         source: &ACheckpoint,
-        key: &ProvingKey<Ep>,
+        key: &SourceBoundViewV2<'_, Ep>,
         salt: Fq,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
@@ -1568,7 +1622,7 @@ impl Session<'_> {
             .w
             .get(source.stage)
             .ok_or(Error::Artifact)?
-            .require_prover(key)
+            .require_source_bound(key)
             .map_err(|_| Error::Artifact)?;
         self.verify_a_cancellable(source, fold.kernel_budget, config.cancellation)?;
         if source.stage + 1 >= self.prover.a.len() {
@@ -1638,29 +1692,14 @@ impl Session<'_> {
         )
         .map_err(|_| Error::Input)?;
         let public = omega_instances(source.public[0], &vesta)?;
-        let witness =
-            Witness::from_circuit_cancellable(key, &circuit, &public, config.cancellation)
-                .map_err(|error| {
-                    if error.is_cancelled() {
-                        Error::Cancelled
-                    } else {
-                        Error::Prover
-                    }
-                })?;
-        let output = create_proof_owned_with_claim(
+        let output = super::proving::prove(
             &self.prepared.plan.pallas,
             key,
-            witness,
+            &circuit,
+            &public,
             randomness,
             config,
-        )
-        .map_err(|error| {
-            if error.is_cancelled() {
-                Error::Cancelled
-            } else {
-                Error::Prover
-            }
-        })?;
+        )?;
         self.restore_wrapper_cancellable(
             source,
             output.proof,
@@ -1776,7 +1815,7 @@ impl Session<'_> {
     pub fn advance(
         &self,
         wrapper: &WCheckpoint,
-        key: &ProvingKey<Eq>,
+        key: &SourceBoundViewV2<'_, Eq>,
         salt: Fp,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
@@ -1796,7 +1835,7 @@ impl Session<'_> {
             .a
             .get(next)
             .ok_or(Error::Artifact)?
-            .require_prover(key)
+            .require_source_bound(key)
             .map_err(|_| Error::Artifact)?;
         let restored = self.restore_wrapper_cancellable(
             &wrapper.source,
@@ -2394,7 +2433,7 @@ fn opening_vesta_cancellable(
 }
 fn prove_a(
     plan: &Plan,
-    key: &ProvingKey<Eq>,
+    key: &SourceBoundViewV2<'_, Eq>,
     circuit: &StageCircuit,
     public: &[Fp],
     randomness: ProverRandomness<'_>,
@@ -2402,26 +2441,11 @@ fn prove_a(
     budget: MemoryBudget,
 ) -> Result<(Vec<u8>, FoldInput<Eq>), Error> {
     let public = [public.to_vec()];
-    let witness = Witness::from_circuit_cancellable(key, circuit, &public, config.cancellation)
-        .map_err(|error| {
-            if error.is_cancelled() {
-                Error::Cancelled
-            } else {
-                Error::Prover
-            }
-        })?;
-    let output = create_proof_owned_with_claim(&plan.vesta, key, witness, randomness, config)
-        .map_err(|error| {
-            if error.is_cancelled() {
-                Error::Cancelled
-            } else {
-                Error::Prover
-            }
-        })?;
+    let output = super::proving::prove(&plan.vesta, key, circuit, &public, randomness, config)?;
     iroha_plonk::verifier::verify_full_cancellable(
         &plan.vesta,
         key.binding(),
-        key.vk(),
+        key.verifying_key(),
         &public,
         &output.proof,
         budget,
@@ -2437,7 +2461,7 @@ fn prove_a(
     let opening = opening_vesta_cancellable(
         &plan.vesta,
         key.binding(),
-        key.vk(),
+        key.verifying_key(),
         &public,
         &output.proof,
         budget,

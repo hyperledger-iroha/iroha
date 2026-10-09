@@ -55,6 +55,7 @@ pub mod startup;
 pub mod test_chain;
 pub use genesis_meta::{
     staged_genesis_execution_policy_hash, staged_genesis_nexus_amx_context_hash,
+    staged_genesis_nexus_amx_context_preimage,
 };
 /// The initial validator roster: the authenticated subset of the configured trusted peers.
 pub mod roster;

@@ -7,6 +7,7 @@
 use iroha_kagemusha_proof::{a_relation::native::artifact::KeyArtifact, omega::native};
 use iroha_plonk::{keys::pk::artifact::ReadConfig, pcs::ipa::PinnedParams};
 
+use super::recipe::InstalledSourceSealV1;
 use super::*;
 
 /// The complete route/catalog or original Omega source failed qualification.
@@ -33,7 +34,7 @@ pub struct QualifiedOmegaProgramV1 {
     installation: ([u8; 32], [u8; 32]),
     program: native::Program,
     key: KeyArtifact<Ep>,
-    original: BlobV1,
+    seal: InstalledSourceSealV1<Ep>,
     layout: native::CheckpointLayout,
     terminals: usize,
 }
@@ -58,43 +59,45 @@ impl QualifiedOmegaProgramV1 {
     pub const fn terminal_count(&self) -> usize {
         self.terminals
     }
-    /// Read and strictly import one exact signed original for active proving.
-    /// The returned owner holds the sole original PK; drop it after proof work.
+    /// Revalidate all three exact originals, then borrow prior strict source authority.
+    /// No PK or complete original byte vector is allocated by this acquisition.
     /// # Errors
     /// Local cap, unavailable/changed original or any source/table/VK mismatch.
     pub fn import_prover(
         &self,
+        authenticated: &AuthenticatedProducerInventoryV1,
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
-    ) -> Result<native::Prover, OmegaQualificationErrorV1> {
-        self.import_prover_cancellable(originals, config, None)
+    ) -> Result<native::ProverView<'_>, OmegaQualificationErrorV1> {
+        self.import_prover_cancellable(authenticated, originals, config, None)
     }
 
-    /// Import the same exact source with a caller-owned cancellation signal.
+    /// Revalidate the same exact source with a caller-owned cancellation signal.
     /// # Errors
     /// The ordinary source errors, or cancellation without an imported key.
     pub fn import_prover_cancellable(
         &self,
+        authenticated: &AuthenticatedProducerInventoryV1,
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<native::Prover, OmegaQualificationErrorV1> {
+    ) -> Result<native::ProverView<'_>, OmegaQualificationErrorV1> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
-        let bytes = read_cancellable(
+        if authenticated.installation() != self.installation {
+            return Err(Error::Authority.into());
+        }
+        let index = authenticated.inventory.omega;
+        let view = self.seal.bind(index, &self.key, cancellation)?;
+        if view.binding().n() > config.maximum_rows {
+            return Err(Error::Inventory.into());
+        }
+        authenticated.revalidate_original_cancellable(
+            index,
             originals,
-            self.original,
-            config.maximum_bytes.min(PROVING_KEY_MAX_BYTES_V1),
+            config.maximum_bytes,
             cancellation,
         )?;
-        let owner = native::Prover::from_original_artifact_cancellable(
-            self.program.clone(),
-            self.key.binding().encoded(),
-            self.key.key().to_bytes(),
-            &bytes,
-            config,
-            cancellation,
-        )?;
-        drop(bytes);
+        let owner = native::ProverView::from_source_bound(&self.program, view)?;
         Ok(owner)
     }
 }
@@ -237,13 +240,13 @@ impl AuthenticatedProducerInventoryV1 {
             return Err(OmegaQualificationErrorV1::Catalog);
         }
         let layout = owner.checkpoint_layout()?;
-        drop(owner);
+        let (_, _, seal) = owner.into_metadata().into_parts();
         drop(original);
         Ok(QualifiedOmegaProgramV1 {
             installation,
             program,
             key: candidate,
-            original: self.inventory.member(self.inventory.omega)?.proving_key,
+            seal: InstalledSourceSealV1::new(self.inventory.omega, seal),
             layout,
             terminals: terminals.len(),
         })

@@ -5438,10 +5438,6 @@ dependencies = [
 name = "iroha_kagemusha_proof"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "ark-bls12-381",
- "ark-ec",
- "ark-ff",
- "ark-serialize",
  "ff",
  "group",
  "iroha_crypto",

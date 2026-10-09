@@ -130,6 +130,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 preparation,
                 issued: manifest.issued_requests,
                 anchors: manifest.direct_anchors,
+                epochs: manifest.finality_epochs,
             },
             credits: manifest.credit_tree.clone(),
             pending,

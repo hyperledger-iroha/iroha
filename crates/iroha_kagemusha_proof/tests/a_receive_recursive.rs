@@ -2494,11 +2494,12 @@ impl NativeCheckpoints {
             // Reconstruct only this native stage PK and compare its exact VK
             // commitments with the independent A proof's installed metadata.
             // This checks fixed/permutation commitments without retaining ten PKs.
-            let native_key =
+            let native_seal =
                 import_native_a(&prover, stage + 1, &native_circuit, &parity_keys[stage + 1]);
+            let native_key = prover.bind_a(stage + 1, &native_seal, None).unwrap();
             assert_eq!(native_key.binding(), parity_keys[stage + 1].binding());
             assert_eq!(
-                native_key.vk().to_bytes(),
+                native_key.verifying_key().to_bytes(),
                 parity_keys[stage + 1].key().to_bytes()
             );
             if stage == 0 {
@@ -2528,10 +2529,10 @@ impl NativeCheckpoints {
                 assert_eq!(
                     reproved.proof(),
                     self.a_proofs[1],
-                    "borrowed native stage key preserves exact deterministic proof bytes"
+                    "metadata-rebuilt native stage key preserves exact deterministic proof bytes"
                 );
             }
-            drop(native_key);
+            drop(native_seal);
             let native_tables = synthesize(
                 &native_circuit,
                 16,
@@ -2624,7 +2625,7 @@ impl NativeCheckpoints {
         assert_eq!(terminal.incoming_vesta, source.incoming_head.vesta);
         assert_eq!(terminal.predecessor_vesta, source.predecessor.vesta);
         eprintln!(
-            "NATIVE_RECEIVE_RESTORE all10A_all9W=true all_native_A_verifier_commitments_and_constraints_equal=true strict_original_import_all19=true native_producer_retains_no_PK=true borrowed_PK_proof_bytes_equal=true canonical_custody_all19_exact_bytes=true fresh_session_from_originals=true wrong_stage_truncated_foreign_session_original_substitution_rejected=true terminal_exports_equal=true final_catalog=false"
+            "NATIVE_RECEIVE_RESTORE all10A_all9W=true all_native_A_verifier_commitments_and_constraints_equal=true strict_original_import_all19=true native_producer_retains_no_PK=true rebuilt_PK_proof_bytes_equal=true canonical_custody_all19_exact_bytes=true fresh_session_from_originals=true wrong_stage_truncated_foreign_session_original_substitution_rejected=true terminal_exports_equal=true final_catalog=false"
         );
         terminal
     }
@@ -2635,7 +2636,7 @@ fn import_native_a(
     stage: usize,
     source: &iroha_kagemusha_proof::a_relation::native::receive::StageCircuit,
     expected: &iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact<Eq>,
-) -> ProvingKey<Eq> {
+) -> iroha_plonk::keys::SourceAdmissionSealV2<Eq> {
     let mut config = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded]);
     config.compress_selectors = false;
     let key = keygen_pk_v2(&common::vesta_params(16), source, &config).unwrap();
@@ -2654,9 +2655,13 @@ fn import_native_a(
             .import_a(stage, &original[..original.len() - 1], read)
             .is_err()
     );
-    let imported = prover.import_a(stage, &original, read).unwrap();
-    assert_eq!(imported.vk().to_bytes(), expected.key().to_bytes());
-    imported
+    let imported_seal = prover.import_a(stage, &original, read).unwrap();
+    let imported = prover.bind_a(stage, &imported_seal, None).unwrap();
+    assert_eq!(
+        imported.verifying_key().to_bytes(),
+        expected.key().to_bytes()
+    );
+    imported_seal
 }
 
 fn check_native_w_import(
@@ -2702,8 +2707,9 @@ fn check_native_w_import(
             .import_w(stage, &original[..original.len() - 1], read)
             .is_err()
     );
-    let imported = prover.import_w(stage, &original, read).unwrap();
-    assert_eq!(imported.vk().to_bytes(), expected);
+    let imported_seal = prover.import_w(stage, &original, read).unwrap();
+    let imported = prover.bind_w(stage, &imported_seal, None).unwrap();
+    assert_eq!(imported.verifying_key().to_bytes(), expected);
 }
 
 /// Complete genuine Receive terminal after all source owners and native restores.

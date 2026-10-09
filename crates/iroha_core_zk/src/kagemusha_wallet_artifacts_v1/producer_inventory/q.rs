@@ -8,11 +8,11 @@ use iroha_kagemusha_proof::{
     },
     q_sigma::{
         QSigmaPlan, SigmaClass,
-        native::{QSigmaError, QSigmaProver, QSigmaSource},
+        native::{QSigmaError, QSigmaProver, QSigmaProverView, QSigmaSource},
     },
     q_signature::{
         QSignaturePlan, SignatureKey, SignatureSlot,
-        native::{QSignatureError, QSignatureProver},
+        native::{QSignatureError, QSignatureProver, QSignatureProverView},
     },
 };
 use iroha_plonk::{
@@ -21,6 +21,7 @@ use iroha_plonk::{
 use iroha_plonk_gadgets::p256::{VerifyMode, native::Affine};
 use iroha_plonk_recursion::verifier::VerifierPlan;
 
+use super::recipe::InstalledSourceSealV1;
 use super::*;
 
 /// A Q original did not match its authenticated source, scope or bounded input.
@@ -110,6 +111,7 @@ pub struct QualifiedQProgramV1 {
     program: u32,
     installation: ([u8; 32], [u8; 32]),
     recipe: QProgramRecipeV1,
+    seals: Box<[InstalledSourceSealV1<Ep>]>,
 }
 impl QualifiedQProgramV1 {
     /// Exact authenticated installation and program index.
@@ -127,6 +129,30 @@ impl QualifiedQProgramV1 {
     /// Exact imported keys in Q0, Q1, ... order, with no PK backreferences.
     pub fn keys(&self) -> &[KeyArtifact<Ep>] {
         self.recipe.keys()
+    }
+    /// Bind the selected member before the wallet revalidates its originals.
+    /// No source file is opened and no public source graph is cloned here.
+    pub(super) fn borrow_cancellable<'a>(
+        &'a self,
+        stage: usize,
+        expected_member: u32,
+        params: &'a PinnedParams<Ep>,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ImportedQV1<'a>, QQualificationErrorV1> {
+        let seal = self.seals.get(stage).ok_or(Error::Inventory)?;
+        let key = self.keys().get(stage).ok_or(Error::Inventory)?;
+        let view = seal.bind(expected_member, key, cancellation)?;
+        Ok(if stage == 0 {
+            ImportedQV1::Sigma(QSigmaProverView::from_source_bound(
+                params,
+                view,
+                self.sigma(),
+                Some(2),
+            )?)
+        } else {
+            let plan = self.signatures().get(stage - 1).ok_or(Error::Inventory)?;
+            ImportedQV1::Signature(QSignatureProverView::from_source_bound(plan, params, view)?)
+        })
     }
     pub(super) const fn recipe(&self) -> &QProgramRecipeV1 {
         &self.recipe
@@ -270,24 +296,38 @@ pub(super) fn source(
     Ok(result)
 }
 
-/// One active exact Q source with its sole original proving key.
-pub enum ImportedQV1 {
-    /// Q0, carrying the fixed own/incoming sigma source classes.
-    Sigma(Box<QSigmaProver>),
-    /// Q1 or later, carrying its exact hard/soft signature-slot policy.
-    Signature(Box<QSignatureProver>),
+/// One borrowed, already qualified Q source after current original custody checks.
+pub enum ImportedQV1<'a> {
+    /// Q0 with its exact own/incoming source and selected serialized profile.
+    Sigma(QSigmaProverView<'a>),
+    /// Q1 or later with its installed hard/soft signature policy.
+    Signature(QSignatureProverView<'a>),
 }
-impl ImportedQV1 {
-    pub(super) fn metadata(&self) -> Result<KeyArtifact<Ep>, QQualificationErrorV1> {
-        let (binding, key) = match self {
-            Self::Sigma(p) => (p.binding(), p.verifying_key()),
-            Self::Signature(p) => (p.binding(), p.verifying_key()),
-        };
-        Ok(KeyArtifact::new(binding.clone(), key.clone())?)
+impl ImportedQV1<'_> {
+    /// Exact borrowed descriptor, including its current row bound.
+    pub fn binding(&self) -> &DescriptorBinding {
+        match self {
+            Self::Sigma(p) => p.binding(),
+            Self::Signature(p) => p.binding(),
+        }
     }
 }
 
-pub(super) fn import(
+// Temporary standalone owners exist only during complete strict qualification.
+enum StrictImportedQ {
+    Sigma(Box<QSigmaProver>),
+    Signature(Box<QSignatureProver>),
+}
+impl StrictImportedQ {
+    fn into_metadata(self) -> iroha_plonk::keys::SourceBoundVerifyingKeyV2<Ep> {
+        match self {
+            Self::Sigma(p) => (*p).into_metadata(),
+            Self::Signature(p) => (*p).into_metadata(),
+        }
+    }
+}
+
+fn import(
     index: usize,
     source: &QSigmaSource,
     signatures: &[QSignaturePlan],
@@ -295,10 +335,10 @@ pub(super) fn import(
     pallas: &PinnedParams<Ep>,
     config: ReadConfig,
     cancellation: Option<&iroha_pasta::CancellationToken>,
-) -> Result<ImportedQV1, QQualificationErrorV1> {
+) -> Result<StrictImportedQ, QQualificationErrorV1> {
     iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
     Ok(if index == 0 {
-        ImportedQV1::Sigma(Box::new(
+        StrictImportedQ::Sigma(Box::new(
             QSigmaProver::from_original_artifact_serialized_foreign_cancellable(
                 source,
                 pallas.clone(),
@@ -312,7 +352,7 @@ pub(super) fn import(
         ))
     } else {
         let plan = signatures.get(index - 1).ok_or(Error::Inventory)?.clone();
-        ImportedQV1::Signature(Box::new(
+        StrictImportedQ::Signature(Box::new(
             QSignatureProver::from_original_artifact_cancellable(
                 plan,
                 pallas.clone(),
@@ -354,17 +394,21 @@ impl AuthenticatedProducerInventoryV1 {
         let (source, signatures) = source(record, scheme, sigmas.metadata())?;
         let pallas = PinnedParams::derive(16).map_err(|_| QQualificationErrorV1::Source)?;
         let mut keys = Vec::with_capacity(record.q.len());
+        let mut seals = Vec::with_capacity(record.q.len());
         for (index, original) in record.q.iter().copied().enumerate() {
             let bytes = self.read_original(original, originals, config.maximum_bytes)?;
-            let key =
-                import(index, &source, &signatures, &bytes, &pallas, config, None)?.metadata()?;
+            let metadata =
+                import(index, &source, &signatures, &bytes, &pallas, config, None)?.into_metadata();
+            let (binding, key, seal) = metadata.into_parts();
             drop(bytes);
-            keys.push(key);
+            keys.push(KeyArtifact::new(binding, key)?);
+            seals.push(InstalledSourceSealV1::new(original, seal));
         }
         Ok(QualifiedQProgramV1 {
             program,
             installation: identity,
             recipe: QProgramRecipeV1::from_metadata(source.plan().clone(), signatures, keys)?,
+            seals: seals.into_boxed_slice(),
         })
     }
 }

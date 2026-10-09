@@ -433,3 +433,6 @@ fn replacement_cannot_start_while_the_original_task_is_still_mutating() {
         });
     }
 }
+
+#[cfg(unix)]
+mod plan_selection_tests;

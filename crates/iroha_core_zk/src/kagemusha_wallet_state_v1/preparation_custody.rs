@@ -358,6 +358,7 @@ pub struct PreparationCustodyV1<'a> {
     updated: [bool; 6],
     issued: IndexRoot,
     anchors: IndexRoot,
+    epochs: IndexRoot,
     refresh: Option<KagemushaWalletPolicyUpdateKindV1>,
 }
 
@@ -378,6 +379,7 @@ impl<'a> PreparationCustodyV1<'a> {
         refresh: Option<KagemushaWalletPolicyUpdateKindV1>,
         issued: IndexRoot,
         anchors: IndexRoot,
+        epochs: IndexRoot,
     ) -> Result<Self, Error> {
         selected.require(store, state)?;
         let maps = PreparationMapsV1::new(store, &selected.maps, state, kind, refresh)?;
@@ -390,6 +392,7 @@ impl<'a> PreparationCustodyV1<'a> {
             updated: [false; 6],
             issued,
             anchors,
+            epochs,
             refresh,
         })
     }
@@ -397,6 +400,43 @@ impl<'a> PreparationCustodyV1<'a> {
     /// Access only this operation's unpublished, source-rooted map draft.
     pub fn maps(&mut self) -> &mut PreparationMapsV1<'a> {
         &mut self.maps
+    }
+
+    pub(crate) fn load_finality_reader(
+        &mut self,
+        genesis: &iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier,
+        epoch: u64,
+    ) -> Result<iroha_data_model::sumeragi_finality::SumeragiCommitVerifierV1, Error> {
+        use iroha_data_model::sumeragi_finality::{
+            MAX_COMMIT_CHECKPOINT_BYTES, SumeragiCommitCheckpointV1, SumeragiCommitVerifierV1,
+        };
+        let checkpoint = if epoch == 0 {
+            SumeragiCommitCheckpointV1::from_authenticated_genesis(genesis)
+                .map_err(|_| Error::Proof("Load initial epoch authority"))?
+        } else {
+            let bytes = self
+                .epochs
+                .get(
+                    &mut Store(self.maps.store()),
+                    &manifest::sequence_key(u128::from(epoch)),
+                )?
+                .ok_or(Error::Invalid("Load epoch has not been synchronized"))?;
+            let entry: native_owner::epochs::EpochEntry = archive::decode(&bytes)
+                .map_err(|_| Error::WitnessLost("Load selected epoch entry"))?;
+            let bytes = self
+                .maps
+                .store()
+                .read_object(&entry.checkpoint, MAX_COMMIT_CHECKPOINT_BYTES)?;
+            SumeragiCommitCheckpointV1::decode_canonical(&bytes)
+                .map_err(|_| Error::WitnessLost("Load selected epoch original"))?
+        };
+        if checkpoint.selected_epoch().authorization.epoch != epoch {
+            return Err(Error::WitnessLost("Load selected epoch identity"));
+        }
+        // This index is sealed by the coordinator's protected manifest; the certificate's
+        // epoch is only a key. No network-provided checkpoint can enter this restore path.
+        SumeragiCommitVerifierV1::from_trusted_epoch_checkpoint(&checkpoint, genesis)
+            .map_err(|_| Error::WitnessLost("Load selected epoch genesis binding"))
     }
 
     /// Read the exact selected original. Only a state-committed zero means absence.

@@ -152,47 +152,36 @@ fn signed_tape_preserves_actual_body_and_canonical_signature_bytes() {
     assert_eq!(tape.len(), body.len() + 64);
 }
 
-// These tests exercise conversion only. The deliberately unverified proof bytes
-// cannot produce a native Load session or confer funding authority.
-fn load_originals() -> (Vec<KagemushaWalletRetainedInputV1>, Fp, [u8; 32]) {
-    use iroha_pasta::{Ep, Eq, Fq};
-    use iroha_plonk_recursion::AccumulatorT;
+// These tests exercise conversion only. The deliberately unverified certificate
+// bytes cannot authorize the pre-Advance native BLS check.
+fn load_originals() -> (Vec<KagemushaWalletRetainedInputV1>, [u8; 32]) {
     let fixture: norito::json::Value = norito::json::from_str(include_str!(
         "../../../../fixtures/kagemusha/ordinary_load_receipt_v1.json"
     ))
     .unwrap();
-    let hex = fixture["receipt_frame_hex"].as_str().unwrap();
-    let bytes = hex
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
-        .collect::<Vec<_>>();
+    let bytes = hex::decode(fixture["receipt_frame_hex"].as_str().unwrap()).unwrap();
     let receipt = KagemushaWalletLoadReceiptV1::decode_canonical(&bytes).unwrap();
     let digest = receipt.receipt_digest().unwrap();
-    let anchor = Fp::from(19);
-    let pallas = AccumulatorT::<Ep>::new(
-        iroha_plonk::transcript::decode_point::<Ep>(
-            &iroha_plonk_recursion::PALLAS_TRIVIAL_GENERATOR,
+    let event = iroha_data_model::events::EventBox::Data(
+        iroha_data_model::events::data::DataEvent::KagemushaLoadCommitted(
+            iroha_data_model::events::data::kagemusha::KagemushaLoadCommittedV1::from_receipt(
+                &receipt,
+            )
+            .unwrap(),
         )
-        .unwrap(),
-        [Fq::ONE; 16],
-    )
-    .unwrap();
-    let vesta = AccumulatorT::<Eq>::new(
-        iroha_plonk::transcript::decode_point::<Eq>(
-            &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
-        )
-        .unwrap(),
-        [Fp::ONE; 16],
-    )
-    .unwrap();
+        .into(),
+    );
+    let tree: iroha_crypto::MerkleTree<iroha_data_model::events::EventBox> =
+        [iroha_crypto::HashOf::new(&event)].into_iter().collect();
     let finality = KagemushaWalletLoadFinalityV1 {
         version: KAGEMUSHA_WALLET_VERSION_V1,
-        anchor_digest: anchor.to_repr(),
         receipt_digest: digest,
-        proof: vec![7],
-        pallas_claim: pallas.to_bytes(),
-        vesta_claim: vesta.to_bytes(),
+        certificate: iroha_data_model::sumeragi_finality::SumeragiCommitCertificateV1 {
+            consensus_header: vec![1],
+            commit_qc: vec![2],
+            result_preimage: vec![3],
+        },
+        event_proof: tree.get_proof(0).unwrap(),
     };
     (
         vec![
@@ -205,70 +194,45 @@ fn load_originals() -> (Vec<KagemushaWalletRetainedInputV1>, Fp, [u8; 32]) {
                 bytes: finality.to_canonical_bytes().unwrap(),
             },
         ],
-        anchor,
         digest,
     )
 }
 
 #[test]
-fn load_original_conversion_reconstructs_fixed_endpoints_and_preserves_both_claims() {
-    use iroha_kagemusha_proof::finality::receipt_finality;
-    let (inputs, anchor, digest) = load_originals();
-    let (receipt, source) = retained_load_source(&inputs, anchor, digest).unwrap();
+fn load_original_conversion_preserves_native_certificates_without_granting_finality() {
+    let (inputs, digest) = load_originals();
+    let (receipt, source) = retained_load_source(&inputs, digest).unwrap();
     let original = KagemushaWalletLoadFinalityV1::decode_canonical(&inputs[1].bytes).unwrap();
     assert_eq!(receipt.receipt_digest().unwrap(), digest);
-    let context = iroha_pasta::poseidon::hash_with_domain(
-        receipt_finality::CONTEXT_DOMAIN,
-        &[anchor, Fp::from_repr(digest).unwrap()],
-    );
-    assert_eq!(
-        source.endpoints,
-        [
-            Fp::from(receipt_finality::PROGRAM_ID),
-            context,
-            Fp::ZERO,
-            Fp::ONE,
-            Fp::ZERO,
-            context
-        ]
-    );
-    assert_eq!(source.proof, original.proof);
-    assert_eq!(source.pallas.to_bytes(), original.pallas_claim);
-    assert_eq!(source.vesta.to_bytes(), original.vesta_claim);
+    assert_eq!(source, original);
+    let native = iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture::new_with_explicit_parameters();
+    assert!(source.verify(&native.verifier(), &receipt).is_err());
 }
 
 #[test]
 fn load_original_conversion_rejects_lost_ambiguous_corrupt_or_cross_receipt_custody() {
-    let (inputs, anchor, digest) = load_originals();
-    assert!(retained_load_source(&inputs, anchor + Fp::ONE, digest).is_err());
-    assert!(retained_load_source(&inputs, anchor, Fp::ONE.to_repr()).is_err());
+    let (inputs, digest) = load_originals();
+    assert!(retained_load_source(&inputs, Fp::ONE.to_repr()).is_err());
     for role in 0..2 {
         let mut missing = inputs.clone();
         missing.remove(role);
-        assert!(retained_load_source(&missing, anchor, digest).is_err());
+        assert!(retained_load_source(&missing, digest).is_err());
         let mut duplicate = inputs.clone();
         duplicate.push(inputs[role].clone());
-        assert!(retained_load_source(&duplicate, anchor, digest).is_err());
+        assert!(retained_load_source(&duplicate, digest).is_err());
         let mut changed = inputs.clone();
         changed[role].bytes.push(0);
-        assert!(retained_load_source(&changed, anchor, digest).is_err());
+        assert!(retained_load_source(&changed, digest).is_err());
     }
     let mut cross_receipt = inputs.clone();
     let mut receipt = KagemushaWalletLoadReceiptV1::decode_canonical(&inputs[0].bytes).unwrap();
     receipt.request_id[0] ^= 1;
     cross_receipt[0].bytes = receipt.to_canonical_bytes().unwrap();
-    assert!(retained_load_source(&cross_receipt, anchor, digest).is_err());
-    for claim in 0..2 {
-        let mut corrupt = inputs.clone();
-        let mut finality =
-            KagemushaWalletLoadFinalityV1::decode_canonical(&inputs[1].bytes).unwrap();
-        let bytes = if claim == 0 {
-            &mut finality.pallas_claim
-        } else {
-            &mut finality.vesta_claim
-        };
-        bytes[..32].fill(0xff);
-        corrupt[1].bytes = finality.to_canonical_bytes().unwrap();
-        assert!(retained_load_source(&corrupt, anchor, digest).is_err());
-    }
+    assert!(retained_load_source(&cross_receipt, digest).is_err());
+
+    let mut cross_finality = inputs.clone();
+    let mut finality = KagemushaWalletLoadFinalityV1::decode_canonical(&inputs[1].bytes).unwrap();
+    finality.receipt_digest = Fp::ONE.to_repr();
+    cross_finality[1].bytes = finality.to_canonical_bytes().unwrap();
+    assert!(retained_load_source(&cross_finality, digest).is_err());
 }

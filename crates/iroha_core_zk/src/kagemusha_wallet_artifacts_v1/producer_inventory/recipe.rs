@@ -3,13 +3,52 @@
 //! These values select compiled sources only. They cannot construct an installed
 //! capability, substitute a signed manifest or bypass original-key qualification.
 
-use iroha_kagemusha_proof::{
-    a_relation::{bootstrap::BootstrapPolicy, own::OwnPolicy},
-    finality::{continuity::SourceVerifier, history::HistoryAnchor},
-};
+use iroha_kagemusha_proof::a_relation::{bootstrap::BootstrapPolicy, own::OwnPolicy};
 use iroha_plonk_gadgets::p256::native::{Affine, words_from_be};
 
 use super::*;
+
+/// Wallet-private strict-origin record, retained only by qualified installation owners.
+/// This wrapper is never decoded from inventory DATA. Call sites create it only
+/// after the complete source-specific original importer returned successfully.
+/// Installation identity belongs to the enclosing qualified owner; member/role
+/// selection must match before any original is opened.
+#[derive(Clone, Debug)]
+pub(super) struct InstalledSourceSealV1<C: PastaCurve> {
+    member: u32,
+    seal: iroha_plonk::keys::SourceAdmissionSealV2<C>,
+}
+impl<C: PastaCurve> InstalledSourceSealV1<C> {
+    pub(super) fn new(member: u32, seal: iroha_plonk::keys::SourceAdmissionSealV2<C>) -> Self {
+        Self { member, seal }
+    }
+    pub(super) fn seal(
+        &self,
+        expected_member: u32,
+    ) -> Result<&iroha_plonk::keys::SourceAdmissionSealV2<C>, Error> {
+        if self.member != expected_member {
+            return Err(Error::Inventory);
+        }
+        Ok(&self.seal)
+    }
+    pub(super) fn bind<'a>(
+        &'a self,
+        expected_member: u32,
+        key: &'a iroha_kagemusha_proof::a_relation::native::artifact::KeyArtifact<C>,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<iroha_plonk::keys::SourceBoundViewV2<'a, C>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        self.seal(expected_member)?
+            .bind(key.binding(), key.key(), cancellation)
+            .map_err(|e| {
+                if e.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Inventory
+                }
+            })
+    }
+}
 
 /// Raw provider/root source policy, independent of the eventual scheme/manifest ID.
 /// Offline tooling supplies its intended policy; installation derives the same
@@ -68,22 +107,6 @@ impl SourceScopeV1 {
     }
 }
 
-/// Exact receipt source and intended genesis anchor before wallet installation.
-/// The source is sealed to its compiled owner, but this raw pair is not an
-/// authenticated wallet installation or approval of the caller's chosen genesis.
-#[derive(Clone, Copy)]
-pub struct ReceiptSourceRecipeV1<'a> {
-    pub(super) source: &'a SourceVerifier,
-    pub(super) anchor: &'a HistoryAnchor,
-}
-impl<'a> ReceiptSourceRecipeV1<'a> {
-    /// Assemble a source recipe without claiming installation authority.
-    #[must_use]
-    pub const fn new(source: &'a SourceVerifier, anchor: &'a HistoryAnchor) -> Self {
-        Self { source, anchor }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,3 +150,7 @@ mod tests {
         assert_eq!(scope.root(), Affine::GENERATOR);
     }
 }
+
+#[cfg(test)]
+#[path = "recipe/seal_tests.rs"]
+mod seal_tests;

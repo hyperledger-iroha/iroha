@@ -281,7 +281,6 @@ fn native_profile_contains_fixed_typed_policies_and_all_decision_codes() {
     for expected in [
         iroha_kagemusha_proof::a_relation::schedule::compiled::compiled_schedule_transcript()
             .unwrap(),
-        iroha_kagemusha_proof::finality::native::compiled_leaf_schedule_transcript().unwrap(),
         producer_inventory::compiled_sigma_policy().unwrap(),
         iroha_kagemusha_proof::omega::native::compiled_policy_transcript().unwrap(),
     ] {
@@ -358,7 +357,7 @@ fn frozen_protocol_digest_matches_independently_framed_native_originals() {
 
 #[test]
 fn native_profile_matches_complete_compiled_encoder_preimage() {
-    // Exact native descriptor-policy prefix, followed by both complete compiled
+    // Exact native descriptor-policy prefix, followed by three complete compiled
     // source inventories. This does not freeze or qualify any actual producer keys.
     let mut original = hex::decode(concat!(
         "010010000000010000000002000000000300000000030100000003020000000303000000030400000003050000000306",
@@ -373,7 +372,6 @@ fn native_profile_matches_complete_compiled_encoder_preimage() {
     for policy in [
         iroha_kagemusha_proof::a_relation::schedule::compiled::compiled_schedule_transcript()
             .unwrap(),
-        iroha_kagemusha_proof::finality::native::compiled_leaf_schedule_transcript().unwrap(),
         producer_inventory::compiled_sigma_policy().unwrap(),
         iroha_kagemusha_proof::omega::native::compiled_policy_transcript().unwrap(),
     ] {
@@ -382,20 +380,20 @@ fn native_profile_matches_complete_compiled_encoder_preimage() {
     }
     let body = native_profile_transcript_v1().unwrap();
     assert_eq!(body, original);
-    assert_eq!(body.len(), 14_513);
-    // Renewed Receive assigns CreditEffects to A7; plain Receive keeps A0.
-    assert_eq!(
-        hex::encode(Sha256::digest(&body)),
-        "fd9870ada870783ff31e4f544e90ee667f5fe0c2db790ec7b754108dad5170ed"
-    );
-    assert_eq!(
-        hex::encode(artifact_digest(b"native-profile", &body)),
-        "c7539c5c1bc5e36046014908cfa3c06ccbb9eb9f691623c65acf9893ffc7c6da"
-    );
     eprintln!(
         "NATIVE_PROFILE bytes={} sha256={} digest={}",
         body.len(),
         hex::encode(Sha256::digest(&body)),
         hex::encode(artifact_digest(b"native-profile", &body))
+    );
+    assert_eq!(body.len(), 3_320);
+    // Native BLS authenticates ledger finality; Load retains four A and three W stages.
+    assert_eq!(
+        hex::encode(Sha256::digest(&body)),
+        "af923b87514d6f53742fd1951fa423626c497f26245b98b8c73a9beabd5342b5"
+    );
+    assert_eq!(
+        hex::encode(artifact_digest(b"native-profile", &body)),
+        "f7321a8be5ad7c861a9f0d1f7230c343ed9c4acdc8c7bea6721af94befbe6be6"
     );
 }

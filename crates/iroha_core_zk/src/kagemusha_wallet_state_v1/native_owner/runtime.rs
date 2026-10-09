@@ -455,10 +455,6 @@ pub struct NativeInstallationConfigV1 {
     pub read: ReadConfig,
     /// Native process-wide proving memory budget.
     pub budget: MemoryBudget,
-    /// Pinned ordinary finality source parameters.
-    pub finality_parameters: iroha_kagemusha_proof::finality::native::Parameters,
-    /// Exact ordinary finality graph bounds.
-    pub finality_limits: iroha_kagemusha_proof::finality::catalog::VerifierLimits,
 }
 
 /// Failed native startup retains the actual provider and sole original source for retry.
@@ -517,14 +513,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             let authenticated =
                 proof(installed.authenticate_producer_inventory(producer_inventory))?;
             let sources = authenticated
-                .qualify_wallet(
-                    &installed,
-                    &config.genesis,
-                    &mut originals,
-                    config.read,
-                    config.finality_parameters.clone(),
-                    config.finality_limits,
-                )
+                .qualify_wallet(&installed, &config.genesis, &mut originals, config.read)
                 .map_err(|error| {
                     if error.is_unavailable() {
                         Error::ArtifactsUnavailable("native startup original source")

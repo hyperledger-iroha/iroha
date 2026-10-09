@@ -7,6 +7,7 @@ use iroha_kagemusha_proof::a_relation::{
 use iroha_plonk::{keys::pk::artifact::ReadConfig, pcs::ipa::PinnedParams};
 use iroha_plonk_recursion::verifier::VerifierPlan;
 
+use super::recipe::InstalledSourceSealV1;
 use super::*;
 
 /// Bootstrap source qualification failed before any wallet capability was granted.
@@ -29,13 +30,16 @@ pub struct QualifiedBootstrapProgramV1 {
     installation: ([u8; 32], [u8; 32]),
     program: u32,
     prover: native::Prover,
+    first: InstalledSourceSealV1<Eq>,
+    wrapper: InstalledSourceSealV1<Ep>,
+    terminal: InstalledSourceSealV1<Eq>,
 }
 impl QualifiedBootstrapProgramV1 {
     /// Exact authenticated installation and selected program.
     pub const fn identity(&self) -> (([u8; 32], [u8; 32]), u32) {
         (self.installation, self.program)
     }
-    /// Metadata-only native stage owner; use its strict imports for borrowed proving keys.
+    /// Metadata-only native stage owner; qualified stage acquisition borrows sealed metadata.
     /// This component alone cannot authorize a complete wallet or final Omega.
     pub const fn prover(&self) -> &native::Prover {
         &self.prover
@@ -141,23 +145,68 @@ impl AuthenticatedProducerInventoryV1 {
         let wrapper = metadata(self.read_verifier_original(record.w[0], originals)?)?;
         let terminal = metadata(self.read_verifier_original(record.a[1], originals)?)?;
         let prover = native::Prover::from_artifacts(plan, first, wrapper, terminal)?;
-        for (role, index) in [record.a[0], record.w[0], record.a[1]]
-            .into_iter()
-            .enumerate()
-        {
-            let original = self.read_original(index, originals, config.maximum_bytes)?;
-            match role {
-                0 => drop(prover.import_first(&original.proving_key, config)?),
-                1 => drop(prover.import_wrapper(&original.proving_key, config)?),
-                2 => drop(prover.import_terminal(&original.proving_key, config)?),
-                _ => unreachable!("fixed three Bootstrap roles"),
-            }
-            drop(original);
-        }
+        let first = {
+            let original = self.read_original(record.a[0], originals, config.maximum_bytes)?;
+            InstalledSourceSealV1::new(
+                record.a[0],
+                prover.import_first(&original.proving_key, config)?,
+            )
+        };
+        let wrapper = {
+            let original = self.read_original(record.w[0], originals, config.maximum_bytes)?;
+            InstalledSourceSealV1::new(
+                record.w[0],
+                prover.import_wrapper(&original.proving_key, config)?,
+            )
+        };
+        let terminal = {
+            let original = self.read_original(record.a[1], originals, config.maximum_bytes)?;
+            InstalledSourceSealV1::new(
+                record.a[1],
+                prover.import_terminal(&original.proving_key, config)?,
+            )
+        };
         Ok(QualifiedBootstrapProgramV1 {
             installation: identity,
             program,
             prover,
+            first,
+            wrapper,
+            terminal,
         })
+    }
+}
+
+impl QualifiedBootstrapProgramV1 {
+    pub(super) fn bind_a(
+        &self,
+        stage: usize,
+        expected_member: u32,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<iroha_plonk::keys::SourceBoundViewV2<'_, Eq>, BootstrapQualificationErrorV1> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        match stage {
+            0 => Ok(self
+                .prover
+                .bind_first(self.first.seal(expected_member)?, cancellation)?),
+            1 => Ok(self
+                .prover
+                .bind_terminal(self.terminal.seal(expected_member)?, cancellation)?),
+            _ => Err(Error::Inventory.into()),
+        }
+    }
+    pub(super) fn bind_w(
+        &self,
+        stage: usize,
+        expected_member: u32,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<iroha_plonk::keys::SourceBoundViewV2<'_, Ep>, BootstrapQualificationErrorV1> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        if stage != 0 {
+            return Err(Error::Inventory.into());
+        }
+        Ok(self
+            .prover
+            .bind_wrapper(self.wrapper.seal(expected_member)?, cancellation)?)
     }
 }

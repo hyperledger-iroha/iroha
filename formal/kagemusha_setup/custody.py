@@ -12,8 +12,42 @@ HERE = Path(__file__).resolve().parent
 REFERENCE = ROOT/'fixtures/native_prover/reference_verifier'
 MODULES = ('__init__.py', 'codec.py', 'curve.py', 'descriptor.py',
            'parameters.py', 'transcript.py', 'verify.py')
-FILES = frozenset(('README.md', '__init__.py', 'bounded.py', 'case.py', 'check.py', 'control_goldens.json', 'custody.py', 'finite.py', 'parameters.py', 'preimage.py', 'produce_parameters.py', 'public_setup.py', 'raw_setup.py', 'rebind.py', 'requests.py', 'simulator.py', 'test_bounded.py', 'test_custody.py', 'test_finite.py', 'test_generic.py', 'test_preimage.py', 'test_proof.py', 'test_raw.py', 'test_requests.py', 'test_seam.py'))
-SOURCES = frozenset(('crates/iroha_pasta/src/curve/hash_to_curve.rs', 'crates/iroha_pasta/src/curve/pallas.rs', 'crates/iroha_pasta/src/curve/vesta.rs', 'crates/iroha_pasta/src/field/cios.rs', 'crates/iroha_pasta/src/field/fp.rs', 'crates/iroha_pasta/src/field/fq.rs', 'crates/iroha_pasta/src/field/mod.rs', 'crates/iroha_pasta/src/params.rs', 'crates/iroha_plonk/src/keys/keygen.rs', 'crates/iroha_plonk/src/keys/pk/artifact.rs', 'crates/iroha_plonk/src/keys/vk.rs', 'crates/iroha_plonk/src/pcs/ipa/commit.rs', 'crates/iroha_plonk/src/pcs/ipa/mod.rs', 'crates/iroha_plonk/src/pcs/ipa/prover.rs', 'crates/iroha_plonk/src/pcs/ipa/verifier.rs', 'crates/iroha_plonk/src/transcript/pipa_r.rs', 'fixtures/native_prover/kats_v1.json', 'fixtures/native_prover/reference_v1.json', 'fixtures/native_prover/reference_verifier/__init__.py', 'fixtures/native_prover/reference_verifier/codec.py', 'fixtures/native_prover/reference_verifier/curve.py', 'fixtures/native_prover/reference_verifier/descriptor.py', 'fixtures/native_prover/reference_verifier/parameters.py', 'fixtures/native_prover/reference_verifier/transcript.py', 'fixtures/native_prover/reference_verifier/verify.py', 'formal/kagemusha_pasta/auxiliary.py', 'formal/kagemusha_pasta/check.py', 'formal/kagemusha_pasta/primes.py', 'formal/kagemusha_pasta/source_manifest.json', 'formal/kagemusha_pasta/supplied_primes.json'))
+FILES = frozenset(('README.md', '__init__.py', 'bounded.py', 'case.py', 'check.py', 'control_goldens.json', 'custody.py', 'finite.py', 'load_a1_case.py', 'load_a1_descriptor.norito', 'parameters.py', 'preimage.py', 'produce_parameters.py', 'public_setup.py', 'raw_setup.py', 'rebind.py', 'requests.py', 'simulator.py', 'test_bounded.py', 'test_custody.py', 'test_finite.py', 'test_generic.py', 'test_load_a1_case.py', 'test_preimage.py', 'test_proof.py', 'test_raw.py', 'test_requests.py', 'test_seam.py'))
+SOURCES = frozenset((
+    'crates/iroha_pasta/src/curve/hash_to_curve.rs',
+    'crates/iroha_pasta/src/curve/pallas.rs',
+    'crates/iroha_pasta/src/curve/vesta.rs',
+    'crates/iroha_pasta/src/field/cios.rs',
+    'crates/iroha_pasta/src/field/fp.rs',
+    'crates/iroha_pasta/src/field/fq.rs',
+    'crates/iroha_pasta/src/field/mod.rs',
+    'crates/iroha_pasta/src/params.rs',
+    'crates/iroha_plonk/src/keys/keygen.rs',
+    'crates/iroha_plonk/src/keys/keygen/rebuild.rs',
+    'crates/iroha_plonk/src/keys/mod.rs',
+    'crates/iroha_plonk/src/keys/pk/artifact.rs',
+    'crates/iroha_plonk/src/keys/source_fingerprint.rs',
+    'crates/iroha_plonk/src/keys/vk.rs',
+    'crates/iroha_plonk/src/pcs/ipa/commit.rs',
+    'crates/iroha_plonk/src/pcs/ipa/mod.rs',
+    'crates/iroha_plonk/src/pcs/ipa/prover.rs',
+    'crates/iroha_plonk/src/pcs/ipa/verifier.rs',
+    'crates/iroha_plonk/src/transcript/pipa_r.rs',
+    'fixtures/native_prover/kats_v1.json',
+    'fixtures/native_prover/reference_v1.json',
+    'fixtures/native_prover/reference_verifier/__init__.py',
+    'fixtures/native_prover/reference_verifier/codec.py',
+    'fixtures/native_prover/reference_verifier/curve.py',
+    'fixtures/native_prover/reference_verifier/descriptor.py',
+    'fixtures/native_prover/reference_verifier/parameters.py',
+    'fixtures/native_prover/reference_verifier/transcript.py',
+    'fixtures/native_prover/reference_verifier/verify.py',
+    'formal/kagemusha_pasta/auxiliary.py',
+    'formal/kagemusha_pasta/check.py',
+    'formal/kagemusha_pasta/primes.py',
+    'formal/kagemusha_pasta/source_manifest.json',
+    'formal/kagemusha_pasta/supplied_primes.json',
+))
 
 
 def require(condition, message):

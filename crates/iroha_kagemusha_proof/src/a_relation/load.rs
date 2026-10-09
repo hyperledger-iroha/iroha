@@ -1,7 +1,7 @@
 //! Ordinary finalized Load receipt, own signatures and recovery-map composition.
 //!
-//! The receipt terms come from one exact byte tape. A separate mandatory source
-//! stage authenticates its genesis-rooted consensus proof and both carried claims.
+//! The receipt terms come from one exact byte tape. Native verifies genesis-rooted
+//! BLS finality before requesting the Advance signature bound to this receipt.
 
 use ff::Field;
 use iroha_pasta::{Ep, Fp};
@@ -12,10 +12,10 @@ use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip}
 use super::{
     SigmaBindingCells, SignatureProofCells,
     context::{ContextObjectCells, ContextObjectSpec},
+    load_receipt::LoadReceiptCells,
     own::{CurrentAuthorization, OwnPolicy, authenticate_current},
 };
 use crate::{
-    finality::LoadReceiptCells,
     operation_relation::{
         map_effects::{InsertCells, MapEffectsChip, MapState, MapTransition},
         objects::{
@@ -141,7 +141,7 @@ impl LoadObjects {
     }
 
     /// Bind every monetary projection to the exact ordinary receipt.
-    /// The mandatory finality stage must additionally authenticate its digest.
+    /// The same stage authenticates the native-authorized Advance signature.
     /// # Errors
     /// Wrong operation or layout; any projected identity/amount mismatch is unsatisfied.
     pub fn bind_finalized_terms(
@@ -292,7 +292,7 @@ pub struct LoadStagePlan {
     context: super::context::ContextPlan,
 }
 impl LoadStagePlan {
-    /// Require recovery, finality, own receipt authorization and current-credential
+    /// Require recovery, receipt-term binding, own receipt authorization and current-credential
     /// authorization exactly once, with hard signature Q slots1 and2 respectively.
     /// # Errors
     /// Wrong variant/task set, signature-Q count or stage assignment.
@@ -311,11 +311,10 @@ impl LoadStagePlan {
         let required = vec![
             vec![OperationTask::LoadRecovery],
             vec![],
-            vec![OperationTask::LoadFinality],
             vec![OperationTask::LoadReceipt],
             vec![OperationTask::LoadCurrentAuthorization],
         ];
-        let partitions = [vec![], vec![0], vec![], vec![1], vec![2]];
+        let partitions = [vec![], vec![0], vec![1], vec![2]];
         if groups != required
             || context.predecessor_stage() != Some(0)
             || partitions
@@ -399,8 +398,10 @@ impl LoadStagePlan {
                 OperationTask::LoadRecovery => {
                     LoadObjects::recovery(chip, region, input, insertion.ok_or(Error::Synthesis)?)?
                 }
-                OperationTask::LoadFinality => objects.bind_finalized_terms(region, input)?,
-                OperationTask::LoadReceipt => objects.authenticate(chip, region, policy, input)?,
+                OperationTask::LoadReceipt => {
+                    objects.bind_finalized_terms(region, input)?;
+                    objects.authenticate(chip, region, policy, input)?;
+                }
                 OperationTask::LoadCurrentAuthorization => {
                     objects.authenticate_current(chip, region, policy, input)?
                 }

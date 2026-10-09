@@ -12,6 +12,7 @@ pub(super) struct FoldSourcesV1 {
     pub(super) preparation: Option<transition_custody::PreparedTransitionV1>,
     pub(super) issued: IndexRoot,
     pub(super) anchors: IndexRoot,
+    pub(super) epochs: IndexRoot,
 }
 
 struct Store<'a>(&'a mut dyn ObjectStore);
@@ -38,6 +39,7 @@ pub struct FoldCustodyV1<'a> {
     preparation: Option<transition_custody::PreparedTransitionV1>,
     issued: IndexRoot,
     anchors: IndexRoot,
+    epochs: IndexRoot,
     credits: credit_tree::CreditTree,
     credit: Option<(bool, KagemushaWalletCreditDigestRecordV1)>,
     pending: map_tree::PersistentMapV1,
@@ -74,6 +76,7 @@ impl<'a> FoldCustodyV1<'a> {
             preparation: sources.preparation,
             issued: sources.issued,
             anchors: sources.anchors,
+            epochs: sources.epochs,
             credits,
             credit: None,
             initial_pending: pending.clone(),
@@ -124,6 +127,7 @@ impl<'a> FoldCustodyV1<'a> {
             refresh,
             self.issued,
             self.anchors,
+            self.epochs,
         )?;
         Ok((&plan.request, &plan.native, &plan.draft, custody))
     }

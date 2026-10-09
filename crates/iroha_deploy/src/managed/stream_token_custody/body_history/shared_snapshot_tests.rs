@@ -47,13 +47,18 @@ fn counted<T>(action: impl FnOnce() -> T) -> (T, Counts) {
 // Two genuine signed bodies, one naturally expired and canonically retired request, and
 // unchanged native custody. No forged History, proof, signature or synthetic expiry clock.
 pub(super) fn history() -> (Fixture, BodyHistory) {
+    history_with_bodies(2)
+}
+
+pub(super) fn history_with_bodies(count: usize) -> (Fixture, BodyHistory) {
+    assert!((2..=3).contains(&count), "small genuine parser fixture");
     let fixture = Fixture::enrolled_with_renewal_validity(4_000, 8_000);
     wait_until(
         fixture.initial.issued_at_unix_ms + 2_000,
         Duration::from_secs(4),
     );
     let mut retained: Option<BodyHistory> = None;
-    for ordinal in 1..=2 {
+    for ordinal in 1..=count {
         if let Some(history) = retained.as_ref() {
             wait_until(
                 history
@@ -145,7 +150,7 @@ pub(super) fn history() -> (Fixture, BodyHistory) {
             (finished, authorization)
         };
         assert!(finished.original().unwrap().is_some());
-        if ordinal == 1 {
+        if ordinal < count {
             let selected = fixture
                 .retain_generated_attempt(authorization, &finished, &current)
                 .unwrap();
@@ -787,4 +792,9 @@ fn genuine_retained_handle_graph_shares_only_original_ancestry_and_closes_errors
         original
     );
     native.test_require_current(4).0.unwrap();
+}
+
+pub(super) fn snapshot_work<T>(read: impl FnOnce() -> T) -> (T, (usize, usize)) {
+    let (result, counts) = counted(read);
+    (result, (counts.records, counts.snapshots))
 }

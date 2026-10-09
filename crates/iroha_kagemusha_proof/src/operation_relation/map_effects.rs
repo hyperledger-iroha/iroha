@@ -229,7 +229,8 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
     /// Constrain Load/Unload arithmetic and the exact insert-only recovery
     /// entry, with distinct `kind * 2^128 + ordinal` keys in one shared map.
     ///
-    /// The owning A authenticates ordinary receipt finality or the Unload quote.
+    /// The owning A authenticates the receipt-bound native-authorized Advance
+    /// or the Unload quote. Native verifies Load finality before that Advance.
     /// Duplicate ordinals, kind substitution and nullifier or charge changes
     /// cannot replace a prior entry or alter the committed successor root.
     ///

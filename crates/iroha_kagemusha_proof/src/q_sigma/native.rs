@@ -3,7 +3,9 @@
 //! A caller supplies the incoming mode after evaluating the complete operation's
 //! soft checks. This module never chooses or authorizes a burn. It derives the
 //! selected local claim, creates the exact local fold, binds every exported
-//! instance and self-verifies each generated Q proof.
+//! instance and self-verifies each generated Q proof. Only source-bound verifier
+//! metadata survives native key generation or strict original import. Each proof
+//! reconstructs temporary on-demand buffers, then drops them before verification.
 
 use core::fmt;
 
@@ -13,7 +15,10 @@ use iroha_plonk::{
     DescriptorBinding, KeyError, ProverConfig, ProverError, ProverRandomness, ProvingKey,
     VerifyError, VerifyingKey, Witness, create_proof_owned,
     frontend::{Circuit, Error as LayoutError},
-    keys::{CosetCachePolicy, KeygenConfigV2, keygen_pk_v2},
+    keys::{
+        CosetCachePolicy, KeygenConfigV2, RebuildError, SourceBoundVerifyingKeyV2,
+        SourceBoundViewV2, keygen_pk_from_vk_v2_cancellable, keygen_pk_v2,
+    },
     pcs::{
         ipa::{IpaError, PinnedParams},
         multiopen::MultiopenError,
@@ -54,6 +59,8 @@ pub enum QSigmaError {
     Key(KeyError),
     /// Proof synthesis or creation failure.
     Prover(ProverError),
+    /// Exact-source temporary proving-buffer reconstruction failed.
+    Rebuild(RebuildError),
     /// Complete or succinct verification failure.
     Verify(VerifyError),
     /// Local accumulator or fold failure.
@@ -73,6 +80,7 @@ impl QSigmaError {
             Self::Artifact(error) => error.is_cancelled(),
             Self::Key(error) => error.is_cancelled(),
             Self::Prover(error) => error.is_cancelled(),
+            Self::Rebuild(error) => error.is_cancelled(),
             Self::Verify(error) => error.is_cancelled(),
             Self::Fold(error) => error.is_cancelled(),
             _ => false,
@@ -531,12 +539,12 @@ impl QSigmaSource {
     }
 }
 
-/// Native outer Q key and pinned Pallas parameters. The profile and public
-/// schema are fixed; resource policy uses an on-demand coset cache.
+/// Native outer Q verifier metadata and pinned Pallas parameters.
+/// The exact profile/source authority is fixed; no proving polynomials are retained.
 #[derive(Debug)]
 pub struct QSigmaProver {
     params: PinnedParams<Ep>,
-    key: ProvingKey<Ep>,
+    key: SourceBoundVerifyingKeyV2<Ep>,
     serialized_buses: Option<usize>,
 }
 /// A Q proof and its exact public frame, retaining the Vesta part obligation.
@@ -551,8 +559,9 @@ pub struct QSigmaProof {
     pub part: FoldInput<Eq>,
 }
 impl QSigmaProver {
-    /// Generates this concrete Q class key at k16. Key generation discards the
-    /// prepared witness values and retains only fixed program/allowlist shape.
+    /// Generates this concrete Q class key at k16, mints exact-source verifier
+    /// metadata and drops proving buffers. Prepared values are discarded during
+    /// source synthesis. Artifact producers use the explicit engine keygen path.
     ///
     /// # Errors
     /// Parameters are not k16, or synthesis/key generation fails.
@@ -599,9 +608,12 @@ impl QSigmaProver {
             keygen_pk_v2(&params, &prepared.circuit, &config)
         }
         .map_err(QSigmaError::Key)?;
+        let metadata = SourceBoundVerifyingKeyV2::from_proving_key(&key, None)
+            .map_err(QSigmaError::Rebuild)?;
+        drop(key);
         Ok(Self {
             params,
-            key,
+            key: metadata,
             serialized_buses,
         })
     }
@@ -792,17 +804,14 @@ impl QSigmaProver {
         if key.vk().to_bytes() != installed_vk {
             return Err(QSigmaError::UnauthorizedKey);
         }
+        let metadata = SourceBoundVerifyingKeyV2::from_proving_key(&key, cancellation)
+            .map_err(QSigmaError::Rebuild)?;
+        drop(key);
         Ok(Self {
             params,
-            key,
+            key: metadata,
             serialized_buses,
         })
-    }
-
-    /// Original proving material for the native package producer. Export alone
-    /// confers no signed inventory or scheme authority.
-    pub const fn proving_key(&self) -> &ProvingKey<Ep> {
-        &self.key
     }
 
     /// Validated V2 descriptor, suitable for A's fixed verifier program.
@@ -811,11 +820,102 @@ impl QSigmaProver {
     }
     /// Fixed Q verifying key for A's class registry.
     pub fn verifying_key(&self) -> &VerifyingKey<Ep> {
-        self.key.vk()
+        self.key.verifying_key()
     }
     /// The outer pinned Pallas prefix.
     pub const fn params(&self) -> &PinnedParams<Ep> {
         &self.params
+    }
+    /// Move admitted public metadata into an installed owner's existing graph.
+    #[must_use]
+    pub fn into_metadata(self) -> SourceBoundVerifyingKeyV2<Ep> {
+        self.key
+    }
+
+    /// Borrow this standalone owner's source authority without graph cloning.
+    #[must_use]
+    pub fn view(&self) -> QSigmaProverView<'_> {
+        QSigmaProverView {
+            params: &self.params,
+            key: self.key.view(),
+            serialized_buses: self.serialized_buses,
+        }
+    }
+    /// Prove through the same borrowed implementation used by installed owners.
+    /// # Errors
+    /// Source mismatch, cancellation, proving or full verification failure.
+    pub fn prove(
+        &self,
+        prepared: &PreparedQSigma,
+        randomness: ProverRandomness,
+        config: ProverConfig,
+    ) -> Result<QSigmaProof, QSigmaError> {
+        self.view().prove(prepared, randomness, config)
+    }
+}
+
+/// Borrowed exact Q profile and source authority; no public graph or PK is cloned.
+#[derive(Debug)]
+pub struct QSigmaProverView<'a> {
+    params: &'a PinnedParams<Ep>,
+    key: SourceBoundViewV2<'a, Ep>,
+    serialized_buses: Option<usize>,
+}
+impl<'a> QSigmaProverView<'a> {
+    /// Bind the installed plan/profile to previously admitted exact metadata.
+    /// A supplied source remains DATA and is checked again during reconstruction.
+    /// # Errors
+    /// Non-k16/profile, invalid bus count, or different declared public schema.
+    pub fn from_source_bound(
+        params: &'a PinnedParams<Ep>,
+        key: SourceBoundViewV2<'a, Ep>,
+        plan: &QSigmaPlan,
+        serialized_buses: Option<usize>,
+    ) -> Result<Self, QSigmaError> {
+        use iroha_plonk::cs::{CurveV1, InstanceModeV1, ProofSuffixV1, TranscriptV2};
+        if params.k() != 16 {
+            return Err(QSigmaError::Parameters);
+        }
+        if serialized_buses.is_some_and(|b| !(1..=8).contains(&b)) {
+            return Err(QSigmaError::Layout(LayoutError::Synthesis));
+        }
+        let d = key.binding().descriptor();
+        let lengths = plan.instance_lengths();
+        if d.k != 16
+            || d.curve != CurveV1::Pallas
+            || d.transcript != TranscriptV2::KagemushaPoseidonRp57Base
+            || d.instance_mode != InstanceModeV1::Direct
+            || d.proof_suffix != ProofSuffixV1::FoldedGenerator
+            || d.instance_types.as_deref() != Some(&QSigmaPlan::instance_types())
+            || d.instance_lengths.len() != lengths.len()
+            || !d
+                .instance_lengths
+                .iter()
+                .zip(lengths)
+                .all(|(a, b)| usize::try_from(*a).ok() == Some(b))
+        {
+            return Err(QSigmaError::Profile);
+        }
+        Ok(Self {
+            params,
+            key,
+            serialized_buses,
+        })
+    }
+    /// Exact borrowed descriptor.
+    #[must_use]
+    pub fn binding(&self) -> &DescriptorBinding {
+        self.key.binding()
+    }
+    /// Exact borrowed verifier.
+    #[must_use]
+    pub fn verifying_key(&self) -> &VerifyingKey<Ep> {
+        self.key.verifying_key()
+    }
+    /// Shared pinned parameter storage.
+    #[must_use]
+    pub const fn params(&self) -> &PinnedParams<Ep> {
+        self.params
     }
     /// Proves and completely self-verifies Q before returning its bytes.
     /// Witness construction rejects a different fixed plan/allowlist/copy graph.
@@ -828,33 +928,25 @@ impl QSigmaProver {
         randomness: ProverRandomness,
         config: ProverConfig,
     ) -> Result<QSigmaProof, QSigmaError> {
-        let witness = if let Some(buses) = self.serialized_buses {
+        // Cancellation is checked before either profile clones/reconstructs a source.
+        iroha_pasta::CancellationToken::checkpoint(config.cancellation)
+            .map_err(|_| QSigmaError::Prover(ProverError::Cancelled))?;
+        let bytes = if let Some(buses) = self.serialized_buses {
             let circuit = prepared
                 .circuit
                 .clone()
                 .with_serialized_foreign(buses)
                 .map_err(QSigmaError::Layout)?;
-            Witness::from_circuit_cancellable(
-                &self.key,
-                &circuit,
-                &prepared.instances,
-                config.cancellation,
-            )
+            self.prove_circuit(&circuit, prepared, randomness, config)?
         } else {
-            Witness::from_circuit_cancellable(
-                &self.key,
-                &prepared.circuit,
-                &prepared.instances,
-                config.cancellation,
-            )
-        }
-        .map_err(QSigmaError::Prover)?;
-        let bytes = create_proof_owned(&self.params, &self.key, witness, randomness, config)
-            .map_err(QSigmaError::Prover)?;
+            self.prove_circuit(&prepared.circuit, prepared, randomness, config)?
+        };
+        // The helper's sole temporary PK has dropped before full verification,
+        // including on errors, cancellation and unwinding. No cross-proof cache.
         iroha_plonk::verifier::verify_full_cancellable(
-            &self.params,
-            self.key.binding(),
-            self.key.vk(),
+            self.params,
+            self.binding(),
+            self.verifying_key(),
             &prepared.instances,
             &bytes,
             config.msm_budget,
@@ -867,11 +959,48 @@ impl QSigmaProver {
             part: prepared.part.clone(),
         })
     }
+
+    fn prove_circuit<C: Circuit<Fq>>(
+        &self,
+        circuit: &C,
+        prepared: &PreparedQSigma,
+        randomness: ProverRandomness<'_>,
+        config: ProverConfig,
+    ) -> Result<Vec<u8>, QSigmaError> {
+        let source = circuit.without_witnesses();
+        let key = keygen_pk_from_vk_v2_cancellable(
+            self.params,
+            &source,
+            &self.key,
+            CosetCachePolicy::OnDemand,
+            config.cancellation,
+        )
+        .map_err(QSigmaError::Rebuild)?;
+        drop(source);
+        let witness = Witness::from_circuit_cancellable(
+            &key,
+            circuit,
+            &prepared.instances,
+            config.cancellation,
+        )
+        .map_err(QSigmaError::Prover)?;
+        create_proof_owned(self.params, &key, witness, randomness, config)
+            .map_err(QSigmaError::Prover)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rebuild_failures_remain_hard_and_preserve_cancellation() {
+        assert!(QSigmaError::Rebuild(RebuildError::Key(KeyError::Cancelled)).is_cancelled());
+        for error in [RebuildError::Profile, RebuildError::Source] {
+            assert!(!QSigmaError::Rebuild(error).is_cancelled());
+        }
+    }
+
     fn source_fixture() -> (QSigmaPlan, Vec<VerifyingKey<Eq>>, PinnedParams<Eq>) {
         use crate::admin_sigma::{
             BOOTSTRAP_K, BootstrapCircuit, BootstrapWitness, ConsumingWitness, LoadCircuit,

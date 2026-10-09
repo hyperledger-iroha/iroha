@@ -17,10 +17,11 @@ const TARGET_COLUMNS: usize = 100;
 /// Format one syntactically valid Kotodama V1 source file.
 ///
 /// Invalid sources are returned as diagnostics rather than being partly rewritten. Comments and
-/// literal spellings are preserved byte-for-byte, and each comment stays on the source line it
+/// literal spellings are preserved byte-for-byte, and each comment stays with the code it
 /// annotated: a comment that followed a token on the same line remains a trailing comment of that
-/// token, written after the `,` or `;` that ends it. Attributes stay on their own line above the
-/// item or error variant they annotate.
+/// token (a line comment after the `,` or `;` that ends it, a block comment ahead of it), and a
+/// block comment that leads code on its line stays in front of that code. Attributes stay on
+/// their own line above the item or error variant they annotate.
 /// Whitespace between tokens is canonicalized with a 100-column target: a line breaks at its
 /// loosest break point first and again, one level deeper, at tighter ones while it still does not
 /// fit. At most one blank line written between members or declarations is kept. The only token
@@ -431,11 +432,12 @@ fn prepare_tokens<'source>(
     mark_tuple_parentheses(&mut tokens);
     tokens
 }
-/// Move every `,` and `;` ahead of the comments that precede it.
+/// Bind every `,` and `;` to the token before it, ahead of the comments that follow that token.
 ///
-/// A separator binds to the token before it and the comments follow it (`value; // why`), so
-/// layout is measured on the order the printer writes. The token after the separator keeps a
-/// blank line that separated the comments from the separator.
+/// Block comments written on the same line as the token stay with it, before the separator
+/// (`amount /* in nanos */, fee`); a line comment or a comment on a later line follows the
+/// separator (`value; // why`). Layout is then measured on the order the printer writes. The
+/// token after the separator keeps a blank line that separated the comments from the separator.
 fn bind_separators_before_comments(tokens: &mut [Tok<'_>]) {
     for index in 1..tokens.len() {
         if !matches!(
@@ -447,16 +449,27 @@ fn bind_separators_before_comments(tokens: &mut [Tok<'_>]) {
         let first_comment = (0..index)
             .rev()
             .take_while(|&before| tokens[before].is_comment())
-            .last();
-        let Some(first_comment) = first_comment.filter(|&first| first > 0) else {
+            .last()
+            .unwrap_or(index);
+        if first_comment == 0 {
             continue;
-        };
+        }
+        let same_line = tokens[first_comment..index]
+            .iter()
+            .take_while(|token| {
+                token.kind == SyntaxKind::BlockComment && token.newlines_before == 0
+            })
+            .count();
+        let target = first_comment + same_line;
+        if target == index && tokens[index].newlines_before == 0 {
+            continue;
+        }
         let carried = tokens[index].newlines_before;
         if let Some(next) = tokens.get_mut(index + 1) {
             next.newlines_before = next.newlines_before.max(carried);
         }
-        tokens[first_comment..=index].rotate_right(1);
-        tokens[first_comment].newlines_before = 0;
+        tokens[target..=index].rotate_right(1);
+        tokens[target].newlines_before = 0;
     }
 }
 /// Mark plain parentheses that hold a comma-separated tuple (expression, type or pattern).
@@ -718,7 +731,15 @@ fn canonicalize_terminators<'source>(
                 remove.extend(next);
             }
         } else if !terminated {
-            terminate_after.insert(last);
+            // Like a written `;`, the terminator follows block comments on the same line.
+            let after = (last + 1..end)
+                .take_while(|&index| {
+                    tokens[index].kind == SyntaxKind::BlockComment
+                        && tokens[index].newlines_before == 0
+                })
+                .last()
+                .unwrap_or(last);
+            terminate_after.insert(after);
         }
     };
     for (open, token) in tokens.iter().enumerate() {
@@ -1093,7 +1114,11 @@ impl<'tokens, 'source> Printer<'tokens, 'source> {
                     | SyntaxKind::RBracket
                     | SyntaxKind::RBrace
             );
-        let starts_line = line_start && !token.is_comment();
+        // A block comment that starts a line and leads code on it belongs to that code's region,
+        // so the line is still measured and broken like any other member.
+        let starts_line = line_start
+            && (!token.is_comment()
+                || (!self.comment_is_trailing(index) && self.comment_leads_code(index)));
         // A new region starts for each member of a block or multi-line list. Any other line start
         // inside a region (forced by a comment) continues that region one level deeper.
         let member = self.regions.last().is_none_or(|region| {
@@ -1451,8 +1476,8 @@ impl<'tokens, 'source> Printer<'tokens, 'source> {
             token.text
         };
         let inline_group = self.groups.last().is_some_and(|group| !group.multiline);
-        let trailing = (index > 0 && token.newlines_before == 0) || inline_group;
-        if trailing && !self.line_comment_open {
+        let trailing = self.comment_is_trailing(index);
+        if trailing {
             // Trailing trivia stays bound to the token before it, ahead of any pending break. A
             // block comment directly after `(` or `[` hugs the delimiter like the token it precedes.
             if token.kind == SyntaxKind::LineComment || !self.output.ends_with(['(', '[']) {
@@ -1468,7 +1493,14 @@ impl<'tokens, 'source> Printer<'tokens, 'source> {
             self.group_start = false;
             self.last_role = Role::Plain;
         }
-        self.comments_after_anchor = true;
+        // A same-line block comment directly before the separator that ends its member keeps
+        // that separator after it (`amount /* in nanos */, fee`).
+        let separator_follows =
+            trailing && token.kind == SyntaxKind::BlockComment && self.separator_follows(index);
+        if separator_follows {
+            self.anchor = self.output.len();
+        }
+        self.comments_after_anchor = !separator_follows;
         if token.kind == SyntaxKind::LineComment {
             self.pending_newlines = self.pending_newlines.max(1);
             self.line_comment_open = true;
@@ -1479,9 +1511,74 @@ impl<'tokens, 'source> Printer<'tokens, 'source> {
                 .is_some_and(|next| next.newlines_before != 0);
             if next_on_new_line && !inline_group {
                 self.pending_newlines = 1;
-            } else if !closes_tightly(self.tokens.get(index + 1)) {
+            } else if !closes_tightly(self.tokens, index + 1) {
                 self.space();
             }
+        }
+    }
+    /// Return whether the comment at `index` is written after the preceding token on the same
+    /// output line rather than starting a line of its own.
+    ///
+    /// A comment that followed a token on its source line trails it, and every comment inside a
+    /// single-line group trails. The exception is a block comment that directly follows the
+    /// opening delimiter of a multi-line group and leads code on its line: it starts the first
+    /// member's line, ahead of the code it annotates.
+    fn comment_is_trailing(&self, index: usize) -> bool {
+        let token = &self.tokens[index];
+        if self.line_comment_open {
+            return false;
+        }
+        if self.groups.last().is_some_and(|group| !group.multiline) {
+            return true;
+        }
+        index > 0
+            && token.newlines_before == 0
+            && !(self.group_start && self.comment_leads_code(index))
+    }
+    /// Return whether the comment at `index` is a block comment followed on its line by code it
+    /// leads: only same-line block comments sit between them, and the code is neither a
+    /// separator nor a closing delimiter.
+    fn comment_leads_code(&self, index: usize) -> bool {
+        if self.tokens[index].kind != SyntaxKind::BlockComment {
+            return false;
+        }
+        for token in &self.tokens[index + 1..] {
+            if token.newlines_before != 0 {
+                return false;
+            }
+            match token.kind {
+                SyntaxKind::BlockComment => {}
+                SyntaxKind::LineComment
+                | SyntaxKind::Comma
+                | SyntaxKind::Semicolon
+                | SyntaxKind::RParen
+                | SyntaxKind::RBracket
+                | SyntaxKind::RBrace => return false,
+                _ => return true,
+            }
+        }
+        false
+    }
+    /// Return whether the token after the comment at `index` is the separator that ends the
+    /// current member: a `,` or `;`, or a closer at which the printer writes a trailing comma.
+    fn separator_follows(&self, index: usize) -> bool {
+        let next = index + 1;
+        match self.tokens.get(next).map(|token| token.kind) {
+            Some(SyntaxKind::Comma | SyntaxKind::Semicolon) => true,
+            Some(SyntaxKind::RParen | SyntaxKind::RBracket | SyntaxKind::RBrace) => {
+                self.closer_takes_trailing_comma(next)
+                    && !matches!(
+                        self.last_significant,
+                        Some(
+                            SyntaxKind::Comma
+                                | SyntaxKind::LParen
+                                | SyntaxKind::LBracket
+                                | SyntaxKind::LBrace
+                                | SyntaxKind::DotDot
+                        )
+                    )
+            }
+            _ => false,
         }
     }
     /// Write `text` directly after the last significant token, ahead of trailing comments.
@@ -2014,7 +2111,7 @@ impl<'printer, 'tokens, 'source> Projection<'printer, 'tokens, 'source> {
                     self.space();
                 }
                 self.write(token.text);
-                if !closes_tightly(tokens.get(index + 1)) {
+                if !closes_tightly(tokens, index + 1) {
                     self.space();
                 }
             }
@@ -2103,9 +2200,18 @@ fn projects_flat(tokens: &[Tok<'_>], partners: &[Option<usize>], index: usize) -
         _ => !token.text.contains(['\n', '\r']),
     }
 }
-/// Return whether `next` is a `)` or `]` that follows a block comment without a space.
-fn closes_tightly(next: Option<&Tok<'_>>) -> bool {
-    next.is_some_and(|next| matches!(next.kind, SyntaxKind::RParen | SyntaxKind::RBracket))
+/// Return whether the token at `next` follows a block comment without a space: a `)` or `]`,
+/// or the `,` before one, which is written directly after the comment or dropped on one line.
+fn closes_tightly(tokens: &[Tok<'_>], next: usize) -> bool {
+    let closer = |index: usize| {
+        tokens
+            .get(index)
+            .is_some_and(|token| matches!(token.kind, SyntaxKind::RParen | SyntaxKind::RBracket))
+    };
+    let comma = tokens
+        .get(next)
+        .is_some_and(|token| token.kind == SyntaxKind::Comma);
+    closer(next) || (comma && closer(next + 1))
 }
 fn question_starts_ternary_at(tokens: &[Tok<'_>], question: usize) -> bool {
     if tokens.get(question).map(|token| token.kind) != Some(SyntaxKind::Question) {

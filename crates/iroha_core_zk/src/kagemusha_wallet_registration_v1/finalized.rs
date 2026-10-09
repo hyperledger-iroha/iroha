@@ -1,11 +1,11 @@
-//! One private registration capability owner for native and recursive authentication.
+//! One private registration capability owner for native finality authentication.
 use super::*;
 use iroha_data_model::{
     NetworkId, account::AccountId, kagemusha::KagemushaWalletAssetScopeV1,
     sumeragi_finality::VerifiedSumeragiBlock,
 };
 
-/// Exact immutable Register authenticated by a native or qualified recursive finality owner.
+/// Exact immutable Register authenticated by the native signed-genesis finality owner.
 /// There is no decoder, caller-verifier trait, public field or unchecked constructor.
 #[derive(Clone, Debug)]
 pub struct FinalizedKagemushaWalletRegistrationV1 {

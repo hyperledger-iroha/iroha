@@ -6,6 +6,8 @@ use KagemushaWalletOperationKindV1 as K;
 use KagemushaWalletPolicyUpdateKindV1 as U;
 use PreparationOriginalV1 as R;
 
+mod epoch_reader;
+
 fn setup() -> (MemoryArchive, KagemushaWalletStateV1, SourceCustodyV1) {
     let credential: KagemushaWalletCredentialV1 = fixture("KagemushaWalletCredentialV1");
     let certificate = enrollment_issuer(&credential);
@@ -35,6 +37,7 @@ fn view<'a>(
         state,
         K::Send,
         None,
+        IndexRoot::default(),
         IndexRoot::default(),
         IndexRoot::default(),
     )
@@ -100,6 +103,7 @@ fn refresh_original_drafts_are_role_bound_and_only_published_with_the_successor(
         Some(U::SchemePolicy),
         IndexRoot::default(),
         IndexRoot::default(),
+        IndexRoot::default(),
     )
     .unwrap();
     refresh
@@ -122,6 +126,7 @@ fn refresh_original_drafts_are_role_bound_and_only_published_with_the_successor(
         &state,
         K::RefreshPolicy,
         Some(U::SchemePolicy),
+        IndexRoot::default(),
         IndexRoot::default(),
         IndexRoot::default(),
     )
@@ -173,6 +178,7 @@ fn signed_time_original_cannot_manufacture_direct_clock_custody() {
         None,
         IndexRoot::default(),
         anchors,
+        IndexRoot::default(),
     )
     .unwrap();
     assert_eq!(custody.anchored_time().unwrap(), Some(anchored));
@@ -226,6 +232,7 @@ fn issued_request_is_exact_local_custody_and_missing_gap_is_not_a_fallback() {
         K::Receive,
         None,
         issued,
+        IndexRoot::default(),
         IndexRoot::default(),
     )
     .unwrap();
@@ -294,6 +301,7 @@ fn retain_blacklist(
         state,
         K::RefreshPolicy,
         Some(U::Blacklist),
+        IndexRoot::default(),
         IndexRoot::default(),
         IndexRoot::default(),
     )
@@ -521,6 +529,7 @@ fn blacklist_partial_publication_and_bad_readback_cannot_update_the_source_draft
             Some(U::Blacklist),
             IndexRoot::default(),
             IndexRoot::default(),
+            IndexRoot::default(),
         )
         .unwrap();
         let before = archive::encode(&draft.snapshot()).unwrap();
@@ -579,7 +588,7 @@ fn selected_blacklist_storage_loss_corruption_and_unavailability_remain_distinct
 }
 
 #[test]
-fn genuine_signed_full_list_larger_than_capsule_is_retained_only_by_bounded_reference() {
+fn genuine_signed_large_full_list_is_retained_only_by_bounded_reference() {
     use p256::ecdsa::{Signature, SigningKey, signature::Signer};
     // The existing golden RegulatoryPolicy certificate and its actual fixture key
     // authenticate this storage vector. No issuer, Native verdict or step is fabricated.
@@ -617,7 +626,7 @@ fn genuine_signed_full_list_larger_than_capsule_is_retained_only_by_bounded_refe
     .unwrap();
     list.verify(&scheme, &certificate).unwrap();
     let original = list.to_canonical_bytes().unwrap();
-    assert!(original.len() > KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1);
+    assert!(original.len() > 262_144);
     assert!(original.len() <= KAGEMUSHA_WALLET_BLACKLIST_MAX_BYTES_V1);
     let (mut store, state, source) = setup();
     let selected = retain_blacklist(&mut store, &state, &source, &list);

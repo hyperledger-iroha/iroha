@@ -104,6 +104,7 @@ fn preparation_draft_must_equal_the_rederived_draft_and_actual_successor() {
             None,
             manifest.issued_requests,
             manifest.direct_anchors,
+            manifest.finality_epochs,
         )
         .unwrap()
     }

@@ -181,3 +181,312 @@ fn batch_parallelism_diagnostic() {
         _ => panic!("select fp or fq"),
     }
 }
+
+#[test]
+fn prepared_cosets_from_coefficients_match_in_place_and_naive() {
+    fn check<F: PastaField>() {
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                for k in [0, 1, 2, 3, 4, 12, 13] {
+                    let domain = FftDomain::<F>::new(k).unwrap();
+                    let mut powers = vec![F::ZERO; domain.n()];
+                    for shift in [F::ONE, F::from(7), <F as WithSmallOrderMulGroup<3>>::ZETA] {
+                        let plan = domain.coset_plan(&mut powers, shift).unwrap();
+                        let original_powers = plan.powers.to_vec();
+                        for count in [0u64, 1, 3, 17] {
+                            let source: Vec<Vec<F>> = (0..count)
+                                .map(|i| coefficients(domain.n(), i + 700))
+                                .collect();
+                            let original_source = source.clone();
+                            let mut expected = source.clone();
+                            let mut expected_columns: Vec<_> =
+                                expected.iter_mut().map(Vec::as_mut_slice).collect();
+                            plan.fft_many(&mut expected_columns).unwrap();
+                            let mut actual = vec![vec![F::from(19); domain.n()]; source.len()];
+                            let addresses: Vec<_> = actual.iter().map(Vec::as_ptr).collect();
+                            let mut columns: Vec<_> =
+                                actual.iter_mut().map(Vec::as_mut_slice).collect();
+                            plan.fft_many_from_cancellable(&source, &mut columns, None)
+                                .unwrap();
+                            assert_eq!(actual, expected, "workers={workers} k={k} count={count}");
+                            assert_eq!(source, original_source);
+                            assert_eq!(plan.powers, original_powers);
+                            for (i, (output, input)) in actual.iter_mut().zip(&source).enumerate() {
+                                assert_eq!(output.as_ptr(), addresses[i]);
+                                if k <= 4 {
+                                    assert_eq!(
+                                        *output,
+                                        naive_coset_dft(input, domain.omega(), shift)
+                                    );
+                                }
+                                domain.coset_ifft(output, shift).unwrap();
+                                assert_eq!(output, input);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+    check::<Fp>();
+    check::<Fq>();
+}
+
+#[test]
+fn prepared_cosets_from_coefficients_validate_entire_batch_before_writes() {
+    fn check<F: PastaField>() {
+        let domain = FftDomain::<F>::new(3).unwrap();
+        let mut powers = vec![F::ZERO; domain.n()];
+        let plan = domain.coset_plan(&mut powers, F::from(7)).unwrap();
+        let source = vec![
+            coefficients::<F>(8, 1),
+            coefficients(8, 2),
+            coefficients(8, 3),
+        ];
+        let original_powers = plan.powers.to_vec();
+        for count in [0, 2, 4] {
+            let mut output = vec![vec![F::from(19); 8]; count];
+            let before = output.clone();
+            let mut columns: Vec<_> = output.iter_mut().map(Vec::as_mut_slice).collect();
+            assert_eq!(
+                plan.fft_many_from_cancellable(&source, &mut columns, None),
+                Err(FftError::WrongColumnCount {
+                    expected: count,
+                    actual: 3
+                })
+            );
+            assert_eq!(output, before);
+        }
+        assert_eq!(
+            FftError::WrongColumnCount {
+                expected: 2,
+                actual: 3
+            }
+            .to_string(),
+            "FFT has 3 source columns, expected 2"
+        );
+        for index in 0..source.len() {
+            for length in [0, 7, 9] {
+                for change_source in [false, true] {
+                    let mut inputs = source.clone();
+                    let mut output = vec![vec![F::from(19); 8]; source.len()];
+                    if change_source {
+                        inputs[index].resize(length, F::ONE);
+                    } else {
+                        output[index].resize(length, F::ONE);
+                    }
+                    let before = output.clone();
+                    let original_inputs = inputs.clone();
+                    let mut columns: Vec<_> = output.iter_mut().map(Vec::as_mut_slice).collect();
+                    assert_eq!(
+                        plan.fft_many_from_cancellable(&inputs, &mut columns, None),
+                        Err(FftError::WrongLength {
+                            expected: 8,
+                            actual: length
+                        })
+                    );
+                    assert_eq!(output, before);
+                    assert_eq!(inputs, original_inputs);
+                    assert_eq!(plan.powers, original_powers);
+                }
+            }
+        }
+        let empty: Vec<Vec<F>> = Vec::new();
+        assert_eq!(
+            plan.fft_many_from_cancellable(&empty, &mut [], None),
+            Ok(())
+        );
+    }
+    check::<Fp>();
+    check::<Fq>();
+}
+
+#[test]
+fn prepared_cosets_from_coefficients_cancel_during_input_borrow_and_retry() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Request cancellation while freezing the second input view. This must
+    // return before writing any output, without a timer or production hook.
+    struct CancelOnBorrow<'a, F> {
+        values: &'a [F],
+        borrows: &'a AtomicUsize,
+        token: &'a CancellationToken,
+    }
+    impl<F> AsRef<[F]> for CancelOnBorrow<'_, F> {
+        fn as_ref(&self) -> &[F] {
+            if self.borrows.fetch_add(1, Ordering::SeqCst) == 1 {
+                self.token.cancel();
+            }
+            self.values
+        }
+    }
+    fn check<F: PastaField>() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            let domain = FftDomain::<F>::new(12).unwrap();
+            let source: Vec<Vec<F>> = (0..3).map(|i| coefficients(domain.n(), i + 900)).collect();
+            let original_source = source.clone();
+            let mut powers = vec![F::ZERO; domain.n()];
+            let plan = domain.coset_plan(&mut powers, F::from(7)).unwrap();
+            let original_powers = plan.powers.to_vec();
+            let mut output = vec![vec![F::from(19); domain.n()]; source.len()];
+            let before = output.clone();
+            let cancelled = CancellationToken::new();
+            cancelled.cancel();
+            {
+                let mut columns: Vec<_> = output.iter_mut().map(Vec::as_mut_slice).collect();
+                assert_eq!(
+                    plan.fft_many_from_cancellable(&source, &mut columns, Some(&cancelled)),
+                    Err(FftError::Cancelled)
+                );
+            }
+            assert_eq!(output, before);
+            let token = CancellationToken::new();
+            let borrows = AtomicUsize::new(0);
+            let watched: Vec<_> = source
+                .iter()
+                .map(|values| CancelOnBorrow {
+                    values,
+                    borrows: &borrows,
+                    token: &token,
+                })
+                .collect();
+            {
+                let mut columns: Vec<_> = output.iter_mut().map(Vec::as_mut_slice).collect();
+                assert_eq!(
+                    plan.fft_many_from_cancellable(&watched, &mut columns, Some(&token)),
+                    Err(FftError::Cancelled)
+                );
+            }
+            assert!(token.is_cancelled());
+            assert_eq!(borrows.load(Ordering::SeqCst), source.len());
+            assert_eq!(output, before);
+            assert_eq!(source, original_source);
+            assert_eq!(plan.powers, original_powers);
+            let mut expected = source.clone();
+            let mut expected_columns: Vec<_> = expected.iter_mut().map(Vec::as_mut_slice).collect();
+            plan.fft_many(&mut expected_columns).unwrap();
+            let mut columns: Vec<_> = output.iter_mut().map(Vec::as_mut_slice).collect();
+            plan.fft_many_from_cancellable(&source, &mut columns, Some(&CancellationToken::new()))
+                .unwrap();
+            assert_eq!(output, expected);
+            assert_eq!(source, original_source);
+            assert_eq!(plan.powers, original_powers);
+        });
+    }
+    check::<Fp>();
+    check::<Fq>();
+}
+
+#[test]
+fn prepared_cosets_from_coefficients_freeze_stateful_source_views() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // A legal AsRef implementation can return a different slice on each call.
+    // The transform must validate and consume the exact first borrowed view.
+    struct ChangingSlice<'a, F> {
+        first: &'a [F],
+        later: &'a [F],
+        borrows: AtomicUsize,
+    }
+    impl<F> AsRef<[F]> for ChangingSlice<'_, F> {
+        fn as_ref(&self) -> &[F] {
+            if self.borrows.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.first
+            } else {
+                self.later
+            }
+        }
+    }
+    fn check<F: PastaField>() {
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                let domain = FftDomain::<F>::new(3).unwrap();
+                let mut powers = vec![F::ZERO; domain.n()];
+                let plan = domain.coset_plan(&mut powers, F::from(7)).unwrap();
+                let original_powers = plan.powers.to_vec();
+                for count in [1u64, 3] {
+                    let source: Vec<Vec<F>> = (0..count)
+                        .map(|i| coefficients(domain.n(), i + 1200))
+                        .collect();
+                    let original_source = source.clone();
+                    let mut expected = source.clone();
+                    let mut expected_columns: Vec<_> =
+                        expected.iter_mut().map(Vec::as_mut_slice).collect();
+                    plan.fft_many(&mut expected_columns).unwrap();
+                    for length in [0, 7, 9] {
+                        let changed = vec![F::ONE; length];
+                        for invalid_first in [false, true] {
+                            for changed_index in 0..source.len() {
+                                let watched: Vec<_> = source
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, values)| {
+                                        let first: &[F] = if invalid_first && i == changed_index {
+                                            &changed
+                                        } else {
+                                            values
+                                        };
+                                        let later: &[F] = if !invalid_first && i == changed_index {
+                                            &changed
+                                        } else {
+                                            values
+                                        };
+                                        ChangingSlice {
+                                            first,
+                                            later,
+                                            borrows: AtomicUsize::new(0),
+                                        }
+                                    })
+                                    .collect();
+                                let mut output = vec![vec![F::from(19); domain.n()]; source.len()];
+                                let before = output.clone();
+                                let result = {
+                                    let mut columns: Vec<_> =
+                                        output.iter_mut().map(Vec::as_mut_slice).collect();
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        plan.fft_many_from_cancellable(&watched, &mut columns, None)
+                                    }))
+                                };
+                                assert!(result.is_ok(), "stateful source panicked");
+                                if invalid_first {
+                                    assert_eq!(
+                                        result.unwrap(),
+                                        Err(FftError::WrongLength {
+                                            expected: 8,
+                                            actual: length
+                                        })
+                                    );
+                                    assert_eq!(output, before, "validation partially wrote output");
+                                } else {
+                                    assert_eq!(result.unwrap(), Ok(()));
+                                    assert_eq!(output, expected);
+                                }
+                                assert!(
+                                    watched
+                                        .iter()
+                                        .all(|input| input.borrows.load(Ordering::SeqCst) == 1)
+                                );
+                                assert_eq!(source, original_source);
+                                assert_eq!(plan.powers, original_powers);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+    check::<Fp>();
+    check::<Fq>();
+}

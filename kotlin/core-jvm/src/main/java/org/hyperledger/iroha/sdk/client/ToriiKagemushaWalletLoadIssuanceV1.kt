@@ -51,8 +51,9 @@ class ToriiKagemushaWalletLoadSelectionV1(
  * [selection], [payerAccountId] and [networkId] retain the request's expected identities. They
  * do not assert that the response contains those identities. The consumer must decode the
  * canonical receipt and bind its request, payer, scheme and wallet to the expected owner.
- * Before wallet admission it must independently authenticate the original successful
- * transaction, ordinary chain finality and the complete recursive Load proof.
+ * Before a fresh Advance, the native wallet verifies the exact receipt's BLS certificate and
+ * event inclusion against genesis-rooted, locally selected epoch authority. Selected and
+ * completed retries use the exact authenticated retained custody.
  *
  * This transport implements none of those checks and exposes no balance or admission verdict.
  * The receipt and HTTP success alone never authorize offline value.

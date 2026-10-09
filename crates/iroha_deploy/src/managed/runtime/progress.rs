@@ -23,6 +23,7 @@ pub(super) enum Phase {
     ProgramAdmission,
     CustodyMaterial,
     StreamTokenRevision,
+    CarrierPeers,
 }
 impl Phase {
     fn description(self) -> &'static str {
@@ -39,6 +40,9 @@ impl Phase {
             Self::Carrier1 => "confirming the original bootstrap carrier on validator 1",
             Self::Carrier2 => "confirming the original bootstrap carrier on validator 2",
             Self::Carrier3 => "confirming the original bootstrap carrier on validator 3",
+            Self::CarrierPeers => {
+                "confirming the original bootstrap carrier on all four validators"
+            }
             Self::Catalog => "publishing the exact generated gateway catalog",
             Self::Restart => "restarting the owned validators with the retained service revision",
             Self::Receipt => "reproving the same readiness transaction after restart",
@@ -77,6 +81,7 @@ impl Progress {
             14 => Phase::ProgramAdmission,
             15 => Phase::CustodyMaterial,
             16 => Phase::StreamTokenRevision,
+            17 => Phase::CarrierPeers,
             _ => Phase::Selection,
         }
     }

@@ -183,6 +183,7 @@ impl AttachmentStore {
                 "original AMX registration request was retired",
             ));
         }
+        require_signed_replay_source(&directory, &preparation)?;
         if was_signed {
             let transaction = preparation.into_signed_transaction().map_err(|_| {
                 AttachmentError::Invalid("signed AMX registration has no original transaction")
@@ -340,6 +341,26 @@ impl AttachmentStore {
         }
         Ok(())
     }
+}
+
+// Replay/carrier publication is reachable only after the wallet retained its signed original.
+// An absent or rolled-back unsigned prefix cannot authorize replacement signing or dispatch.
+fn require_signed_replay_source(
+    directory: &PrivateDirectory,
+    preparation: &iroha_wallet::operations::VerifiedNativePreparation,
+) -> Result<()> {
+    if preparation.phase() != NativePreparationPhase::Signed
+        && directory.entries(4)?.iter().any(|name| {
+            ["replay.nrt", "carrier.nrt"]
+                .iter()
+                .any(|record| name.as_os_str() == std::ffi::OsStr::new(record))
+        })
+    {
+        return Err(AttachmentError::Invalid(
+            "AMX replay evidence has no original signed transaction",
+        ));
+    }
+    Ok(())
 }
 
 // This bounded inventory belongs to the sole administrative action, never the SNS journal.

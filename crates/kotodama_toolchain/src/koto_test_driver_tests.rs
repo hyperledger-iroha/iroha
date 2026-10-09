@@ -143,6 +143,67 @@ fn pure_unit_test_suite_executes_without_runtime_artifact() {
     assert_eq!(results[0].gas(), results[0].own_gas);
 }
 #[test]
+fn coverage_lists_every_declared_function_including_those_without_code() {
+    let temp = TestTempDir::new();
+    let path = temp.write(
+        "classify.ko",
+        r#"seiyaku Classify {
+    fn classify(int x) -> int {
+        if x < 0 {
+            return 0;
+        }
+        return 1;
+    }
+    fn never_called(int x) -> int {
+        if x > 5 {
+            return x * 3;
+        }
+        return x;
+    }
+    #[test]
+    fn classifies() {
+        test::assert_eq(actual: classify(x: -1), expected: 0);
+    }
+}
+"#,
+    );
+    let suite = discover_suite(&path).expect("discover");
+    let compiled = compile_suite(&suite, false).expect("compile");
+    let results = execute_suite(&compiled, TraceMode::PcOnly, 1).expect("execute");
+    let report = render_coverage_report(&compiled, &results);
+    // Whatever the compiler inlines or omits, every declared non-test function has a row, and a
+    // function without code of its own is never reported as covered.
+    for function in ["classify", "never_called"] {
+        let row = report
+            .lines()
+            .find(|line| line.contains(&format!("  {function}")))
+            .unwrap_or_else(|| panic!("{function} row:\n{report}"));
+        if row.trim_start().starts_with('-') {
+            assert!(row.ends_with("(no code of its own: inlined into its callers or unused)"));
+        }
+    }
+    assert!(
+        !report.contains("  classifies"),
+        "tests are not coverage targets:\n{report}"
+    );
+    let codeless = codeless_functions(
+        &suite.target_program,
+        &[CoverageFunction {
+            display_name: "classify".to_owned(),
+            line: 2,
+            pc_start: 0,
+            pc_end: 4,
+        }],
+    );
+    assert_eq!(
+        codeless,
+        vec![CodelessFunction {
+            display_name: "never_called".to_owned(),
+            line: 8,
+        }]
+    );
+}
+#[test]
 fn helper_preserves_u64_max_json_int_through_option_match() {
     let temp = TestTempDir::new();
     let target = temp.write(
@@ -1576,6 +1637,10 @@ fn finalize_suite_rejects_program_without_tests() {
     .err()
     .expect("program without tests should fail");
     assert!(err.contains("no #[test] Kotodama functions"));
+    assert!(
+        err.contains("pass that module to `koto test`"),
+        "the error says where tests live: {err}"
+    );
 }
 #[test]
 fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
@@ -2694,6 +2759,9 @@ fn coverage_helper_functions_handle_internal_and_boundary_cases() {
     };
     let executed = HashSet::from([9_u64, 10, 19, 20]);
     assert!(function_hit(&function, &executed));
+    // Only executions inside `[pc_start, pc_end)` count toward the function's profile.
+    let executions = BTreeMap::from([(9_u64, 4_u64), (10, 3), (19, 2), (20, 7)]);
+    assert_eq!(executed_instructions(&function, &executions), 5);
     assert_eq!(percentage(0, 0), 100.0);
     assert_eq!(percentage(1, 4), 25.0);
 }
@@ -3249,6 +3317,21 @@ fn one_line_source_collapses_layout_outside_string_literals() {
         "f(s: \"keep  ( this ,)\\\" spacing\")"
     );
     assert_eq!(one_line_source("  Point { x: 1 }  "), "Point { x: 1 }");
+    // Single-line excerpts keep their spelling; multi-line ones drop comments and close braces
+    // with one space.
+    assert_eq!(one_line_source("f(a: [ 1 ])"), "f(a: [ 1 ])");
+    assert_eq!(
+        one_line_source(
+            "f(\n    a: 1, // the first \"value\"\n    b: json {\n        c: 2,\n    },\n)"
+        ),
+        "f(a: 1, b: json { c: 2 })"
+    );
+    assert_eq!(
+        one_line_source("f(\n    p: r\"C:\\dir\\\",\n    q: br\"\\x\",\n    s: \"a\\\"b\",\n)"),
+        "f(p: r\"C:\\dir\\\", q: br\"\\x\", s: \"a\\\"b\")"
+    );
+    assert!(opens_raw_string("f(r") && opens_raw_string("br") && opens_raw_string("(br"));
+    assert!(!opens_raw_string("bar") && !opens_raw_string("f(") && !opens_raw_string("x_r"));
 }
 #[test]
 fn lifecycle_rejections_mirror_activation_rules() {
@@ -3322,6 +3405,63 @@ fn literal_argument_records_are_checked_against_the_target_schema_at_compile_tim
         diagnostic.message.ends_with("write \"12\""),
         "{}",
         diagnostic.message
+    );
+    // The record itself is underlined, with the target's parameters as site help.
+    assert_eq!(
+        primary_text(&path, diagnostic),
+        r#"Json::parse("{\"until\":12}")"#
+    );
+    let help = diagnostic.help.as_deref().expect("site help");
+    assert!(help.starts_with("`renew` takes `int until`;"), "{help}");
+}
+/// Source text a diagnostic's primary span covers on its first line.
+fn primary_text(path: &Path, diagnostic: &kotodama_lang::diagnostic::Diagnostic) -> String {
+    let span = diagnostic
+        .primary_span
+        .as_ref()
+        .expect("located diagnostic");
+    let source = fs::read_to_string(path).expect("read diagnosed source");
+    let line = source
+        .lines()
+        .nth(span.start.line - 1)
+        .expect("diagnosed line");
+    let end = if span.end.line == span.start.line {
+        span.end.column
+    } else {
+        line.chars().count() + 1
+    };
+    line.chars()
+        .skip(span.start.column - 1)
+        .take(end - span.start.column)
+        .collect()
+}
+#[test]
+fn unknown_call_targets_are_located_at_the_selector_with_the_declared_selectors() {
+    let temp = TestTempDir::new();
+    let path = write_ledger_package(
+        &temp,
+        r#"
+    #[test(fixture = "people")]
+    fn misspelt_selector() {
+        test::invoke_kotoage_as(actor: "alice", kotoage: "renw", arguments: Json::parse("{}"));
+    }
+"#,
+    );
+    let suite = discover_suite(&path).expect("discover");
+    let Err(SuiteError::Diagnostics(diagnostics)) = compile_suite(&suite, false) else {
+        panic!("an unknown selector must not compile");
+    };
+    let diagnostic = &diagnostics.diagnostics[0];
+    assert_eq!(diagnostic.code, "K2002");
+    assert_eq!(
+        diagnostic.message,
+        "the seiyaku under test has no kotoage, view, or lifecycle declaration named `renw`; did you mean \"renew\"?"
+    );
+    assert_eq!(primary_text(&path, diagnostic), "\"renw\"");
+    let help = diagnostic.help.as_deref().expect("site help");
+    assert!(
+        help.contains("\"hajimari\", \"height\", \"kaizen\", \"pair\", \"renew\", \"time\""),
+        "{help}"
     );
 }
 #[test]
@@ -3611,6 +3751,21 @@ fn coverage_and_trace_attribute_runtime_and_test_steps_separately() {
             .starts_with("yes")
     };
     assert!(covered("hajimari") && covered("height"), "{report}");
+    // Each row profiles the instructions the function executed; uncalled functions ran none.
+    let instructions = |function: &str| {
+        report
+            .lines()
+            .find(|line| line.trim_end().ends_with(&format!("  {function}")))
+            .and_then(|line| line.split_whitespace().nth(2))
+            .and_then(|count| count.replace(',', "").parse::<u64>().ok())
+            .unwrap_or_else(|| panic!("{function} instruction count:\n{report}"))
+    };
+    assert!(
+        report.contains("covered  line  instructions  function"),
+        "{report}"
+    );
+    assert!(instructions("height") > 0, "{report}");
+    assert_eq!(instructions("renew"), 0, "{report}");
     assert!(
         !covered("pair") && !covered("renew") && !covered("time"),
         "{report}"

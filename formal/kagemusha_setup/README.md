@@ -12,21 +12,31 @@ python3.12 -B -S -m formal.kagemusha_setup.check --output /absolute/new/output
 ```
 
 The owner checks exact source pins before importing the subjects, runs the
-maintained prime/group certificates, then seventy-seven controls. It refuses optimized
-Python and existing output directories. It retains setup bytes, raw-model
-tables, synthetic private logs, proofs and failures. Nothing in this package
-imports or reads a development output directory. All dependencies are relative
-to this repository; no Cargo build, large parameter artifact or native prover
-execution is involved.
+maintained prime/group certificates, then one hundred controls. It refuses optimized
+Python, bytecode-writing invocations (use `-B`) and existing output directories. It retains setup bytes, raw-model
+tables, synthetic private logs, proofs and failures. Ordinary controls do not import or read a development output directory. Their
+dependencies are relative to this repository; no Cargo build, large parameter
+artifact or native prover execution is involved. The separately gated large
+constructor below reads only its caller-selected originals directory.
 
 The controls retain the five exact finite-map/law/cap cases, five single-map/KAT cases, eight raw-query cases, six
 fresh-target/parameter cases and ten complete-proof cases, plus two source
 custody cases, thirteen bounded-producer parity/resource/custody cases and
-eleven sequential request/entropy/replay cases and seventeen generic public-table/rebinding cases. One complete-proof method checks exact retained diagnostic
+eleven sequential request/entropy/replay cases, nine request-shape cases and
+seventeen generic public-table/rebinding cases and fourteen closed A1
+constructor/custody cases. One complete-proof method checks exact retained diagnostic
 proof/parameter hashes after the arithmetic-helper relocation. The only retired test checks the replaced fixed-target sampler;
 its failure, zero-target and cap guarantees are covered by the fresh-target
 controls. There is one maintained pair sampler, which draws a fresh private
 target on every ordinary inverse miss. No compatibility sampler is retained.
+
+The source inventory includes the exact-source VK-to-PK reconstruction module,
+its exports and source-fingerprint implementation. The reconstruction reuses an
+already admitted verifier after checking the same descriptor, key and synthesis
+source; it does not choose a new commitment blind or parameter family. These
+source checks do not execute reconstruction or qualify a native wallet. The
+commitment counter is test-only instrumentation; proof and transcript semantics
+remain covered by the existing exact-byte diagnostic controls.
 
 ## Exact setup boundary
 
@@ -187,6 +197,20 @@ exhausted entropy, interruptions, immutable outcomes, capacity, reentrancy,
 storage failure and late-metadata failure. Two injected byte fixtures exercise
 publication failures only; they are never counted as proofs.
 
+Request containers have two named diagnostic caps: `MAX_INSTANCE_COLUMNS=256`
+and `MAX_INSTANCE_VALUES=256`. The value cap applies to each column and their
+aggregate. These finite resource limits are separate from the descriptor's
+protocol bounds; exact descriptor column lengths, scalar types and canonical
+field values remain required. Column counts and lengths are checked before
+visiting scalar values. This admits Load A's69-word statement and Load Q0's
+five-column `[124,2,1,1,1]` shape without selecting a special profile in the
+Owner. Nine request-shape controls cover those shapes, exact failure replay
+and changed bindings, the256/257-column and256-value boundaries, early shape
+refusal, malformed containers, descriptor validation and unchanged explicit
+k>6 opt-in. Their simulator is replaced by a failing sentinel: these controls
+generate no proof or entropy draws and do not establish native Q0/A1 simulator
+acceptance or privacy.
+
 
 ## One generic outer algorithm and historical public originals
 
@@ -215,7 +239,9 @@ entry also validates a supplied authority tag, integer k, raw byte extent and
 explicit large opt-in before creating any directory or hashing supplied bytes.
 An exact descriptor override must be a canonical64-character lowercase hexadecimal
 string before it can be inserted into private copied source. A direct caller owns
-any reads performed before supplying bytes. Small checks/CI never opt in. The
+any reads performed before supplying bytes. Ordinary checks never execute large parameter construction, rebinding or proving;
+the closed A1 controls use explicit large flags only on inert/sentinel or small
+descriptor paths. The generic
 k16 private reference changes exactly two resource checks: it permits only the
 specified Pallas V2 descriptor digest and Pallas k16 parameter extent. Parsing,
 RP57, key binding, all verifier equations, full generator decision and parameter
@@ -234,6 +260,79 @@ custody, public-only values, two-product/two-lookup shapes, all point logs,
 mutations, authority refusal and bounded replay. Five further methods check
 interpolation/canonical-table rejection, query bounds, descriptor-derived
 entropy accounting and pre-I/O large-mode refusal. They generate six additional
-k6 proofs, for fourteen total across77 methods. All prior60 assertions remain;
+k6 proofs, for fourteen total across100 methods. The nine request-shape cases and fourteen
+closed A1 constructor cases add no proofs. All prior60 assertions remain;
 the request binding control additionally mutates public preprocessing bytes.
 No k16 proof, large parameter family, timing qualification or C12 claim follows.
+
+
+## Closed historical Load A1 outer constructor
+
+`load_a1_case.Constructor(output, originals=directory, allow_large=True,
+entropy=callable, limits=Limits())` is a separate diagnostic front for one exact
+historical Eq/Vesta k16 Load A1 relation. Its required `originals` argument
+selects an existing directory, not authority. There is no default development
+path or automatic discovery. Three regular files directly in that directory
+must have the exact SHA256 basenames and lengths below:
+
+| Role | Bytes | SHA256 basename |
+|---|---:|---|
+| Descriptor |39,386 |`e7e535287ff5b2f41ff3c4a92dac549981b1dea243ba191930cc24932a51c087` |
+| Verifying key |2,154 |`04c6acf9d714bf3259dfb1b71606f7f655419548ab2bd5e930ecbd2418b2762c` |
+| Public proving original |140,511,414 |`04824c5fdb5d8f59ef66de7a822d170ece02134b50abe9b65b63ebe3b8fa3a34` |
+
+The package includes only `load_a1_descriptor.norito`, the exact 39,386-byte
+historical descriptor, as **DATA for decoder/custody tests**. It confers no
+source, catalog, witness, parameter, or native verifier authority. Neither the
+large original nor parameters are needed by ordinary tests. The package source
+inventory pins that fixture. The fourteen controls use ordinary temporary
+folders and small synthetic refusal inputs, without a development output tree.
+They import an isolated reference for the small descriptor but do not construct
+a real A1 case, derive setup parameters, perform an FFT/MSM, or generate a proof.
+After a reviewed source installation, their no-proof command is:
+
+```sh
+python3.12 -B -S -m unittest -v formal.kagemusha_setup.test_load_a1_case
+```
+
+The front requires `-B` and unoptimized Python before any private import or
+entropy use. It rejects unsafe/missing original directories and occupied output
+paths before reading originals. `build()` reads each code-selected artifact
+through the exact nofollow parent/file identity guard, full hash and EOF check;
+partial observations survive failures. The historical reference retains official
+KATS and permits only the exact Eq16 descriptor resource exception. Full table
+and canonical-field decoding precedes the sole internal `bounded.Owner.derive(1,16)`.
+No caller-supplied Parameters object, log map or JSON receipt is accepted by this
+front. The same live owner, raw oracle and finite caps remain attached to a
+successful case. Replay returns the same success/failure object without another
+family; interruptions retain failure and propagate. `close()` ends residual
+queries and does not provide restart or serialized trust.
+
+`rebind.py` supplies the shared re-key implementation. Its existing `reference`
+and `make_case` signatures, small defaults, 128MiB original guard and sole
+Pallas-Omega k16 triple remain unchanged. Private factoring gives the closed A1
+front its exact Vesta resource predicate, delegated output writes and allocation
+checkpoints; it does not add an alternative public generic profile. The scalar
+IFFT, ordered point/log equality, default commitment blind1, canonical parsing,
+RP57 equations and full generator decision are unchanged. Chosen authority is
+written only in a fresh private namespace, before importing that namespace.
+Historical inner constants and recursive keys remain unchanged, so even a
+successful future large construction would be a chosen **outer polynomial
+relation**, not coherent recursive re-keying or current native authority.
+
+A real construction requires a separately scheduled large handoff. One shared
+tracer checks a 2GiB peak-allocation ceiling across intake, setup and rebinding.
+The arithmetic allowance is 532,678,860 setup bytes plus 1,614,804,788 case and
+transient bytes; these do not charge or reserve the ceiling twice. Full decoder
+regions can allocate before the next checkpoint, and `tracemalloc` is neither an
+instantaneous limit nor RSS measurement. The exact setup uses 65,538 contexts,
+at most 262,144 raw queries/entries, one request, and 4,194,372 parameter bytes.
+The output owner enforces at most1GiB,64 files,depth4 under a fresh0700 root,
+charging chunks before writes;256KiB and three slots are retained for terminal
+records. Exact namespace/hash/extent checks and a final allocation checkpoint
+precede success. Private logs, original read observations and partial failure
+DATA are retained; no crash-durability or performance claim is made.
+
+Ordinary100 controls still produce only the existing fourteen small k6 proofs.
+Their success cannot establish a large A1 construction, any native16 adapter
+acceptance, the full joint sampler law, a coherent recursive setup, or C12.

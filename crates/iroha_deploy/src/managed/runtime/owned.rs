@@ -423,6 +423,17 @@ impl OwnedGateway {
     pub(super) fn provider(&self) -> ProviderId {
         self.provider
     }
+    /// This gateway's exact original plan, with fresh source checks and no serving authority.
+    /// Active decode limits retain the renderer's standalone full-capture recipe.
+    pub(super) fn original_provider_plan(
+        &self,
+        prepared: &PreparedLocalnet,
+    ) -> Result<Option<RetainedProviderServicePlan>> {
+        self.launch
+            .owner
+            .original_provider_plan(prepared, self.provider)
+    }
+
     /// Pure original intent; this does not replace the caller's live child/revision checks.
     pub(super) fn original_provider_plans(
         &self,

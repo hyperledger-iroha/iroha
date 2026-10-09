@@ -35,7 +35,8 @@ internal class KagemushaWalletSetupInputV1(
     private val c: ByteArray
     init {
         val limits = when (selector) {
-            0, 1, 4, 6, 15, 18, 19, 20, 24, 27, 38, 43, 47, 48, 49, 50, 51 -> intArrayOf(0, 0, 0)
+            0, 1, 4, 6, 15, 18, 19, 20, 24, 27, 38, 43, 47, 48, 49, 50, 51, 52 -> intArrayOf(0, 0, 0)
+            53 -> intArrayOf(256 * 1024, 0, 0)
             39 -> intArrayOf(10_000, 10_000, 10_000)
             40, 44 -> intArrayOf(10_000, 10_000, 0)
             21, 22 -> intArrayOf(21_024, 0, 0)
@@ -58,7 +59,8 @@ internal class KagemushaWalletSetupInputV1(
         b = second.copyOf()
         c = third.copyOf()
         require((selector in listOf(1, 2, 19, 20, 25, 27, 30, 33, 34, 39, 41, 42, 43, 44, 45)) == id.any { it != 0.toByte() }) { "setup identity" }
-        require(selector == 47 || (selector in listOf(1, 27)) == (amount.low != 0L || amount.high != 0L)) { "Offer or Load amount" }
+        require(selector in listOf(47, 53) || (selector in listOf(1, 27)) == (amount.low != 0L || amount.high != 0L)) { "Offer or Load amount" }
+        require(selector != 53 || (amount.high == 0L && a.isNotEmpty())) { "epoch and boundary original" }
         require(token >= 0 && ((selector in listOf(5, 6, 29, 49, 51)) == (token != 0L))) { "native setup token" }
         require(selector !in listOf(30, 33, 34, 35, 36, 37, 46) || a.isNotEmpty()) { "ledger original" }
         require(selector != 29 || (token in 1L..3L && a.isNotEmpty())) { "ledger transport kind and original" }
@@ -106,6 +108,25 @@ class KagemushaWalletFeeClaimV1 internal constructor(payment: ByteArray, request
     fun request(): ByteArray = retainedRequest.copyOf()
     override fun toString(): String = "KagemushaWalletFeeClaimV1(originals=[REDACTED])"
 }
+/** Protected native Load epoch authority; no receipt or monetary permission is implied. */
+class KagemushaWalletEpochProgressV1 internal constructor(result: KagemushaWalletCallV1) {
+    val epoch: java.math.BigInteger
+    val firstHeight: java.math.BigInteger
+    val boundaryHeight: java.math.BigInteger
+    init {
+        if (result.status != KagemushaWalletCallV1.EPOCH_PROGRESS) {
+            throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        }
+        val bytes = result.bytes()
+        fun word(start: Int) = java.math.BigInteger(1, bytes.copyOfRange(start, start + 8).reversedArray())
+        epoch = java.math.BigInteger(java.lang.Long.toUnsignedString(result.sequenceLow))
+        firstHeight = word(0); boundaryHeight = word(8)
+        if (firstHeight.signum() <= 0 || boundaryHeight < firstHeight) {
+            throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+        }
+    }
+}
+
 /** Last durably selected native Global-chain decision; no payout permission is implied. */
 class KagemushaWalletLedgerProgressV1 internal constructor(result: KagemushaWalletCallV1) {
     /** Unsigned u64 height carried as its exact Long bits. */

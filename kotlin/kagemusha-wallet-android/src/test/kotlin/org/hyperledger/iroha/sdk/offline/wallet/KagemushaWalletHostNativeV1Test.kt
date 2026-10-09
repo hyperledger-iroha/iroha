@@ -34,6 +34,56 @@ class KagemushaWalletHostNativeV1Test {
     }
 
     @Test
+    fun loadOriginalHeightOutputUsesActualJniAndClearsRefusedData() {
+        val id = ByteArray(32) { 1 }
+        fun validate(output: LongArray, receipt: ByteArray = byteArrayOf(1),
+            finality: ByteArray = byteArrayOf(2)) =
+            KagemushaWalletLoadOriginalNativeV1.validate(id, id, id,
+                "not-a-canonical-account".toByteArray(Charsets.UTF_8), receipt, finality, output)
+        for (length in listOf(0, 2)) {
+            val output = LongArray(length) { 37 }
+            assertEquals(-1, validate(output))
+            assertTrue(output.all { it == 37L })
+        }
+        val output = longArrayOf(37)
+        assertEquals(-1, validate(output))
+        assertEquals(0L, output[0])
+        output[0] = 41
+        assertEquals(-1, validate(output, receipt = ByteArray(513)))
+        assertEquals(0L, output[0])
+        output[0] = 43
+        assertEquals(-1, validate(output, finality = ByteArray(256 * 1024 + 1)))
+        assertEquals(0L, output[0])
+    }
+
+    @Test
+    fun epochSetupUsesActualJniAndRejectsMalformedInputsBeforeOwnerLookup() {
+        fun call(selector: Int, low: Long = 0, high: Long = 0, token: Long = 0,
+            identity: ByteArray = ByteArray(32), first: ByteArray = byteArrayOf(),
+            second: ByteArray = byteArrayOf(), third: ByteArray = byteArrayOf()) =
+            assertNotNull(KagemushaWalletNativeV1.setup(0, identity, selector, low, high,
+                token, first, second, third))
+        for (reply in listOf(call(52), call(53, first = byteArrayOf(1)),
+            call(53, low = -1, first = byteArrayOf(1)))) {
+            assertEquals(-2, reply.status)
+            assertTrue(reply.bytes().isEmpty())
+        }
+        val malformed = listOf(
+            call(52, low = 1), call(52, first = byteArrayOf(1)),
+            call(53), call(53, high = 1, first = byteArrayOf(1)),
+            call(53, token = 1, first = byteArrayOf(1)),
+            call(53, identity = ByteArray(32) { 1 }, first = byteArrayOf(1)),
+            call(53, first = ByteArray(256 * 1024 + 1)),
+            call(53, first = byteArrayOf(1), second = byteArrayOf(1)),
+            call(53, first = byteArrayOf(1), third = byteArrayOf(1)),
+        )
+        for (reply in malformed) {
+            assertEquals(-1, reply.status)
+            assertTrue(reply.bytes().isEmpty())
+        }
+    }
+
+    @Test
     fun unloadSetupUsesActualJniAndNeverInventsACompletedClaim() {
         val id = ByteArray(32) { 9 }
         fun call(identity: ByteArray = id, beneficiary: ByteArray = byteArrayOf(), token: Long = 0) =

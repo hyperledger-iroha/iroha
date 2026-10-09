@@ -131,6 +131,12 @@ mod tests {
                 description: None,
                 fault_tolerance: 1,
             },
+            DataSpaceMetadata {
+                id: DataSpaceId::new(6),
+                alias: "cbsi".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
         ])
         .unwrap();
         let id = |name: &str| {

@@ -37,6 +37,8 @@ use std::{
 
 #[path = "native_exchange/load.rs"]
 mod load;
+#[path = "native_exchange/load_seam.rs"]
+mod load_seam;
 #[path = "native_exchange/network_settlement.rs"]
 mod network_settlement;
 #[path = "native_exchange/proof_negative.rs"]
@@ -341,11 +343,8 @@ fn fold(wallet: &mut Wallet) {
     panic!("bounded native fold schedule did not complete");
 }
 
-const SOURCE_PINS: [&str; 10] = [
-    "KAGEMUSHA_FINALITY_PRODUCER_SHA256",
-    "KAGEMUSHA_FINALITY_SOURCE_SHA256",
-    "KAGEMUSHA_FINALITY_FIXTURE_SHA256",
-    "KAGEMUSHA_FINALITY_INVENTORY_SHA256",
+const SOURCE_PINS: [&str; 7] = [
+    "KAGEMUSHA_SIGNED_GENESIS_FIXTURE_SHA256",
     "KAGEMUSHA_WALLET_CATALOG_PRODUCER_SHA256",
     "KAGEMUSHA_WALLET_CATALOG_SOURCE_SHA256",
     "KAGEMUSHA_WALLET_CATALOG_INVENTORY_SHA256",
@@ -664,7 +663,8 @@ fn actual_native_a_to_b_to_c_then_unload_with_restart_and_replay() {
             finality: finality_bytes,
         },
     );
-    let loaded = complete(a.execute(load.clone()).unwrap()); // actual installed finality proof verification
+    let (mut a, device_a, loaded) =
+        load_seam::exercise(a, device_a, &sources, &f, &frames_a, &credential_a, &load);
     assert_eq!(complete(a.execute(load.clone()).unwrap()), loaded);
     assert_eq!(a.snapshot().unwrap().owned_balance, 100);
     let mut duplicate = load.clone();

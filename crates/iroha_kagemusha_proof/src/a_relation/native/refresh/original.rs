@@ -2,7 +2,8 @@
 //!
 //! Metadata installation retains no PK or original bytes. Each importer builds the
 //! exact unknown source, validates original tables and installed VK, and returns one
-//! owned PK for the caller to borrow during proving and release immediately afterward.
+//! compact source-admission seal after dropping that PK. Proving reconstructs only this
+//! admitted source and releases its temporary PK before verification and decisions.
 
 use super::*;
 use iroha_plonk::{
@@ -47,7 +48,7 @@ impl Prover {
     /// The owner authenticates the scheme, provider, root and exact compiled-source
     /// catalog before calling this constructor. Metadata matching alone is not original
     /// source verification. Use `import_a`/`import_w` for strict original-key intake;
-    /// every proving call also checks the full borrowed PK identity before any fold.
+    /// every proving call checks the full admitted D/V identity before any fold.
     /// No operation input chooses the profile or stage schedule.
     /// # Errors
     /// Missing source, nonuniform A profile, curve/public schema or W schema.
@@ -101,8 +102,8 @@ impl Prover {
     /// Import one original A PK against the exact compiled stage and installed verifier.
     ///
     /// Unknown source inputs cannot create a `Prepared` operation or accepted claim.
-    /// This returns the only proving buffer owned by this call; the producer retains
-    /// neither the returned PK nor its original byte source. No key generation occurs.
+    /// The imported proving buffers are dropped before returning a compact source-admission seal;
+    /// the producer retains neither proving buffers nor original bytes.
     /// # Errors
     /// Wrong stage/cap, changed source/copy/selector/commitment tables or installed VK.
     pub fn import_a(
@@ -110,7 +111,7 @@ impl Prover {
         stage: usize,
         original: &[u8],
         config: ReadConfig,
-    ) -> Result<ProvingKey<Eq>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Eq>, Error> {
         self.import_a_cancellable(stage, original, config, None)
     }
     /// Import the same original with an explicit operation cancellation signal.
@@ -122,7 +123,7 @@ impl Prover {
         original: &[u8],
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<ProvingKey<Eq>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Eq>, Error> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let artifact = self.a.get(stage).ok_or(Error::Artifact)?;
         original_bounds(original, artifact.binding().n(), config)?;
@@ -148,7 +149,16 @@ impl Prover {
             }
         })?;
         artifact.require_prover(&key).map_err(|_| Error::Artifact)?;
-        Ok(key)
+        let metadata =
+            SourceAdmissionSealV2::from_proving_key(&key, cancellation).map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })?;
+        drop(key);
+        Ok(metadata)
     }
 
     /// Import one original W PK bound to this exact preceding A verifier and stage.
@@ -160,7 +170,7 @@ impl Prover {
         stage: usize,
         original: &[u8],
         config: ReadConfig,
-    ) -> Result<ProvingKey<Ep>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Ep>, Error> {
         self.import_w_cancellable(stage, original, config, None)
     }
     /// Import the same original with an explicit operation cancellation signal.
@@ -172,7 +182,7 @@ impl Prover {
         original: &[u8],
         config: ReadConfig,
         cancellation: Option<&iroha_pasta::CancellationToken>,
-    ) -> Result<ProvingKey<Ep>, Error> {
+    ) -> Result<SourceAdmissionSealV2<Ep>, Error> {
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let artifact = self.w.get(stage).ok_or(Error::Artifact)?;
         original_bounds(original, artifact.binding().n(), config)?;
@@ -194,7 +204,16 @@ impl Prover {
             }
         })?;
         artifact.require_prover(&key).map_err(|_| Error::Artifact)?;
-        Ok(key)
+        let metadata =
+            SourceAdmissionSealV2::from_proving_key(&key, cancellation).map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Artifact
+                }
+            })?;
+        drop(key);
+        Ok(metadata)
     }
 }
 impl Plan {

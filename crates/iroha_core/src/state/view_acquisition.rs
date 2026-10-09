@@ -123,12 +123,15 @@ impl State {
         let _publication = notice.begin();
         f(self.state_write_lock.observe_release())
     }
+}
 
-    /// Hold the real header writer for an exact nonblocking-reader regression.
-    pub(crate) fn with_held_header_for_reader_test<R>(
-        &self,
-        f: impl FnOnce(ReleaseWait) -> R,
-    ) -> R {
+#[cfg(any(test, feature = "iroha-core-tests"))]
+impl State {
+    /// Hold the original cached-header writer for a native nonblocking-reader fixture.
+    ///
+    /// The callback receives this writer's actual release observation. The guard changes
+    /// neither the cached header nor the certified State publication generation.
+    pub fn with_held_header_for_reader_test<R>(&self, f: impl FnOnce(ReleaseWait) -> R) -> R {
         let _held = self.latest_block_header.write();
         f(self.latest_block_header.observe_release())
     }

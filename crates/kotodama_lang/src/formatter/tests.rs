@@ -181,8 +181,8 @@ fn every_repository_source_formats_losslessly_and_idempotently() {
         "only {formatted_sources} sources formatted"
     );
 }
-/// Assert that every line of `formatted` over the column target is held there by a token that
-/// cannot be split: a comment or a literal of at least 40 characters.
+/// Assert that every line of `formatted` over the column target is held there by what cannot be
+/// split: a literal of at least 40 characters, or comments without which the line's code fits.
 fn assert_lines_within_target(name: &str, formatted: &str) {
     let source = SourceFile::new(SourceId(0), name, formatted);
     let lexed = crate::syntax::lex(&source, FrontendBudget::v1());
@@ -191,20 +191,30 @@ fn assert_lines_within_target(name: &str, formatted: &str) {
         let line_end = line_start + line.len();
         let width = line.trim_end_matches(['\r', '\n']).chars().count();
         if width > TARGET_COLUMNS {
-            let unbreakable = lexed.tokens.iter().any(|token| {
+            let mut comment_width = 0_usize;
+            let mut long_literal = false;
+            for token in &lexed.tokens {
                 let (start, end) = (token.range.start as usize, token.range.end as usize);
-                start < line_end
-                    && end > line_start
-                    && match token.kind {
-                        SyntaxKind::LineComment | SyntaxKind::BlockComment => true,
-                        SyntaxKind::String | SyntaxKind::Bytes | SyntaxKind::Number => {
-                            formatted[start..end].chars().count() >= 40
-                        }
-                        _ => false,
+                if start >= line_end || end <= line_start {
+                    continue;
+                }
+                let on_line = formatted[start.max(line_start)..end.min(line_end)]
+                    .trim_end_matches(['\r', '\n'])
+                    .chars()
+                    .count();
+                match token.kind {
+                    // A comment and the space that separates it from the code.
+                    SyntaxKind::LineComment | SyntaxKind::BlockComment => {
+                        comment_width += on_line + 1;
                     }
-            });
+                    SyntaxKind::String | SyntaxKind::Bytes | SyntaxKind::Number => {
+                        long_literal |= formatted[start..end].chars().count() >= 40;
+                    }
+                    _ => {}
+                }
+            }
             assert!(
-                unbreakable,
+                long_literal || width.saturating_sub(comment_width) <= TARGET_COLUMNS,
                 "{name}:{}: {width} columns with a break point available:\n{line}",
                 number + 1
             );
@@ -223,6 +233,17 @@ fn lines_over_the_target_must_hold_an_unbreakable_token() {
     assert!(
         result.is_err(),
         "a breakable over-long line must be reported"
+    );
+    // A comment only excuses the columns it occupies itself.
+    assert_lines_within_target(
+        "trailing.ko",
+        &format!("    let int x = 1; // {}\n", "x".repeat(120)),
+    );
+    let led = format!("    /* note */ let int x = {};\n", "a + ".repeat(25));
+    let result = std::panic::catch_unwind(|| assert_lines_within_target("led.ko", &led));
+    assert!(
+        result.is_err(),
+        "a comment must not excuse over-long code on its line"
     );
 }
 /// Rewrite the whitespace of `text` without moving any token to another line.
@@ -401,8 +422,8 @@ fn preserves_comments_literals_and_canonical_keywords() {
     assert_eq!(
         formatted,
         concat!(
-            "seiyaku Demo { /* exact */\n",
-            "    view fn text() -> string { // keep me\n",
+            "seiyaku Demo {\n",
+            "    /* exact */ view fn text() -> string { // keep me\n",
             "        return r#\"a  b\"#;\n",
             "    }\n",
             "}\n",
@@ -1148,9 +1169,17 @@ fn block_comments_hug_parentheses_and_brackets() {
         text: ")",
         ..Tok::separator(SyntaxKind::Comma, 0)
     };
-    assert!(closes_tightly(Some(&closer)));
-    assert!(!closes_tightly(Some(&Tok::separator(SyntaxKind::Comma, 0))));
-    assert!(!closes_tightly(None));
+    let comma = Tok::separator(SyntaxKind::Comma, 0);
+    let name = Tok {
+        kind: SyntaxKind::Ident,
+        text: "b",
+        ..comma
+    };
+    assert!(closes_tightly(&[closer], 0));
+    assert!(closes_tightly(&[comma, closer], 0));
+    assert!(!closes_tightly(&[comma, name, closer], 0));
+    assert!(!closes_tightly(&[comma], 0));
+    assert!(!closes_tightly(&[closer], 1));
 }
 #[test]
 fn projection_measures_block_comments_like_the_printer() {
@@ -1459,6 +1488,18 @@ fn canonicalize_terminators_end_every_fixture_action_with_a_semicolon() {
             .count();
         assert_eq!(semicolons, 2, "{}", spelled(tokens));
     });
+    // A supplied terminator follows block comments on the action's line, as a written one does.
+    let commented = format(
+        "module FTests{fixture actors{actor(\"issuer\") /* first */\ngrant_permission(\"issuer\",\"Entry\") /* second */;}}",
+    );
+    assert!(
+        commented.contains(concat!(
+            "        actor(\"issuer\") /* first */;\n",
+            "        grant_permission(\"issuer\", \"Entry\") /* second */;\n",
+        )),
+        "{commented}"
+    );
+    assert_eq!(format(&commented), commented);
 }
 #[test]
 fn layered_breaks_measure_each_line_at_the_level_it_starts_on() {
@@ -1552,9 +1593,9 @@ fn bind_separators_before_comments_moves_separators_and_keeps_blank_lines() {
         "seiyaku B{fn f(){g(1 /* a */ ,2);let int x=1 // why\n;\nlet int y=2 /* c */\n\n;let int z=3;}fn g(int a,int b){}}",
         |tokens| {
             let text = spelled(tokens);
-            assert!(text.contains("( 1 , /* a */ 2 )"), "{text}");
+            assert!(text.contains("( 1 /* a */ , 2 )"), "{text}");
             assert!(text.contains("x = 1 ; // why"), "{text}");
-            assert!(text.contains("y = 2 ; /* c */ let"), "{text}");
+            assert!(text.contains("y = 2 /* c */ ; let"), "{text}");
             // The second `let` starts the line after `;`; the third keeps the blank line written
             // before its `;`.
             let lets = tokens
@@ -1573,7 +1614,7 @@ fn bind_separators_before_comments_moves_separators_and_keeps_blank_lines() {
             "seiyaku B {\n",
             "    fn f() {\n",
             "        let int x = 1; // why\n",
-            "        let int y = 2; /* c */\n",
+            "        let int y = 2 /* c */;\n",
             "\n",
             "        let int z = 3;\n",
             "    }\n",
@@ -1639,9 +1680,10 @@ fn long_attributes_end_their_region_before_the_item() {
 fn trailing_commas_and_comments_measure_the_same_in_both_passes() {
     // Without the trailing comma the last argument fits at exactly 100 columns; the comma written
     // at the multi-line closer pushes it to 101, so it breaks on the first pass as it will on the
-    // next. A comment after it follows that comma and never counts.
+    // next. A same-line block comment keeps the comma after it and never counts; a line comment
+    // follows the comma.
     let argument = "a".repeat(85);
-    for trailing in ["", " /* c */"] {
+    for (trailing, written) in [("", "),"), (" /* c */", ") /* c */,"), (" // c", "), // c")] {
         let text = format!(
             "module T{{fn f(int {argument})->int{{return g(\nouter_value,\nh({argument}){trailing}\n);}}}}"
         );
@@ -1652,7 +1694,7 @@ fn trailing_commas_and_comments_measure_the_same_in_both_passes() {
             "the trailing comma counts toward the width:\n{formatted}"
         );
         assert!(
-            formatted.contains(&format!("            ),{trailing}\n        );\n")),
+            formatted.contains(&format!("            {written}\n        );\n")),
             "{formatted}"
         );
     }
@@ -1682,5 +1724,121 @@ fn closer_takes_trailing_comma_only_for_the_innermost_multiline_list() {
             assert!(!printer.closer_takes_trailing_comma(close - 1));
             printer.groups.pop();
         }
+    });
+}
+#[test]
+fn same_line_block_comments_keep_their_separator_after_them() {
+    let formatted = format(
+        "module C{fn f(int amount,int fee)->int{g(amount /* nanos */,fee);g(1 /* x */,);let int x=1 /* one */;let int y=2 // two\n;return x+y;}fn g(int a,int b){}}",
+    );
+    assert!(
+        formatted.contains("        g(amount /* nanos */, fee);\n"),
+        "{formatted}"
+    );
+    assert!(formatted.contains("        g(1 /* x */);\n"), "{formatted}");
+    assert!(
+        formatted.contains("        let int x = 1 /* one */;\n"),
+        "{formatted}"
+    );
+    assert!(
+        formatted.contains("        let int y = 2; // two\n"),
+        "{formatted}"
+    );
+    assert_eq!(format(&formatted), formatted);
+    let wide = format(
+        "module C{fn f()->int{return compute_something_long(first_argument_value /* x */,second_argument_value, // y\nthird_argument /* z */);}}",
+    );
+    assert!(
+        wide.contains(concat!(
+            "        return compute_something_long(\n",
+            "            first_argument_value /* x */,\n",
+            "            second_argument_value, // y\n",
+            "            third_argument /* z */,\n",
+            "        );\n",
+        )),
+        "{wide}"
+    );
+    assert_eq!(format(&wide), wide);
+}
+#[test]
+fn block_comments_after_a_multiline_opener_lead_the_first_member() {
+    let formatted = format(
+        "module L{fn f()->Json{let int v=compute_something_long(/* lead */ first_argument_value,second_argument_value,third_argument);json{/* c */ a:1,b:2}}fn g(){ /* first */ h(); /* end */\n}}",
+    );
+    assert!(
+        formatted.contains(concat!(
+            "        let int v = compute_something_long(\n",
+            "            /* lead */ first_argument_value,\n",
+        )),
+        "{formatted}"
+    );
+    assert!(
+        formatted
+            .contains("        json {\n            /* c */ a: 1,\n            b: 2,\n        }\n"),
+        "{formatted}"
+    );
+    assert!(
+        formatted.contains("    fn g() {\n        /* first */ h(); /* end */\n    }\n"),
+        "{formatted}"
+    );
+    assert_eq!(format(&formatted), formatted);
+}
+#[test]
+fn leading_block_comments_start_their_members_region() {
+    let sum =
+        "first_value + second_value + first_value + second_value + first_value + second_value";
+    let formatted = format(&format!(
+        "module R{{fn f(int first_value,int second_value)->int{{/* note */ let int chosen={sum};return chosen;}}}}"
+    ));
+    assert!(
+        formatted.contains(concat!(
+            "        /* note */ let int chosen = first_value\n",
+            "            + second_value\n",
+        )),
+        "{formatted}"
+    );
+    assert_lines_within_target("leading.ko", &formatted);
+    assert_eq!(format(&formatted), formatted);
+}
+#[test]
+fn comment_placement_helpers_follow_the_printer_state() {
+    let text = "module H{fn f(){g(/* a */ x /* b */ /* c */,y);/* d */\n}}";
+    with_tokens(text, |tokens| {
+        let position = |spelling: &str| {
+            tokens
+                .iter()
+                .position(|token| token.text == spelling)
+                .expect("token")
+        };
+        let mut printer = Printer::new(tokens);
+        assert!(printer.comment_leads_code(position("/* a */")));
+        assert!(!printer.comment_leads_code(position("/* b */")));
+        assert!(!printer.comment_leads_code(position("/* d */")));
+        assert!(!printer.comment_leads_code(position("x")));
+        assert!(printer.separator_follows(position("/* c */")));
+        assert!(!printer.separator_follows(position("/* b */")));
+        let open = tokens
+            .iter()
+            .position(|token| token.role == Role::BreakableParen)
+            .expect("argument list");
+        let close = printer.partners[open].expect("closed");
+        // Directly after a multi-line opener, a comment leading code starts the member's line;
+        // inside a single-line group every comment trails.
+        printer.groups.push(Group {
+            kind: GroupKind::Paren,
+            multiline: true,
+            trailing_comma: true,
+            close,
+        });
+        printer.group_start = true;
+        assert!(!printer.comment_is_trailing(position("/* a */")));
+        printer.group_start = false;
+        assert!(printer.comment_is_trailing(position("/* a */")));
+        printer.line_comment_open = true;
+        assert!(!printer.comment_is_trailing(position("/* a */")));
+        printer.line_comment_open = false;
+        printer.groups.last_mut().expect("group").multiline = false;
+        printer.group_start = true;
+        assert!(printer.comment_is_trailing(position("/* a */")));
     });
 }

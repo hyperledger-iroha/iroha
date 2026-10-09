@@ -27,6 +27,95 @@ const OP: &str = "kagemusha.wallet.load_issuance.read";
 const REQUEST: [u8; 32] = [3; 32];
 type Requests = Arc<Mutex<Vec<TransportRequest>>>;
 
+#[tokio::test]
+async fn native_finality_read_binds_exact_receipt_and_refuses_proof_job_status() {
+    use iroha_data_model::{
+        kagemusha::{KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1, KagemushaWalletLoadFinalityV1},
+        sumeragi_finality::SumeragiCommitCertificateV1,
+    };
+    let initial = client_with_base_url(base_url());
+    let receipt = original(&initial.account);
+    // These bytes test authenticated transport only; native BLS verification rejects them.
+    let evidence = KagemushaWalletLoadFinalityV1 {
+        version: 1,
+        receipt_digest: receipt.receipt_digest().unwrap(),
+        certificate: SumeragiCommitCertificateV1 {
+            consensus_header: vec![1],
+            commit_qc: vec![2],
+            result_preimage: vec![3],
+        },
+        event_proof: iroha_crypto::MerkleProof::from_audit_path(0, vec![]),
+    };
+    let body = evidence.to_canonical_bytes().unwrap();
+    let reply = Response::builder()
+        .status(200)
+        .header("content-type", "application/x-norito")
+        .body(body.clone())
+        .unwrap();
+    let (client, requests, _) = attach(
+        &initial,
+        move |_| Ok(reply.clone()),
+        Duration::ZERO,
+        Duration::ZERO,
+    );
+    let actual = client
+        .account_client()
+        .unwrap()
+        .kagemusha()
+        .load_finality(&receipt)
+        .await
+        .unwrap();
+    assert_eq!(actual, evidence);
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].url.path().ends_with("/finality"));
+        assert_eq!(
+            requests[0].max_response_bytes,
+            KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1
+        );
+        assert_eq!(
+            header(&requests[0], "x-iroha-account"),
+            client.account.to_canonical_hex().unwrap()
+        );
+    }
+    let mut changed = receipt;
+    changed.amount += 1;
+    assert!(matches!(
+        client
+            .account_client()
+            .unwrap()
+            .kagemusha()
+            .load_finality(&changed)
+            .await,
+        Err(Error::ResponseBinding {
+            field: "receipt_digest",
+            ..
+        })
+    ));
+    let reply = Response::builder()
+        .status(202)
+        .header("content-type", "application/x-norito")
+        .body(body)
+        .unwrap();
+    let (client, requests, _) = attach(
+        &initial,
+        move |_| Ok(reply.clone()),
+        Duration::ZERO,
+        Duration::ZERO,
+    );
+    assert!(matches!(
+        client
+            .account_client()
+            .unwrap()
+            .kagemusha()
+            .load_finality(&receipt)
+            .await,
+        Err(Error::Http { status: 202, .. })
+    ));
+    assert_eq!(requests.lock().unwrap().len(), 1);
+}
+
 fn original(payer: &iroha_data_model::account::AccountId) -> KagemushaWalletLoadReceiptV1 {
     // Transport DATA only; this fixture cannot establish consensus or authorize wallet value.
     KagemushaWalletLoadReceiptV1 {
@@ -499,4 +588,5 @@ fn blocking_load_read_reuses_owned_runtime_and_rejects_nested_async_entry() {
     assert_eq!(requests.lock().unwrap().len(), 2);
 }
 
-mod event_proof;
+mod finality;
+mod finality_transport;

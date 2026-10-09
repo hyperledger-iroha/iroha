@@ -11,9 +11,7 @@ use crate::state::authority_registry::{
 };
 use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use iroha_data_model::{
-    asset::{
-        AssetBalancePolicy, AssetDefinition, AssetDefinitionDirectHomeV1, AssetDefinitionId,
-    },
+    asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionDirectHomeV1, AssetDefinitionId},
     domain::Domain,
 };
 
@@ -378,12 +376,12 @@ pub(in crate::state) fn validate_original_asset_definitions(
                     reason: "restricted definition has no owning domain",
                 });
             }
-            iroha_data_model::asset::AssetDefinitionHome::from_definition(definition, direct)
+            iroha_data_model::asset::AssetDefinitionHome::validate_definition(definition, direct)
                 .map_err(|_| GroupedOwnershipError::Source {
-                    table: "world.asset_definitions",
-                    image,
-                    reason: "definition has no coherent authoritative home",
-                })?;
+                table: "world.asset_definitions",
+                image,
+                reason: "definition has no coherent authoritative home",
+            })?;
             if let Some(domain) = domain {
                 if lookup(domains, image, domain, work)?.is_none() {
                     return Err(GroupedOwnershipError::Source {
@@ -566,6 +564,88 @@ mod direct_home_original_tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn tmp_allocation_probe() {
+        use crate::test_allocations::allocations_during;
+        use iroha_data_model::{IntoKeyValue, account::Account};
+        let mut world = Box::new(World::default());
+        let (account_id, account) = Account::new(ALICE_ID.clone())
+            .build(&ALICE_ID)
+            .into_key_value();
+        world.accounts.insert(account_id, account);
+        world.domains.insert(
+            test_support::domain(),
+            Domain::new(test_support::domain()).build(&ALICE_ID),
+        );
+        world.asset_definitions.insert(
+            test_support::id(0),
+            test_support::definition(0, &ALICE_ID, true, None),
+        );
+        world.rebuild_asset_definition_indexes().unwrap();
+        let v = allocations_during(|| {
+            let _ = world
+                .asset_definition_direct_homes
+                .try_committed_view_nonblocking();
+        });
+        let vi = allocations_during(|| {
+            let _ = world
+                .axt_asset_incarnations
+                .try_committed_view_nonblocking();
+        });
+        let full = allocations_during(|| {
+            let _ = CheckedAssetDefinitions::capture(&world, 16_777_216).map(|_| ());
+        });
+        let homes = world
+            .asset_definition_direct_homes
+            .try_committed_view_nonblocking()
+            .unwrap();
+        let incarnations = world
+            .axt_asset_incarnations
+            .try_committed_view_nonblocking()
+            .unwrap();
+        let rows = world
+            .asset_definitions
+            .try_committed_view_nonblocking()
+            .unwrap();
+        let mut work = AssetDefinitionWork::bounded(16_777_216);
+        let t = allocations_during(|| {
+            validate_original_direct_home_transitions(&homes, &incarnations, &mut work).unwrap();
+        });
+        let r = allocations_during(|| {
+            validate_original_direct_home_rows(
+                &homes,
+                &rows,
+                &incarnations,
+                GroupImage::Current,
+                &mut work,
+            )
+            .unwrap();
+            validate_original_direct_home_rows(
+                &homes,
+                &rows,
+                &incarnations,
+                GroupImage::Predecessor,
+                &mut work,
+            )
+            .unwrap();
+        });
+        let l = allocations_during(|| {
+            let _ = lookup(
+                &homes,
+                GroupImage::Predecessor,
+                &test_support::id(0),
+                &mut work,
+            );
+        });
+        let m = allocations_during(|| {
+            let _ = homes.try_matches_current(&world.asset_definition_direct_homes);
+        });
+        let full2 = allocations_during(|| {
+            let _ = CheckedAssetDefinitions::capture(&world, 16_777_216).map(|_| ());
+        });
+        panic!("probe v={v} vi={vi} full={full} t={t} r={r} l={l} m={m} full2={full2}");
     }
 
     #[test]

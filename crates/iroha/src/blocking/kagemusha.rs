@@ -23,6 +23,33 @@ impl AccountClient {
 }
 
 impl Kagemusha<'_> {
+    /// Retrieve direct BLS evidence for an exact receipt, without granting balance authority.
+    ///
+    /// Verify against independently authenticated genesis-rooted epoch authority.
+    /// # Errors
+    /// Returns the asynchronous read failure or a blocking-runtime rejection.
+    pub fn load_finality(
+        &self,
+        receipt: &KagemushaWalletLoadReceiptV1,
+    ) -> Result<iroha_data_model::kagemusha::KagemushaWalletLoadFinalityV1> {
+        self.runtime.block_on(self.inner.load_finality(receipt))?
+    }
+
+    /// Retrieve one boundary certificate without granting epoch authority.
+    ///
+    /// Select the boundary from authenticated native progress and verify its CommitQC
+    /// before accepting the successor committee.
+    /// # Errors
+    /// Returns the asynchronous read failure or a blocking-runtime rejection.
+    pub fn load_epoch(
+        &self,
+        receipt: &KagemushaWalletLoadReceiptV1,
+        boundary_height: u64,
+    ) -> Result<iroha_data_model::sumeragi_finality::SumeragiCommitCertificateV1> {
+        self.runtime
+            .block_on(self.inner.load_epoch(receipt, boundary_height))?
+    }
+
     /// Send one exact enrollment operation, preserving native originals for durable recovery.
     ///
     /// Returned originals require the native wallet owner's verification and durable admission.
@@ -47,21 +74,5 @@ impl Kagemusha<'_> {
     ) -> Result<KagemushaWalletLoadReceiptV1> {
         self.runtime
             .block_on(self.inner.load_issuance(scheme, wallet, request))?
-    }
-
-    /// Retrieve bounded event inclusion DATA using this account's exact network signature.
-    ///
-    /// Independently verify the returned path against a finalized block's counted event
-    /// commitment and the exact original receipt before using it as Load evidence.
-    /// # Errors
-    /// Returns the asynchronous request/decode failure or a blocking-runtime rejection.
-    pub fn load_event_proof(
-        &self,
-        scheme: &[u8; 32],
-        wallet: &[u8; 32],
-        request: &[u8; 32],
-    ) -> Result<iroha_crypto::MerkleProof<iroha_data_model::events::EventBox>> {
-        self.runtime
-            .block_on(self.inner.load_event_proof(scheme, wallet, request))?
     }
 }

@@ -3184,7 +3184,16 @@ fn fresh_catalog_round_preserves_original_census_and_expired_current_proof_refus
                 Ok(fixture.components[slot].enrollment().record_digest())
             },
         );
-        assert_eq!(result.is_err(), wrong_provider);
+        assert_eq!(
+            result.is_err(),
+            wrong_provider,
+            "fresh native provider round: wrong_provider={wrong_provider}; result={result:?}; remaining_ms={}",
+            fixture
+                .options
+                .deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis(),
+        );
         if let Ok(digests) = result {
             assert_eq!(
                 digests,
@@ -3238,3 +3247,6 @@ fn fresh_catalog_round_preserves_original_census_and_expired_current_proof_refus
     assert!(!fixture.owner.fresh_catalog_round().unwrap());
     no_http(&peers);
 }
+
+#[path = "import_scope_tests.rs"]
+pub(super) mod import_scope_tests;

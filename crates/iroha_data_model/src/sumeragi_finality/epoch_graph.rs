@@ -427,6 +427,13 @@ impl ScheduleOutcome {
     ) -> Result<(), ScheduleError> {
         self.validate_with_validation(validation)?;
         next.validate_with_validation(validation)?;
+        self.validate_successor_relation(next)
+    }
+
+    // The sole cross-result relationship rule. Ordinary verification validates both complete
+    // endpoints before this pure comparison; the opaque receipt join already owns those
+    // original validations and additionally binds each height to its authenticated block.
+    pub(super) fn validate_successor_relation(&self, next: &Self) -> Result<(), ScheduleError> {
         let ScheduledSlot::Ready(incumbent) = &self.next else {
             return Err(ScheduleError::Epoch(
                 "next height lacks certified authority".into(),

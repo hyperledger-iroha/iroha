@@ -8,12 +8,8 @@ use iroha_core_zk::kagemusha_wallet_artifacts_v1::{
         BlobV1, CATALOG_MAX_BYTES_V1, PROVING_KEY_MAX_BYTES_V1, QualifiedWalletSourcesV1,
     },
 };
-use iroha_kagemusha_proof::finality::{catalog::VerifierLimits, native::Parameters};
 use iroha_pasta::msm::MemoryBudget;
-use iroha_plonk::{
-    keys::{CosetCachePolicy, pk::artifact::ReadConfig},
-    pcs::ipa::PinnedParams,
-};
+use iroha_plonk::keys::{CosetCachePolicy, pk::artifact::ReadConfig};
 
 mod attempt;
 mod exports;
@@ -119,17 +115,6 @@ fn financial_offer(input: &RuntimeOriginals<'_>) -> Result<()> {
     }
     Ok(())
 }
-// The authenticated engineering source graph contains 406,815,883 encoded descriptor/VK
-// bytes. This cumulative intake ceiling is separate from per-original limits, live RSS and
-// the process-wide 64 MiB MSM scratch cap. It is not physical-phone qualification.
-const FINALITY_METADATA_MAX_BYTES: usize = 512 << 20;
-fn finality_limits() -> VerifierLimits {
-    VerifierLimits {
-        maximum_artifacts: 65_536,
-        maximum_verifier_bytes: FINALITY_METADATA_MAX_BYTES,
-        msm_budget: MemoryBudget::DEFAULT,
-    }
-}
 fn read_config() -> ReadConfig {
     ReadConfig {
         maximum_bytes: PROVING_KEY_MAX_BYTES_V1,
@@ -233,19 +218,8 @@ impl PreparedInstallation {
             input.producer_inventory,
             base,
         )?;
-        let parameters = Parameters {
-            pallas: PinnedParams::derive(16).map_err(|_| Failure::code(RESOURCE))?,
-            vesta: PinnedParams::derive(16).map_err(|_| Failure::code(RESOURCE))?,
-        };
         let sources = inventory
-            .qualify_wallet(
-                &installed,
-                &selected.genesis,
-                &mut originals,
-                read_config(),
-                parameters,
-                finality_limits(),
-            )
+            .qualify_wallet(&installed, &selected.genesis, &mut originals, read_config())
             .map_err(|error| {
                 Failure::code(if error.is_unavailable() {
                     ARTIFACTS_UNAVAILABLE

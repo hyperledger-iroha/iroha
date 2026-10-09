@@ -115,52 +115,22 @@ fn retained_original(
     Ok(&first.bytes)
 }
 
-// Shape and exact-original conversion only; the native Load plan must verify the
-// qualified finality source and decide both claims before producing any A stage.
+// Shape and exact-original conversion only. Native authenticates direct BLS
+// finality before Advance; A authenticates the resulting receipt-bound signature.
 fn retained_load_source(
     inputs: &[KagemushaWalletRetainedInputV1],
-    anchor: Fp,
     digest: [u8; 32],
-) -> Result<
-    (
-        KagemushaWalletLoadReceiptV1,
-        iroha_kagemusha_proof::finality::continuity::SourceNodeEvidence,
-    ),
-    Error,
-> {
-    use iroha_kagemusha_proof::finality::{continuity::SourceNodeEvidence, receipt_finality};
-    use iroha_pasta::{Ep, Eq, poseidon::hash_with_domain};
-    use iroha_plonk_recursion::AccumulatorT;
+) -> Result<(KagemushaWalletLoadReceiptV1, KagemushaWalletLoadFinalityV1), Error> {
     let ordinary = authority(KagemushaWalletLoadReceiptV1::decode_canonical(
         retained_original(inputs, KagemushaWalletRetainedInputRoleV1::LoadReceipt)?,
     ))?;
     let original = authority(KagemushaWalletLoadFinalityV1::decode_canonical(
         retained_original(inputs, KagemushaWalletRetainedInputRoleV1::LoadFinality)?,
     ))?;
-    if authority(ordinary.receipt_digest())? != digest
-        || original.receipt_digest != digest
-        || original.anchor_digest != anchor.to_repr()
-    {
+    if authority(ordinary.receipt_digest())? != digest || original.receipt_digest != digest {
         return Err(Error::Authority);
     }
-    let digest = Option::<Fp>::from(Fp::from_repr(digest)).ok_or(Error::Authority)?;
-    let context = hash_with_domain(receipt_finality::CONTEXT_DOMAIN, &[anchor, digest]);
-    let finality = SourceNodeEvidence {
-        endpoints: [
-            Fp::from(receipt_finality::PROGRAM_ID),
-            context,
-            Fp::from(0),
-            Fp::from(1),
-            Fp::from(0),
-            context,
-        ],
-        proof: original.proof,
-        pallas: AccumulatorT::<Ep>::from_bytes(&original.pallas_claim)
-            .map_err(|_| Error::Authority)?,
-        vesta: AccumulatorT::<Eq>::from_bytes(&original.vesta_claim)
-            .map_err(|_| Error::Authority)?,
-    };
-    Ok((ordinary, finality))
+    Ok((ordinary, original))
 }
 
 /// Immutable conversion context selected by the authenticated installation owner.
@@ -270,8 +240,6 @@ pub(crate) struct LoadFieldsV1 {
     pub(crate) receipt: [u8; 282],
     /// Own Advance receipt, Enrollment certificate and current credential.
     pub(crate) objects: [Vec<u8>; 3],
-    /// Original retained finality wrapper and both claims; native Plan re-verifies all three.
-    pub(crate) finality: iroha_kagemusha_proof::finality::continuity::SourceNodeEvidence,
 }
 
 /// Typed post-Advance Unload/Retiring fields for their actual consuming sigma relation.
@@ -661,20 +629,18 @@ impl<'a> PreparationV1<'a> {
         })
     }
 
-    /// Convert retained ordinary receipt/finality originals and own signed fields.
-    /// The independently installed native Load plan pins the selected global anchor
-    /// and source catalog. This conversion grants no funding authority: its producer
-    /// still hard-verifies the exact wrapper, decides both claims and checks all stages.
+    /// Convert retained ordinary receipt originals and own signed fields. Native
+    /// verified BLS finality before Advance; the producer verifies the receipt-bound
+    /// Advance signature and every state transition in the four Load stages.
     /// # Errors
     /// Another operation, missing/ambiguous original, noncanonical fields, changed
-    /// installed anchor, receipt terms, source digest or transported claims.
+    /// receipt terms or source digest.
     pub(crate) fn load_fields(
         &self,
         owner: &AuthenticatedCredentialV1,
         step: &ReleasedStep,
         predecessor: &FoldedStateV1,
         public: &KagemushaWalletLineagePublicV1,
-        load_plan: &iroha_kagemusha_proof::a_relation::native::load::Plan,
         budget: MemoryBudget,
     ) -> Result<LoadFieldsV1, Error> {
         let capsule = &step.frozen.capsule;
@@ -690,11 +656,7 @@ impl<'a> PreparationV1<'a> {
         if capsule.kind != KagemushaWalletOperationKindV1::Load {
             return Err(Error::Authority);
         }
-        let (ordinary, finality) = retained_load_source(
-            &capsule.retained_inputs,
-            load_plan.history_anchor().digest(),
-            digest,
-        )?;
+        let (ordinary, _) = retained_load_source(&capsule.retained_inputs, digest)?;
         let previous = &predecessor.source_state.core;
         if ordinary.scheme_id != self.installed.verifier().scheme().scheme_id()
             || ordinary.asset_digest != previous.asset_digest
@@ -721,7 +683,6 @@ impl<'a> PreparationV1<'a> {
                 owner.certificate_tape.clone(),
                 owner.credential_tape.clone(),
             ],
-            finality,
         })
     }
 

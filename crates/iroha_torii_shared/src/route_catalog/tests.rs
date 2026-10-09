@@ -36,14 +36,15 @@ mod tests {
         assert!(CATALOGED_ROUTES.contains(&route));
     }
     #[test]
-    fn kagemusha_load_event_path_is_a_private_authenticated_read() {
-        let route = contracts_and_verification_keys::KAGEMUSHA_LOAD_EVENT_PROOF_GET;
+    fn kagemusha_load_finality_is_a_private_authenticated_read() {
+        let route = contracts_and_verification_keys::KAGEMUSHA_LOAD_FINALITY_GET;
         assert_eq!(
             route.path(),
-            "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/event-proof"
+            "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality"
         );
         assert_eq!(route.method(), HttpMethod::Get);
         assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
         assert_eq!(
             route.authentication(),
             AuthenticationPolicy::CanonicalAccountSignature
@@ -52,11 +53,11 @@ mod tests {
         assert!(CATALOGED_ROUTES.contains(&route));
     }
     #[test]
-    fn kagemusha_load_finality_is_a_private_authenticated_read() {
-        let route = contracts_and_verification_keys::KAGEMUSHA_LOAD_FINALITY_PROOF_GET;
+    fn kagemusha_load_epoch_is_an_exact_private_authenticated_read() {
+        let route = contracts_and_verification_keys::KAGEMUSHA_LOAD_EPOCH_GET;
         assert_eq!(
             route.path(),
-            "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality-proof"
+            "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/epochs/{boundary}"
         );
         assert_eq!(route.method(), HttpMethod::Get);
         assert_eq!(route.effect(), RouteEffect::ReadOnly);

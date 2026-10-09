@@ -1413,7 +1413,8 @@ impl NativeRecord {
         assert!(prover.prepare(changed, budget).is_err());
         let session = prover.prepare(input, budget).unwrap();
         let fold = FoldConfig::default();
-        let foreign = prover.import_a(1, a[1].proving_key, read).unwrap();
+        let foreign_seal = prover.import_a(1, a[1].proving_key, read).unwrap();
+        let foreign = prover.bind_a(1, &foreign_seal, None).unwrap();
         assert!(matches!(
             session.first(
                 &foreign,
@@ -1424,8 +1425,9 @@ impl NativeRecord {
             ),
             Err(native::Error::Artifact)
         ));
-        drop(foreign);
-        let key = prover.import_a(0, a[0].proving_key, read).unwrap();
+        drop(foreign_seal);
+        let key_seal = prover.import_a(0, a[0].proving_key, read).unwrap();
+        let key = prover.bind_a(0, &key_seal, None).unwrap();
         let mut checkpoint = session
             .first(
                 &key,
@@ -1435,7 +1437,7 @@ impl NativeRecord {
                 ProverConfig::default(),
             )
             .unwrap();
-        drop(key);
+        drop(key_seal);
         assert_eq!(checkpoint.proof(), self.proofs[0].0);
         assert_eq!(checkpoint.pallas_bytes(), self.proofs[0].1);
         assert!(session.terminal(&checkpoint, budget).is_err());
@@ -1470,7 +1472,8 @@ impl NativeRecord {
         for stage in 1..self.proofs.len() {
             let salt = u64::try_from(stage).unwrap();
             if stage == 1 {
-                let foreign = prover.import_w(1, w[1].proving_key, read).unwrap();
+                let foreign_seal = prover.import_w(1, w[1].proving_key, read).unwrap();
+                let foreign = prover.bind_w(1, &foreign_seal, None).unwrap();
                 assert!(matches!(
                     session.wrapper(
                         &checkpoint,
@@ -1482,11 +1485,12 @@ impl NativeRecord {
                     ),
                     Err(native::Error::Artifact)
                 ));
-                drop(foreign);
+                drop(foreign_seal);
             }
-            let key = prover
+            let key_seal = prover
                 .import_w(stage - 1, w[stage - 1].proving_key, read)
                 .unwrap();
+            let key = prover.bind_w(stage - 1, &key_seal, None).unwrap();
             let wrapper = session
                 .wrapper(
                     &checkpoint,
@@ -1497,7 +1501,7 @@ impl NativeRecord {
                     ProverConfig::default(),
                 )
                 .unwrap();
-            drop(key);
+            drop(key_seal);
             assert_eq!(wrapper.proof(), self.wrappers[stage - 1].0);
             assert_eq!(wrapper.vesta_bytes(), self.wrappers[stage - 1].1);
             let wrapper = session
@@ -1521,7 +1525,8 @@ impl NativeRecord {
                     .is_err()
             );
             if stage == 1 {
-                let foreign = prover.import_a(0, a[0].proving_key, read).unwrap();
+                let foreign_seal = prover.import_a(0, a[0].proving_key, read).unwrap();
+                let foreign = prover.bind_a(0, &foreign_seal, None).unwrap();
                 assert!(matches!(
                     session.advance(
                         &wrapper,
@@ -1533,9 +1538,10 @@ impl NativeRecord {
                     ),
                     Err(native::Error::Artifact)
                 ));
-                drop(foreign);
+                drop(foreign_seal);
             }
-            let key = prover.import_a(stage, a[stage].proving_key, read).unwrap();
+            let key_seal = prover.import_a(stage, a[stage].proving_key, read).unwrap();
+            let key = prover.bind_a(stage, &key_seal, None).unwrap();
             let next = session
                 .advance(
                     &wrapper,
@@ -1546,7 +1552,7 @@ impl NativeRecord {
                     ProverConfig::default(),
                 )
                 .unwrap();
-            drop(key);
+            drop(key_seal);
             assert_eq!(next.proof(), self.proofs[stage].0);
             assert_eq!(next.pallas_bytes(), self.proofs[stage].1);
             let mut bad = self.proofs[stage].0.clone();
@@ -1580,7 +1586,8 @@ impl NativeRecord {
         }
         let terminal = session.terminal(&checkpoint, budget).unwrap();
         assert_eq!(terminal.proof, self.proofs.last().unwrap().0);
-        let key = prover.import_w(0, w[0].proving_key, read).unwrap();
+        let key_seal = prover.import_w(0, w[0].proving_key, read).unwrap();
+        let key = prover.bind_w(0, &key_seal, None).unwrap();
         assert!(
             session
                 .wrapper(

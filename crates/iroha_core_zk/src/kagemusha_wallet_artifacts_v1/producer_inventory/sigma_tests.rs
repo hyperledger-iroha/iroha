@@ -174,7 +174,6 @@ fn signed_sixteen_sigmas_qualify_exact_sources_and_reject_substitutions() {
     let (pack, installation, catalog) =
         engineering_fixture::signed_inventory_with_sources(steps, |pack| {
             let mut inventory = structural_inventory();
-            inventory.finality.network = [0x51; 32];
             inventory.originals = originals;
             // Explicit framing-only Omega and operation graph, never granted source admission.
             inventory.originals.push(OriginalV1 {
@@ -203,15 +202,6 @@ fn signed_sixteen_sigmas_qualify_exact_sources_and_reject_substitutions() {
     // Real source-qualified sigmas cannot upgrade framing-only operations or
     // a foreign native genesis into the complete wallet capability.
     let native = iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture::new_with_explicit_parameters();
-    let params = iroha_kagemusha_proof::finality::native::Parameters {
-        pallas: PinnedParams::derive(16).unwrap(),
-        vesta: PinnedParams::derive(16).unwrap(),
-    };
-    let finality_limits = iroha_kagemusha_proof::finality::catalog::VerifierLimits {
-        maximum_artifacts: 4_096,
-        maximum_verifier_bytes: 16 << 20,
-        msm_budget: MemoryBudget::DEFAULT,
-    };
     let mut foreign = AuthenticatedProducerInventoryV1 {
         inventory: authenticated.inventory.clone(),
         scheme_id: authenticated.scheme_id,
@@ -219,26 +209,12 @@ fn signed_sixteen_sigmas_qualify_exact_sources_and_reject_substitutions() {
     };
     foreign.manifest_digest[0] ^= 1;
     assert!(matches!(
-        foreign.qualify_wallet(
-            &installed,
-            &native.verifier(),
-            &mut disk,
-            config(),
-            params.clone(),
-            finality_limits,
-        ),
+        foreign.qualify_wallet(&installed, &native.verifier(), &mut disk, config(),),
         Err(WalletSourcesErrorV1::Original(Error::Authority))
     ));
     assert_eq!(disk.opens, 48, "installation mismatch must precede reads");
     assert!(matches!(
-        authenticated.qualify_wallet(
-            &installed,
-            &native.verifier(),
-            &mut disk,
-            config(),
-            params,
-            finality_limits,
-        ),
+        authenticated.qualify_wallet(&installed, &native.verifier(), &mut disk, config(),),
         Err(WalletSourcesErrorV1::Finality(
             FinalityQualificationErrorV1::AnchorMismatch
         ))
@@ -257,7 +233,6 @@ fn signed_sources(
     let (pack, installation, catalog) =
         engineering_fixture::signed_inventory_with_sources(steps, |pack| {
             let mut inventory = structural_inventory();
-            inventory.finality.network = [0x51; 32];
             inventory.originals = originals;
             inventory.originals.push(OriginalV1 {
                 descriptor: BlobV1::of(&pack.lineage.descriptor),
@@ -543,10 +518,99 @@ fn signed_bootstrap_program_qualifies_whole_context_and_all_original_stages() {
                 .import_terminal(&original.proving_key, read)
                 .unwrap()
         };
-        expected.require_prover(&actual).unwrap();
+        let view = if role == 19 {
+            qualified.prover().bind_first(&actual, None).unwrap()
+        } else {
+            qualified.prover().bind_terminal(&actual, None).unwrap()
+        };
+        expected.require_source_bound(&view).unwrap();
     }
+    // Acquisition reuses only the exact prior strict-origin seal; every selected
+    // original remains mandatory, even though no PK import is repeated here.
+    let before = disk.opens;
+    assert!(qualified.bind_a(0, 21, None).is_err());
+    assert!(qualified.bind_w(0, 19, None).is_err());
+    assert_eq!(
+        disk.opens, before,
+        "member mismatch must precede source I/O"
+    );
+    let acquire = |disk: &mut Disk, cap: ReadConfig, cancellation| {
+        let view = qualified.bind_a(0, 19, cancellation).unwrap();
+        wallet::revalidate_stage(&authenticated2, 19, view, disk, cap, cancellation)
+    };
+    let too_few_rows = ReadConfig {
+        maximum_rows: (1 << 16) - 1,
+        ..read
+    };
+    assert!(matches!(
+        acquire(&mut disk, too_few_rows, None),
+        Err(wallet::WalletSourcesErrorV1::Original(Error::Inventory))
+    ));
+    assert_eq!(
+        disk.opens, before,
+        "a tighter current row cap precedes source I/O"
+    );
+    let zero_bytes = ReadConfig {
+        maximum_bytes: 0,
+        ..read
+    };
+    assert!(matches!(
+        acquire(&mut disk, zero_bytes, None),
+        Err(wallet::WalletSourcesErrorV1::Original(Error::Inventory))
+    ));
+    assert_eq!(disk.opens, before, "a tighter byte cap precedes source I/O");
+    let view = acquire(&mut disk, read, None).unwrap();
+    first_key.require_source_bound(&view).unwrap();
+    assert_eq!(
+        disk.opens - before,
+        3,
+        "every acquisition streams D, VK and PK"
+    );
+    let selected = authenticated2.inventory.originals[19];
+    for blob in [
+        selected.descriptor,
+        selected.verifying_key,
+        selected.proving_key,
+    ] {
+        let path = disk.directory.path().join(hex::encode(blob.sha256));
+        let saved = path.with_extension("retained");
+        std::fs::rename(&path, &saved).unwrap();
+        assert!(
+            acquire(&mut disk, read, None).is_err(),
+            "missing role cannot grant a view"
+        );
+        std::fs::write(&path, [0u8]).unwrap();
+        assert!(
+            matches!(
+                acquire(&mut disk, read, None),
+                Err(wallet::WalletSourcesErrorV1::Original(Error::Inventory))
+            ),
+            "changed role cannot grant a view"
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(saved, path).unwrap();
+    }
+    let before = disk.opens;
+    let token = iroha_pasta::CancellationToken::new();
+    token.cancel();
+    assert!(qualified.bind_a(0, 19, Some(&token)).is_err());
+    let admitted = qualified.bind_a(0, 19, None).unwrap();
+    assert!(
+        wallet::revalidate_stage(
+            &authenticated2,
+            19,
+            admitted,
+            &mut disk,
+            too_few_rows,
+            Some(&token)
+        )
+        .unwrap_err()
+        .is_cancelled(),
+        "cancellation precedes cap rejection and I/O"
+    );
+    assert_eq!(disk.opens, before);
     let route = authenticated2
-        .qualify_operation_route(&installed2, &q, 0, None, &mut disk, read)
+        .qualify_operation_route(&installed2, &q, 0, &mut disk, read)
         .unwrap();
     assert_eq!(route.identity(), (authenticated2.installation(), 0, 0));
     assert!(matches!(
@@ -634,7 +698,6 @@ fn signed_retiring_route_imports_each_stage_and_keeps_candidate_omega_unqualifie
         SourceScopeV1::from_scheme(installed.verifier().scheme()).unwrap(),
         qualified_q.recipe(),
         &omega,
-        None,
     )
     .unwrap() else {
         panic!("Retiring uses the shared consuming source");
@@ -715,14 +778,7 @@ fn signed_retiring_route_imports_each_stage_and_keeps_candidate_omega_unqualifie
     let before = disk.opens;
     assert!(
         authenticated2
-            .qualify_operation_route(
-                &installed2,
-                &qualified_q,
-                route_index,
-                None,
-                &mut disk,
-                read
-            )
+            .qualify_operation_route(&installed2, &qualified_q, route_index, &mut disk, read)
             .is_err()
     );
     assert_eq!(disk.opens, before);
@@ -732,7 +788,7 @@ fn signed_retiring_route_imports_each_stage_and_keeps_candidate_omega_unqualifie
         .unwrap();
     let before = disk.opens;
     let qualified = authenticated2
-        .qualify_operation_route(&installed2, &q, route_index, None, &mut disk, read)
+        .qualify_operation_route(&installed2, &q, route_index, &mut disk, read)
         .unwrap();
     assert_eq!(
         qualified.identity(),
@@ -762,7 +818,7 @@ fn signed_retiring_route_imports_each_stage_and_keeps_candidate_omega_unqualifie
         authenticated2.inventory.operations[program].context[index][0] ^= 1;
         assert!(
             authenticated2
-                .qualify_operation_route(&installed2, &q, route_index, None, &mut disk, read)
+                .qualify_operation_route(&installed2, &q, route_index, &mut disk, read)
                 .is_err()
         );
         authenticated2.inventory.operations[program].context[index][0] ^= 1;

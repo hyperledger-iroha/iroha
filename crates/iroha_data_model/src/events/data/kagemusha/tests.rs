@@ -180,15 +180,14 @@ fn native_capture_for(
         block::{BlockSignatures, builder::BlockBuilder},
         isi::kagemusha_wallet::load_finality::verify_finalized_kagemusha_wallet_load_v1,
         isi::kagemusha_wallet::{KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1},
+        kagemusha::KagemushaWalletLoadFinalityV1,
         sumeragi_finality::{
-            ExecutionCommitment, ExecutionResultCommitment, test_fixtures::NativeFinalityFixture,
+            ExecutionCommitment, ExecutionResultCommitment, SumeragiCommitCertificateV1,
+            test_fixtures::NativeFinalityFixture,
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
     let mut fixture = NativeFinalityFixture::start_with_explicit_parameters(chain_label);
-    let verifier = fixture.verifier();
-    let initial_epoch = verifier.initial_epoch();
-    let initial_parameters = verifier.initial_chain_parameters().unwrap();
     let header = fixture.next_header();
     let instruction = KagemushaWalletLedgerV1::new(
         receipt.scheme_id,
@@ -236,6 +235,17 @@ fn native_capture_for(
     )
     .unwrap();
     assert_eq!(exact.receipt(), &receipt);
+    let tree: iroha_crypto::MerkleTree<EventBox> = [HashOf::new(&boxed)].into_iter().collect();
+    let native_finality = KagemushaWalletLoadFinalityV1 {
+        version: 1,
+        receipt_digest: receipt.receipt_digest().unwrap(),
+        certificate: SumeragiCommitCertificateV1::from_verified(&decision).unwrap(),
+        event_proof: tree.get_proof(0).unwrap(),
+    };
+    native_finality
+        .verify(&fixture.verifier(), &receipt)
+        .unwrap();
+    let native_finality_frame = native_finality.to_canonical_bytes().unwrap();
     let event_commitment = decision.execution().event_commitment.unwrap();
     let certificate = decision.block().commit_certificate().unwrap();
     let core_header: iroha_sumeragi::message::BlockHeader =
@@ -269,20 +279,8 @@ fn native_capture_for(
         "version": 1,
         "chain_id": (fixture.chain_id()),
         "signed_genesis_wire_hex": (hex::encode(fixture.genesis().encode_wire().unwrap())),
-        "history_anchor": {
-            "network_hex": (hex::encode(initial_epoch.network_id.as_bytes())),
-            "instance_hex": (hex::encode(verifier.instance().0)),
-            "initial_context_hex": (hex::encode(initial_epoch.context_id().unwrap())),
-            "initial_epoch": (initial_epoch.authorization.epoch),
-            "parameters": (vec![
-                initial_parameters.block_time_ms,
-                initial_parameters.payload_retry_interval_ms,
-                initial_parameters.exec_budget_ms,
-                initial_parameters.apply_budget_ms,
-                u64::from(initial_parameters.max_block_bytes),
-                initial_parameters.epoch_length_blocks,
-            ]),
-        },
+        "native_finality_frame_hex": (hex::encode(&native_finality_frame)),
+        "native_finality_frame_bytes": (native_finality_frame.len()),
         "receipt_frame_hex": (hex::encode(norito::encode_canonical(&receipt).unwrap())),
         "receipt_transcript_hex": (hex::encode(receipt.transcript().unwrap())),
         "receipt_digest_hex": (hex::encode(event.receipt_digest)),
@@ -441,25 +439,33 @@ fn npos_schedule_capture() -> norito::json::Value {
     })
 }
 
+fn saved_capture(name: &str, expected: &norito::json::Value) -> norito::json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/kagemusha")
+        .join(name);
+    if std::env::var_os("IROHA_UPDATE_KAGEMUSHA_WALLET_VECTORS").is_some_and(|value| value == "1") {
+        let mut json = norito::json::to_string_pretty(expected).unwrap();
+        json.push('\n');
+        std::fs::write(&path, json).expect("update native capture");
+    }
+    norito::json::from_slice(&std::fs::read(path).expect("native capture")).unwrap()
+}
+
 #[test]
 fn npos_schedule_proof_bytes_match_independent_native_capture() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/kagemusha/ordinary_load_npos_schedule_v1.json");
-    let saved: norito::json::Value =
-        norito::json::from_slice(&std::fs::read(path).expect("native-captured NPoS fixture"))
-            .unwrap();
-    assert_eq!(saved, npos_schedule_capture());
+    let expected = npos_schedule_capture();
+    assert_eq!(
+        saved_capture("ordinary_load_npos_schedule_v1.json", &expected),
+        expected
+    );
 }
 
 #[test]
 fn canonical_receipt_and_event_proof_bytes_match_independent_native_capture() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/kagemusha/ordinary_load_receipt_v1.json");
-    let saved: norito::json::Value =
-        norito::json::from_slice(&std::fs::read(path).expect("native-captured fixture")).unwrap();
+    let expected = native_capture();
+    let saved = saved_capture("ordinary_load_receipt_v1.json", &expected);
     assert_eq!(
-        saved,
-        native_capture(),
+        saved, expected,
         "receipt/event frame, transcript, codec identity and exact typed-hash preimage must all match the pinned native capture"
     );
     let preimage = hex::decode(saved["event_box_hash_preimage_hex"].as_str().unwrap()).unwrap();
@@ -477,11 +483,9 @@ fn canonical_receipt_and_event_proof_bytes_match_independent_native_capture() {
 
 #[test]
 fn first_load_receipt_and_event_match_independent_native_capture() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/kagemusha/ordinary_first_load_receipt_v1.json");
-    let saved: norito::json::Value =
-        norito::json::from_slice(&std::fs::read(path).expect("native first-Load capture")).unwrap();
-    assert_eq!(saved, first_load_capture());
+    let expected = first_load_capture();
+    let saved = saved_capture("ordinary_first_load_receipt_v1.json", &expected);
+    assert_eq!(saved, expected);
     let bytes = hex::decode(saved["receipt_frame_hex"].as_str().unwrap()).unwrap();
     let receipt: KagemushaWalletLoadReceiptV1 = norito::decode_canonical(&bytes).unwrap();
     let limbs = |bytes: [u8; 32]| {

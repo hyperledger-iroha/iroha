@@ -94,16 +94,7 @@ fn financial_offer_classification_never_grants_an_owner() {
 }
 
 #[test]
-fn complete_metadata_extent_is_separate_from_process_scratch_and_original_limits() {
-    // Exact encoded D/V extent of the retained graph reconstructed by the production
-    // receipt qualifier. This regression is a sizing check, not graph or phone admission.
-    let observed_metadata_bytes = 406_815_883;
-    let limits = finality_limits();
-    assert!(observed_metadata_bytes > 64 << 20);
-    assert!(observed_metadata_bytes <= limits.maximum_verifier_bytes);
-    assert_eq!(limits.maximum_verifier_bytes, 512 << 20);
-    assert_eq!(limits.maximum_artifacts, 65_536);
-    assert_eq!(limits.msm_budget, MemoryBudget::DEFAULT);
+fn wallet_artifact_import_retains_its_bounded_process_scratch() {
     assert_eq!(read_config().maximum_bytes, PROVING_KEY_MAX_BYTES_V1);
     assert_eq!(read_config().maximum_rows, 1 << 16);
     assert_eq!(

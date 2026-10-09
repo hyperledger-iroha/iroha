@@ -147,6 +147,37 @@ pub(in crate::managed) struct CheckpointImportScope {
 }
 
 impl CheckpointImportScope {
+    #[cfg(test)]
+    /// Observe lexical ownership without retaining the memo or its validated contexts.
+    pub(in crate::managed) fn test_alive(&self) -> impl Fn() -> bool + 'static {
+        let cache = Arc::downgrade(&self.cache);
+        move || cache.strong_count() != 0
+    }
+
+    #[cfg(test)]
+    /// Probe the actual workspace after its producer; a cold probe intentionally warms it.
+    pub(in crate::managed) fn test_epoch_charge(
+        &self,
+        context: &iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1,
+    ) -> u64 {
+        let mut selected = self
+            .cache
+            .epoch_validation
+            .as_ref()
+            .expect("lexical import scope owns its pure epoch workspace")
+            .try_lock()
+            .expect("read-only probe runs after the completed child import");
+        let finite = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+            1024 * 1024,
+            MAX_CHECKPOINT_BYTES,
+            8 * 1024 * 1024,
+            64 * 1024 * 1024,
+            64,
+        ));
+        finite.with(|| selected.core_epoch(context)).unwrap();
+        finite.consumed_allocated_bytes()
+    }
+
     /// Begin cold pure-import work only for an inactive shared original graph.
     /// Owned profiles and active caller admission keep their original independent recipes.
     pub(in crate::managed) fn for_original(parent: &ServiceAuthority) -> Option<Self> {

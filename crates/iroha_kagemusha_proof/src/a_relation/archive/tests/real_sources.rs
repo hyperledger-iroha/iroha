@@ -239,30 +239,29 @@ pub(super) fn captured_metadata(
     Some((binding, key))
 }
 
-/// No fallback: this source-capacity diagnostic requires the explicitly named
-/// genuine proof capture. Files are read through bounded readers even if changed.
+/// Read independently selected current originals; no historical identity fallback.
+pub(super) fn read_selected_fixture() -> super::omega_fixture::LoadedFixture {
+    use super::omega_fixture::{load_selected, pin};
+    let value = |name| std::env::var(name).expect("explicit independent current fixture selection");
+    load_selected(
+        &std::path::PathBuf::from(value("KAGEMUSHA_HARD_PREDECESSOR_FIXTURE")),
+        pin(&value("KAGEMUSHA_HARD_PREDECESSOR_MANIFEST_SHA256")),
+        pin(&value("KAGEMUSHA_HARD_PREDECESSOR_DESCRIPTOR_SHA256")),
+        pin(&value("KAGEMUSHA_HARD_PREDECESSOR_KEY_SHA256")),
+    )
+}
+
+/// Source-capacity DATA diagnostic; source/binary admission remains independent.
 pub(super) fn read_captured_metadata() -> (DescriptorBinding, VerifyingKey<Ep>) {
-    use std::io::Read as _;
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/qualification/kagemusha-receive/o1-bootstrap-omega-metadata");
-    let read = |name: &str| {
-        let mut bytes = Vec::new();
-        std::fs::File::open(root.join(name))
-            .expect("current genuine Bootstrap metadata capture is required")
-            .take(1_048_577)
-            .read_to_end(&mut bytes)
-            .unwrap();
-        assert!(bytes.len() <= 1_048_576, "metadata byte cap");
-        bytes
-    };
-    let descriptor = read("descriptor.bin");
-    let key = read("verifying-key.bin");
-    let parsed = captured_metadata(&descriptor, &key).expect("exact current Omega profile");
+    let fixture = read_selected_fixture();
+    let parsed = captured_metadata(&fixture.originals[0], &fixture.originals[1])
+        .expect("exact selected current Omega profile");
+    fixture.recheck();
     eprintln!(
         "ARCHIVE_CAPTURED_PREDECESSOR descriptor_digest={:02x?} key_digest={:?} key_bytes={} diagnostic_only=true no_artifact_admission=true",
         parsed.0.digest(),
         parsed.1.kagemusha_digest(&parsed.0).unwrap(),
-        key.len(),
+        fixture.originals[1].len()
     );
     parsed
 }

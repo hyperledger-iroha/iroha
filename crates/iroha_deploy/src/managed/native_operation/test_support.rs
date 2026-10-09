@@ -182,6 +182,7 @@ mod musubi_namespace_tests;
 
 #[path = "test_support/amx_registration_native_tests.rs"]
 mod amx_registration_native_tests;
+pub(crate) use amx_registration_native_tests::with_signed_amx_preparation;
 
 /// Exercise the shared post-carrier decision against an actual native fixture's authenticated
 /// frontier and its owner's real bounded SDK proof reader. No paid wallet or source is replaced.

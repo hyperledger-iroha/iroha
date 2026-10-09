@@ -1882,14 +1882,15 @@ uint32_t connect_norito_kagemusha_wallet_revision_v1(void);
 
 /* Canonical Load transport DATA only. Does not verify finality/proofs or change value.
  * Three selectors are exactly32 bytes; payer is strict canonical I105 UTF-8<=1024;
- * unsigned canonical receipt<=512, canonical LoadFinality original<=16384.
+ * unsigned canonical receipt<=512, canonical native LoadFinality original<=262144.
  * Zero means exact canonical data/selection/payer/receipt-digest binding only.
+ * out_height is a writable untrusted DATA locator, zeroed on failure.
  * No pointer is retained. Native wallet Load independently authorizes all value. */
 int32_t connect_norito_kagemusha_wallet_load_original_validate_v1(
     const uint8_t *scheme, const uint8_t *wallet, const uint8_t *request,
     const uint8_t *payer, size_t payer_length,
     const uint8_t *receipt, size_t receipt_length,
-    const uint8_t *finality, size_t finality_length);
+    const uint8_t *finality, size_t finality_length, uint64_t *out_height);
 
 /* Native startup supplies the runtime handle. Foreign originals do not select trust pins. */
 typedef struct {
@@ -2025,6 +2026,13 @@ typedef struct {
 // is idempotent, including after restart; it never re-creates a key or wallet incarnation.
 // DiscardCustodyDeletion51(token only) drops an unused review; kind55 empty/all scalars0.
 // Discard never undoes an attempted deletion. Review tokens cannot alias owners or purposes.
+// EpochProgress52(no inputs) returns kind57: sequence_low=epoch, sequence_high/detail=0,
+// bytes16=LE64first_height || LE64boundary_height. These heights select transport, not value.
+// EpochBoundary53 takes expected u64 epoch in amount (high64 zero; epoch0 is valid), first
+// canonical commit certificate <=262144, all other inputs zero/empty. Native authenticates
+// its incumbent from protected custody, verifies the exact boundary and atomically retains
+// the successor. Exact retries reconcile publication uncertainty and never regress progress.
+// Older epoch checkpoints remain available for delayed Load receipts. Both return kind57.
 // setup_id is exactly32 bytes: nonzero only for selectors1/2/19/20/25/27/30/33/34/39/41/42/43/44/45; all zero otherwise.
 // Unused originals/amount/token are empty/zero. Original bounds are selected by Native;
 // signer certificate frames are <=512 bytes. No caller clock, nonce, proof verdict or arbitrary signing body.

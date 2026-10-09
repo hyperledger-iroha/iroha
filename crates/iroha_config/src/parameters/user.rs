@@ -69,8 +69,6 @@ pub use kagemusha_enrollment::{
     KagemushaEnrollmentGoogle, KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider,
     KagemushaEnrollmentWorker,
 };
-mod kagemusha_load_finality;
-pub use kagemusha_load_finality::KagemushaLoadFinality;
 mod app_routed_read_config;
 mod musubi_publication_installation;
 pub use musubi_publication_installation::MusubiPublicationInstallation;
@@ -15029,8 +15027,6 @@ pub struct Torii {
     pub recipient_lookup: Option<ToriiRecipientLookup>,
     /// Optional KAGEMUSHA issuer; all trust and runtime leaves are mandatory when present.
     pub kagemusha_enrollment: Option<KagemushaEnrollmentIssuer>,
-    /// Optional bounded terminal Load proof service over committed native history.
-    pub kagemusha_load_finality: Option<KagemushaLoadFinality>,
     /// Explicit Torii origins used for public-dataspace routed reads.
     #[config(default)]
     pub public_dataspace_upstreams: Vec<ToriiPublicDataspaceUpstream>,
@@ -15083,7 +15079,6 @@ impl core::fmt::Debug for Torii {
             .field("tx_history", &self.tx_history)
             .field("recipient_lookup", &self.recipient_lookup)
             .field("kagemusha_enrollment", &self.kagemusha_enrollment)
-            .field("kagemusha_load_finality", &self.kagemusha_load_finality)
             .field(
                 "public_dataspace_upstream_count",
                 &self.public_dataspace_upstreams.len(),
@@ -16320,9 +16315,6 @@ impl Torii {
             tx_history: self.tx_history.map(|config| config.parse(emitter)),
             kagemusha_enrollment: self
                 .kagemusha_enrollment
-                .and_then(|config| config.parse(emitter)),
-            kagemusha_load_finality: self
-                .kagemusha_load_finality
                 .and_then(|config| config.parse(emitter)),
             recipient_lookup: self
                 .recipient_lookup

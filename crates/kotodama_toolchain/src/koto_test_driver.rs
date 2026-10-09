@@ -343,6 +343,8 @@ struct CompiledSuite {
     fixture_consts: HashMap<String, Expr>,
     /// Functions of the runtime seiyaku, or of a pure unit-test target, keyed to runtime PCs.
     coverage_functions: Vec<CoverageFunction>,
+    /// Declared seiyaku functions with no code of their own in the profiled artifact.
+    codeless_functions: Vec<CodelessFunction>,
     /// Source maps and file text for locating failures.
     context: Arc<SourceContext>,
     /// Chain discriminant used to compile account literals and derive fixture actors.
@@ -381,6 +383,14 @@ struct CoverageFunction {
     line: u32,
     pc_start: u64,
     pc_end: u64,
+}
+/// A declared seiyaku function that has no code of its own in the profiled artifact: the compiler
+/// inlined it into its callers or omitted it as unused, so coverage cannot attribute execution
+/// to it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CodelessFunction {
+    display_name: String,
+    line: u32,
 }
 /// Gas and cycles consumed by one nested kotoage, view, or lifecycle call made by a test.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1418,8 +1428,8 @@ fn finalize_suite_with_sources(
     }
     if tests.is_empty() {
         return Err(format!(
-            "no #[test] Kotodama functions were found for {}",
-            target_path.display()
+            "no #[test] Kotodama functions were found for {}; tests live in a `*.test.ko` module that declares `koto_test {{ target: \"...\" }}`, so pass that module to `koto test`",
+            display_path(&target_path)
         ));
     }
     let fixtures = build_fixture_map(
@@ -2011,6 +2021,7 @@ fn prepare_compiled_suite(
             .iter()
             .any(|test| test.name == function.display_name)
     });
+    let codeless_functions = codeless_functions(&suite.target_program, &coverage_functions);
     Ok(CompiledSuite {
         suite: suite_artifact,
         runtime,
@@ -2020,9 +2031,35 @@ fn prepare_compiled_suite(
         fixture_sites: suite.fixture_sites.clone(),
         fixture_consts: suite.fixture_consts.clone(),
         coverage_functions,
+        codeless_functions,
         context,
         chain_discriminant,
     })
+}
+/// Declared non-test functions of the seiyaku under test that emitted no code of their own.
+fn codeless_functions(program: &Program, emitted: &[CoverageFunction]) -> Vec<CodelessFunction> {
+    let mut functions = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function)
+                if !function.modifiers.is_test
+                    && !emitted
+                        .iter()
+                        .any(|emitted| emitted.display_name == function.name) =>
+            {
+                Some(CodelessFunction {
+                    display_name: function.name.clone(),
+                    line: u32::try_from(function.location.line).unwrap_or(u32::MAX),
+                })
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    functions.sort_by(|left, right| {
+        (left.line, &left.display_name).cmp(&(right.line, &right.display_name))
+    });
+    functions
 }
 fn build_coverage_functions(
     program: &Program,
@@ -3973,47 +4010,75 @@ fn closest_name<'a>(name: &str, candidates: &[&'a str]) -> Option<&'a str> {
 }
 /// Render a possibly multi-line source excerpt on one line, as a call would be written inline.
 ///
-/// Outside string literals, runs of whitespace become one space, no space follows an opening
-/// bracket or precedes a closing one, and a trailing comma before a closing bracket is dropped.
-/// String literals are copied unchanged.
+/// A single-line excerpt is kept as written. In a multi-line one, outside string literals, line
+/// comments are dropped, runs of whitespace become one space, no space follows an opening `(` or
+/// `[` or precedes a closing one, a closing `}` keeps one space before it, and a trailing comma
+/// before a closing bracket is dropped. String literals, including raw `r"..."` and `br"..."`
+/// strings whose backslashes are not escapes, are copied unchanged.
 fn one_line_source(snippet: &str) -> String {
+    let snippet = snippet.trim();
+    if !snippet.contains('\n') {
+        return snippet.to_owned();
+    }
     let mut out = String::with_capacity(snippet.len());
-    let mut in_string = false;
+    // `Some(raw)` while inside a string literal.
+    let mut string = None::<bool>;
     let mut escaped = false;
     let mut pending_space = false;
-    for character in snippet.trim().chars() {
-        if in_string {
+    let mut characters = snippet.chars().peekable();
+    while let Some(character) = characters.next() {
+        if let Some(raw) = string {
             out.push(character);
             if escaped {
                 escaped = false;
-            } else if character == '\\' {
+            } else if character == '\\' && !raw {
                 escaped = true;
             } else if character == '"' {
-                in_string = false;
+                string = None;
             }
+            continue;
+        }
+        if character == '/' && characters.peek() == Some(&'/') {
+            for skipped in characters.by_ref() {
+                if skipped == '\n' {
+                    break;
+                }
+            }
+            pending_space = true;
             continue;
         }
         if character.is_whitespace() {
             pending_space = true;
             continue;
         }
-        if matches!(character, ')' | ']') {
+        if matches!(character, ')' | ']' | '}') {
+            while out.ends_with(' ') {
+                out.pop();
+            }
             if out.ends_with(',') {
                 out.pop();
             }
-            while out.ends_with(' ') {
-                out.pop();
+            if character == '}' && !out.ends_with('{') {
+                out.push(' ');
             }
         } else if pending_space && !out.ends_with(['(', '[']) && !out.is_empty() {
             out.push(' ');
         }
         pending_space = false;
-        out.push(character);
         if character == '"' {
-            in_string = true;
+            string = Some(opens_raw_string(&out));
         }
+        out.push(character);
     }
     out
+}
+/// Whether a string literal opening right after `prefix` is raw (`r"..."` or `br"..."`).
+fn opens_raw_string(prefix: &str) -> bool {
+    let Some(rest) = prefix.strip_suffix('r') else {
+        return false;
+    };
+    let rest = rest.strip_suffix('b').unwrap_or(rest);
+    !rest.ends_with(|character: char| character.is_alphanumeric() || character == '_')
 }
 /// Map a VM error to a failure kind with a readable message (no Rust debug formatting).
 fn classify_vm_error(
@@ -5138,9 +5203,12 @@ fn render_gas_report(results: &[TestRunResult]) -> String {
 }
 /// Function coverage of the seiyaku under test, computed only from seiyaku execution: nested
 /// calls for a contract-backed suite, or the test projection for a pure unit-test target.
+///
+/// Each function row also counts the instructions it executed across the selected tests, a
+/// function-level execution profile.
 fn render_coverage_report(compiled: &CompiledSuite, results: &[TestRunResult]) -> String {
     use std::fmt::Write as _;
-    let mut executed_pcs = HashSet::new();
+    let mut executions = BTreeMap::<u64, u64>::new();
     for result in results {
         let capture = if compiled.runtime.is_some() {
             result.trace.runtime.as_ref()
@@ -5148,9 +5216,12 @@ fn render_coverage_report(compiled: &CompiledSuite, results: &[TestRunResult]) -
             result.trace.harness.as_ref()
         };
         if let Some(trace) = capture {
-            executed_pcs.extend(trace.pcs().iter().copied());
+            for pc in trace.pcs() {
+                *executions.entry(*pc).or_default() += 1;
+            }
         }
     }
+    let executed_pcs = executions.keys().copied().collect::<HashSet<_>>();
     let total_functions = compiled.coverage_functions.len();
     let covered_functions = compiled
         .coverage_functions
@@ -5171,24 +5242,60 @@ fn render_coverage_report(compiled: &CompiledSuite, results: &[TestRunResult]) -
     let function_pct = percentage(covered_functions as u64, total_functions as u64);
     let byte_pct = percentage(covered_bytes, total_bytes);
     let mut output = String::new();
-    let _ = writeln!(
+    let _ = write!(
         output,
         "\ncoverage: {covered_functions}/{total_functions} functions ({function_pct:.1}%), {covered_bytes}/{total_bytes} bytecode-bytes ({byte_pct:.1}%)"
     );
-    output.push_str("covered  line  function\n");
-    for function in &compiled.coverage_functions {
-        let covered = if function_hit(function, &executed_pcs) {
-            "yes"
-        } else {
-            "no "
-        };
-        let _ = writeln!(
-            output,
-            "{covered:>7}  {:>4}  {}",
-            function.line, function.display_name
-        );
+    match compiled.codeless_functions.len() {
+        0 => output.push('\n'),
+        1 => output.push_str("; 1 more function has no code of its own\n"),
+        count => {
+            let _ = writeln!(output, "; {count} more functions have no code of their own");
+        }
+    }
+    output.push_str("covered  line  instructions  function\n");
+    let mut rows = compiled
+        .coverage_functions
+        .iter()
+        .map(|function| {
+            let covered = if function_hit(function, &executed_pcs) {
+                "yes"
+            } else {
+                "no "
+            };
+            (
+                function.line,
+                format!(
+                    "{covered:>7}  {:>4}  {:>12}  {}",
+                    function.line,
+                    group_digits(executed_instructions(function, &executions)),
+                    function.display_name
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    // Inlined or unused functions are listed, not hidden, but have no coverage of their own.
+    rows.extend(compiled.codeless_functions.iter().map(|function| {
+        (
+            function.line,
+            format!(
+                "{:>7}  {:>4}  {:>12}  {} (no code of its own: inlined into its callers or unused)",
+                "-", function.line, "-", function.display_name
+            ),
+        )
+    }));
+    rows.sort_by_key(|(line, _)| *line);
+    for (_, row) in rows {
+        output.push_str(&row);
+        output.push('\n');
     }
     output
+}
+/// Instructions executed inside one function's PC range, from per-PC execution counts.
+fn executed_instructions(function: &CoverageFunction, executions: &BTreeMap<u64, u64>) -> u64 {
+    executions
+        .range(function.pc_start..function.pc_end)
+        .fold(0_u64, |total, (_, count)| total.saturating_add(*count))
 }
 fn function_hit(function: &CoverageFunction, executed_pcs: &HashSet<u64>) -> bool {
     executed_pcs

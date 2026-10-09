@@ -183,10 +183,7 @@ pub use self::{
     ledger_records::{
         KagemushaWalletLedgerKeyV1, KagemushaWalletPayoutKeyV1, KagemushaWalletPayoutRecordV1,
     },
-    load_finality::{
-        KAGEMUSHA_WALLET_LOAD_FINALITY_CLAIM_BYTES_V1, KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1,
-        KagemushaWalletLoadFinalityV1,
-    },
+    load_finality::{KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1, KagemushaWalletLoadFinalityV1},
     messages::{
         KAGEMUSHA_WALLET_CREDIT_OPENING_TRANSCRIPT_BYTES_V1,
         KAGEMUSHA_WALLET_CREDIT_STATUS_TRANSCRIPT_BYTES_V1,
@@ -393,7 +390,10 @@ pub const KAGEMUSHA_WALLET_RENEWAL_REQUEST_MAX_BYTES_V1: usize = 73_728;
 /// Maximum standalone canonical frame of one local completion record.
 pub const KAGEMUSHA_WALLET_COMPLETION_RECORD_MAX_BYTES_V1: usize = 65_536;
 /// Maximum standalone canonical frame of one local recovery capsule.
-pub const KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1: usize = 262_144;
+/// Includes a bounded native finality envelope and the remaining local custody fields;
+/// this does not change the separate 10,000-byte peer Payment limit.
+pub const KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1: usize =
+    KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1 + 262_144;
 /// Maximum standalone canonical frame of one local fold record.
 ///
 /// The record carries one Ω, which must fit the 10,000-byte Payment that carries it (§8), so

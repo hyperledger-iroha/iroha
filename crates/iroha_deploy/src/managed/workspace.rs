@@ -331,6 +331,7 @@ mod tests {
         assert!(runtime.network_profiles().is_err());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn relocated_and_renamed_app_uses_only_its_exact_resources() {
         let _resources = super::super::native_test_guard();
@@ -389,7 +390,7 @@ mod tests {
         assert!(InstalledRuntime::from_directory(&moved_app.join("Contents")).is_err());
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     #[test]
     fn packaged_runtime_rejects_indirect_application_resources_and_metadata() {
         let _resources = super::super::native_test_guard();

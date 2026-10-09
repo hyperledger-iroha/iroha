@@ -106,18 +106,38 @@ impl AssetDefinitionHome {
         definition: &AssetDefinition,
         direct_dataspace: Option<DataSpaceId>,
     ) -> Result<Self, ParseError> {
+        Self::validate_definition(definition, direct_dataspace)?;
+        Ok(
+            match (definition.owning_domain.as_ref(), direct_dataspace) {
+                (Some(domain), _) => Self::Domain(domain.clone()),
+                (None, Some(dataspace)) => Self::Dataspace(dataspace),
+                (None, None) => Self::Global,
+            },
+        )
+    }
+
+    /// Validate an immutable home without constructing an owned projection or cloning names.
+    ///
+    /// Inspection-only callers can use this check while retaining the original definition.
+    /// `direct_dataspace` has the same authoritative-source requirement as
+    /// [`Self::from_definition`]. Both methods share this sole validation predicate.
+    ///
+    /// # Errors
+    /// Returns the same errors, in the same order, as [`Self::from_definition`].
+    pub fn validate_definition(
+        definition: &AssetDefinition,
+        direct_dataspace: Option<DataSpaceId>,
+    ) -> Result<(), ParseError> {
         match (definition.owning_domain.as_ref(), direct_dataspace) {
             (Some(_), Some(_)) => Err(ParseError::new(
                 "asset definition cannot have both domain and direct-dataspace homes",
             )),
-            (Some(domain), None) => Ok(Self::Domain(domain.clone())),
+            (Some(_), None) => Ok(()),
             (None, Some(DataSpaceId::UNIVERSAL)) => Err(ParseError::new(
                 "direct-dataspace asset home must be a non-universal dataspace",
             )),
-            (None, Some(dataspace)) => Ok(Self::Dataspace(dataspace)),
-            (None, None) if definition.balance_scope_policy == AssetBalancePolicy::Global => {
-                Ok(Self::Global)
-            }
+            (None, Some(_)) => Ok(()),
+            (None, None) if definition.balance_scope_policy == AssetBalancePolicy::Global => Ok(()),
             (None, None) => Err(ParseError::new(
                 "dataspace-restricted asset definition requires an immutable home",
             )),
@@ -163,8 +183,7 @@ mod tests {
         );
         let json = norito::json::to_json(&row).expect("serialize row");
         assert_eq!(
-            norito::json::from_json::<AssetDefinitionDirectHomeV1>(&json)
-                .expect("deserialize row"),
+            norito::json::from_json::<AssetDefinitionDirectHomeV1>(&json).expect("deserialize row"),
             row
         );
         let unknown = json.replacen('{', "{\"active\":true,", 1);
@@ -234,6 +253,45 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn borrowed_home_validation_preserves_projection_and_refusal_precedence() {
+        let short = DomainId::try_new("issuer", "public").expect("short domain");
+        let label = "d".repeat(63);
+        let long = DomainId::try_new(&label, &label).expect("maximum domain components");
+        let dataspace = DataSpaceId::new(u64::MAX);
+        for policy in [
+            AssetBalancePolicy::Global,
+            AssetBalancePolicy::DataspaceRestricted,
+        ] {
+            for domain in [None, Some(&short), Some(&long)] {
+                let definition = definition(policy, domain.cloned());
+                for direct in [None, Some(DataSpaceId::UNIVERSAL), Some(dataspace)] {
+                    let expected = match (domain.is_some(), direct) {
+                        (true, Some(_)) => Err(
+                            "asset definition cannot have both domain and direct-dataspace homes",
+                        ),
+                        (false, Some(DataSpaceId::UNIVERSAL)) => {
+                            Err("direct-dataspace asset home must be a non-universal dataspace")
+                        }
+                        (false, None) if policy == AssetBalancePolicy::DataspaceRestricted => {
+                            Err("dataspace-restricted asset definition requires an immutable home")
+                        }
+                        _ => Ok(()),
+                    };
+                    let borrowed = AssetDefinitionHome::validate_definition(&definition, direct)
+                        .map_err(|error| error.reason());
+                    assert_eq!(borrowed, expected);
+                    assert_eq!(
+                        AssetDefinitionHome::from_definition(&definition, direct)
+                            .map(|_| ())
+                            .map_err(|error| error.reason()),
+                        borrowed,
+                    );
+                }
+            }
+        }
     }
 
     #[test]

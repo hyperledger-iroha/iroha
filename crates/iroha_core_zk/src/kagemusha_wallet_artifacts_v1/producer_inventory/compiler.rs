@@ -175,8 +175,6 @@ pub struct CompiledOperationV1 {
     a: Vec<CompiledKeyV1<Eq>>,
     w: Vec<CompiledKeyV1<Ep>>,
     predecessor: Option<KeyArtifact<Ep>>,
-    anchor: Option<iroha_kagemusha_proof::finality::history::HistoryAnchor>,
-    receipt: Option<[BlobV1; 2]>,
 }
 impl CompiledOperationV1 {
     /// Exact source-compiled terminal identity, with no final catalog authority.
@@ -485,15 +483,14 @@ impl<'a> OfflineCompilerV1<'a> {
     /// Compile one exact logical route under a raw candidate Omega dependency.
     /// Source compilation does not authorize that candidate; final closure must compare it.
     /// # Errors
-    /// Foreign scope/class, missing receipt source or any stage source/import failure.
+    /// Foreign scope/class or any stage source/import failure.
     pub fn operation(
         &mut self,
         route: OperationRoute,
         q: &CompiledQV1,
         omega: Option<&CompiledKeyV1<Ep>>,
-        receipt: Option<ReceiptSourceRecipeV1<'_>>,
     ) -> Result<CompiledOperationV1, CompilationErrorV1> {
-        self.operation_source(route, q, omega, receipt, None)
+        self.operation_source(route, q, omega, None)
     }
 
     /// Reconstruct a route under the final exact Omega key without regenerating its
@@ -509,7 +506,6 @@ impl<'a> OfflineCompilerV1<'a> {
         operation: &CompiledOperationV1,
         q: &CompiledQV1,
         omega: &CompiledOmegaV1,
-        receipt: Option<ReceiptSourceRecipeV1<'_>>,
     ) -> Result<CompiledOperationV1, CompilationErrorV1> {
         if operation.scope != self.scope
             || operation.own != q.own
@@ -528,12 +524,8 @@ impl<'a> OfflineCompilerV1<'a> {
         } else {
             Some(omega.key())
         };
-        let closed =
-            self.operation_source(operation.route, q, predecessor, receipt, Some(operation))?;
-        if closed.context != operation.context
-            || closed.anchor != operation.anchor
-            || closed.receipt != operation.receipt
-        {
+        let closed = self.operation_source(operation.route, q, predecessor, Some(operation))?;
+        if closed.context != operation.context {
             return Err(CompilationErrorV1::Closure);
         }
         Ok(closed)
@@ -544,13 +536,9 @@ impl<'a> OfflineCompilerV1<'a> {
         route: OperationRoute,
         q: &CompiledQV1,
         omega: Option<&CompiledKeyV1<Ep>>,
-        receipt: Option<ReceiptSourceRecipeV1<'_>>,
         originals: Option<&CompiledOperationV1>,
     ) -> Result<CompiledOperationV1, CompilationErrorV1> {
-        if q.scope != self.scope
-            || q.variant != route.variant
-            || (route.variant != Variant::Load && receipt.is_some())
-        {
+        if q.scope != self.scope || q.variant != route.variant {
             return Err(CompilationErrorV1::Closure);
         }
         let template = OperationV1 {
@@ -637,7 +625,7 @@ impl<'a> OfflineCompilerV1<'a> {
             }};
         }
         let (context, a, w) = if route.variant == Variant::Bootstrap {
-            if omega.is_some() || receipt.is_some() {
+            if omega.is_some() {
                 return Err(CompilationErrorV1::Closure);
             }
             stages!(source(
@@ -647,7 +635,7 @@ impl<'a> OfflineCompilerV1<'a> {
         } else {
             let key = omega.ok_or(CompilationErrorV1::Closure)?;
             let plan = source(
-                operation::plan(route, self.scope, &q.recipe, &key.metadata, receipt),
+                operation::plan(route, self.scope, &q.recipe, &key.metadata),
                 CompilationPhaseV1::OperationRecipe,
             )?;
             match plan {
@@ -669,13 +657,6 @@ impl<'a> OfflineCompilerV1<'a> {
             a,
             w,
             predecessor: omega.map(|k| k.metadata.clone()),
-            anchor: receipt.map(|r| *r.anchor),
-            receipt: receipt.map(|r| {
-                [
-                    BlobV1::of(r.source.binding().encoded()),
-                    BlobV1::of(r.source.verifying_key().to_bytes()),
-                ]
-            }),
         })
     }
 

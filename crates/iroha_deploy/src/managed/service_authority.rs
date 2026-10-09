@@ -429,6 +429,8 @@ impl ServiceAuthority {
         #[cfg(test)]
         if create {
             creating_original_tests::after_child();
+        } else {
+            profile_validation_test_support::after_existing_child(&result);
         }
         // Close the retained parent on every ordinary child result while a successful child's
         // native directory and lock remain live. Parent custody failure supersedes that result.

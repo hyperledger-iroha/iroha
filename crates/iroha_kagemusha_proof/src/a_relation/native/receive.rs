@@ -79,6 +79,15 @@ pub enum Error {
     /// Circuit assignment or proving fails.
     Prover,
 }
+impl From<super::proving::Error> for Error {
+    fn from(error: super::proving::Error) -> Self {
+        match error {
+            super::proving::Error::Cancelled => Self::Cancelled,
+            super::proving::Error::Artifact => Self::Artifact,
+            super::proving::Error::Prover => Self::Prover,
+        }
+    }
+}
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "native Receive: {self:?}")

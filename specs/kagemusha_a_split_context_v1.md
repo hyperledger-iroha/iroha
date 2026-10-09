@@ -173,20 +173,20 @@ rebound at terminal closure. The proof source is explicit messages outside the
 complete Receive schema, and its exact active tape triple plus fixed-owner
 opening within that schema.
 
-The Load schedule is A1 (hard predecessor and D32 recovery), W1,
-A2 (hard Q_sigma), W2, A3 (hard ordinary receipt finality), W3,
-A4 (hard own receipt signature Q), W4, A5 (hard current-credential and
-Enrollment-certificate signature Q). Three signed object tapes and the exact
-282-byte ordinary Load receipt enter the same context. A3 retains the prior
-P carry/opening and finality P carry/opening in its four-input fold. W3 retains
-the prior and finality V claims alongside its actual A3 opening; neither claim
-is replaced by an acceptance flag. Every later stage retains that continuation.
-The finality key and complete global-genesis anchor are fixed by the installed
-Load plan. Its receipt digest, scheme, asset, wallet, ordinal, amount and charge
-are constrained to the exact Load effect. No dedicated Load signature Q exists.
-The fixed operation tasks still require current authorization on every step;
-authenticating the predecessor does not replace it. The complete ordinary-finality
-chain and current terminal catalog require fresh proof and envelope qualification.
+The Load schedule is A1 (hard predecessor, D32 recovery and exact receipt
+binding), W1, A2 (hard Q_sigma), W2, A3 (hard own receipt signature Q),
+W3, A4 (hard current-credential and Enrollment-certificate signature Q).
+Three signed object tapes and the exact 282-byte ordinary Load receipt enter
+the same context. The receipt digest, scheme, asset, wallet, ordinal, amount
+and charge are constrained to the exact Load effect. No finality source key,
+proof or deferred finality claim enters the circuit.
+
+The native owner verifies BLS finality and receipt inclusion before requesting
+the signed Advance. Offline lineage authenticates this decision through that
+credential-bound signature under the selected released-app/uncompromised-OS
+assumption. It does not claim circuit verification of BLS. Current authorization
+remains mandatory on every step. The changed A/W/Omega keys need current-candidate
+qualification; see [native finality goals](kagemusha_native_finality_goals.md).
 
 Send likewise
 requires a separate own 2V/1F Q in addition to Q_sigma and its map/object tasks.

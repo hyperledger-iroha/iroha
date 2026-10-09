@@ -157,7 +157,15 @@ impl SumeragiFinalityCheckpoint {
     /// # Errors
     /// Malformed bounds or encoding failure; this does not authenticate decoded trust roots.
     pub fn encode_canonical(&self) -> Result<Vec<u8>, FinalityError> {
-        self.validate_bounds()?;
+        if norito::core::decode_limits_active() {
+            // An enclosing owner keeps the original independent scopes and charges.
+            self.validate_bounds()?;
+        } else {
+            // Reuse only exact immutable epoch values within these bounds checks. End
+            // the workspace before encoding; no verdict or workspace leaves this call.
+            let mut validation = EpochValidationScope::new();
+            self.validate_bounds_with_validation(Some(&mut validation))?;
+        }
         norito::encode_canonical(self).map_err(malformed)
     }
     /// Decode bounded canonical material; independent checkpoint selection is still required.
@@ -273,8 +281,16 @@ impl SumeragiFinalityVerifier {
             self.decisions.last_key_value().map(|(height, _)| *height) == Some(tip.height()),
             "checkpoint must export the authenticated tip",
         )?;
-        // One immutable witness needs the complete certificate/prefix check exactly once.
-        self.verify_retained_decision(tip)?;
+        // This producer owns pure epoch work only until its checkpoint is returned.
+        // Active caller admission keeps the original independent verification recipe.
+        let mut validation =
+            (!norito::core::decode_limits_active()).then(EpochValidationScope::new);
+        // The original witness still undergoes every certificate, prefix and decision check.
+        if let Some(validation) = validation.as_mut() {
+            self.verify_retained_decision_with_validation(tip, Some(validation))?;
+        } else {
+            self.verify_retained_decision(tip)?;
+        }
         let first = tip.height().saturating_sub(2).max(1);
         let checkpoint = SumeragiFinalityCheckpoint {
             network_id: NetworkId::from_genesis_hash(self.genesis.hash()),
@@ -293,7 +309,13 @@ impl SumeragiFinalityVerifier {
                 .collect(),
             tip: tip.clone(),
         };
-        checkpoint.validate_bounds()?;
+        if let Some(validation) = validation.as_mut() {
+            checkpoint.validate_bounds_with_validation(Some(validation))?;
+        } else {
+            checkpoint.validate_bounds()?;
+        }
+        // The result is the same DTO, not a retained epoch workspace or current-state grant.
+        drop(validation);
         Ok(checkpoint)
     }
 
@@ -478,5 +500,7 @@ impl SumeragiFinalityVerifier {
 
 #[cfg(all(test, feature = "transparent_api"))]
 mod epoch_validation_tests;
+#[cfg(all(test, feature = "transparent_api"))]
+mod producer_validation_tests;
 #[cfg(all(test, feature = "transparent_api"))]
 mod tests;

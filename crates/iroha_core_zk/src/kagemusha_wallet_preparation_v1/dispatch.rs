@@ -17,12 +17,14 @@ use super::*;
 
 type Result<T> = core::result::Result<T, state::Error>;
 
-fn proof<T>(result: core::result::Result<T, Error>) -> Result<T> {
+pub(super) fn proof<T>(result: core::result::Result<T, Error>) -> Result<T> {
     result.map_err(|error| match error {
         Error::Unavailable => state::Error::ArtifactsUnavailable("native operation artifact"),
+        Error::Cancelled => state::Error::Cancelled,
         _ => state::Error::Proof("installed native operation preparation"),
     })
 }
+
 fn model<T>(result: core::result::Result<T, KagemushaWalletValidationErrorV1>) -> Result<T> {
     result.map_err(|_| state::Error::Invalid("native operation original"))
 }
@@ -483,10 +485,11 @@ impl PreparationV1<'_> {
                         leaf.key(),
                         model(leaf.leaf_value())?,
                     )?;
-                    Step::Load(Box::new(proof(self.prepare_load(
+                    Step::Load(Box::new(self.prepare_load(
                         &owner,
                         released,
                         sources.finality(),
+                        custody,
                         LoadOriginalsV1 {
                             receipt,
                             finality,
@@ -494,7 +497,7 @@ impl PreparationV1<'_> {
                         },
                         nonce,
                         budget,
-                    ))?))
+                    )?))
                 }
                 Action::Send { request: original } => {
                     let request: KagemushaWalletRequestV1 =
@@ -836,5 +839,39 @@ impl PreparationV1<'_> {
             step,
             send_usage,
         })
+    }
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    #[test]
+    fn native_preparation_mapping_preserves_cancellation_and_artifact_unavailability() {
+        assert_eq!(proof(Ok(7)).unwrap(), 7);
+        assert!(matches!(
+            proof::<()>(Err(Error::Cancelled)),
+            Err(state::Error::Cancelled)
+        ));
+        assert!(matches!(
+            proof::<()>(Err(Error::Unavailable)),
+            Err(state::Error::ArtifactsUnavailable(
+                "native operation artifact"
+            ))
+        ));
+        for rejected in [
+            Error::Authority,
+            Error::RuntimeBinding,
+            Error::Inventory,
+            Error::Profile,
+            Error::Proof,
+        ] {
+            assert!(matches!(
+                proof::<()>(Err(rejected)),
+                Err(state::Error::Proof(
+                    "installed native operation preparation"
+                ))
+            ));
+        }
     }
 }

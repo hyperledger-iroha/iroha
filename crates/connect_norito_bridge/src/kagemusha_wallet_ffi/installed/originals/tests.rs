@@ -1,6 +1,6 @@
 //! Closed carrier DATA tests. These inventory fixtures contain no source keys or authority.
 use super::*;
-use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::{FinalityV1, OriginalV1};
+use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::OriginalV1;
 fn fixture() -> ProducerInventoryV1 {
     let blob = |n| BlobV1 {
         bytes: 16,
@@ -26,20 +26,12 @@ fn fixture() -> ProducerInventoryV1 {
         routes: vec![],
         terminals: vec![],
         omega: 0,
-        finality: FinalityV1 {
-            network: [0; 32],
-            instance: [0; 32],
-            initial_context: [0; 32],
-            initial_epoch: 0,
-            parameters: [0; 6],
-            originals: vec![],
-        },
     }
 }
 fn transport(rows: norito::json::Value) -> Vec<u8> {
     norito::json::to_json(
         &norito::json!({"schema":"iroha.kagemusha.wallet-artifact-original-transport.v1",
-        "walletOriginals":rows,"finalityOriginals":[]}),
+        "walletOriginals":rows}),
     )
     .unwrap()
     .into_bytes()
@@ -80,9 +72,9 @@ fn transport_extent_and_cross_role_conflicts_cannot_choose_other_originals() {
         bytes: 16,
         sha256: [3; 32],
     };
-    insert(&mut roles, original, Store::Finality).unwrap();
-    insert(&mut roles, original, Store::Wallet).unwrap();
-    assert_eq!(roles[&original.sha256].store, Store::Wallet);
+    insert(&mut roles, original).unwrap();
+    insert(&mut roles, original).unwrap();
+    assert_eq!(roles[&original.sha256], original);
     assert!(
         insert(
             &mut roles,
@@ -90,7 +82,6 @@ fn transport_extent_and_cross_role_conflicts_cannot_choose_other_originals() {
                 bytes: 17,
                 ..original
             },
-            Store::Finality
         )
         .is_err()
     );
@@ -101,7 +92,6 @@ fn transport_extent_and_cross_role_conflicts_cannot_choose_other_originals() {
                 bytes: 0,
                 ..original
             },
-            Store::Wallet
         )
         .is_err()
     );
@@ -112,7 +102,6 @@ fn transport_extent_and_cross_role_conflicts_cannot_choose_other_originals() {
                 sha256: [0; 32],
                 ..original
             },
-            Store::Wallet
         )
         .is_err()
     );
@@ -151,13 +140,11 @@ fn retired_project_transport_schema_is_rejected_even_with_exact_rows() {
 }
 
 #[test]
-fn metadata_inventory_requires_the_four_current_originals_and_two_cas_children() {
+fn metadata_inventory_requires_the_four_current_originals_and_wallet_cas_child() {
     // This owner-private namespace observation conveys no verifier or source authority.
     let temp = tempfile::tempdir().unwrap();
     let root = PrivateDirectory::open_or_create(temp.path().join("bundle")).unwrap();
-    for name in ["wallet-originals", "finality-originals"] {
-        root.ensure_child(name).unwrap();
-    }
+    root.ensure_child("wallet-originals").unwrap();
     for name in [
         "verifier-pack.norito",
         "producer-inventory.norito",
@@ -189,57 +176,54 @@ fn metadata_inventory_requires_the_four_current_originals_and_two_cas_children()
     );
 }
 
-/// Inert source DATA, not a signed inventory or qualified finality graph. This exercises
+/// Inert source DATA, not a signed inventory or qualified wallet. This exercises
 /// the same private directory reader used after production inventory authentication.
-fn finality_data_fixture() -> (
+fn wallet_data_fixture() -> (
     tempfile::TempDir,
     std::path::PathBuf,
     ProducerInventoryV1,
     [Vec<u8>; 3],
 ) {
-    use iroha_kagemusha_proof::finality::catalog::ArtifactRecord;
     let temp = tempfile::tempdir().unwrap();
     // The immutable reader deliberately rejects OS path aliases such as macOS /var.
     let root = temp.path().canonicalize().unwrap().join("bundle");
     let metadata = PrivateDirectory::open_or_create(&root).unwrap();
     metadata.ensure_child("wallet-originals").unwrap();
-    metadata.ensure_child("finality-originals").unwrap();
     // Exact original readers reject OS aliases such as macOS /var -> /private/var.
     let root = root.canonicalize().unwrap();
     let originals = [
-        b"inert finality descriptor DATA".to_vec(),
-        b"inert finality verifying key DATA".to_vec(),
-        b"inert finality proving key DATA".to_vec(),
+        b"inert wallet descriptor DATA".to_vec(),
+        b"inert wallet verifying key DATA".to_vec(),
+        b"inert wallet proving key DATA".to_vec(),
     ];
     let blobs = originals.each_ref().map(|bytes| BlobV1::of(bytes));
-    let mut finality = DirectoryOriginalsV1::open_existing(
-        root.join("finality-originals"),
+    let mut wallet = DirectoryOriginalsV1::open_existing(
+        root.join("wallet-originals"),
         PROVING_KEY_MAX_BYTES_V1,
     )
     .unwrap();
-    for (blob, bytes) in blobs.iter().zip(&originals).take(2) {
-        finality.store_original(*blob, bytes).unwrap();
+    for (blob, bytes) in blobs.iter().zip(&originals) {
+        wallet.store_original(*blob, bytes).unwrap();
     }
     let mut inventory = fixture();
-    inventory.originals.clear();
-    inventory.finality.originals = vec![ArtifactRecord {
-        name: vec![], // No identity/authority claim: private routing DATA only.
-        lengths: blobs.map(|blob| blob.bytes),
-        sha256: blobs.map(|blob| blob.sha256),
+    inventory.originals = vec![OriginalV1 {
+        descriptor: blobs[0],
+        verifying_key: blobs[1],
+        proving_key: blobs[2],
     }];
     (temp, root, inventory, originals)
 }
 
 #[test]
-fn finality_catalog_reader_never_requires_or_routes_server_pk() {
-    let (_temp, root, inventory, originals) = finality_data_fixture();
+fn wallet_catalog_reader_requires_only_wallet_artifacts() {
+    let (_temp, root, inventory, originals) = wallet_data_fixture();
     let mut source = CatalogReader::load(
         PrivateDirectory::open_exact(&root).unwrap(),
         &root,
         &inventory,
     )
     .unwrap();
-    for original in &originals[..2] {
+    for original in &originals {
         let digest = BlobV1::of(original).sha256;
         let mut bytes = Vec::new();
         OriginalSourceV1::open(&mut source, digest)
@@ -248,16 +232,7 @@ fn finality_catalog_reader_never_requires_or_routes_server_pk() {
             .unwrap();
         assert_eq!(&bytes, original);
     }
-    assert!(matches!(
-        OriginalSourceV1::open(&mut source, BlobV1::of(&originals[2]).sha256),
-        Err(OriginalError::Inventory)
-    ));
-    assert!(
-        !root
-            .join("finality-originals")
-            .join(hex::encode(BlobV1::of(&originals[2]).sha256))
-            .exists()
-    );
+    assert!(!root.join("finality-originals").exists());
     assert!(matches!(
         OriginalSourceV1::open(&mut source, [0x55; 32]),
         Err(OriginalError::Inventory)
@@ -265,8 +240,8 @@ fn finality_catalog_reader_never_requires_or_routes_server_pk() {
 }
 
 #[test]
-fn finality_catalog_reader_refuses_changed_extent_hash_or_wrong_store() {
-    let (_temp, root, inventory, originals) = finality_data_fixture();
+fn wallet_catalog_reader_refuses_changed_extent_hash_or_missing_original() {
+    let (_temp, root, inventory, originals) = wallet_data_fixture();
     let load = |inventory: &ProducerInventoryV1| {
         CatalogReader::load(
             PrivateDirectory::open_exact(&root).unwrap(),
@@ -275,46 +250,48 @@ fn finality_catalog_reader_refuses_changed_extent_hash_or_wrong_store() {
         )
     };
     let mut wrong_length = inventory.clone();
-    wrong_length.finality.originals[0].lengths[1] += 1;
+    wrong_length.originals[0].verifying_key.bytes += 1;
     assert!(load(&wrong_length).is_err_and(|error| error.status == INVALID));
     let mut wrong_hash = inventory.clone();
-    wrong_hash.finality.originals[0].sha256[0] = [0x66; 32];
+    wrong_hash.originals[0].descriptor.sha256 = [0x66; 32];
     assert!(load(&wrong_hash).is_err_and(|error| error.status == INVALID));
 
-    // Identical bytes in the other directory do not satisfy the catalog's selected role.
+    // Identical bytes outside the selected directory cannot satisfy the catalog.
     let name = hex::encode(BlobV1::of(&originals[1]).sha256);
-    std::fs::rename(
-        root.join("finality-originals").join(&name),
-        root.join("wallet-originals").join(&name),
-    )
-    .unwrap();
+    std::fs::rename(root.join("wallet-originals").join(&name), root.join(&name)).unwrap();
     assert!(load(&inventory).is_err_and(|error| error.status == INVALID));
 }
 
 #[test]
-fn finality_transport_requires_all_verifier_originals_and_excludes_server_pk() {
-    let (_temp, _root, inventory, _originals) = finality_data_fixture();
-    let record = &inventory.finality.originals[0];
+fn wallet_transport_requires_all_originals_and_rejects_retired_finality_graph() {
+    let (_temp, _root, inventory, _originals) = wallet_data_fixture();
+    let record = &inventory.originals[0];
+    let blobs = [record.descriptor, record.verifying_key, record.proving_key];
     let wire = |indices: &[usize]| {
         let mut rows: Vec<_> = indices
             .iter()
-            .map(|&i| (record.sha256[i], record.lengths[i]))
+            .map(|&i| (blobs[i].sha256, blobs[i].bytes))
             .collect();
         rows.sort();
-        let finality_originals: Vec<_> = rows
+        let wallet_originals: Vec<_> = rows
             .into_iter()
             .map(|(hash, bytes)| norito::json!({"bytes":bytes,"sha256":(hex::encode(hash))}))
             .collect();
         norito::json::to_json(&norito::json!({
             "schema":"iroha.kagemusha.wallet-artifact-original-transport.v1",
-            "walletOriginals":[],
-            "finalityOriginals": finality_originals
+            "walletOriginals": wallet_originals
         }))
         .unwrap()
         .into_bytes()
     };
-    require_transport(&inventory, &wire(&[0, 1])).unwrap();
-    for indices in [&[0][..], &[1], &[0, 1, 2], &[0, 2], &[]] {
+    require_transport(&inventory, &wire(&[0, 1, 2])).unwrap();
+    for indices in [&[0][..], &[1], &[0, 1], &[0, 2], &[]] {
         assert!(require_transport(&inventory, &wire(indices)).is_err());
     }
+    let mut retired: norito::json::Value = norito::json::from_slice(&wire(&[0, 1, 2])).unwrap();
+    retired
+        .as_object_mut()
+        .unwrap()
+        .insert("finalityOriginals".into(), norito::json!([]));
+    assert!(require_transport(&inventory, &norito::json::to_vec(&retired).unwrap()).is_err());
 }

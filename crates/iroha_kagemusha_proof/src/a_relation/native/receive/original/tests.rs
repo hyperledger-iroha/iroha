@@ -275,8 +275,12 @@ fn sequential_imports(variant: Variant) {
                 .import_a((stage + 1) % A_STAGE_COUNT, &original, read)
                 .is_err()
         );
-        let imported = prover.import_a(stage, &original, read).unwrap();
-        assert_eq!(imported.vk().to_bytes(), a[stage].key().to_bytes());
+        let imported_seal = prover.import_a(stage, &original, read).unwrap();
+        let imported = prover.bind_a(stage, &imported_seal, None).unwrap();
+        assert_eq!(
+            imported.verifying_key().to_bytes(),
+            a[stage].key().to_bytes()
+        );
         drop((imported, original));
         if stage < W_STAGE_COUNT {
             let pk =
@@ -297,9 +301,10 @@ fn sequential_imports(variant: Variant) {
                     .import_w((stage + 1) % W_STAGE_COUNT, &original, read)
                     .is_err()
             );
-            let imported = prover.import_w(stage, &original, read).unwrap();
+            let imported_seal = prover.import_w(stage, &original, read).unwrap();
+            let imported = prover.bind_w(stage, &imported_seal, None).unwrap();
             assert_eq!(
-                imported.vk().to_bytes(),
+                imported.verifying_key().to_bytes(),
                 wrappers[stage].verifying_key().to_bytes()
             );
         }

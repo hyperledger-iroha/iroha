@@ -7,16 +7,12 @@
 
 use std::{collections::BTreeMap, io, io::Read, io::Write, path::Path, str::FromStr};
 
-use iroha_core_zk::{
-    kagemusha_wallet_artifacts_v1::{
-        DESCRIPTOR_MAX_BYTES_V1, InstallationV1, InstalledVerifierPackV1,
-        VERIFYING_KEY_MAX_BYTES_V1,
-        producer_inventory::{
-            BlobV1, DirectoryOriginalsV1, FinalityV1, OfflineCompilerV1, OriginalSourceV1,
-            PROVING_KEY_MAX_BYTES_V1, ReceiptSourceRecipeV1, SourceScopeV1, WalletArtifactDraftV1,
-        },
+use iroha_core_zk::kagemusha_wallet_artifacts_v1::{
+    InstallationV1, InstalledVerifierPackV1,
+    producer_inventory::{
+        BlobV1, DirectoryOriginalsV1, OfflineCompilerV1, OriginalSourceV1,
+        PROVING_KEY_MAX_BYTES_V1, SourceScopeV1, WalletArtifactDraftV1,
     },
-    kagemusha_wallet_finality_v1::derive_history_anchor,
 };
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
@@ -26,16 +22,8 @@ use iroha_data_model::{
     sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier, genesis_epoch},
 };
 use iroha_fs::{FileSnapshot, PrivateDirectory, SealedPrivateFile};
-use iroha_kagemusha_proof::finality::{
-    catalog::{ArtifactRecord, VerifierBlobSource, VerifierLimits, qualify_receipt},
-    continuity::producer::Error as FinalityError,
-    native::Parameters,
-};
 use iroha_pasta::msm::MemoryBudget;
-use iroha_plonk::{
-    keys::{CosetCachePolicy, pk::artifact::ReadConfig},
-    pcs::ipa::PinnedParams,
-};
+use iroha_plonk::keys::{CosetCachePolicy, pk::artifact::ReadConfig};
 use iroha_plonk_gadgets::p256::native::{Affine, words_from_be};
 use norito::json::{self, JsonDeserialize};
 use p256::{
@@ -44,16 +32,8 @@ use p256::{
 };
 use sha2::{Digest as _, Sha256};
 
-#[path = "kagemusha_wallet_artifacts/finality.rs"]
-mod finality;
-#[path = "kagemusha_wallet_artifacts/server.rs"]
-mod server;
-
 const REQUEST_MAX: usize = 65_536;
 const GENESIS_MAX: usize = 64 << 20;
-const RECORDS_MAX: usize = 4_096;
-const INVENTORY_MAX: usize = 16 << 20;
-const VERIFIERS_MAX: usize = 512 << 20;
 const OUTPUT_MAX: u64 = 128 << 30;
 
 #[derive(JsonDeserialize)]
@@ -71,8 +51,6 @@ struct Request {
     network_id_hex: String,
     genesis_public_key: String,
     signed_genesis: OriginalInput,
-    finality_inventory: OriginalInput,
-    finality_originals_directory: String,
     custody_directory: String,
     scheme_root_public_key_hex: String,
     enrollment_public_key_hex: String,
@@ -197,7 +175,6 @@ fn parse_request(bytes: &[u8]) -> io::Result<Request> {
     }
     digest(&request.network_id_hex)?;
     digest(&request.signed_genesis.sha256)?;
-    digest(&request.finality_inventory.sha256)?;
     let keys = [
         point(&request.scheme_root_public_key_hex)?,
         point(&request.enrollment_public_key_hex)?,
@@ -272,69 +249,6 @@ fn scope(key: KagemushaDevicePublicKeyV1) -> io::Result<SourceScopeV1> {
     )
 }
 
-type FinalityRecords = (Vec<ArtifactRecord>, BTreeMap<[u8; 32], BlobV1>, usize);
-
-fn records(bytes: &[u8]) -> io::Result<FinalityRecords> {
-    let records: Vec<ArtifactRecord> = checked(
-        norito::decode_canonical_with_limits(bytes, norito::canonical_decode_limits(bytes.len())),
-        "canonical finality inventory required",
-    )?;
-    if records.is_empty() || records.len() > RECORDS_MAX {
-        return Err(invalid("finality record ceiling"));
-    }
-    let mut blobs = BTreeMap::new();
-    let mut total = 0usize;
-    let mut previous: Option<&[u8]> = None;
-    for record in &records {
-        checked(record.validate_identity(), "invalid finality identity")?;
-        if previous.is_some_and(|name| name >= record.name.as_slice()) {
-            return Err(invalid("duplicate or unordered finality record"));
-        }
-        previous = Some(&record.name);
-        // Retain the signed PK commitments in each record, but never open server PKs.
-        for (index, cap) in [DESCRIPTOR_MAX_BYTES_V1, VERIFYING_KEY_MAX_BYTES_V1]
-            .into_iter()
-            .enumerate()
-        {
-            let blob = BlobV1 {
-                bytes: record.lengths[index],
-                sha256: record.sha256[index],
-            };
-            let length = usize::try_from(blob.bytes).map_err(|_| invalid("finality extent"))?;
-            if length == 0 || length > cap || blob.sha256 == [0; 32] {
-                return Err(invalid("finality original bound"));
-            }
-            total = total
-                .checked_add(length)
-                .filter(|n| *n <= VERIFIERS_MAX)
-                .ok_or_else(|| invalid("finality aggregate ceiling"))?;
-            if blobs
-                .insert(blob.sha256, blob)
-                .is_some_and(|old| old != blob)
-            {
-                return Err(invalid("conflicting finality content address"));
-            }
-        }
-    }
-    Ok((records, blobs, total))
-}
-
-struct FinalitySource<'a> {
-    source: &'a DirectoryOriginalsV1,
-    blobs: &'a BTreeMap<[u8; 32], BlobV1>,
-}
-impl VerifierBlobSource for FinalitySource<'_> {
-    fn open(&mut self, digest: &[u8; 32]) -> Result<Box<dyn Read + '_>, FinalityError> {
-        let blob = self.blobs.get(digest).ok_or(FinalityError::Artifact)?;
-        self.source
-            .verify_original(*blob)
-            .map_err(|_| FinalityError::Artifact)?;
-        self.source
-            .open_original(*digest)
-            .map_err(|_| FinalityError::Artifact)
-    }
-}
-
 /// Copy only identities returned by the completed signed catalog. The compiler
 /// cache may contain provisional sources and is never the transport directory.
 fn copy_closed(
@@ -397,9 +311,7 @@ fn copy_closed(
 
 struct CompleteSource<'a> {
     wallet: &'a DirectoryOriginalsV1,
-    finality: &'a DirectoryOriginalsV1,
     wallet_blobs: &'a BTreeMap<[u8; 32], BlobV1>,
-    finality_blobs: &'a BTreeMap<[u8; 32], BlobV1>,
 }
 impl OriginalSourceV1 for CompleteSource<'_> {
     fn open(
@@ -407,14 +319,8 @@ impl OriginalSourceV1 for CompleteSource<'_> {
         digest: [u8; 32],
     ) -> Result<Box<dyn Read + '_>, iroha_core_zk::kagemusha_wallet_proofs_v1::Error> {
         use iroha_core_zk::kagemusha_wallet_proofs_v1::Error;
-        let (source, blob) = if let Some(blob) = self.finality_blobs.get(&digest) {
-            (self.finality, blob)
-        } else {
-            (
-                self.wallet,
-                self.wallet_blobs.get(&digest).ok_or(Error::Inventory)?,
-            )
-        };
+        let source = self.wallet;
+        let blob = self.wallet_blobs.get(&digest).ok_or(Error::Inventory)?;
         source.verify_original(*blob).map_err(|error| {
             if matches!(
                 error.kind(),
@@ -489,22 +395,14 @@ fn certificate(
     )
 }
 
-#[derive(Clone, Copy)]
-struct CompilerStores<'a> {
-    wallet: &'a DirectoryOriginalsV1,
-    finality: &'a DirectoryOriginalsV1,
-}
-
 fn finish(
     request: &Request,
     draft: WalletArtifactDraftV1,
     output: &PrivateDirectory,
-    stores: CompilerStores<'_>,
+    wallet: &DirectoryOriginalsV1,
     native: &SumeragiFinalityVerifier,
     config: ReadConfig,
-    verifier_bytes: usize,
 ) -> io::Result<()> {
-    let CompilerStores { wallet, finality } = stores;
     let custody = PrivateDirectory::open_exact(&request.custody_directory)?;
     let root = private_key(
         &custody,
@@ -572,24 +470,14 @@ fn finish(
     publish(output, "artifact-manifest.norito", &manifest_original)?;
     let carrier = output.create_child("carrier")?;
     let carrier_wallet_directory = carrier.create_child("wallet-originals")?;
-    let carrier_finality_directory = carrier.create_child("finality-originals")?;
     copy_closed(
         wallet,
         &carrier_wallet_directory,
         originals.wallet_originals(),
     )?;
-    copy_closed(
-        finality,
-        &carrier_finality_directory,
-        originals.finality_originals(),
-    )?;
     let carrier_wallet = DirectoryOriginalsV1::open_existing(
         carrier_wallet_directory.path(),
         PROVING_KEY_MAX_BYTES_V1,
-    )?;
-    let carrier_finality = DirectoryOriginalsV1::open_existing(
-        carrier_finality_directory.path(),
-        DESCRIPTOR_MAX_BYTES_V1,
     )?;
     let installed = checked(
         InstalledVerifierPackV1::load(originals.verifier_pack(), installation),
@@ -604,40 +492,19 @@ fn finish(
         .iter()
         .map(|blob| (blob.sha256, *blob))
         .collect();
-    let finality_blobs = originals
-        .finality_originals()
-        .iter()
-        .map(|blob| (blob.sha256, *blob))
-        .collect();
     let mut combined = CompleteSource {
         wallet: &carrier_wallet,
-        finality: &carrier_finality,
         wallet_blobs: &wallet_blobs,
-        finality_blobs: &finality_blobs,
     };
     let qualified = authenticated
-        .qualify_wallet(
-            &installed,
-            native,
-            &mut combined,
-            config,
-            Parameters {
-                pallas: checked(PinnedParams::derive(16), "Pallas parameters")?,
-                vesta: checked(PinnedParams::derive(16), "Vesta parameters")?,
-            },
-            VerifierLimits {
-                maximum_artifacts: RECORDS_MAX,
-                maximum_verifier_bytes: verifier_bytes,
-                msm_budget: MemoryBudget::DEFAULT,
-            },
-        )
+        .qualify_wallet(&installed, native, &mut combined, config)
         .map_err(io::Error::other)?;
     if qualified.installation() != (installation.scheme_id, installation.manifest_digest) {
         return Err(invalid(
             "qualified graph changed signed installation identity",
         ));
     }
-    originals.write_bundle_metadata(carrier.path(), &carrier_wallet, &carrier_finality)?;
+    originals.write_bundle_metadata(carrier.path(), &carrier_wallet)?;
     custody.revalidate()?;
     Ok(())
 }
@@ -650,74 +517,21 @@ fn run(path: &str) -> io::Result<()> {
         GENESIS_MAX,
         Some(digest(&request.signed_genesis.sha256)?),
     )?;
-    let inventory = Original::open(
-        &request.finality_inventory.path,
-        INVENTORY_MAX,
-        Some(digest(&request.finality_inventory.sha256)?),
-    )?;
     let native = native_finality(
         &request.chain_id,
         &request.network_id_hex,
         &request.genesis_public_key,
         &genesis.bytes,
     )?;
-    let anchor = checked(
-        derive_history_anchor(&native),
-        "selected genesis history anchor rejected",
-    )?;
-    let (records, blobs, metadata_bytes) = records(&inventory.bytes)?;
-    let source = DirectoryOriginalsV1::open_existing(
-        &request.finality_originals_directory,
-        DESCRIPTOR_MAX_BYTES_V1,
-    )?;
-    let mut metadata = FinalitySource {
-        source: &source,
-        blobs: &blobs,
-    };
-    eprintln!("Reconstructing the complete selected finality verifier graph (server PK reads: 0).");
-    let receipt = checked(
-        qualify_receipt(
-            anchor,
-            &records,
-            &mut metadata,
-            Parameters {
-                pallas: checked(PinnedParams::derive(16), "Pallas parameters")?,
-                vesta: checked(PinnedParams::derive(16), "Vesta parameters")?,
-            },
-            VerifierLimits {
-                maximum_artifacts: RECORDS_MAX,
-                maximum_verifier_bytes: metadata_bytes,
-                msm_budget: MemoryBudget::DEFAULT,
-            },
-        ),
-        "complete finality source graph rejected",
-    )?;
     request_original.recheck()?;
     genesis.recheck()?;
-    inventory.recheck()?;
     let parent = PrivateDirectory::open_exact(&request.output_parent)?;
     let output = parent.create_child(&request.output_name)?;
     let wallet_directory = output.create_child("compiler-cache")?;
-    let finality_directory = output.create_child("finality-verifier-cache")?;
     let mut wallet =
         DirectoryOriginalsV1::open_existing(wallet_directory.path(), PROVING_KEY_MAX_BYTES_V1)?;
-    let mut finality =
-        DirectoryOriginalsV1::open_existing(finality_directory.path(), DESCRIPTOR_MAX_BYTES_V1)?;
     publish(&output, "request.json", &request_original.bytes)?;
     publish(&output, "signed-genesis.norito", &genesis.bytes)?;
-    publish(&output, "finality-inventory.norito", &inventory.bytes)?;
-    for blob in blobs.values() {
-        source.verify_original(*blob)?;
-        let mut reader = checked(
-            source.open_original(blob.sha256),
-            "finality original unavailable",
-        )?;
-        let length =
-            usize::try_from(blob.bytes).map_err(|_| invalid("finality original extent"))?;
-        let mut bytes = Vec::with_capacity(length);
-        (&mut reader).take(blob.bytes + 1).read_to_end(&mut bytes)?;
-        finality.store_original(*blob, &bytes)?;
-    }
     let config = ReadConfig {
         maximum_bytes: PROVING_KEY_MAX_BYTES_V1,
         maximum_rows: 1 << 16,
@@ -737,42 +551,19 @@ fn run(path: &str) -> io::Result<()> {
         "wallet compiler configuration",
     )?;
     let draft = compiler
-        .wallet_pack(
-            ReceiptSourceRecipeV1::new(receipt.source(), &anchor),
-            FinalityV1 {
-                network: anchor.network,
-                instance: anchor.instance,
-                initial_context: anchor.initial_context,
-                initial_epoch: anchor.initial_epoch,
-                parameters: anchor.parameters,
-                originals: records,
-            },
-        )
+        .wallet_pack(*native.initial_epoch().network_id.as_bytes())
         .map_err(io::Error::other)?;
     drop(compiler);
     request_original.recheck()?;
     genesis.recheck()?;
-    inventory.recheck()?;
     publish(
         &output,
         "unsigned-producer-inventory.norito",
         draft.producer_inventory(),
     )?;
-    finish(
-        &request,
-        draft,
-        &output,
-        CompilerStores {
-            wallet: &wallet,
-            finality: &finality,
-        },
-        &native,
-        config,
-        metadata_bytes,
-    )?;
+    finish(&request, draft, &output, &wallet, &native, config)?;
     request_original.recheck()?;
     genesis.recheck()?;
-    inventory.recheck()?;
     output.sync()?;
     println!(
         "Complete signed artifact originals written to {}. Installation, release admission and financial execution remain separate.",
@@ -782,21 +573,18 @@ fn run(path: &str) -> io::Result<()> {
 }
 
 fn main() {
-    // The process is single-threaded here. The native streaming finality compiler
-    // inherits owner-only modes even though its temporary originals are ordinary files.
+    // The compiler inherits owner-only modes for temporary artifact originals.
     #[cfg(unix)]
     let _previous_mask = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
     let args: Vec<_> = std::env::args().skip(1).collect();
     let result = match args.as_slice() {
         [help] if help == "--help" => {
             println!(
-                "kagemusha_wallet_artifacts --request ABSOLUTE_IMMUTABLE_PUBLIC_JSON\nkagemusha_wallet_artifacts --compile-finality ABSOLUTE_IMMUTABLE_PUBLIC_JSON\nkagemusha_wallet_artifacts --initialize-finality-server ABSOLUTE_IMMUTABLE_PUBLIC_JSON\nConstructs complete native originals and signs protocol certificates/manifest using the selected private recovery role keys. No network actions. Server initialization only selects authenticated storage and imports its graph."
+                "kagemusha_wallet_artifacts --request ABSOLUTE_IMMUTABLE_PUBLIC_JSON\nConstructs native wallet originals and signs protocol certificates/manifest using the selected private recovery role keys. Finality uses direct BLS verification and needs no proof artifacts. No network actions."
             );
             Ok(())
         }
         [flag, path] if flag == "--request" => run(path),
-        [flag, path] if flag == "--compile-finality" => finality::run(path),
-        [flag, path] if flag == "--initialize-finality-server" => server::run(path),
         _ => Err(invalid(
             "usage: kagemusha_wallet_artifacts --request ABSOLUTE_IMMUTABLE_PUBLIC_JSON",
         )),

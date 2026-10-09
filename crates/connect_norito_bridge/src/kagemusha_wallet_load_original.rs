@@ -1,8 +1,8 @@
 //! Bounded canonical Load transport decoding, without finality or monetary authority.
 //!
 //! The HTTP read returns the exact unsigned receipt frame. The independently supplied
-//! compact finality original remains DATA until the actual wallet Load proof owner
-//! authenticates its installed anchor, source key, proof and both carried claims.
+//! native finality original remains DATA until the wallet authenticates its BLS
+//! certificates, signed-genesis epoch authority and exact receipt event inclusion.
 
 use iroha_data_model::{
     account::address::AccountAddress,
@@ -45,7 +45,7 @@ fn validate(
     payer: &[u8],
     receipt_original: &[u8],
     finality_original: &[u8],
-) -> Result<()> {
+) -> Result<u64> {
     let scheme = identity(scheme)?;
     let wallet_id = identity(wallet_id)?;
     let request = identity(request)?;
@@ -85,7 +85,7 @@ fn validate(
     {
         return Err(Failure::code(INVALID));
     }
-    Ok(())
+    Ok(receipt.block_height)
 }
 
 unsafe fn input<'a>(pointer: *const u8, length: usize, bound: usize) -> Result<&'a [u8]> {
@@ -99,11 +99,12 @@ unsafe fn input<'a>(pointer: *const u8, length: usize, bound: usize) -> Result<&
 /// Validate exact Load originals against independently retained authenticated read selectors.
 /// Returns zero only for canonical DATA binding. It does not authenticate ordinary finality,
 /// verify any financial proof, prepare a Load, touch storage/key custody or change a balance.
-/// The caller retains the exact input bytes; no reconstructed frame or authority DTO is returned.
+/// The caller retains the exact input bytes; the returned height is an untrusted DATA locator.
 ///
 /// # Safety
 /// Each identity points to 32 initialized bytes. Other inputs are readable for their stated
 /// lengths and remain alive throughout this call. No callback or borrowed input is retained.
+/// `out_height` points to one writable u64 and is zeroed on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_wallet_load_original_validate_v1(
     scheme: *const u8,
@@ -115,11 +116,16 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_load_original_validate_
     receipt_length: usize,
     finality: *const u8,
     finality_length: usize,
+    out_height: *mut u64,
 ) -> i32 {
     wallet::run(|| {
+        if out_height.is_null() {
+            return Err(Failure::code(INVALID));
+        }
         // SAFETY: admitted fixed identity and bounded original extents.
         unsafe {
-            validate(
+            *out_height = 0;
+            *out_height = validate(
                 input(scheme, 32, 32)?,
                 input(wallet_id, 32, 32)?,
                 input(request, 32, 32)?,
@@ -134,7 +140,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_wallet_load_original_validate_
                     finality_length,
                     KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1,
                 )?,
-            )
+            )?;
+            Ok(())
         }
     })
     .err()

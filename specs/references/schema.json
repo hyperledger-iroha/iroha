@@ -11051,6 +11051,7 @@
     ]
   },
   "Hash": "Array<u8, 32>",
+  "Hash32": "Array<u8, 32>",
   "HashOf<Array<u8, 32>>": "Hash",
   "HashOf<BlockExecutionContextBundle>": "Hash",
   "HashOf<BlockHeader>": "Hash",
@@ -11058,6 +11059,7 @@
   "HashOf<DaCommitmentBundle>": "Hash",
   "HashOf<DaPinIntentBundle>": "Hash",
   "HashOf<DaProofPolicyBundle>": "Hash",
+  "HashOf<EventBox>": "Hash",
   "HashOf<ExecutionOutputV1>": "Hash",
   "HashOf<FastpqOrdinarySourceStatementLeafV1>": "Hash",
   "HashOf<FeedEvent>": "Hash",
@@ -11681,24 +11683,16 @@
         "type": "u16"
       },
       {
-        "name": "anchor_digest",
-        "type": "Array<u8, 32>"
-      },
-      {
         "name": "receipt_digest",
         "type": "Array<u8, 32>"
       },
       {
-        "name": "proof",
-        "type": "Vec<u8>"
+        "name": "certificate",
+        "type": "SumeragiCommitCertificateV1"
       },
       {
-        "name": "pallas_claim",
-        "type": "Array<u8, 544>"
-      },
-      {
-        "name": "vesta_claim",
-        "type": "Array<u8, 544>"
+        "name": "event_proof",
+        "type": "MerkleProof<EventBox>"
       }
     ]
   },
@@ -12167,6 +12161,18 @@
       {
         "name": "audit_path",
         "type": "Vec<Option<HashOf<Array<u8, 32>>>>"
+      }
+    ]
+  },
+  "MerkleProof<EventBox>": {
+    "Struct": [
+      {
+        "name": "leaf_index",
+        "type": "u32"
+      },
+      {
+        "name": "audit_path",
+        "type": "Vec<Option<HashOf<EventBox>>>"
       }
     ]
   },
@@ -16922,6 +16928,9 @@
   },
   "Option<HashOf<DaProofPolicyBundle>>": {
     "Option": "HashOf<DaProofPolicyBundle>"
+  },
+  "Option<HashOf<EventBox>>": {
+    "Option": "HashOf<EventBox>"
   },
   "Option<HashOf<ExecutionOutputV1>>": {
     "Option": "HashOf<ExecutionOutputV1>"
@@ -29914,6 +29923,50 @@
     ]
   },
   "String": "String",
+  "SumeragiCommitCertificateV1": {
+    "Struct": [
+      {
+        "name": "consensus_header",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "commit_qc",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "result_preimage",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "SumeragiCommitCheckpointV1": {
+    "Struct": [
+      {
+        "name": "genesis_hash",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "network",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "chain",
+        "type": "String"
+      },
+      {
+        "name": "instance",
+        "type": "Hash32"
+      },
+      {
+        "name": "initial",
+        "type": "ValidatorEpochContextV1"
+      },
+      {
+        "name": "selected",
+        "type": "ValidatorEpochContextV1"
+      }
+    ]
+  },
   "SumeragiConsensusStatus": {
     "Struct": [
       {
@@ -32596,6 +32649,9 @@
   },
   "Vec<Option<HashOf<Array<u8, 32>>>>": {
     "Vec": "Option<HashOf<Array<u8, 32>>>"
+  },
+  "Vec<Option<HashOf<EventBox>>>": {
+    "Vec": "Option<HashOf<EventBox>>"
   },
   "Vec<Option<HashOf<ExecutionOutputV1>>>": {
     "Vec": "Option<HashOf<ExecutionOutputV1>>"

@@ -632,10 +632,9 @@ fn certified_direct_home_requires_exact_row_current_incarnation_and_domainless_d
         incarnation,
         dataspace_id: home,
     };
-    let other = AxtAssetIncarnationV1::try_from_bytes(
-        *Hash::new(b"another actual registration").as_ref(),
-    )
-    .unwrap();
+    let other =
+        AxtAssetIncarnationV1::try_from_bytes(*Hash::new(b"another actual registration").as_ref())
+            .unwrap();
     for policy in [
         AssetBalancePolicy::Global,
         AssetBalancePolicy::DataspaceRestricted,

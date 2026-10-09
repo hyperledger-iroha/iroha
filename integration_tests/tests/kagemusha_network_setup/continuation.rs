@@ -571,12 +571,57 @@ fn execute_four_validator_monetary_continuation() -> Result<()> {
             "restart changed genesis"
         );
         prefix(&network, height)?;
+        balances(&network, [900, 0, 100, 0])?;
+        let settlement: norito::json::Value = norito::json::from_slice(&settled)?;
+        let settlement_root = root.join("settlement");
+        let transaction: SignedTransaction = canonical(&original(
+            &settlement_root,
+            &settlement,
+            "originals",
+            "unload-signed-transaction.norito",
+            ORIGINAL_MAX,
+        )?)?;
+        ensure!(
+            transaction.hash().as_ref() == &digest(&settlement["settlement_transaction_hash_hex"])?,
+            "retained Unload transaction differs"
+        );
+        let client =
+            running_peer(&network)?.client_for(&account(43), key(43).private_key().clone());
+        ensure!(
+            client.submit_transaction_and_wait(&transaction)? == transaction.hash(),
+            "post-restart transport retry changed identity"
+        );
+        ensure!(
+            committed_height(&network)? == height,
+            "post-restart exact transaction retry created a new block"
+        );
+        balances(&network, [900, 0, 100, 0])?;
+        // A fresh transaction bypasses transaction-hash replay handling and must
+        // use the durable Unload payout record without transferring funds again.
+        let instruction: KagemushaWalletLedgerV1 = canonical(&original(
+            &settlement_root,
+            &settlement,
+            "originals",
+            "unload-instruction.norito",
+            ORIGINAL_MAX,
+        )?)?;
+        let (retry, retry_height) = submit(
+            &network,
+            43,
+            vec![instruction.into()],
+            &root,
+            "post-restart-unload-retry-signed.norito",
+        )?;
+        ensure!(
+            retry.hash() != transaction.hash() && retry_height > height,
+            "post-restart instruction retry must execute in a fresh certified block"
+        );
         let snapshots = balances(&network, [900, 0, 100, 0])?;
         publish(
             &root,
             "completed.json",
             &norito::json::to_vec(
-                &norito::json!({"schema":"iroha.kagemusha.real-network-monetary-result.v1", "setup_sha256":setup_sha, "funding_sha256":(hash(&funded)), "settlement_sha256":(hash(&settled)), "confirmation_sha256":(hash(&confirmation)), "restarted_height":height, "balances_after_restart":snapshots, "adversarial_qualified":(norito::json::from_slice::<norito::json::Value>(&settled)?["adversarial_qualified"].clone()), "scope":"Real four-validator execution and same-node-store restart; genuine-proof/native-consumer evidence selected separately, software platform fixture, no physical device or live bank qualification."}),
+                &norito::json!({"schema":"iroha.kagemusha.real-network-monetary-result.v1", "setup_sha256":setup_sha, "funding_sha256":(hash(&funded)), "settlement_sha256":(hash(&settled)), "confirmation_sha256":(hash(&confirmation)), "restarted_height":height, "post_restart_exact_transaction_retry_returned_original":true, "post_restart_instruction_retry_height":retry_height, "post_restart_instruction_retry_hash_hex":(hex::encode(retry.hash().as_ref())), "post_restart_instruction_retry_original_sha256":(hash(&norito::encode_canonical(&retry)?)), "balances_after_restart":snapshots, "adversarial_qualified":(settlement["adversarial_qualified"].clone()), "scope":"Real four-validator execution, same-node-store restart and post-restart exact transport/fresh-instruction replay without another payout; genuine-proof/native-consumer evidence selected separately, software platform fixture, no physical device or live bank qualification."}),
             )?,
         )?;
         Ok(())

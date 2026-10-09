@@ -649,11 +649,11 @@ fn evaluate_into<F: PastaField>(
     Ok(())
 }
 
-/// Copies a complete coefficient batch before transforming disjoint columns.
+/// Transforms immutable coefficient batches directly into disjoint columns.
 /// Only slice metadata is allocated; field storage belongs to the workspace.
 fn evaluate_many<F: PastaField>(
     plan: Option<&CosetFftPlan<'_, '_, F>>,
-    coefficients: &[impl AsRef<[F]>],
+    coefficients: &[impl AsRef<[F]> + Sync],
     values: &mut [&mut [F]],
     cancellation: Option<&CancellationToken>,
 ) -> Result<(), KeyError> {
@@ -679,10 +679,7 @@ fn evaluate_many<F: PastaField>(
     }
     // An owned transform is never admitted without its accounted plan.
     let plan = plan.ok_or(KeyError::CosetIndex)?;
-    for (values, coefficients) in values.iter_mut().zip(coefficients) {
-        values.copy_from_slice(coefficients.as_ref());
-    }
-    plan.fft_many_cancellable(values, cancellation)?;
+    plan.fft_many_from_cancellable(coefficients, values, cancellation)?;
     Ok(())
 }
 

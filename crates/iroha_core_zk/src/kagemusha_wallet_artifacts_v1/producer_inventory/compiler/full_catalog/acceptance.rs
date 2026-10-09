@@ -7,19 +7,8 @@ use super::*;
 use crate::kagemusha_wallet_artifacts_v1::InstalledVerifierPackV1;
 use p256::ecdsa::{Signature, signature::Signer};
 
-struct Combined<'a> {
-    wallet: &'a mut Originals,
-    metadata: &'a mut VerifierFiles,
-}
-impl OriginalSourceV1 for Combined<'_> {
-    fn open(&mut self, digest: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
-        if self.metadata.files.contains_key(&digest) {
-            VerifierBlobSource::open(self.metadata, &digest).map_err(|_| Error::Inventory)
-        } else {
-            self.wallet.open(digest)
-        }
-    }
-}
+#[path = "acquisition_tests.rs"]
+mod acquisition_tests;
 
 struct Counted<'a> {
     source: &'a mut dyn OriginalSourceV1,
@@ -143,7 +132,6 @@ pub(super) fn accept(
     output: &Path,
     draft: WalletArtifactDraftV1,
     wallet: &mut Originals,
-    metadata: &mut VerifierFiles,
     native: &SumeragiFinalityVerifier,
     config: ReadConfig,
 ) -> (InstalledVerifierPackV1, QualifiedWalletSourcesV1) {
@@ -201,15 +189,12 @@ pub(super) fn accept(
         .unwrap(),
         complete.producer_inventory(),
     );
-    let verifier_bytes = metadata.bytes;
-    let mut originals = Combined { wallet, metadata };
     qualify(
         output,
         complete.verifier_pack(),
         complete.producer_inventory(),
         installation,
-        &mut originals,
-        verifier_bytes,
+        wallet,
         native,
         config,
     )
@@ -221,7 +206,6 @@ fn qualify(
     producer: &[u8],
     installation: InstallationV1,
     source: &mut dyn OriginalSourceV1,
-    verifier_bytes: usize,
     native: &SumeragiFinalityVerifier,
     config: ReadConfig,
 ) -> (InstalledVerifierPackV1, QualifiedWalletSourcesV1) {
@@ -234,15 +218,7 @@ fn qualify(
     assert_eq!(inventory.routes.len(), compiled_routes().len());
     let installed = InstalledVerifierPackV1::load(pack_bytes, installation).unwrap();
     let authenticated = installed.authenticate_producer_inventory(producer).unwrap();
-    qualify_authenticated(
-        output,
-        installed,
-        authenticated,
-        source,
-        verifier_bytes,
-        native,
-        config,
-    )
+    qualify_authenticated(output, installed, authenticated, source, native, config)
 }
 
 fn qualify_authenticated(
@@ -250,7 +226,6 @@ fn qualify_authenticated(
     installed: InstalledVerifierPackV1,
     authenticated: AuthenticatedProducerInventoryV1,
     source: &mut dyn OriginalSourceV1,
-    verifier_bytes: usize,
     native: &SumeragiFinalityVerifier,
     config: ReadConfig,
 ) -> (InstalledVerifierPackV1, QualifiedWalletSourcesV1) {
@@ -260,21 +235,7 @@ fn qualify_authenticated(
     };
     let mut originals = Counted { source, reads: 0 };
     let qualified = authenticated
-        .qualify_wallet(
-            &installed,
-            native,
-            &mut originals,
-            config,
-            Parameters {
-                pallas: PinnedParams::derive(16).unwrap(),
-                vesta: PinnedParams::derive(16).unwrap(),
-            },
-            VerifierLimits {
-                maximum_artifacts: RECORDS,
-                maximum_verifier_bytes: verifier_bytes,
-                msm_budget: MemoryBudget::DEFAULT,
-            },
-        )
+        .qualify_wallet(&installed, native, &mut originals, config)
         .unwrap();
     assert_eq!(
         qualified.installation(),
@@ -282,14 +243,15 @@ fn qualify_authenticated(
     );
     assert_eq!(qualified.scope(), fixture_scope());
     assert_eq!(
-        qualified.finality().anchor(),
-        &crate::kagemusha_wallet_finality_v1::derive_history_anchor(native).unwrap()
+        qualified.finality().verifier().initial_epoch(),
+        native.initial_epoch()
     );
     for route in compiled_routes() {
         qualified.route(route).unwrap();
         qualified.q(route).unwrap();
     }
     let (sigma_imports, q_imports) = active_imports(&qualified, &mut originals, config);
+    let acquisition_cases = acquisition_tests::run(&qualified, &mut originals, config);
     let inventory = qualified.inventory();
     publish(
         &output.join("qualified-source-membership.json"),
@@ -312,11 +274,12 @@ fn qualify_authenticated(
     )
     .unwrap();
     eprintln!(
-        "WALLET_SOURCE_ACCEPTED engineering=true deployment_authority=false complete_routes={} strict_original_reads={} active_sigma_imports={} active_q_imports={} cancelled_import_opens=0 unavailable_retry=true scheme={} manifest={} genuine_receipt=false native_wallet_open=false",
+        "WALLET_SOURCE_ACCEPTED engineering=true deployment_authority=false complete_routes={} strict_original_reads={} active_sigma_imports={} active_q_imports={} cancelled_import_opens=0 unavailable_retry=true active_seal_acquisition_cases={} scheme={} manifest={} genuine_receipt=false native_wallet_open=false",
         inventory.routes.len(),
         originals.reads,
         sigma_imports,
         q_imports,
+        acquisition_cases,
         hex::encode(installation.scheme_id),
         hex::encode(installation.manifest_digest),
     );
@@ -343,23 +306,14 @@ struct PinnedEngineeringInputs {
     installed: InstalledVerifierPackV1,
     authenticated: AuthenticatedProducerInventoryV1,
     native: SumeragiFinalityVerifier,
-    metadata: VerifierFiles,
     catalog: PathBuf,
     inventory_pin: [u8; 32],
     pack_pin: [u8; 32],
 }
 
-// The finality-only and complete wallet fixtures share the same exact pinned
-// installation/inventory/native-root admission. This grants no source capability.
+// Signed installation and native root admission creates no proving capability.
 fn pinned_engineering_inputs(output: &Path) -> PinnedEngineeringInputs {
-    let snapshot = PathBuf::from(std::env::var_os("KAGEMUSHA_FINALITY_METADATA_SNAPSHOT").unwrap());
-    let pins = Pins {
-        producer: pin("KAGEMUSHA_FINALITY_PRODUCER_SHA256"),
-        sources: pin("KAGEMUSHA_FINALITY_SOURCE_SHA256"),
-        fixture: pin("KAGEMUSHA_FINALITY_FIXTURE_SHA256"),
-        inventory: pin("KAGEMUSHA_FINALITY_INVENTORY_SHA256"),
-    };
-    let (finality_records, fixture) = records(&snapshot, pins).unwrap();
+    let fixture = pinned_genesis_fixture();
     let catalog = PathBuf::from(std::env::var_os("KAGEMUSHA_WALLET_SIGNED_CATALOG").unwrap());
     regular_directory(&catalog).unwrap();
     let producer_pin = pin("KAGEMUSHA_WALLET_CATALOG_PRODUCER_SHA256");
@@ -394,7 +348,6 @@ fn pinned_engineering_inputs(output: &Path) -> PinnedEngineeringInputs {
         norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
             .unwrap();
     inventory.validate().unwrap();
-    assert_eq!(inventory.finality.originals, finality_records);
     let scope = fixture_scope();
     assert_eq!(
         bounded_file(&catalog.join("source-policy.norito"), 4096).unwrap(),
@@ -418,10 +371,7 @@ fn pinned_engineering_inputs(output: &Path) -> PinnedEngineeringInputs {
             pack_pin,
             installation.scheme_id,
             installation.manifest_digest,
-            pins.producer,
-            pins.sources,
-            pins.fixture,
-            pins.inventory,
+            BlobV1::of(&fixture).sha256,
         ))
         .unwrap(),
     )
@@ -432,7 +382,6 @@ fn pinned_engineering_inputs(output: &Path) -> PinnedEngineeringInputs {
         installed,
         authenticated,
         native: native_finality(&fixture),
-        metadata: VerifierFiles::new(&snapshot.join("originals"), &finality_records).unwrap(),
         catalog,
         inventory_pin,
         pack_pin,
@@ -448,7 +397,6 @@ pub(crate) fn open_pinned_engineering_wallet_sources(output: &Path) -> Engineeri
         installed,
         authenticated,
         native,
-        mut metadata,
         catalog,
         inventory_pin,
         pack_pin,
@@ -468,13 +416,8 @@ pub(crate) fn open_pinned_engineering_wallet_sources(output: &Path) -> Engineeri
     let private = iroha_fs::PrivateDirectory::open_or_create(output.join("originals")).unwrap();
     let mut sealed =
         DirectoryOriginalsV1::open_existing(private.path(), PROVING_KEY_MAX_BYTES_V1).unwrap();
-    let verifier_bytes = metadata.bytes;
-    let mut originals = Combined {
-        wallet: &mut wallet,
-        metadata: &mut metadata,
-    };
     let (copied_count, copied_bytes) =
-        super::transport::copy(&authenticated, &mut originals, &mut sealed).unwrap();
+        super::transport::copy(&authenticated, &mut wallet, &mut sealed).unwrap();
     publish(
         &output.join("sealed-transport.norito"),
         &norito::to_bytes(&(
@@ -492,7 +435,6 @@ pub(crate) fn open_pinned_engineering_wallet_sources(output: &Path) -> Engineeri
         installed,
         authenticated,
         &mut sealed,
-        verifier_bytes,
         &native,
         config,
     );
@@ -504,7 +446,7 @@ pub(crate) fn open_pinned_engineering_wallet_sources(output: &Path) -> Engineeri
     )
 }
 
-/// Purpose-limited verifier owners admitted from exact signed engineering inputs.
+/// Native finality owner selected independently of any proving original.
 pub(crate) type EngineeringFinalitySources = (
     std::sync::Arc<InstalledVerifierPackV1>,
     QualifiedReceiptSourceV1,
@@ -512,9 +454,7 @@ pub(crate) type EngineeringFinalitySources = (
     DirectoryOriginalsV1,
 );
 
-/// Qualify only the complete finality verifier graph from the same pinned
-/// installation as the wallet fixture. Wallet/server proving originals are never
-/// opened, and the returned owner cannot open a native wallet or produce proofs.
+/// Bind a signed engineering wallet installation to authenticated native genesis.
 pub(crate) fn open_pinned_engineering_finality_sources(
     output: &Path,
 ) -> EngineeringFinalitySources {
@@ -522,80 +462,21 @@ pub(crate) fn open_pinned_engineering_finality_sources(
         installed,
         authenticated,
         native,
-        mut metadata,
-        inventory_pin,
-        pack_pin,
         ..
     } = pinned_engineering_inputs(output);
-    let verifier_bytes = metadata.bytes;
+    let qualified = authenticated.qualify_finality(&installed, &native).unwrap();
+    assert_eq!(qualified.verifier().initial_epoch(), native.initial_epoch());
     let private = iroha_fs::PrivateDirectory::open_or_create(output.join("originals")).unwrap();
-    let mut sealed = DirectoryOriginalsV1::open_existing(
-        private.path(),
-        VERIFYING_KEY_MAX_BYTES_V1.max(DESCRIPTOR_MAX_BYTES_V1),
-    )
-    .unwrap();
-    struct MetadataOnly<'a>(&'a mut VerifierFiles);
-    impl OriginalSourceV1 for MetadataOnly<'_> {
-        fn open(&mut self, digest: [u8; 32]) -> Result<Box<dyn Read + '_>, Error> {
-            VerifierBlobSource::open(self.0, &digest).map_err(|_| Error::Inventory)
-        }
-    }
-    let (count, bytes) = super::transport::copy_finality(
-        &authenticated,
-        &mut MetadataOnly(&mut metadata),
-        &mut sealed,
-    )
-    .unwrap();
-    let qualified = authenticated
-        .qualify_finality(
-            &native,
-            &mut sealed,
-            Parameters {
-                pallas: installed.verifier().pallas_parameters().as_ref().clone(),
-                vesta: installed
-                    .verifier()
-                    .vesta_parameters(16)
-                    .unwrap()
-                    .as_ref()
-                    .clone(),
-            },
-            VerifierLimits {
-                maximum_artifacts: RECORDS,
-                maximum_verifier_bytes: verifier_bytes,
-                msm_budget: MemoryBudget::DEFAULT,
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        qualified.installation(),
-        (
-            installed.verifier().scheme().scheme_id(),
-            installed.verifier().manifest_digest()
-        )
-    );
-    assert_eq!(
-        qualified.anchor(),
-        &crate::kagemusha_wallet_finality_v1::derive_history_anchor(&native).unwrap()
-    );
-    publish(
-        &output.join("qualified-finality-transport.norito"),
-        &norito::to_bytes(&(
-            b"complete finality verifier qualification; no wallet/server proving capability or deployment authority".to_vec(),
-            inventory_pin,
-            pack_pin,
-            u64::try_from(count).unwrap(),
-            bytes,
-        ))
-        .unwrap(),
-    )
-    .unwrap();
+    let sealed =
+        DirectoryOriginalsV1::open_existing(private.path(), PROVING_KEY_MAX_BYTES_V1).unwrap();
     (std::sync::Arc::new(installed), qualified, native, sealed)
 }
 
 #[test]
-#[ignore = "genuine complete verifier-only admission from independently pinned signed catalog and native genesis; no PK imports"]
-fn qualify_signed_finality_from_pinned_originals_without_proving_keys() {
-    let output = PathBuf::from(std::env::var_os("KAGEMUSHA_FINALITY_ACCEPTANCE_OUTPUT").unwrap());
-    let (_installed, _qualified, _native, _originals) =
-        open_pinned_engineering_finality_sources(&output);
+#[ignore = "independently pinned signed catalog and native genesis"]
+fn qualify_native_finality_without_proof_artifacts() {
+    let output =
+        PathBuf::from(std::env::var_os("KAGEMUSHA_NATIVE_FINALITY_ACCEPTANCE_OUTPUT").unwrap());
+    let (_, qualified, native, _) = open_pinned_engineering_finality_sources(&output);
+    assert_eq!(qualified.verifier().initial_epoch(), native.initial_epoch());
 }

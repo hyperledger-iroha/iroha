@@ -28,26 +28,6 @@ fn original() -> Inputs {
         sigma,
         receipt: [0; LoadReceiptCells::BYTES],
         objects: core::array::from_fn(|_| vec![]),
-        finality: SourceNodeEvidence {
-            endpoints: [Fp::ZERO; 6],
-            proof: vec![],
-            pallas: AccumulatorT::new(
-                iroha_plonk::transcript::decode_point::<Ep>(
-                    &iroha_plonk_recursion::PALLAS_TRIVIAL_GENERATOR,
-                )
-                .unwrap(),
-                [Fq::ONE; K],
-            )
-            .unwrap(),
-            vesta: AccumulatorT::new(
-                iroha_plonk::transcript::decode_point::<Eq>(
-                    &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
-                )
-                .unwrap(),
-                [Fp::ONE; K],
-            )
-            .unwrap(),
-        },
         insertion: IndexedInsert {
             leaf: crate::tree::IndexedLeaf::default(),
             leaf_slot: 0,
@@ -217,7 +197,7 @@ fn final_digest_has_exact52_fields_and_keeps_high_foreign_challenge_limbs() {
         .unwrap()
     );
     let part = FoldInput::from_normalized(eq, 16, [Fp::ONE; K]).unwrap();
-    let public = internal_public(digest, &part, None).unwrap();
+    let public = internal_public(digest, &part).unwrap();
     assert_eq!(public.len(), 69);
     assert_eq!(&public[62..65], &[Fp::ZERO, Fp::ONE, Fp::ZERO]);
     assert_eq!(&public[22..42], &public[42..62]);
@@ -245,8 +225,8 @@ fn original_key_bounds_reject_empty_oversized_and_excess_domain() {
 }
 
 #[test]
-fn fifth_checkpoint_is_terminal_and_out_of_range_source_is_rejected() {
-    assert_eq!(A_STAGE_COUNT, 5);
+fn fourth_checkpoint_is_terminal_and_out_of_range_source_is_rejected() {
+    assert_eq!(A_STAGE_COUNT, 4);
     assert_eq!(
         crate::a_relation::schedule::compiled::OperationSchedule::for_variant(Variant::Load)
             .stage_count(),

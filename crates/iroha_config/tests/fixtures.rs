@@ -272,7 +272,6 @@ fn minimal_config_inherits_large_application_rate_budgets() {
     }
     assert_eq!(torii.recipient_lookup.requests_per_minute, 60_000_000);
     assert!(torii.kagemusha_enrollment.is_none());
-    assert!(torii.kagemusha_load_finality.is_none());
     assert_eq!(
         torii
             .proof_api
@@ -815,6 +814,26 @@ fn retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage(
         .expect_err("the first release must not expose a journal-disabled runtime path");
     let message = strip_ansi_codes(&format!("{report:?}"));
     assert_contains!(message, "unknown parameter: `queue.plan_journal_enabled`");
+}
+
+#[test]
+fn retired_kagemusha_finality_prover_configuration_is_rejected() {
+    for field in ["proving_cache", "verifier_originals", "journal_dir"] {
+        let table = format!("[torii.kagemusha_load_finality]\n{field} = '/retired/finality'\n")
+            .parse()
+            .expect("retired finality TOML should parse");
+        let error = ConfigReader::new()
+            .read_toml_with_extends(fixtures_dir().join("base.toml"))
+            .expect("base config should load")
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<UserConfig>()
+            .expect_err("the retired finality prover must not be configurable");
+        let report = strip_ansi_codes(&format!("{error:?}"));
+        assert!(
+            report.contains("unknown parameter: `torii.kagemusha_load_finality"),
+            "{report}"
+        );
+    }
 }
 #[test]
 fn nexus_storage_weights_require_full_budget() {

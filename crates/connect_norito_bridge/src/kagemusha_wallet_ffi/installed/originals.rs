@@ -9,12 +9,6 @@ use iroha_core_zk::kagemusha_wallet_proofs_v1::Error as OriginalError;
 use iroha_fs::PrivateDirectory;
 use std::{io::Read, path::Path};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Store {
-    Wallet,
-    Finality,
-}
-
 /// Clones share retained native ancestry and immutable metadata; never PK buffers.
 #[derive(Clone)]
 pub(super) struct CatalogOriginals {
@@ -28,35 +22,19 @@ pub(super) struct CatalogOriginals {
 struct CatalogReader {
     metadata: Arc<PrivateDirectory>,
     wallet: Arc<DirectoryOriginalsV1>,
-    finality: Arc<DirectoryOriginalsV1>,
-    roles: Arc<BTreeMap<[u8; 32], SelectedOriginal>>,
+    roles: Arc<BTreeMap<[u8; 32], BlobV1>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SelectedOriginal {
-    blob: BlobV1,
-    store: Store,
-}
-
-fn insert(
-    roles: &mut BTreeMap<[u8; 32], SelectedOriginal>,
-    blob: BlobV1,
-    role: Store,
-) -> Result<()> {
+fn insert(roles: &mut BTreeMap<[u8; 32], BlobV1>, blob: BlobV1) -> Result<()> {
     if blob.bytes == 0 || blob.sha256 == [0; 32] || blob.bytes > PROVING_KEY_MAX_BYTES_V1 as u64 {
         return Err(Failure::code(INVALID));
     }
     if let Some(previous) = roles.get_mut(&blob.sha256) {
-        if previous.blob != blob {
+        if *previous != blob {
             return Err(Failure::code(INVALID));
         }
-        // A shared exact original selects one store deterministically. A read never
-        // falls through from a missing/invalid original into another directory.
-        if role == Store::Wallet {
-            previous.store = Store::Wallet;
-        }
     } else {
-        roles.insert(blob.sha256, SelectedOriginal { blob, store: role });
+        roles.insert(blob.sha256, blob);
     }
     Ok(())
 }
@@ -79,7 +57,7 @@ impl CatalogOriginals {
         }
         let metadata = PrivateDirectory::open_exact(root).map_err(storage)?;
         require_metadata_inventory(&metadata)?;
-        // All six financial offering paths have fixed current Native roles.
+        // All five financial offering paths have fixed current Native roles.
         // A signed transport row cannot substitute a different path.
         for (name, bytes, cap) in [
             ("verifier-pack.norito", pack, VERIFIER_PACK_MAX_BYTES_V1),
@@ -123,53 +101,23 @@ impl CatalogReader {
             PROVING_KEY_MAX_BYTES_V1,
         )
         .map_err(storage)?;
-        let finality = DirectoryOriginalsV1::open_existing(
-            root.join("finality-originals"),
-            PROVING_KEY_MAX_BYTES_V1,
-        )
-        .map_err(storage)?;
-        // Reauthenticate every wallet proving original and the complete finality D/VK
-        // graph. Server finality PK identities remain signed inventory metadata;
-        // their bytes are neither required nor read by the wallet.
+        // Reauthenticate every wallet proving original. Ordinary finality uses
+        // native BLS certificates and has no proving artifacts.
         for record in &inventory.originals {
             for blob in [record.descriptor, record.verifying_key, record.proving_key] {
                 wallet.verify_original(blob).map_err(storage)?;
             }
         }
-        for record in &inventory.finality.originals {
-            for index in 0..2 {
-                finality
-                    .verify_original(BlobV1 {
-                        bytes: record.lengths[index],
-                        sha256: record.sha256[index],
-                    })
-                    .map_err(storage)?;
-            }
-        }
         let mut roles = BTreeMap::new();
         for record in &inventory.originals {
             for blob in [record.descriptor, record.verifying_key, record.proving_key] {
-                insert(&mut roles, blob, Store::Wallet)?;
-            }
-        }
-        for record in &inventory.finality.originals {
-            // Only the complete receipt verifier graph is a wallet transport role.
-            for i in 0..2 {
-                insert(
-                    &mut roles,
-                    BlobV1 {
-                        bytes: record.lengths[i],
-                        sha256: record.sha256[i],
-                    },
-                    Store::Finality,
-                )?;
+                insert(&mut roles, blob)?;
             }
         }
         metadata.revalidate().map_err(storage)?;
         Ok(Self {
             metadata: Arc::new(metadata),
             wallet: Arc::new(wallet),
-            finality: Arc::new(finality),
             roles: Arc::new(roles),
         })
     }
@@ -184,20 +132,12 @@ impl OriginalSourceV1 for CatalogReader {
         self.metadata
             .revalidate()
             .map_err(|_| OriginalError::Unavailable)?;
-        match self
-            .roles
-            .get(&sha256)
-            .ok_or(OriginalError::Inventory)?
-            .store
-        {
-            Store::Wallet => self.wallet.open_original(sha256),
-            Store::Finality => self.finality.open_original(sha256),
-        }
+        self.roles.get(&sha256).ok_or(OriginalError::Inventory)?;
+        self.wallet.open_original(sha256)
     }
 }
 fn require_metadata_inventory(metadata: &PrivateDirectory) -> Result<()> {
-    const NAMES: [&str; 6] = [
-        "finality-originals",
+    const NAMES: [&str; 5] = [
         "financial-originals.json",
         "producer-inventory.norito",
         "transport.json",
@@ -243,12 +183,9 @@ fn closed(blobs: impl IntoIterator<Item = BlobV1>) -> Result<Vec<BlobV1>> {
     Ok(originals.into_values().collect())
 }
 fn require_transport(inventory: &ProducerInventoryV1, bytes: &[u8]) -> Result<()> {
-    // Exact catalog maxima are 4096 wallet records and 65536 finality records;
-    // wallet records contribute three rows, finality records two. Account
-    // for that whole legitimate closed transport graph before allocating JSON.
+    // Each bounded wallet artifact record contributes descriptor, VK and PK rows.
     const ROWS: usize =
-        iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::ARTIFACT_MAX_COUNT_V1 * 3
-            + 65_536 * 2;
+        iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::ARTIFACT_MAX_COUNT_V1 * 3;
     let limits = norito::json::JsonPreflightLimits::new(
         32 * 1024 * 1024,
         ROWS * 3 + 4,
@@ -262,7 +199,7 @@ fn require_transport(inventory: &ProducerInventoryV1, bytes: &[u8]) -> Result<()
         4,
     );
     let value = selection::json_limits(bytes, 32 * 1024 * 1024, false, limits)?;
-    let object = selection::exact(&value, &["schema", "walletOriginals", "finalityOriginals"])?;
+    let object = selection::exact(&value, &["schema", "walletOriginals"])?;
     if selection::text(object, "schema")? != "iroha.kagemusha.wallet-artifact-original-transport.v1"
     {
         return Err(Failure::code(INVALID));
@@ -273,13 +210,7 @@ fn require_transport(inventory: &ProducerInventoryV1, bytes: &[u8]) -> Result<()
             .iter()
             .flat_map(|r| [r.descriptor, r.verifying_key, r.proving_key]),
     )?;
-    let finality = closed(inventory.finality.originals.iter().flat_map(|r| {
-        (0..2).map(|i| BlobV1 {
-            bytes: r.lengths[i],
-            sha256: r.sha256[i],
-        })
-    }))?;
-    for (name, expected) in [("walletOriginals", wallet), ("finalityOriginals", finality)] {
+    for (name, expected) in [("walletOriginals", wallet)] {
         let actual = object
             .get(name)
             .and_then(norito::json::Value::as_array)

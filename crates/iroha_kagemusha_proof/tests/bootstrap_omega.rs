@@ -106,3 +106,7 @@ fn tagged_three_bus_bootstrap_secondary_strict_and_unknown_inventory() {
         plan.primary_end()
     );
 }
+
+/// Deferred exact Bootstrap proof parity for metadata-only native Omega ownership.
+#[path = "common/omega_rebuild.rs"]
+mod omega_rebuild;

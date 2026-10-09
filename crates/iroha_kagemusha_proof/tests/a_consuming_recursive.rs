@@ -1670,25 +1670,6 @@ fn installed_native_retiring_from_bootstrap_preserves_every_original_and_checkpo
     use iroha_kagemusha_proof::witness::core_index as core;
     let rooted =
         load_outer::load_chain::bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap();
-    // Bounded diagnostic export from a proved and decided current source. The
-    // files carry no installation authority; Archive capacity tests may consume
-    // these exact descriptor/VK bytes instead of constructor-only metadata.
-    let export = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/qualification/kagemusha-receive/o1-bootstrap-omega-metadata");
-    std::fs::create_dir_all(&export).unwrap();
-    let descriptor = rooted.binding.encoded();
-    let verifying_key = rooted.key.to_bytes();
-    assert!(descriptor.len() < 1_048_576 && verifying_key.len() < 1_048_576);
-    std::fs::write(export.join("descriptor.bin"), descriptor).unwrap();
-    std::fs::write(export.join("verifying-key.bin"), verifying_key).unwrap();
-    std::fs::write(export.join("scope.txt"), format!(
-        "Genuine pinned single-terminal compact Bootstrap Omega, constant-size stage context source.\nDescriptor digest: {}\nExact key digest: {}\nProof bytes: {}\nDiagnostic metadata only; no artifact admission, full catalog or performance qualification.\nExecutable/source provenance belongs to the invoking qualification capture.\n",
-        hex(rooted.binding.digest()), hex(&rooted.key.kagemusha_digest(&rooted.binding).unwrap().to_repr()), rooted.proof.len(),
-    )).unwrap();
-    eprintln!(
-        "CURRENT_BOOTSTRAP_OMEGA_METADATA path={} genuine_proof_and_decides=true diagnostic_only=true",
-        export.display()
-    );
     let before = StateWitness::from(&rooted.source.state);
     assert_eq!(before.core[core::BALANCE], Fp::ZERO);
     assert_eq!(before.lineage[14], Fp::ZERO);
@@ -1937,7 +1918,8 @@ fn native_installed_consuming_differential(
     let session = installed.prepare(input.clone(), budget).unwrap();
     let unrelated_session = installed.prepare(input.clone(), budget).unwrap();
     let fold = FoldConfig::default();
-    let foreign = installed.import_a(1, &a_originals[1].pk, config).unwrap();
+    let foreign_seal = installed.import_a(1, &a_originals[1].pk, config).unwrap();
+    let foreign = installed.bind_a(1, &foreign_seal, None).unwrap();
     assert!(matches!(
         session.first(
             &foreign,
@@ -1948,8 +1930,9 @@ fn native_installed_consuming_differential(
         ),
         Err(native::Error::Artifact)
     ));
-    drop(foreign);
-    let key = installed.import_a(0, &a_originals[0].pk, config).unwrap();
+    drop(foreign_seal);
+    let key_seal = installed.import_a(0, &a_originals[0].pk, config).unwrap();
+    let key = installed.bind_a(0, &key_seal, None).unwrap();
     let generated = session
         .first(
             &key,
@@ -1959,7 +1942,7 @@ fn native_installed_consuming_differential(
             ProverConfig::default(),
         )
         .unwrap();
-    drop(key);
+    drop(key_seal);
     assert_eq!(generated.proof(), originals_a[0].0);
     let mut current = session
         .restore_first(originals_a[0].0.clone(), &originals_a[0].1, budget)
@@ -1995,7 +1978,8 @@ fn native_installed_consuming_differential(
     );
     for stage in 0..3 {
         if stage == 0 {
-            let foreign = installed.import_w(1, &w_originals[1].pk, config).unwrap();
+            let foreign_seal = installed.import_w(1, &w_originals[1].pk, config).unwrap();
+            let foreign = installed.bind_w(1, &foreign_seal, None).unwrap();
             assert!(matches!(
                 session.wrapper(
                     &current,
@@ -2007,11 +1991,12 @@ fn native_installed_consuming_differential(
                 ),
                 Err(native::Error::Artifact)
             ));
-            drop(foreign);
+            drop(foreign_seal);
         }
-        let key = installed
+        let key_seal = installed
             .import_w(stage, &w_originals[stage].pk, config)
             .unwrap();
+        let key = installed.bind_w(stage, &key_seal, None).unwrap();
         let generated_w = session
             .wrapper(
                 &current,
@@ -2022,7 +2007,7 @@ fn native_installed_consuming_differential(
                 ProverConfig::default(),
             )
             .unwrap();
-        drop(key);
+        drop(key_seal);
         assert_eq!(generated_w.proof(), originals_w[stage].0);
         let restored_w = session
             .restore_wrapper(
@@ -2044,7 +2029,8 @@ fn native_installed_consuming_differential(
         assert_eq!(generated_w.stage(), stage);
         // Replay the exact original W proof and opening at every continuation.
         if stage == 0 {
-            let foreign = installed.import_a(0, &a_originals[0].pk, config).unwrap();
+            let foreign_seal = installed.import_a(0, &a_originals[0].pk, config).unwrap();
+            let foreign = installed.bind_a(0, &foreign_seal, None).unwrap();
             assert!(matches!(
                 session.advance(
                     &restored_w,
@@ -2056,11 +2042,12 @@ fn native_installed_consuming_differential(
                 ),
                 Err(native::Error::Artifact)
             ));
-            drop(foreign);
+            drop(foreign_seal);
         }
-        let key = installed
+        let key_seal = installed
             .import_a(stage + 1, &a_originals[stage + 1].pk, config)
             .unwrap();
+        let key = installed.bind_a(stage + 1, &key_seal, None).unwrap();
         let generated_a = session
             .advance(
                 &restored_w,
@@ -2071,7 +2058,7 @@ fn native_installed_consuming_differential(
                 ProverConfig::default(),
             )
             .unwrap();
-        drop(key);
+        drop(key_seal);
         assert_eq!(generated_a.proof(), originals_a[stage + 1].0);
         let restored_a = session
             .restore_a(
@@ -2158,7 +2145,8 @@ fn native_installed_consuming_differential(
     eprintln!(
         "NATIVE_CONSUMING_PARITY metadata_only_producer=true borrowed_stage_PK=true exact_original_proof_bytes=true canonical_fresh_session_replay=true"
     );
-    let key = installed.import_w(0, &w_originals[0].pk, config).unwrap();
+    let key_seal = installed.import_w(0, &w_originals[0].pk, config).unwrap();
+    let key = installed.bind_w(0, &key_seal, None).unwrap();
     assert!(
         session
             .wrapper(

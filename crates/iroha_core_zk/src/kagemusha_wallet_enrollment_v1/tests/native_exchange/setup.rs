@@ -61,7 +61,7 @@ impl LedgerSetup {
         });
         assert_eq!(
             sha(&originals[8]),
-            env_pin("KAGEMUSHA_FINALITY_FIXTURE_SHA256")
+            env_pin("KAGEMUSHA_SIGNED_GENESIS_FIXTURE_SHA256")
         );
         let capture: norito::json::Value = norito::json::from_slice(&originals[8]).unwrap();
         assert_eq!(

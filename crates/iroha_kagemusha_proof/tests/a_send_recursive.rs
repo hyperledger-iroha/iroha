@@ -1848,9 +1848,10 @@ fn native_installed_send_differential(
     let session = installed.prepare(input.clone(), budget).unwrap();
     let unrelated_session = installed.prepare(input.clone(), budget).unwrap();
     let fold = FoldConfig::default();
-    let foreign = installed
+    let foreign_seal = installed
         .import_a(1, &key_originals_a[1].pk, config)
         .unwrap();
+    let foreign = installed.bind_a(1, &foreign_seal, None).unwrap();
     assert!(matches!(
         session.first(
             &foreign,
@@ -1861,10 +1862,11 @@ fn native_installed_send_differential(
         ),
         Err(native::Error::Artifact)
     ));
-    drop(foreign);
-    let key = installed
+    drop(foreign_seal);
+    let key_seal = installed
         .import_a(0, &key_originals_a[0].pk, config)
         .unwrap();
+    let key = installed.bind_a(0, &key_seal, None).unwrap();
     let generated = session
         .first(
             &key,
@@ -1874,7 +1876,7 @@ fn native_installed_send_differential(
             ProverConfig::default(),
         )
         .unwrap();
-    drop(key);
+    drop(key_seal);
     assert_eq!(generated.proof(), originals_a[0].0);
     let mut current = session
         .restore_first(originals_a[0].0.clone(), &originals_a[0].1, budget)
@@ -1910,9 +1912,10 @@ fn native_installed_send_differential(
     );
     for stage in 0..4 {
         if stage == 0 {
-            let foreign = installed
+            let foreign_seal = installed
                 .import_w(1, &key_originals_w[1].pk, config)
                 .unwrap();
+            let foreign = installed.bind_w(1, &foreign_seal, None).unwrap();
             assert!(matches!(
                 session.wrapper(
                     &current,
@@ -1924,11 +1927,12 @@ fn native_installed_send_differential(
                 ),
                 Err(native::Error::Artifact)
             ));
-            drop(foreign);
+            drop(foreign_seal);
         }
-        let key = installed
+        let key_seal = installed
             .import_w(stage, &key_originals_w[stage].pk, config)
             .unwrap();
+        let key = installed.bind_w(stage, &key_seal, None).unwrap();
         let generated_w = session
             .wrapper(
                 &current,
@@ -1939,7 +1943,7 @@ fn native_installed_send_differential(
                 ProverConfig::default(),
             )
             .unwrap();
-        drop(key);
+        drop(key_seal);
         let restored_w = session
             .restore_wrapper(
                 &current,
@@ -1968,9 +1972,10 @@ fn native_installed_send_differential(
         assert_eq!(generated_w.stage(), stage);
         // Retain the exact original W opening and proof bytes at every continuation.
         if stage == 0 {
-            let foreign = installed
+            let foreign_seal = installed
                 .import_a(0, &key_originals_a[0].pk, config)
                 .unwrap();
+            let foreign = installed.bind_a(0, &foreign_seal, None).unwrap();
             assert!(matches!(
                 session.advance(
                     &restored_w,
@@ -1982,11 +1987,12 @@ fn native_installed_send_differential(
                 ),
                 Err(native::Error::Artifact)
             ));
-            drop(foreign);
+            drop(foreign_seal);
         }
-        let key = installed
+        let key_seal = installed
             .import_a(stage + 1, &key_originals_a[stage + 1].pk, config)
             .unwrap();
+        let key = installed.bind_a(stage + 1, &key_seal, None).unwrap();
         let generated_a = session
             .advance(
                 &restored_w,
@@ -1997,7 +2003,7 @@ fn native_installed_send_differential(
                 ProverConfig::default(),
             )
             .unwrap();
-        drop(key);
+        drop(key_seal);
         let restored_a = session
             .restore_a(
                 &restored_w,
@@ -2114,9 +2120,10 @@ fn native_installed_send_differential(
     eprintln!(
         "NATIVE_SEND_PARITY metadata_only_producer=true borrowed_stage_PK=true exact_original_proof_bytes=true canonical_fresh_session_replay=true"
     );
-    let key = installed
+    let key_seal = installed
         .import_w(0, &key_originals_w[0].pk, config)
         .unwrap();
+    let key = installed.bind_w(0, &key_seal, None).unwrap();
     assert!(
         session
             .wrapper(

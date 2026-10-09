@@ -4,7 +4,7 @@ use super::{
     ManagedCustodyEnrollmentInterval, ManagedStreamTokenCustody, ManagedTransactionFinality,
     PreparedLocalnet, Result, RetainedCustodyEnrollment,
     native_operation::{encode, invalid, now_ms, read_optional, require_deadline},
-    service_authority::{NetworkPurpose, ServiceAuthority},
+    service_authority::{CheckpointImportScope, NetworkPurpose, ServiceAuthority},
     service_bootstrap::{ManagedServiceBootstrap, ServiceBootstrapProgress},
     service_policies::GeneratedServicePolicies,
 };
@@ -75,6 +75,11 @@ struct RuntimeSelection {
 impl RuntimeSelection {
     fn read(authority: &ServiceAuthority) -> Result<Self> {
         let intent = authority.original_intent()?;
+        // This read owns one bounded immutable import workspace for its three fresh children.
+        // It carries no source, wallet, current-state or authority verdict beyond this call.
+        let imports = CheckpointImportScope::for_original(authority);
+        #[cfg(test)]
+        let imports = tests::import_scope_tests::select_scope(imports);
         // Only immutable projections share this view. Every mutable child read below retains
         // its ordinary native admission, and no projection escapes the full-image exit check.
         let result = (|| {
@@ -113,13 +118,15 @@ impl RuntimeSelection {
                 let selected = match ManagedStreamTokenCustody::open_existing_from_original(
                     authority,
                     plan.provider_id(),
-                    None,
+                    imports.as_ref(),
                 )? {
                     Some(custody) => custody.inspect_local_initial_interval_if_present(
                         &policies.provider(plan.provider_id())?.custody,
                     )?,
                     None => None,
                 };
+                #[cfg(test)]
+                tests::import_scope_tests::after_child(index, imports.as_ref());
                 initial.push(selected);
                 compliance.push(intent.gateway_compliance_plan(plan.provider_id())?);
             }
@@ -136,6 +143,9 @@ impl RuntimeSelection {
                     .map_err(|_| invalid("original enrollment count differs"))?,
             })
         })();
+        // Every temporary child is already closed. End pure reuse before closing the original
+        // intent on both success and ordinary error; neither selection retains this workspace.
+        drop(imports);
         #[cfg(test)]
         tests::before_selection_finish();
         // Close custody even when a child or projection failed; an exit refusal supersedes

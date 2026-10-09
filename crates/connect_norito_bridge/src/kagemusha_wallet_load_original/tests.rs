@@ -29,14 +29,29 @@ fn originals() -> (KagemushaWalletLoadReceiptV1, Vec<u8>, Vec<u8>, String) {
         receipt.payer_account_digest,
         kagemusha_wallet_account_digest_v1(&payer).unwrap()
     );
+    let event = iroha_data_model::events::EventBox::Data(
+        iroha_data_model::events::data::DataEvent::KagemushaLoadCommitted(
+            iroha_data_model::events::data::kagemusha::KagemushaLoadCommittedV1::from_receipt(
+                &receipt,
+            )
+            .unwrap(),
+        )
+        .into(),
+    );
     let finality = KagemushaWalletLoadFinalityV1 {
         version: 1,
-        anchor_digest: [1; 32],
         receipt_digest: receipt.receipt_digest().unwrap(),
-        // Deliberately not a proof: DATA decoding must never confer proof authority.
-        proof: vec![1],
-        pallas_claim: [0; 544],
-        vesta_claim: [0; 544],
+        // Deliberately invalid certificate: decoding confers no finality authority.
+        certificate: iroha_data_model::sumeragi_finality::SumeragiCommitCertificateV1 {
+            consensus_header: vec![1],
+            commit_qc: vec![2],
+            result_preimage: vec![3],
+        },
+        event_proof: [iroha_crypto::HashOf::new(&event)]
+            .into_iter()
+            .collect::<iroha_crypto::MerkleTree<iroha_data_model::events::EventBox>>()
+            .get_proof(0)
+            .unwrap(),
     }
     .to_canonical_bytes()
     .unwrap();
@@ -52,7 +67,7 @@ fn originals() -> (KagemushaWalletLoadReceiptV1, Vec<u8>, Vec<u8>, String) {
 fn exact_originals_decode_without_authenticating_the_explicit_nonproof_data() {
     let (receipt, original, finality, payer) = originals();
     let before = (original.clone(), finality.clone());
-    validate(
+    let height = validate(
         &receipt.scheme_id,
         &receipt.wallet_id,
         &receipt.request_id,
@@ -61,6 +76,7 @@ fn exact_originals_decode_without_authenticating_the_explicit_nonproof_data() {
         &finality,
     )
     .unwrap();
+    assert_eq!(height, receipt.block_height);
     assert_eq!((original, finality), before);
 }
 
@@ -164,7 +180,14 @@ fn malformed_payer_and_input_ceiling_are_rejected_before_canonical_decode() {
     assert!(check(payer.as_bytes(), &[], &finality).is_err());
     assert!(check(payer.as_bytes(), &[0; 513], &finality).is_err());
     assert!(check(payer.as_bytes(), &original, &[]).is_err());
-    assert!(check(payer.as_bytes(), &original, &[0; 16385]).is_err());
+    assert!(
+        check(
+            payer.as_bytes(),
+            &original,
+            &vec![0; KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1 + 1]
+        )
+        .is_err()
+    );
     // Oversized pointers are never dereferenced; this tests the actual C safety boundary.
     assert_eq!(
         unsafe {
@@ -178,6 +201,7 @@ fn malformed_payer_and_input_ceiling_are_rejected_before_canonical_decode() {
                 513,
                 finality.as_ptr(),
                 finality.len(),
+                &mut 0,
             )
         },
         INVALID

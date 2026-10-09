@@ -1409,7 +1409,7 @@ fn workspace_test_failures_keep_their_stable_boundary_codes() {
     assert_eq!(
         compilation.render_human(),
         format!(
-            "error[MUSUBI_E_COMPILER]: Kotodama rejected the selected test sources\n{rendered}\n"
+            "{rendered}\nerror[MUSUBI_E_COMPILER]: Kotodama rejected the selected test sources\n"
         )
     );
     let json = CommandOutput::failure("test", compilation)
@@ -3527,6 +3527,9 @@ fn sibling_path_dependencies_can_create_their_shared_workspace() {
     let app = new_package(&projects, "app", "contract");
     let _feemath = new_package(&projects, "feemath", "library");
     let shared = projects.join(MANIFEST_FILE_NAME);
+    let standalone = run_with_manifest(&app, &["check"]);
+    assert_eq!(standalone.output.exit_code(), 0);
+    assert!(projects.join("app").join(LOCK_FILE_NAME).is_file());
     let refused = run_with_manifest(&app, &["add", "feemath", "--path", "../feemath"]);
     let rendered = refused.output.render(OutputFormat::Human).expect("refusal");
     assert_eq!(
@@ -3570,14 +3573,49 @@ fn sibling_path_dependencies_can_create_their_shared_workspace() {
             .expect("app manifest")
             .contains("feemath = { path = \"../feemath\" }")
     );
+    // The app was checked as a standalone package before; its old lock is reported, not deleted.
+    let stale = projects.join("app").join(LOCK_FILE_NAME);
+    assert!(
+        rendered
+            .stdout()
+            .contains(&format!("{} is no longer read; delete it", stale.display())),
+        "{}",
+        rendered.stdout()
+    );
+    assert!(stale.is_file());
     let checked = run_with_manifest(&app, &["check"]);
     let rendered = checked.output.render(OutputFormat::Human).expect("check");
     assert_eq!(rendered.exit_code(), 0, "{}", rendered.stderr());
+    assert!(projects.join(LOCK_FILE_NAME).is_file());
     let again = run_with_manifest(
         &app,
         &["add", "other", "--path", "../feemath", "--create-workspace"],
     );
     assert_eq!(again.output.exit_code(), ErrorCode::Usage.exit_code());
+}
+
+#[cfg(unix)]
+#[test]
+fn publishing_refuses_the_scaffold_placeholder_namespace() {
+    let temp = TempDir::new().expect("project directory");
+    let projects = fs::canonicalize(temp.path()).expect("canonical project directory");
+    let app = new_package(&projects, "app", "contract");
+    let refused = run_with_manifest(&app, &["publish"]);
+    let rendered = refused.output.render(OutputFormat::Human).expect("refusal");
+    assert_eq!(
+        rendered.exit_code(),
+        ErrorCode::Usage.exit_code(),
+        "{}",
+        rendered.stderr()
+    );
+    assert!(
+        rendered.stderr().contains("placeholder namespace `local`"),
+        "{}",
+        rendered.stderr()
+    );
+    assert!(!projects.join("app").join(PUBLICATION_LOCK_PATH).exists());
+    assert!(reject_placeholder_namespace(&"local/app".parse().expect("selector")).is_err());
+    assert!(reject_placeholder_namespace(&"demo/app".parse().expect("selector")).is_ok());
 }
 
 #[cfg(unix)]

@@ -71,6 +71,11 @@ pub(crate) enum Setup {
     },
     LedgerFinality(Vec<u8>),
     LedgerStatus,
+    EpochStatus,
+    EpochBoundary {
+        epoch: u64,
+        original: Vec<u8>,
+    },
     FeePayout {
         credit: [u8; 32],
         world: Vec<u8>,
@@ -148,7 +153,12 @@ fn unload_progress(value: state::UnloadFinalityProgressV1) -> Response {
 }
 pub(crate) fn bounds(selector: u32) -> Result<[usize; 3]> {
     Ok(match selector {
-        43 | 47 | 48 | 49 | 50 | 51 => [0; 3],
+        43 | 47 | 48 | 49 | 50 | 51 | 52 => [0; 3],
+        53 => [
+            iroha_data_model::sumeragi_finality::MAX_COMMIT_CERTIFICATE_BYTES_V1,
+            0,
+            0,
+        ],
         44 => [
             KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
             KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
@@ -221,7 +231,8 @@ pub(crate) fn request(
         selector,
         1 | 2 | 19 | 20 | 25 | 27 | 30 | 33 | 34 | 39 | 41 | 42 | 43 | 44 | 45
     ) != (id != [0; 32]))
-        || (selector != 47 && (matches!(selector, 1 | 27) != (amount != 0)))
+        || (!matches!(selector, 47 | 53) && (matches!(selector, 1 | 27) != (amount != 0)))
+        || (selector == 53 && amount > u128::from(u64::MAX))
         || (matches!(selector, 5 | 6 | 29 | 49 | 51) != (token != 0))
         || (selector == 29 && !(1..=3).contains(&token))
         || originals
@@ -238,6 +249,11 @@ pub(crate) fn request(
         49 => Setup::ConfirmCustodyDeletion { token },
         50 => Setup::ResumeCustodyDeletion,
         51 => Setup::DiscardCustodyDeletion { token },
+        52 => Setup::EpochStatus,
+        53 if !first.is_empty() => Setup::EpochBoundary {
+            epoch: amount as u64,
+            original: first.to_vec(),
+        },
         47 => Setup::CollectRetained { sequence: amount },
         38 => Setup::RequestFeeSelection,
         39 if !first.is_empty() && second.is_empty() == third.is_empty() => {
@@ -376,6 +392,18 @@ fn ledger_progress(progress: Option<state::LedgerProgressV1>) -> Response {
             kind: 34,
             ..Response::default()
         },
+    }
+}
+fn epoch_progress(progress: state::NativeEpochProgressV1) -> Response {
+    Response {
+        kind: 57,
+        sequence: u128::from(progress.epoch),
+        bytes: [
+            progress.first_height.to_le_bytes(),
+            progress.boundary_height.to_le_bytes(),
+        ]
+        .concat(),
+        ..Response::default()
     }
 }
 impl<P, S> NativeWallet<P, S>
@@ -527,6 +555,12 @@ where
                 )));
             }
             Setup::LedgerStatus => return Ok(ledger_progress(self.wallet.ledger_progress()?)),
+            Setup::EpochStatus => return Ok(epoch_progress(self.wallet.epoch_progress()?)),
+            Setup::EpochBoundary { epoch, original } => {
+                return Ok(epoch_progress(
+                    self.wallet.ingest_epoch_boundary(epoch, &original)?,
+                ));
+            }
             Setup::FeePayout {
                 credit,
                 world,
@@ -677,6 +711,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn epoch_ingress_has_one_bounded_original_and_no_authority_fields() {
+        let zero = [0; 32];
+        assert!(matches!(
+            request(&zero, 52, 0, 0, [&[]; 3]),
+            Ok(Setup::EpochStatus)
+        ));
+        assert_eq!(bounds(53).unwrap(), [262_144, 0, 0]);
+        for epoch in [0, u128::from(u64::MAX)] {
+            assert!(matches!(request(&zero, 53, epoch, 0, [&[7], &[], &[]]),
+                Ok(Setup::EpochBoundary { epoch: selected, original }) if u128::from(selected) == epoch && original == [7]));
+        }
+        assert!(request(&zero, 53, u128::from(u64::MAX) + 1, 0, [&[7], &[], &[]]).is_err());
+        assert!(request(&zero, 53, 0, 0, [&[]; 3]).is_err());
+        assert!(request(&zero, 53, 0, 0, [&vec![1; 262_145], &[], &[]]).is_err());
+        for selector in [52, 53] {
+            let first: &[u8] = if selector == 53 { &[1] } else { &[] };
+            assert!(request(&[1; 32], selector, 0, 0, [first, &[], &[]]).is_err());
+            assert!(request(&zero, selector, 0, 1, [first, &[], &[]]).is_err());
+            assert!(request(&zero, selector, 0, 0, [first, &[1], &[]]).is_err());
+            assert!(request(&zero, selector, 0, 0, [first, &[], &[1]]).is_err());
+        }
+        let result = epoch_progress(state::NativeEpochProgressV1 {
+            epoch: u64::MAX,
+            first_height: 4,
+            boundary_height: u64::MAX,
+        });
+        assert_eq!(result.kind, 57);
+        assert_eq!(result.sequence, u128::from(u64::MAX));
+        assert_eq!(result.detail, 0);
+        assert_eq!(
+            result.bytes,
+            [4u64.to_le_bytes(), u64::MAX.to_le_bytes()].concat()
+        );
+    }
+
+    #[test]
     fn unload_settlement_union_preserves_native_confirmation_and_absence() {
         let progress = state::LedgerProgressV1 {
             height: 2,
@@ -791,7 +861,7 @@ mod tests {
                 assert!(request(&[0; 32], 47, sequence, 0, originals).is_err());
             }
         }
-        assert!(bounds(52).is_err());
+        assert!(bounds(54).is_err());
     }
 
     #[test]
@@ -822,7 +892,7 @@ mod tests {
             assert!(request(&[0; 32], selector, 0, 0, [&[7], &[], &[]]).is_ok());
             assert!(request(&[0; 32], selector, 0, 0, [&[]; 3]).is_err());
         }
-        assert!(bounds(52).is_err());
+        assert!(bounds(54).is_err());
     }
     #[test]
     fn unload_projection_requires_request_identity_and_only_optional_beneficiary() {

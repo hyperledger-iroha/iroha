@@ -84,8 +84,6 @@ pub use kagemusha_enrollment::{
     KagemushaEnrollmentGoogle, KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider,
     KagemushaEnrollmentWorker,
 };
-mod kagemusha_load_finality;
-pub use kagemusha_load_finality::KagemushaLoadFinality;
 mod sccp;
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
@@ -1433,7 +1431,7 @@ fn min_nonzero_bytes(current: Bytes, limit: u64) -> Bytes {
 }
 pub(crate) fn sora_lane_catalog() -> LaneCatalog {
     let lane_count = NonZeroU32::new(3).expect("three lanes are non-zero");
-    // All workload lanes share the universal dataspace's public disclosure class.
+    // LaneCatalog requires one visibility per dataspace; universal lanes must be public.
     let lanes = vec![
         LaneConfigMetadata {
             id: LaneId::new(0),
@@ -5701,10 +5699,10 @@ pub struct SumeragiLaneLifecycleEntry {
     /// Global carrier height that activated this incarnation.
     pub activation_height: u64,
 }
-/// Compute the canonical Sumeragi commitment to the Nexus and AMX inputs
-/// that can change proposal assembly or deterministic validation.
+/// Build the canonical Sumeragi preimage of the Nexus and AMX inputs that can
+/// change proposal assembly or deterministic validation.
 ///
-/// The commitment deliberately excludes local storage paths, worker pool
+/// The projection deliberately excludes local storage paths, worker pool
 /// sizing, caches, and telemetry. It includes the validated lane geometry,
 /// dataspace and routing catalogs, lane election/fee/AXT/DA policy, the five
 /// deterministic AMX budgets, and staged active public-lane validator records.
@@ -5713,52 +5711,22 @@ pub struct SumeragiLaneLifecycleEntry {
 /// so peers with divergent lifecycle histories cannot enter the same height or
 /// later derive the same recreated lane differently. Active validator records
 /// and retained lineage entries are sorted canonically before encoding.
-#[must_use]
-pub fn sumeragi_nexus_amx_context_hash(
-    nexus: &Nexus,
-    pipeline: &Pipeline,
-    active_validators: &[GenesisActiveNexusLaneRecord],
-    retained_lane_lineage: &[SumeragiLaneLifecycleEntry],
-) -> Hash {
-    sumeragi_nexus_amx_context_hash_with_catalog_policy(
-        nexus,
-        pipeline,
-        active_validators,
-        retained_lane_lineage,
-        None,
-    )
-}
-/// Commit effective Nexus/AMX inputs together with an authenticated runtime catalog policy.
 ///
-/// The root commits the complete ledger-owned dataspace and manifest additions. Callers must
-/// derive it from validated committed state, never from a local configuration overlay. Before
-/// any catalog-policy transaction exists, `None` retains the original projection byte for byte.
+/// The framing and tag grammar are owned by [`iroha_data_model::nexus::NexusAmxContextWriterV1`]
+/// and [`iroha_data_model::nexus::decode_nexus_amx_context_v1`]; a field added here must also
+/// be added to that grammar.
 #[must_use]
-pub fn sumeragi_nexus_amx_context_hash_with_catalog_policy(
+pub fn sumeragi_nexus_amx_context_preimage(
     nexus: &Nexus,
     pipeline: &Pipeline,
     active_validators: &[GenesisActiveNexusLaneRecord],
     retained_lane_lineage: &[SumeragiLaneLifecycleEntry],
-    committed_catalog_policy_root: Option<Hash>,
-) -> Hash {
-    const DATASPACE_COUNT_TAG: &str = "nexus.dataspace_catalog.count";
-    fn append<T: Encode>(out: &mut Vec<u8>, tag: &'static str, value: &T) {
-        let bytes = value.encode();
-        let tag_len = u32::try_from(tag.len()).expect("static projection tag fits in u32");
-        let bytes_len = u64::try_from(bytes.len()).expect("projection field fits in u64");
-        out.extend_from_slice(&tag_len.to_le_bytes());
-        out.extend_from_slice(tag.as_bytes());
-        out.extend_from_slice(&bytes_len.to_le_bytes());
-        out.extend_from_slice(&bytes);
-    }
-    let mut preimage = b"sumeragi:nexus-amx-context\0v1".to_vec();
-    append(
-        &mut preimage,
-        "nexus.lane_catalog.lane_count",
-        &nexus.lane_catalog.lane_count().get(),
-    );
+) -> Vec<u8> {
+    use iroha_data_model::nexus::{NexusAmxContextWriterV1, tag};
+    let mut preimage = NexusAmxContextWriterV1::new();
+    preimage.field(tag::LANE_COUNT, &nexus.lane_catalog.lane_count().get());
     let (_, consensus_lanes) = nexus.lane_catalog.consensus_projection();
-    append(&mut preimage, "nexus.lane_catalog.lanes", &consensus_lanes);
+    preimage.field(tag::LANES, &consensus_lanes);
     let mut retained_lane_lineage = retained_lane_lineage.to_vec();
     retained_lane_lineage.sort_unstable_by(|left, right| {
         left.lane_id
@@ -5767,79 +5735,46 @@ pub fn sumeragi_nexus_amx_context_hash_with_catalog_policy(
             .then_with(|| left.incarnation.cmp(&right.incarnation))
             .then_with(|| left.activation_height.cmp(&right.activation_height))
     });
-    append(
-        &mut preimage,
-        "nexus.lane_lifecycle.count",
+    preimage.field(
+        tag::LANE_LIFECYCLE_COUNT,
         &u64::try_from(retained_lane_lineage.len())
             .expect("retained lane lineage length fits in u64"),
     );
     for entry in retained_lane_lineage {
-        append(
-            &mut preimage,
-            "nexus.lane_lifecycle.lane_id",
-            &entry.lane_id,
-        );
-        append(
-            &mut preimage,
-            "nexus.lane_lifecycle.generation",
-            &entry.generation,
-        );
-        append(
-            &mut preimage,
-            "nexus.lane_lifecycle.incarnation",
-            &entry.incarnation,
-        );
-        append(
-            &mut preimage,
-            "nexus.lane_lifecycle.activation_height",
+        preimage.field(tag::LANE_LIFECYCLE_LANE_ID, &entry.lane_id);
+        preimage.field(tag::LANE_LIFECYCLE_GENERATION, &entry.generation);
+        preimage.field(tag::LANE_LIFECYCLE_INCARNATION, &entry.incarnation);
+        preimage.field(
+            tag::LANE_LIFECYCLE_ACTIVATION_HEIGHT,
             &entry.activation_height,
         );
     }
     let mut dataspaces = nexus.dataspace_catalog.entries().iter().collect::<Vec<_>>();
     dataspaces.sort_unstable_by_key(|entry| entry.id);
     let dataspace_count = u64::try_from(dataspaces.len()).expect("dataspace count fits in u64");
-    append(&mut preimage, DATASPACE_COUNT_TAG, &dataspace_count);
+    preimage.field(tag::DATASPACE_COUNT, &dataspace_count);
     for entry in dataspaces {
-        append(&mut preimage, "nexus.dataspace.id", &entry.id);
-        append(&mut preimage, "nexus.dataspace.alias", &entry.alias);
-        append(
-            &mut preimage,
-            "nexus.dataspace.fault_tolerance",
-            &entry.fault_tolerance,
-        );
+        preimage.field(tag::DATASPACE_ID, &entry.id);
+        preimage.field(tag::DATASPACE_ALIAS, &entry.alias);
+        preimage.field(tag::DATASPACE_FAULT_TOLERANCE, &entry.fault_tolerance);
     }
-    append(
-        &mut preimage,
-        "nexus.routing.default_lane",
+    preimage.field(
+        tag::ROUTING_DEFAULT_LANE,
         &nexus.routing_policy.default_lane,
     );
-    append(
-        &mut preimage,
-        "nexus.routing.default_dataspace",
+    preimage.field(
+        tag::ROUTING_DEFAULT_DATASPACE,
         &nexus.routing_policy.default_dataspace,
     );
-    append(
-        &mut preimage,
-        "nexus.routing.rule_count",
+    preimage.field(
+        tag::ROUTING_RULE_COUNT,
         &u64::try_from(nexus.routing_policy.rules.len()).expect("routing rule count fits in u64"),
     );
     for rule in &nexus.routing_policy.rules {
-        append(&mut preimage, "nexus.routing.rule.lane", &rule.lane);
-        append(
-            &mut preimage,
-            "nexus.routing.rule.dataspace",
-            &rule.dataspace,
-        );
-        append(
-            &mut preimage,
-            "nexus.routing.rule.account",
-            &rule.matcher.account,
-        );
-        append(
-            &mut preimage,
-            "nexus.routing.rule.instruction",
-            &rule.matcher.instruction,
-        );
+        preimage.field(tag::ROUTING_RULE_LANE, &rule.lane);
+        preimage.field(tag::ROUTING_RULE_DATASPACE, &rule.dataspace);
+        preimage.field(tag::ROUTING_RULE_ACCOUNT, &rule.matcher.account);
+        preimage.field(tag::ROUTING_RULE_INSTRUCTION, &rule.matcher.instruction);
     }
     let public_validator_mode = match nexus.staking.public_validator_mode {
         LaneValidatorMode::StakeElected => 0_u8,
@@ -5849,102 +5784,60 @@ pub fn sumeragi_nexus_amx_context_hash_with_catalog_policy(
         LaneValidatorMode::StakeElected => 0_u8,
         LaneValidatorMode::AdminManaged => 1,
     };
-    append(
-        &mut preimage,
-        "nexus.staking.public_validator_mode",
-        &public_validator_mode,
-    );
-    append(
-        &mut preimage,
-        "nexus.staking.restricted_validator_mode",
+    preimage.field(tag::STAKING_PUBLIC_VALIDATOR_MODE, &public_validator_mode);
+    preimage.field(
+        tag::STAKING_RESTRICTED_VALIDATOR_MODE,
         &restricted_validator_mode,
     );
-    append(
-        &mut preimage,
-        "nexus.staking.min_validator_stake",
+    preimage.field(
+        tag::STAKING_MIN_VALIDATOR_STAKE,
         &nexus.staking.min_validator_stake,
     );
-    append(
-        &mut preimage,
-        "nexus.staking.max_validators",
+    preimage.field(
+        tag::STAKING_MAX_VALIDATORS,
         &nexus.staking.max_validators.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.staking.max_stake_shares_per_validator",
+    preimage.field(
+        tag::STAKING_MAX_STAKE_SHARES_PER_VALIDATOR,
         &nexus.staking.max_stake_shares_per_validator.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.staking.max_pending_unbonds_per_share",
+    preimage.field(
+        tag::STAKING_MAX_PENDING_UNBONDS_PER_SHARE,
         &nexus.staking.max_pending_unbonds_per_share.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.staking.unbonding_delay_ns",
+    preimage.field(
+        tag::STAKING_UNBONDING_DELAY_NS,
         &nexus.staking.unbonding_delay.as_nanos(),
     );
-    append(
-        &mut preimage,
-        "nexus.staking.max_slash_bps",
-        &nexus.staking.max_slash_bps,
-    );
-    append(
-        &mut preimage,
-        "nexus.staking.reward_dust_threshold",
+    preimage.field(tag::STAKING_MAX_SLASH_BPS, &nexus.staking.max_slash_bps);
+    preimage.field(
+        tag::STAKING_REWARD_DUST_THRESHOLD,
         &nexus.staking.reward_dust_threshold,
     );
-    append(
-        &mut preimage,
-        "nexus.staking.stake_asset_id",
-        &nexus.staking.stake_asset_id,
-    );
-    append(
-        &mut preimage,
-        "nexus.staking.stake_escrow_account_id",
+    preimage.field(tag::STAKING_STAKE_ASSET_ID, &nexus.staking.stake_asset_id);
+    preimage.field(
+        tag::STAKING_STAKE_ESCROW_ACCOUNT_ID,
         &nexus.staking.stake_escrow_account_id,
     );
-    append(
-        &mut preimage,
-        "nexus.staking.slash_sink_account_id",
+    preimage.field(
+        tag::STAKING_SLASH_SINK_ACCOUNT_ID,
         &nexus.staking.slash_sink_account_id,
     );
-    append(&mut preimage, "nexus.fees.asset", &nexus.fees.fee_asset_id);
-    append(
-        &mut preimage,
-        "nexus.fees.sink",
-        &nexus.fees.fee_sink_account_id,
-    );
-    append(&mut preimage, "nexus.fees.base", &nexus.fees.base_fee);
-    append(
-        &mut preimage,
-        "nexus.fees.per_byte",
-        &nexus.fees.per_byte_fee,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.per_instruction",
-        &nexus.fees.per_instruction_fee,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.per_gas_unit",
-        &nexus.fees.per_gas_unit_fee,
-    );
-    append(
-        &mut preimage,
-        "nexus.fees.sponsor_vault_custody_account_id",
+    preimage.field(tag::FEES_ASSET, &nexus.fees.fee_asset_id);
+    preimage.field(tag::FEES_SINK, &nexus.fees.fee_sink_account_id);
+    preimage.field(tag::FEES_BASE, &nexus.fees.base_fee);
+    preimage.field(tag::FEES_PER_BYTE, &nexus.fees.per_byte_fee);
+    preimage.field(tag::FEES_PER_INSTRUCTION, &nexus.fees.per_instruction_fee);
+    preimage.field(tag::FEES_PER_GAS_UNIT, &nexus.fees.per_gas_unit_fee);
+    preimage.field(
+        tag::FEES_SPONSOR_VAULT_CUSTODY_ACCOUNT_ID,
         &nexus.fees.sponsor_vault_custody_account_id,
     );
     let settlement_mode = match nexus.fees.settlement_mode {
         NexusFeeSettlementMode::Direct => 0_u8,
         NexusFeeSettlementMode::LaneRelayBurn => 1,
     };
-    append(
-        &mut preimage,
-        "nexus.fees.settlement_mode",
-        &settlement_mode,
-    );
+    preimage.field(tag::FEES_SETTLEMENT_MODE, &settlement_mode);
     let successful_claim_fee_exempt_authorities = nexus
         .fees
         .successful_claim_fee_exempt_authorities
@@ -5955,219 +5848,169 @@ pub fn sumeragi_nexus_amx_context_hash_with_catalog_policy(
                 .expect("validated Nexus fee-exempt authority must encode as canonical I105")
         })
         .collect::<Vec<_>>();
-    append(
-        &mut preimage,
-        "nexus.fees.successful_claim_exempt_authorities",
+    preimage.field(
+        tag::FEES_SUCCESSFUL_CLAIM_EXEMPT_AUTHORITIES,
         &successful_claim_fee_exempt_authorities,
     );
-    append(
-        &mut preimage,
-        "nexus.dataspace_fee_sponsor_program_ids",
+    preimage.field(
+        tag::DATASPACE_FEE_SPONSOR_PROGRAM_IDS,
         &nexus.dataspace_fee_sponsor_program_ids,
     );
-    append(
-        &mut preimage,
-        "nexus.axt.slot_length_ms",
-        &nexus.axt.slot_length_ms.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.axt.max_clock_skew_ms",
-        &nexus.axt.max_clock_skew_ms,
-    );
-    append(
-        &mut preimage,
-        "nexus.axt.proof_cache_ttl_slots",
+    preimage.field(tag::AXT_SLOT_LENGTH_MS, &nexus.axt.slot_length_ms.get());
+    preimage.field(tag::AXT_MAX_CLOCK_SKEW_MS, &nexus.axt.max_clock_skew_ms);
+    preimage.field(
+        tag::AXT_PROOF_CACHE_TTL_SLOTS,
         &nexus.axt.proof_cache_ttl_slots.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.axt.replay_retention_slots",
+    preimage.field(
+        tag::AXT_REPLAY_RETENTION_SLOTS,
         &nexus.axt.replay_retention_slots.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.fusion.floor_teu",
-        &nexus.fusion.floor_teu,
-    );
-    append(
-        &mut preimage,
-        "nexus.fusion.exit_teu",
-        &nexus.fusion.exit_teu,
-    );
-    append(
-        &mut preimage,
-        "nexus.fusion.observation_slots",
+    preimage.field(tag::FUSION_FLOOR_TEU, &nexus.fusion.floor_teu);
+    preimage.field(tag::FUSION_EXIT_TEU, &nexus.fusion.exit_teu);
+    preimage.field(
+        tag::FUSION_OBSERVATION_SLOTS,
         &nexus.fusion.observation_slots.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.fusion.max_window_slots",
+    preimage.field(
+        tag::FUSION_MAX_WINDOW_SLOTS,
         &nexus.fusion.max_window_slots.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.enabled",
-        &nexus.autoscale.enabled,
-    );
-    append(
-        &mut preimage,
-        "nexus.autoscale.min_lane_id",
+    preimage.field(tag::AUTOSCALE_ENABLED, &nexus.autoscale.enabled);
+    preimage.field(
+        tag::AUTOSCALE_MIN_LANE_ID,
         &nexus.autoscale.min_lane_id.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.max_lane_id_exclusive",
+    preimage.field(
+        tag::AUTOSCALE_MAX_LANE_ID_EXCLUSIVE,
         &nexus.autoscale.max_lane_id_exclusive.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.target_block_ms",
+    preimage.field(
+        tag::AUTOSCALE_TARGET_BLOCK_MS,
         &nexus.autoscale.target_block_ms.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.scale_out_latency_ratio_bits",
+    preimage.field(
+        tag::AUTOSCALE_SCALE_OUT_LATENCY_RATIO_BITS,
         &nexus.autoscale.scale_out_latency_ratio.to_bits(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.scale_in_latency_ratio_bits",
+    preimage.field(
+        tag::AUTOSCALE_SCALE_IN_LATENCY_RATIO_BITS,
         &nexus.autoscale.scale_in_latency_ratio.to_bits(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.scale_out_utilization_ratio_bits",
+    preimage.field(
+        tag::AUTOSCALE_SCALE_OUT_UTILIZATION_RATIO_BITS,
         &nexus.autoscale.scale_out_utilization_ratio.to_bits(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.scale_in_utilization_ratio_bits",
+    preimage.field(
+        tag::AUTOSCALE_SCALE_IN_UTILIZATION_RATIO_BITS,
         &nexus.autoscale.scale_in_utilization_ratio.to_bits(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.scale_out_window_blocks",
+    preimage.field(
+        tag::AUTOSCALE_SCALE_OUT_WINDOW_BLOCKS,
         &nexus.autoscale.scale_out_window_blocks.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.scale_in_window_blocks",
+    preimage.field(
+        tag::AUTOSCALE_SCALE_IN_WINDOW_BLOCKS,
         &nexus.autoscale.scale_in_window_blocks.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.cooldown_blocks",
+    preimage.field(
+        tag::AUTOSCALE_COOLDOWN_BLOCKS,
         &nexus.autoscale.cooldown_blocks.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.per_lane_target_tps",
+    preimage.field(
+        tag::AUTOSCALE_PER_LANE_TARGET_TPS,
         &nexus.autoscale.per_lane_target_tps.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.autoscale.last_transition_height",
+    preimage.field(
+        tag::AUTOSCALE_LAST_TRANSITION_HEIGHT,
         &nexus.autoscale.last_transition_height,
     );
-    append(
-        &mut preimage,
-        "nexus.commit.window_slots",
-        &nexus.commit.window_slots.get(),
-    );
+    preimage.field(tag::COMMIT_WINDOW_SLOTS, &nexus.commit.window_slots.get());
     let da = &nexus.da;
-    macro_rules! append_da_fields {
-        ($($tag:literal => $value:expr),+ $(,)?) => {
-            $(
-                append(
-                    &mut preimage,
-                    $tag,
-                    &$value,
-                );
-            )+
-        };
-    }
-    append_da_fields! {
-        "nexus.da.q_in_slot_total" => da.q_in_slot_total.get(),
-        "nexus.da.q_in_slot_per_ds_min" => da.q_in_slot_per_ds_min.get(),
-        "nexus.da.sample_size_base" => da.sample_size_base.get(),
-        "nexus.da.sample_size_max" => da.sample_size_max.get(),
-        "nexus.da.threshold_base" => da.threshold_base.get(),
-        "nexus.da.per_attester_shards" => da.per_attester_shards.get(),
-        "nexus.da.ingest_quota_window_blocks" => da.ingest_quota_window_blocks.get(),
-        "nexus.da.ingest_quota_max_count_per_account" =>
-            da.ingest_quota_max_count_per_account.get(),
-        "nexus.da.ingest_quota_max_bytes_per_account" =>
-            da.ingest_quota_max_bytes_per_account.get(),
-        "nexus.da.audit.sample_size" => da.audit.sample_size.get(),
-        "nexus.da.audit.window_count" => da.audit.window_count.get(),
-    }
-    append(
-        &mut preimage,
-        "nexus.da.audit.interval_ns",
+    preimage.field(tag::DA_Q_IN_SLOT_TOTAL, &da.q_in_slot_total.get());
+    preimage.field(tag::DA_Q_IN_SLOT_PER_DS_MIN, &da.q_in_slot_per_ds_min.get());
+    preimage.field(tag::DA_SAMPLE_SIZE_BASE, &da.sample_size_base.get());
+    preimage.field(tag::DA_SAMPLE_SIZE_MAX, &da.sample_size_max.get());
+    preimage.field(tag::DA_THRESHOLD_BASE, &da.threshold_base.get());
+    preimage.field(tag::DA_PER_ATTESTER_SHARDS, &da.per_attester_shards.get());
+    preimage.field(
+        tag::DA_INGEST_QUOTA_WINDOW_BLOCKS,
+        &da.ingest_quota_window_blocks.get(),
+    );
+    preimage.field(
+        tag::DA_INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
+        &da.ingest_quota_max_count_per_account.get(),
+    );
+    preimage.field(
+        tag::DA_INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
+        &da.ingest_quota_max_bytes_per_account.get(),
+    );
+    preimage.field(tag::DA_AUDIT_SAMPLE_SIZE, &da.audit.sample_size.get());
+    preimage.field(tag::DA_AUDIT_WINDOW_COUNT, &da.audit.window_count.get());
+    preimage.field(
+        tag::DA_AUDIT_INTERVAL_NS,
         &nexus.da.audit.interval.as_nanos(),
     );
-    append(
-        &mut preimage,
-        "nexus.da.recovery.request_timeout_ns",
+    preimage.field(
+        tag::DA_RECOVERY_REQUEST_TIMEOUT_NS,
         &nexus.da.recovery.request_timeout.as_nanos(),
     );
-    append(
-        &mut preimage,
-        "nexus.da.rotation.max_hits_per_window",
+    preimage.field(
+        tag::DA_ROTATION_MAX_HITS_PER_WINDOW,
         &nexus.da.rotation.max_hits_per_window.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.da.rotation.window_slots",
+    preimage.field(
+        tag::DA_ROTATION_WINDOW_SLOTS,
         &nexus.da.rotation.window_slots.get(),
     );
-    append(
-        &mut preimage,
-        "nexus.da.rotation.seed_tag",
-        &nexus.da.rotation.seed_tag,
-    );
-    append(
-        &mut preimage,
-        "nexus.da.rotation.latency_decay_bits",
+    preimage.field(tag::DA_ROTATION_SEED_TAG, &nexus.da.rotation.seed_tag);
+    preimage.field(
+        tag::DA_ROTATION_LATENCY_DECAY_BITS,
         &nexus.da.rotation.latency_decay.to_bits(),
     );
-    append(
-        &mut preimage,
-        "pipeline.amx_per_dataspace_budget_ms",
+    preimage.field(
+        tag::PIPELINE_AMX_PER_DATASPACE_BUDGET_MS,
         &pipeline.amx_per_dataspace_budget_ms,
     );
-    append(
-        &mut preimage,
-        "pipeline.amx_group_budget_ms",
+    preimage.field(
+        tag::PIPELINE_AMX_GROUP_BUDGET_MS,
         &pipeline.amx_group_budget_ms,
     );
-    append(
-        &mut preimage,
-        "pipeline.amx_per_instruction_ns",
+    preimage.field(
+        tag::PIPELINE_AMX_PER_INSTRUCTION_NS,
         &pipeline.amx_per_instruction_ns,
     );
-    append(
-        &mut preimage,
-        "pipeline.amx_per_memory_access_ns",
+    preimage.field(
+        tag::PIPELINE_AMX_PER_MEMORY_ACCESS_NS,
         &pipeline.amx_per_memory_access_ns,
     );
-    append(
-        &mut preimage,
-        "pipeline.amx_per_syscall_ns",
+    preimage.field(
+        tag::PIPELINE_AMX_PER_SYSCALL_NS,
         &pipeline.amx_per_syscall_ns,
     );
     let mut active_validators = active_validators.to_vec();
     active_validators.sort_by(|(left, _), (right, _)| left.cmp(right));
-    append(
-        &mut preimage,
-        "staged.active_public_lane_validators",
+    preimage.field(
+        tag::STAGED_ACTIVE_PUBLIC_LANE_VALIDATORS,
         &active_validators,
     );
-    if let Some(root) = committed_catalog_policy_root {
-        append(&mut preimage, "nexus.committed_catalog_policy.v1", &root);
-    }
-    Hash::new(preimage)
+    preimage.finish()
+}
+/// Compute the canonical Sumeragi commitment to the Nexus and AMX inputs: the hash of
+/// [`sumeragi_nexus_amx_context_preimage`].
+#[must_use]
+pub fn sumeragi_nexus_amx_context_hash(
+    nexus: &Nexus,
+    pipeline: &Pipeline,
+    active_validators: &[GenesisActiveNexusLaneRecord],
+    retained_lane_lineage: &[SumeragiLaneLifecycleEntry],
+) -> Hash {
+    Hash::new(sumeragi_nexus_amx_context_preimage(
+        nexus,
+        pipeline,
+        active_validators,
+        retained_lane_lineage,
+    ))
 }
 /// Tiered state backend settings controlling hot/cold storage behaviour.
 #[derive(Debug, Clone)]
@@ -7486,8 +7329,6 @@ pub struct Torii {
     pub recipient_lookup: ToriiRecipientLookup,
     /// Optional current bank-selected KAGEMUSHA issuer dependencies; absent disables serving.
     pub kagemusha_enrollment: Option<KagemushaEnrollmentIssuer>,
-    /// Optional bounded terminal Load proof service over committed native history.
-    pub kagemusha_load_finality: Option<KagemushaLoadFinality>,
     /// Explicit Torii origins used for public-dataspace routed reads.
     pub public_dataspace_upstreams: Vec<ToriiPublicDataspaceUpstream>,
     /// App-facing query/backpressure limits.
@@ -7547,7 +7388,6 @@ impl fmt::Debug for Torii {
             .field("tx_history", &self.tx_history)
             .field("recipient_lookup", &self.recipient_lookup)
             .field("kagemusha_enrollment", &self.kagemusha_enrollment)
-            .field("kagemusha_load_finality", &self.kagemusha_load_finality)
             .field("da_ingest", &self.da_ingest)
             .field("push", &self.push)
             .finish_non_exhaustive()

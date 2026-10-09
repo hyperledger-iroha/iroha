@@ -148,7 +148,13 @@ challenge-bound current/completed observations. Torii retains its exact prepared
 body, original custody and authenticated-operator quota across the operation.
 
 1. Startup requires a fresh `CurrentCustody` observation with phase `Startup`.
-   It contains no invented token or completed row.
+   It contains no invented token or completed row and grants no signing or serving
+   authority. If unrelated committed work advances the local tip while the signed
+   reply is in flight, Torii certifies that newer tip in the same fresh State view
+   and requires identical complete custody control and revision digest. The signed
+   candidate remains the observed anchor; the original floor, minimum and historical
+   anchors still apply. Changed custody, missing certificates or a removed provider
+   refuse startup. All live operation and admission phases retain the exact-tip rule.
 2. Each issuance has a separate fresh `BeforeProvider` observation. The service
    derives the same operation from its own pinned provider binding and exact
    canonical body before reading state or calling the signer.

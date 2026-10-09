@@ -35,15 +35,8 @@ ff = "0.13.1"
 # Curve::to_affine for canonical transported incoming correction points.
 group = "0.13"
 
-# Native untrusted BLS witness generation; the constrained source program
-# checks every transition and remains the sole cryptographic authority.
-ark-bls12-381 = { version = "0.4.0", default-features = false, features = ["curve"] }
-ark-ff = { version = "0.4.2", default-features = false }
-ark-ec = { version = "0.4.2", default-features = false }
-ark-serialize = { version = "0.4.2", default-features = false }
-sha2 = "0.10.9"
-
 [dev-dependencies]
+sha2 = "0.10.9"
 # Canonical executed-genesis admission for the source-only finality compiler.
 # These test-driver dependencies never enter the production native proof boundary.
 iroha_genesis = { workspace = true }
