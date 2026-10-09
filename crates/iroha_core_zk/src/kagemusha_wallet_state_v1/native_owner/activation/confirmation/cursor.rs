@@ -274,10 +274,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         if scheme.scheme_id() != self.scheme_id
             || chain != genesis.chain_id()
             || genesis.initial_epoch().network_id.as_bytes() != &scheme.network_id
-            || !matches!(
-                genesis.root_scope(),
-                Ok(iroha_data_model::block::consensus::SumeragiRootScope::Global)
-            )
+            || genesis.root_scope() != iroha_data_model::block::consensus::SumeragiRootScope::Global
         {
             return Err(Error::Proof("activation cursor root scope"));
         }

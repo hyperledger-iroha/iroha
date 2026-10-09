@@ -99,7 +99,8 @@ impl AuthenticatedGlobalBeaconDkgAttemptV1 {
         network: NetworkId,
         chain_id: &ChainId,
     ) -> Result<Self, LocalGlobalThresholdBeaconDkgErrorV1> {
-        let epoch = crate::sumeragi::epoch::genesis_epoch(genesis)
+        let epoch = crate::sumeragi::epoch::authenticated_genesis(genesis)
+            .map(|genesis| genesis.into_parts().0)
             .map_err(LocalGlobalThresholdBeaconDkgErrorV1::GenesisAuthority)?;
         if epoch.network_id != network
             || epoch.mode != ConsensusMode::Npos

@@ -53,20 +53,20 @@ fn asset_definition_home_dataspace(
         None => Ok(Some(DataSpaceId::UNIVERSAL)),
     }
 }
-/// Exact Phase A refusal for a restricted home, shared by the direct and domain paths.
+/// General restricted-home refusal, shared by the direct and domain paths.
 ///
 /// Keep this text stable: the post-reset replay qualification scans committed rejections for it.
 const RESTRICTED_HOME_REFUSAL: &str =
     "direct-dataspace registration currently requires a public home dataspace";
 /// Refuse a home that a definition with this balance policy may not use.
 ///
-/// A global definition can never be homed in a restricted dataspace: every global balance
-/// operation executes on the universal coordinator, so its payloads are always public. A
-/// dataspace-restricted definition is refused a restricted home until restricted-home read
-/// gates, route-scoped reads and the restricted-home write postcondition are in force.
-// TODO: admit DataspaceRestricted definitions in restricted homes together with those rules.
+/// Global definitions never use restricted homes. A dataspace-restricted definition may
+/// use the sole restricted home of its authenticated independent private root, with both
+/// original route coordinates and the canonical physical geometry. General restricted
+/// homes on a global root remain refused until their complete read/write boundary ships.
+// TODO: general restricted homes on Global roots still need complete route-scoped read/write qualification.
 fn ensure_home_admissible(
-    state_transaction: &StateTransaction<'_, '_>,
+    state_transaction: &mut StateTransaction<'_, '_>,
     definition_id: &AssetDefinitionId,
     balance_scope_policy: AssetBalancePolicy,
     home_dataspace: DataSpaceId,
@@ -77,16 +77,47 @@ fn ensure_home_admissible(
     ) {
         return Ok(());
     }
-    Err(InstructionExecutionError::InvariantViolation(
-        match balance_scope_policy {
-            AssetBalancePolicy::Global => format!(
-                "global asset definition {definition_id} cannot be registered in restricted dataspace {}; use DataspaceRestricted balance policy",
-                home_dataspace.as_u64()
-            ),
-            AssetBalancePolicy::DataspaceRestricted => RESTRICTED_HOME_REFUSAL.to_owned(),
+    let refusal = || {
+        InstructionExecutionError::InvariantViolation(
+            match balance_scope_policy {
+                AssetBalancePolicy::Global => format!(
+                    "global asset definition {definition_id} cannot be registered in restricted dataspace {}; use DataspaceRestricted balance policy",
+                    home_dataspace.as_u64()
+                ),
+                AssetBalancePolicy::DataspaceRestricted => RESTRICTED_HOME_REFUSAL.to_owned(),
+            }
+            .into(),
+        )
+    };
+    if balance_scope_policy == AssetBalancePolicy::Global {
+        return Err(refusal());
+    }
+    // This owner retains any original local decoder refusal before the ISI error bridge.
+    // No local geometry, header or SNS owner can replace the authenticated root source.
+    if !cfg!(all(test, sumeragi_core_mutation = "HC207")) {
+        let scope = crate::executor::root_scope::execution_root_scope(state_transaction)
+            .map_err(|_| refusal())?;
+        if !matches!(scope, iroha_data_model::block::consensus::SumeragiRootScope::Dataspace { dataspace_id, .. } if dataspace_id == home_dataspace)
+        {
+            return Err(refusal());
         }
-        .into(),
-    ))
+    }
+    if !cfg!(all(test, sumeragi_core_mutation = "HC208"))
+        && (state_transaction.current_dataspace_id != Some(home_dataspace)
+            || state_transaction.world.current_dataspace_id != Some(home_dataspace))
+    {
+        return Err(refusal());
+    }
+    if cfg!(all(test, sumeragi_core_mutation = "HC209")) {
+        return Ok(());
+    }
+    if state_transaction.world.dataspace_catalog != state_transaction.nexus.dataspace_catalog {
+        return Err(refusal());
+    }
+    state_transaction
+        .nexus
+        .validate_private_root_geometry(home_dataspace)
+        .map_err(|_| refusal())
 }
 /// Keep an alias inside its definition's namespace whenever either side is restricted.
 ///

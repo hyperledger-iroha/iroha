@@ -8743,8 +8743,8 @@ state_test! { sync lanes_requiring_state_reset_tracks_shard_mapping_changes
 state_test! { sync lanes_requiring_state_reset_tracks_storage_profile_and_visibility_changes
     let storage_lane_id = LaneId::new(1);
     let visibility_lane_id = LaneId::new(2);
-    let_row! { previous_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: storage_lane_id, alias: "storage-policy".to_string(), storage: LaneStorageProfile::FullReplica, ..LaneConfig::default() }, LaneConfig { id: visibility_lane_id, alias: "visibility-policy".to_string(), visibility: LaneVisibility::Public, ..LaneConfig::default() }, ], ) .expect("previous catalog") };
-    let_row! { current_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: storage_lane_id, alias: "storage-policy".to_string(), storage: LaneStorageProfile::SplitReplica, ..LaneConfig::default() }, LaneConfig { id: visibility_lane_id, alias: "visibility-policy".to_string(), visibility: LaneVisibility::Restricted, ..LaneConfig::default() }, ], ) .expect("current catalog") };
+    let_row! { previous_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: storage_lane_id, alias: "storage-policy".to_string(), storage: LaneStorageProfile::FullReplica, ..LaneConfig::default() }, LaneConfig { id: visibility_lane_id, dataspace_id: DataSpaceId::new(2), alias: "visibility-policy".to_string(), visibility: LaneVisibility::Public, ..LaneConfig::default() }, ], ) .expect("previous catalog") };
+    let_row! { current_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: storage_lane_id, alias: "storage-policy".to_string(), storage: LaneStorageProfile::SplitReplica, ..LaneConfig::default() }, LaneConfig { id: visibility_lane_id, dataspace_id: DataSpaceId::new(2), alias: "visibility-policy".to_string(), visibility: LaneVisibility::Restricted, ..LaneConfig::default() }, ], ) .expect("current catalog") };
     let previous = RuntimeLaneConfig::from_catalog(&previous_catalog);
     let current = RuntimeLaneConfig::from_catalog(&current_catalog);
     assert_eq!(
@@ -14400,16 +14400,17 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
     let prospective_owner = LaneId::new(1);
     let current_owner = LaneId::new(2);
     let shared_dataspace = DataSpaceId::new(9);
-    let initial_nexus = iroha_config::parameters::actual::Nexus {
+    let prospective_dataspace = DataSpaceId::new(10);
+    let mut initial_nexus = iroha_config::parameters::actual::Nexus {
         lane_catalog: LaneCatalog::new(
             nonzero!(3_u32),
             vec![
                 LaneConfig::default(),
                 LaneConfig {
                     id: prospective_owner,
-                    alias: "restricted-prospective-owner".to_owned(),
-                    dataspace_id: shared_dataspace,
-                    visibility: LaneVisibility::Restricted,
+                    alias: "public-prospective-owner".to_owned(),
+                    dataspace_id: prospective_dataspace,
+                    visibility: LaneVisibility::Public,
                     ..LaneConfig::default()
                 },
                 LaneConfig {
@@ -14421,7 +14422,7 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
                 },
             ],
         )
-        .expect("mixed-visibility shared-dataspace catalog"),
+        .expect("public lanes in separate registered dataspaces"),
         dataspace_catalog: DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
@@ -14430,10 +14431,17 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
                 description: None,
                 fault_tolerance: 1,
             },
+            DataSpaceMetadata {
+                id: prospective_dataspace,
+                alias: "prospective-staking".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
         ])
-        .expect("shared-dataspace lifecycle dataspace catalog"),
+        .expect("both prospective and current staking dataspaces are registered"),
         ..iroha_config::parameters::actual::Nexus::default()
     };
+    initial_nexus.lane_config = RuntimeLaneConfig::from_catalog(&initial_nexus.lane_catalog);
     let mut state = State::new_with_nexus_for_testing(
         World::default(), initial_nexus, LiveQueryStore::start_test(),
     );
@@ -14450,6 +14458,14 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
     assert_eq!(
         nexus_staking_authority_lane_at_height(current_owner, &nexus_before, 0),
         Some(current_owner)
+    );
+    assert_eq!(
+        nexus_active_lane_dataspace_at_height(prospective_owner, &nexus_before, 0),
+        Some(prospective_dataspace)
+    );
+    assert_eq!(
+        nexus_active_lane_dataspace_at_height(current_owner, &nexus_before, 0),
+        Some(shared_dataspace)
     );
     let validator_before = state
         .world
@@ -14480,6 +14496,9 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
         nexus_after.staking.restricted_validator_mode,
         nexus_before.staking.restricted_validator_mode
     );
+    assert_eq!(nexus_after.lane_catalog, nexus_before.lane_catalog);
+    assert_eq!(nexus_after.dataspace_catalog, nexus_before.dataspace_catalog);
+    assert!(lane_config_entries_match(&nexus_after.lane_config, &nexus_before.lane_config));
     let world = state.world.view();
     assert_eq!(
         world
@@ -14506,13 +14525,46 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
         None,
         "the restored intermediate configuration has no staking owner"
     );
-    let mut reenabled = all_admin;
-    reenabled.staking.restricted_validator_mode =
+    let mut reenabled = all_admin.clone();
+    reenabled.staking.public_validator_mode =
         iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
+    // Visibility is uniform within each dataspace. The valid lower-lane takeover
+    // moves only the prospective owner into the current public dataspace.
+    reenabled.lane_catalog = LaneCatalog::new(
+        all_admin.lane_catalog.lane_count(),
+        all_admin.lane_catalog.lanes().iter().map(|lane| {
+            if lane.id == prospective_owner {
+                LaneConfig { dataspace_id: shared_dataspace, ..lane.clone() }
+            } else {
+                lane.clone()
+            }
+        }).collect(),
+    ).expect("reenabled shared dataspace remains uniformly public");
+    reenabled.lane_config = RuntimeLaneConfig::from_catalog(&reenabled.lane_catalog);
+    assert_eq!(
+        nexus_staking_authority_lane_at_height(current_owner, &reenabled, 0),
+        Some(prospective_owner),
+        "the lower public sibling would replace the restored no-owner configuration"
+    );
+    assert_eq!(
+        nexus_active_lane_dataspace_at_height(prospective_owner, &reenabled, 0),
+        Some(shared_dataspace)
+    );
+    let mut reset_lanes = lanes_requiring_state_reset(&all_admin.lane_config, &reenabled.lane_config);
+    reset_lanes.extend(lanes_requiring_consensus_reset(&all_admin.lane_catalog, &reenabled.lane_catalog));
+    assert_eq!(reset_lanes, BTreeSet::from([prospective_owner]));
     let mut restored = restored;
+    assert!(matches!(
+        restored.set_nexus(reenabled.clone()),
+        Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    // The ordinary setter retains the immutable configured baseline. Exercise the
+    // same inner publication guard before any geometry change, independently of
+    // that earlier refusal; only the unoccupied prospective lane needs a reset.
+    let configured_catalog = restored.nexus_snapshot().configured_lane_catalog;
     let err = restored
-        .set_nexus(reenabled)
-        .expect_err("re-enabling a different owner must reject legacy live state");
+        .set_nexus_with_configured_lane_catalog(reenabled, configured_catalog, None)
+        .expect_err("re-enabling a different owner must reject restored live state");
     assert!(matches!(
         err,
         LaneLifecycleError::UnsafeRetirement { lane, reason }
@@ -14521,9 +14573,26 @@ state_test! { sync set_nexus_rejects_two_step_staking_mode_toggle_with_live_shar
     ));
     let restored_nexus = restored.nexus_snapshot();
     assert_eq!(
-        restored_nexus.staking.restricted_validator_mode,
+        restored_nexus.staking.public_validator_mode,
         iroha_config::parameters::actual::LaneValidatorMode::AdminManaged,
         "rejected owner re-enable must preserve the no-owner configuration"
+    );
+    assert_eq!(
+        restored_nexus.staking.restricted_validator_mode,
+        all_admin.staking.restricted_validator_mode
+    );
+    assert_eq!(restored_nexus.lane_catalog, all_admin.lane_catalog);
+    assert_eq!(restored_nexus.dataspace_catalog, all_admin.dataspace_catalog);
+    assert!(lane_config_entries_match(&restored_nexus.lane_config, &all_admin.lane_config));
+    assert_eq!(
+        nexus_staking_authority_lane_at_height(current_owner, &restored_nexus, 0),
+        None
+    );
+    let world = restored.world.view();
+    assert_eq!(
+        world.public_lane_validators().get(&(current_owner, validator_before.validator.clone())),
+        Some(&validator_before),
+        "rejected re-enable must preserve the exact restored live owner row"
     );
 }
 
@@ -14579,34 +14648,65 @@ state_test! { sync set_nexus_rejects_live_single_lane_stake_owner_reassignment
         &keypair,
         1_000_000,
     );
+    let nexus_before = state.nexus_snapshot();
+    let validator_before = state
+        .world
+        .public_lane_validators
+        .view()
+        .get(&(LaneId::SINGLE, validator.clone()))
+        .expect("live single-lane validator")
+        .clone();
+    let replacement_dataspace = DataSpaceId::new(1);
     let mut prospective = iroha_config::parameters::actual::Nexus {
         lane_catalog: LaneCatalog::new(
             nonzero!(2_u32),
             vec![
-                LaneConfig::default(),
+                LaneConfig {
+                    dataspace_id: replacement_dataspace,
+                    ..LaneConfig::default()
+                },
                 LaneConfig {
                     id: LaneId::new(1),
                     alias: "prospective-staking-owner".to_owned(),
                     dataspace_id: DataSpaceId::UNIVERSAL,
-                    visibility: LaneVisibility::Restricted,
+                    visibility: LaneVisibility::Public,
                     ..LaneConfig::default()
                 },
             ],
         )
-        .expect("prospective shared-dataspace catalog"),
+        .expect("prospective public dataspace catalogs"),
+        dataspace_catalog: DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: replacement_dataspace,
+                alias: "retained-single-lane".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("prospective registered dataspaces"),
         ..Default::default()
     };
-    prospective.staking.public_validator_mode =
-        iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
-    prospective.staking.restricted_validator_mode =
-        iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
+    prospective.lane_config = RuntimeLaneConfig::from_catalog(&prospective.lane_catalog);
+    prospective.routing_policy.default_lane = LaneId::new(1);
+    assert_eq!(
+        nexus_staking_authority_lane_at_height(LaneId::SINGLE, &nexus_before, 0),
+        Some(LaneId::SINGLE)
+    );
+    assert_eq!(
+        nexus_staking_authority_lane_at_height(LaneId::new(1), &prospective, 0),
+        Some(LaneId::new(1)),
+        "the prospective universal dataspace has a different staking owner"
+    );
 
     assert!(matches!(
         state.set_nexus(prospective.clone()),
         Err(LaneLifecycleError::ConfiguredCatalogBaseline(_))
     ));
     let configured_catalog = state.nexus_snapshot().configured_lane_catalog;
-    // Validate the semantic restriction independently of the earlier immutable-baseline guard.
+    // Universal lanes are public and share their validator mode, so moving its
+    // lowest owner requires changing SINGLE's physical dataspace. Validate the
+    // live-custody reset guard independently of the immutable-baseline guard.
     let err = state
         .set_nexus_with_configured_lane_catalog(prospective, configured_catalog, None)
         .expect_err("assigning a different owner must not strand live SINGLE stake");
@@ -14614,9 +14714,18 @@ state_test! { sync set_nexus_rejects_live_single_lane_stake_owner_reassignment
         err,
         LaneLifecycleError::UnsafeRetirement { lane, reason }
             if lane == LaneId::SINGLE
-                && reason == LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON
+                && reason == LIVE_LANE_STAKING_CUSTODY_REASON
     ));
+    assert_eq!(state.nexus_snapshot().lane_catalog, nexus_before.lane_catalog);
+    assert_eq!(state.nexus_snapshot().dataspace_catalog, nexus_before.dataspace_catalog);
     let world = state.world.view();
+    assert_eq!(
+        world
+            .public_lane_validators()
+            .get(&(LaneId::SINGLE, validator.clone())),
+        Some(&validator_before),
+        "rejected physical owner reassignment must preserve the exact live row"
+    );
     assert!(
         world
             .public_lane_validators()

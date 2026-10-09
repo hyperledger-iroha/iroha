@@ -433,9 +433,11 @@ pub fn staged_signed_native_genesis_with_projection<T: Send>(
                     Some(config),
                     GenesisBlock(authenticated.0.clone()),
                     |staged| {
-                        let epoch =
-                            iroha_data_model::sumeragi_finality::genesis_epoch(&authenticated.0)
-                                .map_err(|error| eyre!(error))?;
+                        let epoch = iroha_data_model::sumeragi_finality::authenticated_genesis(
+                            &authenticated.0,
+                        )
+                        .map(|genesis| genesis.into_parts().0)
+                        .map_err(|error| eyre!(error))?;
                         let authority = StagedNativeGenesis {
                             genesis: authenticated.0.clone(),
                             epoch,
@@ -906,7 +908,8 @@ mod tests {
             Some(1_700_000_000_000),
         )
         .expect("no-config signing must authenticate default storage before executing genesis");
-        let epoch = iroha_data_model::sumeragi_finality::genesis_epoch(&signed.0)
+        let epoch = iroha_data_model::sumeragi_finality::authenticated_genesis(&signed.0)
+            .map(|genesis| genesis.into_parts().0)
             .expect("signed topology establishes the exact BLS generation zero");
         assert_eq!(epoch.authorization.authority_generation, 0);
         assert_eq!(

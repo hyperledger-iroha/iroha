@@ -3,7 +3,7 @@ use super::*;
 use iroha_data_model::{
     NetworkId,
     block::decode_framed_signed_block,
-    sumeragi_finality::{SumeragiFinalityProof, genesis_epoch},
+    sumeragi_finality::{SumeragiFinalityProof, authenticated_genesis},
 };
 
 const NAMES: [&str; 9] = [
@@ -80,7 +80,9 @@ impl LedgerSetup {
             sources.installed.verifier().scheme().network_id
         );
         assert_eq!(
-            genesis_epoch(&genesis).unwrap(),
+            authenticated_genesis(&genesis)
+                .map(|genesis| genesis.into_parts().0)
+                .unwrap(),
             *sources.genesis.initial_epoch()
         );
         assert_eq!(

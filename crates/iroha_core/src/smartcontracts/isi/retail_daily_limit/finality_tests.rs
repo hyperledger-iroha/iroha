@@ -50,7 +50,7 @@ use iroha_data_model::{
     sumeragi::{PROTOCOL_VERSION, SumeragiFootprint, SumeragiStatus},
     sumeragi_finality::{
         FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier, VerifiedSumeragiBlock,
-        genesis_epoch,
+        authenticated_genesis,
     },
     sumeragi_lanes::{SumeragiLaneRecord, SumeragiLaneRoute},
     transaction::{
@@ -767,7 +767,8 @@ fn activated_chain() -> ActivatedChain {
 
 /// The trust root a client selects independently: the signed genesis and its own committee.
 fn genesis_verifier(chain: &CertifiedTestChain) -> SumeragiFinalityVerifier {
-    let committee = genesis_epoch(chain.genesis())
+    let committee = authenticated_genesis(chain.genesis())
+        .map(|genesis| genesis.into_parts().0)
         .expect("signed genesis epoch")
         .committee
         .into_iter()

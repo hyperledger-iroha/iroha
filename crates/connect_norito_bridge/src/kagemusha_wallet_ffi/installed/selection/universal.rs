@@ -73,7 +73,9 @@ fn finality(
     {
         return Err(invalid());
     }
-    let epoch = genesis_epoch(&genesis).map_err(|_| invalid())?;
+    let epoch = authenticated_genesis(&genesis)
+        .map(|genesis| genesis.into_parts().0)
+        .map_err(|_| invalid())?;
     let roster = epoch
         .committee
         .iter()

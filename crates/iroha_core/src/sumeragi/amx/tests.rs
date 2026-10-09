@@ -13,7 +13,7 @@ use iroha_data_model::{
         AmxRecordProofV1, AmxRecordV1, AmxTransactionV1, AmxVoteV1, SumeragiAmxState,
     },
     sumeragi_finality::{
-        SUMERAGI_LANE_STATE_WITNESS_KEY, SumeragiLaneStateCommitment, genesis_epoch,
+        SUMERAGI_LANE_STATE_WITNESS_KEY, SumeragiLaneStateCommitment, authenticated_genesis,
         test_fixtures::NativeFinalityFixture,
     },
     sumeragi_lanes::SumeragiLaneState,
@@ -53,8 +53,12 @@ impl Dataspace {
         RegisterAmxDataspaceV1 {
             dataspace: self.id,
             instance: self.instance(),
-            anchor: norito::encode_canonical(&genesis_epoch(self.chain.genesis()).unwrap())
-                .unwrap(),
+            anchor: norito::encode_canonical(
+                &authenticated_genesis(self.chain.genesis())
+                    .map(|genesis| genesis.into_parts().0)
+                    .unwrap(),
+            )
+            .unwrap(),
         }
     }
 
@@ -234,7 +238,9 @@ fn sumeragi_amx_deadline_step_aborts_in_the_first_block_after_the_deadline() {
                 dataspace.id,
                 AmxForeignInstanceV1::new(
                     dataspace.instance(),
-                    genesis_epoch(dataspace.chain.genesis()).unwrap(),
+                    authenticated_genesis(dataspace.chain.genesis())
+                        .map(|genesis| genesis.into_parts().0)
+                        .unwrap(),
                 )
                 .unwrap(),
             )
@@ -401,7 +407,9 @@ fn amx_relay_decode_refusal_keeps_original_undecided_record_and_retries_proof() 
                 dataspace.id,
                 AmxForeignInstanceV1::new(
                     dataspace.instance(),
-                    genesis_epoch(dataspace.chain.genesis()).unwrap(),
+                    authenticated_genesis(dataspace.chain.genesis())
+                        .map(|genesis| genesis.into_parts().0)
+                        .unwrap(),
                 )
                 .unwrap(),
             )
@@ -525,7 +533,9 @@ fn amx_deadline_record_refusal_keeps_original_pending_state_and_typed_retry() {
                 dataspace.id,
                 AmxForeignInstanceV1::new(
                     dataspace.instance(),
-                    genesis_epoch(dataspace.chain.genesis()).unwrap(),
+                    authenticated_genesis(dataspace.chain.genesis())
+                        .map(|genesis| genesis.into_parts().0)
+                        .unwrap(),
                 )
                 .unwrap(),
             )

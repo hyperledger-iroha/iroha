@@ -3,8 +3,9 @@
 //! The portable proof's complete backing is prepaid before copying its authenticated fields.
 //! A final namespace refusal retains that complete graph; delivery still requires every
 //! original source guard. The actual certified reader retains completed terminal target/gap
-//! work across local refusal; partial genesis/certificate/schedule work and full native-prefix
-//! graph funding remain distinct custody boundaries.
+//! work across local refusal. Constructor genesis bytes/body survive initial refusal and
+//! prefix retries; partial genesis-result/authority, certificate/schedule work and full
+//! native-prefix graph funding remain distinct custody boundaries.
 //! TODO(S8): connect this owned acquisition to the durable validator-relay owner; detachment
 //! supplies no transaction-signing, fee, permission or restart-publication authority.
 
@@ -26,7 +27,9 @@ use crate::{
         NativeContextArchive, NativeContextArchiveError, NativeContextRead,
     },
     state::StateReadOnly,
-    sumeragi::certified_chain::{CertifiedBlock, CertifiedChain, ChainReadError},
+    sumeragi::certified_chain::{
+        AmxChainInitialization, CertifiedBlock, CertifiedChain, ChainReadError,
+    },
 };
 
 /// Exact source, canonical or physical cause; none becomes record absence.
@@ -141,6 +144,7 @@ struct OriginalAmxSource {
 #[must_use = "dropping this owner abandons the exact pending native AMX proof"]
 pub struct NativeAmxRecordProofReadV1<'v, V: StateReadOnly> {
     view: &'v V,
+    initialization: Option<AmxChainInitialization<'v, V>>,
     chain: Option<CertifiedChain<'v, V>>,
     source: Option<OriginalAmxSource>,
     #[cfg(test)]
@@ -221,6 +225,7 @@ impl<'v, V: StateReadOnly> NativeAmxRecordProofReadV1<'v, V> {
     ) -> Self {
         Self {
             view,
+            initialization: None,
             chain: None,
             source: Some(OriginalAmxSource {
                 network_id: *view.network_id(),
@@ -253,7 +258,18 @@ impl<'v, V: StateReadOnly> NativeAmxRecordProofReadV1<'v, V> {
             ))?;
         source.require_pending()?;
         if self.chain.is_none() {
-            self.chain = Some(CertifiedChain::new(self.view)?);
+            if self.initialization.is_none() {
+                self.initialization = Some(AmxChainInitialization::new(self.view)?);
+            }
+            self.chain = Some(
+                self.initialization
+                    .as_mut()
+                    .expect("original constructor acquisition")
+                    .complete()?,
+            );
+            // All charged source/body owners moved into the same chain. Retiring this
+            // empty stage neither refunds backing nor releases an original decoder.
+            self.initialization = None;
         }
         if source.certified.is_none() {
             source.certified = Some(

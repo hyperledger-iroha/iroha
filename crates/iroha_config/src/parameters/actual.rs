@@ -3646,6 +3646,70 @@ impl Nexus {
         );
         !(policy_is_default && catalog_is_default && dataspace_is_default)
     }
+    /// Validate the physical geometry of a single independently authenticated private root.
+    ///
+    /// This checks the actual/configured catalogs, derived storage geometry, routing and
+    /// autoscale state only. The caller must separately authenticate its signed root scope
+    /// and consensus mode; local configuration never supplies either authority.
+    ///
+    /// # Errors
+    /// Rejects any geometry other than the exact restricted, fully replicated lane zero of
+    /// `dataspace_id`, with no foreign physical catalog, route or elastic-lane state.
+    pub fn validate_private_root_geometry(
+        &self,
+        dataspace_id: DataSpaceId,
+    ) -> core::result::Result<(), &'static str> {
+        if self.lane_catalog != self.configured_lane_catalog
+            || self.dataspace_catalog != self.configured_dataspace_catalog
+            || !self.lane_config.matches_catalog(&self.lane_catalog)
+        {
+            return Err("private root requires unchanged configured execution geometry");
+        }
+        if !matches!(self.dataspace_catalog.entries(), [entry] if entry.id == dataspace_id) {
+            return Err(
+                "private root requires exactly its signed dataspace in the physical catalog",
+            );
+        }
+        let [lane] = self.lane_catalog.lanes() else {
+            return Err("private root requires exactly one physical lane zero");
+        };
+        if self.lane_catalog.lane_count().get() != 1
+            || lane.id != LaneId::SINGLE
+            || lane.dataspace_id != dataspace_id
+            || lane.visibility != LaneVisibility::Restricted
+            || lane.storage != LaneStorageProfile::FullReplica
+        {
+            return Err(
+                "private root requires its own restricted, fully replicated physical lane zero",
+            );
+        }
+        let routing = &self.routing_policy;
+        if routing.default_lane != LaneId::SINGLE
+            || routing.default_dataspace != dataspace_id
+            || routing.rules.iter().any(|rule| {
+                rule.lane != LaneId::SINGLE
+                    || rule.dataspace.is_some_and(|target| target != dataspace_id)
+            })
+        {
+            return Err(
+                "private root routing must remain inside its signed dataspace and lane zero",
+            );
+        }
+        if self.autoscale.enabled
+            || self.autoscale.last_transition_height != 0
+            || [
+                iroha_data_model::nexus::AUTOSCALE_META_MANAGED,
+                iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT,
+                iroha_data_model::nexus::AUTOSCALE_META_DRAIN_STATE,
+                iroha_data_model::nexus::AUTOSCALE_META_COMMITTEE,
+            ]
+            .iter()
+            .any(|key| lane.metadata.contains_key(*key))
+        {
+            return Err("private root cannot contain autoscale or elastic-lane state");
+        }
+        Ok(())
+    }
     /// Returns true when any lane/dataspace/routing overrides are present (even in single-lane mode).
     #[must_use]
     pub fn has_lane_overrides(&self) -> bool {
@@ -5086,6 +5150,25 @@ impl LaneConfig {
             entries.push(entry);
         }
         Self { entries, by_id }
+    }
+    /// Check the complete derived catalog and its exact lookup index without allocating.
+    ///
+    /// This preserves equality with [`Self::from_catalog`] while borrowing every
+    /// original field. It also rejects missing, extra, reordered or rebound index
+    /// entries, so callers do not reconstruct an unadmitted configuration graph.
+    #[must_use]
+    pub fn matches_catalog(&self, catalog: &LaneCatalog) -> bool {
+        let lanes = catalog.lanes();
+        self.entries.len() == lanes.len()
+            && self.by_id.len() == lanes.len()
+            && self
+                .entries
+                .iter()
+                .zip(lanes)
+                .enumerate()
+                .all(|(index, (entry, metadata))| {
+                    entry.matches_metadata(metadata) && self.by_id.get(&metadata.id) == Some(&index)
+                })
     }
     /// Iterate over all derived lane entries in catalog order.
     #[must_use]

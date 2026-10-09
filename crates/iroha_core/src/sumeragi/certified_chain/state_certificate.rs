@@ -189,43 +189,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         current: &CommittedBlock,
     ) -> Result<(VerifiedAuthority, iroha_sumeragi::types::HeightConfig), VerificationReadError>
     {
-        let height = current.height();
-        let malformed = |reason: String| ChainReadError::Committee { height, reason };
-        if !current.extends(parent) {
-            return Err(ChainReadError::Discontinuous { height }.into());
-        }
-        parent
-            .commitment
-            .schedule
-            .validate_successor(&current.commitment.schedule)
-            .map_err(|error| malformed(error.to_string()))?;
-        let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment.schedule.next else {
-            return Err(malformed("parent has no authorized successor".into()).into());
-        };
-        let mut validation = EpochValidationScope::new();
-        let config = scheduled
-            .height_config_with_validation(&mut validation)
-            .map_err(|error| malformed(error.to_string()))?;
-        // Resource admission precedes the boolean signature relation and keeps
-        // the original inherited cumulative allowance. No refusal is converted
-        // to an invalid certificate or hidden in a new per-frame scope.
-        let scratch = iroha_crypto::BlsNormalAggregateScratch::new(|bytes| {
-            #[cfg(all(test, sumeragi_core_mutation = "HC13"))]
-            {
-                let _ = bytes;
-                Ok(())
-            }
-            #[cfg(not(all(test, sumeragi_core_mutation = "HC13")))]
-            query_scratch_admission(bytes)
-        })
-        .map_err(VerificationReadError::Resource)?;
-        let authority = VerifiedAuthority::with_crypto(
-            scheduled.epoch.clone(),
-            height,
-            BlsCrypto::with_aggregate_scratch(scratch),
-            &mut validation,
-        )?;
-        Ok((authority, config))
+        executed_successor_authority(parent, current)
     }
 
     pub(super) fn verify_executed_successor(
@@ -233,19 +197,74 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         parent: &CommittedBlock,
         current: CommittedBlock,
     ) -> Result<CertifiedBlock, VerificationReadError> {
-        let (authority, config) = self.executed_successor_authority(parent, &current)?;
-        let certified = self
-            .verification_context()
-            .verify_certificate_with_scratch_admission(
-                current,
-                &authority,
-                Some(&config),
-                None,
-                &mut query_scratch_admission,
-            )?;
+        self.verification_context()
+            .verify_executed_successor(parent, current)
+    }
+}
+
+// Both State-view readers and the event-only source adapter use this same successor
+// relation. The context is private and comes from actual authenticated signed genesis;
+// no caller-supplied committee, result, or checkpoint can construct certificate authority.
+impl PrefixVerifierContext {
+    pub(super) fn verify_executed_successor(
+        &self,
+        parent: &CommittedBlock,
+        current: CommittedBlock,
+    ) -> Result<CertifiedBlock, VerificationReadError> {
+        let (authority, config) = executed_successor_authority(parent, &current)?;
+        let certified = self.verify_certificate_with_scratch_admission(
+            current,
+            &authority,
+            Some(&config),
+            None,
+            &mut query_scratch_admission,
+        )?;
         verify_boundary_source(&certified.committed, parent, &authority)?;
         Ok(certified)
     }
+}
+
+fn executed_successor_authority(
+    parent: &CommittedBlock,
+    current: &CommittedBlock,
+) -> Result<(VerifiedAuthority, iroha_sumeragi::types::HeightConfig), VerificationReadError> {
+    let height = current.height();
+    let malformed = |reason: String| ChainReadError::Committee { height, reason };
+    if !current.extends(parent) {
+        return Err(ChainReadError::Discontinuous { height }.into());
+    }
+    parent
+        .commitment
+        .schedule
+        .validate_successor(&current.commitment.schedule)
+        .map_err(|error| malformed(error.to_string()))?;
+    let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment.schedule.next else {
+        return Err(malformed("parent has no authorized successor".into()).into());
+    };
+    let mut validation = EpochValidationScope::new();
+    let config = scheduled
+        .height_config_with_validation(&mut validation)
+        .map_err(|error| malformed(error.to_string()))?;
+    // Resource admission precedes the boolean signature relation and keeps
+    // the original inherited cumulative allowance. No refusal is converted
+    // to an invalid certificate or hidden in a new per-frame scope.
+    let scratch = iroha_crypto::BlsNormalAggregateScratch::new(|bytes| {
+        #[cfg(all(test, sumeragi_core_mutation = "HC13"))]
+        {
+            let _ = bytes;
+            Ok(())
+        }
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC13")))]
+        query_scratch_admission(bytes)
+    })
+    .map_err(VerificationReadError::Resource)?;
+    let authority = VerifiedAuthority::with_crypto(
+        scheduled.epoch.clone(),
+        height,
+        BlsCrypto::with_aggregate_scratch(scratch),
+        &mut validation,
+    )?;
+    Ok((authority, config))
 }
 
 /// Charge the inherited request allowance before allocating verification scratch.
@@ -267,7 +286,7 @@ pub(super) fn query_scratch_admission(
 
 // Resource locality was established by the verifier's original scratch admission or
 // codec producer. Do not rediscover it from the projected QueryExecutionFail.
-fn verification_attempt_failure(
+pub(super) fn verification_attempt_failure(
     error: VerificationReadError,
 ) -> ExecutionAttemptError<QueryExecutionFail> {
     match error {

@@ -116,7 +116,9 @@ fn genuine_selection_scope_shares_only_epoch_work_then_drops_and_keeps_active_re
     let peers = fixture.peers();
     assert_eq!(fixture.carriers.len(), 6);
     let context =
-        iroha_data_model::sumeragi_finality::genesis_epoch(fixture.native.chain.genesis()).unwrap();
+        iroha_data_model::sumeragi_finality::authenticated_genesis(fixture.native.chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
     let cold = DecodeBudgetContext::new(limits(64 * 1024 * 1024));
     let mut validation = iroha_data_model::sumeragi_finality::EpochValidationScope::new();
     cold.with(|| validation.core_epoch(&context)).unwrap();

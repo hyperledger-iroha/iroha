@@ -385,8 +385,12 @@ use crate::execution_attempt::ExecutionAttemptError;
 pub use block_proofs::{BlockProofLimits, BlockProofResource};
 use block_proofs::{block_proofs_for_entry_from_kura, executed_block_wire_from_kura};
 use canonical_history::committed_block_from_kura;
+mod finality_proof_interval;
+pub use finality_proof_interval::FinalityProofIntervalReadError;
+
 pub use canonical_history::{
     CanonicalHistoryCursor, CanonicalHistoryReadBudget, CanonicalHistorySource,
+    FinalizedEventReadError,
 };
 #[cfg(test)]
 pub(crate) use committed_transaction_context::seed_committed_transaction_context;
@@ -897,7 +901,9 @@ mod threshold_key_lifecycle_certificate_tests {
             10,
             false,
         );
-        let epoch = crate::sumeragi::epoch::genesis_epoch(&signed).unwrap();
+        let epoch = crate::sumeragi::epoch::authenticated_genesis(&signed)
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
         let roster = epoch
             .committee
             .iter()
@@ -16325,12 +16331,14 @@ mod stake_snapshot_tests {
             let nexus = state.nexus.get_mut();
             nexus.staking.min_validator_stake = 100_u64.into();
         }
+        let restricted_dataspace = DataSpaceId::new(1);
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![
                 LaneConfig::default(),
                 LaneConfig {
                     id: LaneId::new(1),
+                    dataspace_id: restricted_dataspace,
                     alias: "restricted".to_string(),
                     visibility: LaneVisibility::Restricted,
                     ..LaneConfig::default()
@@ -16340,6 +16348,15 @@ mod stake_snapshot_tests {
         .expect("lane catalog");
         {
             let nexus = state.nexus.get_mut();
+            nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: restricted_dataspace,
+                    alias: "restricted".to_owned(),
+                    ..DataSpaceMetadata::default()
+                },
+            ])
+            .expect("dataspace catalog");
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
@@ -16617,12 +16634,14 @@ mod stake_snapshot_tests {
             let nexus = state.nexus.get_mut();
             nexus.staking.min_validator_stake = 1_u64.into();
         }
+        let restricted_dataspace = DataSpaceId::new(1);
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![
                 LaneConfig::default(),
                 LaneConfig {
                     id: LaneId::new(1),
+                    dataspace_id: restricted_dataspace,
                     alias: "restricted".to_string(),
                     visibility: LaneVisibility::Restricted,
                     ..LaneConfig::default()
@@ -16632,6 +16651,15 @@ mod stake_snapshot_tests {
         .expect("lane catalog");
         {
             let nexus = state.nexus.get_mut();
+            nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: restricted_dataspace,
+                    alias: "restricted".to_owned(),
+                    ..DataSpaceMetadata::default()
+                },
+            ])
+            .expect("dataspace catalog");
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
             nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
@@ -30304,6 +30332,139 @@ impl State {
         )
     }
 
+    /// Read one block-event execution under its original finite State source owner.
+    ///
+    /// This off-chain event projection does not authorize State mutation or deterministic
+    /// instruction metering. It preserves the caller's work/byte limits and original
+    /// execution pool; genesis results still require their actual H2 successor. Both
+    /// captures are one-shot: an active/changed publication returns its original release
+    /// observation rather than waiting inside the single event consumer.
+    /// # Errors
+    /// Preserves original State capture refusal, local execution refusal and canonical rejection.
+    pub fn read_finalized_event_carrier(
+        &self,
+        height: NonZeroUsize,
+        max_work: u64,
+        max_bytes: u64,
+    ) -> Result<crate::smartcontracts::isi::tx::FinalizedExecutionCarrier, FinalizedEventReadError>
+    {
+        #[cfg(all(test, sumeragi_core_mutation = "HC201"))]
+        return self
+            .read_finalized_execution_carrier(height, max_work, max_bytes)
+            .map_err(Into::into);
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC201")))]
+        self.read_finalized_event_carrier_after_read(height, max_work, max_bytes, || {})
+    }
+
+    // This probe is used only by deterministic tests at the real post-I/O boundary.
+    // The production caller supplies no callback, owner, source or visibility hint.
+    fn read_finalized_event_carrier_after_read(
+        &self,
+        height: NonZeroUsize,
+        max_work: u64,
+        max_bytes: u64,
+        after_read: impl FnOnce(),
+    ) -> Result<crate::smartcontracts::isi::tx::FinalizedExecutionCarrier, FinalizedEventReadError>
+    {
+        use iroha_data_model::query::error::QueryExecutionFail;
+        if max_work == 0 || max_bytes == 0 {
+            return Err(QueryExecutionFail::GasBudgetExceeded.into());
+        }
+        let budget = self.ivm_execution_budget();
+        // Every physical hash guard ends before original-pool refund callbacks run.
+        budget.with_deferred_refund_notifications(|_| {
+            let mut releases = self.block_hashes.reader_release_batch();
+            let (hashes, tip) = self.try_event_source(&mut releases, || {})?;
+            let expected = hashes.get(height.get() - 1).copied().ok_or_else(|| {
+                QueryExecutionFail::Conversion("canonical carrier height is unavailable".into())
+            })?;
+            let carrier = if height.get() <= 2 {
+                // Same G1/H2 verifier and same pool; use the captured original journal
+                // instead of entering a second blocking State reader on this event path.
+                crate::smartcontracts::isi::tx::read_finalized_execution_carrier(
+                    &self.kura,
+                    self.chain_id_ref(),
+                    *self.network_id_ref(),
+                    &hashes,
+                    height,
+                    expected,
+                    max_work,
+                    max_bytes,
+                    &budget,
+                )?
+            } else {
+                let source = CanonicalHistorySource::new(&self.kura, &hashes, tip, budget.clone());
+                crate::smartcontracts::isi::tx::read_finalized_event_carrier(
+                    source,
+                    &self.kura,
+                    self.chain_id_ref(),
+                    *self.network_id_ref(),
+                    height,
+                    expected,
+                    max_work,
+                    max_bytes,
+                )?
+            };
+            // A new stable tip may append while I/O runs. Keep the target's current
+            // membership check, but never spin or hide an active/changed writer here.
+            after_read();
+            let mut current_releases = self.block_hashes.reader_release_batch();
+            let (current_hashes, _) = self.try_event_source(&mut current_releases, || {})?;
+            if current_hashes.get(height.get() - 1).copied() != Some(expected) {
+                return Err(QueryExecutionFail::Conversion(
+                    "canonical carrier changed during finalized event read".into(),
+                )
+                .into());
+            }
+            Ok(carrier)
+        })
+    }
+
+    // Existing physical reader acquisition owns both release notices. The test probe
+    // runs at the real capture boundary; ordinary callers install no callback or source.
+    fn try_event_source<'state>(
+        &'state self,
+        releases: &mut Option<iroha_allocation::release::DeferredReleaseBatch>,
+        after_capture: impl FnOnce(),
+    ) -> Result<(BlockHashesView<'state>, Option<NativeExecutionTip>), StateViewError> {
+        #[cfg(all(test, sumeragi_core_mutation = "HC202"))]
+        {
+            let mut after_capture = Some(after_capture);
+            loop {
+                let generation = self.state_view_generation();
+                if generation % 2 != 0 {
+                    std::thread::yield_now();
+                    continue;
+                }
+                let hashes = self.block_hashes.try_view_retaining(releases)?;
+                let tip = *self.native_execution_tip.view().get();
+                if let Some(probe) = after_capture.take() {
+                    probe();
+                }
+                if is_stable_state_view_generation(generation, self.state_view_generation()) {
+                    return Ok((hashes, tip));
+                }
+                drop(hashes);
+                std::thread::yield_now();
+            }
+        }
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC202")))]
+        {
+            let release = self.state_write_lock.observe_release();
+            let generation = self.state_view_generation();
+            if generation % 2 != 0 {
+                return Err(StateViewError::Busy(release));
+            }
+            let hashes = self.block_hashes.try_view_retaining(releases)?;
+            let tip = *self.native_execution_tip.view().get();
+            after_capture();
+            if !is_stable_state_view_generation(generation, self.state_view_generation()) {
+                return Err(StateViewError::Busy(release));
+            }
+            Ok((hashes, tip))
+        }
+    }
+
     /// Read the complete signed-genesis prefix under an off-chain caller's original owner.
     ///
     /// Unlike a checkpoint walk, a G1 execution requires its actual H2 successor. The
@@ -43938,6 +44099,8 @@ mod npos_effect_application_tests {
     }
 }
 #[cfg(test)]
+mod event_carrier_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 #[path = "state/world_initial_supply_tests.rs"]
@@ -43994,5 +44157,5 @@ mod nexus_fee_receipt;
 
 #[path = "state/direct_homes.rs"]
 mod direct_homes;
-use direct_homes::{ensure_dataspace_classes_preserved, ensure_homed_dataspaces_keep_lanes};
 pub(crate) use direct_homes::{direct_home_dataspace, validate_direct_home_transition};
+use direct_homes::{ensure_dataspace_classes_preserved, ensure_homed_dataspaces_keep_lanes};

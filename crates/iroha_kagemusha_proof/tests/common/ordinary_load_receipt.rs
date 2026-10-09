@@ -4,7 +4,7 @@
 
 use iroha_data_model::sumeragi_finality::{
     FinalityValidator, SumeragiCommitCertificateV1, SumeragiCommitVerifierV1,
-    SumeragiFinalityVerifier, genesis_epoch,
+    SumeragiFinalityVerifier, authenticated_genesis,
 };
 use std::fs;
 
@@ -34,7 +34,9 @@ pub(crate) fn verified_receipt(capture: &str) -> [u8; 282] {
     let genesis =
         iroha_data_model::block::decode_framed_signed_block(&raw("signed_genesis_wire_hex"))
             .unwrap();
-    let epoch = genesis_epoch(&genesis).unwrap();
+    let epoch = authenticated_genesis(&genesis)
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
     let roster = epoch
         .committee
         .iter()

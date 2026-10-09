@@ -269,11 +269,7 @@ pub fn verify_registration_source_v1(
         .validate()
         .map_err(|_| RegistrationErrorV1::Invalid("selected scheme"))?;
     let network = genesis.initial_epoch().network_id;
-    if genesis
-        .root_scope()
-        .map_err(|_| RegistrationErrorV1::Invalid("genesis scope"))?
-        != SumeragiRootScope::Global
-        || scheme.network_id != *network.as_bytes()
+    if genesis.root_scope() != SumeragiRootScope::Global || scheme.network_id != *network.as_bytes()
     {
         return Err(RegistrationErrorV1::Invalid("selected global network"));
     }

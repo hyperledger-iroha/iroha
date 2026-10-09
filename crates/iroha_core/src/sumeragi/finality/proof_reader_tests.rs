@@ -663,3 +663,90 @@ fn check_during_target_change(chain: &CertifiedTestChain) {
     drop(original_publications);
     assert_eq!(chain.height(), 3);
 }
+
+#[test]
+fn finite_finality_interval_under_original_codec_checks_each_real_quorum_once() {
+    with_chain_at(10, check_finite_finality_interval);
+}
+
+#[inline(never)]
+fn check_finite_finality_interval(chain: &CertifiedTestChain) {
+    let view = chain.state().view();
+    let from = 5;
+    let to = chain.height();
+    let budget = view.execution_budget();
+    let reserved = budget.reserved_bytes();
+    // Derive the finite allowance from this exact public producer and genuine
+    // signed boundary fixture, including its durable-body/metadata prelude.
+    let measured = DecodeBudgetContext::new(caller_limits(usize::MAX));
+    let expected = measured.with(|| collect_original_interval(&view, from, to));
+    let debit = measured.consumed_allocated_bytes();
+    assert!(debit > 0);
+    let finite = DecodeBudgetContext::new(caller_limits(usize::try_from(debit).unwrap()));
+    chain.kura().reset_canonical_query_reads_for_test();
+    let (actual, relations) = relation_counts::measure(|| {
+        finite.with(|| {
+            let owner =
+                crate::state::CanonicalHistoryReadBudget::new(budget.clone(), finite.clone());
+            let bytes = expected
+                .iter()
+                .map(|proof| norito::canonical_frame_len(proof).unwrap())
+                .sum();
+            let limits = NativeFinalityProofIntervalLimits::new(
+                std::num::NonZeroU64::new(from).unwrap(),
+                std::num::NonZeroU64::new(to).unwrap(),
+                std::num::NonZeroUsize::new(
+                    iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES,
+                )
+                .unwrap(),
+                std::num::NonZeroUsize::new(bytes).unwrap(),
+                std::time::Instant::now() + std::time::Duration::from_secs(900),
+            )
+            .unwrap();
+            let retained = chain
+                .state()
+                .read_finality_proof_interval(
+                    &owner,
+                    &limits,
+                    &std::sync::atomic::AtomicBool::new(false),
+                )
+                .unwrap();
+            assert!(
+                budget.reserved_bytes() > reserved,
+                "original response allocations remain charged while borrowed"
+            );
+            // Test oracle copies only; production exposes immutable charged loans.
+            let actual: Vec<_> = (0..retained.len())
+                .map(|index| retained.proof(index).unwrap().clone())
+                .collect();
+            drop(retained);
+            actual
+        })
+    });
+    let (physical_reads, _) = chain.kura().canonical_query_reads_for_test();
+    assert_eq!(
+        actual, expected,
+        "full portable proof bytes and committee stay identical"
+    );
+    assert_eq!(budget.reserved_bytes(), reserved);
+    assert_eq!(
+        relations.qcs,
+        (2..=to).collect::<Vec<_>>(),
+        "one finite original-owner interval must verify each real native quorum once; physical_reads={physical_reads}"
+    );
+    // Constructor + one genesis-prefix body, one target/gap walk, one final
+    // complete raw-source join. No fitted elapsed-time or larger codec limit.
+    assert_eq!(physical_reads, usize::try_from(to * 2 + 1).unwrap());
+    assert!(finite.consumed_allocated_bytes() <= debit);
+    assert_eq!(view.height(), usize::try_from(to).unwrap());
+}
+
+fn collect_original_interval(
+    view: &impl StateReadOnly,
+    from: u64,
+    to: u64,
+) -> Vec<SumeragiFinalityProof> {
+    (from..=to)
+        .map(|height| build_proof(view, height).unwrap())
+        .collect()
+}

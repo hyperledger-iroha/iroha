@@ -15,7 +15,7 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
     sumeragi_amx::{AmxRecordKind, AmxTransactionV1, AmxTransferLegV1, AmxVoteV1},
-    sumeragi_finality::genesis_epoch,
+    sumeragi_finality::authenticated_genesis,
 };
 use iroha_model_base::{chain::ChainId, domain::DomainId};
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -222,8 +222,12 @@ impl Roots {
                 RegisterAmxDataspaceV1 {
                     dataspace: id,
                     instance: chain.instance().0,
-                    anchor: norito::encode_canonical(&genesis_epoch(chain.genesis()).unwrap())
-                        .unwrap(),
+                    anchor: norito::encode_canonical(
+                        &authenticated_genesis(chain.genesis())
+                            .map(|genesis| genesis.into_parts().0)
+                            .unwrap(),
+                    )
+                    .unwrap(),
                 }
                 .into()
             })
@@ -867,7 +871,9 @@ fn native_amx_global_source_requires_signed_parent_real_h2_and_exact_instance() 
     assert_eq!(authenticated.instance, global.instance().0);
     assert_eq!(
         authenticated.current,
-        genesis_epoch(global.genesis()).unwrap()
+        authenticated_genesis(global.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap()
     );
     let before = budget.reserved_bytes();
     let original_limit = budget.limit_bytes();

@@ -53,9 +53,8 @@ pub(crate) fn validate_direct_home_transition(
     incarnation_before: Option<&AxtAssetIncarnationV1>,
     incarnation_after: Option<&AxtAssetIncarnationV1>,
 ) -> Result<(), ParseError> {
-    let inserted_for_existing = |row: &AssetDefinitionDirectHomeV1| {
-        incarnation_before == Some(&row.incarnation)
-    };
+    let inserted_for_existing =
+        |row: &AssetDefinitionDirectHomeV1| incarnation_before == Some(&row.incarnation);
     let removed_while_live =
         |row: &AssetDefinitionDirectHomeV1| incarnation_after == Some(&row.incarnation);
     match (before, after) {
@@ -211,7 +210,9 @@ impl StateBlock<'_> {
         for id in &keys {
             let incarnation_after = self.world.axt_asset_incarnations.get(id);
             validate_direct_home_transition(
-                self.world.asset_definition_direct_homes.get_before_block(id),
+                self.world
+                    .asset_definition_direct_homes
+                    .get_before_block(id),
                 self.world.asset_definition_direct_homes.get(id),
                 self.world.axt_asset_incarnations.get_before_block(id),
                 incarnation_after,

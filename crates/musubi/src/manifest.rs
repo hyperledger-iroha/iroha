@@ -634,7 +634,11 @@ fn parse_lints(table: &toml::Table) -> Result<kotodama_lang::session::LintConfig
                 )
             })?;
         config.set_level(key, level).map_err(|unknown| {
-            ManifestError::new(ManifestErrorKind::UnknownField, &location, unknown.to_string())
+            ManifestError::new(
+                ManifestErrorKind::UnknownField,
+                &location,
+                unknown.to_string(),
+            )
         })?;
     }
     Ok(config)
@@ -1899,8 +1903,7 @@ fixtures = { path = "tests/fixtures" }
     #[test]
     fn lints_table_selects_levels_and_rejects_unknown_lints() {
         use kotodama_lang::lint::LintLevel;
-        let with_lints =
-            |lints: &str| format!("{PACKAGE}\n[lints]\n{lints}\n");
+        let with_lints = |lints: &str| format!("{PACKAGE}\n[lints]\n{lints}\n");
         let manifest = parse_manifest(&with_lints(
             "unused-local = \"deny\"\ndead-store = \"allow\"\ndeny-warnings = true",
         ))

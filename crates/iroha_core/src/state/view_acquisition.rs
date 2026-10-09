@@ -110,10 +110,13 @@ impl State {
             .try_view_once()
             .expect("original refund callback can acquire all actual State reader owners");
     }
+}
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+impl State {
     /// Hold the actual State publisher and visibility interval for nonblocking reader tests.
     /// The callback receives the existing physical writer's original release observation.
-    pub(crate) fn with_held_view_publication_for_reader_test<R>(
+    pub fn with_held_view_publication_for_reader_test<R>(
         &self,
         f: impl FnOnce(ReleaseWait) -> R,
     ) -> R {
@@ -123,10 +126,7 @@ impl State {
         let _publication = notice.begin();
         f(self.state_write_lock.observe_release())
     }
-}
 
-#[cfg(any(test, feature = "iroha-core-tests"))]
-impl State {
     /// Hold the original cached-header writer for a native nonblocking-reader fixture.
     ///
     /// The callback receives this writer's actual release observation. The guard changes

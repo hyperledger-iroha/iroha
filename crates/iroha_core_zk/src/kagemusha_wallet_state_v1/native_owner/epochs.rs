@@ -71,7 +71,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             || genesis.initial_epoch().network_id.as_bytes() != &scheme.network_id
             || !matches!(
                 genesis.root_scope(),
-                Ok(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+                iroha_data_model::block::consensus::SumeragiRootScope::Global
             )
         {
             return Err(Error::Proof("native epoch root scope"));

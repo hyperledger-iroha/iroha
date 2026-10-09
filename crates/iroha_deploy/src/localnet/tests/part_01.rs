@@ -263,7 +263,8 @@ fn localnet_signed_topology_establishes_exact_bls_generation_zero() {
     let raw = append_peer_pop(raw, &peers).unwrap();
     raw.validate_genesis_topology().unwrap();
     let signed = raw.build_and_sign(&key_pair).unwrap();
-    let epoch = iroha_data_model::sumeragi_finality::genesis_epoch(&signed.0)
+    let epoch = iroha_data_model::sumeragi_finality::authenticated_genesis(&signed.0)
+        .map(|genesis| genesis.into_parts().0)
         .expect("signed BLS registrations are the sole genesis validator authority");
     let mut expected = peers
         .iter()

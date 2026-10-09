@@ -1578,7 +1578,10 @@ mod tests {
         let merged = manifest.merged_with(&flags);
         assert_eq!(merged.level("unused-state"), LintLevel::Deny);
         assert_eq!(merged.level("dead-store"), LintLevel::Allow);
-        assert_eq!(LintConfig::new().merged_with(&LintConfig::new()), LintConfig::new());
+        assert_eq!(
+            LintConfig::new().merged_with(&LintConfig::new()),
+            LintConfig::new()
+        );
     }
 
     fn source_fixture(source: &'static str) -> &'static str {

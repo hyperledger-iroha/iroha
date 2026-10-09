@@ -628,9 +628,12 @@ fn qualification_closes_original_sources_on_physical_and_ordinary_errors() {
     );
     fs::remove_dir(&archive.records).unwrap();
     fs::rename(&moved, &archive.records).unwrap();
-    archive
+    let qualification = archive
         .qualify_against_certified_tip(&view, state.kura(), 0)
         .unwrap();
+    assert_eq!(qualification.archive_tip(), &key);
+    assert_eq!(qualification.kura_tip_height(), key.height);
+    assert_eq!(qualification.lag_blocks(), 0);
 
     // Advance the genuine Kura source after selection; its exit also closes an error.
     let result =
@@ -706,7 +709,14 @@ fn qualification_inventory_is_bounded_and_tracks_every_original_network_source()
             }
         )
     ));
-    archive
+    let qualification = archive
         .qualify_against_certified_tip(&second.state().view(), second.kura(), 0)
         .unwrap();
+    assert_eq!(
+        qualification.archive_tip(),
+        qualification.activation_floor()
+    );
+    assert_eq!(qualification.archive_tip().height, second.height());
+    assert_eq!(qualification.kura_tip_height(), second.height());
+    assert_eq!(qualification.lag_blocks(), 0);
 }

@@ -7300,14 +7300,14 @@ fn asset_balance_definition_route_target_with_world<W: WorldReadOnly>(
         .transpose()?
         .flatten();
     let resolved = definition.map(|definition| {
-            let balance_scope_policy = definition.balance_scope_policy();
-            (
-                definition.id,
-                balance_scope_policy,
-                definition.owning_domain,
-                definition.alias,
-            )
-        });
+        let balance_scope_policy = definition.balance_scope_policy();
+        (
+            definition.id,
+            balance_scope_policy,
+            definition.owning_domain,
+            definition.alias,
+        )
+    });
     let effective_id = resolved
         .as_ref()
         .map(|(resolved_id, _, _, _)| resolved_id)

@@ -102,14 +102,19 @@ impl norito::json::JsonDeserialize for AssetDefinitionId {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
-        Self::parse_address_literal(&value)
-            .map_err(|err| asset_definition_id_json_error(err.reason()))
+        Self::parse_json_address_text(&value)
     }
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         let candidate = value.as_str().ok_or_else(|| {
             asset_definition_id_json_error("Asset Definition ID must be a JSON string")
         })?;
-        Self::parse_address_literal(candidate)
+        Self::parse_json_address_text(candidate)
+    }
+}
+impl AssetDefinitionId {
+    /// Apply the existing canonical JSON string relation to original decoded text.
+    pub(crate) fn parse_json_address_text(value: &str) -> Result<Self, norito::json::Error> {
+        Self::parse_address_literal(value)
             .map_err(|err| asset_definition_id_json_error(err.reason()))
     }
 }

@@ -1131,11 +1131,13 @@ impl PreparedLocalnet {
     }
 }
 
-// Callers authenticate original genesis with genesis_epoch first. Reusing the already decoded
-// block keeps private-root validation within its existing read; no positive result is cached.
+// Each private caller passes the scalar from its same-block canonical authentication.
+// Profile validation keeps its original order without reconstructing completed metadata;
+// the original signed block remains mandatory and no positive result is cached.
 pub(super) fn validate_signed_profile(
     prepared: &PreparedLocalnet,
     block: &iroha_data_model::block::SignedBlock,
+    metadata: &iroha_data_model::parameter::system::ConsensusHandshakeMetadata,
 ) -> crate::managed::Result<std::collections::BTreeMap<AccountId, Json>> {
     let invalid = || Error::Invalid("retained signed localnet service profile differs".into());
     block
@@ -1146,8 +1148,12 @@ pub(super) fn validate_signed_profile(
     {
         return Err(invalid());
     }
-    let metadata = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(block)
-        .map_err(|_| invalid())?;
+    #[cfg(all(test, sumeragi_deploy_mutation = "DEP7"))]
+    let metadata = {
+        let _ = metadata;
+        iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(block)
+            .map_err(|_| invalid())?
+    };
     if metadata.sumeragi_context.root_scope.dataspace_id().as_u64() != prepared.context.dataspace_id
         || (metadata.sumeragi_context.root_scope == SumeragiRootScope::Global
             && prepared.context.dataspace_alias != "universal")
@@ -1162,7 +1168,7 @@ pub(super) fn validate_signed_profile(
     .map_err(|_| invalid())?;
     let _address_profile = ChainDiscriminantGuard::enter(discriminant);
     let manager = AccountId::parse_encoded(&prepared.context.account_id).map_err(|_| invalid())?;
-    let expected_profile = Json::new(prepared.service_profile);
+    let expected_profile = Json::try_new(prepared.service_profile).map_err(|_| invalid())?;
     let mut found_profile = false;
     let mut registered_roles = std::collections::BTreeMap::new();
     let role_key: iroha_model_base::name::Name = ROLE_METADATA
@@ -1518,8 +1524,10 @@ pub(crate) fn capture_retained(
         let bytes = generation.read("genesis.signed.nrt", SIGNED_GENESIS_MAX_BYTES_V1)?;
         let block =
             iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|_| invalid())?;
-        iroha_data_model::sumeragi_finality::genesis_epoch(&block).map_err(|_| invalid())?;
-        validate_signed_profile(prepared, &block)?;
+        let metadata = iroha_data_model::sumeragi_finality::authenticated_genesis(&block)
+            .map_err(|_| invalid())?
+            .metadata();
+        validate_signed_profile(prepared, &block, &metadata)?;
         generation.revalidate()?;
         return Ok(None);
     }
@@ -1532,9 +1540,11 @@ pub(crate) fn capture_retained(
             .read("genesis.signed.nrt", SIGNED_GENESIS_MAX_BYTES_V1)?,
     )
     .map_err(|_| invalid())?;
-    let epoch =
-        iroha_data_model::sumeragi_finality::genesis_epoch(&block).map_err(|_| invalid())?;
-    let registered_roles = validate_signed_profile(prepared, &block)?;
+    let authenticated = iroha_data_model::sumeragi_finality::authenticated_genesis(&block)
+        .map_err(|_| invalid())?;
+    let metadata = authenticated.metadata();
+    let epoch = authenticated.into_parts().0;
+    let registered_roles = validate_signed_profile(prepared, &block, &metadata)?;
     if prepared.context.dataspace_id != 0
         || prepared.context.dataspace_alias != "universal"
         || registered_roles.len() != NETWORK_ROLES.len() + PROVIDER_COUNT * ROLES.len() + 2
@@ -1687,8 +1697,6 @@ pub(crate) fn capture_retained(
         .map_err(|_| invalid())?;
     }
     publication_material::validate_retained(&manifest, &network).map_err(|_| invalid())?;
-    let metadata = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&block)
-        .map_err(|_| invalid())?;
     if metadata.sumeragi_context.root_scope != SumeragiRootScope::Global
         || NetworkId::from_genesis_hash(block.hash()) != manifest.network_id
     {

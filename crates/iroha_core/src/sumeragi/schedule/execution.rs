@@ -247,11 +247,13 @@ impl StateBlock<'_> {
                 )
                 .into());
             }
-            let epoch = crate::sumeragi::epoch::genesis_epoch(source).map_err(|error| {
-                crate::execution_attempt::genesis_read_attempt_error(error, |error| {
-                    ScheduleError::Epoch(error.to_string())
-                })
-            })?;
+            let epoch = crate::sumeragi::epoch::authenticated_genesis(source)
+                .map(|genesis| genesis.into_parts().0)
+                .map_err(|error| {
+                    crate::execution_attempt::genesis_read_attempt_error(error, |error| {
+                        ScheduleError::Epoch(error.to_string())
+                    })
+                })?;
             let pulse = epoch_beacon::capture(
                 root_scope,
                 &self.world,

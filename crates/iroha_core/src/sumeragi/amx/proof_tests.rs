@@ -8,7 +8,7 @@ use iroha_data_model::{
         AllocatedAmxRecordProofV1, AmxForeignInstanceV1, AmxLegV1, AmxRecordKind, AmxRecordV1,
         AmxTransactionV1,
     },
-    sumeragi_finality::{genesis_epoch, test_fixtures::NativeFinalityFixture},
+    sumeragi_finality::{authenticated_genesis, test_fixtures::NativeFinalityFixture},
 };
 use iroha_model_base::topology::DataSpaceId;
 
@@ -27,7 +27,12 @@ fn config() -> TestChainConfig {
             RegisterAmxDataspaceV1 {
                 dataspace: DataSpaceId::new(id),
                 instance: chain.verifier().instance().0,
-                anchor: norito::encode_canonical(&genesis_epoch(chain.genesis()).unwrap()).unwrap(),
+                anchor: norito::encode_canonical(
+                    &authenticated_genesis(chain.genesis())
+                        .map(|genesis| genesis.into_parts().0)
+                        .unwrap(),
+                )
+                .unwrap(),
             }
             .into()
         })
@@ -114,9 +119,13 @@ fn path(chain: &CertifiedTestChain) -> PathBuf {
 #[test]
 fn persisted_amx_records_survive_deadline_pruning_and_certified_replay() {
     let (mut chain, tx) = chain();
-    let tracker =
-        AmxForeignInstanceV1::new(chain.instance().0, genesis_epoch(chain.genesis()).unwrap())
-            .unwrap();
+    let tracker = AmxForeignInstanceV1::new(
+        chain.instance().0,
+        authenticated_genesis(chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
+    )
+    .unwrap();
     let begin = read_proof(&chain, 2, AmxRecordKind::Begin, tx)
         .unwrap()
         .unwrap();
@@ -329,9 +338,13 @@ fn persisted_amx_original_read_retains_acquired_inode_and_exact_pool_through_dec
     );
     let proof = read.complete().unwrap().unwrap();
     assert!(proof.belongs_to(&budget));
-    let tracker =
-        AmxForeignInstanceV1::new(chain.instance().0, genesis_epoch(chain.genesis()).unwrap())
-            .unwrap();
+    let tracker = AmxForeignInstanceV1::new(
+        chain.instance().0,
+        authenticated_genesis(chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(tracker.verify_record(proof.canonical()).unwrap().height, 2);
     assert!(matches!(&proof.canonical().record, AmxRecordV1::Begin(begin) if begin.tx == tx));
     assert!(
@@ -513,9 +526,13 @@ fn persisted_amx_completed_proof_retains_exact_graph_through_final_namespace_ref
     );
     assert!(proof.belongs_to(&budget));
     assert_eq!(amx_proof_backing_identity(&proof), original);
-    let tracker =
-        AmxForeignInstanceV1::new(chain.instance().0, genesis_epoch(chain.genesis()).unwrap())
-            .unwrap();
+    let tracker = AmxForeignInstanceV1::new(
+        chain.instance().0,
+        authenticated_genesis(chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(tracker.verify_record(proof.canonical()).unwrap().height, 2);
     assert!(matches!(&proof.canonical().record, AmxRecordV1::Begin(begin) if begin.tx == tx));
     assert!(
@@ -661,9 +678,13 @@ fn persisted_amx_detached_source_keeps_original_frame_pool_and_retry_after_view_
     assert!(proof.belongs_to(&budget));
     let foreign = iroha_allocation::AllocationBudget::new(budget.limit_bytes());
     assert!(!proof.belongs_to(&foreign));
-    let tracker =
-        AmxForeignInstanceV1::new(chain.instance().0, genesis_epoch(chain.genesis()).unwrap())
-            .unwrap();
+    let tracker = AmxForeignInstanceV1::new(
+        chain.instance().0,
+        authenticated_genesis(chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(tracker.verify_record(proof.canonical()).unwrap().height, 2);
     assert!(matches!(&proof.canonical().record, AmxRecordV1::Begin(begin) if begin.tx == tx));
     assert!(owned.complete().is_err());
@@ -711,9 +732,13 @@ fn persisted_amx_detach_pins_partial_inode_and_continues_without_original_view()
     assert_eq!(owned.acquired_frame().unwrap(), original_file);
     let proof = owned.complete().unwrap().unwrap();
     assert!(proof.belongs_to(&budget));
-    let tracker =
-        AmxForeignInstanceV1::new(chain.instance().0, genesis_epoch(chain.genesis()).unwrap())
-            .unwrap();
+    let tracker = AmxForeignInstanceV1::new(
+        chain.instance().0,
+        authenticated_genesis(chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
+    )
+    .unwrap();
     tracker.verify_record(proof.canonical()).unwrap();
     assert!(owned.complete().is_err());
     fs::remove_file(&archive).unwrap();

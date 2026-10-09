@@ -2,6 +2,8 @@
 
 mod compact_source;
 mod cursor;
+mod interval;
+mod proof_destination;
 pub use compact_source::{
     NativeCommitCertificateDataV1, NativeCommitCertificateReadErrorV1, read_commit_certificate,
 };
@@ -9,6 +11,11 @@ pub use cursor::{
     NativeCurrentFinalityV1, NativeFinalityAtHeightV1, NativeFinalityCursorErrorV1,
     NativeFinalityCursorV1,
 };
+pub use interval::{
+    NativeFinalityProofInterval, NativeFinalityProofIntervalError,
+    NativeFinalityProofIntervalLimits, NativeFinalityProofSource, build_proof_interval,
+};
+pub use proof_destination::ProofDestinationError;
 
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{

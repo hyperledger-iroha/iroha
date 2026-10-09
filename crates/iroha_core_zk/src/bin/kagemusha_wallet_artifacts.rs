@@ -19,7 +19,7 @@ use iroha_data_model::{
     NetworkId,
     block::decode_framed_signed_block,
     kagemusha::kagemusha_wallet_v1::*,
-    sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier, genesis_epoch},
+    sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier, authenticated_genesis},
 };
 use iroha_fs::{FileSnapshot, PrivateDirectory, SealedPrivateFile};
 use iroha_pasta::msm::MemoryBudget;
@@ -216,7 +216,10 @@ fn native_finality(
     }
     // The maintained reader authenticates block/transaction signatures, proposal
     // commitments, the complete signed initial epoch and every validator PoP.
-    let epoch = checked(genesis_epoch(&genesis), "signed genesis authority rejected")?;
+    let epoch = checked(
+        authenticated_genesis(&genesis).map(|genesis| genesis.into_parts().0),
+        "signed genesis authority rejected",
+    )?;
     let roster = epoch
         .committee
         .iter()

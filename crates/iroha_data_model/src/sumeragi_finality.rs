@@ -31,9 +31,9 @@ pub use beacon::{
 };
 mod genesis;
 pub use genesis::{
-    AuthenticatedSignedGenesisV1, GenesisReadError, MAX_SIGNED_GENESIS_BYTES_V1,
-    SignedGenesisPinsV1, authenticate_signed_genesis_v1, genesis_epoch,
-    signed_genesis_consensus_metadata,
+    AuthenticatedGenesis, AuthenticatedSignedGenesisV1, GenesisReadError,
+    MAX_SIGNED_GENESIS_BYTES_V1, SignedGenesisPinsV1, authenticate_signed_genesis_v1,
+    authenticated_genesis, signed_genesis_consensus_metadata,
 };
 mod genesis_dataspace;
 pub use genesis_dataspace::{
@@ -126,9 +126,9 @@ pub enum FinalityReadError {
     /// The original signed genesis could not be read or authenticated.
     #[error(transparent)]
     Genesis(#[from] GenesisReadError),
-    /// Exact original checkpoint decoder fields, before any caller locality classification.
+    /// Exact original canonical block decoder fields, before any caller locality classification.
     /// Intrinsic format ceilings are not automatically a retryable caller refusal.
-    #[error("checkpoint decoder resource: {0}")]
+    #[error("canonical block decoder resource: {0}")]
     DecodeResource(#[source] norito::core::DecodeAttemptError),
 }
 
@@ -143,8 +143,13 @@ pub enum FinalityReadError {
 pub fn consensus_configuration_fingerprint(
     genesis: &SignedBlock,
 ) -> Result<Hash, GenesisReadError> {
-    let epoch = genesis_epoch(genesis)?;
-    let parameters = explicit_genesis_chain_parameters(genesis)?;
+    let authenticated = authenticated_genesis(genesis)?;
+    #[cfg(not(all(test, sumeragi_model_mutation = "DM13")))]
+    let metadata = authenticated.metadata();
+    let epoch = authenticated.into_parts().0;
+    #[cfg(all(test, sumeragi_model_mutation = "DM13"))]
+    let metadata = signed_genesis_consensus_metadata(genesis)?;
+    let parameters = explicit_genesis_chain_parameters(genesis, metadata.block_cadence_ms)?;
     let encoded = norito::encode_canonical(&(crate::sumeragi::PROTOCOL_VERSION, epoch, parameters))
         .map_err(|error| error.to_string())?;
     Ok(Hash::new_from_chunks(&[
@@ -153,15 +158,14 @@ pub fn consensus_configuration_fingerprint(
     ]))
 }
 
-// Both callers have already authenticated this exact signed genesis: the
-// fingerprint authenticates it above and the verifier retains its original
-// validated root. Keep one explicit-parameter reader; results and mutable World
-// never supply these initial lag-two values.
+// Both callers carry the cadence from their canonical authentication of this exact
+// signed body. The same original instruction kernel still requires each explicit
+// parameter exactly once; results and mutable World never supply these lag-two values.
 fn explicit_genesis_chain_parameters(
     genesis: &SignedBlock,
+    block_cadence_ms: std::num::NonZeroU64,
 ) -> Result<ChainParamsRecord, GenesisReadError> {
-    let metadata = signed_genesis_consensus_metadata(genesis)?;
-    let mut parameters = ExplicitParameters::new(metadata.block_cadence_ms);
+    let mut parameters = ExplicitParameters::new(block_cadence_ms);
     for transaction in genesis.external_transactions() {
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err("native configuration requires explicit signed instructions".into());
@@ -838,6 +842,37 @@ struct Decision {
     executed_len: u64,
 }
 
+// Selected-roster and root-instance checks shared only by the two canonical genesis
+// owners. Callers first run their original ProofCrypto/authentication order; this private
+// borrowed kernel creates no authority token, body clone or second metadata decoder.
+fn authenticated_genesis_instance(
+    trusted_genesis: &SignedBlock,
+    chain_id: &str,
+    validators: &[FinalityValidator],
+    crypto: &ProofCrypto,
+    epoch: &crate::sumeragi::epoch::ValidatorEpochContextV1,
+    root_scope: crate::block::consensus::SumeragiRootScope,
+) -> Result<Hash32, FinalityError> {
+    need(
+        validators.len() == epoch.committee.len()
+            && validators
+                .iter()
+                .zip(&epoch.committee)
+                .all(|(selected, member)| {
+                    selected.public_key == *member.validator.public_key()
+                        && selected.proof_of_possession == member.proof_of_possession
+                }),
+        "selected roster differs from signed genesis authority",
+    )?;
+    root_scope
+        .instance_id(
+            crypto,
+            crate::NetworkId::from_genesis_hash(trusted_genesis.hash()),
+            chain_id,
+        )
+        .map_err(malformed)
+}
+
 /// Independent current-certificate verifier retaining only authenticated prefix decisions.
 #[derive(Debug, Clone)]
 pub struct SumeragiFinalityVerifier {
@@ -847,6 +882,7 @@ pub struct SumeragiFinalityVerifier {
     instance: Hash32,
     genesis_committee_digest: [u8; 32],
     genesis_epoch: crate::sumeragi::epoch::ValidatorEpochContextV1,
+    genesis_metadata: crate::parameter::system::ConsensusHandshakeMetadata,
     decisions: BTreeMap<u64, Decision>,
 }
 impl SumeragiFinalityVerifier {
@@ -873,32 +909,24 @@ impl SumeragiFinalityVerifier {
             "trust root must be signed genesis",
         )?;
         let (crypto, committee) = ProofCrypto::new(&validators)?;
-        let genesis_epoch = genesis::genesis_epoch_with_validation(trusted_genesis, validation)?;
-        need(
-            validators.len() == genesis_epoch.committee.len()
-                && validators
-                    .iter()
-                    .zip(&genesis_epoch.committee)
-                    .all(|(selected, member)| {
-                        selected.public_key == *member.validator.public_key()
-                            && selected.proof_of_possession == member.proof_of_possession
-                    }),
-            "selected roster differs from signed genesis authority",
+        let authenticated =
+            genesis::authenticated_genesis_with_validation(trusted_genesis, validation)?;
+        let genesis_metadata = authenticated.metadata();
+        let (genesis_epoch, root_scope) = authenticated.into_parts();
+        let instance = authenticated_genesis_instance(
+            trusted_genesis,
+            chain_id,
+            &validators,
+            &crypto,
+            &genesis_epoch,
+            root_scope,
         )?;
-        let instance = signed_genesis_consensus_metadata(trusted_genesis)?
-            .sumeragi_context
-            .root_scope
-            .instance_id(
-                &crypto,
-                crate::NetworkId::from_genesis_hash(trusted_genesis.hash()),
-                chain_id,
-            )
-            .map_err(malformed)?;
         Ok(Self {
             genesis: trusted_genesis.clone(),
             chain_id: chain_id.to_owned(),
             genesis_committee: validators,
             genesis_epoch,
+            genesis_metadata,
             instance,
             genesis_committee_digest: chain_hash(&committee_digest_preimage(&committee)).0,
             decisions: BTreeMap::new(),
@@ -930,24 +958,25 @@ impl SumeragiFinalityVerifier {
     /// an unauthenticated genesis execution result or current mutable state.
     ///
     /// # Errors
-    /// Preserves the original signed-metadata decoder error and rejects missing,
-    /// duplicate or invalid explicit parameters. This never fills omitted fields
-    /// with local defaults, changes the selected root, or grants global scope.
+    /// Rejects missing, duplicate or invalid original explicit parameters. The cadence
+    /// is retained from construction's canonical authentication, with no further decoding.
+    /// This never fills omitted fields with local defaults, changes the selected root,
+    /// or grants global scope.
     pub fn initial_chain_parameters(&self) -> Result<ChainParamsRecord, GenesisReadError> {
-        explicit_genesis_chain_parameters(&self.genesis)
+        #[cfg(not(all(test, sumeragi_model_mutation = "DM14")))]
+        let metadata = self.genesis_metadata;
+        #[cfg(all(test, sumeragi_model_mutation = "DM14"))]
+        let metadata = signed_genesis_consensus_metadata(&self.genesis)?;
+        explicit_genesis_chain_parameters(&self.genesis, metadata.block_cadence_ms)
     }
     /// Immutable root ownership from the original independently selected signed genesis.
     ///
     /// Parent-network services must require [`crate::block::consensus::SumeragiRootScope::Global`]
     /// explicitly; a valid private-root certificate does not grant global parent authority.
-    /// # Errors
-    /// The retained signed genesis no longer contains valid canonical consensus metadata.
-    pub fn root_scope(
-        &self,
-    ) -> Result<crate::block::consensus::SumeragiRootScope, GenesisReadError> {
-        Ok(signed_genesis_consensus_metadata(&self.genesis)?
-            .sumeragi_context
-            .root_scope)
+    /// This returns the same constructor-authenticated scalar; it performs no decoding.
+    #[must_use]
+    pub const fn root_scope(&self) -> crate::block::consensus::SumeragiRootScope {
+        self.genesis_metadata.sumeragi_context.root_scope
     }
     /// Admit exactly the next proof into the authenticated contiguous prefix.
     ///
@@ -1564,13 +1593,15 @@ mod configuration_fingerprint_tests {
     fn initial_signed_values_seed_both_ready_slots_and_exact_fingerprint_bytes() {
         let fixture = test_fixtures::NativeFinalityFixture::new_with_explicit_parameters();
         let selected = selected_verifier(&fixture, fixture.genesis());
-        let epoch = genesis_epoch(fixture.genesis()).unwrap();
+        let epoch = authenticated_genesis(fixture.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
         assert_eq!(selected.initial_epoch(), &epoch);
         assert_eq!(epoch.network_id, fixture.network_id());
         assert_eq!(epoch.authorization.epoch, 0);
         assert_eq!(epoch.authorization.first_height, 1);
         assert_eq!(
-            selected.root_scope().unwrap(),
+            selected.root_scope(),
             crate::block::consensus::SumeragiRootScope::Global
         );
 
@@ -1617,7 +1648,9 @@ mod configuration_fingerprint_tests {
         ] {
             let bytes = norito::encode_canonical(&(
                 crate::sumeragi::PROTOCOL_VERSION,
-                genesis_epoch(genesis).unwrap(),
+                authenticated_genesis(genesis)
+                    .map(|genesis| genesis.into_parts().0)
+                    .unwrap(),
                 expected,
             ))
             .unwrap();
@@ -1677,7 +1710,7 @@ mod configuration_fingerprint_tests {
         );
         let owner = private.verifier();
         assert!(matches!(
-            owner.root_scope().unwrap(),
+            owner.root_scope(),
             crate::block::consensus::SumeragiRootScope::Dataspace { .. }
         ));
         assert_ne!(owner.initial_epoch().network_id, fixture.network_id());

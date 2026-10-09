@@ -324,7 +324,9 @@ impl NativeFinalityFixture {
             .sign(authority.private_key());
         let genesis =
             SignedBlock::try_genesis(vec![tx], authority.private_key(), None, None).unwrap();
-        let epoch = genesis_epoch(&genesis).unwrap();
+        let epoch = authenticated_genesis(&genesis)
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
         let mut block = genesis.clone();
         Self::install_network_results(&mut block, vec![Ok(Vec::new())]);
         let result = Self::result(&block, &epoch);
@@ -853,7 +855,9 @@ mod tests {
             "native-npos-fixture",
             SumeragiConsensusMode::Npos,
         );
-        let epoch = genesis_epoch(fixture.genesis()).unwrap();
+        let epoch = authenticated_genesis(fixture.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
         assert_eq!(epoch.mode, crate::parameter::system::ConsensusMode::Npos);
         assert_eq!(epoch.authorization.first_height, 1);
         assert!(epoch.authorization.last_height >= 3);

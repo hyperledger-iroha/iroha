@@ -1,5 +1,9 @@
 //! Metrics and status reporting.
 //!
+//! Full status uses one nonblocking original State read for each World sample.
+//! Busy publication refuses locally instead of spinning on the async telemetry actor;
+//! the existing 500 ms service deadline and verified journal catch-up remain unchanged.
+//!
 //! Aggregate TEU gauges and per-lane/dataspace instruments are updated together for the mandatory
 //! Nexus scheduler so operators can inspect both network-wide and routed scheduler activity.
 mod manifest_status;
@@ -5571,11 +5575,16 @@ impl Actor {
         if !self.enabled {
             return Err(StatusSnapshotError::Disabled);
         }
-        refresh_sumeragi_mode(&self.metrics, &self.state);
-        refresh_ivm_execution_budget_metrics(&self.metrics, &self.state.ivm_execution_budget());
         let local_removed = {
-            let world = self.state.world_view();
-            !world.peers().iter().any(|peer| peer == &self.local_peer_id)
+            // Release this exact view before any actor await or history read.
+            let view = status_state_view(&self.state)?;
+            refresh_sumeragi_mode(&self.metrics, &view);
+            refresh_ivm_execution_budget_metrics(&self.metrics, &self.state.ivm_execution_budget());
+            !view
+                .world()
+                .peers()
+                .iter()
+                .any(|peer| peer == &self.local_peer_id)
         };
         if crate::status::local_peer_removed() != local_removed {
             crate::status::set_local_removed_from_world(local_removed);
@@ -5977,7 +5986,8 @@ impl Actor {
                 iroha_logger::error!("Failed to get genesis block from Kura.");
             }
         }
-        let world_view = self.state.world_view();
+        let view = status_state_view(&self.state)?;
+        let world_view = view.world();
         // These metrics may briefly lead "latest block" when the world snapshot is ahead;
         // that observation window should remain very narrow.
         self.metrics.domains.set(world_view.domains().len() as u64);
@@ -6175,12 +6185,23 @@ pub fn start(
         ),
     ))
 }
-/// Project the next height's authenticated native scheduling mode from this State.
-/// Missing, pending or malformed authority clears a stale mode instead of using configuration.
-fn refresh_sumeragi_mode(metrics: &Metrics, state: &State) {
-    use iroha_data_model::parameter::system::ConsensusMode;
+/// Capture one original State view without waiting on its publishing writer.
+fn status_state_view(state: &State) -> Result<crate::state::StateView<'_>, StatusSnapshotError> {
+    #[cfg(all(test, sumeragi_core_mutation = "HC203"))]
+    {
+        // Deliberate mutant: restore the actor's unbounded publication wait.
+        Ok(state.view())
+    }
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC203")))]
+    {
+        state.try_view_once().map_err(StatusSnapshotError::from)
+    }
+}
 
-    let view = state.view();
+/// Project the next height's authenticated mode from the status sample's admitted view.
+/// Missing, pending or malformed authority clears a stale mode instead of using configuration.
+fn refresh_sumeragi_mode(metrics: &Metrics, view: &impl crate::state::StateReadOnly) {
+    use iroha_data_model::parameter::system::ConsensusMode;
     let schedule = view.world().consensus_schedule();
     let mode_tag = u64::try_from(view.height())
         .ok()
@@ -8431,7 +8452,7 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        refresh_sumeragi_mode(&metrics, &unstarted);
+        refresh_sumeragi_mode(&metrics, &unstarted.view());
         assert_eq!(exported_mode(), "", "pre-genesis state has no authority");
         for (mode, expected) in [
             (SumeragiConsensusMode::Npos, "npos"),
@@ -8451,10 +8472,10 @@ mod tests {
                     ));
             }
             let chain = CertifiedTestChain::start(config).expect("authenticated signed genesis");
-            refresh_sumeragi_mode(&metrics, chain.state());
+            refresh_sumeragi_mode(&metrics, &chain.state().view());
             assert_eq!(exported_mode(), expected);
         }
-        refresh_sumeragi_mode(&metrics, &unstarted);
+        refresh_sumeragi_mode(&metrics, &unstarted.view());
         assert_eq!(
             exported_mode(),
             "",

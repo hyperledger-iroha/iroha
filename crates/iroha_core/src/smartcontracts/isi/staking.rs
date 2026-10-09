@@ -4619,7 +4619,7 @@ mod tests {
                 vec![LaneConfig {
                     id: lane_id,
                     alias: "restricted".to_string(),
-                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    dataspace_id: DataSpaceId::new(7),
                     visibility: LaneVisibility::Restricted,
                     ..LaneConfig::default()
                 }],
@@ -4750,7 +4750,7 @@ mod tests {
                     LaneConfig {
                         id: admin_lane,
                         alias: "restricted-admin".to_string(),
-                        dataspace_id: DataSpaceId::UNIVERSAL,
+                        dataspace_id: DataSpaceId::new(1),
                         visibility: LaneVisibility::Restricted,
                         ..LaneConfig::default()
                     },
@@ -4873,7 +4873,7 @@ mod tests {
                 vec![LaneConfig {
                     id: LaneId::new(1),
                     alias: "restricted".to_string(),
-                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    dataspace_id: DataSpaceId::new(1),
                     visibility: LaneVisibility::Restricted,
                     ..LaneConfig::default()
                 }],

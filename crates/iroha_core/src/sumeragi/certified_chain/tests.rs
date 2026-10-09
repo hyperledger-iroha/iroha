@@ -120,7 +120,9 @@ fn committed_and_certified_reads_of_a_real_chain() {
     );
     assert_eq!(
         genesis.commitment().schedule.current,
-        super::super::epoch::genesis_epoch(chain.genesis()).unwrap()
+        super::super::epoch::authenticated_genesis(chain.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap()
     );
     // The transaction of block 3 is anchored by the executed wire R commits.
     let anchor = blocks[2].entry_anchor(&entry).expect("anchor");
@@ -992,4 +994,86 @@ fn durable_certificate_read_rejects_checksum_valid_corruption_after_cache_warm()
             .certified(2)
             .expect("restored pinned original source");
     }
+}
+
+#[test]
+fn signed_genesis_initialization_does_not_repeat_completed_scope_decode() {
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    let budget = chain.state().ivm_execution_budget();
+    let original = frame(&chain, 1);
+    let baseline = budget.reserved_bytes();
+    let limits =
+        norito::canonical_decode_limits(chain.kura().native_context_archive_max_bytes().get());
+    let original_wire = original.encode_wire().unwrap();
+    let view = chain.state().view();
+    let expected_hash = *view.block_hashes().get(0).unwrap();
+    let original_slot = chain
+        .kura()
+        .native_frame_read(1, expected_hash)
+        .unwrap()
+        .unwrap();
+    // Measure the actual durable acquisition used by the public constructor, its original
+    // prelude, and one complete canonical epoch pass. The warm Kura body is not that newly
+    // decoded owner and cannot stand in for its real cumulative body-decoder debit.
+    let reference = norito::core::DecodeBudgetContext::try_new_owned(limits, &budget).unwrap();
+    reference.with(|| {
+        let source = ChainSource::State(&view).block(GENESIS_HEIGHT).unwrap();
+        assert_eq!(source.hash(), expected_hash);
+        assert!(source.header().is_genesis());
+        assert_eq!(source.hash().as_ref(), view.network_id().as_bytes());
+        source.validate_proposal_commitments().unwrap();
+        let _signed = super::super::epoch::authenticated_genesis(&source).unwrap();
+        budget.with_deferred_refund_notifications(|_| drop(source));
+    });
+    let single_pass = usize::try_from(reference.consumed_allocated_bytes()).unwrap();
+    assert!(
+        single_pass > 0,
+        "original signed metadata must actually decode"
+    );
+    drop(reference);
+    assert_eq!(budget.reserved_bytes(), baseline);
+    let context = norito::core::DecodeBudgetContext::try_new_owned(
+        norito::DecodeLimits::new(
+            limits.max_sequence_elements(),
+            limits.max_field_bytes(),
+            limits.max_total_elements(),
+            single_pass,
+            limits.max_nesting_depth(),
+        ),
+        &budget,
+    )
+    .unwrap();
+    let read = context.with(|| CertifiedChain::new(&view));
+    // The old constructor exhausts this exact cumulative allowance at its duplicate JSON
+    // read. Refuse unrelated fixture/runtime failures before the causal assertion.
+    if let Err(error) = &read {
+        assert!(
+            matches!(error, ExecutionAttemptError::Deferred(local)
+                if local.reason() == ivm::error::ExecutionDeferral::ActiveMemoryCapacity),
+            "unexpected signed-genesis initialization failure: {error:?}"
+        );
+    }
+    assert!(
+        read.is_ok(),
+        "signed genesis initialization must use the original completed scope decode once: {:?}",
+        read.as_ref().err()
+    );
+    let reader = read.unwrap();
+    assert_eq!(reader.instance(), chain.instance());
+    assert_eq!(reader.genesis().hash(), expected_hash);
+    assert_eq!(reader.genesis().encode_wire().unwrap(), original_wire);
+    let current_slot = chain
+        .kura()
+        .native_frame_read(1, expected_hash)
+        .unwrap()
+        .unwrap();
+    assert!(original_slot.same_original_slot(&current_slot));
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        u64::try_from(single_pass).unwrap()
+    );
+    budget.with_deferred_refund_notifications(|_| drop(reader));
+    drop(view);
+    drop(context);
+    assert_eq!(budget.reserved_bytes(), baseline);
 }

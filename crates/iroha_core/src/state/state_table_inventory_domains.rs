@@ -56,6 +56,16 @@ pub(super) struct OtherDomains {
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
         usage: Use::Name,
+        reason: "Diagnostic JSON schema name for a verified genesis dataspace authority; it labels the projection and computes no State commitment",
+        literals: &[r"iroha.genesis-dataspace-verification.v1"],
+    },
+    OtherDomains {
+        usage: Use::Test,
+        reason: "Unexpected trailing field supplied by the Nexus/AMX context parser's rejection test; it is not an accepted context field or a State commitment",
+        literals: &[r"nexus.committed_catalog_policy.v1"],
+    },
+    OtherDomains {
+        usage: Use::Name,
         reason: "Exact RegisterDataspaceAssetDefinition instruction wire identifier, used both by the instruction and the built-in dispatch registry; it names one instruction layout and computes no digest",
         literals: &[r"iroha.asset_definition.dataspace.register.v1"],
     },

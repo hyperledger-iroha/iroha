@@ -169,12 +169,18 @@ impl LintWarning {
         // output never mixes a translated message with English help or notes.
         let english = self.localized_message(Language::English);
         let mut diagnostic = match self.severity {
-            LintSeverity::Warning => {
-                Diagnostic::warning(self.diagnostic_code(), DiagnosticPhase::Semantic, english, span)
-            }
-            LintSeverity::Error => {
-                Diagnostic::error(self.diagnostic_code(), DiagnosticPhase::Semantic, english, span)
-            }
+            LintSeverity::Warning => Diagnostic::warning(
+                self.diagnostic_code(),
+                DiagnosticPhase::Semantic,
+                english,
+                span,
+            ),
+            LintSeverity::Error => Diagnostic::error(
+                self.diagnostic_code(),
+                DiagnosticPhase::Semantic,
+                english,
+                span,
+            ),
         };
         diagnostic.notes.push(format!(
             "lint `{}` in category `{}`",

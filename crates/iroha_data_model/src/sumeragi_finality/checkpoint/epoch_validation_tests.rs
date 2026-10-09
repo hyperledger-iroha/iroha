@@ -38,7 +38,9 @@ fn checkpoint_epoch_work_is_lexical_and_standalone_proofs_remain_independent() {
     assert!(!norito::core::decode_limits_active());
     // The exact context is reconstructed from authenticated signed source, not selected
     // by a cache key or epoch number. Public readers still validate it independently.
-    let signed_epoch = genesis_epoch(&fixture.genesis).unwrap();
+    let signed_epoch = authenticated_genesis(&fixture.genesis)
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
     assert_eq!(
         signed_epoch,
         checkpoint
@@ -51,7 +53,12 @@ fn checkpoint_epoch_work_is_lexical_and_standalone_proofs_remain_independent() {
     );
     assert_eq!(signed_epoch, checkpoint.decisions[0].schedule.current);
     let before = validation_counts::calls();
-    assert_eq!(genesis_epoch(&fixture.genesis).unwrap(), signed_epoch);
+    assert_eq!(
+        authenticated_genesis(&fixture.genesis)
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
+        signed_epoch
+    );
     assert_eq!(validation_counts::calls() - before, 1);
     let before = validation_counts::calls();
     assert_eq!(fixture.verifier().genesis_epoch, signed_epoch);
@@ -417,7 +424,9 @@ fn genesis_reconstruction_still_authenticates_transactions_and_changed_signed_cr
 
     let fixture = Fixture::new();
     let original_wire = fixture.genesis.encode_wire().unwrap();
-    let epoch = genesis_epoch(&fixture.genesis).unwrap();
+    let epoch = authenticated_genesis(&fixture.genesis)
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
     let mut validation = EpochValidationScope::new();
     validation.core_epoch(&epoch).unwrap();
     let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
@@ -454,12 +463,17 @@ fn genesis_reconstruction_still_authenticates_transactions_and_changed_signed_cr
         genesis_registrations(&fixture.genesis).unwrap()
     );
     let before = validation_counts::calls();
-    let expected = genesis_epoch(&wrong_transaction).unwrap_err();
+    let expected = authenticated_genesis(&wrong_transaction)
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap_err();
     assert_eq!(validation_counts::calls() - before, 0);
     let before = validation_counts::calls();
-    let actual =
-        super::super::genesis::genesis_epoch_with_validation(&wrong_transaction, Some(&validation))
-            .unwrap_err();
+    let actual = super::super::genesis::authenticated_genesis_with_validation(
+        &wrong_transaction,
+        Some(&validation),
+    )
+    .map(|genesis| genesis.into_parts().0)
+    .unwrap_err();
     assert!(matches!(&actual, GenesisReadError::Invalid(_)));
     assert_eq!(actual.to_string(), expected.to_string());
     assert_eq!(
@@ -508,16 +522,21 @@ fn genesis_reconstruction_still_authenticates_transactions_and_changed_signed_cr
         genesis_registrations(&fixture.genesis).unwrap()
     );
     let before = validation_counts::calls();
-    let expected = genesis_epoch(&wrong_credential).unwrap_err();
+    let expected = authenticated_genesis(&wrong_credential)
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap_err();
     assert_eq!(
         validation_counts::calls() - before,
         1,
         "authenticated source reaches the actual PoP validator"
     );
     let before = validation_counts::calls();
-    let actual =
-        super::super::genesis::genesis_epoch_with_validation(&wrong_credential, Some(&validation))
-            .unwrap_err();
+    let actual = super::super::genesis::authenticated_genesis_with_validation(
+        &wrong_credential,
+        Some(&validation),
+    )
+    .map(|genesis| genesis.into_parts().0)
+    .unwrap_err();
     assert!(matches!(&actual, GenesisReadError::Invalid(_)));
     assert_eq!(actual.to_string(), expected.to_string());
     assert_eq!(validation_counts::calls() - before, 1);
@@ -541,13 +560,18 @@ fn genesis_reconstruction_still_authenticates_transactions_and_changed_signed_cr
         SignedBlock::try_genesis(vec![transaction], authority.private_key(), None, None).unwrap();
     assert_ne!(other_genesis.hash(), fixture.genesis.hash());
     let other_wire = other_genesis.encode_wire().unwrap();
-    let expected = genesis_epoch(&other_genesis).unwrap();
+    let expected = authenticated_genesis(&other_genesis)
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
     assert_ne!(expected, epoch);
     for _ in 0..2 {
         let before = validation_counts::calls();
-        let reconstructed =
-            super::super::genesis::genesis_epoch_with_validation(&other_genesis, Some(&validation))
-                .unwrap();
+        let reconstructed = super::super::genesis::authenticated_genesis_with_validation(
+            &other_genesis,
+            Some(&validation),
+        )
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
         assert_eq!(validation_counts::calls() - before, 1);
         assert_eq!(reconstructed, expected);
     }
@@ -564,8 +588,12 @@ fn genesis_reconstruction_still_authenticates_transactions_and_changed_signed_cr
     assert_eq!(other_genesis.encode_wire().unwrap(), other_wire);
     let before = validation_counts::calls();
     assert_eq!(
-        super::super::genesis::genesis_epoch_with_validation(&fixture.genesis, Some(&validation))
-            .unwrap(),
+        super::super::genesis::authenticated_genesis_with_validation(
+            &fixture.genesis,
+            Some(&validation)
+        )
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap(),
         epoch
     );
     assert_eq!(validation_counts::calls() - before, 0);

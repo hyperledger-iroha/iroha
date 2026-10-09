@@ -2863,12 +2863,21 @@ impl PipelineStatusEntry {
         }
     }
 }
+// Only actual local retry owners belong in the pending event. No VM resource
+// category or allocation demand is manufactured for a physical State writer.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+enum PendingBlockDeferral {
+    #[error("original State event capture is busy")]
+    StateViewBusy(iroha_allocation::release::ReleaseWait),
+    #[error(transparent)]
+    Execution(#[from] iroha_core::execution_attempt::ExecutionDeferred),
+}
 #[derive(Clone, Debug)]
 struct PendingBlockStatus {
     kind: PipelineStatusKind,
     block_hash: HashOf<BlockHeader>,
     observed_at: Instant,
-    deferred: Option<iroha_core::execution_attempt::ExecutionDeferred>,
+    deferred: Option<PendingBlockDeferral>,
 }
 #[derive(Debug)]
 struct PipelineStatusCache {
@@ -2891,7 +2900,7 @@ struct PipelineStatusCache {
 enum BlockRecordOutcome {
     Recorded,
     MissingBlock,
-    Deferred(iroha_core::execution_attempt::ExecutionDeferred),
+    Deferred(PendingBlockDeferral),
 }
 impl PipelineStatusCache {
     #[cfg(test)]
@@ -3364,14 +3373,19 @@ impl PipelineStatusCache {
             return BlockRecordOutcome::MissingBlock;
         };
         let work = routing::app_query_limits().max_fetch_size;
-        let result = iroha_core::smartcontracts::isi::tx::visit_finalized_network_transactions(
-            state,
-            height_nz,
-            expected_hash,
-            work,
-            iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
-            |entrypoint, result| self.record_network_result(height, kind, now, entrypoint, result),
-        );
+        let result = state
+            .read_finalized_event_carrier(
+                height_nz,
+                work,
+                iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
+            )
+            .and_then(|carrier| {
+                carrier
+                    .visit_network_transactions(expected_hash, |entrypoint, result| {
+                        self.record_network_result(height, kind, now, entrypoint, result)
+                    })
+                    .map_err(Into::into)
+            });
         if let Err(error) = result {
             iroha_logger::debug!(
                 ?error,
@@ -3379,12 +3393,16 @@ impl PipelineStatusCache {
                 "pipeline status cache could not authenticate finalized carrier"
             );
             return match error {
-                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                    BlockRecordOutcome::Deferred(reason)
-                }
-                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => {
-                    BlockRecordOutcome::MissingBlock
-                }
+                iroha_core::state::FinalizedEventReadError::StateView(
+                    iroha_core::state::StateViewError::Busy(wait),
+                ) => BlockRecordOutcome::Deferred(PendingBlockDeferral::StateViewBusy(wait)),
+                iroha_core::state::FinalizedEventReadError::Execution(
+                    iroha_core::execution_attempt::ExecutionAttemptError::Deferred(reason),
+                ) => BlockRecordOutcome::Deferred(reason.into()),
+                iroha_core::state::FinalizedEventReadError::StateView(_)
+                | iroha_core::state::FinalizedEventReadError::Execution(
+                    iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_),
+                ) => BlockRecordOutcome::MissingBlock,
             };
         }
         BlockRecordOutcome::Recorded

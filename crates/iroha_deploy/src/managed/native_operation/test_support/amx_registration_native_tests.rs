@@ -22,7 +22,7 @@ use iroha_data_model::{
     isi::{Grant, InstructionBox, Log, error::InstructionExecutionError},
     permission::Permission,
     private_dataspace::PrivateDataspaceRegistration,
-    sumeragi_finality::{genesis_epoch, test_fixtures::NativeFinalityFixture},
+    sumeragi_finality::{authenticated_genesis, test_fixtures::NativeFinalityFixture},
     transaction::{FeePaymentIntent, error::TransactionRejectionReason},
 };
 use iroha_executor_data_model::permission::parameter::CanSetParameters;
@@ -53,7 +53,9 @@ fn request(parent: &iroha::config::Config) -> AmxDataspaceRegistrationRequest {
         child.chain_id().parse().unwrap(),
         child.network_id(),
         decision.result().0,
-        genesis_epoch(child.genesis()).unwrap(),
+        authenticated_genesis(child.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
     )
     .unwrap();
     AmxDataspaceRegistrationRequest {

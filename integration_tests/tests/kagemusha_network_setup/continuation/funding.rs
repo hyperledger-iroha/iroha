@@ -232,9 +232,33 @@ pub(super) fn run(
             (receipt.ordinal, receipt.amount, receipt.block_height) == (0, 100, 5),
             "live receipt terms"
         );
-        let event_path = client
-            .kagemusha()
-            .load_event_proof(&scheme_id, &wallet, &request_id)?;
+        // The service returns DATA; only the independently selected signed genesis
+        // and original H5 certificate can authorize this receipt's event inclusion.
+        let mut finality = client.kagemusha().load_finality(&receipt)?;
+        finality.verify(&anchor, &receipt)?;
+        let certificate = block
+            .block()
+            .commit_certificate()
+            .ok_or_else(|| eyre!("Load block certificate missing"))?;
+        ensure!(
+            finality.certificate.consensus_header.as_slice() == certificate.consensus_header()
+                && finality.certificate.commit_qc.as_slice() == certificate.commit_qc()
+                && finality.certificate.result_preimage.as_slice() == certificate.result_preimage(),
+            "live Load finality differs from the original authenticated block"
+        );
+        let previous_certificate =
+            iroha_data_model::sumeragi_finality::SumeragiCommitCertificateV1::from_verified(
+                &previous,
+            )?;
+        let original_certificate =
+            std::mem::replace(&mut finality.certificate, previous_certificate);
+        let substituted_certificate_rejected = finality.verify(&anchor, &receipt).is_err();
+        finality.certificate = original_certificate;
+        ensure!(
+            substituted_certificate_rejected,
+            "a previous authenticated certificate must not authorize the live Load receipt"
+        );
+        let event_path = finality.event_proof;
         let verified = verify_finalized_kagemusha_wallet_load_event_v1(
             &block,
             &event_path,

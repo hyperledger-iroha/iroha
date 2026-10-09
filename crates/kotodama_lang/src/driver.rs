@@ -327,15 +327,15 @@ fn project_lint_config(
         path: path.to_path_buf(),
         message,
     };
-    let entries = value.as_object().ok_or_else(|| {
-        invalid("`lints` must be an object of lint slugs and levels".to_owned())
-    })?;
+    let entries = value
+        .as_object()
+        .ok_or_else(|| invalid("`lints` must be an object of lint slugs and levels".to_owned()))?;
     let mut config = crate::session::LintConfig::new();
     for (key, level) in entries {
         if key == "deny-warnings" {
-            let deny = level
-                .as_bool()
-                .ok_or_else(|| invalid("`lints.deny-warnings` must be `true` or `false`".to_owned()))?;
+            let deny = level.as_bool().ok_or_else(|| {
+                invalid("`lints.deny-warnings` must be `true` or `false`".to_owned())
+            })?;
             config.set_deny_warnings(deny);
             continue;
         }
@@ -2512,8 +2512,14 @@ mod tests {
         );
         for (lints, expected) in [
             (r#"{"unused-locl": "deny"}"#, "did you mean `unused-local`?"),
-            (r#"{"unused-local": "error"}"#, "must be \"allow\", \"warn\", or \"deny\""),
-            (r#"{"deny-warnings": "yes"}"#, "`lints.deny-warnings` must be"),
+            (
+                r#"{"unused-local": "error"}"#,
+                "must be \"allow\", \"warn\", or \"deny\"",
+            ),
+            (
+                r#"{"deny-warnings": "yes"}"#,
+                "`lints.deny-warnings` must be",
+            ),
             (r#"["unused-local"]"#, "`lints` must be an object"),
         ] {
             fs::write(&manifest, with_lints(lints)).expect("write invalid lints");

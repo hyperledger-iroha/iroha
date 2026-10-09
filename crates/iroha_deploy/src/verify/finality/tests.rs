@@ -31,8 +31,8 @@ use iroha_data_model::{
     },
     sumeragi_finality::{
         ChainParamsRecord, ExecutionCommitment, ExecutionResultCommitment, NativeLaneStateProof,
-        ScheduleOutcome, ScheduledConfig, SumeragiFinalityAttestationBody, chain_hash, core_epoch,
-        genesis_epoch, global_threshold_beacon_npos_successor_seed_v1,
+        ScheduleOutcome, ScheduledConfig, SumeragiFinalityAttestationBody, authenticated_genesis,
+        chain_hash, core_epoch, global_threshold_beacon_npos_successor_seed_v1,
         global_threshold_beacon_pulse_id_v1, global_threshold_beacon_pulse_payload_v1,
         test_fixtures::{NativeFinalityFixture, author_payload},
     },
@@ -190,7 +190,9 @@ impl Chain {
         let genesis =
             SignedBlock::try_genesis(vec![tx], authority.private_key(), None, None).unwrap();
         let network = NetworkId::from_genesis_hash(genesis.hash());
-        let context = genesis_epoch(&genesis).unwrap();
+        let context = authenticated_genesis(&genesis)
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
         let mut epochs = vec![Epoch { keys, context }];
         for (range, end) in &ranges[1..] {
             let keys = ordered_keys(range.clone());
@@ -2160,9 +2162,10 @@ fn original_genesis_policy_decode_refusal_preserves_exact_source_and_retry() {
     let original = chain.anchor.genesis.encode_wire().unwrap();
     let original_proof = norito::encode_canonical(chain.proof(1)).unwrap();
     let no_allocation = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
-    let producer =
-        norito::with_decode_limits_scope(no_allocation, || genesis_epoch(&chain.anchor.genesis))
-            .unwrap_err();
+    let producer = norito::with_decode_limits_scope(no_allocation, || {
+        authenticated_genesis(&chain.anchor.genesis).map(|genesis| genesis.into_parts().0)
+    })
+    .unwrap_err();
     assert!(
         matches!(
             producer,
@@ -2257,7 +2260,9 @@ fn checkpoint_npos_refusal_follows_a_completed_original_binary_read() {
     norito::with_decode_limits_scope(limits(original_binary_cost), || {
         let decoded = decode().expect("entire original binary frame fits before policy");
         assert_eq!(decoded.hash(), chain.anchor.genesis.hash());
-        let error = genesis_epoch(&decoded).unwrap_err();
+        let error = authenticated_genesis(&decoded)
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap_err();
         assert!(
             matches!(
                 error,
@@ -2289,7 +2294,9 @@ fn checkpoint_npos_refusal_follows_a_completed_original_binary_read() {
         assert_eq!(checkpoint.encode_canonical().unwrap(), original);
         let decoded = decode().expect("validated checkpoint prefix and original binary both fit");
         assert_eq!(decoded.hash(), chain.anchor.genesis.hash());
-        let error = genesis_epoch(&decoded).unwrap_err();
+        let error = authenticated_genesis(&decoded)
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap_err();
         assert!(
             matches!(
                 error,

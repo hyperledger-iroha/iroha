@@ -8,7 +8,7 @@ use iroha_data_model::{
     isi::Log,
     level::Level,
     sumeragi_finality::{
-        SumeragiFinalityProof, SumeragiFinalityVerifier, genesis_epoch,
+        SumeragiFinalityProof, SumeragiFinalityVerifier, authenticated_genesis,
         test_fixtures::NativeFinalityFixture,
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
@@ -68,7 +68,9 @@ fn changed_certificate(
 #[test]
 fn native_descendants_authenticate_beyond_the_retired_short_fixture_window() {
     let mut chain = NativeFinalityFixture::start("sccp-native-descendants");
-    let initial = genesis_epoch(chain.genesis()).unwrap();
+    let initial = authenticated_genesis(chain.genesis())
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
     let mut verifier = restored(&chain);
     for height in 2..=12 {
         let parent = chain.latest().block_header.hash();
@@ -179,7 +181,9 @@ fn portable_native_chain_rejects_forks_skips_and_corrupted_certificates() {
 #[test]
 fn genesis_authority_is_network_bound_and_every_schedule_or_key_change_changes_identity() {
     let chain = NativeFinalityFixture::start("sccp-native-authority");
-    let context = genesis_epoch(chain.genesis()).unwrap();
+    let context = authenticated_genesis(chain.genesis())
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
     context.validate().unwrap();
     let generation = context.generation();
     assert_eq!(generation.generation, 0);

@@ -337,6 +337,41 @@ pub(crate) fn canonical_decode_attempt_error<E>(
     ExecutionAttemptError::Rejected(rejected(error))
 }
 
+/// Preserve an original native storage/decode refusal before its caller formats a rejection.
+///
+/// Kura's durable metadata and body decoder share the active cumulative codec scope.
+/// Physical buffer refusals retain their original pool owner; malformed bytes and
+/// changed source slots remain completed errors chosen by the existing caller.
+pub(crate) fn kura_read_attempt_error<E>(
+    error: crate::kura::Error,
+    rejected: impl FnOnce(crate::kura::Error) -> E,
+) -> ExecutionAttemptError<E> {
+    #[cfg(all(test, sumeragi_core_mutation = "HC206"))]
+    return ExecutionAttemptError::Rejected(rejected(error));
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC206")))]
+    {
+        use crate::kura::Error;
+        match error {
+            Error::NoritoFrame(error) => {
+                norito_decode_attempt_error(error, |error| rejected(Error::NoritoFrame(error)))
+            }
+            Error::BlockDecode(error) => {
+                canonical_decode_attempt_error(error, |error| rejected(Error::BlockDecode(error)))
+            }
+            Error::NativeFrameAllocation(error) => {
+                let original = match error {
+                    iroha_allocation::ChargedBufferError::Admission(original) => original.into(),
+                    iroha_allocation::ChargedBufferError::Allocator { .. } => {
+                        ExecutionDeferral::AllocationUnavailable.into()
+                    }
+                };
+                ExecutionAttemptError::Deferred(original)
+            }
+            error => ExecutionAttemptError::Rejected(rejected(error)),
+        }
+    }
+}
+
 /// Classify original JSON decoding before a diagnostic can discard local retry identity.
 ///
 /// JSON's resource-limit error is emitted by the active decoder budget. Malformed input,
@@ -476,6 +511,47 @@ impl crate::state::StateTransaction<'_, '_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn kura_storage_attempt_keeps_original_refusal_and_deterministic_source_error() {
+        let pool = iroha_allocation::AllocationBudget::new(8);
+        let occupied = pool.try_reserve_bytes(8).unwrap();
+        let original = pool.try_reserve_bytes(1).unwrap_err();
+        let error = crate::kura::Error::NativeFrameAllocation(
+            iroha_allocation::ChargedBufferError::Admission(original.clone()),
+        );
+        let ExecutionAttemptError::<()>::Deferred(retained) =
+            super::kura_read_attempt_error(error, |_| {
+                panic!("original pool refusal cannot be rejected")
+            })
+        else {
+            panic!("original storage refusal");
+        };
+        assert_eq!(retained.allocation_refusal(), Some(&original));
+        let error = crate::kura::Error::NativeFrameAllocation(
+            iroha_allocation::ChargedBufferError::Allocator { requested_bytes: 8 },
+        );
+        let ExecutionAttemptError::<()>::Deferred(retained) =
+            super::kura_read_attempt_error(error, |_| {
+                panic!("physical allocation cannot be rejected")
+            })
+        else {
+            panic!("original storage allocation refusal");
+        };
+        assert_eq!(retained.reason(), ExecutionDeferral::AllocationUnavailable);
+        assert!(retained.allocation_refusal().is_none());
+        assert!(matches!(
+            super::kura_read_attempt_error(
+                crate::kura::Error::CanonicalBlockWireMismatch { height: 3 },
+                std::convert::identity,
+            ),
+            ExecutionAttemptError::Rejected(crate::kura::Error::CanonicalBlockWireMismatch {
+                height: 3
+            })
+        ));
+        drop(occupied);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+
     #[test]
     fn prepared_signature_attempt_keeps_original_pool_refusal_and_source_invariants() {
         use iroha_data_model::block::{BlockSignatureCustodyError, PreparedSignatureBlockError};

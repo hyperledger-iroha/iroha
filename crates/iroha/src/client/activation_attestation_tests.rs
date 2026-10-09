@@ -1212,7 +1212,7 @@ fn private_dataspace_record_read_is_bounded_exact_and_does_not_select_parent_tru
             MAX_PRIVATE_DATASPACE_RECORD_PROOF_BYTES, PrivateDataspaceAnchorState,
             PrivateDataspaceRecord, PrivateDataspaceRecordProof, PrivateDataspaceRegistration,
         },
-        sumeragi_finality::genesis_epoch,
+        sumeragi_finality::authenticated_genesis,
         testing::native_finality::NativeFinalityFixture,
     };
     let client = current_finality_client();
@@ -1233,7 +1233,9 @@ fn private_dataspace_record_read_is_bounded_exact_and_does_not_select_parent_tru
         child.chain_id().parse().unwrap(),
         child.network_id(),
         result,
-        genesis_epoch(child.genesis()).unwrap(),
+        authenticated_genesis(child.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
     )
     .unwrap();
     let record = PrivateDataspaceRecord {
@@ -1341,7 +1343,7 @@ fn private_root_export_fixture() -> (
 ) {
     use iroha_data_model::{
         block::consensus::SumeragiRootScope, private_dataspace::PrivateDataspaceRegistration,
-        sumeragi_finality::genesis_epoch, testing::native_finality::NativeFinalityFixture,
+        sumeragi_finality::authenticated_genesis, testing::native_finality::NativeFinalityFixture,
     };
     let parent = current_finality_client();
     let scope = SumeragiRootScope::Dataspace {
@@ -1360,7 +1362,9 @@ fn private_root_export_fixture() -> (
         child.chain_id().parse().unwrap(),
         child.network_id(),
         result,
-        genesis_epoch(child.genesis()).unwrap(),
+        authenticated_genesis(child.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
     )
     .unwrap();
     let mut client = client_with_base_url(base_url());

@@ -162,7 +162,8 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
 }
 
 fn assert_signed_generation_zero_is_the_voter_roster(network: &Network) {
-    let epoch = iroha_data_model::sumeragi_finality::genesis_epoch(&network.genesis().0)
+    let epoch = iroha_data_model::sumeragi_finality::authenticated_genesis(&network.genesis().0)
+        .map(|genesis| genesis.into_parts().0)
         .expect("genesis must commit a canonical native epoch");
     let mut expected = network
         .validators()

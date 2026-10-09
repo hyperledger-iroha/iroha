@@ -283,7 +283,9 @@ mod root_scope_tests {
             dataspace_id: DataSpaceId::new((1_u64 << 40) + 13),
         };
         let genesis = test_support::signed_genesis(scope);
-        let epoch = crate::sumeragi::epoch::genesis_epoch(&genesis).unwrap();
+        let epoch = crate::sumeragi::epoch::authenticated_genesis(&genesis)
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
         let state = State::new_for_testing(
             World::new(),
             crate::kura::Kura::blank_kura_for_testing(),
@@ -317,7 +319,9 @@ mod root_scope_tests {
             dataspace_id: DataSpaceId::new(13),
         };
         let epoch =
-            crate::sumeragi::epoch::genesis_epoch(&test_support::signed_genesis(scope)).unwrap();
+            crate::sumeragi::epoch::authenticated_genesis(&test_support::signed_genesis(scope))
+                .map(|genesis| genesis.into_parts().0)
+                .unwrap();
         let mut world = test_support::world(scope);
         world.parliament_required_beacon_pulse_slots.insert(
             (BeaconSessionId::for_network_v1(&epoch.network_id), 7),

@@ -200,7 +200,9 @@ impl BaseFixture {
         let native =
             NativeFinalityFixture::start_with_mode("fc56984b-2be7-431d-840e-21514d1883f0", mode);
         let genesis = native.genesis().encode_wire().unwrap();
-        let epoch = genesis_epoch(native.genesis()).unwrap();
+        let epoch = authenticated_genesis(native.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap();
         let root = g1_key(7);
         let artifact = g1_key(8);
         let enrollment = g1_key(9);

@@ -222,7 +222,12 @@ fn paid_roots() -> Roots {
             RegisterAmxDataspaceV1 {
                 dataspace: id,
                 instance: chain.instance().0,
-                anchor: norito::encode_canonical(&genesis_epoch(chain.genesis()).unwrap()).unwrap(),
+                anchor: norito::encode_canonical(
+                    &authenticated_genesis(chain.genesis())
+                        .map(|genesis| genesis.into_parts().0)
+                        .unwrap(),
+                )
+                .unwrap(),
             }
             .into()
         });

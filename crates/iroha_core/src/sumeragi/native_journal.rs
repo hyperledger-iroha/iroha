@@ -293,7 +293,8 @@ pub fn authenticate_signed_genesis(
     if block.hash() != network.into_genesis_hash() {
         return Err("foreign signed genesis".into());
     }
-    let epoch = super::epoch::genesis_epoch(&block)?;
+    let epoch =
+        super::epoch::authenticated_genesis(&block).map(|genesis| genesis.into_parts().0)?;
     Ok((block, epoch))
 }
 

@@ -33,12 +33,9 @@ fn project<'a>(
     for (id, definition) in definitions {
         let domain = definition.owning_domain().as_ref();
         let incarnation = incarnation(id);
-        let direct = direct_home_dataspace(
-            home(id).as_ref(),
-            Some(definition),
-            incarnation.as_ref(),
-        )
-        .map_err(|error| error.to_string())?;
+        let direct =
+            direct_home_dataspace(home(id).as_ref(), Some(definition), incarnation.as_ref())
+                .map_err(|error| error.to_string())?;
         iroha_data_model::asset::AssetDefinitionHome::from_definition(definition, direct)
             .map_err(|error| error.to_string())?;
         if let Some(domain) = domain {

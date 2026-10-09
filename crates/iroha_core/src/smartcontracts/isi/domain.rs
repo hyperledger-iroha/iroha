@@ -46,6 +46,11 @@ pub mod isi {
     /// Alias grace window after lease expiry (369 hours).
     const ASSET_ALIAS_GRACE_MS: u64 = 369u64 * 60 * 60 * 1_000;
     include!("domain/asset_alias_scope.rs");
+    /// Exact private-root home admission and original refusal controls.
+    #[cfg(test)]
+    mod private_root_home_tests {
+        include!("domain/private_root_home_tests.rs");
+    }
     /// Restore or retarget the continuity record for an already validated alias binding.
     ///
     /// # Errors
@@ -10114,7 +10119,10 @@ mod tests {
         let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect_err("a public definition cannot take an alias in a restricted namespace");
-        assert!(error.to_string().contains("restricted dataspace"), "{error}");
+        assert!(
+            error.to_string().contains("restricted dataspace"),
+            "{error}"
+        );
         assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
         assert!(
             tx.world
@@ -10190,7 +10198,10 @@ mod tests {
         let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect_err("a restricted-homed definition keeps its aliases in its home namespace");
-        assert!(error.to_string().contains("restricted dataspace"), "{error}");
+        assert!(
+            error.to_string().contains("restricted dataspace"),
+            "{error}"
+        );
         assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
     }
     #[test]

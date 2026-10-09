@@ -615,7 +615,7 @@ pub(super) fn private_root_fixture() -> (
     use iroha_data_model::{
         block::consensus::SumeragiRootScope,
         sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1},
-        sumeragi_finality::{genesis_epoch, test_fixtures::NativeFinalityFixture},
+        sumeragi_finality::{authenticated_genesis, test_fixtures::NativeFinalityFixture},
     };
     let dataspace = iroha_model_base::topology::DataSpaceId::from_hash(
         &NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, "walletroot")
@@ -636,7 +636,9 @@ pub(super) fn private_root_fixture() -> (
         fixture.chain_id().parse().unwrap(),
         fixture.network_id(),
         genesis.result().0,
-        genesis_epoch(fixture.genesis()).unwrap(),
+        authenticated_genesis(fixture.genesis())
+            .map(|genesis| genesis.into_parts().0)
+            .unwrap(),
     )
     .unwrap();
     (fixture, registration)

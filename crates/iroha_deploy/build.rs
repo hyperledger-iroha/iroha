@@ -8,12 +8,15 @@ use std::{env, fs, path::Path};
 
 const CFG: &str = "sumeragi_deploy_mutation";
 const ENV: &str = "SUMERAGI_DEPLOY_MUTATION";
-const IDS: &[&str] = &["DEP1", "DEP2", "DEP3", "DEP4", "DEP5", "DEP6"];
+const IDS: &[&str] = &["DEP1", "DEP2", "DEP3", "DEP4", "DEP5", "DEP6", "DEP7"];
 
 fn main() {
-    println!(
-        "cargo:rustc-check-cfg=cfg(sumeragi_deploy_mutation, values(\"DEP1\", \"DEP2\", \"DEP3\", \"DEP4\", \"DEP5\", \"DEP6\"))"
-    );
+    let values = IDS
+        .iter()
+        .map(|id| format!("{id:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!("cargo:rustc-check-cfg=cfg({CFG}, values({values}))");
     println!("cargo:rerun-if-env-changed={ENV}");
     println!("cargo:rerun-if-changed=build.rs");
     let rustflags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();

@@ -311,10 +311,10 @@ pub(crate) fn verify_retained(
     )?;
     let block =
         iroha_data_model::block::decode_framed_signed_block(&bytes).map_err(|_| invalid())?;
-    iroha_data_model::sumeragi_finality::genesis_epoch(&block).map_err(|_| invalid())?;
-    service_authorities::validate_signed_profile(prepared, &block)?;
-    let metadata = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&block)
-        .map_err(|_| invalid())?;
+    let metadata = iroha_data_model::sumeragi_finality::authenticated_genesis(&block)
+        .map_err(|_| invalid())?
+        .metadata();
+    service_authorities::validate_signed_profile(prepared, &block, &metadata)?;
     if metadata.sumeragi_context.root_scope != spec.scope()
         || NetworkId::from_genesis_hash(block.hash()).to_string() != prepared.context.network_id
     {
@@ -1080,7 +1080,71 @@ mod tests {
             );
         }
         let signed = read_signed_genesis(&directory.join("genesis.signed.nrt")).unwrap();
-        let epoch = iroha_data_model::sumeragi_finality::genesis_epoch(&signed).unwrap();
+        let authenticated =
+            iroha_data_model::sumeragi_finality::authenticated_genesis(&signed).unwrap();
+        let metadata = authenticated.metadata();
+        let epoch = authenticated.into_parts().0;
+        // Derive only the mandatory account/profile value work from their canonical
+        // constructors, independently of the profile validator or metadata decoder.
+        // A DEP7 metadata replay cannot enlarge its own successful allowance.
+        let profile_limits = |allocated| {
+            norito::DecodeLimits::new(1_000_000, 48 * 1024 * 1024, 1_000_000, allocated, 64)
+        };
+        let reference = norito::core::DecodeBudgetContext::new(profile_limits(usize::MAX));
+        let mut identity_debit = 0;
+        reference.with(|| {
+            let discriminant =
+                iroha_data_model::account::address::AccountAddress::i105_discriminant(
+                    &prepared.context.account_id,
+                )
+                .unwrap();
+            let _address_profile = ChainDiscriminantGuard::enter(discriminant);
+            assert_eq!(
+                AccountId::parse_encoded(&prepared.context.account_id).unwrap(),
+                owner
+            );
+            identity_debit = reference.consumed_allocated_bytes();
+            iroha_primitives::json::Json::try_new(prepared.service_profile).unwrap();
+        });
+        let profile_debit = reference.consumed_allocated_bytes();
+        assert!(identity_debit > 0 && profile_debit > identity_debit);
+        // The already authenticated metadata must consume no additional allowance;
+        // normal identity and expected-profile validation still execute in full.
+        let profile_context = norito::core::DecodeBudgetContext::new(profile_limits(
+            usize::try_from(profile_debit).unwrap(),
+        ));
+        profile_context.with(|| {
+            service_authorities::validate_signed_profile(&prepared, &signed, &metadata)
+        }).expect("original private-root signed profile must reuse completed authenticated metadata without another codec decode");
+        assert_eq!(profile_context.consumed_allocated_bytes(), profile_debit);
+        let empty = norito::core::DecodeBudgetContext::new(profile_limits(0));
+        assert!(
+            empty
+                .with(|| service_authorities::validate_signed_profile(
+                    &prepared, &signed, &metadata
+                ))
+                .is_err(),
+            "an empty allowance must still refuse the original account validation"
+        );
+        // Complete the same required identity read, then refuse the actual JSON
+        // constructor. The production validator must return its error, not unwind.
+        let partial = norito::core::DecodeBudgetContext::new(profile_limits(
+            usize::try_from(identity_debit).unwrap(),
+        ));
+        assert!(
+            partial
+                .with(|| service_authorities::validate_signed_profile(
+                    &prepared, &signed, &metadata
+                ))
+                .is_err(),
+            "signed profile JSON construction refusal must return without panicking"
+        );
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            369
+        );
+        service_authorities::validate_signed_profile(&prepared, &signed, &metadata)
+            .expect("a separate pristine profile attempt must still validate its original source");
         assert_eq!(epoch.authorization.authority_generation, 0);
         assert_eq!(epoch.committee.len(), 4);
         epoch

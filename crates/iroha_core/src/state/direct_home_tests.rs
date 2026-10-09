@@ -12,8 +12,7 @@ fn id() -> AssetDefinitionId {
 }
 
 fn definition() -> AssetDefinition {
-    AssetDefinition::numeric(id(), "Direct home", AssetBalancePolicy::Global, None)
-        .build(&ALICE_ID)
+    AssetDefinition::numeric(id(), "Direct home", AssetBalancePolicy::Global, None).build(&ALICE_ID)
 }
 
 fn world() -> World {
@@ -179,11 +178,7 @@ fn restricted_direct_fixture_rejects_invalid_home_and_rolls_back_partial_setup()
             .is_err()
     );
     world
-        .insert_direct_asset_definition_with_assets_for_testing(
-            definition,
-            DataSpaceId::new(7),
-            [],
-        )
+        .insert_direct_asset_definition_with_assets_for_testing(definition, DataSpaceId::new(7), [])
         .unwrap();
     assert_eq!(
         world.view().asset_definition_dataspace(&id()).unwrap(),
@@ -237,7 +232,11 @@ fn direct_home_is_exact_changes_world_root_and_leaves_parameters_unchanged() {
         Some(ds)
     );
     assert_eq!(
-        world.asset_definition_direct_homes.view().get(&id()).copied(),
+        world
+            .asset_definition_direct_homes
+            .view()
+            .get(&id())
+            .copied(),
         Some(AssetDefinitionDirectHomeV1 {
             incarnation: *world.axt_asset_incarnations.view().get(&id()).unwrap(),
             dataspace_id: ds,
@@ -297,7 +296,13 @@ fn native_home_rolls_back_with_transaction_drop() {
         );
     }
     assert!(block.world.asset_definitions.get(&id()).is_none());
-    assert!(block.world.asset_definition_direct_homes.get(&id()).is_none());
+    assert!(
+        block
+            .world
+            .asset_definition_direct_homes
+            .get(&id())
+            .is_none()
+    );
     block.validate_direct_home_rows().unwrap();
 }
 
@@ -472,8 +477,7 @@ fn row_transitions_are_immutable_for_one_incarnation() {
     assert!(validate_direct_home_transition(Some(&live), None, Some(&one), Some(&one)).is_err());
     // Modify only to a new incarnation.
     assert!(
-        validate_direct_home_transition(Some(&live), Some(&moved), Some(&one), Some(&one))
-            .is_err()
+        validate_direct_home_transition(Some(&live), Some(&moved), Some(&one), Some(&one)).is_err()
     );
     validate_direct_home_transition(Some(&live), Some(&reincarnated), Some(&one), Some(&two))
         .unwrap();
@@ -491,7 +495,11 @@ fn snapshot_restore_rejects_a_row_moved_for_the_same_incarnation() {
         .set_asset_definition_dataspace_for_testing(id(), DataSpaceId::new(7))
         .unwrap();
     world.rebuild_asset_definition_indexes().unwrap();
-    let mut moved = *world.asset_definition_direct_homes.view().get(&id()).unwrap();
+    let mut moved = *world
+        .asset_definition_direct_homes
+        .view()
+        .get(&id())
+        .unwrap();
     moved.dataspace_id = DataSpaceId::new(8);
     let mut homes = world.asset_definition_direct_homes.block();
     homes.insert(id(), moved);
@@ -533,13 +541,8 @@ fn confined_definitions_resolve_only_their_home_bucket_on_their_home_route() {
     );
     world
         .insert_direct_asset_definition_with_assets_for_testing(
-            AssetDefinition::numeric(
-                id(),
-                "Kina",
-                AssetBalancePolicy::DataspaceRestricted,
-                None,
-            )
-            .build(&owner),
+            AssetDefinition::numeric(id(), "Kina", AssetBalancePolicy::DataspaceRestricted, None)
+                .build(&owner),
             home,
             [],
         )
@@ -559,7 +562,9 @@ fn confined_definitions_resolve_only_their_home_bucket_on_their_home_route() {
             AssetBalanceScope::Dataspace(home)
         );
         assert_eq!(
-            tx.world.resolve_asset_id_for_scope_hint(&bare, None).unwrap(),
+            tx.world
+                .resolve_asset_id_for_scope_hint(&bare, None)
+                .unwrap(),
             home_id
         );
         assert_eq!(

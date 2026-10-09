@@ -122,8 +122,9 @@ fn offline_proposal(
     parent: &SignedBlock,
     input: crate::tx::AcceptedTransaction<'static>,
 ) -> Result<SignedBlock, String> {
-    let epoch =
-        crate::sumeragi::epoch::genesis_epoch(genesis).map_err(|error| error.to_string())?;
+    let epoch = crate::sumeragi::epoch::authenticated_genesis(genesis)
+        .map(|genesis| genesis.into_parts().0)
+        .map_err(|error| error.to_string())?;
     let network = match input.entrypoint() {
         iroha_data_model::transaction::TransactionEntrypoint::External(transaction) => {
             transaction.network_id()
@@ -232,7 +233,9 @@ fn evidence_fixture() -> ValidatorCommitteeProvisioningEvidenceV1 {
     .unwrap();
     let network = NetworkId::from_genesis_hash(genesis.hash());
     let instance = crate::sumeragi::node::root_instance(&genesis, &chain_id().to_string()).unwrap();
-    let mut current = crate::sumeragi::epoch::genesis_epoch(&genesis).unwrap();
+    let mut current = crate::sumeragi::epoch::authenticated_genesis(&genesis)
+        .map(|genesis| genesis.into_parts().0)
+        .unwrap();
     let state = crate::state::State::new_with_chain_and_network_id_for_testing(
         World::new(),
         crate::kura::Kura::blank_kura_for_testing(),

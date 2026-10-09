@@ -5343,7 +5343,7 @@ async fn pipeline_status_pending_completion_reuses_original_carrier_and_leaves_o
                 kind: PipelineStatusKind::Committed,
                 block_hash,
                 observed_at,
-                deferred: Some(deferred.clone()),
+                deferred: Some(deferred.clone().into()),
             },
         );
     }
@@ -5387,7 +5387,7 @@ async fn pipeline_status_pending_completion_reuses_original_carrier_and_leaves_o
     assert_eq!(pending.kind, PipelineStatusKind::Committed);
     assert_eq!(pending.block_hash, unrelated_hash);
     assert_eq!(pending.observed_at, observed_at);
-    assert_eq!(pending.deferred, Some(deferred));
+    assert_eq!(pending.deferred, Some(deferred.into()));
     assert_eq!(
         app.pipeline_status_cache.lookup(&hash).unwrap().kind,
         PipelineStatusKind::Committed
@@ -5426,7 +5426,7 @@ async fn pipeline_status_pending_foreign_or_absent_query_keeps_exact_deferred_so
             kind: PipelineStatusKind::Applied,
             block_hash: original.block().hash(),
             observed_at,
-            deferred: Some(deferred.clone()),
+            deferred: Some(deferred.clone().into()),
         },
     );
     let foreign = crate::history_producer::HistoryProducerOwner::for_test();
@@ -5467,7 +5467,7 @@ async fn pipeline_status_pending_foreign_or_absent_query_keeps_exact_deferred_so
     assert_eq!(pending.kind, PipelineStatusKind::Applied);
     assert_eq!(pending.block_hash, original.block().hash());
     assert_eq!(pending.observed_at, observed_at);
-    assert_eq!(pending.deferred, Some(deferred));
+    assert_eq!(pending.deferred, Some(deferred.into()));
     assert_eq!(owner.allocation_context().consumed_allocated_bytes(), 0);
     assert_eq!(foreign.allocation_context().consumed_allocated_bytes(), 0);
     assert_eq!(frames.reserved_bytes(), frames.limit_bytes());
