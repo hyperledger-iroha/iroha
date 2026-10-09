@@ -27,7 +27,6 @@ fn asset_definition_encoding_refusal_keeps_all_native_and_state_fences() {
         let generation = state.state_view_generation();
         let checked = CheckedAssetDefinitions::capture(
             &state.world,
-            &state.ivm_execution_budget(),
             16_777_216,
         )
         .unwrap();

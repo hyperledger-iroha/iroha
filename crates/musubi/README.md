@@ -101,6 +101,21 @@ the selected contracts and tests. `musubi new <dir>` creates a counter seiyaku n
 after the package, four tests, a README and `.gitignore`; `--namespace` defaults to
 `local` until the package is published.
 
+Kotodama lints warn by default. A `[lints]` table in `Musubi.toml` sets a level per lint
+name, and `deny-warnings = true` turns every warning into an error; a package without
+`[lints]` uses its workspace root's table. `musubi check|build|test --deny-warnings` does
+the same for one run. A denied lint fails the command with `MUSUBI_E_COMPILER`:
+
+```toml
+[lints]
+unused-local = "deny"
+exact-division = "allow"
+deny-warnings = false
+```
+
+Unknown lint names are manifest errors that name the closest lint; `koto explain --list`
+lists them all.
+
 Path dependencies stay below one workspace root. For two standalone sibling packages,
 `musubi add <alias> --path ../<dir> --create-workspace` writes the shared parent
 `Musubi.toml` listing both as members before adding the dependency; it refuses packages

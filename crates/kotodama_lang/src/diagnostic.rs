@@ -702,7 +702,7 @@ impl DiagnosticBundle {
                 message
             );
             if let Some(span) = &diagnostic.primary_span {
-                let _ = write!(output, "\n  --> {}", display_location(span));
+                let _ = write!(output, "\n  --> {}", display_position(span));
                 if let Some(source) = &diagnostic.primary_source {
                     source_rendering::render(&mut output, source, span);
                 }
@@ -711,7 +711,7 @@ impl DiagnosticBundle {
                 let _ = write!(
                     output,
                     "\n  = label: {}: {}",
-                    display_location(&label.span),
+                    display_position(&label.span),
                     label.message
                 );
                 if let Some(Some(source)) = diagnostic.label_sources.get(index) {
@@ -864,7 +864,20 @@ fn sarif_rule(code: &str, first: Option<&Diagnostic>) -> Value {
     }
     json_object(entries)
 }
-/// `path:line:column-line:column`, the human form of a span.
+/// `path:line:column`, the human form of where a span starts.
+///
+/// The underlined excerpt shows the span's extent, so the location names only
+/// its start; JSON and SARIF keep the complete range.
+fn display_position(span: &SourceSpan) -> String {
+    format!(
+        "{}:{}:{}",
+        display_source_span(span),
+        span.start.line,
+        span.start.column
+    )
+}
+/// `path:line:column-line:column`, the human form of a complete span, used
+/// where no excerpt shows the extent (a fix outside the captured source).
 fn display_location(span: &SourceSpan) -> String {
     format!(
         "{}:{}:{}-{}:{}",
@@ -1232,7 +1245,7 @@ mod tests {
         });
         let human = DiagnosticBundle::single(diagnostic).render_human();
         assert!(!human.contains("[bytes"), "{human}");
-        assert!(human.contains("--> fix.ko:1:1-1:9"), "{human}");
+        assert!(human.contains("--> fix.ko:1:1"), "{human}");
         assert!(
             human.ends_with("= fix: replace `contract` with `seiyaku` or `誓約`"),
             "{human}"

@@ -17,6 +17,11 @@
 //! Addresses are 21 bytes starting with `0x41`, except log addresses, which are
 //! the 20-byte EVM form. A success response carrying `{"Error": …}` is an
 //! [`RpcError::Api`]. Nothing is verified here.
+//!
+//! Every answer is decoded inside its attempt under its route's byte cap
+//! ([`crate::limits::http_response_cap`]), so an endpoint that answers with
+//! malformed data or an API error is discredited and the next call starts at
+//! the next endpoint.
 
 use norito::json::{Map, Value};
 
@@ -246,7 +251,9 @@ impl TronClient {
     /// # Errors
     /// Any [`RpcError`].
     pub fn now_block(&self) -> Result<TronBlock, RpcError> {
-        parse_block(&self.call("/wallet/getnowblock", Map::new())?)
+        self.call("/wallet/getnowblock", Map::new(), |value| {
+            parse_block(&value)
+        })
     }
 
     /// `POST /wallet/getblockbynum` with full transactions; `None` for an
@@ -257,11 +264,12 @@ impl TronClient {
     pub fn block_by_num(&self, number: u64) -> Result<Option<TronBlock>, RpcError> {
         let mut body = Map::new();
         body.insert("num".to_owned(), Value::from(number));
-        let value = self.call("/wallet/getblockbynum", body)?;
-        if is_empty_object(&value) {
-            return Ok(None);
-        }
-        parse_block(&value).map(Some)
+        self.call("/wallet/getblockbynum", body, |value| {
+            if is_empty_object(&value) {
+                return Ok(None);
+            }
+            parse_block(&value).map(Some)
+        })
     }
 
     /// `POST /wallet/getblockbylimitnext`: blocks `start..end` (end exclusive,
@@ -279,18 +287,19 @@ impl TronClient {
         let mut body = Map::new();
         body.insert("startNum".to_owned(), Value::from(start));
         body.insert("endNum".to_owned(), Value::from(end));
-        let value = self.call("/wallet/getblockbylimitnext", body)?;
-        let map = expect_object(&value, "block range")?;
-        let blocks = optional_array(map, "block", "block range")?
-            .iter()
-            .map(parse_block)
-            .collect::<Result<Vec<_>, _>>()?;
-        if u64::try_from(blocks.len()).map_or(true, |len| len > end - start) {
-            return Err(invalid_response(
-                "getblockbylimitnext returned more blocks than requested",
-            ));
-        }
-        Ok(blocks)
+        self.call("/wallet/getblockbylimitnext", body, |value| {
+            let map = expect_object(&value, "block range")?;
+            let blocks = optional_array(map, "block", "block range")?
+                .iter()
+                .map(parse_block)
+                .collect::<Result<Vec<_>, _>>()?;
+            if u64::try_from(blocks.len()).map_or(true, |len| len > end - start) {
+                return Err(invalid_response(
+                    "getblockbylimitnext returned more blocks than requested",
+                ));
+            }
+            Ok(blocks)
+        })
     }
 
     /// `POST /wallet/getnextmaintenancetime`: the next maintenance time (ms).
@@ -298,9 +307,10 @@ impl TronClient {
     /// # Errors
     /// Any [`RpcError`].
     pub fn next_maintenance_time(&self) -> Result<u64, RpcError> {
-        let value = self.call("/wallet/getnextmaintenancetime", Map::new())?;
-        let what = "next maintenance time";
-        number_or_zero(expect_object(&value, what)?, "num", what)
+        self.call("/wallet/getnextmaintenancetime", Map::new(), |value| {
+            let what = "next maintenance time";
+            number_or_zero(expect_object(&value, what)?, "num", what)
+        })
     }
 
     /// `POST /walletsolidity/getnowblock`: the newest solidified block.
@@ -308,7 +318,9 @@ impl TronClient {
     /// # Errors
     /// Any [`RpcError`].
     pub fn solidity_now_block(&self) -> Result<TronBlock, RpcError> {
-        parse_block(&self.call("/walletsolidity/getnowblock", Map::new())?)
+        self.call("/walletsolidity/getnowblock", Map::new(), |value| {
+            parse_block(&value)
+        })
     }
 
     /// `POST /walletsolidity/gettransactioninfobyid`; `None` while the
@@ -322,11 +334,12 @@ impl TronClient {
     ) -> Result<Option<TronTransactionInfo>, RpcError> {
         let mut body = Map::new();
         body.insert("value".to_owned(), Value::from(hex::encode(txid)));
-        let value = self.call("/walletsolidity/gettransactioninfobyid", body)?;
-        if is_empty_object(&value) {
-            return Ok(None);
-        }
-        parse_transaction_info(value).map(Some)
+        self.call("/walletsolidity/gettransactioninfobyid", body, |value| {
+            if is_empty_object(&value) {
+                return Ok(None);
+            }
+            parse_transaction_info(value).map(Some)
+        })
     }
 
     /// `POST /wallet/getcontractinfo`: the runtime code of `address`; `None`
@@ -343,17 +356,18 @@ impl TronClient {
     pub fn contract_info(&self, address: &[u8; 21]) -> Result<Option<TronContractInfo>, RpcError> {
         let mut body = Map::new();
         body.insert("value".to_owned(), address_param(address, "the contract")?);
-        let value = self.call("/wallet/getcontractinfo", body)?;
-        if is_empty_object(&value) {
-            return Ok(None);
-        }
-        let what = "contract info";
-        let map = expect_object(&value, what)?;
-        Ok(Some(TronContractInfo {
-            runtime_code: tron_hex_field(map, "runtimecode", what)?,
-            smart_contract: optional(map, "smart_contract").cloned(),
-            contract_state: optional(map, "contract_state").cloned(),
-        }))
+        self.call("/wallet/getcontractinfo", body, |value| {
+            if is_empty_object(&value) {
+                return Ok(None);
+            }
+            let what = "contract info";
+            let map = expect_object(&value, what)?;
+            Ok(Some(TronContractInfo {
+                runtime_code: tron_hex_field(map, "runtimecode", what)?,
+                smart_contract: optional(map, "smart_contract").cloned(),
+                contract_state: optional(map, "contract_state").cloned(),
+            }))
+        })
     }
 
     /// `POST /wallet/triggerconstantcontract` of `contract` with full call
@@ -369,8 +383,9 @@ impl TronClient {
         data: &[u8],
     ) -> Result<TronConstantCall, RpcError> {
         let body = constant_call_body(owner, contract, data)?;
-        let value = self.call("/wallet/triggerconstantcontract", body)?;
-        parse_constant_call(&value)
+        self.call("/wallet/triggerconstantcontract", body, |value| {
+            parse_constant_call(&value)
+        })
     }
 
     /// `POST /walletsolidity/triggerconstantcontract`: the same call against
@@ -387,8 +402,9 @@ impl TronClient {
         data: &[u8],
     ) -> Result<TronConstantCall, RpcError> {
         let body = constant_call_body(owner, contract, data)?;
-        let value = self.call("/walletsolidity/triggerconstantcontract", body)?;
-        parse_constant_call(&value)
+        self.call("/walletsolidity/triggerconstantcontract", body, |value| {
+            parse_constant_call(&value)
+        })
     }
 
     /// `POST /wallet/broadcasthex` of a signed `Transaction` protobuf.
@@ -408,30 +424,39 @@ impl TronClient {
             "transaction".to_owned(),
             Value::from(hex::encode(transaction)),
         );
-        let value = self.call("/wallet/broadcasthex", body)?;
-        let what = "broadcast";
-        let map = expect_object(&value, what)?;
-        Ok(TronBroadcast {
-            result: optional_bool(map, "result", what)?.unwrap_or(false),
-            code: optional_str(map, "code", what)?.map(sanitize_message),
-            message: optional_str(map, "message", what)?
-                .filter(|message| !message.is_empty())
-                .map(sanitize_message),
-            txid: optional_str(map, "txid", what)?
-                .map(|text| {
-                    parse_tron_hex_array::<32>(text)
-                        .map_err(|error| field_error(what, "txid", error))
-                })
-                .transpose()?,
+        self.call("/wallet/broadcasthex", body, |value| {
+            let what = "broadcast";
+            let map = expect_object(&value, what)?;
+            Ok(TronBroadcast {
+                result: optional_bool(map, "result", what)?.unwrap_or(false),
+                code: optional_str(map, "code", what)?.map(sanitize_message),
+                message: optional_str(map, "message", what)?
+                    .filter(|message| !message.is_empty())
+                    .map(sanitize_message),
+                txid: optional_str(map, "txid", what)?
+                    .map(|text| {
+                        parse_tron_hex_array::<32>(text)
+                            .map_err(|error| field_error(what, "txid", error))
+                    })
+                    .transpose()?,
+            })
         })
     }
 
-    /// `POST path` with a JSON body. The answer is parsed inside the attempt,
-    /// so an endpoint whose success body is not JSON fails over; an
-    /// `{"Error": …}` answer is an [`RpcError::Api`] and is returned at once.
-    fn call(&self, path: &str, body: Map) -> Result<Value, RpcError> {
+    /// `POST path` with a JSON body, then `decode` the answer. Both run inside
+    /// the attempt, so an endpoint whose success body is not JSON fails over;
+    /// an `{"Error": …}` answer ([`RpcError::Api`]) or a malformed one is
+    /// returned at once and discredits the endpoint.
+    fn call<T>(
+        &self,
+        path: &str,
+        body: Map,
+        decode: impl Fn(Value) -> Result<T, RpcError>,
+    ) -> Result<T, RpcError> {
         self.transport
-            .post_json_then(path, &Value::Object(body), api_result)
+            .post_json_then(path, &Value::Object(body), |endpoint, value| {
+                decode(api_result(endpoint, value)?)
+            })
     }
 }
 

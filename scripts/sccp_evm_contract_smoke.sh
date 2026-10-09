@@ -5,9 +5,10 @@
 # 0.8.31 compilers (solc for ETH/BSC, tronprotocol tv_0.8.31 for TRON) through
 # `scripts/contract_artifact_corridor.py`, proves that a mutated manifest, a
 # stale source and a mutated compiler are refused, installs and audits the
-# locked EDR runtime in a private copy, and runs the EDR suite under chain ids
-# 1, 56 and 0x2b6653dc. TRON-compiler bytecode itself is qualified on java-tron
-# (TRE) separately; nothing here is TVM evidence.
+# locked EDR runtime in a private copy, and runs the EDR suite and the Rust
+# fixture and calldata conformance suite under chain ids 1, 56 and 0x2b6653dc.
+# TRON-compiler bytecode itself is qualified on java-tron (TRE) separately;
+# nothing here is TVM evidence.
 #
 # Prerequisites: Python 3.9+, Node.js >= 22 with npm, HTTPS for the first
 # compiler download (cached by SHA-256 under target/sccp-contract-tooling).
@@ -128,6 +129,12 @@ SCCP_CONTRACT_ARTIFACT_MANIFEST="$MANIFEST" \
 SCCP_CORRIDOR_PYTHON_BIN="$PYTHON_BIN" \
 SCCP_GAS_REPORT="$GAS_REPORT" \
   "$NODE_BIN" --test contracts/evm/sccp/test/sccp_taira_xor.test.js
+
+echo "Running the Rust fixture and calldata conformance EDR suite (chain ids 1, 56 and 0x2b6653dc)."
+SCCP_EVM_RUNTIME_DIR="$RUNTIME_DIR" \
+SCCP_CONTRACT_ARTIFACT_MANIFEST="$MANIFEST" \
+SCCP_CORRIDOR_PYTHON_BIN="$PYTHON_BIN" \
+  "$NODE_BIN" --test contracts/evm/sccp/test/sccp_v1_fixtures.test.js
 
 "$PYTHON_BIN" - "$GAS_REPORT" <<'PY'
 import json

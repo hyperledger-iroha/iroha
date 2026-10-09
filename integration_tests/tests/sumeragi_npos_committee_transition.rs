@@ -97,6 +97,8 @@ struct NativeProviderManifest {
 mod committee_parliament;
 #[path = "support/committee_staking.rs"]
 mod committee_staking;
+#[path = "support/committee_staking_history.rs"]
+mod committee_staking_history;
 #[path = "support/committee_status.rs"]
 mod committee_status;
 #[path = "support/parliament_submission.rs"]
@@ -612,35 +614,39 @@ async fn advance_to_height(
             ProgressAction::AwaitCatchup => {}
             ProgressAction::SubmitAt(height) => {
                 let client = peers[usize::try_from(tick)? % peers.len()].client();
-                let account = client.account_client();
                 let message = format!("committee transition progress {target}:{tick}");
                 pending_height = Some(height);
-                tokio::time::timeout_at(deadline.into(), async {
-                    let mut payload = account.prepare_transaction(
-                        iroha::client::AccountTransactionDraft::new(
-                            vec![Log::new(Level::INFO, message)],
-                            FeePaymentIntent::authority(Vec::new(), None),
-                            Metadata::default(),
-                        ),
-                    )?;
-                    let quote = account
-                        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
-                            payload: &payload,
-                        })
-                        .await?;
-                    ensure!(
-                        payload
-                            .fee_payment
-                            .has_same_payer_and_gas_bound(&quote.intent),
-                        "progress fee quote changed the signed payer"
-                    );
-                    payload.fee_payment = quote.intent;
-                    let transaction = account.sign_transaction(payload)?;
-                    account.submit_transaction_and_wait(&transaction).await?;
-                    Ok::<_, eyre::Report>(())
-                })
+                committee_status::submit_async_until(
+                    client.client().clone(),
+                    deadline,
+                    |bounded| async move {
+                        let account = bounded.account_client()?;
+                        let mut payload = account.prepare_transaction(
+                            iroha::client::AccountTransactionDraft::new(
+                                vec![Log::new(Level::INFO, message)],
+                                FeePaymentIntent::authority(Vec::new(), None),
+                                Metadata::default(),
+                            ),
+                        )?;
+                        let quote = account
+                            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
+                                payload: &payload,
+                            })
+                            .await?;
+                        ensure!(
+                            payload
+                                .fee_payment
+                                .has_same_payer_and_gas_bound(&quote.intent),
+                            "progress fee quote changed the signed payer"
+                        );
+                        payload.fee_payment = quote.intent;
+                        let transaction = account.sign_transaction(payload)?;
+                        account.submit_transaction_and_wait(&transaction).await?;
+                        Ok::<_, eyre::Report>(())
+                    },
+                )
                 .await
-                .wrap_err("progress transaction exceeded its original deadline")??;
+                .wrap_err("committee progress transaction failed")?;
                 tick += 1;
             }
         }
@@ -948,13 +954,41 @@ fn append_finality_chain_from_proofs(
     chain_id: &iroha_model_base::chain::ChainId,
     network_id: NetworkId,
     signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
+    journal: NativeFinalityJournal,
+    end: u64,
+    deadline: Instant,
+    fetch: impl FnMut(NonZeroU64) -> Result<iroha::data_model::sumeragi_finality::SumeragiFinalityProof>,
+) -> Result<NativeFinalityJournal> {
+    let base = u64::try_from(journal.blocks.len())?;
+    ensure!(
+        base >= 2 && base < end,
+        "rotation phase must extend an original H2+ journal"
+    );
+    extend_finality_chain_from_proofs(
+        chain_id,
+        network_id,
+        signed_genesis_hash,
+        journal,
+        end,
+        deadline,
+        fetch,
+    )
+    .map(|(journal, _)| journal)
+}
+
+// Staking observations may name the same immutable tip. Every observation still runs
+// the complete native verifier; only already acquired physical source rows are retained.
+fn extend_finality_chain_from_proofs(
+    chain_id: &iroha_model_base::chain::ChainId,
+    network_id: NetworkId,
+    signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
     mut journal: NativeFinalityJournal,
     end: u64,
     deadline: Instant,
     mut fetch: impl FnMut(
         NonZeroU64,
     ) -> Result<iroha::data_model::sumeragi_finality::SumeragiFinalityProof>,
-) -> Result<NativeFinalityJournal> {
+) -> Result<(NativeFinalityJournal, Vec<CertifiedBlock>)> {
     ensure!(
         (2..=MAX_QUALIFICATION_HEIGHT).contains(&end),
         "committee proof cut exceeds its explicit disposable bound"
@@ -963,14 +997,18 @@ fn append_finality_chain_from_proofs(
         network_id.into_genesis_hash() == signed_genesis_hash,
         "network differs from independent signed genesis"
     );
+    ensure!(
+        Instant::now() < deadline,
+        "committee proof retrieval deadline elapsed"
+    );
     let limits = finality_limits();
     journal
         .validate_source(limits)
         .map_err(|error| eyre!(error))?;
     let base = u64::try_from(journal.blocks.len())?;
     ensure!(
-        base >= 2 && base < end,
-        "rotation phase must extend an original H2+ journal"
+        base >= 2 && base <= end,
+        "retained observation must preserve or extend its original H2+ journal"
     );
     eprintln!(
         "rotation finality prefix acquisition: base={base} target={end} planned_new_requests={}",
@@ -1015,9 +1053,9 @@ fn append_finality_chain_from_proofs(
         "rotation finality prefix acquired: base={base} target={end} actual_new_rows={}",
         end - base
     );
-    authenticate_finality_journal(&journal, chain_id, network_id, end, deadline)?;
+    let blocks = authenticate_finality_journal(&journal, chain_id, network_id, end, deadline)?;
     eprintln!("rotation finality prefix verified: tip={end}");
-    Ok(journal)
+    Ok((journal, blocks))
 }
 
 async fn stage_genesis_brokers(

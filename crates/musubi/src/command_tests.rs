@@ -1402,7 +1402,7 @@ fn workspace_test_failures_keep_their_stable_boundary_codes() {
         test_runner_diagnostic(&WorkspaceTestErrorV1::Execution("fixture".to_owned())).code(),
         ErrorCode::TestFailed
     );
-    let rendered = "error[K2003] semantic: operator `+` is not defined for `bool` and `int`\n  --> tests/app.test.ko:3:9-3:17";
+    let rendered = "error[K2003] semantic: operator `+` is not defined for `bool` and `int`\n  --> tests/app.test.ko:3:9";
     let compilation =
         test_runner_diagnostic(&WorkspaceTestErrorV1::Compilation(rendered.to_owned()));
     assert_eq!(compilation.code(), ErrorCode::Compiler);

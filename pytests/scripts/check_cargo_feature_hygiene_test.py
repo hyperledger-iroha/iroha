@@ -391,6 +391,21 @@ def test_rejects_stale_explicit_opt_in_name(monkeypatch) -> None:
     )
 
 
+@pytest.mark.parametrize("members", [[], ["dep:pprof"], ["dep:bytes"], ["pprof", "dep:bytes"]])
+def test_torii_profiling_retains_both_explicit_dependency_owners(members) -> None:
+    """Profiling owns target pprof and host bytes without exporting a pprof alias."""
+    document = _guarded_document("iroha_torii")
+    assert _guarded_errors("iroha_torii", document) == []
+    visible = FEATURE_HYGIENE.cargo_visible_features(document)
+    assert "pprof" not in visible
+    assert "profiling" not in FEATURE_HYGIENE.local_default_feature_closure(visible)
+    document["features"]["profiling"] = members
+    assert any(
+        "feature `profiling` must be" in error
+        for error in _guarded_errors("iroha_torii", document)
+    )
+
+
 def _member_rows(*, implicit_norito_defaults: bool = False) -> list[str]:
     rows = []
     for name in sorted(FEATURE_HYGIENE.FOUNDATIONAL_DEPENDENCIES):
@@ -828,6 +843,7 @@ def test_contextual_cuda_pins_both_exact_dependency_members() -> None:
         ("irohad_lib", ("default", "daemon")),
         ("iroha", ("default",)),
         ("iroha_data_model", ("default", "application-model")),
+        ("iroha_torii", ("default", "node-api")),
     ],
 )
 def test_unit_mutation_testing_is_empty_explicit_and_excluded_from_defaults(
@@ -857,7 +873,7 @@ def test_unit_mutation_testing_is_empty_explicit_and_excluded_from_defaults(
         ), aggregate
 
 
-@pytest.mark.parametrize("package", ["irohad_lib", "iroha", "iroha_data_model"])
+@pytest.mark.parametrize("package", ["irohad_lib", "iroha", "iroha_data_model", "iroha_torii"])
 def test_unit_mutation_dependency_is_nonshipping_even_through_an_alias(
     tmp_path: Path, package: str,
 ) -> None:

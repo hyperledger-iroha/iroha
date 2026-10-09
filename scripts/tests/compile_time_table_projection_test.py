@@ -360,7 +360,7 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
         # These first-release tables evolve with the language. Verify their current
         # closed schemas and ownership instead of claiming an obsolete Rust preimage.
         for filename, width in [
-            ("diagnostic_explanations_v1.tsv", 4),
+            ("diagnostic_explanations_v1.tsv", 6),
             ("compile_fail_cases_v1.tsv", 6),
             ("secret_reject_cases_v1.tsv", 4),
         ]:

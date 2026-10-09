@@ -7581,3 +7581,256 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
         }
     }
 }
+/// Probe-call argument for one registry parameter descriptor, or `None` when
+/// the descriptor needs a bespoke call shape (generic, aggregate, ZK, AXT or
+/// state-handle arguments).
+fn registry_probe_argument(descriptor: &str) -> Option<&'static str> {
+    Some(match descriptor.strip_suffix('?').unwrap_or(descriptor) {
+        "AccountId" => "account",
+        "AssetDefinitionId" => "asset_definition",
+        "AssetId" => "asset",
+        "DataSpaceId" => "dataspace",
+        "DomainId" | "DomainId|Name" => "domain",
+        "Json" => "value",
+        "Name" | "Name|Json" => "key",
+        "Name|bytes" | "bytes" => "evidence",
+        "NftId" => "nft",
+        "Option<quantity>" => "cap",
+        "Option<string>" => "note",
+        "bool" => "enabled",
+        "int" | "int|bytes" | "int|decimal" => "quorum",
+        "quantity" => "amount",
+        "string" | "string|bytes" | "string|int" => "name",
+        "NumericSpec" => "NumericSpec::integer()",
+        "Mintable" => "Mintable::Once",
+        "SignatureScheme" => "SignatureScheme::Ed25519",
+        "ErrorEnum::Variant" => "ProbeError::Rejected",
+        "List<(AccountId,AccountId,AssetDefinitionId,quantity),N>" => {
+            "[(account, account, asset_definition, amount)]"
+        }
+        _ => return None,
+    })
+}
+#[test]
+fn every_builtin_codegen_matches_its_registry_operation_syscalls() {
+    use kotodama_surface::builtins::{Builtin, BuiltinLowering, BuiltinMode, BuiltinSurface};
+    const PARAMS: &str = "AccountId account, AssetDefinitionId asset_definition, AssetId asset, \
+        DataSpaceId dataspace, DomainId domain, Json value, Name key, bytes evidence, NftId nft, \
+        Option<quantity> cap, Option<string> note, bool enabled, int quorum, quantity amount, \
+        string name";
+    let compile = |body: &str| {
+        let source = format!(
+            "seiyaku Probe {{ error enum ProbeError {{ Rejected = 1 }} \
+             kotoage fn probe({PARAMS}) authorize(\"Probe\") {{ {body} }} }}"
+        );
+        Compiler::new()
+            .compile_source(&source)
+            .map(|bytes| emitted_syscalls(&bytes))
+    };
+    let baseline = compile("")
+        .expect("empty probe compiles")
+        .into_iter()
+        .collect::<HashSet<_>>();
+    // Pointer publication, normalization and encoding, heap allocation,
+    // checked `int` narrowing and its trap are compiler-owned plumbing unless
+    // the builtin declares them as its operation.
+    let plumbing = |syscall: u32| {
+        syscall == syscalls::SYSCALL_INPUT_PUBLISH_TLV
+            || syscall == syscalls::SYSCALL_ALLOC
+            || syscall == syscalls::SYSCALL_NORMALIZE_NORITO_BYTES
+            || syscall == syscalls::SYSCALL_POINTER_TO_NORITO
+            || syscall == syscalls::SYSCALL_ABORT
+            || syscalls::is_numeric_v1_syscall(syscall)
+    };
+    let mut checked = 0_usize;
+    let mut unprobed = Vec::new();
+    let mut failures = Vec::new();
+    for (builtin, spec) in Builtin::registry() {
+        if spec.surface != BuiltinSurface::Function
+            || spec.mode != BuiltinMode::Any
+            || matches!(builtin, Builtin::PointerConstructor(_))
+            || builtin.is_compile_time_nominal()
+        {
+            continue;
+        }
+        if builtin == Builtin::TriggerEvent {
+            // Readable only from a trigger body; `trigger_event` codegen is
+            // covered by the trigger lowering tests.
+            unprobed.push(spec.name);
+            continue;
+        }
+        // Arguments that must be compile-time literals at the call.
+        let literal = |label: &str| match (builtin, label) {
+            (Builtin::ContractInvokeQuantity2, "entrypoint")
+            | (Builtin::GrantContractEntrypoint | Builtin::RevokeContractEntrypoint, "kotoage") => {
+                Some("\"probe\"")
+            }
+            (Builtin::ContractInvokeQuantity2, "returns") => Some("\"quantity\""),
+            (Builtin::BuildSubmitBallotInline, "election_id" | "backend") => Some("\"probe\""),
+            (Builtin::BuildSubmitBallotInline, "ciphertext") => Some("b\"ciphertext\""),
+            (Builtin::BuildSubmitBallotInline, "nullifier") => {
+                Some("b\"0123456789abcdef0123456789abcdef\"")
+            }
+            (Builtin::BuildSubmitBallotInline, "proof") => Some("b\"proof\""),
+            (Builtin::BuildSubmitBallotInline, "verification_key") => Some("b\"vk\""),
+            _ => None,
+        };
+        let arguments = spec
+            .signature
+            .parameters
+            .iter()
+            .zip(spec.signature.parameter_names)
+            .map(|(descriptor, label)| {
+                literal(label)
+                    .or_else(|| registry_probe_argument(descriptor))
+                    .map(|argument| format!("{label}: {argument}"))
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(arguments) = arguments else {
+            unprobed.push(spec.name);
+            continue;
+        };
+        // Rule (a) of the label policy: a label equal to the declared
+        // parameter name is accepted by every builtin.
+        let call = format!("{}({})", spec.name, arguments.join(", "));
+        let statement = if spec.signature.return_type == "()" {
+            format!("{call};")
+        } else {
+            format!("let _probe = {call};")
+        };
+        let emitted = match compile(&statement) {
+            Ok(emitted) => emitted,
+            Err(error) => {
+                failures.push(format!(
+                    "{builtin:?}: `{statement}` failed to compile: {error}"
+                ));
+                continue;
+            }
+        };
+        let declared = spec
+            .operation_syscalls
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        let emitted = emitted
+            .into_iter()
+            .filter(|syscall| {
+                !baseline.contains(syscall) && (declared.contains(syscall) || !plumbing(*syscall))
+            })
+            .collect::<HashSet<_>>();
+        let consistent = match spec.lowering {
+            BuiltinLowering::DirectSyscall => emitted == declared,
+            BuiltinLowering::DerivedSyscalls => !emitted.is_empty() && emitted.is_subset(&declared),
+            BuiltinLowering::Instructions => emitted.is_empty(),
+        };
+        if !consistent {
+            failures.push(format!(
+                "{builtin:?} ({:?}): `{statement}` emitted {emitted:x?}, registry declares {declared:x?}",
+                spec.lowering
+            ));
+        }
+        checked += 1;
+    }
+    // Receiver methods (StateMap helpers, JSON getters, `Name.path`) run in a
+    // private helper, where JSON payload getters are permitted.
+    const ARGS: &str = "account, asset_definition, asset, dataspace, domain, value, key, \
+        evidence, nft, cap, note, enabled, quorum, amount, name";
+    let compile_method = |body: &str| {
+        let source = format!(
+            "seiyaku Probe {{ state StateMap<int, int> Balances; fn run({PARAMS}) {{ {body} }} \
+             kotoage fn probe({PARAMS}) authorize(\"Probe\") {{ run({ARGS}); }} }}"
+        );
+        Compiler::new()
+            .compile_source(&source)
+            .map(|bytes| emitted_syscalls(&bytes))
+    };
+    let method_baseline = compile_method("")
+        .expect("empty method probe compiles")
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let mut methods = 0_usize;
+    for (builtin, spec) in Builtin::registry() {
+        if spec.surface != BuiltinSurface::MethodOnly || spec.mode != BuiltinMode::Any {
+            continue;
+        }
+        let parameters = spec
+            .signature
+            .parameters
+            .iter()
+            .zip(spec.signature.parameter_names);
+        let mut receiver = None;
+        let mut arguments = Vec::new();
+        for (index, (descriptor, label)) in parameters.enumerate() {
+            let argument = match *descriptor {
+                "StateMap<K,V>" => "Balances",
+                "K" | "V" => "quorum",
+                other => registry_probe_argument(other)
+                    .unwrap_or_else(|| panic!("{builtin:?}: no probe for `{other}`")),
+            };
+            if index == 0 {
+                receiver = Some(argument);
+            } else {
+                arguments.push(format!("{label}: {argument}"));
+            }
+        }
+        let receiver = receiver.unwrap_or_else(|| panic!("{builtin:?} has no receiver"));
+        let statement = format!(
+            "let _probe = {receiver}.{}({});",
+            spec.name,
+            arguments.join(", ")
+        );
+        let declared = spec
+            .operation_syscalls
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        match compile_method(&statement) {
+            Ok(emitted) => {
+                let emitted = emitted
+                    .into_iter()
+                    .filter(|syscall| {
+                        !method_baseline.contains(syscall)
+                            && (declared.contains(syscall) || !plumbing(*syscall))
+                    })
+                    .collect::<HashSet<_>>();
+                let consistent = match spec.lowering {
+                    BuiltinLowering::DirectSyscall => emitted == declared,
+                    BuiltinLowering::DerivedSyscalls => {
+                        !emitted.is_empty() && emitted.is_subset(&declared)
+                    }
+                    BuiltinLowering::Instructions => emitted.is_empty(),
+                };
+                if !consistent {
+                    failures.push(format!(
+                        "{builtin:?} ({:?}): `{statement}` emitted {emitted:x?}, registry declares {declared:x?}",
+                        spec.lowering
+                    ));
+                }
+            }
+            Err(error) => failures.push(format!(
+                "{builtin:?}: `{statement}` failed to compile: {error}"
+            )),
+        }
+        methods += 1;
+    }
+    assert!(methods >= 15, "only {methods} receiver methods were probed");
+    unprobed.sort_unstable();
+    assert!(
+        failures.is_empty(),
+        "{}\nunprobed: {unprobed:?}",
+        failures.join("\n")
+    );
+    // Builtins whose arguments need bespoke shapes (AXT descriptors) or a
+    // trigger body; each is covered by a dedicated codegen test. Adding a
+    // builtin with plain arguments extends the sweep automatically.
+    assert_eq!(
+        unprobed,
+        [
+            "axt::begin",
+            "axt::stage_anchored_spend",
+            "context::trigger_event"
+        ],
+        "registry builtins the sweep cannot synthesize a call for"
+    );
+    assert!(checked > 100, "only {checked} builtins were probed");
+}

@@ -293,7 +293,8 @@ decimal.mul_div_round(multiplier: decimal, divisor: decimal, scale: int, mode: r
 quantity.mul_div_round(multiplier: decimal, divisor: decimal, scale: int, mode: rounding-mode) -> quantity
 ```
 
-All four arguments are named. These operations retain the mathematical product
+Like every receiver method, the four arguments may be passed positionally in
+the order shown or with these labels. These operations retain the mathematical product
 before division and round exactly once at the requested scale. The product does
 not pass through the ordinary bounded multiplication result type; an overflowing
 intermediate is allowed when the final rounded result is representable. Constant
@@ -307,7 +308,8 @@ The existing observed fused primitive charges canonical envelopes, exact limb
 multiplication/division and final rounding under staged metering. These calls
 must not lower to separate bounded multiplication and division syscalls.
 
-All three methods require the three argument names shown above. `rounding-mode`
+Like every receiver method, these accept their arguments positionally in the
+order shown or with the declared labels. `rounding-mode`
 denotes one of the seven `Rounding::*` paths below, not a user-declarable type
 or an integer tag. `scale` is
 checked against `0..=28`; a constant outside that range is rejected with
@@ -389,7 +391,8 @@ math::wrapping_sub(int left, int right) -> int
 math::wrapping_mul(int left, int right) -> int
 ```
 
-The binary forms require the `left` and `right` argument names. These four
+Like every `math::` helper, the binary forms accept their operands positionally
+or labelled `left:` and `right:`. These four
 spellings are the complete V1 wrapping surface; flat `wrapping_*` aliases and
 generic `numeric::*` helpers are not source APIs.
 
@@ -399,7 +402,8 @@ gas, and ABI surface; host-language bigint behavior is never inherited
 implicitly.
 
 The checked helpers `math::isqrt(value)` and `math::abs(value)` accept one
-`int`. Binary helpers use named `left:` and `right:` arguments of type `int`.
+`int`. Binary helpers take two `int` operands, positionally or labelled `left:`
+and `right:` (`dividend:` and `divisor:` for `div_ceil`).
 All operands and final results obey the complete signed 512-bit domain.
 
 | Helper | Result and faults |

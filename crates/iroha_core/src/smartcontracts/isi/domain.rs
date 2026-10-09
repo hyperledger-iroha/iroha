@@ -36,7 +36,7 @@ pub mod isi {
             AssetBalancePolicy,
         },
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
-        nexus::{AxtAssetIncarnationV1, DataSpaceCatalog, LaneVisibility},
+        nexus::{AxtAssetIncarnationV1, DataSpaceCatalog},
     };
     use iroha_logger::prelude::*;
     use iroha_model_base::domain::DomainId;
@@ -486,20 +486,35 @@ pub mod isi {
         validate_alias_for_asset_definition(asset_definition.alias().as_ref(), asset_definition)?;
         Ok(())
     }
+    /// Check an alias's namespace route against the definition's immutable home.
+    ///
+    /// `home_dataspace` is `None` only when the home cannot be resolved; the caller's
+    /// authoritative-route check then refuses the registration.
     fn validate_asset_definition_alias_route(
         state_transaction: &mut StateTransaction<'_, '_>,
         alias: Option<&AssetDefinitionAlias>,
+        home_dataspace: Option<DataSpaceId>,
     ) -> Result<(), InstructionExecutionError> {
         let Some(alias) = alias else {
             return Ok(());
         };
-        if dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())?.is_none() {
+        let Some(alias_dataspace) =
+            dataspace_id_for_alias_segment(state_transaction, alias.dataspace_segment())?
+        else {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
                     "asset definition alias `{alias}` references an unknown or inactive dataspace"
                 )
                 .into(),
             ));
+        };
+        if let Some(home_dataspace) = home_dataspace {
+            ensure_alias_namespace_matches_home(
+                state_transaction,
+                alias,
+                alias_dataspace,
+                home_dataspace,
+            )?;
         }
         let Some(domain) = alias.domain_segment() else {
             return Ok(());
@@ -1000,6 +1015,96 @@ pub mod isi {
     ) -> Option<AssetDefinitionId> {
         crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
     }
+    /// Check, without mutating state, the identity rules `Register<Account>` applies to the
+    /// built `account` before it is inserted: reserved native metadata keys, controller
+    /// capabilities, an already registered id, retired rekey identities, reserved FX corridor
+    /// and SCCP escrow identities, and the UAID and opaque-identifier bindings.
+    ///
+    /// `Register<Account>` runs exactly this check first, and SCCP settlement runs it for an
+    /// absent recipient (`specs/sccp.md` §4.12.3): an identity it refuses can never be
+    /// registered, so the message bounces instead of failing. Metadata sizes and the account
+    /// label (which a bare `Account::new` never carries) are checked by the execution itself.
+    ///
+    /// TODO(ws41): `Register<Account>` ends with `retail_fee::reopen_account`, which can still
+    /// refuse an identity that has retained retail state (no active retail policy, or a
+    /// refused reopen). That refusal is not prechecked here, so SCCP settlement of such a
+    /// recipient fails instead of bouncing or holding.
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal `Register<Account>` would report.
+    pub(crate) fn precheck_register_account(
+        state_transaction: &StateTransaction<'_, '_>,
+        account: &Account,
+    ) -> Result<(), Error> {
+        if let Some(reserved_key) = [
+            ASSET_TRANSFER_CONTROL_METADATA_KEY,
+            iroha_data_model::validation_fee::RETAIL_FEE_ENROLLMENT_METADATA_KEY,
+            iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+        ]
+        .into_iter()
+        .find(|key| account.metadata().get(*key).is_some())
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "account metadata key `{reserved_key}` is reserved for native state; register the account without it and use the dedicated lifecycle instruction"
+                )
+                .into(),
+            ));
+        }
+        ensure_controller_capabilities(
+            account.controller(),
+            &state_transaction.crypto.allowed_signing,
+            &state_transaction.crypto.allowed_curve_ids,
+        )?;
+        let account_id = account.id();
+        if state_transaction.world.account(account_id).is_ok() {
+            return Err(RepetitionError {
+                instruction: InstructionType::Register,
+                id: IdBox::AccountId(account_id.clone()),
+            }
+            .into());
+        }
+        crate::retail_fee::ensure_not_rekeyed(&state_transaction.world, account_id)?;
+        crate::smartcontracts::isi::kaigi::ensure_account_id_is_not_retired_rekey_predecessor(
+            state_transaction,
+            account_id,
+        )?;
+        if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
+            state_transaction,
+            account_id,
+        )? {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "cannot register account {account_id}: its identity is reserved for deterministic FX corridor protocol escrow"
+                )
+                .into(),
+            ));
+        }
+        if crate::smartcontracts::isi::sccp::escrow::is_escrow(
+            &*state_transaction.world,
+            account_id,
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "cannot register account {account_id}: its identity is reserved for an SCCP route escrow"
+                )
+                .into(),
+            ));
+        }
+        if let Some(uaid) = account.uaid() {
+            if let Some(existing) = state_transaction.world.uaid_accounts.get(uaid) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("UAID {uaid} already bound to account {existing}").into(),
+                ));
+            }
+        } else if !account.opaque_ids().is_empty() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Opaque identifiers require a UAID".to_owned().into(),
+            ));
+        }
+        Ok(())
+    }
     impl Execute for Register<Account> {
         #[metrics(+"register_account")]
         fn execute(
@@ -1008,79 +1113,12 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account: Account = self.object().clone().build(authority);
-            if let Some(reserved_key) = [
-                ASSET_TRANSFER_CONTROL_METADATA_KEY,
-                iroha_data_model::validation_fee::RETAIL_FEE_ENROLLMENT_METADATA_KEY,
-                iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
-            ]
-            .into_iter()
-            .find(|key| account.metadata().get(*key).is_some())
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "account metadata key `{reserved_key}` is reserved for native state; register the account without it and use the dedicated lifecycle instruction"
-                    )
-                    .into(),
-                )
-                .into());
-            }
+            precheck_register_account(state_transaction, &account)?;
             crate::smartcontracts::limits::enforce_metadata_value_sizes(
                 state_transaction,
                 account.metadata(),
             )?;
-            ensure_controller_capabilities(
-                account.controller(),
-                &state_transaction.crypto.allowed_signing,
-                &state_transaction.crypto.allowed_curve_ids,
-            )?;
             let (account_id, account_value) = account.clone().into_key_value();
-            if state_transaction.world.account(&account_id).is_ok() {
-                return Err(RepetitionError {
-                    instruction: InstructionType::Register,
-                    id: IdBox::AccountId(account_id),
-                }
-                .into());
-            }
-            crate::retail_fee::ensure_not_rekeyed(&state_transaction.world, &account_id)?;
-            crate::smartcontracts::isi::kaigi::ensure_account_id_is_not_retired_rekey_predecessor(
-                state_transaction,
-                &account_id,
-            )?;
-            if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
-                state_transaction,
-                &account_id,
-            )? {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot register account {account_id}: its identity is reserved for deterministic FX corridor protocol escrow"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if crate::smartcontracts::isi::sccp::escrow::is_escrow(
-                &*state_transaction.world,
-                &account_id,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot register account {account_id}: its identity is reserved for an SCCP route escrow"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if let Some(uaid) = account.uaid() {
-                if let Some(existing) = state_transaction.world.uaid_accounts.get(uaid) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!("UAID {uaid} already bound to account {existing}").into(),
-                    ));
-                }
-            } else if !account.opaque_ids().is_empty() {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "Opaque identifiers require a UAID".to_owned().into(),
-                ));
-            }
             if let Some(label) = account.label() {
                 if account_label_is_pii(label) {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -2314,14 +2352,12 @@ pub mod isi {
                     .into(),
             ));
         }
-        // The protected Parameters registry is publicly readable. Private homes require
-        // a separately retained storage and disclosure capability before admission.
-        if !dataspace_is_public_or_universal(state_transaction, dataspace_id) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "direct-dataspace registration currently requires a public home dataspace".into(),
-            ));
-        }
-        Ok(())
+        ensure_home_admissible(
+            state_transaction,
+            &instruction.object.id,
+            instruction.object.balance_scope_policy,
+            dataspace_id,
+        )
     }
     /// Register the existing definition payload and its optional direct namespace atomically.
     fn register_asset_definition(
@@ -2336,9 +2372,14 @@ pub mod isi {
             asset_definition.metadata(),
         )?;
         ensure_asset_definition_human_fields(&asset_definition)?;
+        let home_dataspace = match dataspace_id {
+            Some(dataspace_id) => Some(dataspace_id),
+            None => asset_definition_home_dataspace(state_transaction, &asset_definition)?,
+        };
         validate_asset_definition_alias_route(
             state_transaction,
             asset_definition.alias().as_ref(),
+            home_dataspace,
         )?;
         if let Some(alias) = asset_definition.alias().as_ref() {
             ensure_authority_can_manage_asset_definition_alias(
@@ -2354,7 +2395,7 @@ pub mod isi {
                 authority,
                 &asset_definition,
             )?;
-            ensure_global_asset_definition_registered_on_authoritative_route(
+            ensure_asset_definition_registered_on_authoritative_route(
                 state_transaction,
                 &asset_definition,
             )?;
@@ -2860,7 +2901,12 @@ pub mod isi {
                 .into());
             }
             validate_alias_for_asset_definition(alias.as_ref(), &definition)?;
-            validate_asset_definition_alias_route(state_transaction, alias.as_ref())?;
+            let home_dataspace = asset_definition_home_dataspace(state_transaction, &definition)?;
+            validate_asset_definition_alias_route(
+                state_transaction,
+                alias.as_ref(),
+                home_dataspace,
+            )?;
             let existing_alias = state_transaction
                 .world
                 .asset_definition_alias_bindings
@@ -9242,10 +9288,12 @@ mod tests {
                 &authority,
                 &instruction,
             )
-            .expect_err(
-                "publicly readable registry must reject private homes under either balance policy",
-            );
-            assert!(error.to_string().contains("public home dataspace"));
+            .expect_err("a restricted home is refused under either balance policy");
+            let expected = match policy {
+                AssetBalancePolicy::Global => "cannot be registered in restricted dataspace",
+                AssetBalancePolicy::DataspaceRestricted => "public home dataspace",
+            };
+            assert!(error.to_string().contains(expected), "{error}");
         }
         tx.nexus.lane_catalog = public_lanes;
         instruction.object.balance_scope_policy = AssetBalancePolicy::Global;
@@ -9623,9 +9671,21 @@ mod tests {
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         tx.current_dataspace_id = Some(paynet);
         tx.world.current_dataspace_id = Some(paynet);
+        // Restricted homes stay refused on the domain path exactly as on the direct path.
+        let error = Register::asset_definition(new_definition.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("restricted homes are refused until restricted-home confinement ships");
+        assert!(
+            error.to_string().contains("public home dataspace"),
+            "{error}"
+        );
+        assert!(tx.world.asset_definitions.get(&definition_id).is_none());
+        assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
+        // The same definition and alias register in a public home dataspace.
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
         Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
-            .expect("restricted-policy definition may use a restricted alias home");
+            .expect("restricted-policy definition may use an alias in its public home");
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)
@@ -10051,13 +10111,11 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register global definition");
         let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
-        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+        let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
-            .expect("an alias does not move the asset's authoritative home");
-        assert_eq!(
-            tx.world.asset_definition_aliases.get(&alias),
-            Some(&definition_id)
-        );
+            .expect_err("a public definition cannot take an alias in a restricted namespace");
+        assert!(error.to_string().contains("restricted dataspace"), "{error}");
+        assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
         assert!(
             tx.world
                 .asset_definition(&definition_id)
@@ -10129,13 +10187,11 @@ mod tests {
             .build(&authority),
         );
         let alias: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
-        SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
+        let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
-            .expect("universal dataspace may home a global asset alias");
-        assert_eq!(
-            tx.world.asset_definition_aliases.get(&alias),
-            Some(&definition_id)
-        );
+            .expect_err("a restricted-homed definition keeps its aliases in its home namespace");
+        assert!(error.to_string().contains("restricted dataspace"), "{error}");
+        assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
     }
     #[test]
     fn asset_home_extra_coverage_clear_alias_keeps_global_home_universal() {
@@ -10199,10 +10255,10 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
-            .expect("register explicitly owned restricted definition");
+            .expect("register explicitly owned restricted-policy definition");
         let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
@@ -10241,30 +10297,33 @@ mod tests {
             domain_id.clone(),
             "unit".parse().expect("name"),
         );
-        let definition = NewAssetDefinition {
-            id: definition_id.clone(),
-            name: "unit".to_owned(),
-            description: None,
-            alias: None,
-            spec: NumericSpec::integer(),
-            mintable: Mintable::Infinitely,
-            logo: None,
-            metadata: Metadata::default(),
-            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            owning_domain: Some(domain_id),
-        };
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let paynet = DataSpaceId::new(7);
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
-        Register::asset_definition(definition)
-            .execute(&authority, &mut tx)
-            .expect("register restricted definition");
+        // Registration refuses restricted homes, so seed the homed definition directly.
+        tx.world.insert_asset_definition_entry(
+            definition_id.clone(),
+            AssetDefinition::numeric(
+                definition_id.clone(),
+                "unit".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id),
+            )
+            .build(&authority),
+        );
+        let foreign: AssetDefinitionAlias = "unit#universal".parse().expect("alias");
+        assert!(
+            SetAssetDefinitionAlias::bind(definition_id.clone(), foreign, None)
+                .execute(&authority, &mut tx)
+                .is_err(),
+            "a restricted-homed definition cannot alias another namespace"
+        );
         let alias: AssetDefinitionAlias = "unit#paynet".parse().expect("alias");
         SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
-            .expect("restricted asset alias may use restricted dataspace");
+            .expect("restricted asset alias may use its own restricted home namespace");
         assert_eq!(
             tx.world.asset_definition_aliases.get(&alias),
             Some(&definition_id)

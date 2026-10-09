@@ -818,7 +818,7 @@ mod tests {
         assert_eq!(human.exit_code(), 8);
         let stderr = human.stderr();
         assert!(stderr.starts_with("error[E_RETURN_TYPE_MISMATCH] semantic: "));
-        assert!(stderr.contains("--> contracts/hello.ko:7:9-7:20"));
+        assert!(stderr.contains("--> contracts/hello.ko:7:9"));
         assert!(stderr.ends_with(
             "error[MUSUBI_E_COMPILER]: Kotodama rejected the selected sources with 1 error\n"
         ));

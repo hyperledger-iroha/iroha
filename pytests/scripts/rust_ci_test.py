@@ -1112,6 +1112,44 @@ def test_unknown_mutation_feature_owner_requires_review(tmp_path: Path) -> None:
         rust_ci.workspace_check_features(root)
 
 
+@pytest.mark.parametrize("inherited", (False, True))
+@pytest.mark.parametrize("target_specific", (False, True))
+def test_mutation_owner_self_dev_dependency_is_rejected(
+    tmp_path: Path, inherited: bool, target_specific: bool,
+) -> None:
+    """Self dev edges force an ordinary library build even for owning libtests."""
+
+    table = "target.'cfg(unix)'.dev-dependencies" if target_specific else "dev-dependencies"
+    dependency = ('{ workspace = true }' if inherited else
+                  '{ package = "iroha_data_model", path = ".", features = ["test-fixtures"] }')
+    root = _feature_workspace(
+        tmp_path, 'default = []\nmutation-testing = []\ntest-fixtures = []\n',
+        f'[{table}]\nfixture_owner = {dependency}\n',
+    )
+    if inherited:
+        manifest = root / "Cargo.toml"
+        manifest.write_text(manifest.read_text() +
+                            '[workspace.dependencies]\nfixture_owner = '
+                            '{ package = "iroha_data_model", path = "model", features = ["test-fixtures"] }\n')
+    with pytest.raises(rust_ci.ClassificationError, match="self dev-dependency"):
+        rust_ci.workspace_check_features(root)
+
+
+@pytest.mark.parametrize("workspace", (False, True))
+def test_torii_test_commands_keep_explicit_integration_fixtures(workspace: bool) -> None:
+    """The complete test route enables fixtures without enabling them in builds."""
+
+    build, test = rust_ci.commands_for_checks(
+        ("iroha_core", "iroha_torii"), ("build", "test"), workspace=workspace,
+    )
+    assert "--features" not in build
+    assert test[test.index("--features") + 1] == "iroha_torii/test-fixtures"
+    assert ("--workspace" in test) is workspace
+    assert "mutation-testing" not in " ".join(test)
+    other, = rust_ci.commands_for_checks(("iroha_core",), ("test",), workspace=workspace)
+    assert "--features" not in other
+
+
 @pytest.mark.parametrize("inventory", ({}, {"iroha_data_model": ("mutation-testing",)},
                                        {"iroha_data_model": ("governance", "governance")}))
 def test_missing_mutated_or_duplicate_feature_inventory_is_refused(inventory) -> None:

@@ -1884,17 +1884,28 @@ impl<'s> Worker<'s> {
             .finishing
             .as_mut()
             .expect("original completed execution");
-        if original.native_contexts.is_some() {
-            return Ok(());
-        }
-        match self.context.native_context_archive.prepare(
-            &original.overlay,
-            original.valid.as_ref(),
-            original.phase.ready().expect("original prepared result"),
-            &original.witness,
-        ) {
-            Ok(projection) => {
-                original.native_contexts = Some(projection);
+        let capture = (|| {
+            if original.native_contexts.is_none() {
+                original.native_contexts = Some(self.context.native_context_archive.prepare(
+                    &original.overlay,
+                    original.valid.as_ref(),
+                    original.phase.ready().expect("original prepared result"),
+                    &original.witness,
+                )?);
+            }
+            self.context.native_context_archive.prepare_amx_intents(
+                original
+                    .native_contexts
+                    .as_mut()
+                    .expect("original context capture"),
+                &original.overlay,
+                original.valid.as_ref(),
+                original.phase.ready().expect("original prepared result"),
+                &original.witness,
+            )
+        })();
+        match capture {
+            Ok(()) => {
                 original.archive_refusal = None;
                 Ok(())
             }
@@ -2943,6 +2954,8 @@ impl<'s> Worker<'s> {
         );
         // Only real work may activate the pulse signer. A pulse cannot create a block.
         if selected.is_empty() && merges.merges.is_empty() {
+            #[cfg(test)]
+            queue.record_empty_native_payload();
             return Ok(None);
         }
         let assembly = Assembly {
@@ -2952,7 +2965,8 @@ impl<'s> Worker<'s> {
         };
         while !selected.is_empty() || !merges.merges.is_empty() {
             // Every selected Queue input retains its original admission receipt,
-            // including mixed sources. Completed reuse still requires Queue-only work.
+            // including mixed sources. Lane-bearing completion retains this same
+            // source and rechecks its actual ranges and original lease on every lend.
             let pending_inputs = match selection {
                 Some(selection) => queue
                     .capture_pending_payload_lease(
@@ -3078,6 +3092,54 @@ impl<'s> Worker<'s> {
         }
         // Only a new actual preparation probe may retire its previous refusal owner.
         drop(preparation_refusal);
+        if job.source().block.lane_merge().is_some() {
+            let result = job.finish_retained(
+                |source| source.block.resultless_proposal_wire_len(),
+                |source, writer| source.block.write_resultless_proposal_wire(writer),
+            );
+            #[cfg(not(all(test, sumeragi_core_mutation = "HC199")))]
+            {
+                // The actual source, mixed Queue lease, signature custody and
+                // immutable output retire together. Fresh source checks precede
+                // each retry; a Core build deadline does not recreate this work.
+                self.payload_build = Some(GlobalPayloadBuild {
+                    scope,
+                    job,
+                    preparation_refusal: None,
+                });
+            }
+            #[cfg(all(test, sumeragi_core_mutation = "HC199"))]
+            {
+                // Restore only the completed-stage loss; refused original work
+                // remains retained exactly as in the unmutated implementation.
+                if result.is_err() {
+                    self.payload_build = Some(GlobalPayloadBuild {
+                        scope,
+                        job,
+                        preparation_refusal: None,
+                    });
+                }
+            }
+            return match result {
+                Ok(payload) => {
+                    iroha_logger::debug!(
+                        height = scope.height,
+                        view = scope.view,
+                        bytes = payload.as_slice().len(),
+                        "sumeragi: original funded lane payload build completed"
+                    );
+                    Ok(Some(payload))
+                }
+                Err(error) => {
+                    let reason = format!("canonical payload admission: {error:?}");
+                    Err(if error.is_local_refusal() {
+                        PublicationError::Retryable(reason)
+                    } else {
+                        PublicationError::RecoveryRequired(reason)
+                    })
+                }
+            };
+        }
         match job.finish(
             |source| source.block.resultless_proposal_wire_len(),
             |source, writer| source.block.write_resultless_proposal_wire(writer),
@@ -3089,13 +3151,7 @@ impl<'s> Worker<'s> {
                     bytes = payload.as_slice().len(),
                     "sumeragi: original funded payload build completed"
                 );
-                let pending_inputs = if source.block.lane_merge().is_none() {
-                    source.pending_inputs
-                } else {
-                    // A selected-input receipt cannot authorize completed lane reuse.
-                    None
-                };
-                self.retain_completed_payload(scope, pending_inputs, &payload);
+                self.retain_completed_payload(scope, source.pending_inputs, &payload);
                 Ok(Some(payload))
             }
             Err((job, error)) => {
@@ -3124,6 +3180,13 @@ impl<'s> Worker<'s> {
             .is_some_and(|original| original.scope.height == height && original.scope.view == view)
         {
             self.completed_payload = None;
+        }
+        if self.payload_build.as_ref().is_some_and(|original| {
+            original.scope.height == height
+                && original.scope.view == view
+                && original.job.is_completed()
+        }) {
+            self.payload_build = None;
         }
         if self.recovery.is_some() || self.publication_pending() {
             return;
@@ -3449,3 +3512,7 @@ mod local_signature_preparation_tests;
 #[cfg(test)]
 #[path = "executor_amx_retry_tests.rs"]
 mod amx_retry_tests;
+
+#[cfg(test)]
+#[path = "executor_amx_intent_tests.rs"]
+mod amx_intent_tests;

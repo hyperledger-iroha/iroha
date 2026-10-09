@@ -128,6 +128,8 @@ pub mod publication_rwlock;
 pub mod query;
 /// Transaction queue and mempool logic.
 pub mod queue;
+/// Dataspace classes and immutable asset-definition homes.
+pub mod read_scope;
 pub(crate) mod receiver_snapshot;
 /// Shared compiled validator identity and signed genesis input validation.
 pub mod release_identity;

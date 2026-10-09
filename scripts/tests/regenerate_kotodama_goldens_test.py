@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import importlib.util
 import io
+import re
 import sys
 import tempfile
 import unittest
@@ -588,8 +589,9 @@ class TestModuleValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             template = Path("crates/musubi/templates/contract.test.ko")
+            template_bytes = (MODULE.repository_root() / template).read_bytes()
             (root / template).parent.mkdir(parents=True)
-            (root / template).write_bytes(b"test-target: ../contracts/coffee-club.ko")
+            (root / template).write_bytes(template_bytes)
             contract = root / "crates/musubi/templates/contract.ko"
             contract.write_bytes(b"contract-source")
             ordinary = Path("examples/coffee-club/tests/coffee-club.test.ko")
@@ -600,9 +602,11 @@ class TestModuleValidationTests(unittest.TestCase):
                 self.assertEqual(command[-3:-1], ["--source-root", cwd])
                 if Path(command[-1]).is_absolute():
                     staged = Path(command[-1])
-                    self.assertEqual(staged.read_bytes(), (root / template).read_bytes())
+                    self.assertEqual(staged.read_bytes(), template_bytes)
+                    target = re.search(rb'koto_test\s*\{\s*target:\s*"([^"]+)"', template_bytes)
+                    self.assertIsNotNone(target)
                     self.assertEqual(
-                        (staged.parent.parent / "contracts/coffee-club.ko").read_bytes(),
+                        (staged.parent / target.group(1).decode("utf-8")).read_bytes(),
                         contract.read_bytes(),
                     )
                     self.assertEqual(cwd, staged.parent.parent)
@@ -615,7 +619,7 @@ class TestModuleValidationTests(unittest.TestCase):
                 )
             self.assertEqual(len(observed), 2)
             self.assertIn(ordinary, observed)
-            self.assertEqual((root / template).read_bytes(), b"test-target: ../contracts/coffee-club.ko")
+            self.assertEqual((root / template).read_bytes(), template_bytes)
 
     def test_test_runner_failure_is_not_reclassified_as_a_deployable_source(self) -> None:
         with mock.patch.object(MODULE, "run", side_effect=MODULE.GoldenError("test failed")):

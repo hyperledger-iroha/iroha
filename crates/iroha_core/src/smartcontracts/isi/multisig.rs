@@ -3488,6 +3488,7 @@ fn map_validation_fail(err: ValidationFail) -> InstructionExecutionError {
 mod tests {
     mod cancellation;
     mod proposal_attempt;
+    mod sccp_record;
     use super::*;
     use crate::{
         executor::Executor,

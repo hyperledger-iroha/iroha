@@ -22,7 +22,8 @@ use kotodama_lang::{
     },
     formatter::format_source,
     linker::SourceModuleUnit,
-    session::CompilerSession,
+    lint::{LintLevel, LintWarning},
+    session::{CompilerSession, LintConfig},
     source::{FrontendBudget, MAX_SOURCE_BYTES, SourceFile, SourceId},
 };
 #[cfg(test)]
@@ -175,6 +176,8 @@ struct CheckArgs {
     #[arg(long, value_enum, default_value_t)]
     format: DiagnosticFormat,
     #[command(flatten)]
+    lints: LintArgs,
+    #[command(flatten)]
     capabilities: CompileCapabilities,
     #[command(flatten)]
     selection: SourceSelection,
@@ -186,6 +189,59 @@ struct CheckArgs {
         conflicts_with = "project"
     )]
     sources: Vec<PathBuf>,
+}
+/// Lint levels selected on the command line, layered over the project manifest's `lints`.
+#[derive(Args, Debug, Default, Clone)]
+struct LintArgs {
+    /// Fail the check when any lint would warn (every `warn` lint becomes `deny`).
+    #[arg(long)]
+    deny_warnings: bool,
+    /// Do not report the lint with this name, such as `unused-local` (repeatable).
+    #[arg(long = "allow", value_name = "LINT")]
+    allow: Vec<String>,
+    /// Report the lint with this name as a warning (repeatable).
+    #[arg(long = "warn", value_name = "LINT")]
+    warn: Vec<String>,
+    /// Report the lint with this name as an error that fails the check (repeatable).
+    #[arg(long = "deny", value_name = "LINT")]
+    deny: Vec<String>,
+}
+impl LintArgs {
+    /// Validate the flags: every name must be a registered lint, and one lint gets one level.
+    fn config(&self) -> Result<LintConfig, KotoError> {
+        let mut config = LintConfig::new();
+        let mut selected = BTreeMap::<&str, LintLevel>::new();
+        for (names, level) in [
+            (&self.allow, LintLevel::Allow),
+            (&self.warn, LintLevel::Warn),
+            (&self.deny, LintLevel::Deny),
+        ] {
+            for name in names {
+                if let Some(previous) = selected.insert(name, level)
+                    && previous != level
+                {
+                    return Err(KotoError::Usage(format!(
+                        "lint `{name}` is given both `--{}` and `--{}`",
+                        previous.as_str(),
+                        level.as_str()
+                    )));
+                }
+                config
+                    .set_level(name, level)
+                    .map_err(|unknown| KotoError::Usage(unknown.to_string()))?;
+            }
+        }
+        config.set_deny_warnings(self.deny_warnings);
+        Ok(config)
+    }
+}
+/// Apply the effective lint level to one finding: `None` when it is allowed, otherwise the
+/// finding with its severity (`deny` reports an error that fails the check).
+fn leveled_lint(config: &LintConfig, warning: LintWarning) -> Option<LintWarning> {
+    match config.level(warning.code) {
+        LintLevel::Allow => None,
+        level => Some(warning.with_level(level)),
+    }
 }
 #[derive(Args, Debug)]
 struct BuildArgs {
@@ -623,10 +679,12 @@ fn source_root_for_input(input: &Path, explicit: Option<&Path>) -> Result<PathBu
 fn check(args: CheckArgs) -> Result<(), KotoError> {
     let CheckArgs {
         format,
+        lints,
         capabilities,
         selection,
         sources,
     } = args;
+    let lint_flags = lints.config()?;
     // A source that cannot be opened is an I/O failure (exit status 10), as in every other
     // subcommand, not a diagnostic about Kotodama code.
     if let Some((path, error)) = sources.iter().find_map(|path| {
@@ -650,9 +708,14 @@ fn check(args: CheckArgs) -> Result<(), KotoError> {
         .into_iter()
         .partition(|path| is_test_module_path(path));
     let (mut checked, mut diagnostics) = match selection.project {
-        Some(manifest) => check_locked_project(&driver, &manifest),
+        Some(manifest) => check_locked_project(&driver, &manifest, &lint_flags),
         None if sources.is_empty() => (Vec::new(), DiagnosticBundle::new(Vec::new())),
-        None => check_project_paths_with_root(&driver, sources, selection.source_root.as_deref()),
+        None => check_project_paths_with_root(
+            &driver,
+            sources,
+            selection.source_root.as_deref(),
+            &lint_flags,
+        ),
     };
     let mut test_targets = Vec::new();
     for module in test_modules {
@@ -729,7 +792,12 @@ fn is_test_module_path(path: &Path) -> bool {
         kotodama_lang::parser::parse(&source).is_ok_and(|program| program.test_target.is_some())
     })
 }
-fn check_locked_project(driver: &BuildDriver, manifest: &Path) -> (Vec<PathBuf>, DiagnosticBundle) {
+/// Check the exact graph of a project manifest with its `lints` levels, overridden by `lint_flags`.
+fn check_locked_project(
+    driver: &BuildDriver,
+    manifest: &Path,
+    lint_flags: &LintConfig,
+) -> (Vec<PathBuf>, DiagnosticBundle) {
     let loaded = match load_source_project_manifest(manifest) {
         Ok(loaded) => loaded,
         Err(error) => {
@@ -744,12 +812,14 @@ fn check_locked_project(driver: &BuildDriver, manifest: &Path) -> (Vec<PathBuf>,
             return (Vec::new(), diagnostics);
         }
     };
-    check_loaded_project(driver, loaded)
+    check_loaded_project(driver, loaded, lint_flags)
 }
 fn check_loaded_project(
     driver: &BuildDriver,
     loaded: LoadedSourceProject,
+    lint_flags: &LintConfig,
 ) -> (Vec<PathBuf>, DiagnosticBundle) {
+    let lint_config = loaded.lints.merged_with(lint_flags);
     let source_paths = loaded.source_paths;
     let checked_graph = if kotodama_lang::parser::parse(&loaded.graph.root.source)
         .is_ok_and(|program| program.unit.kind == kotodama_lang::ast::SourceUnitKind::Module)
@@ -770,7 +840,8 @@ fn check_loaded_project(
                 .collect();
             let diagnostics = warnings
                 .into_iter()
-                .map(|warning| {
+                .filter_map(|warning| {
+                    let lint = leveled_lint(&lint_config, warning.warning)?;
                     let key = ProjectSourceKey {
                         package_identity: warning.package_identity.clone(),
                         source_name: warning.source_name.clone(),
@@ -778,11 +849,11 @@ fn check_loaded_project(
                     let path = source_paths
                         .get(&key)
                         .map_or_else(|| Path::new(&warning.source_name), PathBuf::as_path);
-                    warning.warning.to_diagnostic(
+                    Some(lint.to_diagnostic(
                         &display_path(path),
                         warning.package_identity.as_deref(),
                         kotodama_lang::i18n::detect_language(),
-                    )
+                    ))
                 })
                 .collect();
             (checked, DiagnosticBundle::new(diagnostics))
@@ -808,15 +879,18 @@ fn check_project_paths(
     driver: &BuildDriver,
     inputs: Vec<PathBuf>,
 ) -> (Vec<PathBuf>, DiagnosticBundle) {
-    check_project_paths_with_root(driver, inputs, None)
+    check_project_paths_with_root(driver, inputs, None, &LintConfig::default())
 }
 fn check_project_paths_with_root(
     driver: &BuildDriver,
     inputs: Vec<PathBuf>,
     explicit_root: Option<&Path>,
+    lint_config: &LintConfig,
 ) -> (Vec<PathBuf>, DiagnosticBundle) {
     if let [input] = inputs.as_slice() {
-        let loaded = source_root_for_input(input, explicit_root)
+        let root = source_root_for_input(input, explicit_root);
+        let loaded = root
+            .clone()
             .map_err(|error| BuildError::InvalidPath {
                 path: input.clone(),
                 message: error,
@@ -824,17 +898,24 @@ fn check_project_paths_with_root(
             .and_then(|root| load_source_project(input, &root, &BTreeMap::new()));
         match loaded {
             Ok(loaded) => {
-                return check_loaded_project(driver, loaded);
+                return check_loaded_project(driver, loaded, lint_config);
             }
             Err(error) => {
-                let diagnostics = error.into_diagnostics().unwrap_or_else(|error| {
+                let mut diagnostics = error.into_diagnostics().unwrap_or_else(|error| {
                     DiagnosticBundle::single(Diagnostic::error(
                         "K0000",
-                        DiagnosticPhase::Resolve,
+                        DiagnosticPhase::Lex,
                         error.to_string(),
                         None,
                     ))
                 });
+                // Loading parses the source and its companions; name them by the same
+                // working-directory-relative paths as semantic diagnostics.
+                if let Ok(root) = root {
+                    for diagnostic in &mut diagnostics.diagnostics {
+                        remap_rooted_diagnostic_sources(diagnostic, &root);
+                    }
+                }
                 return (Vec::new(), diagnostics);
             }
         }
@@ -920,12 +1001,13 @@ fn check_project_paths_with_root(
         match driver.check_explicit_sources(sources) {
             Ok(warnings) => {
                 checked.extend(project_inputs);
-                diagnostics.extend(warnings.into_iter().map(|warning| {
+                diagnostics.extend(warnings.into_iter().filter_map(|warning| {
+                    let lint = leveled_lint(lint_config, warning.warning)?;
                     let path = source_paths
                         .get(&warning.source_name)
                         .map(String::as_str)
                         .unwrap_or(warning.source_name.as_str());
-                    lint_diagnostic(warning.warning, Path::new(path))
+                    Some(lint_diagnostic(lint, Path::new(path)))
                 }));
             }
             Err(error) => match error.into_diagnostics() {
@@ -2373,7 +2455,11 @@ fn collect_lsp_workspace_diagnostics(
                 let Some(uri) = source_uris.get(&key) else {
                     continue;
                 };
-                let diagnostic = warning.warning.to_diagnostic(
+                // The editor reports the project manifest's lint levels, as `koto check` does.
+                let Some(lint) = leveled_lint(&project.lints, warning.warning) else {
+                    continue;
+                };
+                let diagnostic = lint.to_diagnostic(
                     uri,
                     warning.package_identity.as_deref(),
                     kotodama_lang::i18n::detect_language(),
@@ -2555,6 +2641,7 @@ fn lsp_local_source_project_with_root(
                     path.clone(),
                 )]),
                 manifest: None,
+                lints: LintConfig::default(),
             }
         });
         if requested
@@ -2673,7 +2760,11 @@ fn lsp_project_with_open_overlays(
                     {
                         span.package_identity = Some(package.identity.clone());
                     }
-                    if let Some(fix) = &mut diagnostic.fix {
+                    for fix in diagnostic
+                        .fix
+                        .iter_mut()
+                        .chain(&mut diagnostic.alternative_fixes)
+                    {
                         fix.span.package_identity = Some(package.identity.clone());
                     }
                 }
@@ -2845,7 +2936,7 @@ fn remap_lsp_locked_project_diagnostic(
     for label in &mut diagnostic.labels {
         remap(&mut label.span);
     }
-    if let Some(fix) = &mut diagnostic.fix {
+    for fix in diagnostic.fix.iter_mut().chain(&mut diagnostic.alternative_fixes) {
         remap(&mut fix.span);
     }
 }
@@ -2868,7 +2959,7 @@ fn remap_project_diagnostic_sources(
     for label in &mut diagnostic.labels {
         remap(&mut label.span);
     }
-    if let Some(fix) = &mut diagnostic.fix {
+    for fix in diagnostic.fix.iter_mut().chain(&mut diagnostic.alternative_fixes) {
         remap(&mut fix.span);
     }
 }
@@ -2894,7 +2985,32 @@ fn remap_locked_project_diagnostic_sources(
     for label in &mut diagnostic.labels {
         remap(&mut label.span);
     }
-    if let Some(fix) = &mut diagnostic.fix {
+    for fix in diagnostic.fix.iter_mut().chain(&mut diagnostic.alternative_fixes) {
+        remap(&mut fix.span);
+    }
+}
+/// Name root-local sources of a diagnostic (logical paths below `root`) by their
+/// working-directory-relative paths, as semantic diagnostics of the same files are named.
+fn remap_rooted_diagnostic_sources(diagnostic: &mut Diagnostic, root: &Path) {
+    let remap = |span: &mut SourceSpan| {
+        if span.package_identity.is_some() {
+            return;
+        }
+        let Some(source_name) = span.source.as_deref() else {
+            return;
+        };
+        let path = root.join(source_name);
+        if path.is_file() {
+            span.source = Some(display_path(&path));
+        }
+    };
+    if let Some(span) = &mut diagnostic.primary_span {
+        remap(span);
+    }
+    for label in &mut diagnostic.labels {
+        remap(&mut label.span);
+    }
+    for fix in diagnostic.fix.iter_mut().chain(&mut diagnostic.alternative_fixes) {
         remap(&mut fix.span);
     }
 }
@@ -3984,6 +4100,86 @@ mod tests {
         std::fs::remove_dir_all(root).expect("remove lint check root");
     }
     #[test]
+    fn lint_flags_validate_names_and_select_one_level_per_lint() {
+        let flags = LintArgs {
+            deny_warnings: false,
+            allow: vec!["unused-local".to_owned()],
+            warn: Vec::new(),
+            deny: vec!["dead-store".to_owned()],
+        };
+        let config = flags.config().expect("known lints");
+        assert_eq!(config.level("unused-local"), LintLevel::Allow);
+        assert_eq!(config.level("dead-store"), LintLevel::Deny);
+        assert_eq!(config.level("unused-state"), LintLevel::Warn);
+        let conflicting = LintArgs {
+            deny: vec!["unused-local".to_owned()],
+            ..flags.clone()
+        };
+        assert!(matches!(
+            conflicting.config(),
+            Err(KotoError::Usage(message)) if message.contains("both `--allow` and `--deny`")
+        ));
+        let unknown = LintArgs {
+            allow: vec!["unused-locl".to_owned()],
+            ..LintArgs::default()
+        };
+        assert!(matches!(
+            unknown.config(),
+            Err(KotoError::Usage(message)) if message.contains("did you mean `unused-local`?")
+        ));
+        let denying = LintArgs {
+            deny_warnings: true,
+            ..LintArgs::default()
+        }
+        .config()
+        .expect("deny-warnings");
+        let warnings = CompilerSession::default()
+            .check_with_lints(CompileRequest {
+                source: "seiyaku L { view fn one() -> int { let unused = 1; return 1; } }",
+                source_name: Some("l.ko"),
+            })
+            .expect("lints do not fail the check");
+        let unused = warnings
+            .into_iter()
+            .find(|warning| warning.code == "unused-local")
+            .expect("unused local");
+        let denied = leveled_lint(&denying, unused.clone()).expect("denied lints are reported");
+        assert_eq!(denied.severity, kotodama_lang::lint::LintSeverity::Error);
+        assert!(leveled_lint(&config, unused).is_none(), "allowed lints are dropped");
+    }
+    #[test]
+    fn rooted_diagnostics_name_existing_sources_relative_to_the_working_directory() {
+        let cwd = std::env::current_dir().expect("working directory");
+        let root = cwd.join("src");
+        let span = |source: &str| SourceSpan {
+            package_identity: None,
+            source: Some(source.to_owned()),
+            start: SourcePosition { line: 1, column: 1 },
+            end: SourcePosition { line: 1, column: 2 },
+            byte_range: None,
+        };
+        let mut diagnostic = Diagnostic::error(
+            "K1001",
+            DiagnosticPhase::Parse,
+            "message",
+            Some(span("lib.rs")),
+        );
+        diagnostic.alternative_fixes.push(DiagnosticFix {
+            span: span("missing.ko"),
+            replacement: String::new(),
+        });
+        remap_rooted_diagnostic_sources(&mut diagnostic, &root);
+        assert_eq!(
+            diagnostic.primary_span.and_then(|span| span.source).as_deref(),
+            Some("src/lib.rs")
+        );
+        assert_eq!(
+            diagnostic.alternative_fixes[0].span.source.as_deref(),
+            Some("missing.ko"),
+            "names that are not files below the root stay logical"
+        );
+    }
+    #[test]
     fn unified_check_links_only_the_explicit_locked_project_graph() {
         let root = std::env::temp_dir().join(format!(
             "koto-check-project-{}-{}",
@@ -4023,7 +4219,7 @@ mod tests {
         )
         .expect("write explicit project manifest");
         let driver = BuildDriver::new(CompilerSession::default(), "koto-check-test");
-        let (checked, diagnostics) = check_locked_project(&driver, &project);
+        let (checked, diagnostics) = check_locked_project(&driver, &project, &LintConfig::default());
         let canonical_app = app.canonicalize().expect("canonical app path");
         let canonical_module = module.canonicalize().expect("canonical module path");
         assert_eq!(
@@ -4068,7 +4264,7 @@ mod tests {
             "seiyaku App { view fn run() -> int { return Missing::value(); } }",
         )
         .expect("write unknown module call");
-        let (checked, diagnostics) = check_locked_project(&driver, &project);
+        let (checked, diagnostics) = check_locked_project(&driver, &project, &LintConfig::default());
         assert!(checked.is_empty());
         let error = diagnostics
             .diagnostics

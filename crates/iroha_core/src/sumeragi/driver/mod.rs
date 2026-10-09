@@ -481,9 +481,13 @@ impl Kernel {
                         self.persist.push(Write::Body(Box::new(block)));
                     }
                 }
-                Action::Execute { block, req } => {
+                Action::Execute {
+                    block,
+                    req,
+                    certified,
+                } => {
                     let block_hash = block.hash(&*self.hasher);
-                    self.exec.execute(req, block_hash, block);
+                    self.exec.execute(req, block_hash, block, certified);
                 }
                 Action::DiscardExecution { height, keep } => {
                     self.exec.discard(height, keep.clone());
@@ -1070,6 +1074,10 @@ struct Shared {
     wake: iroha_allocation::ChargedShared<ThreadWake>,
     /// One transaction notification remains pending through the completion drain.
     transactions_pending: AtomicBool,
+    #[cfg(test)]
+    empty_waiting: AtomicBool,
+    #[cfg(test)]
+    empty_epoch: std::sync::atomic::AtomicU64,
     /// The event loop runs.
     alive: AtomicBool,
     /// The thread whose end stopped the instance, if one did.
@@ -1130,6 +1138,21 @@ impl Shared {
     }
 
     fn publish(&self, kernel: &mut Kernel) {
+        #[cfg(test)]
+        {
+            let waiting = kernel
+                .exec
+                .waiting_empty_request_for_test()
+                .is_some_and(|req| {
+                    // Pending-ready is created while absorbing the worker completion. Do not
+                    // observe it until its matching EMPTY answer has actually reached Core.
+                    !kernel.local.iter().any(|event| {
+                        matches!(event,
+                    Event::PayloadBuilt { req: queued, payload: None } if *queued == req)
+                    })
+                });
+            self.empty_waiting.store(waiting, Ordering::Release);
+        }
         let status = kernel.core().status();
         let backlog = kernel.backlog();
         kernel.observe(&status, &backlog);
@@ -1203,6 +1226,65 @@ impl Drop for LoopGuard {
 pub struct DriverHandle {
     shared: Arc<Shared>,
     inputs: DriverInputs,
+}
+
+/// Queue admission retains the original input/wake allocation without retaining Worker,
+/// State, Queue or the driver's physical joins. No callback allocation or bridge thread exists.
+#[derive(Clone)]
+pub(crate) struct QueueWake {
+    shared: std::sync::Weak<Shared>,
+    inputs: Option<DriverInputs>,
+    budget: iroha_allocation::AllocationBudget,
+}
+
+impl QueueWake {
+    pub(crate) fn belongs_to(&self, budget: &iroha_allocation::AllocationBudget) -> bool {
+        self.budget.same_pool(budget)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_live(&self) -> bool {
+        self.budget.with_deferred_refund_notifications(|_| {
+            let Some(shared) = self.shared.upgrade() else {
+                return false;
+            };
+            let live = !shared.node_gate.is_closed() && shared.alive.load(Ordering::Acquire);
+            drop(shared);
+            live
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn same_original(&self, other: &Self) -> bool {
+        std::sync::Weak::ptr_eq(&self.shared, &other.shared)
+    }
+
+    pub(crate) fn notify(&self) {
+        self.budget.with_deferred_refund_notifications(|_| {
+            if let Some(shared) = self.shared.upgrade() {
+                notify_transactions(&shared, self.inputs.as_ref().expect("original live inputs"));
+                // A concurrent stop may make this the last original Shared reference.
+                drop(shared);
+            }
+        });
+    }
+}
+
+impl Drop for QueueWake {
+    fn drop(&mut self) {
+        let inputs = self.inputs.take();
+        self.budget
+            .with_deferred_refund_notifications(|_| drop(inputs));
+    }
+}
+
+fn notify_transactions(shared: &Shared, inputs: &DriverInputs) {
+    if shared.node_gate.is_closed() || !shared.alive.load(Ordering::Acquire) {
+        return;
+    }
+    if !shared.transactions_pending.swap(true, Ordering::AcqRel) {
+        let _ = inputs.send(Input::Transactions);
+    }
 }
 
 impl DriverHandle {
@@ -1300,17 +1382,29 @@ impl DriverHandle {
         }
     }
 
+    /// Observe the real EMPTY wait after Core consumed the completion and startup admission.
+    #[cfg(test)]
+    pub(crate) fn waiting_after_empty_for_test(&self) -> bool {
+        let before = self.shared.empty_epoch.load(Ordering::Acquire);
+        before % 2 == 0
+            && !self.shared.transactions_pending.load(Ordering::Acquire)
+            && self.shared.empty_waiting.load(Ordering::Acquire)
+            && !self.shared.transactions_pending.load(Ordering::Acquire)
+            && self.shared.alive.load(Ordering::Acquire)
+            && before == self.shared.empty_epoch.load(Ordering::Acquire)
+    }
+
     /// An includable transaction arrived (`PayloadReady` after an `EMPTY` build).
     pub fn transactions_available(&self) {
-        if self.shared.node_gate.is_closed() {
-            return;
-        }
-        if !self
-            .shared
-            .transactions_pending
-            .swap(true, Ordering::AcqRel)
-        {
-            let _ = self.inputs.send(Input::Transactions);
+        notify_transactions(&self.shared, &self.inputs);
+    }
+
+    /// Allocation-free weak admission binding to this exact driver's existing inputs.
+    pub(crate) fn queue_wake(&self) -> QueueWake {
+        QueueWake {
+            shared: Arc::downgrade(&self.shared),
+            inputs: Some(self.inputs.clone()),
+            budget: self.shared.allocation_budget.clone(),
         }
     }
 
@@ -1538,6 +1632,10 @@ where
             backlog: Mutex::new(Backlog::default()),
             wake: wake.clone(),
             transactions_pending: AtomicBool::new(false),
+            #[cfg(test)]
+            empty_waiting: AtomicBool::new(false),
+            #[cfg(test)]
+            empty_epoch: std::sync::atomic::AtomicU64::new(0),
             alive: AtomicBool::new(true),
             stopped: Mutex::new(None),
             metrics: metrics.as_ref().map(|metrics| metrics.series().clone()),
@@ -1755,7 +1853,14 @@ fn run_exec<E: Executor, K: BlockStore + ?Sized>(
 ) -> ExecDone {
     let failed = |what: &str| format!("executor panicked in {what}");
     match op {
-        ExecOp::Execute { block, block_hash } => ExecDone::Executed(
+        // TODO: SC17 / spec §4.5: pass this flag into the production executor when CT1/CT5
+        // wall-clock guards land. The current executor has no such guards; the scheduler
+        // and conformance host retain the core's flag without inferring it from local state.
+        ExecOp::Execute {
+            block,
+            block_hash,
+            certified: _,
+        } => ExecDone::Executed(
             catch_unwind(AssertUnwindSafe(|| executor.execute(&block, &block_hash)))
                 .unwrap_or_else(|_| {
                     Some(iroha_sumeragi::api::ExecOutcome::Failed(failed("execute")))
@@ -1980,8 +2085,25 @@ fn run_loop(
         match input {
             Input::Done(completion) => kernel.complete(clock.now(), completion),
             Input::Transactions => {
+                #[cfg(test)]
+                {
+                    shared
+                        .empty_epoch
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |epoch| {
+                            epoch.checked_add(1)
+                        })
+                        .expect("finite test EMPTY observation epoch");
+                    shared.empty_waiting.store(false, Ordering::Release);
+                }
                 kernel.transactions_available();
                 *received_transactions = true;
+                #[cfg(test)]
+                shared
+                    .empty_epoch
+                    .fetch_update(Ordering::Release, Ordering::Acquire, |epoch| {
+                        epoch.checked_add(1)
+                    })
+                    .expect("finite test EMPTY observation epoch");
             }
             Input::Exited(worker) => return Err(worker),
             Input::Stop => return Ok(false),

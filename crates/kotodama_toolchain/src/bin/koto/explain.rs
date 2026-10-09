@@ -320,7 +320,7 @@ fn render_diagnostic(
             if let Some(lint) = lint {
                 let _ = writeln!(
                     output,
-                    "\nThis is the `{lint}` lint. It is a warning: the source still compiles."
+                    "\nThis is the `{lint}` lint. It warns by default and the source still compiles; `koto check --deny {lint}`, `--deny-warnings`, or a `lints` level of `deny` makes it fail the check."
                 );
             }
             let _ = writeln!(output, "\nhelp: {}", explanation.help);
@@ -348,7 +348,7 @@ fn render_diagnostic(
             if let Some(lint) = lint {
                 let _ = writeln!(
                     output,
-                    "Lint `{lint}` (warning; the source still compiles).\n"
+                    "Lint `{lint}` (warns by default and the source still compiles; a `deny` level fails the check).\n"
                 );
             }
             let _ = writeln!(output, "{}\n", explanation.help);

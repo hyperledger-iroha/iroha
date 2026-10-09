@@ -12,9 +12,9 @@ use super::{
     constants::{
         BSC_CHAIN_ID, CODEC_EVM_ADDRESS20, CODEC_TAIRA_ACCOUNT, CODEC_TON_ACCOUNT36,
         CODEC_TRON_ADDRESS21, DOMAIN_BSC, DOMAIN_ETHEREUM, DOMAIN_SORA_TAIRA, DOMAIN_TON,
-        DOMAIN_TRON, ETHEREUM_CHAIN_ID, ROUTE_ID_BSC, ROUTE_ID_ETHEREUM, ROUTE_ID_TON,
-        ROUTE_ID_TRON, TAG_BSC, TAG_ETHEREUM, TAG_SORA_TAIRA, TAG_TON, TAG_TRON, TON_GLOBAL_ID,
-        TRON_CHAIN_ID,
+        DOMAIN_TRON, ETHEREUM_CHAIN_ID, MAX_VOID_FROZEN_RANGE_EVM, MAX_VOID_FROZEN_RANGE_TON,
+        ROUTE_ID_BSC, ROUTE_ID_ETHEREUM, ROUTE_ID_TON, ROUTE_ID_TRON, TAG_BSC, TAG_ETHEREUM,
+        TAG_SORA_TAIRA, TAG_TON, TAG_TRON, TON_GLOBAL_ID, TRON_CHAIN_ID,
     },
     hashes::word_u64,
 };
@@ -115,6 +115,20 @@ pub const fn evm_chain_id(network: SccpNetworkV1) -> Option<u64> {
         SccpNetworkV1::BscMainnet => Some(BSC_CHAIN_ID),
         SccpNetworkV1::TronMainnet => Some(TRON_CHAIN_ID),
         SccpNetworkV1::SoraTaira | SccpNetworkV1::TonMainnet => None,
+    }
+}
+
+/// Most nonces one frozen void of an external destination may name (§4.16, §5.1.8): the
+/// `voidFrozen` range bound on ETH, BSC and TRON, one `sccp_void_frozen` bucket on TON; `None`
+/// for Taira, which is never a destination.
+#[must_use]
+pub const fn max_void_frozen_range(network: SccpNetworkV1) -> Option<u64> {
+    match network {
+        SccpNetworkV1::SoraTaira => None,
+        SccpNetworkV1::EthereumMainnet | SccpNetworkV1::BscMainnet | SccpNetworkV1::TronMainnet => {
+            Some(MAX_VOID_FROZEN_RANGE_EVM)
+        }
+        SccpNetworkV1::TonMainnet => Some(MAX_VOID_FROZEN_RANGE_TON),
     }
 }
 
@@ -250,5 +264,18 @@ mod tests {
         assert_eq!(evm_chain_id(SccpNetworkV1::BscMainnet), Some(56));
         assert_eq!(evm_chain_id(SccpNetworkV1::TronMainnet), Some(0x2b66_53dc));
         assert_eq!(evm_chain_id(SccpNetworkV1::TonMainnet), None);
+    }
+
+    #[test]
+    fn frozen_void_ranges_follow_each_destination() {
+        assert_eq!(max_void_frozen_range(SccpNetworkV1::SoraTaira), None);
+        for network in [
+            SccpNetworkV1::EthereumMainnet,
+            SccpNetworkV1::BscMainnet,
+            SccpNetworkV1::TronMainnet,
+        ] {
+            assert_eq!(max_void_frozen_range(network), Some(256));
+        }
+        assert_eq!(max_void_frozen_range(SccpNetworkV1::TonMainnet), Some(512));
     }
 }

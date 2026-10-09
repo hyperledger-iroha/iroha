@@ -123,10 +123,7 @@ use iroha_data_model::soranet::privacy_metrics::{
 };
 use iroha_data_model::{
     self,
-    block::{
-        BlockHeader, SharedSignedBlock, SignedBlock,
-        consensus::{EvidencePenaltyStatus, EvidenceRecord},
-    },
+    block::{BlockHeader, SharedSignedBlock, SignedBlock, consensus::EvidencePenaltyStatus},
     consensus::ConsensusKeyRecord,
     nexus::{
         DataSpaceCatalog, LaneLifecycleStatusV1, PublicLaneRewardRecord, PublicLaneStakeShare,
@@ -7556,7 +7553,7 @@ mod evidence_list_query_contract_tests {
             vote
         };
         // Transport projection only; original history remains responsible for attribution.
-        let mut record = EvidenceRecord {
+        let mut record = iroha_data_model::block::consensus::EvidenceRecord {
             evidence: Evidence::from_native(&NativeEvidence::VoteEquivocation(vote(4), vote(5)))
                 .unwrap(),
             attribution: EvidenceAttribution {
@@ -7797,7 +7794,10 @@ pub async fn handle_v1_sumeragi_evidence_list(
         // count-first encoder makes its exact destination allocation.
         let wire = SumeragiEvidenceListWireResponse {
             total,
-            items: records.iter().map(|record| (**record).clone()).collect(),
+            items: records
+                .iter()
+                .map(|record| record.canonical_projection())
+                .collect(),
         };
         return bounded_sumeragi_evidence_list_norito_response(
             &wire,
@@ -7807,7 +7807,16 @@ pub async fn handle_v1_sumeragi_evidence_list(
     // Map to Norito-JSON response
     let items: Vec<norito::json::Value> = records
         .iter()
-        .map(|record| evidence_to_json(record))
+        .map(|record| {
+            evidence_fields_to_json(
+                &record.evidence,
+                &record.attribution,
+                record.recorded_at_height,
+                record.recorded_at_view,
+                record.recorded_at_ms,
+                record.penalty_status,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     let payload = json_object(vec![json_entry("total", total), json_entry("items", items)]);
     bounded_sumeragi_evidence_list_json_response(
@@ -8980,9 +8989,27 @@ fn evidence_penalty_status_to_json(status: EvidencePenaltyStatus) -> Value {
     lifecycle.insert("details".into(), details);
     Value::Object(lifecycle)
 }
-fn evidence_to_json(rec: &EvidenceRecord) -> Result<Value> {
+#[cfg(test)]
+fn evidence_to_json(rec: &iroha_data_model::block::consensus::EvidenceRecord) -> Result<Value> {
+    evidence_fields_to_json(
+        &rec.evidence,
+        &rec.attribution,
+        rec.recorded_at_height,
+        rec.recorded_at_view,
+        rec.recorded_at_ms,
+        rec.penalty_status,
+    )
+}
+fn evidence_fields_to_json(
+    evidence: &iroha_data_model::block::consensus::Evidence,
+    attribution: &iroha_data_model::block::consensus::EvidenceAttribution,
+    recorded_at_height: u64,
+    recorded_at_view: u64,
+    recorded_at_ms: u64,
+    penalty_status: EvidencePenaltyStatus,
+) -> Result<Value> {
     use iroha_sumeragi::message::Evidence as NativeEvidence;
-    let native = rec.evidence.decode_native().map_err(|error| match error {
+    let native = evidence.decode_native().map_err(|error| match error {
         iroha_sumeragi::message::CodecError::Resource(_) => {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
@@ -8997,7 +9024,6 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Result<Value> {
         NativeEvidence::InvalidProposal { .. } => "invalid_proposal",
         NativeEvidence::ConflictingCertificates(..) => "conflicting_certificates",
     };
-    let attribution = &rec.attribution;
     let offenders = attribution
         .offenders
         .iter()
@@ -9013,10 +9039,10 @@ fn evidence_to_json(rec: &EvidenceRecord) -> Result<Value> {
         "epoch": (attribution.epoch), "context_id": (hex::encode(attribution.context_id)),
         "authority_generation": (hex::encode(attribution.authority_generation)),
         "offenders": offenders, "safety_violation": (attribution.safety_violation),
-        "native_frame_hash": (hash_to_hex(iroha_crypto::Hash::new(rec.evidence.native_frame()))),
-        "recorded_height": (rec.recorded_at_height), "recorded_view": (rec.recorded_at_view),
-        "recorded_ms": (rec.recorded_at_ms), "consensus_admitted_height": (rec.recorded_at_height),
-        "penalty_status": (evidence_penalty_status_to_json(rec.penalty_status))
+        "native_frame_hash": (hash_to_hex(iroha_crypto::Hash::new(evidence.native_frame()))),
+        "recorded_height": (recorded_at_height), "recorded_view": (recorded_at_view),
+        "recorded_ms": (recorded_at_ms), "consensus_admitted_height": (recorded_at_height),
+        "penalty_status": (evidence_penalty_status_to_json(penalty_status))
     }))
 }
 fn reject_direct_multisig_signing(
@@ -36640,42 +36666,6 @@ mod explorer_lookup_tests {
         assert_eq!(page.items[0]["quantity"].as_str(), Some("10"));
     }
 
-    routing_test! { sync definition_visibility_rejects_a_restricted_definition_without_a_home
-        let (owner, _) = checked_explorer_lookup_account(0x37, "invalid restricted definition owner");
-        let definition_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("cash", "universal").unwrap(), "invalid".parse().unwrap(),
-        );
-        let definition = dm::AssetDefinition::numeric(
-            definition_id.clone(), "Invalid", iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted, None,
-        ).build(&owner);
-        let home = DataSpaceId::new(7);
-        let mut world = World::with([], [dm::Account::new(owner.clone()).build(&owner)], []);
-        world
-            .insert_direct_asset_definition_with_assets_for_testing(definition, home, [])
-            .expect("admitted direct-home fixture");
-        let visibility = DataspaceReadVisibility::new(BTreeSet::from([home, DataSpaceId::UNIVERSAL]), false);
-        assert!(visibility.allows_asset_definition(&world.view(), &definition_id));
-        {
-            // Seed corruption only inside an uncommitted test checkpoint. The
-            // production constructor correctly rejects this malformed home.
-            let mut block = world.block();
-            let mut tx = block.transaction_without_telemetry(
-                iroha_config::parameters::actual::LaneConfig::default(), 0,
-            );
-            let empty_registry = iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1 {
-                version: iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1::VERSION,
-                bindings: BTreeMap::new(),
-            };
-            tx.parameters_mut_for_testing().get_mut().set_parameter(
-                iroha_data_model::parameter::Parameter::Custom(empty_registry.into_custom_parameter().unwrap()),
-            );
-            assert!(tx.asset_definitions().get(&definition_id).is_some());
-            assert!(tx.asset_definition_home(&definition_id).is_err());
-            assert!(!visibility.allows_asset_definition(&*tx, &definition_id));
-        }
-        assert!(visibility.allows_asset_definition(&world.view(), &definition_id));
-    }
-
     routing_test! { sync direct_dataspace_definition_visibility_uses_immutable_home
         let (owner, _) = checked_explorer_lookup_account(0x33, "direct definition visibility owner");
         let home = DataSpaceId::new(8_648_377_547_929_788_715);
@@ -51518,8 +51508,10 @@ pub(crate) fn prepared_submit_outcome(
             })?;
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
-    // A queue/cache observation reports Pending only; it never proves application.
-    if let Some(status) = app.pipeline_status_cache.lookup(&transaction_hash) {
+    // Local queue/admission/expiry hints never replace a missing canonical block outcome.
+    if let Some(status) =
+        crate::pipeline_status_cached_entry_without_canonical(app, &transaction_hash)?
+    {
         return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
     if app

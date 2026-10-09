@@ -129,6 +129,11 @@ pub struct ResetArgs {
 pub(crate) enum DataspaceCommand {
     /// Create, fund, register, and select four private validators without supplying configuration.
     Up(DataspaceUpArgs),
+    /// Register a retained inactive AMX instance; explicitly run localnet down first.
+    #[command(
+        long_about = "Explicit administrative parent AMX registration of one retained private generation. Requires exclusive inactive custody: use `kagami localnet down NAME` before this action, then `kagami localnet up NAME` to restart that same generation. Signing material is selected only by --admin-config; recovery never renews the original fees or UTC deadline."
+    )]
+    RegisterAmx(DataspaceAmxRegistrationArgs),
     /// Observe local validators and independently verified parent attachment separately.
     Status(ContextShowArgs),
     /// List the independently pinned network profiles supplied by this installation.
@@ -149,6 +154,29 @@ pub(crate) struct DataspaceUpArgs {
     #[arg(long)]
     name: Option<String>,
     /// Complete parent authentication, local startup, and attachment budget in seconds.
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..=60))]
+    timeout: u64,
+    #[command(flatten)]
+    store: StoreArgs,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DataspaceAmxRegistrationArgs {
+    /// Exact retained private managed context; no new child is prepared.
+    name: String,
+    /// Explicit parent administrative client configuration, with runtime-only signing custody.
+    #[arg(long)]
+    admin_config: PathBuf,
+    /// Exact parent fee asset; no asset is inferred from the child or SNS owner.
+    #[arg(long)]
+    fee_asset: AssetDefinitionId,
+    /// Positive aggregate fee ceiling for the original transaction.
+    #[arg(long)]
+    max_fee: Quantity,
+    /// Original exclusive Unix millisecond signing authorization; repeat unchanged on recovery.
+    #[arg(long)]
+    deadline_unix_ms: u64,
+    /// Fresh I/O budget only, bounded by the original authorization and release.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..=60))]
     timeout: u64,
     #[command(flatten)]
@@ -472,6 +500,43 @@ impl<T: Write> RunArgs<T> for DataspaceCommand {
                         )
                     }
                 }
+            }
+            Self::RegisterAmx(args) => {
+                let administrator =
+                    iroha::config::Config::load_file(args.store.resolve_path(&args.admin_config)?)
+                        .wrap_err("open explicitly selected parent administrator")?;
+                let options = managed::ManagedAmxRegistrationOptions {
+                    fee_asset: args.fee_asset,
+                    max_fee: args.max_fee,
+                    deadline_unix_ms: args.deadline_unix_ms,
+                    timeout: Duration::from_secs(args.timeout),
+                };
+                let result = args.store.open()?.register_amx_dataspace(
+                    &InstalledRuntime::discover()?, &args.name, &administrator, &options,
+                ).wrap_err("administrative AMX registration failed; retain the exact original source and operation")?;
+                let (finalized, outcome) = match result.finalized {
+                    Some(iroha_deploy::attachment::AmxRegistrationFinality::Registered(
+                        finality,
+                    )) => (Some(finality), "registered"),
+                    Some(iroha_deploy::attachment::AmxRegistrationFinality::Rejected(finality)) => {
+                        (Some(finality), "rejected")
+                    }
+                    None => (None, "pending"),
+                };
+                let receipt = norito::json!({
+                    "context": (args.name), "outcome": outcome,
+                    "transaction_status": (result.transaction_status.map(|status| status.as_str())),
+                    "finality": (finalized.map(|f| norito::json!({
+                        "transaction_hash": (f.transaction_hash.to_string()), "height": (f.height),
+                        "block_hash": (f.block_hash.to_string()), "block_time_ms": (f.block_time_ms),
+                    }))),
+                });
+                write_json(writer, &receipt)?;
+                ensure!(
+                    outcome == "registered",
+                    "AMX registration is {outcome}; retain the original administrative journal"
+                );
+                Ok(())
             }
             Self::Status(args) => {
                 let store = args.store.open()?;
@@ -1142,6 +1207,60 @@ fn write_json(writer: &mut impl Write, value: &impl norito::json::JsonSerialize)
 mod tests {
     use super::*;
     use clap::Parser as _;
+
+    #[test]
+    fn administrative_amx_cli_requires_explicit_parent_signer_and_original_finite_terms() {
+        let common = ["kagami", "dataspace", "register-amx", "private"];
+        let arguments = [
+            "--admin-config",
+            "parent-admin.toml",
+            "--fee-asset",
+            iroha_deploy::genesis::profile::TAIRA_XOR_ASSET_DEFINITION_ID,
+            "--max-fee",
+            "1",
+            "--deadline-unix-ms",
+            "1234567890000",
+        ];
+        let parsed = crate::Cli::try_parse_from(common.into_iter().chain(arguments)).unwrap();
+        let crate::Command::Dataspace(DataspaceCommand::RegisterAmx(args)) = parsed.command else {
+            panic!("wrong administrative action");
+        };
+        assert_eq!(args.name, "private");
+        assert_eq!(args.admin_config, Path::new("parent-admin.toml"));
+        assert_eq!(args.deadline_unix_ms, 1234567890000);
+        assert_eq!(args.timeout, 60);
+        assert_eq!(args.max_fee, Quantity::from(1_u32));
+        assert!(crate::Cli::try_parse_from(common).is_err());
+        let help = crate::Cli::try_parse_from(common.into_iter().chain(["--help"]))
+            .err()
+            .expect("help must exit through Clap's display result")
+            .to_string();
+        assert!(help.contains("localnet down NAME") && help.contains("localnet up NAME"));
+        for index in [0, 2, 4, 6] {
+            assert!(
+                crate::Cli::try_parse_from(
+                    common.into_iter().chain(
+                        arguments
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, a)| (!(index..index + 2).contains(&i)).then_some(*a))
+                    )
+                )
+                .is_err()
+            );
+        }
+        for timeout in ["0", "61"] {
+            assert!(
+                crate::Cli::try_parse_from(
+                    common
+                        .into_iter()
+                        .chain(arguments)
+                        .chain(["--timeout", timeout])
+                )
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn internal_worker_requires_the_absolute_deadline_and_keeps_bounded_milliseconds() {

@@ -403,6 +403,11 @@ pub enum Action {
         block: AvailableBody,
         /// Request id (never reused).
         req: u64,
+        /// The node holds a `PrepareQC` at the block's height for this block (a re-proposal's
+        /// `Q`, or its own lock), evaluated at every emission (§4.2, §6.2 step 9). It never
+        /// changes the verdict: it only exempts the block from the application's local-clock
+        /// guards (§4.5 CT1, CT5), whose honest first Prepare voters already passed them.
+        certified: bool,
     },
     /// Cancel and drop executions of blocks at `height` other than `keep`.
     DiscardExecution {

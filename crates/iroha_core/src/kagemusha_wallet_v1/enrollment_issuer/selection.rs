@@ -107,18 +107,10 @@ impl<R: EnrollmentIssuerRuntimeV1> EnrollmentIssuerV1<R> {
                 .scale()
                 .unwrap_or(iroha_primitives::numeric::MAX_DECIMAL_SCALE)
                 != dispatch.asset.scale
-            || !matches!(
-                (
-                    definition.balance_scope_policy(),
-                    registration.balance_scope
-                ),
-                (
-                    iroha_data_model::asset::AssetBalancePolicy::Global,
-                    iroha_data_model::asset::AssetBalanceScope::Global
-                ) | (
-                    iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-                    iroha_data_model::asset::AssetBalanceScope::Dataspace(_)
-                )
+            || !crate::kagemusha_wallet_v1::wsv::registration_scope_matches_home(
+                &view.world,
+                definition,
+                registration.balance_scope,
             )
         {
             return Err(Selection);

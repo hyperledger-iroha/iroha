@@ -49,8 +49,6 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thre
 use iroha_logger::prelude::*;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
-#[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
-use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 pub use lane_geometry::RawGeometryWait;
 pub(crate) use lane_geometry::{GeometryBindingRequest, RawGeometryAttempt, RawGeometryPhase};
@@ -192,10 +190,6 @@ fn checked_keypair() -> KeyPair {
 fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("kura algorithm-specific fixture key generation should succeed")
-}
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
-fn checked_peer_id() -> PeerId {
-    PeerId::new(checked_keypair().public_key().clone())
 }
 fn default_fastpq_proof_sidecar_queue_cap() -> usize {
     FASTPQ_DEFAULTS::PROOF_SIDECAR_QUEUE_CAP.get()

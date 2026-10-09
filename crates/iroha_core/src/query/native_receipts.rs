@@ -10,7 +10,8 @@
 mod amx_read;
 mod ordinary_writes;
 pub use amx_read::{
-    NativeAmxRecordProofErrorV1, NativeAmxRecordProofPollV1, NativeAmxRecordProofReadV1,
+    NativeAmxRecordProofErrorV1, NativeAmxRecordProofIssuedV1, NativeAmxRecordProofOwnedV1,
+    NativeAmxRecordProofPollV1, NativeAmxRecordProofReadV1,
 };
 
 pub(crate) mod lane_payload;

@@ -160,7 +160,7 @@ impl Rig {
             match action {
                 Action::Send { to, msg } => self.sent.push((self.now, vec![to], msg)),
                 Action::Broadcast { to, msg } => self.sent.push((self.now, to, msg)),
-                Action::Execute { block, req } => self.pending.push((req, block)),
+                Action::Execute { block, req, .. } => self.pending.push((req, block)),
                 _ => {}
             }
         }

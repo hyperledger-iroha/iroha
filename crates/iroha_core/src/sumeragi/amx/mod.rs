@@ -39,11 +39,15 @@
 //! when contract code catches the inner error; a refused attempt cannot publish World effects.
 //! Each daemon supervises its signed root with an independent State and mandatory native
 //! context archive. Lane instances still share `G`'s State (`specs/sumeragi_lanes.md` §0).
-//! TODO(S6): assemble production participant bootstrap, complete outbound proof custody and
-//! durable validator relaying for pending proofs (§11.4), then qualify native monetary and
+//! Managed bootstrap retains the authenticated G1/H2 source; explicit administrative parent
+//! registration retains its original transaction and independently verified native outcome.
+//! TODO(S6): qualify that managed lifecycle, complete outbound proof custody and durable
+//! validator relaying for pending proofs (§11.4), then qualify native monetary and
 //! whole-network commit/abort/deadline/restart behavior across independent root daemons.
 //! The resumable AMX reader retains its original carrier, archive descriptor and acquired bytes
-//! through local refusal. It prepays the complete portable proof graph and tree scratch from
+//! through local refusal. Its move-only source can outlive the original StateView after the
+//! same reader certifies the carrier and pins the archive descriptor. It prepays the complete
+//! portable proof graph and tree scratch from
 //! the same finite pool; its canonical InstructionBox successor retains those charges through
 //! local signed admission, Queue and payload clones. Receiving decoder/envelope custody, other
 //! native receipt proof graphs, historical reader internals and durable outbound relay remain
@@ -295,5 +299,6 @@ pub(crate) use native::{execute_prepare_original, execute_settle_original};
 
 #[cfg(test)]
 pub(crate) use native::{
-    NativeLegExecutionError, NativeLegRetryObservation, with_paid_prepare_retry_fixture,
+    NativeLegExecutionError, NativeLegRetryObservation, with_paid_prepare_pruning_fixture,
+    with_paid_prepare_retry_fixture,
 };

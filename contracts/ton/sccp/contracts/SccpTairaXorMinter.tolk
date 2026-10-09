@@ -4,8 +4,15 @@
 // There is no owner, admin, upgrade path or setter. The minting pause changes
 // only through `sccp_apply_control` / `sccp_apply_control_historical` with a
 // Parliament control leaf attested by the Taira bridge roster (§5.1.6).
-// Replay flags live in `SccpConsumedBucket` children (512 nonces each).
+// Replay flags live in `SccpConsumedBucket` children (512 nonces each), which
+// the minter activates once per index (§5.3.4 step 2).
+//
+// Every asynchronous step either completes, bounces back to a handler that
+// undoes its effect, or is recorded in `retries` for a permissionless
+// `sccp_retry` (§5.3.4). External-out events are sent with bounce on action
+// failure, so a failed event aborts and bounces the whole step.
 
+import "@stdlib/gas-payments"
 import "@stdlib/strings"
 import "sccp-addresses"
 import "sccp-cells"
@@ -36,16 +43,18 @@ type MinterMessage =
     | SccpApplyControl
     | SccpApplyControlHistorical
     | SccpDeployBuckets
+    | SccpRetry
     | SccpConsumed
     | SccpAlreadyConsumed
+    | SccpConsumeReverted
     | SccpRangeConsumed
     | SccpRangeRejected
     | BurnNotificationForMinter
     | TopUpTons
     | RequestWalletAddress
 
-/// Outgoing messages whose bounces the minter handles (§5.3.4 steps 6–7).
-type MinterBounce = SccpConsume | InternalTransferStep
+/// Outgoing messages whose bounces the minter handles (§5.3.4 steps 2, 6, 7).
+type MinterBounce = SccpConsume | InternalTransferStep | SccpUnconsume | SccpActivateBucket
 
 /// Members, size and threshold of the roster that signed an attestation.
 struct SignerSet {
@@ -127,55 +136,63 @@ fun bucketDeployCount(idx: int, deployed: int): int {
     return idx - deployed + 1;
 }
 
-/// Deploys buckets `[first, end)` with StateInit (flags clear) and a top-up.
-fun sendBucketDeployments(minter: address, bucketCode: cell, first: int, end: int, queryId: int) {
+/// Activates bucket `index` (bounceable, canonical StateInit attached): the
+/// only message that makes a bucket accept flags (§5.3.4 step 2).
+fun sendBucketActivation(minter: address, bucketCode: cell, index: int, queryId: int) {
+    val activate = createMessage({
+        bounce: BounceMode.Only256BitsOfBody,
+        dest: sccpBucketDeployment(minter, index, bucketCode),
+        value: sccpBucketActivationValue(),
+        body: SccpActivateBucket { queryId, index },
+    });
+    activate.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
+}
+
+/// Activates buckets `[first, end)`, in order.
+fun sendBucketActivations(minter: address, bucketCode: cell, first: int, end: int, queryId: int) {
     var i = first;
     while (i < end) {
-        val deploy = createMessage({
-            bounce: BounceMode.NoBounce,
-            dest: sccpBucketDeployment(minter, i, bucketCode),
-            value: sccpBucketDeployValue(),
-            body: TopUpTons { queryId },
-        });
-        deploy.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
+        sendBucketActivation(minter, bucketCode, i, queryId);
         i += 1;
     }
 }
 
-/// Sends `body` to bucket `idx` carrying the whole balance above the
-/// reserved floor; a StateInit is attached only when `deploys`.
+/// Sends `body` to bucket `idx` (never with a StateInit).
 fun sendToBucket<TBody>(
     minter: address,
     bucketCode: cell,
     idx: int,
-    deploys: bool,
     body: TBody,
     value: coins,
     mode: int,
 ) {
-    if (deploys) {
-        val msg = createMessage({
-            bounce: BounceMode.Only256BitsOfBody,
-            dest: sccpBucketDeployment(minter, idx, bucketCode),
-            value,
-            body,
-        });
-        msg.send(mode);
-    } else {
-        val msg = createMessage({
-            bounce: BounceMode.Only256BitsOfBody,
-            dest: sccpBucketAddress(minter, idx, bucketCode),
-            value,
-            body,
-        });
-        msg.send(mode);
-    }
+    val msg = createMessage({
+        bounce: BounceMode.Only256BitsOfBody,
+        dest: sccpBucketAddress(minter, idx, bucketCode),
+        value,
+        body,
+    });
+    msg.send(mode);
 }
 
-/// Emits an external-out event (§5.3.3).
+/// Sends a bounceable `sccp_unconsume{nonce}` (§5.3.4 step 7); its bounce
+/// records a retry.
+fun sendUnconsume(minter: address, bucketCode: cell, nonce: int, mode: int) {
+    sendToBucket(
+        minter,
+        bucketCode,
+        nonce >> SCCP_BUCKET_SHIFT,
+        SccpUnconsume { nonce },
+        sccpUnconsumeValue(),
+        mode,
+    );
+}
+
+/// Emits an external-out event (§5.3.3). A failed event fails the action
+/// phase and bounces the inbound message, so no step completes without it.
 fun emitEvent<TBody>(body: TBody) {
     val event = createExternalLogMessage({ dest: createAddressNone(), body });
-    event.send(SEND_MODE_REGULAR);
+    event.send(SEND_MODE_REGULAR | SEND_MODE_BOUNCE_ON_ACTION_FAIL);
 }
 
 /// Returns everything above the reserved floor to `response` (TEP-74 excesses).
@@ -210,8 +227,24 @@ fun handleConsumeRequest(
     if (isMint) {
         assert (!st.mintingPaused) throw SccpErrors.MintingIsPaused;
     }
-    val nowMs = sccpNowMs();
     val config = st.config.load();
+    val proof = message.load();
+    val minter = contract.getAddress();
+    val minterHash = minter.accountId();
+    val payload = sccpParseInboundPayload(proof.payload, config.routeRevision, minterHash);
+    if (!isMint) {
+        assert (nonceArgument == payload.nonce) throw SccpErrors.BadNonce;
+    }
+    val idx = payload.nonce >> SCCP_BUCKET_SHIFT;
+    val deployed = st.deployedBuckets;
+    val deployCount = bucketDeployCount(idx, deployed);
+    val required = isMint
+        ? sccpFinalizeRequiredValue(deployCount)
+        : sccpVoidRequiredValue(deployCount);
+    // §5.3.5: the value is checked before any signature is verified.
+    sccpCheckEntryValue(valueCoins, required);
+
+    val nowMs = sccpNowMs();
     val verified = verifyAttestation(
         config.tairaNetworkId,
         st.roster,
@@ -220,11 +253,6 @@ fun handleConsumeRequest(
         signatures,
         nowMs,
     );
-
-    val proof = message.load();
-    val minter = contract.getAddress();
-    val minterHash = minter.accountId();
-    val payload = sccpParseInboundPayload(proof.payload, config.routeRevision, minterHash);
     val messageId = sccpInboundMessageId(config.tairaNetworkId, payload.payloadHash);
     sccpVerifyLeafInclusion(
         sccpTransferLeaf(messageId, minterHash),
@@ -238,19 +266,8 @@ fun handleConsumeRequest(
     if (isMint) {
         assert (nowMs <= payload.deadlineMs) throw SccpErrors.DeadlinePassed;
     } else {
-        assert (nonceArgument == payload.nonce) throw SccpErrors.BadNonce;
         assert (nowMs > payload.deadlineMs) throw SccpErrors.DeadlineNotReached;
     }
-
-    val idx = payload.nonce >> SCCP_BUCKET_SHIFT;
-    val deployed = st.deployedBuckets;
-    val deployCount = bucketDeployCount(idx, deployed);
-    val required = isMint
-        ? sccpFinalizeRequiredValue(deployCount)
-        : sccpVoidRequiredValue(deployCount);
-    assert (
-        valueCoins >= required + sccpMinterFloorDeficit(valueCoins)
-    ) throw SccpErrors.NotEnoughValue;
 
     var amount = 0;
     var recipient: address? = null;
@@ -267,9 +284,9 @@ fun handleConsumeRequest(
     }
     st.save();
 
-    sccpReserveFloor(sccpMinterFloor(), valueCoins);
-    if (deployCount > 1) {
-        sendBucketDeployments(minter, config.bucketCode, deployed, idx, queryId);
+    sccpReserveMinterFloor(valueCoins, required);
+    if (deployCount > 0) {
+        sendBucketActivations(minter, config.bucketCode, deployed, idx + 1, queryId);
     }
     val tail: ConsumeTail = {
         kind,
@@ -281,7 +298,6 @@ fun handleConsumeRequest(
         minter,
         config.bucketCode,
         idx,
-        deployCount > 0,
         SccpConsume {
             queryId,
             nonce: payload.nonce,
@@ -308,6 +324,8 @@ fun handleApplyControl(
     var st = lazy MinterStorage.load();
     assert (st.initialized) throw SccpErrors.NotInitialized;
     assert (sccpGlobalId() == SCCP_TON_GLOBAL_ID) throw SccpErrors.WrongChain;
+    val required = sccpApplyControlRequiredValue();
+    sccpCheckEntryValue(valueCoins, required);
     val nowMs = sccpNowMs();
     val config = st.config.load();
     val verified = verifyAttestation(
@@ -341,7 +359,7 @@ fun handleApplyControl(
     st.opCount += 1;
     st.save();
 
-    sccpReserveFloor(sccpMinterFloor(), valueCoins);
+    sccpReserveMinterFloor(valueCoins, required);
     emitEvent(SccpControlAppliedEvent {
         controlNonce: proof.controlNonce,
         paused: proof.paused,
@@ -446,14 +464,17 @@ fun onInternalMessage(in: InMessage) {
                 sccpBucketAddress(minter, nonce >> SCCP_BUCKET_SHIFT, config.bucketCode)
             ) throw SccpErrors.NotBucket;
             val tail = msg.tail.load();
+            // §5.3.4 step 4: the value was checked at entry and the floor was
+            // topped up there, so this reply pays only its own step. Any
+            // failure bounces to the bucket, which clears the flag and reports
+            // `sccp_consume_reverted`.
+            sccpReservePriorBalance(in.valueCoins);
             if (tail.kind == SCCP_CONSUME_KIND_MINT) {
-                // §5.3.4 step 4, kind mint: every value spent here was checked at entry.
                 val amount = msg.amount as coins;
                 st.pendingSupply -= amount;
                 st.totalSupply += amount;
                 st.opCount += 1;
                 st.save();
-                sccpReserveFloor(sccpMinterFloor(), in.valueCoins);
                 emitEvent(SccpFinalizedEvent {
                     messageId: tail.messageId,
                     nonce,
@@ -475,7 +496,6 @@ fun onInternalMessage(in: InMessage) {
             } else {
                 st.opCount += 1;
                 st.save();
-                sccpReserveFloor(sccpMinterFloor(), in.valueCoins);
                 emitEvent(SccpVoidedEvent {
                     messageId: tail.messageId,
                     firstNonce: nonce,
@@ -497,13 +517,33 @@ fun onInternalMessage(in: InMessage) {
                     config.bucketCode,
                 )
             ) throw SccpErrors.NotBucket;
+            // §5.3.4 step 5; a failure bounces to the bucket, which reports
+            // `sccp_consume_reverted`.
             val tail = msg.tail.load();
             if (tail.kind == SCCP_CONSUME_KIND_MINT) {
                 st.pendingSupply -= msg.amount;
                 st.save();
             }
-            sccpReserveFloor(sccpMinterFloor(), in.valueCoins);
+            sccpReservePriorBalance(in.valueCoins);
             returnExcess(tail.response, msg.queryId);
+        }
+
+        SccpConsumeReverted => {
+            // §5.3.4 step 4: the minter bounced `sccp_consumed` or
+            // `sccp_already_consumed`, so the pending amount was never moved.
+            var st = lazy MinterStorage.load();
+            val config = st.config.load();
+            val nonce = msg.nonce;
+            assert (
+                in.senderAddress ==
+                sccpBucketAddress(
+                    contract.getAddress(),
+                    nonce >> SCCP_BUCKET_SHIFT,
+                    config.bucketCode,
+                )
+            ) throw SccpErrors.NotBucket;
+            st.pendingSupply -= msg.amount;
+            st.save();
         }
 
         SccpRangeConsumed => {
@@ -520,6 +560,8 @@ fun onInternalMessage(in: InMessage) {
             ) throw SccpErrors.NotBucket;
             st.opCount += 1;
             st.save();
+            // paid by the value attached to the range request; a failure
+            // bounces and the bucket clears the range
             emitEvent(SccpVoidedEvent {
                 messageId: 0,
                 firstNonce: first,
@@ -557,25 +599,22 @@ fun onInternalMessage(in: InMessage) {
             assert (((first + count - 1) >> SCCP_BUCKET_SHIFT) == idx) throw SccpErrors.BadRange;
             val deployed = st.deployedBuckets;
             val deployCount = bucketDeployCount(idx, deployed);
-            assert (
-                in.valueCoins >=
-                sccpVoidFrozenRequiredValue(deployCount) + sccpMinterFloorDeficit(in.valueCoins)
-            ) throw SccpErrors.NotEnoughValue;
+            val required = sccpVoidFrozenRequiredValue(deployCount);
+            sccpCheckEntryValue(in.valueCoins, required);
             if (deployCount > 0) {
                 st.deployedBuckets = idx + 1;
                 st.save();
             }
             val config = st.config.load();
             val minter = contract.getAddress();
-            sccpReserveFloor(sccpMinterFloor(), in.valueCoins);
-            if (deployCount > 1) {
-                sendBucketDeployments(minter, config.bucketCode, deployed, idx, msg.queryId);
+            sccpReserveMinterFloor(in.valueCoins, required);
+            if (deployCount > 0) {
+                sendBucketActivations(minter, config.bucketCode, deployed, idx + 1, msg.queryId);
             }
             sendToBucket(
                 minter,
                 config.bucketCode,
                 idx,
-                deployCount > 0,
                 SccpConsumeRange {
                     queryId: msg.queryId,
                     first,
@@ -590,6 +629,8 @@ fun onInternalMessage(in: InMessage) {
         SccpRotate => {
             var st = lazy MinterStorage.load();
             assert (st.initialized) throw SccpErrors.NotInitialized;
+            val required = sccpRotateRequiredValue();
+            sccpCheckEntryValue(in.valueCoins, required);
             val nowMs = sccpNowMs();
             val config = st.config.load();
             val roster = st.roster.load();
@@ -645,7 +686,12 @@ fun onInternalMessage(in: InMessage) {
             st.prevRoster = prev.toCell();
             st.roster = installed.toCell();
             st.save();
-            sccpReserveFloor(sccpMinterFloor(), in.valueCoins);
+            sccpReserveMinterFloor(in.valueCoins, required);
+            emitEvent(SccpRosterRotatedEvent {
+                generation: next.generation,
+                digest: nextDigest,
+                validUntilMs: next.validUntilMs,
+            });
             returnExcess(msg.response, msg.queryId);
         }
 
@@ -656,22 +702,55 @@ fun onInternalMessage(in: InMessage) {
             assert (
                 (count >= 1) & (count <= SCCP_MAX_DEPLOY_BUCKETS_PER_CALL)
             ) throw SccpErrors.BadRange;
-            assert (
-                in.valueCoins >=
-                sccpDeployBucketsRequiredValue(count) + sccpMinterFloorDeficit(in.valueCoins)
-            ) throw SccpErrors.NotEnoughValue;
+            val required = sccpDeployBucketsRequiredValue(count);
+            sccpCheckEntryValue(in.valueCoins, required);
             val first = st.deployedBuckets;
             st.deployedBuckets = first + count;
             st.save();
             val config = st.config.load();
-            sccpReserveFloor(sccpMinterFloor(), in.valueCoins);
-            sendBucketDeployments(
+            sccpReserveMinterFloor(in.valueCoins, required);
+            sendBucketActivations(
                 contract.getAddress(),
                 config.bucketCode,
                 first,
                 first + count,
                 msg.queryId,
             );
+            returnExcess(msg.response, msg.queryId);
+        }
+
+        SccpRetry => {
+            // §5.3.4: re-runs a recorded step whose message bounced. The entry
+            // is removed before the resend and recorded again only if the
+            // resend bounces, so each recorded step runs at most once.
+            var st = lazy MinterStorage.load();
+            assert (st.initialized) throw SccpErrors.NotInitialized;
+            val required = sccpRetryRequiredValue();
+            sccpCheckEntryValue(in.valueCoins, required);
+            val nonce = msg.nonce;
+            val entry = st.retries.get(nonce);
+            assert (entry.isFound) throw SccpErrors.NothingToRetry;
+            val kind = entry.loadValue();
+            st.retries.delete(nonce);
+            st.save();
+            val config = st.config.load();
+            val minter = contract.getAddress();
+            sccpReserveMinterFloor(in.valueCoins, required);
+            if (kind == SCCP_RETRY_ACTIVATE) {
+                sendBucketActivation(
+                    minter,
+                    config.bucketCode,
+                    nonce >> SCCP_BUCKET_SHIFT,
+                    msg.queryId,
+                );
+            } else {
+                sendUnconsume(
+                    minter,
+                    config.bucketCode,
+                    nonce,
+                    SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_BOUNCE_ON_ACTION_FAIL,
+                );
+            }
             returnExcess(msg.response, msg.queryId);
         }
 
@@ -709,7 +788,9 @@ fun onInternalMessage(in: InMessage) {
             st.opCount += 1;
             st.save();
 
-            sccpReserveFloor(sccpMinterFloor(), in.valueCoins);
+            // §5.3.5: a burn never pays toward the minter floor, and a failed
+            // event bounces `burn_notification`, which restores the wallet.
+            sccpReservePriorBalance(in.valueCoins);
             emitEvent(SccpTransferToTairaEvent {
                 messageId,
                 nonce,
@@ -733,7 +814,8 @@ fun onInternalMessage(in: InMessage) {
                 (st.controlNonce == 0) &
                 (!st.mintingPaused) &
                 (st.deployedBuckets == 0) &
-                (st.prevRoster == null)
+                (st.prevRoster == null) &
+                st.retries.isEmpty()
             ) throw SccpErrors.BadConfig;
             val config = st.config.load();
             assert (
@@ -797,11 +879,21 @@ fun onInternalMessage(in: InMessage) {
     }
 }
 
+/// Records `kind` for `key` in `retries` (§5.3.4).
+fun MinterStorage.recordRetry(mutate self, key: int, kind: int) {
+    self.retries.set(key, kind);
+}
+
 /// §5.3.4 step 6 (bounced `sccp_consume`: release the pending supply; the
-/// value stays) and step 7 (bounced `internal_transfer`: burn the unminted
-/// supply and ask the bucket to clear the flag, so the message becomes
-/// finalizable again).
+/// value stays), step 7 (bounced `internal_transfer`: burn the unminted supply
+/// and ask the bucket to clear the flag, so the message becomes finalizable
+/// again) and the recorded retries: a bounced `sccp_unconsume` or
+/// `sccp_activate_bucket` changed nothing at the bucket, so the step is
+/// recorded for `sccp_retry`.
 fun onBouncedMessage(in: InMessageBounced) {
+    // A bounce may carry little value. Only the network sets the bounced flag,
+    // and only for a message the minter sent, so the minter pays this handler.
+    setGasLimitToMaximum();
     in.bouncedBody.skipBouncedPrefix();
     val msg = lazy MinterBounce.fromSlice(in.bouncedBody);
 
@@ -822,25 +914,57 @@ fun onBouncedMessage(in: InMessageBounced) {
             st.save();
         }
         InternalTransferStep => {
+            // Only the network sets the bounced flag, so this is a mint the
+            // minter sent to a canonical wallet (`query_id = nonce`).
             var st = lazy MinterStorage.load();
             val config = st.config.load();
             val nonce = msg.queryId;
             st.totalSupply -= msg.jettonAmount;
+            // The bounce handler cannot bounce: send the unconsume only when the
+            // balance surely pays it, and otherwise record it for `sccp_retry`.
+            if (
+                contract.getOriginalBalance() >=
+                sccpUnconsumeCost() + sccpGasFee(SCCP_GAS_MINTER_BOUNCE)
+            ) {
+                sendUnconsume(
+                    contract.getAddress(),
+                    config.bucketCode,
+                    nonce,
+                    SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_IGNORE_ERRORS,
+                );
+            } else {
+                st.recordRetry(nonce, SCCP_RETRY_UNCONSUME);
+            }
             st.save();
-            val unconsume = createMessage({
-                bounce: BounceMode.NoBounce,
-                dest: sccpBucketAddress(
+        }
+        SccpUnconsume => {
+            var st = lazy MinterStorage.load();
+            val config = st.config.load();
+            val nonce = msg.nonce;
+            assert (
+                in.senderAddress ==
+                sccpBucketAddress(
                     contract.getAddress(),
                     nonce >> SCCP_BUCKET_SHIFT,
                     config.bucketCode,
-                ),
-                value: sccpUnconsumeValue(),
-                body: SccpUnconsume { nonce },
-            });
-            unconsume.send(SEND_MODE_PAY_FEES_SEPARATELY | SEND_MODE_IGNORE_ERRORS);
+                )
+            ) throw SccpErrors.NotBucket;
+            st.recordRetry(nonce, SCCP_RETRY_UNCONSUME);
+            st.save();
+        }
+        SccpActivateBucket => {
+            var st = lazy MinterStorage.load();
+            val config = st.config.load();
+            val index = msg.index;
+            assert (
+                in.senderAddress ==
+                sccpBucketAddress(contract.getAddress(), index, config.bucketCode)
+            ) throw SccpErrors.NotBucket;
+            st.recordRetry(index << SCCP_BUCKET_SHIFT, SCCP_RETRY_ACTIVATE);
+            st.save();
         }
         else => {
-            // bucket deployments and excess returns are not bounceable
+            // range requests, reverted reports and excess returns: the value stays
         }
     }
 }
@@ -930,20 +1054,48 @@ fun deployCountForNonce(nonce: int): int {
 
 /// `finalize_required_value()` for the message with outbound `nonce` (§5.3.5).
 get fun finalize_required_value(nonce: int): int {
-    return sccpFinalizeRequiredValue(deployCountForNonce(nonce)) + sccpMinterFloorDeficit(0);
+    return sccpMinterQuote(sccpFinalizeRequiredValue(deployCountForNonce(nonce)));
 }
 
 /// `void_required_value()` for the message with outbound `nonce` (§5.3.5).
 get fun void_required_value(nonce: int): int {
-    return sccpVoidRequiredValue(deployCountForNonce(nonce)) + sccpMinterFloorDeficit(0);
+    return sccpMinterQuote(sccpVoidRequiredValue(deployCountForNonce(nonce)));
 }
 
 /// Required value of `sccp_void_frozen` starting at `firstNonce`.
 get fun void_frozen_required_value(firstNonce: int): int {
-    return sccpVoidFrozenRequiredValue(deployCountForNonce(firstNonce)) + sccpMinterFloorDeficit(0);
+    return sccpMinterQuote(sccpVoidFrozenRequiredValue(deployCountForNonce(firstNonce)));
 }
 
 /// Required value of `sccp_deploy_buckets` for `count` buckets.
 get fun deploy_buckets_required_value(count: int): int {
-    return sccpDeployBucketsRequiredValue(count) + sccpMinterFloorDeficit(0);
+    return sccpMinterQuote(sccpDeployBucketsRequiredValue(count));
+}
+
+/// Required value of `sccp_apply_control` and `sccp_apply_control_historical`.
+get fun apply_control_required_value(): int {
+    return sccpMinterQuote(sccpApplyControlRequiredValue());
+}
+
+/// Required value of one `sccp_rotate`.
+get fun rotate_required_value(): int {
+    return sccpMinterQuote(sccpRotateRequiredValue());
+}
+
+/// Required value of `sccp_retry`.
+get fun retry_required_value(): int {
+    return sccpMinterQuote(sccpRetryRequiredValue());
+}
+
+/// `MINTER_FLOOR` at current prices (§5.3.5).
+get fun minter_floor(): int {
+    return sccpMinterFloor();
+}
+
+/// The retry recorded for `nonce`: 0 (none), `SCCP_RETRY_UNCONSUME` (1) or
+/// `SCCP_RETRY_ACTIVATE` (2, key = first nonce of the bucket).
+get fun get_sccp_retry(nonce: int): int {
+    val st = lazy MinterStorage.load();
+    val entry = st.retries.get(nonce);
+    return entry.isFound ? entry.loadValue() : 0;
 }

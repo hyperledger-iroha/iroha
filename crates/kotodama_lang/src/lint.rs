@@ -164,19 +164,17 @@ impl LintWarning {
             },
             byte_range: Some(span.byte_range),
         };
+        // The message is the canonical English text; a translation rides along
+        // as `localized`, so machine-readable output stays stable and human
+        // output never mixes a translated message with English help or notes.
+        let english = self.localized_message(Language::English);
         let mut diagnostic = match self.severity {
-            LintSeverity::Warning => Diagnostic::warning(
-                self.diagnostic_code(),
-                DiagnosticPhase::Semantic,
-                self.localized_message(language),
-                span,
-            ),
-            LintSeverity::Error => Diagnostic::error(
-                self.diagnostic_code(),
-                DiagnosticPhase::Semantic,
-                self.localized_message(language),
-                span,
-            ),
+            LintSeverity::Warning => {
+                Diagnostic::warning(self.diagnostic_code(), DiagnosticPhase::Semantic, english, span)
+            }
+            LintSeverity::Error => {
+                Diagnostic::error(self.diagnostic_code(), DiagnosticPhase::Semantic, english, span)
+            }
         };
         diagnostic.notes.push(format!(
             "lint `{}` in category `{}`",
@@ -207,7 +205,7 @@ impl LintWarning {
             // does not replace its immutable bytes with a filesystem or open-buffer read.
             diagnostic.primary_source = Some(span.source_file.clone());
         }
-        diagnostic
+        crate::i18n::with_translation(diagnostic, language, self.localized_message(language))
     }
 }
 /// Reported severity of one lint finding.
@@ -4479,6 +4477,26 @@ mod tests {
         assert_eq!(denied.severity, LintSeverity::Error);
         let diagnostic = denied.to_diagnostic("x.ko", None, Language::English);
         assert_eq!(diagnostic.severity, crate::diagnostic::Severity::Error);
+    }
+    #[test]
+    fn lint_diagnostics_keep_english_messages_and_carry_translations() {
+        let warning = LintWarning::new(
+            "unused-state",
+            LintMessage::UnusedState {
+                name: "total".into(),
+            },
+        );
+        let english = warning.localized_message(Language::English);
+        let japanese = warning.localized_message(Language::Japanese);
+        assert_ne!(english, japanese, "unused-state must have a translation");
+        let diagnostic = warning.to_diagnostic("x.ko", None, Language::Japanese);
+        assert_eq!(diagnostic.message, english);
+        let localized = diagnostic.localized.expect("translation is attached");
+        assert_eq!(localized.language, Language::Japanese.tag());
+        assert_eq!(localized.message, japanese);
+        let plain = warning.to_diagnostic("x.ko", None, Language::English);
+        assert_eq!(plain.message, english);
+        assert!(plain.localized.is_none());
     }
     #[test]
     fn lint_provenance_uses_parser_ranges_for_declarations_bindings_and_calls() {

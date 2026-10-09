@@ -27,7 +27,7 @@ const OWNER: [u8; 21] = [
 ];
 
 fn profiles(chain: &SyntheticTronChainV1) -> SccpChainProfilesV1 {
-    SccpChainProfilesV1::compiled().with_tron(*chain.profile())
+    SccpChainProfilesV1::genesis().with_tron(*chain.profile())
 }
 
 fn params() -> SccpLightClientParamsV1 {
@@ -78,7 +78,7 @@ fn bootstrap_installs_the_period_set_and_ages_with_the_period() {
     assert_eq!(deadline, period_end + params().ws_bound_ms);
     assert!(!is_aged(chain.profile(), &light_client, now));
     assert_eq!(
-        is_aged_with_profiles(&profiles(&chain), &memory, &light_client, NETWORK, deadline),
+        is_aged_with_profiles(&profiles(&chain), &memory, NETWORK, deadline),
         Ok(true)
     );
     assert_eq!(
@@ -285,6 +285,58 @@ fn solid_proofs_yield_the_transfer_call_and_void_calls() {
 }
 
 #[test]
+fn non_canonical_or_out_of_range_calls_are_not_sccp_calls() {
+    let transfer = TransferToTairaCallV1 {
+        taira_recipient: vec![1; 40],
+        token_amount: 5_000_000_000,
+        expected_nonce: 3,
+    }
+    .calldata();
+    let frozen = crate::v1::evm_abi::void_frozen_calldata(4, 2);
+    let with_trailing_byte = |calldata: &[u8]| {
+        let mut calldata = calldata.to_vec();
+        calldata.push(0);
+        calldata
+    };
+    let cases = [
+        (with_trailing_byte(&transfer), AbiError::BadLength),
+        (with_trailing_byte(&frozen), AbiError::BadLength),
+        (
+            crate::v1::evm_abi::void_frozen_calldata(4, 0),
+            AbiError::BadVoidRange,
+        ),
+        (
+            crate::v1::evm_abi::void_frozen_calldata(4, 257),
+            AbiError::BadVoidRange,
+        ),
+        (
+            crate::v1::evm_abi::void_frozen_calldata(u64::MAX, 2),
+            AbiError::BadVoidRange,
+        ),
+    ];
+    let height = 1_120;
+    let transactions = cases
+        .iter()
+        .map(|(calldata, _)| trigger_transaction(&OWNER, &CONTRACT, calldata, 1, 0))
+        .collect();
+    let chain = SyntheticTronChainV1::new([7; 32]).with_transactions(height, transactions);
+    let (memory, _) = installed(&chain, 1_100);
+    let now = chain.time_ms(1_160) + 1_000;
+    for (index, (_, error)) in cases.into_iter().enumerate() {
+        let proof = TronSourceProofV1 {
+            anchor: TronProofAnchorV1::Solid(chain.segment(height, 1_140)),
+            transaction: chain.transaction_proof(height, index),
+        };
+        let bytes = SccpSourceProofV1::Tron(proof).to_bytes().expect("bounded");
+        assert_eq!(
+            verify_proof_with_profiles(&profiles(&chain), &memory, NETWORK, &bytes, now),
+            Err(TronLcError::NotSccpCall(error).into()),
+            "case {index}"
+        );
+    }
+}
+
+#[test]
 fn failed_or_value_moving_calls_are_refused() {
     let (chain, transaction) = burn_chain(6, 1_120, 2);
     let (memory, _) = installed(&chain, 1_100);
@@ -417,7 +469,7 @@ fn protobuf_signature_and_merkle_codecs_are_strict() {
     let mut cursor = 0;
     assert_eq!(read_varint(&[0x80, 0x00], &mut cursor), None);
     let mut signature = block.signature.clone();
-    signature[64] = 4;
+    signature[64] = 2;
     assert_eq!(
         header_signer(&block.raw, &signature),
         Err(TronLcError::MalformedSignature)
@@ -458,4 +510,170 @@ fn field_readers_reject_only_another_wire_type() {
     for field in [1, 3] {
         assert_eq!(bytes_of(&map, field, malformed), Err(malformed()));
     }
+}
+
+/// The high-`s` twin of a `v ∈ {0, 1}` signature: `(r, n − s)` with the parity flipped.
+fn high_s(signature: &[u8]) -> Vec<u8> {
+    let mut twin = signature.to_vec();
+    let s: [u8; 32] = signature[32..64].try_into().expect("s");
+    twin[32..64].copy_from_slice(&order_minus(&s));
+    twin[64] ^= 1;
+    twin
+}
+
+#[test]
+fn java_tron_signature_forms_recover_the_same_witness() {
+    let chain = SyntheticTronChainV1::new([10; 32]);
+    let block = chain.block(1_105);
+    let signer = header_signer(&block.raw, &block.signature).expect("canonical");
+    let twin = high_s(&block.signature);
+    assert!(
+        twin[32..64] > SECP256K1_HALF_ORDER[..],
+        "the twin is high-s"
+    );
+    assert_eq!(
+        order_minus(&order_minus(&twin[32..64].try_into().expect("s"))).to_vec(),
+        twin[32..64].to_vec()
+    );
+    for offset in [0_u8, 4, 27, 31] {
+        for signature in [&block.signature, &twin] {
+            let mut form = signature.clone();
+            form[64] += offset;
+            assert_eq!(header_signer(&block.raw, &form), Ok(signer), "v + {offset}");
+        }
+    }
+    let malformed = Err(TronLcError::MalformedSignature);
+    for v in [2_u8, 3, 6, 7, 8, 26, 29, 30, 33, 34, 35, 0xff] {
+        let mut form = block.signature.clone();
+        form[64] = v;
+        assert_eq!(header_signer(&block.raw, &form), malformed, "v = {v}");
+    }
+    let mut zero_s = block.signature.clone();
+    zero_s[32..64].fill(0);
+    let mut order_s = block.signature.clone();
+    order_s[32..64].copy_from_slice(&SECP256K1_ORDER);
+    let mut order_r = block.signature.clone();
+    order_r[..32].copy_from_slice(&SECP256K1_ORDER);
+    for form in [zero_s, order_s, order_r, block.signature[..64].to_vec()] {
+        assert_eq!(header_signer(&block.raw, &form), malformed);
+    }
+
+    // A segment in which every other witness signed with a high `s` advances exactly like the
+    // canonical one.
+    let (mut memory, _) = installed(&chain, 1_100);
+    let now = chain.time_ms(1_160) + 1_000;
+    let mut segment = chain.segment(1_100, 1_160);
+    for header in segment.headers.iter_mut().step_by(2) {
+        header.witness_signature = high_s(&header.witness_signature);
+    }
+    let delta = advance(&chain, &mut memory, vec![segment], now).expect("high-s headers count");
+    assert_eq!(
+        delta.head.expect("moved").latest_finalized.source_height,
+        1_141
+    );
+}
+
+/// The witness set `learned` lacks relative to `full`.
+fn evicted(full: &TronWitnessSetV1, learned: &TronWitnessSetV1) -> Vec<Vec<u8>> {
+    full.witnesses
+        .iter()
+        .filter(|witness| !learned.witnesses.contains(witness))
+        .map(|witness| witness.account_address.clone())
+        .collect()
+}
+
+#[test]
+fn a_witness_missing_one_slot_of_the_window_is_still_learned() {
+    // The witness scheduled at slot 8 203 misses its first-round slot and produces in the
+    // second round (slot 8 230).
+    let chain = SyntheticTronChainV1::new([11; 32])
+        .with_roster(P0 + 1, 2, None)
+        .with_missed_slots(&[BOUNDARY + 3]);
+    let (mut memory, _) = installed(&chain, BOUNDARY - 100);
+    let now = chain.time_ms(BOUNDARY + 100) + 1_000;
+    let delta = advance(
+        &chain,
+        &mut memory,
+        vec![chain.segment(BOUNDARY - 5, BOUNDARY + 100)],
+        now,
+    )
+    .expect("learns the next set");
+    let learned = decode_set(&delta.new_sets[0]).expect("decodes");
+    assert_eq!(learned, chain.witness_set(P0 + 1));
+    assert_eq!(delta.head.expect("moved").latest_set_id, P0 + 1);
+}
+
+#[test]
+fn a_witness_missing_both_rounds_of_the_window_is_evicted() {
+    let missing = BOUNDARY + 3;
+    let chain = SyntheticTronChainV1::new([12; 32])
+        .with_roster(P0 + 1, 2, None)
+        .with_missed_slots(&[missing, missing + 27]);
+    let absent = chain.scheduled_account(P0 + 1, missing);
+    let (mut memory, _) = installed(&chain, BOUNDARY - 100);
+    let now = chain.time_ms(BOUNDARY + 100) + 1_000;
+    // The window spans 56 slots after the maintenance block: that witness's first two slots lie
+    // inside it and its third outside.
+    let window_slots = chain.profile().learning_window_ms() / 3_000;
+    assert!(missing + 27 <= BOUNDARY + window_slots && missing + 54 > BOUNDARY + window_slots);
+    let delta = advance(
+        &chain,
+        &mut memory,
+        vec![chain.segment(BOUNDARY - 5, BOUNDARY + 100)],
+        now,
+    )
+    .expect("learns the next set");
+    let learned = decode_set(&delta.new_sets[0]).expect("decodes");
+    assert_eq!(
+        evicted(&chain.witness_set(P0 + 1), &learned),
+        vec![absent.to_vec()]
+    );
+    assert_eq!(learned.witnesses.len(), 26);
+}
+
+#[test]
+fn the_newest_window_header_names_a_witness_key() {
+    let chain = SyntheticTronChainV1::new([13; 32]);
+    let (memory, _) = installed(&chain, BOUNDARY - 100);
+    let params = params();
+    let ctx = Ctx {
+        profile: chain.profile(),
+        params: &params,
+        now: chain.time_ms(BOUNDARY + 100) + 1_000,
+        newest: P0,
+    };
+    let sets = Sets::new(&memory);
+    let mut signed = ctx
+        .signed(
+            &chain.segment(BOUNDARY - 5, BOUNDARY + 100),
+            "segment headers",
+        )
+        .expect("segment");
+    // The first-round header of one witness recovers to an older key; its second-round header
+    // carries the key it uses for the rest of the period.
+    let first_round = 5 + 4;
+    let stale_key = [0x41; ADDRESS_BYTES];
+    let witness = signed[first_round].header.witness;
+    let current_key = signed[first_round + 27].signer;
+    assert_eq!(signed[first_round + 27].header.witness, witness);
+    signed[first_round].signer = stale_key;
+    let (set, valid_from, _) = learn_next(&ctx, &sets, &signed).expect("learns");
+    assert_eq!(valid_from, BOUNDARY);
+    let entry = set
+        .witnesses
+        .iter()
+        .find(|entry| entry.account_address == witness)
+        .expect("learned");
+    assert_eq!(entry.signing_address, current_key.to_vec());
+    // Reversed, the stale key is the newest one and wins.
+    let mut reversed = signed.clone();
+    reversed[first_round].signer = current_key;
+    reversed[first_round + 27].signer = stale_key;
+    let (set, _, _) = learn_next(&ctx, &sets, &reversed).expect("learns");
+    let entry = set
+        .witnesses
+        .iter()
+        .find(|entry| entry.account_address == witness)
+        .expect("learned");
+    assert_eq!(entry.signing_address, stale_key.to_vec());
 }

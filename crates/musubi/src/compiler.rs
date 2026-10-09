@@ -937,14 +937,19 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
             match action {
                 CompilerActionV1::Check => {
                     let language = kotodama_lang::i18n::detect_language();
+                    let lints = member_lint_config(workspace, member);
                     result.warnings.extend(
                         driver
                             .check_project(graph)
                             .map_err(CompilerBridgeErrorV1::from_build_error)
                             .map_err(locate)?
                             .into_iter()
-                            .map(|warning| {
-                                let mut diagnostic = warning.warning.to_diagnostic(
+                            .filter_map(|warning| {
+                                let lint = match lints.level(warning.warning.code) {
+                                    kotodama_lang::lint::LintLevel::Allow => return None,
+                                    level => warning.warning.with_level(level),
+                                };
+                                let mut diagnostic = lint.to_diagnostic(
                                     &warning.source_name,
                                     warning.package_identity.as_deref(),
                                     language,
@@ -954,7 +959,7 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
                                     member_directory(member),
                                     &local_directories,
                                 );
-                                diagnostic
+                                Some(diagnostic)
                             }),
                     );
                 }
@@ -1014,6 +1019,19 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
             .then_with(|| left.source.cmp(&right.source))
     });
     Ok(result)
+}
+/// Lint levels for one checked member: its own `[lints]`, else the workspace root's, else the
+/// defaults (every lint warns).
+fn member_lint_config(
+    workspace: &Workspace,
+    member: &WorkspaceMember,
+) -> kotodama_lang::session::LintConfig {
+    member
+        .manifest
+        .lints
+        .clone()
+        .or_else(|| workspace.root_manifest().lints.clone())
+        .unwrap_or_default()
 }
 fn package_target_root(workspace: &Workspace, member: &WorkspaceMember) -> PathBuf {
     workspace

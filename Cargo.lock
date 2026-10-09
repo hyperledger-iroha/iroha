@@ -6047,7 +6047,6 @@ dependencies = [
  "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_samples",
- "iroha_torii",
  "iroha_torii_shared",
  "iroha_version",
  "iroha_zkp_halo2",

@@ -348,6 +348,9 @@ struct BuildArgs {
     /// Enable the Kotodama ZK compilation surface for every selected contract and test.
     #[arg(long)]
     zk: bool,
+    /// Fail when any Kotodama lint would warn, on top of the `[lints]` levels in `Musubi.toml`.
+    #[arg(long)]
+    deny_warnings: bool,
 }
 #[derive(Args, Debug)]
 struct PackageArgs {

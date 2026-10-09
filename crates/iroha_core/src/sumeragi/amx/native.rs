@@ -865,3 +865,16 @@ pub(crate) fn with_paid_prepare_retry_fixture(
 
 #[cfg(test)]
 pub(crate) use retry_probe::Observation as NativeLegRetryObservation;
+
+/// Reuse genuine paid parent proofs to settle/prune a No vote in the same private block.
+#[cfg(test)]
+pub(crate) fn with_paid_prepare_pruning_fixture(
+    test: impl FnOnce(
+        &crate::sumeragi::test_chain::CertifiedTestChain,
+        [iroha_data_model::isi::InstructionBox; 3],
+        iroha_crypto::KeyPair,
+        [[u8; 32]; 2],
+    ),
+) {
+    tests::with_paid_prepare_pruning_fixture(test);
+}

@@ -586,6 +586,11 @@ fn retained_lane_evidence_read_preserves_original_capture_across_open_failure_an
     );
     assert_eq!(attribution.offenders[0].signer, 2);
     drop(reader);
+    assert!(
+        budget.reserved_bytes() > baseline,
+        "the immutable attribution still owns its actual graph"
+    );
+    drop(attribution);
     assert_eq!(budget.reserved_bytes(), baseline);
 }
 
@@ -837,11 +842,16 @@ fn native_lane_admission_and_restore_keep_original_carrier_clock_through_penalty
         matches!(replay, Err(evidence::EvidenceAdmissionError::Invalid(reason)) if reason == "evidence is already committed")
     );
 
-    let mut forged = current.clone();
+    let mut forged = current.canonical_projection();
     let EvidenceScope::Lane(scope) = &mut forged.attribution.scope else {
         panic!("lane scope")
     };
     scope.admission_parent_core_hash[0] ^= 1;
+    let forged = crate::state::RetainedEvidenceRecord::from_fixture(
+        forged,
+        &chain.state().ivm_execution_budget(),
+    )
+    .unwrap();
     let mut records = chain.state().world.consensus_evidence.block();
     records.insert(key, forged);
     records.commit();
@@ -2050,4 +2060,79 @@ fn original_lane_observer_late_policy_refusal_retains_observation_and_retries() 
         evidence::pending_evidence_admissions(state, carrier, state.state_view_generation()),
         [original]
     );
+}
+
+#[test]
+fn lane_verified_offender_graph_refuses_occupied_original_pool_and_retries() {
+    let (chain, _guard) = anchored_chain(3);
+    let budget = chain.state().ivm_execution_budget();
+    let baseline = budget.reserved_bytes();
+    let mut reader = LaneProofRead::new(capture(&chain), 3)
+        .unwrap_or_else(|(_, error)| panic!("original lane custody: {error}"));
+    reader.poll().unwrap();
+    let proof = vote_pair(&reader, 3);
+    let config = std::ptr::from_ref(reader.cursor.config().epoch.as_ref());
+    let headers = reader.headers.as_slice().as_ptr();
+    let retained = budget.reserved_bytes();
+    let blocker = budget
+        .try_reserve_bytes(budget.limit_bytes() - retained)
+        .unwrap();
+    let compact_bytes = reader.cursor.config().committee.members()[2]
+        .as_bytes()
+        .len()
+        + 1;
+    let expected = budget
+        .try_reserve(std::alloc::Layout::array::<u8>(compact_bytes).unwrap())
+        .unwrap_err();
+    assert!(matches!(
+        &expected,
+        iroha_allocation::AllocationRefusal::Capacity { .. }
+    ));
+    let result = reader.verify(&proof);
+    let error = result.expect_err(
+        "occupied original offender pool must refuse before constructing a verified graph",
+    );
+    let classified = crate::sumeragi::evidence::EvidenceAdmissionError::from(error);
+    assert!(matches!(classified,
+        crate::sumeragi::evidence::EvidenceAdmissionError::Preparation(
+            crate::state::EvidencePreparationError::Admission(actual)) if actual == expected));
+    assert_eq!(
+        std::ptr::from_ref(reader.cursor.config().epoch.as_ref()),
+        config
+    );
+    assert_eq!(reader.headers.as_slice().as_ptr(), headers);
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    drop(blocker);
+    assert_eq!(budget.reserved_bytes(), retained);
+    let verified = reader.verify(&proof).unwrap();
+    assert_eq!(verified.tip(), reader.tip);
+    assert_eq!(verified.offenders()[0].signer, 2);
+    let vector = verified.offenders().as_ptr();
+    let compact = verified.offenders()[0]
+        .peer_id
+        .public_key()
+        .borrowed_parts()
+        .unwrap()
+        .1
+        .as_ptr();
+    let held = budget.reserved_bytes();
+    assert!(held > retained);
+    let attribution = verified.into_attribution();
+    assert!(attribution.belongs_to(&budget));
+    assert_eq!(attribution.offenders.as_ptr(), vector);
+    assert_eq!(
+        attribution.offenders[0]
+            .peer_id
+            .public_key()
+            .borrowed_parts()
+            .unwrap()
+            .1
+            .as_ptr(),
+        compact
+    );
+    assert_eq!(budget.reserved_bytes(), held);
+    drop(attribution);
+    assert_eq!(budget.reserved_bytes(), retained);
+    drop(reader);
+    assert_eq!(budget.reserved_bytes(), baseline);
 }

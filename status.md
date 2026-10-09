@@ -11,7 +11,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Area | Current state | Remaining qualification |
 | --- | --- | --- |
 | Sumeragi | The sans-IO core, simulator and node driver are integrated; the previous consensus runtime is removed. Certified results bind World roots and ordered events. | Current-candidate simulator/mutation gates, consumers, network faults and authenticated accelerated restoration. |
-| Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. The daemon can host an independent signed dataspace root with its own State, Kura, allocation pool and native context archive. Explicit Kagami AMX bootstrap authenticates the parent's original G1/H2 and stages the participant in private genesis. Lifecycle/restart have component and node coverage. | Managed AMX source acquisition and parent registration, complete outbound proof custody, durable validator relaying and current-source network isolation, scale and restart. |
+| Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. The daemon can host an independent signed dataspace root with its own State, Kura, allocation pool and native context archive. Explicit and managed Kagami AMX bootstrap retain the parent's original G1/H2 and stage the participant in private genesis. Explicit administrative parent registration retains its original signed request and authenticated native outcome; the resumable proof source can detach from its State view. Lifecycle/restart have component and node coverage. | Current-source qualification of managed registration and detached proof custody, complete outbound funding, durable validator relaying, network isolation, scale and restart. |
 | Storage and execution | `lanes::LaneRunner` and `SumeragiLaneMerge` are the production path. Kura owns a shared fail-stop gate and authenticated native tips/journals. | Original funded execution custody through acquisition, certification, publication, replay and retained-generation reclamation. |
 | Configuration and DPN | Private dataspace definitions are separate from validator settings. `iroha dataspace plan/apply/status` derives artifacts and retains once-only transactions under one budget. Kagami has an isolated BPNG catalog/paid-namespace genesis preset. | Profile-based generator closure, four-daemon paid deployment/readback and physical isolation. BPNG local contracts, fee authority and application provisioning remain incomplete. Owner-node provisioning is outside this path. |
 | Kagami/Mochi developer experience | Shared config-free native localnet, owned processes and workspace contexts are implemented in `iroha_deploy`; Musubi provides source, artifact and package deployment with retained recovery. Matching macOS regressions pass for filesystem custody, continuous startup deadlines, worker handoff and failure cleanup, bootstrap selection and retained gateway projections. Installed release binaries pass private-root startup, restart and listener isolation. | Global deployment and the attachment parent exceed the original 30-second startup deadline. Extended startup reaches all three promoted provider catalogs but still expires during restart qualification. Permitted State/archive publication lag now retries without the prior fatal activation error, but combined readiness remains unqualified. Deep retained-history preparation still expires before native request retention. Failed attempts close all four owned peers. Combined paid provisioning, anchoring, payload isolation, renewal and publication need full validation. The public Taira installation profile is committed, both release packagers select its exact image, and its published checkpoint passes native signature and finality verification. Recurring signed checkpoints, cold registry publication, native desktop interaction, signed OS matrices and reference-host latency remain open. Concurrent source changes are recorded separately from compiled-candidate results. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
@@ -33,9 +33,10 @@ The paid Nexus workload exposed an AMX retry defect: a completed State visibilit
 publication incorrectly invalidated retained decoded bytes and halted the node.
 The repair separates immutable decode custody from State authority; every retry
 still authenticates the current committed parent. Native retry and parent
-authentication controls pass. The rebuilt candidate passes ten fresh paid Nexus
+authentication controls pass. An earlier rebuilt candidate passed ten fresh paid Nexus
 workloads, serial restart/readback of all sixteen validators and disjoint-lane
-stop/restart, with all expected peer processes closing cleanly.
+stop/restart, with all expected peer processes closing cleanly. Subsequent source
+changes require fresh qualification of the combined candidate.
 The retired publisher-custody fixture
 cannot supply current admission evidence.
 Full fault/leakage campaigns, optimized-build resource qualification and the
@@ -372,14 +373,14 @@ passes.
   execution/finalized-State binding and signed release evidence remain open under
   the [ZK goals](specs/zk_first_release_goals.md).
 
-- **Parliament:** the [final requirements and launch decision](specs/parliament_private_ballot_design.md)
-  requires PQ private ballots without decryption custodians and with potentially
-  small electorates. No construction satisfying accepted-voter dropout is
-  selected; this is a construction blocker, with no pending owner decision.
-  Binding-governance mainnet launch is no-go until qualification. The fast pause
-  panel is seated per epoch independently of attempts. Current timed-OVN ballots and consensus-mandatory Parliament pulse/
-  custody checks do not satisfy that target; construction and availability
-  isolation remain blockers.
+- **Parliament:** binding juries move to [anonymous on-chain ballots](specs/parliament_private_ballot_design.md):
+  public votes and tally, voter-to-ballot linkage hidden by a PQ membership and
+  nullifier proof, and no ballot custodian. The construction is selected but its
+  proof profile is unqualified and nothing is implemented. Binding-governance
+  mainnet launch is no-go until qualification. The epoch-seated fast pause
+  panel is specified, not implemented. Current timed-OVN ballots and consensus-mandatory
+  Parliament pulse/custody checks are retirement and availability-isolation
+  targets.
 - **Services:** Musubi publication/paid contracts, standalone elections,
   SoraNet/Linux helpers, SCCP live corridors and Inrou Linux/AArch64/KVM isolation
   remain unqualified.

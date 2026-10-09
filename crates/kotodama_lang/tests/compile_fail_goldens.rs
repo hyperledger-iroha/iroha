@@ -80,7 +80,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    state int count;\n    hajimari() {\n        count = 0\n    }\n}\n",
         concat!(
             "error[K1001] parse: expected `;`, found `}`\n",
-            "  --> missing-semicolon.ko:4:18-4:18\n",
+            "  --> missing-semicolon.ko:4:18\n",
             "    4 |         count = 0\n",
             "      |                  ^\n",
             "  = help: every statement and `state`/`const` declaration ends with `;`; block-valued `if`, `match` and `for` statements do not\n",
@@ -92,7 +92,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "contract Counter {\n}\n",
         concat!(
             "error[E_ENGLISH_DECLARATION_WORD] parse: `contract` is not a Kotodama keyword; a deployable unit is declared with `seiyaku` or `誓約`\n",
-            "  --> english-contract.ko:1:1-1:9\n",
+            "  --> english-contract.ko:1:1\n",
             "    1 | contract Counter {\n",
             "      | ^^^^^^^^\n",
             "  = help: a source file contains exactly one `seiyaku Name { ... }` (deployable; also spelled `誓約`) or one `module Name { ... }` (reusable library)\n",
@@ -104,7 +104,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    pub fn one() -> int {\n        return 1;\n    }\n}\n",
         concat!(
             "error[E_ENGLISH_DECLARATION_WORD] parse: `pub` is not a Kotodama keyword; a public state-changing function is declared with `kotoage` or `言挙げ`\n",
-            "  --> english-pub-fn.ko:2:5-2:8\n",
+            "  --> english-pub-fn.ko:2:5\n",
             "    2 |     pub fn one() -> int {\n",
             "      |     ^^^\n",
             "  = help: public functions are `kotoage fn` (also `言挙げ fn`; submitted in a transaction, may write state, requires `authorize(\"Permission\")`) or `view fn` (read-only); plain `fn` is private to the unit\n",
@@ -116,7 +116,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    kaizan() {\n    }\n}\n",
         concat!(
             "error[E_KEYWORD_TYPO] parse: unknown keyword `kaizan`; did you mean `kaizen`/`改善`?\n",
-            "  --> keyword-typo.ko:2:5-2:11\n",
+            "  --> keyword-typo.ko:2:5\n",
             "    2 |     kaizan() {\n",
             "      |     ^^^^^^\n",
             "  = help: keywords are case-sensitive and spelled exactly as in the V1 keyword table\n",
@@ -128,7 +128,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    state int count;\n    fn hajimari() {\n        count = 0;\n    }\n}\n",
         concat!(
             "error[E_DECLARATION_SHAPE] parse: `hajimari` is a lifecycle hook, not a function name: write `hajimari() { ... }` without `fn`\n",
-            "  --> lifecycle-hook-as-function.ko:3:5-3:7\n",
+            "  --> lifecycle-hook-as-function.ko:3:5\n",
             "    3 |     fn hajimari() {\n",
             "      |     ^^\n",
             "  = help: `hajimari`/`始まり` declares the one-shot activation hook that initializes durable state; it is written `hajimari() { ... }` with no `fn`, no name and no `authorize(...)`\n",
@@ -140,7 +140,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "誓約 Counter {\n    言挙げ bump() authorize(\"CanBump\") {\n    }\n}\n",
         concat!(
             "error[E_DECLARATION_SHAPE] parse: `言挙げ` modifies a function declaration: write `言挙げ fn bump(...)`\n",
-            "  --> kanji-kotoage-without-fn.ko:2:5-2:8\n",
+            "  --> kanji-kotoage-without-fn.ko:2:5\n",
             "    2 |     言挙げ bump() authorize(\"CanBump\") {\n",
             "      |     ^^^^^^\n",
             "  = help: public functions are declared `kotoage fn name(...)` (also `言挙げ fn`) or `view fn name(...)`; only the lifecycle hooks `hajimari` and `kaizen` omit `fn`\n",
@@ -152,7 +152,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    kotoage fn bump(int delta) authorize(\"CanBump\") -> int {\n        return delta;\n    }\n}\n",
         concat!(
             "error[E_AUTHORIZE_POSITION] parse: the return type comes before `authorize(...)`: write `-> int authorize(\"CanBump\")`\n",
-            "  --> authorize-before-return-type.ko:2:32-2:59\n",
+            "  --> authorize-before-return-type.ko:2:32\n",
             "    2 |     kotoage fn bump(int delta) authorize(\"CanBump\") -> int {\n",
             "      |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
             "  = help: a function head reads `kotoage fn name(params) -> Type authorize(\"Permission\") { ... }`\n",
@@ -164,7 +164,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "誓約 Counter {\n    言挙げ fn run() {\n    }\n}\n",
         concat!(
             "error[E_KOTOAGE_AUTHORIZATION_MISSING] parse: 言挙げ function `run` requires `authorize(\"Permission\")` before its body\n",
-            "  --> kanji-kotoage-without-authorize.ko:2:17-2:17\n",
+            "  --> kanji-kotoage-without-authorize.ko:2:17\n",
             "    2 |     言挙げ fn run() {\n",
             "      |                    ^\n",
             "  = help: name the permission a caller must hold, for example `authorize(\"CanRun\")`; if `run` only reads state, declare it `view fn` instead",
@@ -175,7 +175,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    改善() authorize(\"Admin\") {\n    }\n}\n",
         concat!(
             "error[E_LIFECYCLE_AUTHORIZATION] parse: `改善` cannot declare `authorize(...)`: lifecycle hooks are authorized by the runtime\n",
-            "  --> lifecycle-authorization.ko:2:10-2:28\n",
+            "  --> lifecycle-authorization.ko:2:10\n",
             "    2 |     改善() authorize(\"Admin\") {\n",
             "      |            ^^^^^^^^^^^^^^^^^^\n",
             "  = help: activation and in-place replacement are authorized by the runtime's `CanInvokeContractEntrypoint` check on the deploying transaction; remove the clause\n",
@@ -187,7 +187,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn sum() -> int {\n        let mut total = 0;\n        return total;\n    }\n}\n",
         concat!(
             "error[E_LET_MUT] parse: a mutable local is declared with `var`, not `let mut`\n",
-            "  --> let-mut.ko:3:9-3:16\n",
+            "  --> let-mut.ko:3:9\n",
             "    3 |         let mut total = 0;\n",
             "      |         ^^^^^^^\n",
             "  = help: `let` binds an immutable local and `var` a mutable one: `var total = 0;` or `var int total = 0;`\n",
@@ -199,7 +199,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn sum() -> int {\n        var total = 0;\n        for i in 0..10 {\n            total += i;\n        }\n        return total;\n    }\n}\n",
         concat!(
             "error[E_RANGE_SYNTAX] parse: Kotodama has no `..` range operator; counted loops use `range(N)`, which counts from 0 up to N - 1\n",
-            "  --> range-operator.ko:4:18-4:23\n",
+            "  --> range-operator.ko:4:18\n",
             "    4 |         for i in 0..10 {\n",
             "      |                  ^^^^^\n",
             "  = help: the loop bound must be a compile-time integer expression\n",
@@ -211,7 +211,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn sum() -> int {\n        var i = 0;\n        while i < 10 {\n            i += 1;\n        }\n        return i;\n    }\n}\n",
         concat!(
             "error[E_UNSUPPORTED_LOOP] parse: `while` loops are not part of Kotodama; every loop is a `for` loop with a compiler-proven bound\n",
-            "  --> while-loop.ko:4:9-4:14\n",
+            "  --> while-loop.ko:4:9\n",
             "    4 |         while i < 10 {\n",
             "      |         ^^^^^\n",
             "  = help: execution is metered and must be bounded: iterate `for i in range(N)` with a compile-time `N`, or a collection with a proven capacity, and exit early with `break`",
@@ -222,7 +222,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn sum() -> int {\n        var total = 0;\n        for (i = 0; i < 10; i += 1) {\n            total += i;\n        }\n        return total;\n    }\n}\n",
         concat!(
             "error[E_UNSUPPORTED_LOOP] parse: `for (init; condition; step)` loops are not part of Kotodama; every loop is a `for` loop with a compiler-proven bound\n",
-            "  --> three-clause-for.ko:4:13-4:36\n",
+            "  --> three-clause-for.ko:4:13\n",
             "    4 |         for (i = 0; i < 10; i += 1) {\n",
             "      |             ^^^^^^^^^^^^^^^^^^^^^^^\n",
             "  = help: count with `for i in range(N) { ... }`, which runs i = 0 up to N - 1; `N` must be a compile-time integer expression\n",
@@ -234,7 +234,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn read(Option<int> maybe) -> int {\n        match maybe {\n            Option::some(v) => v,\n            _ => 0,\n        }\n    }\n}\n",
         concat!(
             "error[E_MATCH_WILDCARD] parse: `match` has no wildcard arm; name every variant\n",
-            "  --> match-wildcard.ko:5:13-5:14\n",
+            "  --> match-wildcard.ko:5:13\n",
             "    5 |             _ => 0,\n",
             "      |             ^\n",
             "  = help: a match over `Option` lists `Option::some(value)` and `Option::none`; over `Result`, `Result::ok(value)` and `Result::err(error)`; payloads you do not use bind `_`",
@@ -245,7 +245,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn wrap(int value) -> Option<int> {\n        return Some(value);\n    }\n}\n",
         concat!(
             "error[E_LEGACY_SUM_CONSTRUCTOR] parse: `Some` is spelled `Option::some` in Kotodama\n",
-            "  --> some-constructor.ko:3:16-3:20\n",
+            "  --> some-constructor.ko:3:16\n",
             "    3 |         return Some(value);\n",
             "      |                ^^^^\n",
             "  = help: optional and fallible values are built and matched as `Option::some(value)`, `Option::none`, `Result::ok(value)` and `Result::err(error)`\n",
@@ -257,7 +257,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn empty() -> Option<int> {\n        return None();\n    }\n}\n",
         concat!(
             "error[E_LEGACY_SUM_CONSTRUCTOR] parse: `None` is spelled `Option::none` in Kotodama, and it is a value, not a call\n",
-            "  --> none-call.ko:3:16-3:20\n",
+            "  --> none-call.ko:3:16\n",
             "    3 |         return None();\n",
             "      |                ^^^^\n",
             "  = help: optional and fallible values are built and matched as `Option::some(value)`, `Option::none`, `Result::ok(value)` and `Result::err(error)`\n",
@@ -269,7 +269,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn first() -> int {\n        let window = 0..10;\n        return 0;\n    }\n}\n",
         concat!(
             "error[E_RANGE_SYNTAX] parse: Kotodama has no `..` range operator\n",
-            "  --> range-value.ko:3:23-3:25\n",
+            "  --> range-value.ko:3:23\n",
             "    3 |         let window = 0..10;\n",
             "      |                       ^^\n",
             "  = help: counted loops iterate `for i in range(N)`, which counts from 0 up to N - 1 with a compile-time `N`; there are no range values or list slices",
@@ -280,7 +280,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "module Math {\n    pub fn double(int value) -> int {\n        return value * 2;\n    }\n}\n",
         concat!(
             "error[E_ENGLISH_DECLARATION_WORD] parse: `pub` is not a Kotodama keyword; a module makes a function public with `export`\n",
-            "  --> english-pub-fn-in-module.ko:2:5-2:8\n",
+            "  --> english-pub-fn-in-module.ko:2:5\n",
             "    2 |     pub fn double(int value) -> int {\n",
             "      |     ^^^\n",
             "  = help: a module shares functions, structs, error enums and constants with `export`; public `kotoage fn` (also `言挙げ fn`) and `view fn` functions belong to a seiyaku\n",
@@ -292,7 +292,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn run(value) -> int {\n        return 1;\n    }\n}\n",
         concat!(
             "error[E_MISSING_DECLARATION_TYPE] parse: parameter `value` needs a type before its name, for example `int value`\n",
-            "  --> missing-parameter-type.ko:2:17-2:22\n",
+            "  --> missing-parameter-type.ko:2:17\n",
             "    2 |     view fn run(value) -> int {\n",
             "      |                 ^^^^^\n",
             "  = help: declarations name the type first; the type is never inferred for parameters, fields, state or constants",
@@ -303,7 +303,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Vault {\n    kotoage fn add(amount: int) authorize(\"CanAdd\") {\n    }\n}\n",
         concat!(
             "error[E_RETIRED_DECLARATION_ORDER] parse: parameters are type-first: write `int amount`, not `amount: int`\n",
-            "  --> name-colon-type.ko:2:20-2:31\n",
+            "  --> name-colon-type.ko:2:20\n",
             "    2 |     kotoage fn add(amount: int) authorize(\"CanAdd\") {\n",
             "      |                    ^^^^^^^^^^^\n",
             "  = help: Kotodama declarations name the type first: `fn add(int lhs)`, `state int total;`, `const int limit = 1;`, `let int count = 0;`, struct field `quantity balance;`\n",
@@ -315,10 +315,10 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    state int count;\n    hajimari() {\n        count = 0;\n\n    kotoage fn bump() authorize(\"CanBump\") {\n        count += 1;\n    }\n}\n",
         concat!(
             "error[K1001] parse: expected `}` to close the block, found keyword `kotoage`\n",
-            "  --> missing-closing-brace.ko:4:19-4:19\n",
+            "  --> missing-closing-brace.ko:4:19\n",
             "    4 |         count = 0;\n",
             "      |                   ^\n",
-            "  = label: missing-closing-brace.ko:3:16-3:17: this `{` is not closed\n",
+            "  = label: missing-closing-brace.ko:3:16: this `{` is not closed\n",
             "    3 |     hajimari() {\n",
             "      |                ^\n",
             "  = help: declarations cannot appear inside a function body; close the body with `}` before the next declaration\n",
@@ -330,7 +330,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    始まり（） {\n    }\n}\n",
         concat!(
             "error[E_FULLWIDTH_ASCII] lex: full-width `（）` (U+FF08) is not Kotodama syntax; write `()`\n",
-            "  --> fullwidth-parentheses.ko:2:8-2:10\n",
+            "  --> fullwidth-parentheses.ko:2:8\n",
             "    2 |     始まり（） {\n",
             "      |           ^^^^\n",
             "  = help: punctuation, letters and digits outside string literals are ASCII; switch the input method to half-width (direct input) for code\n",
@@ -342,7 +342,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    言挙げfn bump() authorize(\"CanBump\") {\n    }\n}\n",
         concat!(
             "error[E_KEYWORD_SPACING] lex: `言挙げ` and `fn` need a space between them\n",
-            "  --> glued-kanji-keyword.ko:2:5-2:10\n",
+            "  --> glued-kanji-keyword.ko:2:5\n",
             "    2 |     言挙げfn bump() authorize(\"CanBump\") {\n",
             "      |     ^^^^^^^^\n",
             "  = help: `言挙げ` is a keyword (also spelled `kotoage`); separate it from the next word with a space\n",
@@ -354,7 +354,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "契約 Counter {\n}\n",
         concat!(
             "error[E_CONFUSABLE_KEYWORD] lex: `契約` is not a Kotodama keyword; did you mean `誓約`/`seiyaku`?\n",
-            "  --> confusable-keyword.ko:1:1-1:3\n",
+            "  --> confusable-keyword.ko:1:1\n",
             "    1 | 契約 Counter {\n",
             "      | ^^^^\n",
             "  = help: `誓約` (せいやく, “solemn pledge”) is spelled exactly `誓約` or `seiyaku`; both spellings are the same keyword\n",
@@ -366,7 +366,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    // owner check \u{202e} disabled\n}\n",
         concat!(
             "error[E_BIDI_CONTROL_CHARACTER] lex: source contains the invisible bidirectional control character U+202E (RIGHT-TO-LEFT OVERRIDE)\n",
-            "  --> bidi-control-in-comment.ko:2:20-2:21\n",
+            "  --> bidi-control-in-comment.ko:2:20\n",
             "    2 |     // owner check \\u{202e} disabled\n",
             "      |                    ^^^^^^^^\n",
             "  = help: it can make reviewed code read differently from what compiles; delete it (inside a string literal, write it as a `\\u{...}` escape)\n",
@@ -378,7 +378,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn label() -> string {\n        return \"admin\u{202e} user\";\n    }\n}\n",
         concat!(
             "error[E_BIDI_CONTROL_CHARACTER] lex: source contains the invisible bidirectional control character U+202E (RIGHT-TO-LEFT OVERRIDE)\n",
-            "  --> bidi-control-in-string.ko:3:22-3:23\n",
+            "  --> bidi-control-in-string.ko:3:22\n",
             "    3 |         return \"admin\\u{202e} user\";\n",
             "      |                      ^^^^^^^^\n",
             "  = help: it can make reviewed code read differently from what compiles; write it as the escape `\\u{202e}` if the string really needs it\n",
@@ -390,7 +390,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    state int count;\n    hajimari() {\n        count = 0; // reset\u{2028}count = 1;\n    }\n}\n",
         concat!(
             "error[E_UNICODE_LINE_SEPARATOR] lex: source contains the invisible line separator U+2028 (LINE SEPARATOR)\n",
-            "  --> line-separator-in-comment.ko:4:28-4:29\n",
+            "  --> line-separator-in-comment.ko:4:28\n",
             "    4 |         count = 0; // reset\\u{2028}count = 1;\n",
             "      |                            ^^^^^^^^\n",
             "  = help: it can make reviewed code read differently from what compiles; delete it (inside a string literal, write it as a `\\u{...}` escape)\n",
@@ -402,7 +402,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku\u{a0}Counter {\n}\n",
         concat!(
             "error[E_NON_ASCII_WHITESPACE] lex: U+00A0 is not a token separator; use an ASCII space\n",
-            "  --> non-ascii-space.ko:1:8-1:9\n",
+            "  --> non-ascii-space.ko:1:8\n",
             "    1 | seiyaku\\u{a0}Counter {\n",
             "      |        ^^^^^^\n",
             "  = help: tokens are separated by ASCII spaces, tabs and line breaks, or the ideographic space U+3000; other Unicode spaces look identical but are rejected\n",
@@ -414,7 +414,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn both(bool a, bool b) -> bool {\n        return a & b;\n    }\n}\n",
         concat!(
             "error[E_UNSUPPORTED_OPERATOR] lex: `&` is not a Kotodama operator; boolean AND is `&&`\n",
-            "  --> single-ampersand.ko:3:18-3:19\n",
+            "  --> single-ampersand.ko:3:18\n",
             "    3 |         return a & b;\n",
             "      |                  ^\n",
             "  = help: Kotodama has no bitwise operators or closures; combine `bool` conditions with `&&` and `||`\n",
@@ -426,7 +426,7 @@ const RENDERED_SYNTAX_SNAPSHOTS: &[(&str, &str, &str)] = &[
         "seiyaku Counter {\n    view fn 合計() -> int {\n        return 1;\n    }\n}\n",
         concat!(
             "error[K0100] lex: non-ASCII identifier `合計`: identifiers are ASCII\n",
-            "  --> japanese-identifier.ko:2:13-2:15\n",
+            "  --> japanese-identifier.ko:2:13\n",
             "    2 |     view fn 合計() -> int {\n",
             "      |             ^^^^\n",
             "  = help: the only Japanese words in Kotodama source are the keywords 誓約, 言挙げ, 始まり and 改善 (also spelled seiyaku, kotoage, hajimari and kaizen); name declarations with ASCII letters, digits and `_`, and keep Japanese text in strings and comments",

@@ -483,7 +483,7 @@ fn every_event() -> Vec<(SccpEvent, &'static str)> {
                 bounce_message_id: [11; 32],
                 bounce_revision: 2,
                 amount: 7,
-                reason: SccpBounceReasonV1::CreditRefused,
+                reason: SccpBounceReasonV1::UnregistrableRecipient,
             }),
             "inbound_bounced",
         ),
@@ -1343,6 +1343,14 @@ fn leaf_control_and_record_roundtrips() {
         roundtrip(&status);
         roundtrip(&inbound(status));
     }
+    for reason in [
+        SccpPendingReasonV1::CreditRefused,
+        SccpPendingReasonV1::FeeSinkUnavailable,
+        SccpPendingReasonV1::BlockLeavesFull,
+    ] {
+        roundtrip(&reason);
+        roundtrip(&inbound(SccpInboundStatusV1::pending(reason)));
+    }
     roundtrip(&locator());
 }
 
@@ -1706,6 +1714,18 @@ fn enum_json_tags_are_snake_case() {
             "liability_shortfall",
         ),
         (
+            json_tag(&SccpPendingReasonV1::CreditRefused, "reason"),
+            "credit_refused",
+        ),
+        (
+            json_tag(&SccpPendingReasonV1::FeeSinkUnavailable, "reason"),
+            "fee_sink_unavailable",
+        ),
+        (
+            json_tag(&SccpPendingReasonV1::BlockLeavesFull, "reason"),
+            "block_leaves_full",
+        ),
+        (
             json_tag(&SccpRouteActivationV1::InboundOnly, "activation"),
             "inbound_only",
         ),
@@ -1731,6 +1751,10 @@ fn enum_json_tags_are_snake_case() {
             "inadmissible_controller",
         ),
         (
+            json_tag(&SccpBounceReasonV1::UnregistrableRecipient, "reason"),
+            "unregistrable_recipient",
+        ),
+        (
             json_tag(&SettleSccpV1::inbound([0; 32]).target, "target"),
             "inbound",
         ),
@@ -1753,7 +1777,7 @@ fn unknown_binary_tags_are_rejected() {
     assert_rejects_tags::<SccpLeafRefV1>(&[2, u32::MAX], 64);
     assert_rejects_tags::<SccpVoidKindV1>(&[2, u32::MAX], 0);
     assert_rejects_tags::<SccpOutboundStatusV1>(&[4, u32::MAX], 64);
-    assert_rejects_tags::<SccpPendingReasonV1>(&[3, u32::MAX], 0);
+    assert_rejects_tags::<SccpPendingReasonV1>(&[6, u32::MAX], 0);
     assert_rejects_tags::<SccpInboundStatusV1>(&[3, u32::MAX], 64);
     assert_rejects_tags::<SccpRouteActivationV1>(&[5, u32::MAX], 0);
     assert_rejects_tags::<SccpLcFreezeReasonV1>(&[2, u32::MAX], 64);

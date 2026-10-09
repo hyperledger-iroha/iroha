@@ -69,6 +69,7 @@ pub use provider_credit::{
     ManagedInitialProviderCredit, ManagedInitialProviderCreditIntent,
     ManagedInitialProviderCreditProgress,
 };
+pub use remote::ManagedAmxRegistrationOptions;
 pub use remote_failure::ManagedAttachmentFailure;
 pub use remote_status::{
     DataspaceRequest, ManagedAttachmentPhase, ManagedAttachmentStatus, ManagedConfirmedAnchor,

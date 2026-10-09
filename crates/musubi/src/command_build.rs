@@ -38,7 +38,8 @@ pub(super) fn run_build_with_warnings(
         network::NetworkPurpose::LocalCompilation,
     )?;
     let chain_discriminant = graph.account_chain_discriminant()?;
-    let warnings = kotodama_lang::diagnostic::DiagnosticBundle::new(execution.warnings.clone());
+    let warnings = leveled_warnings(execution.warnings.clone(), args.deny_warnings)
+        .map_err(compiler_bundle_diagnostic)?;
     let mut data = Map::from_iter([
         ("network".to_owned(), network.json()),
         (
@@ -114,6 +115,33 @@ pub(super) fn run_build_with_warnings(
         },
         warnings,
     ))
+}
+
+/// Apply `--deny-warnings` to the lint findings of a check. Findings denied by `[lints]` or by
+/// the flag are errors and fail the command with the complete set of findings.
+fn leveled_warnings(
+    mut warnings: Vec<kotodama_lang::diagnostic::Diagnostic>,
+    deny_warnings: bool,
+) -> Result<
+    kotodama_lang::diagnostic::DiagnosticBundle,
+    kotodama_lang::diagnostic::DiagnosticBundle,
+> {
+    use kotodama_lang::diagnostic::{DiagnosticBundle, Severity};
+    if deny_warnings {
+        for warning in &mut warnings {
+            warning.severity = Severity::Error;
+        }
+    }
+    let bundle = DiagnosticBundle::new(warnings);
+    if bundle
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
+        Err(bundle)
+    } else {
+        Ok(bundle)
+    }
 }
 
 /// Describe which address profile the selected sources were compiled for.
@@ -641,6 +669,25 @@ fn render_test_report(report: &WorkspaceTestReportV1) -> (String, Map) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deny_warnings_turns_every_lint_finding_into_a_failure() {
+        use kotodama_lang::diagnostic::{Diagnostic, DiagnosticPhase, Severity};
+        let warning = Diagnostic::warning("K5013", DiagnosticPhase::Semantic, "unused", None);
+        let kept = leveled_warnings(vec![warning.clone()], false).expect("warnings do not fail");
+        assert_eq!(kept.diagnostics[0].severity, Severity::Warning);
+        let denied = leveled_warnings(vec![warning.clone()], true).expect_err("denied");
+        assert_eq!(denied.diagnostics[0].severity, Severity::Error);
+        let mut by_manifest = warning;
+        by_manifest.severity = Severity::Error;
+        assert!(leveled_warnings(vec![by_manifest], false).is_err());
+        assert!(
+            leveled_warnings(Vec::new(), true)
+                .expect("nothing to deny")
+                .diagnostics
+                .is_empty()
+        );
+    }
 
     #[test]
     fn copyable_commands_quote_shell_syntax_in_package_paths_and_target_names() {

@@ -1446,7 +1446,9 @@ The selector of
 `ledger::seiyaku::grant_kotoage`/`revoke_kotoage` is a string literal checked at
 compile time against the current seiyaku: it must name a `kotoage`/`言挙げ`
 declaration, so an unknown name or a `view fn`, private `fn`, or lifecycle
-hook is `E_KOTOAGE_SELECTOR`.
+hook is `E_KOTOAGE_SELECTOR`. A reusable module declares no kotoage and cannot
+name a seiyaku's selectors, so these calls belong in the seiyaku (or one of its
+`include` fragments) that declares the kotoage.
 
 ### Call context
 
@@ -1738,8 +1740,9 @@ Exceeding an input bound closes the transport rather than accumulating work.
 Human diagnostics capture immutable source text when their exact spans are
 produced. Bounded source excerpts underline the selected bytes using deterministic
 Unicode 15.1 display widths and four-column tab stops, including Japanese and
-combining characters. Locations are shown as `path:line:column-line:column`;
-exact byte ranges appear only in JSON and SARIF. Messages render tokens with
+combining characters. Locations are shown as `path:line:column` of the span's
+start, with the excerpt underlining its extent; complete ranges and exact byte
+ranges appear only in JSON and SARIF. Messages render tokens with
 their source spelling and echo a branded keyword exactly as written at the
 diagnosed site (`言挙げ function ...`), while lists of expected keywords name
 both spellings (`` `kotoage`/`言挙げ` ``). A missing terminator such as `;` is
@@ -1811,7 +1814,13 @@ Fixes never choose a rounding mode or scale for `K5012`; the
 help names `div_round`, `ratio_round`, and `mul_div_round`. Each lint has a
 level of `allow`, `warn` (the default), or `deny`, configured per slug, and a
 deny-warnings mode promotes every warning to an error. A denied finding fails
-the check.
+the check. `koto check` takes repeatable `--allow`, `--warn`, and `--deny <slug>`
+flags and `--deny-warnings`; they override a project manifest's optional
+`"lints"` object (`{"unused-local": "deny", "deny-warnings": true}`), whose
+levels `koto lsp --project` also applies. `musubi check|build|test` read a
+`[lints]` table with the same keys from the package's `Musubi.toml` (or the
+workspace root's) and take `--deny-warnings`. An unknown slug is an error that
+names the closest lint.
 
 The local-only test helper requires
 `test::expect_reject_as(actor:, kotoage:, arguments:, expected:)`. The expected
@@ -1861,6 +1870,8 @@ manifest directory, and package identities are exact locked strings:
 }
 ```
 
+The only optional field is `lints`, an object of lint levels that `koto check`
+and `koto lsp` apply; it never changes the graph or the build output.
 Unknown or duplicate fields, duplicate sources/exports, path escapes, unknown
 packages, import cycles, undeclared aliases, and unexported calls fail closed.
 Locked package names use nonempty `/`-separated ASCII components matching

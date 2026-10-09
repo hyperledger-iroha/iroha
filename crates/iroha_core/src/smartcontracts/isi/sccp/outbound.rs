@@ -369,7 +369,7 @@ mod tests {
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::isi::sccp::test_support::{authority, header, sample_roster},
+        smartcontracts::isi::sccp::test_support::{ONE_XOR, authority, header, sample_roster},
         state::{State, World},
     };
     use iroha_data_model::{
@@ -387,7 +387,6 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use mv::storage::StorageReadOnly;
 
-    const ONE_XOR: u128 = 1_000_000_000;
     const CONTRACT: [u8; 20] = [0xc0; 20];
 
     /// A state whose `authority(1)` holds 10 XOR.

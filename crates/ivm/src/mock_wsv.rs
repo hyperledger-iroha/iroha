@@ -83,21 +83,24 @@ impl AssetDefinition {
         }
     }
 }
-/// Decode the `REGISTER_ASSET` numeric-spec (`r12`) and mintability (`r13`)
-/// words with the data-model encoding every contract host shares.
+/// Decode the `REGISTER_ASSET` display name (`r11` payload), numeric-spec
+/// word (`r12`) and mintability word (`r13`) with the data-model decoder that
+/// CoreHost also uses, so both hosts accept and reject exactly the same calls.
 ///
 /// # Errors
-/// Returns [`VMError::DecodeError`] for a word outside the encoding.
-fn decode_asset_registration_words(
+/// Returns [`VMError::DecodeError`] for an invalid display name or a word
+/// outside the encoding, as CoreHost does.
+fn decode_asset_registration(
+    name: &[u8],
     spec_word: u64,
     mintable_word: u64,
-) -> Result<(NumericSpec, Mintable), VMError> {
-    use iroha_data_model::asset::definition::ivm_registration;
-    let spec =
-        ivm_registration::numeric_spec_from_word(spec_word).map_err(|_| VMError::DecodeError)?;
-    let mintable =
-        ivm_registration::mintable_from_word(mintable_word).map_err(|_| VMError::DecodeError)?;
-    Ok((spec, mintable))
+) -> Result<iroha_data_model::asset::definition::ivm_registration::Registration, VMError> {
+    iroha_data_model::asset::definition::ivm_registration::decode_registration(
+        name,
+        spec_word,
+        mintable_word,
+    )
+    .map_err(|_| VMError::DecodeError)
 }
 /// NFT state tracking the current owner, stored metadata, and the issuing authority.
 #[derive(Clone, Debug)]
@@ -3826,8 +3829,8 @@ impl IVMHost for WsvHost {
             }
             syscalls::SYSCALL_REGISTER_ASSET => {
                 // r10 = &AssetDefinitionId, r11 = &Blob UTF-8 display name,
-                // r12 = numeric-spec word, r13 = mintability word. The words use
-                // the data-model `ivm_registration` encoding shared with CoreHost.
+                // r12 = numeric-spec word, r13 = mintability word, decoded by the
+                // data-model `ivm_registration` decoder shared with CoreHost.
                 let id = match vm.validate_tlv(vm.register(10)) {
                     Ok(tlv) => match tlv.type_id {
                         PointerType::AssetDefinitionId => self.decode_asset_payload(tlv.payload)?,
@@ -3842,16 +3845,14 @@ impl IVMHost for WsvHost {
                 if name_tlv.type_id != PointerType::Blob {
                     return Err(VMError::NoritoInvalid);
                 }
-                let name = String::from_utf8(name_tlv.payload.to_vec())
-                    .map_err(|_| VMError::DecodeError)?;
-                let (spec, mintable) =
-                    decode_asset_registration_words(vm.register(12), vm.register(13))?;
+                let registration =
+                    decode_asset_registration(name_tlv.payload, vm.register(12), vm.register(13))?;
                 if self.wsv.register_asset_definition_with_spec(
                     &self.caller,
                     id,
-                    name,
-                    spec,
-                    mintable,
+                    registration.name,
+                    registration.spec,
+                    registration.mintable,
                 ) {
                     Ok(Self::mutation_gas(0))
                 } else {
@@ -6162,6 +6163,50 @@ mod tests_null_decode {
         );
     }
     #[test]
+    fn smartcontract_instruction_rejects_record_sccp_message_under_every_tag() {
+        // specs/sccp.md §4.4: contracts record no SCCP messages. ABI v1 defines only tag
+        // `1=SubmitBallot`, so the canonical encoded record fails under it, under the retired
+        // tag 2 and under every other tag, without touching the mock world.
+        let caller: AccountId = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "wonderland",
+        );
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(WsvHost::new_with_subject(MockWorldStateView::new(), caller));
+        let record = iroha_data_model::isi::sccp::RecordSccpMessage {
+            network: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+            expected_revision: 1,
+            amount: Numeric::new(2_u32, 0),
+            recipient: vec![0x22; 20],
+        };
+        let payload = encode_canonical_norito(&DMInstructionBox::from(record))
+            .expect("encode canonical RecordSccpMessage");
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload))
+            .expect("alloc canonical RecordSccpMessage");
+        vm.set_register(10, ptr);
+        for tag in [
+            0,
+            syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
+            2,
+            u64::MAX,
+        ] {
+            vm.set_register(11, tag);
+            assert_eq!(
+                call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
+                Err(VMError::PermissionDenied),
+                "tag {tag} must not execute RecordSccpMessage"
+            );
+        }
+        let host = vm
+            .host_mut_any()
+            .expect("host")
+            .downcast_ref::<WsvHost>()
+            .expect("WsvHost");
+        assert!(host.wsv.zk_events.is_empty() && host.wsv.elections.is_empty());
+        assert!(host.state_overlay.is_empty() && host.fastpq_batch_entries.is_none());
+    }
+    #[test]
     fn smartcontract_instruction_accepts_only_canonical_instruction_box() {
         let caller: AccountId = test_account_id(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
@@ -7647,20 +7692,33 @@ mod tests_asset_registration_and_scope {
 
     #[test]
     fn register_asset_rejects_malformed_words_and_display_names() {
-        for (name, spec_word, mintable_word, expected) in [
-            (&b"Rose"[..], 30, 0, VMError::DecodeError),
-            (&b"Rose"[..], 0, 0b100, VMError::DecodeError),
-            (&b"Rose"[..], 0, 3, VMError::DecodeError),
-            (&b""[..], 0, 0, VMError::PermissionDenied),
-            (&b"ro#se"[..], 0, 0, VMError::PermissionDenied),
+        // The same inputs trap with `DecodeError` on CoreHost
+        // (`register_asset_syscall_rejects_malformed_registration_words`).
+        for (name, spec_word, mintable_word) in [
+            (&b"Rose"[..], 30, 0),
+            (&b"Rose"[..], 0, 0b100),
+            (&b"Rose"[..], 0, 3),
+            (&b""[..], 0, 0),
+            (&b"ro#se"[..], 0, 0),
+            (&b"\xff"[..], 0, 0),
         ] {
             let mut host = registering_host();
             assert_eq!(
                 register(&mut host, name, spec_word, mintable_word),
-                Err(expected)
+                Err(VMError::DecodeError)
             );
             assert_eq!(host.wsv.asset_definition_registration(&asset()), None);
+            assert!(decode_asset_registration(name, spec_word, mintable_word).is_err());
         }
+        let decoded = decode_asset_registration(
+            b"Rose",
+            ivm_registration::numeric_spec_word(NumericSpec::integer()),
+            ivm_registration::mintable_word(Mintable::Not),
+        )
+        .expect("valid registration");
+        assert_eq!(decoded.name, "Rose");
+        assert_eq!(decoded.spec, NumericSpec::integer());
+        assert_eq!(decoded.mintable, Mintable::Not);
     }
 
     #[test]

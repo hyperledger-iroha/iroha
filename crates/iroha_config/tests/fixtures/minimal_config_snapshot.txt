@@ -1975,6 +1975,7 @@ Root {
             advance_after: None,
             poll_interval: 60s,
             request_timeout: 10s,
+            poll_budget: 120s,
             max_advance_bytes: 262144,
             endpoints: SccpLightClientKeeperEndpoints {
                 ethereum_execution: [

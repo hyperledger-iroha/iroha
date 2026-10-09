@@ -430,6 +430,7 @@ fn call_build_args(args: &CallArgs) -> BuildArgs {
         network: args.network.clone(),
         chain_discriminant: None,
         zk: false,
+        deny_warnings: false,
     }
 }
 /// Bind the network's explicit fee payer to the signature-bound call gas limit.

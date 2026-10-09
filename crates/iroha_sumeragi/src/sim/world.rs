@@ -8,11 +8,13 @@
 //! handled event costs virtual CPU time (per pairing counted by the crypto wrapper), during
 //! which the replica is busy; its actions take effect at the end of that time.
 
+mod clock_guard;
 mod progress;
 mod seed_config;
 mod storage;
 mod transport;
 
+pub use clock_guard::{CertifiedTime, GuardEvent, GuardRule, GuardState};
 pub use transport::SharedWire;
 
 use std::{
@@ -24,7 +26,7 @@ use std::{
 use super::{
     byz::Adversary,
     crypto::{SharedLog, SimCrypto, SimSigner},
-    driver::{Clock, Executor, Io, OwnedWrite, Write, decode_txs, divergent_exec, encode_tx},
+    driver::{Clock, Executor, Io, OwnedWrite, Write, decode_txs, divergent_exec},
     host::{Done, Host, Op, Start, fake_host},
     net::{Fate, NetConfig, Nic, Packet, approx_size, class_of, lane},
     oracle::Oracle,
@@ -328,6 +330,8 @@ pub struct World {
     workload: Option<Workload>,
     /// Toy two-phase application and independent O-AMX observations, when configured.
     pub amx: Option<super::amx::AmxWorld>,
+    /// The application clock guard (§4.5) and O-TIME observations, when configured.
+    pub clock_guard: Option<GuardState>,
     /// Submitted transactions per instance.
     pub txs: Vec<TxLog>,
     next_tx: u64,
@@ -562,6 +566,10 @@ impl World {
             .collect();
         let replica_count = replicas.len();
         let adv = Adversary::new(&sc, &machines);
+        let clock_guard = sc
+            .clock_guard
+            .as_ref()
+            .map(|config| GuardState::new(config, machines_n));
         let mut world = Self {
             name: sc.name.clone(),
             seed: sc.seed,
@@ -589,6 +597,7 @@ impl World {
             io_completions: vec![0; machines_n],
             workload: sc.workload,
             amx: None,
+            clock_guard,
             txs: Vec::new(),
             next_tx: 0,
             stats: Stats::default(),
@@ -1009,9 +1018,13 @@ impl World {
                         .write(at, latency, Write::Body(Box::new(block)));
                 self.schedule(done, Ev::IoDone { r, epoch, id });
             }
-            Action::Execute { block, req } => {
+            Action::Execute {
+                block,
+                req,
+                certified,
+            } => {
                 let bh = block.hash(&self.hasher);
-                self.replicas[r].exec.submit(bh, req, block);
+                self.replicas[r].exec.submit(bh, req, block, certified);
                 self.exec_kick(r, at);
             }
             Action::DiscardExecution { height, keep } => {
@@ -1717,7 +1730,8 @@ impl World {
                 self.replicas[r].exec.parked.push(job);
                 continue;
             };
-            let (outcome, latency) = self.exec_outcome(r, &job.block, &job.bh, &parent);
+            let (outcome, latency) =
+                self.exec_outcome(r, &job.block, &job.bh, &parent, job.certified);
             job.outcome = Some(outcome);
             let id = job.id;
             let finish = at + latency;
@@ -1729,17 +1743,24 @@ impl World {
     }
 
     /// The executor's outcome for `block` (hash `bh`) on the post-state `parent` under the
-    /// machine profile (injected failures, defects, divergence), and its latency.
+    /// machine profile (injected failures, defects, divergence) and the application clock
+    /// guard of an `Execute` with the given `certified` flag (§4.5), and its latency. A guard
+    /// refusal is answered before execution (1 ms).
     fn exec_outcome(
         &mut self,
         r: usize,
         block: &AvailableBody,
         bh: &Hash32,
         parent: &Hash32,
+        certified: bool,
     ) -> (ExecOutcome, Millis) {
         let m = self.replicas[r].machine;
         let profile = self.machines[m].profile;
-        let outcome = if self.rng.chance(profile.exec_fail_ppm) {
+        let injected = self.rng.chance(profile.exec_fail_ppm);
+        if !injected && let Some(refused) = self.clock_guard_refusal(r, block, bh, certified) {
+            return (refused, 1);
+        }
+        let outcome = if injected {
             ExecOutcome::Failed("injected".to_owned())
         } else if profile.reject_nonempty && !block.payload().as_slice().is_empty() {
             ExecOutcome::Invalid
@@ -1825,7 +1846,9 @@ impl World {
         } else {
             u64::from(budget_ms).saturating_sub(profile.exec_base) * 1024 / profile.exec_per_kib
         };
-        let limit = u64::from(max_bytes).min(budget_bytes);
+        let limit = u64::from(max_bytes)
+            .min(budget_bytes)
+            .saturating_sub(self.block_time_bytes());
         let rep = &self.replicas[r];
         let mut payload = Vec::new();
         for (id, tx) in &rep.txs {
@@ -1839,6 +1862,7 @@ impl World {
             payload.extend_from_slice(tx);
         }
         let inst = rep.inst;
+        self.stamp_block_time(m, &mut payload);
         let hash = crate::preimage::payload_hash(&self.hasher, &payload);
         self.oracle.built.insert((inst, m, hash));
         self.replicas[r].pending_ready = payload.is_empty().then_some(req);
@@ -1893,7 +1917,7 @@ impl World {
         self.next_tx += 1;
         let id = self.next_tx;
         let poison = self.rng.chance(workload.poison_ppm);
-        let tx = encode_tx(id, poison, workload.pad);
+        let tx = workload.tx(id, poison);
         self.txs[inst].insert(id, (self.now, poison, None));
         for r in 0..self.replicas.len() {
             let m = self.replicas[r].machine;
@@ -2067,14 +2091,18 @@ impl World {
                         .write(at, latency, Write::Owned { op, ok, write });
                 self.schedule(when, Ev::IoDone { r, epoch, id });
             }
-            Op::Execute { op, block } => {
+            Op::Execute {
+                op,
+                block,
+                certified,
+            } => {
                 self.replicas[r].exec.prepared = None;
                 let bh = block.hash(&self.hasher);
                 let Some(parent) = self.parent_result(r, &block) else {
                     let outcome = None;
                     return done(self, at, Done::Executed { op, outcome });
                 };
-                let (outcome, latency) = self.exec_outcome(r, &block, &bh, &parent);
+                let (outcome, latency) = self.exec_outcome(r, &block, &bh, &parent, certified);
                 let height = block.header().height;
                 self.schedule(
                     at + latency,
@@ -2403,7 +2431,7 @@ impl World {
             return;
         };
         for (id, poison) in pending {
-            let tx = encode_tx(id, poison, workload.pad);
+            let tx = workload.tx(id, poison);
             self.offer_tx(r, id, tx);
         }
     }
@@ -2659,7 +2687,7 @@ fn describe_op(op: &Op) -> String {
     match op {
         Op::WriteRecord { op, record } => format!("write-record#{op} h{}", record.height),
         Op::WriteBody { op, block } => format!("write-body#{op} h{}", block.header().height),
-        Op::Execute { op, block } => format!("execute#{op} h{}", block.header().height),
+        Op::Execute { op, block, .. } => format!("execute#{op} h{}", block.header().height),
         Op::Discard { op, height, .. } => format!("discard#{op} h{height}"),
         Op::Prepare { op, block, .. } => format!("prepare#{op} h{}", block.header().height),
         Op::Append { op, block, .. } => format!("append#{op} h{}", block.header().height),
@@ -2753,7 +2781,15 @@ fn summarize(actions: &[Action]) -> String {
                 body.header().height,
                 peers.len()
             ),
-            Action::Execute { block, req } => format!("exec(h{} req{req})", block.header().height),
+            Action::Execute {
+                block,
+                req,
+                certified,
+            } => format!(
+                "exec(h{} req{req}{})",
+                block.header().height,
+                if *certified { " certified" } else { "" }
+            ),
             Action::DiscardExecution { height, keep } => {
                 format!("discard(h{height} keep {})", keep.len())
             }

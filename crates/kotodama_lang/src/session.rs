@@ -271,6 +271,18 @@ impl LintConfig {
         self.levels.insert(known, level);
         Ok(self)
     }
+    /// Layer `overrides` (for example command-line flags) over this configuration (for example a
+    /// project manifest): a level set in `overrides` replaces this one for the same lint, and
+    /// deny-warnings holds when either enables it.
+    #[must_use]
+    pub fn merged_with(&self, overrides: &Self) -> Self {
+        let mut levels = self.levels.clone();
+        levels.extend(overrides.levels.iter().map(|(slug, level)| (*slug, *level)));
+        Self {
+            levels,
+            deny_warnings: self.deny_warnings || overrides.deny_warnings,
+        }
+    }
     /// Promote every lint that would warn to an error.
     pub fn set_deny_warnings(&mut self, deny: bool) -> &mut Self {
         self.deny_warnings = deny;
@@ -1544,6 +1556,29 @@ mod tests {
             unknown.to_string(),
             "unknown lint `unused-locals`; did you mean `unused-local`?"
         );
+    }
+
+    #[test]
+    fn merged_lint_config_lets_overrides_win_per_lint() {
+        use crate::lint::LintLevel;
+        let mut manifest = LintConfig::new();
+        manifest
+            .set_level("unused-local", LintLevel::Deny)
+            .and_then(|config| config.set_level("dead-store", LintLevel::Allow))
+            .expect("known lints");
+        let mut flags = LintConfig::new();
+        flags
+            .set_level("unused-local", LintLevel::Allow)
+            .expect("known lint");
+        let merged = manifest.merged_with(&flags);
+        assert_eq!(merged.level("unused-local"), LintLevel::Allow);
+        assert_eq!(merged.level("dead-store"), LintLevel::Allow);
+        assert_eq!(merged.level("unused-state"), LintLevel::Warn);
+        flags.set_deny_warnings(true);
+        let merged = manifest.merged_with(&flags);
+        assert_eq!(merged.level("unused-state"), LintLevel::Deny);
+        assert_eq!(merged.level("dead-store"), LintLevel::Allow);
+        assert_eq!(LintConfig::new().merged_with(&LintConfig::new()), LintConfig::new());
     }
 
     fn source_fixture(source: &'static str) -> &'static str {

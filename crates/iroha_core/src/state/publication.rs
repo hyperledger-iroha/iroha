@@ -285,10 +285,10 @@ impl<'state> StateBlock<'state> {
                 );
                 return Err(TransactionsBlockError::ExecutionOutputCapacity);
             }
-            if let Err(error) = this.validate_owned_asset_definition_registry_overlay() {
+            if let Err(error) = this.validate_direct_home_rows() {
                 error!(
                     ?error,
-                    "direct asset home registry differs from its retained native transition"
+                    "direct asset homes differ from their live definition incarnations"
                 );
                 return Err(TransactionsBlockError::ExecutionOutputCapacity);
             }

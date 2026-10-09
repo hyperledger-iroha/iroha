@@ -107,6 +107,7 @@ mod sns_lease;
 mod staking_preparation;
 mod stream_control;
 mod stream_token_custody_proof;
+mod torii_mutation_guard;
 #[cfg(feature = "app_api")]
 mod validation_fee_api;
 mod validator_committee;
@@ -1275,7 +1276,7 @@ pub use gov::{
     handle_gov_unlock_stats,
 };
 // Routing helpers used by integration tests
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
 #[cfg(feature = "telemetry")]
@@ -1306,11 +1307,14 @@ pub use routing::{
     handle_v1_sumeragi_evidence_list,
 };
 // Admission-free handler entry points kept only for integration tests.
-#[cfg(all(feature = "app_api", any(feature = "test-fixtures", feature = "bench")))]
+#[cfg(all(
+    feature = "app_api",
+    any(test, feature = "test-fixtures", feature = "bench")
+))]
 pub use routing::handle_queries_with_opts;
 #[cfg(all(feature = "app_api", feature = "bench"))]
 pub use routing::handle_v1_contracts_activity_get_for_bench;
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use routing::handle_v1_zk_roots;
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -1330,7 +1334,7 @@ pub use routing::{
     handle_transaction_with_metrics as handle_transaction_with_metrics_for_bench,
     verify_signed_query_request as verify_signed_query_request_for_bench,
 };
-#[cfg(all(feature = "app_api", feature = "test-fixtures"))]
+#[cfg(all(feature = "app_api", any(test, feature = "test-fixtures")))]
 pub use routing::{
     handle_count_proofs, handle_list_proofs, handle_v1_events_sse_for_tests,
     signed_find_proof_by_id,
@@ -3048,6 +3052,7 @@ impl PipelineStatusCache {
         }
         order.push_back((observed_at, height));
     }
+    #[cfg(all(test, sumeragi_torii_mutation = "TOR2"))]
     fn refresh_pending_blocks(&self, state: &CoreState) {
         if !self.event_hints_trustworthy.load(AtomicOrdering::Acquire) {
             return;
@@ -3078,6 +3083,68 @@ impl PipelineStatusCache {
             }
         }
         self.prune_if_needed(now);
+    }
+    // The caller retains the exact authenticated carrier/query owner across its State
+    // membership recheck. Keep the occupied entry locked through this borrowed projection:
+    // a replacement at the same height must never be removed by an older completion.
+    fn complete_pending_from_carrier(
+        &self,
+        carrier: &iroha_core::smartcontracts::isi::tx::FinalizedExecutionCarrier,
+        expected_hash: HashOf<BlockHeader>,
+    ) -> Result<(), Error> {
+        if carrier.block().hash() != expected_hash {
+            return Err(pipeline_status_projection_error(
+                "pending completion carrier differs from its canonical binding",
+            ));
+        }
+        if !self.event_hints_trustworthy.load(AtomicOrdering::Acquire) {
+            return Ok(());
+        }
+        let height = carrier.block().header().height();
+        let DashEntry::Occupied(pending) = self.pending_blocks.entry(height) else {
+            return Ok(());
+        };
+        if pending.get().block_hash != expected_hash {
+            return Ok(());
+        }
+        if let Some(reason) = &pending.get().deferred {
+            iroha_logger::trace!(height = height.get(), %reason, "completing original deferred pipeline history observation");
+        }
+        let kind = pending.get().kind;
+        let observed_at = pending.get().observed_at;
+        // This opaque Core carrier has already authenticated its complete immutable join.
+        // Reuse the event projection without copying rows or performing another history read.
+        carrier
+            .visit_network_transactions(expected_hash, |entrypoint, result| {
+                self.record_network_result(height, kind, observed_at, entrypoint, result);
+            })
+            .map_err(|error| crate::canonical_history::query_attempt_error(error.into()))?;
+        pending.remove();
+        Self::decrement_live_count(&self.pending_count);
+        // Do not prune while holding the pending-map entry: pruning acquires that same map.
+        Ok(())
+    }
+    fn record_network_result(
+        &self,
+        height: NonZeroU64,
+        kind: PipelineStatusKind,
+        observed_at: Instant,
+        entrypoint: &TransactionEntrypoint,
+        result: &iroha_data_model::transaction::TransactionResult,
+    ) {
+        let (entry_kind, rejection) = match result.as_ref() {
+            Ok(_) => (kind, None),
+            Err(reason) => (
+                PipelineStatusKind::Rejected,
+                Some(pipeline_rejection_summary(reason)),
+            ),
+        };
+        if let Some(hash) = signed_transaction_hash_for_entrypoint(entrypoint) {
+            self.record_entry_inner(
+                hash,
+                PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, observed_at),
+            );
+        }
     }
     fn prune_if_needed(&self, now: Instant) {
         let elapsed_secs = now.saturating_duration_since(self.start).as_secs().max(1);
@@ -3305,21 +3372,7 @@ impl PipelineStatusCache {
             expected_hash,
             work,
             iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
-            |entrypoint, result| {
-                let (entry_kind, rejection) = match result.as_ref() {
-                    Ok(_) => (kind, None),
-                    Err(reason) => (
-                        PipelineStatusKind::Rejected,
-                        Some(pipeline_rejection_summary(reason)),
-                    ),
-                };
-                if let Some(hash) = signed_transaction_hash_for_entrypoint(entrypoint) {
-                    self.record_entry_inner(
-                        hash,
-                        PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, now),
-                    );
-                }
-            },
+            |entrypoint, result| self.record_network_result(height, kind, now, entrypoint, result),
         );
         if let Err(error) = result {
             iroha_logger::debug!(
@@ -37500,11 +37553,18 @@ impl Torii {
             CAPABILITIES => public_get(sccp::handler_capabilities);
             GOVERNANCE => public_get(sccp::handler_governance);
             GOVERNANCE_PROPOSALS => public_get(sccp::handler_governance_proposals);
+            GOVERNANCE_PROPOSAL => public_get(sccp::handler_governance_proposal);
+            HISTORY => public_get(sccp::handler_history);
             LIGHT_CLIENTS => public_get(sccp::handler_light_clients);
+            LIGHT_CLIENT => public_get(sccp::handler_light_client);
             LIGHT_CLIENT_SETS => public_get(sccp::handler_light_client_sets);
+            LIGHT_CLIENT_CHECKPOINTS => public_get(sccp::handler_light_client_checkpoints);
             REGISTRY => public_get(sccp::handler_registry);
+            MESSAGES_RECENT => public_get(sccp::handler_messages_recent);
             MESSAGE => public_get(sccp::handler_message);
             MESSAGE_PROOF => public_get(sccp::handler_message_proof);
+            OUTBOUND_BY_NONCE => public_get(sccp::handler_outbound);
+            CONTROLS => public_get(sccp::handler_controls);
             CONTROL_PROOF => public_get(sccp::handler_control_proof);
             ROSTER_CURRENT => public_get(sccp::handler_roster_current);
             ROSTER_ROTATIONS => public_get(sccp::handler_rotations);

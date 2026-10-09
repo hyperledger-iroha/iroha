@@ -5,7 +5,10 @@
 //! record, and retains that exact allocation through publication retries. Readers never
 //! substitute current State or reconstruct missing historical values from a root.
 
+mod prepared_intents;
 mod read;
+#[cfg(test)]
+pub(crate) use prepared_intents::test_helpers as prepared_intent_test_helpers;
 pub use read::NativeContextRead;
 
 use crate::{
@@ -137,11 +140,20 @@ pub struct PreparedNativeContext {
     height: u64,
     carrier_hash: HashOf<BlockHeader>,
     bytes: ChargedBuffer<u8>,
+    // The complete context stays owned if later intent admission refuses.
+    prepared_intents: Option<ChargedBuffer<u8>>,
+    intents_complete: bool,
 }
 impl PreparedNativeContext {
     /// Exact original canonical projection; exposure grants no finality.
     pub fn canonical_bytes(&self) -> &[u8] {
         self.bytes.as_slice()
+    }
+    /// Original local intent bytes, pending missing outbound authority and native proof checking.
+    /// This is not a submitted or completed relay.
+    #[cfg(test)]
+    pub(crate) fn prepared_intent_bytes(&self) -> Option<&[u8]> {
+        self.prepared_intents.as_ref().map(ChargedBuffer::as_slice)
     }
     /// Height of the exact result-bearing carrier.
     pub const fn height(&self) -> u64 {
@@ -332,6 +344,12 @@ impl NativeContextArchive {
             height: projection.carrier_height,
             carrier_hash: projection.carrier_hash,
             bytes,
+            prepared_intents: None,
+            intents_complete: !projection
+                .ordinary_writes
+                .0
+                .iter()
+                .any(|write| prepared_intents::is_prepared_key_prefix(&write.key)),
         })
     }
 
@@ -345,9 +363,20 @@ impl NativeContextArchive {
         original: &PreparedNativeContext,
     ) -> Result<(), NativeContextArchiveError> {
         self.recheck_namespace()?;
-        if !self.writable || !original.bytes.belongs_to(&self.budget) {
+        if !self.writable
+            || !original.bytes.belongs_to(&self.budget)
+            || original
+                .prepared_intents
+                .as_ref()
+                .is_some_and(|intents| !intents.belongs_to(&self.budget))
+        {
             return Err(NativeContextArchiveError::Source(
                 "foreign archive backing pool",
+            ));
+        }
+        if !original.intents_complete {
+            return Err(NativeContextArchiveError::Source(
+                "original intent capture is incomplete",
             ));
         }
         publish_record(
@@ -356,6 +385,16 @@ impl NativeContextArchive {
             original.carrier_hash,
             original.bytes.as_slice(),
         )?;
+        if let Some(intents) = &original.prepared_intents {
+            if !cfg!(all(test, sumeragi_core_mutation = "HC183")) {
+                publish_named_record(
+                    &self.directory,
+                    &RecordName::intent(original.height, original.carrier_hash, false),
+                    &RecordName::intent(original.height, original.carrier_hash, true),
+                    intents.as_slice(),
+                )?;
+            }
+        }
         self.recheck_namespace()?;
         Ok(())
     }
@@ -429,6 +468,12 @@ impl RecordName {
         out.bytes[out.len..out.len + 4].copy_from_slice(b".nrt");
         out.len += 4;
         out
+    }
+    fn intent(height: u64, hash: HashOf<BlockHeader>, staged: bool) -> Self {
+        let mut name = Self::new(height, hash, staged);
+        let start = name.len - 4;
+        name.bytes[start..name.len].copy_from_slice(b".ami");
+        name
     }
     fn as_str(&self) -> &str {
         std::str::from_utf8(&self.bytes[..self.len]).expect("fixed ASCII record identity")
@@ -521,11 +566,37 @@ fn publish_record(
     hash: HashOf<BlockHeader>,
     bytes: &[u8],
 ) -> io::Result<()> {
+    publish_named_record(
+        directory,
+        &RecordName::new(height, hash, false),
+        &RecordName::new(height, hash, true),
+        bytes,
+    )
+}
+#[cfg(unix)]
+fn open_named_record(directory: &File, name: &RecordName) -> io::Result<File> {
+    use rustix::fs::{Mode, OFlags};
+    let file = File::from(rustix::fs::openat(
+        directory,
+        name.as_str(),
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?);
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::other("native context record is not a file"));
+    }
+    Ok(file)
+}
+#[cfg(unix)]
+fn publish_named_record(
+    directory: &File,
+    target: &RecordName,
+    staged: &RecordName,
+    bytes: &[u8],
+) -> io::Result<()> {
     use rustix::fs::{AtFlags, Mode, OFlags};
     use std::os::unix::fs::MetadataExt as _;
-    let target = RecordName::new(height, hash, false);
-    let staged = RecordName::new(height, hash, true);
-    match open_record(directory, height, hash) {
+    match open_named_record(directory, target) {
         Ok(file) => {
             verify_bytes(file, bytes)?;
             directory.sync_all()?;
@@ -562,11 +633,11 @@ fn publish_record(
     ) {
         Ok(()) => {}
         Err(rustix::io::Errno::EXIST) => {
-            verify_bytes(open_record(directory, height, hash)?, bytes)?
+            verify_bytes(open_named_record(directory, target)?, bytes)?
         }
         Err(error) => return Err(error.into()),
     }
-    verify_bytes(open_record(directory, height, hash)?, bytes)?;
+    verify_bytes(open_named_record(directory, target)?, bytes)?;
     directory.sync_all()?;
     remove_matching_stage(directory, staged.as_str(), bytes)
 }
@@ -631,6 +702,19 @@ fn publish_record(
     _directory: &File,
     _height: u64,
     _hash: HashOf<BlockHeader>,
+    _bytes: &[u8],
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "descriptor-relative native context archive is required",
+    ))
+}
+
+#[cfg(not(unix))]
+fn publish_named_record(
+    _directory: &File,
+    _target: &RecordName,
+    _staged: &RecordName,
     _bytes: &[u8],
 ) -> io::Result<()> {
     Err(io::Error::new(

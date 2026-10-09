@@ -370,8 +370,6 @@ pub const SYSCALL_INPUT_PUBLISH_TLV: u32 = 0xE0;
 pub const SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION: u32 = 0xA0;
 /// `r11` operation tag authorizing a decoded `SubmitBallot` instruction for syscall `0xA0`.
 pub const SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT: u64 = 1;
-/// `r11` operation tag authorizing a decoded `RecordSccpMessage` instruction for syscall `0xA0`.
-pub const SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE: u64 = 2;
 /// Execute a query from canonical `&NoritoBytes(QueryRequest)`.
 pub const SYSCALL_SMARTCONTRACT_EXECUTE_QUERY: u32 = 0xA1;
 /// Convenience syscall used by samples: create one NFT per known account.

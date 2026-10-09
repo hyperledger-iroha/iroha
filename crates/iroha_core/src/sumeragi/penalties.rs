@@ -27,7 +27,7 @@ use iroha_crypto::{ChargedPublicKey, Hash, PublicKey, PublicKeyAllocationError};
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus::{Evidence, EvidencePenaltyStatus, EvidenceRecord, EvidenceScope},
+        consensus::{Evidence, EvidencePenaltyStatus, EvidenceScope},
     },
     consensus::{
         NposConsensusEffects, NposConsensusSlashAction, NposMarkConsensusEvidenceAppliedAction,
@@ -399,7 +399,7 @@ impl<'a> PenaltyApplier<'a> {
                 world,
             )?
             .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?;
-        let due = |record: &EvidenceRecord| {
+        let due = |record: &crate::state::RetainedEvidenceRecord| {
             let admitted_at = if cfg!(all(test, sumeragi_core_mutation = "HC3"))
                 && matches!(record.attribution.scope, EvidenceScope::Lane(_))
             {
@@ -927,14 +927,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
         }
         tx.world.consensus_evidence.insert(
             key,
-            EvidenceRecord {
-                evidence: evidence.clone(),
-                attribution: admitted.attribution().clone(),
-                recorded_at_height: current_height,
-                recorded_at_view: current_view,
-                recorded_at_ms: now_ms,
-                penalty_status: EvidencePenaltyStatus::Pending,
-            },
+            admitted.record(evidence, current_height, current_view, now_ms)?,
         );
     }
     for action in &effects.penalty_actions {
@@ -1468,6 +1461,11 @@ mod tests {
             penalty_status: EvidencePenaltyStatus::Pending,
         };
         let mut block = state.world.consensus_evidence.block();
+        let record = crate::state::RetainedEvidenceRecord::from_fixture(
+            record,
+            &state.ivm_execution_budget(),
+        )
+        .unwrap();
         block.insert(key, record);
         block.commit();
         key
@@ -3727,10 +3725,13 @@ mod tests {
         .unwrap();
         let key = insert_evidence(&state, proof, 21);
         let mut rows = state.world.consensus_evidence.block();
-        let mut row = rows.get(&key).unwrap().clone();
+        let mut row = rows.get(&key).unwrap().canonical_projection();
         row.attribution.scope = EvidenceScope::Lane(scope);
         row.attribution.height = 1_000; // Native lane clock, intentionally above global carrier.
         row.attribution.offenders[0].lane_stake = bound.then_some(binding);
+        let row =
+            crate::state::RetainedEvidenceRecord::from_fixture(row, &state.ivm_execution_budget())
+                .unwrap();
         rows.insert(key, row);
         rows.commit();
         (state, key, validator)

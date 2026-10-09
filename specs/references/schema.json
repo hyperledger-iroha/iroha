@@ -24388,7 +24388,7 @@
       },
       {
         "discriminant": 3,
-        "tag": "credit_refused"
+        "tag": "unregistrable_recipient"
       }
     ]
   },

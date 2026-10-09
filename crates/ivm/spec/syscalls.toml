@@ -566,7 +566,7 @@ gas = "G_hash + bytes"
 
 [[syscall]]
 number = "0xA0"
-args = "r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot,2=RecordSccpMessage)"
+args = "r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot)"
 ret = "u64=0"
 gas = "G_sci"
 
@@ -842,7 +842,7 @@ gas = "G_scq"
 
 [[syscall]]
 number = "0x010007"
-args = "r10=&NoritoBytes(ContractAddress | Hash)"
+args = "r10=&NoritoBytes(ContractArtifactId)"
 ret = "r10=ptr (&NoritoBytes(ContractManifest))"
 gas = "G_scq"
 
@@ -932,25 +932,25 @@ gas = "G_sci + bytes"
 
 [[syscall]]
 number = "0x010210"
-args = "r10=&Blob(alias), r11=&AccountId(replacement)"
+args = "r10=&Blob(alias), r11=&AccountId(replacement), r12=request_generation"
 ret = "u64=0"
 gas = "G_sci + bytes"
 
 [[syscall]]
 number = "0x010211"
-args = "r10=&Blob(alias)"
+args = "r10=&Blob(alias), r11=request_generation"
 ret = "u64=0"
 gas = "G_sci + bytes"
 
 [[syscall]]
 number = "0x010212"
-args = "r10=&Blob(alias)"
+args = "r10=&Blob(alias), r11=request_generation"
 ret = "u64=0"
 gas = "G_sci + bytes"
 
 [[syscall]]
 number = "0x010213"
-args = "r10=&Blob(alias)"
+args = "r10=&Blob(alias), r11=request_generation"
 ret = "u64=0"
 gas = "G_sci + bytes"
 

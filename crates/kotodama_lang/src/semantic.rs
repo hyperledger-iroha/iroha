@@ -7910,6 +7910,30 @@ fn analyze_fixed_builtin_call(
     }
 }
 
+/// Every receiver method of a durable `StateMap`, as the spec's Durable state
+/// section lists them.
+const STATE_MAP_METHODS: &[&str] = &["get", "contains", "get_or_insert", "remove", "page", "take"];
+
+/// Help for a call of a method `StateMap` does not have.
+///
+/// Defaulting reads point at the explicit `Option` idiom rather than at the
+/// closest spelling, because the closest helper (`get_or_insert`) writes state.
+fn unknown_state_map_method_help(method: &str) -> String {
+    let surface = "`StateMap` methods are `get`, `contains`, `get_or_insert`, `remove`, `page`, and `take`; write with `map[key] = value`.";
+    match method {
+        "get_or" | "get_or_default" | "get_or_else" | "unwrap_or" => format!(
+            "`map.get(key)` returns `Option<V>`; handle absence explicitly with `map.get(key).unwrap_or(default)`, `map.get(key).expect(Error::Missing)`, or a `match` when the fallback must only be evaluated on absence. A missing key is never read as zero. {surface}"
+        ),
+        "ensure" | "insert" | "insert_default" | "entry" | "or_insert" => format!(
+            "`map.get_or_insert(key, default)` writes `default` when the key is absent and returns the stored value; `map[key] = value` writes unconditionally. {surface}"
+        ),
+        _ => match crate::diagnostic::suggest::closest(method, STATE_MAP_METHODS.iter().copied()) {
+            Some(candidate) => format!("did you mean `{candidate}`? {surface}"),
+            None => surface.to_owned(),
+        },
+    }
+}
+
 fn analyze_map_get_or_insert(
     context: &SemanticContext,
     builtin: Builtin,
@@ -8000,6 +8024,17 @@ fn analyze_kotoage_grant_call(
                 .filter(|(_, modifiers)| modifiers.kind == FunctionKind::Kotoage)
                 .map(|(name, _)| name.as_str())
                 .collect::<Vec<_>>();
+            if candidates.is_empty() {
+                // A reusable module declares no kotoage, so it cannot name the
+                // selectors of the seiyaku that will link it.
+                return Err(sem_err(
+                    "E_KOTOAGE_SELECTOR",
+                    format!(
+                        "this source unit declares no {kotoage}, so `{selector}` cannot be checked; call {} from the seiyaku that declares `{selector}`, because a reusable module cannot name a seiyaku's selectors",
+                        builtin.source_name()
+                    ),
+                ));
+            }
             let suggestion = crate::diagnostic::suggest::closest(selector, candidates)
                 .map(|candidate| format!("; did you mean `{candidate}`?"))
                 .unwrap_or_default();
@@ -8061,7 +8096,15 @@ fn analyze_builtin_literal_argument(
         return Ok(None);
     };
     if matches!(descriptor, "NumericSpec" | "Mintable" | "SignatureScheme") {
-        return nominal_argument_word(context, builtin, index, descriptor, argument).map(Some);
+        return nominal_argument_word(context, builtin, index, descriptor, argument)
+            .map(Some)
+            .inspect_err(|_| {
+                // Point at the argument and list only the forms its type accepts.
+                context.capture_help(
+                    context.expression_source(argument),
+                    nominal_argument_help(descriptor),
+                );
+            });
     }
     if builtin.is_payload_helper()
         && builtin.surface() == BuiltinSurface::MethodOnly
@@ -8073,6 +8116,13 @@ fn analyze_builtin_literal_argument(
             raw,
             iroha_data_model::account::address::chain_discriminant(),
         ) {
+            context.capture_help(
+                context.expression_source(argument),
+                format!(
+                    "A typed JSON getter key is a `Name`. {} Fields whose keys are not `Name`s cannot be read with typed getters.",
+                    invalid.help
+                ),
+            );
             return Err(sem_err(
                 "E_INVALID_ID_LITERAL",
                 format!("JSON key {}", invalid.message),
@@ -8119,6 +8169,14 @@ fn misplaced_nominal_value(builtin: Builtin) -> SemanticError {
     }
 }
 
+/// Site-specific help for an argument of the compile-time nominal type
+/// `descriptor`, listing only the forms that type accepts.
+fn nominal_argument_help(descriptor: &str) -> String {
+    format!(
+        "Write one `{descriptor}` value directly as this argument: {}. It is folded at compile time, so a local, parameter, or integer cannot stand in for it.",
+        nominal_value_forms(descriptor)
+    )
+}
 /// The source forms a compile-time nominal parameter accepts, for diagnostics.
 fn nominal_value_forms(descriptor: &str) -> String {
     Builtin::all()
@@ -11897,6 +11955,19 @@ fn analyze_expr_expected_inner(
                     let Some(signature) =
                         context.function_params.borrow().get(&name).cloned()
                     else {
+                        if *implicit_receiver
+                            && let Some(receiver) = arg_typed.first()
+                            && matches!(resolve_struct_type(&receiver.ty), Type::StateMap(..))
+                        {
+                            context.capture_help(
+                                context.expression_source(expr),
+                                unknown_state_map_method_help(&source_name),
+                            );
+                            return Err(SemanticError {
+                                code: "K2002",
+                                message: format!("`StateMap` has no method `{source_name}`"),
+                            });
+                        }
                         return Err(SemanticError {
                             code: "K2002",
                             message: format!("unknown function or builtin `{source_name}`"),
@@ -16090,6 +16161,19 @@ mod tests {
             "{}",
             error.message
         );
+        // A reusable module declares no kotoage, so it cannot name selectors.
+        let module = analyze_error(
+            "module Helpers { export fn allow(AccountId account) { \
+             ledger::seiyaku::grant_kotoage(account, kotoage: \"pay\"); } }",
+        );
+        assert_eq!(module.code, "E_KOTOAGE_SELECTOR");
+        assert!(
+            module.message.contains(
+                "call ledger::seiyaku::grant_kotoage from the seiyaku that declares `pay`"
+            ),
+            "{}",
+            module.message
+        );
     }
     #[test]
     fn asset_registration_takes_compile_time_spec_and_mintability() {
@@ -16227,6 +16311,108 @@ mod tests {
             assert_eq!(error.code, "E_NOMINAL_ARGUMENT", "{}", error.message);
             assert!(error.message.contains(fragment), "{}", error.message);
         }
+    }
+    /// Check `source` and return the first semantic diagnostic's message, help
+    /// and primary-span text.
+    fn first_checked_diagnostic(source: &str) -> (String, Option<String>, Option<String>) {
+        let diagnostics = crate::session::CompilerSession::default()
+            .check(crate::session::CompileRequest {
+                source,
+                source_name: Some("probe.ko"),
+            })
+            .expect_err("source must be rejected");
+        let diagnostic = diagnostics
+            .diagnostics
+            .first()
+            .expect("one diagnostic")
+            .clone();
+        let primary = diagnostic
+            .primary_span
+            .and_then(|span| span.byte_range)
+            .map(|range| source[range.start as usize..range.end as usize].to_owned());
+        (diagnostic.message, diagnostic.help, primary)
+    }
+    #[test]
+    fn nominal_argument_errors_point_at_the_argument_with_type_specific_help() {
+        for (argument, descriptor, call) in [
+            (
+                "2",
+                "NumericSpec",
+                "ledger::asset::register(asset_definition: asset, name: \"Rose\", spec: 2, mintable: Mintable::Once)",
+            ),
+            (
+                "mode",
+                "Mintable",
+                "ledger::asset::register(asset_definition: asset, name: \"Rose\", spec: NumericSpec::integer(), mintable: mode)",
+            ),
+            (
+                "1",
+                "SignatureScheme",
+                "let _ok = crypto::verify_signature(message: b\"m\", signature: b\"s\", public_key: b\"k\", scheme: 1)",
+            ),
+        ] {
+            let source = format!(
+                "seiyaku Probe {{ kotoage fn probe(AssetDefinitionId asset, int mode) authorize(\"Probe\") {{ {call}; }} }}"
+            );
+            let (message, help, primary) = first_checked_diagnostic(&source);
+            assert!(message.contains(descriptor), "{message}");
+            assert_eq!(primary.as_deref(), Some(argument), "{message}");
+            let help = help.expect("site-specific help");
+            assert_eq!(help, nominal_argument_help(descriptor));
+            for other in ["NumericSpec", "Mintable", "SignatureScheme"] {
+                assert_eq!(
+                    help.contains(&format!("`{other}::")),
+                    other == descriptor,
+                    "{help}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn invalid_json_key_literals_point_at_the_key_with_name_help() {
+        let source = "seiyaku Probe { view fn v() -> int { return read(json { a: \"1\" }); } \
+                      fn read(Json value) -> int { return value.get_int(\"a b\").unwrap_or(0); } }";
+        let (message, help, primary) = first_checked_diagnostic(source);
+        assert!(
+            message.starts_with("JSON key invalid Name literal"),
+            "{message}"
+        );
+        assert_eq!(primary.as_deref(), Some("\"a b\""));
+        let help = help.expect("JSON key help");
+        assert!(
+            help.starts_with("A typed JSON getter key is a `Name`."),
+            "{help}"
+        );
+        assert!(!help.contains("account"), "{help}");
+    }
+    #[test]
+    fn unknown_state_map_methods_teach_the_documented_surface() {
+        for (method, fragment) in [
+            ("get_or", "map.get(key).unwrap_or(default)"),
+            ("get_or_default", "map.get(key).expect(Error::Missing)"),
+            ("ensure", "map.get_or_insert(key, default)"),
+            ("contans", "did you mean `contains`?"),
+            ("keys", "`StateMap` methods are `get`, `contains`"),
+        ] {
+            let source = format!(
+                "seiyaku Probe {{ state StateMap<int, int> M; view fn probe() -> int {{ let _x = M.{method}(1, 0); return 0; }} }}"
+            );
+            let (message, help, primary) = first_checked_diagnostic(&source);
+            assert_eq!(message, format!("`StateMap` has no method `{method}`"));
+            let help = help.expect("StateMap method help");
+            assert!(help.contains(fragment), "{method}: {help}");
+            assert_eq!(primary, Some(format!("M.{method}(1, 0)")));
+        }
+        assert!(!unknown_state_map_method_help("get_or").contains("did you mean"));
+        // A non-StateMap receiver keeps the generic unknown-function message.
+        let error = analyze_error("fn f(int x) -> int { return x.get_or(1, 0); }");
+        assert!(
+            error
+                .message
+                .contains("unknown function or builtin `get_or`"),
+            "{}",
+            error.message
+        );
     }
     #[test]
     fn json_string_and_bool_getters_return_typed_options() {

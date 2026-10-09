@@ -132,6 +132,7 @@ pub(super) fn run_deploy(
         network: args.network.clone(),
         chain_discriminant: None,
         zk: false,
+        deny_warnings: false,
     };
     let build = build::prepare_build(
         manifest,

@@ -215,12 +215,16 @@ rather than proof of future liveness. Those operating seams are outside the TLA
 state machine and the check is not a refinement proof.
 For this formal-model corridor, release qualification still requires a settled
 source revision, an exhaustive same-source pinned TLC 2.19 run and archive, and
-qualification of mandatory finalized-pulse production and consensus-enforced
-global-beacon and TLE key-rotation paths. The repository-wide gate inventory in
-the [SORA Parliament hardening roadmap](../../roadmap.md#services-and-deployment)
-additionally requires focused and four-peer execution evidence, a genuine
-authenticated deployment-selected share provider, and independent review of the
-timed-OVN publication manifest. Qualified software custody or an authenticated
-external broker satisfies this provider boundary; hardware custody remains an
-optional deployment choice. Zeroizing software buffers alone are not
-secure-erasure evidence.
+qualification of finalized-pulse production and consensus-enforced
+global-beacon key rotation. The
+[ballot decision](../../specs/parliament_private_ballot_design.md) retires the
+timed-OVN and TLE phases modeled above. The model must be revised to cover
+credential sealing, casting open, verified unique-nullifier append,
+deterministic closure and the terminal outcome. It must also replace the
+consensus-mandatory pulse and unavailable-pulse branch with the
+governance-local exact-pulse wait, while preserving immutable quorum, bounded
+sortition and governance-attempt retries (ballot retries are removed), public
+findings, disjoint Confirmation and atomic capacity failure. The repository-wide gate inventory in the
+[SORA Parliament hardening roadmap](../../roadmap.md#services-and-deployment)
+additionally requires focused and four-peer execution evidence and independent
+review of the anonymous-ballot relation.

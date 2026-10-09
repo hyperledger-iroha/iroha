@@ -173,7 +173,10 @@ mod tests {
 
     #[test]
     fn guesses_and_confusables_map_back_without_collisions() {
-        assert_eq!(suggestion_for("contract").map(|k| k.romaji), Some("seiyaku"));
+        assert_eq!(
+            suggestion_for("contract").map(|k| k.romaji),
+            Some("seiyaku")
+        );
         assert_eq!(suggestion_for("Init").map(|k| k.romaji), Some("hajimari"));
         assert_eq!(suggestion_for("upgrade").map(|k| k.romaji), Some("kaizen"));
         assert_eq!(suggestion_for("契約").map(|k| k.romaji), Some("seiyaku"));
@@ -181,8 +184,14 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for keyword in &BRANDED_KEYWORDS {
             for word in keyword.english_guesses.iter().chain(keyword.confusables) {
-                assert!(seen.insert(word.to_ascii_lowercase()), "duplicate guess {word}");
-                assert!(by_spelling(word).is_none(), "{word} must not be a real spelling");
+                assert!(
+                    seen.insert(word.to_ascii_lowercase()),
+                    "duplicate guess {word}"
+                );
+                assert!(
+                    by_spelling(word).is_none(),
+                    "{word} must not be a real spelling"
+                );
             }
         }
     }

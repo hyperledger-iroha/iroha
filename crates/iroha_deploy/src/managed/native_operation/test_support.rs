@@ -180,6 +180,9 @@ pub(in crate::managed) fn provider_id(
 #[path = "test_support/musubi_namespace_tests.rs"]
 mod musubi_namespace_tests;
 
+#[path = "test_support/amx_registration_native_tests.rs"]
+mod amx_registration_native_tests;
+
 /// Exercise the shared post-carrier decision against an actual native fixture's authenticated
 /// frontier and its owner's real bounded SDK proof reader. No paid wallet or source is replaced.
 pub(in crate::managed) fn assert_optional_current<T>(

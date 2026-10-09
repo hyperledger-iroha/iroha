@@ -373,6 +373,65 @@ fn check_treats_test_modules_as_tests_and_fmt_walks_directories() {
 }
 
 #[test]
+fn lint_levels_come_from_flags_and_the_project_manifest() {
+    let root = package("lints");
+    fs::write(
+        root.join("contracts/linted.ko"),
+        "seiyaku Linted {\n    view fn one() -> int {\n        let unused = 1;\n        return 1;\n    }\n}\n",
+    )
+    .expect("write linted source");
+    let output = koto(&root, &["check", "contracts/linted.ko"]);
+    assert!(output.status.success(), "lints warn by default");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning[K5013]"), "{stderr}");
+    assert!(stderr.contains("--> contracts/linted.ko:3:13"), "{stderr}");
+    let output = koto(&root, &["check", "--deny-warnings", "contracts/linted.ko"]);
+    assert_eq!(output.status.code(), Some(8));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("error[K5013]"));
+    let output = koto(&root, &["check", "--deny", "unused-local", "contracts/linted.ko"]);
+    assert_eq!(output.status.code(), Some(8));
+    let output = koto(&root, &["check", "--allow", "unused-local", "contracts/linted.ko"]);
+    assert!(output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("K5013"));
+    let output = koto(&root, &["check", "--deny", "unused-locl", "contracts/linted.ko"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("did you mean `unused-local`?"),
+        "unknown lint names are usage errors with a suggestion"
+    );
+    let output = koto(
+        &root,
+        &[
+            "check",
+            "--allow",
+            "unused-local",
+            "--deny",
+            "unused-local",
+            "contracts/linted.ko",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    fs::write(
+        root.join("kotodama.project.json"),
+        r#"{"version": 1, "root": "contracts/linted.ko", "imports": [], "packages": [], "lints": {"unused-local": "deny"}}"#,
+    )
+    .expect("write project manifest");
+    let output = koto(&root, &["check", "--project", "kotodama.project.json"]);
+    assert_eq!(output.status.code(), Some(8), "the manifest denies the lint");
+    let output = koto(
+        &root,
+        &[
+            "check",
+            "--project",
+            "kotodama.project.json",
+            "--warn",
+            "unused-local",
+        ],
+    );
+    assert!(output.status.success(), "flags override the manifest");
+}
+
+#[test]
 fn explain_and_doc_speak_kotodama() {
     let root = package("explain");
     let output = koto(&root, &["explain", "言挙げ"]);

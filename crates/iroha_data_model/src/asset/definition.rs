@@ -554,9 +554,11 @@ pub mod ivm_registration {
     const MINTABLE_TAG_NOT: u64 = 2;
     const MINTABLE_TAG_LIMITED: u64 = 3;
 
-    /// A register word that does not encode a valid registration parameter.
+    /// A `REGISTER_ASSET` argument that does not encode a valid registration parameter.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum RegistrationWordError {
+        /// The display name is not UTF-8 or fails [`super::validate_asset_name`].
+        DisplayName,
         /// The numeric-spec word is neither `0` nor `scale + 1` for a scale up to 28.
         NumericSpec(u64),
         /// The mintability word has an unknown tag, stray bits, or a zero/oversized
@@ -567,6 +569,7 @@ pub mod ivm_registration {
     impl fmt::Display for RegistrationWordError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
+                Self::DisplayName => f.write_str("invalid REGISTER_ASSET display name"),
                 Self::NumericSpec(word) => {
                     write!(f, "invalid REGISTER_ASSET numeric spec word {word:#x}")
                 }
@@ -575,6 +578,46 @@ pub mod ivm_registration {
                 }
             }
         }
+    }
+
+    /// The display name, numeric spec and mintability of one `REGISTER_ASSET` call.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Registration {
+        /// Validated display name.
+        pub name: String,
+        /// Numeric spec every quantity of the definition must satisfy.
+        pub spec: NumericSpec,
+        /// Mintability of the definition.
+        pub mintable: Mintable,
+    }
+
+    /// Decode the registration arguments every contract host reads for
+    /// `REGISTER_ASSET`: the UTF-8 display-name payload of `r11`, the
+    /// numeric-spec word in `r12` and the mintability word in `r13`.
+    ///
+    /// This is the single decoder shared by every host, so a name, spec or
+    /// mintability is either registered exactly as written or rejected
+    /// identically everywhere.
+    ///
+    /// # Errors
+    /// Returns [`RegistrationWordError::DisplayName`] for a non-UTF-8 or invalid
+    /// display name, and the word errors of [`numeric_spec_from_word`] and
+    /// [`mintable_from_word`].
+    pub fn decode_registration(
+        name: &[u8],
+        spec_word: u64,
+        mintable_word: u64,
+    ) -> Result<Registration, RegistrationWordError> {
+        let name = core::str::from_utf8(name)
+            .ok()
+            .filter(|name| super::validate_asset_name(name).is_ok())
+            .ok_or(RegistrationWordError::DisplayName)?
+            .to_owned();
+        Ok(Registration {
+            name,
+            spec: numeric_spec_from_word(spec_word)?,
+            mintable: mintable_from_word(mintable_word)?,
+        })
     }
 
     impl std::error::Error for RegistrationWordError {}
@@ -676,13 +719,46 @@ pub mod ivm_registration {
                 0b101,
                 0b110,
                 MINTABLE_TAG_LIMITED,
-                (u64::from(u32::MAX) + 1) << 2 | MINTABLE_TAG_LIMITED,
+                ((u64::from(u32::MAX) + 1) << 2) | MINTABLE_TAG_LIMITED,
             ] {
                 assert_eq!(
                     mintable_from_word(malformed),
                     Err(RegistrationWordError::Mintable(malformed))
                 );
             }
+        }
+
+        #[test]
+        fn registration_decodes_name_spec_and_mintability_together() {
+            let spec = NumericSpec::fractional(2);
+            let mintable = Mintable::limited_from_u32(3).expect("token budget");
+            assert_eq!(
+                decode_registration(
+                    "Rose".as_bytes(),
+                    numeric_spec_word(spec),
+                    mintable_word(mintable)
+                ),
+                Ok(Registration {
+                    name: "Rose".to_owned(),
+                    spec,
+                    mintable,
+                })
+            );
+            for name in [&b""[..], b"   ", b"ro#se", b"ro@se", b"\xff\xfe"] {
+                assert_eq!(
+                    decode_registration(name, 0, 0),
+                    Err(RegistrationWordError::DisplayName),
+                    "{name:?}"
+                );
+            }
+            assert_eq!(
+                decode_registration(b"Rose", 30, 0),
+                Err(RegistrationWordError::NumericSpec(30))
+            );
+            assert_eq!(
+                decode_registration(b"Rose", 0, 0b100),
+                Err(RegistrationWordError::Mintable(0b100))
+            );
         }
     }
 }

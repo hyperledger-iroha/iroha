@@ -155,7 +155,16 @@ fn every_action() -> Vec<SccpGovernanceActionV1> {
             next: SccpParametersV1::taira_default(),
         }),
         SccpGovernanceActionV1::ClearBridgeKeyFault(fault(1_000)),
+        activate_profile(BSC, 2),
     ]
+}
+
+fn activate_profile(network: SccpNetworkV1, version: u32) -> SccpGovernanceActionV1 {
+    SccpGovernanceActionV1::ActivateLightClientProfile(SccpActivateLightClientProfileActionV1 {
+        network,
+        version,
+        profile_hash: [0x5e; 32],
+    })
 }
 
 /// Build a proposal for `live` whose `base_revisions` are exactly `S(P)` with revision 0.
@@ -209,6 +218,7 @@ fn every_action_maps_to_its_spec_subject() {
         SccpGovernanceSubjectV1::LightClient(TRON),
         SccpGovernanceSubjectV1::Parameters,
         SccpGovernanceSubjectV1::BridgeKeyFault(peer(3)),
+        SccpGovernanceSubjectV1::LightClient(BSC),
     ];
     let actions = every_action();
     assert_eq!(actions.len(), expected.len());
@@ -240,6 +250,7 @@ fn action_network_is_the_subject_network() {
             Some(TRON),
             None,
             None,
+            Some(BSC),
         ]
     );
 }
@@ -295,6 +306,7 @@ fn subjects_are_sorted_and_deduplicated() {
             SccpGovernanceSubjectV1::Route(TON),
             SccpGovernanceSubjectV1::RouteControl(BSC),
             SccpGovernanceSubjectV1::LightClient(ETH),
+            SccpGovernanceSubjectV1::LightClient(BSC),
             SccpGovernanceSubjectV1::LightClient(TRON),
             SccpGovernanceSubjectV1::LightClient(TON),
             SccpGovernanceSubjectV1::Parameters,
@@ -417,6 +429,7 @@ fn taira_is_rejected_in_every_network_bearing_action() {
             checkpoint: checkpoint(),
         }),
         SccpGovernanceActionV1::FreezeLightClient(SccpFreezeLightClientActionV1 { network: TAIRA }),
+        activate_profile(TAIRA, 2),
     ];
     for action in taira_actions {
         assert_eq!(
@@ -674,6 +687,68 @@ fn initialize_light_client_is_checked() {
 }
 
 #[test]
+fn activate_light_client_profile_is_checked() {
+    assert_eq!(validate(vec![activate_profile(ETH, 2)]), Ok(()));
+    assert_eq!(validate(vec![activate_profile(TON, u32::MAX)]), Ok(()));
+    for version in [0, 1] {
+        assert_eq!(
+            validate(vec![activate_profile(ETH, version)]),
+            Err(SccpGovernanceStaticError::GenesisLightClientProfileVersion { action: 0, version })
+        );
+    }
+    let mut zero_hash = activate_profile(TRON, 3);
+    if let SccpGovernanceActionV1::ActivateLightClientProfile(action) = &mut zero_hash {
+        action.profile_hash = [0; 32];
+    }
+    assert_eq!(
+        validate(vec![zero_hash]),
+        Err(SccpGovernanceStaticError::ZeroLightClientProfileHash { action: 0 })
+    );
+    // It shares the light-client lane subject with initialization, checkpoints and freezes.
+    let action = activate_profile(TRON, 2);
+    assert_eq!(action.subject(), SccpGovernanceSubjectV1::LightClient(TRON));
+    assert_eq!(action.network(), Some(TRON));
+    assert_eq!(action.first_json_u64_violation(), None);
+    let error = SccpGovernanceStaticError::GenesisLightClientProfileVersion {
+        action: 3,
+        version: 1,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("version 1 is active from genesis")
+    );
+}
+
+#[test]
+fn activate_light_client_profile_has_a_fixed_layout() {
+    let action = SccpActivateLightClientProfileActionV1 {
+        network: ETH,
+        version: 0x0102_0304,
+        profile_hash: [0xab; 32],
+    };
+    roundtrip(&action);
+    assert_rejects_unknown_field(&action, &[]);
+    let wrapped = SccpGovernanceActionV1::ActivateLightClientProfile(action);
+    roundtrip(&wrapped);
+    assert_rejects_unknown_field(&wrapped, &["payload"]);
+    let value = norito::json::to_value(&wrapped).expect("value");
+    assert_eq!(
+        value.get("action").and_then(norito::json::Value::as_str),
+        Some("activate_light_client_profile")
+    );
+    // The variant tag is 14, followed by the action's own canonical encoding.
+    let encoded = wrapped.encode();
+    let bare = action.encode();
+    assert!(encoded.ends_with(&bare), "the action body follows the tag");
+    assert_eq!(
+        <SccpGovernanceActionV1 as norito::codec::DecodeAll>::decode_all(&mut encoded.as_slice())
+            .expect("decodes"),
+        wrapped
+    );
+}
+
+#[test]
 fn set_parameters_is_checked() {
     let mut next = SccpParametersV1::taira_default();
     next.max_exempt_transactions_per_block = 93;
@@ -877,7 +952,7 @@ fn proposal_json_is_closed_and_amounts_are_decimal_strings() {
 
 #[test]
 fn unknown_action_and_subject_tags_are_rejected() {
-    for unsupported_tag in [14_u32, 15, u32::MAX] {
+    for unsupported_tag in [15_u32, 16, u32::MAX] {
         let mut encoded = unsupported_tag.encode();
         encoded.extend_from_slice(&[0x11; 256]);
         assert!(
@@ -916,4 +991,31 @@ fn static_errors_render_their_context() {
         error: SccpParametersError::RosterMaxAgeTooShort,
     };
     assert!(nested.to_string().contains("roster_max_age_ms"));
+}
+
+#[test]
+fn trusted_checkpoints_are_refused_for_ton() {
+    let install = |network| {
+        SccpGovernanceActionV1::InstallTrustedCheckpoint(SccpInstallTrustedCheckpointActionV1 {
+            network,
+            checkpoint: checkpoint(),
+        })
+    };
+    for network in [ETH, TRON, SccpNetworkV1::BscMainnet] {
+        assert_eq!(validate(vec![install(network)]), Ok(()));
+    }
+    assert_eq!(
+        validate(vec![
+            SccpGovernanceActionV1::FreezeLightClient(SccpFreezeLightClientActionV1 {
+                network: ETH
+            }),
+            install(TON),
+        ]),
+        Err(SccpGovernanceStaticError::TonTrustedCheckpoint { action: 1 })
+    );
+    assert!(
+        SccpGovernanceStaticError::TonTrustedCheckpoint { action: 1 }
+            .to_string()
+            .contains("reads none")
+    );
 }

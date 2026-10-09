@@ -5,6 +5,10 @@
 //! queue can expose the actual Nexus assignments instead of single-lane
 //! placeholders.
 mod payload_leases;
+mod sumeragi_wake;
+pub(crate) use sumeragi_wake::SumeragiQueueRegistration;
+use sumeragi_wake::SumeragiQueueReservation;
+use sumeragi_wake::SumeragiQueueWake;
 mod resident_owner;
 use resident_owner::{QueueResidentLedger, QueuedTransaction};
 mod router;
@@ -507,7 +511,13 @@ pub struct Queue {
     /// Age budget in milliseconds used to mark queue pressure as latency-saturated.
     pressure_age_budget_ms: AtomicU64,
     /// Optional wake handle for the Sumeragi worker when new transactions are enqueued.
-    sumeragi_wake: OnceLock<mpsc::SyncSender<()>>,
+    sumeragi_wake: parking_lot::Mutex<Option<SumeragiQueueWake>>,
+    sumeragi_start_ticket: AtomicU64,
+    /// Observe the actual native worker's completed EMPTY answer, never a timer or hint.
+    #[cfg(test)]
+    empty_native_payloads: AtomicUsize,
+    #[cfg(test)]
+    empty_lane_payloads: AtomicUsize,
     /// Limits derived from Nexus configuration (TEU capacity, starvation bounds).
     nexus_limits: RwLock<QueueLimits>,
     /// Cached TEU metadata for queued transactions keyed by hash.
@@ -2493,7 +2503,12 @@ impl Queue {
                 tx_gossip: ArrayQueue::new(capacity.get()),
                 backpressure_tx,
                 pressure_age_budget_ms: AtomicU64::new(Self::default_pressure_age_budget_ms()),
-                sumeragi_wake: OnceLock::new(),
+                sumeragi_wake: parking_lot::Mutex::new(None),
+                sumeragi_start_ticket: AtomicU64::new(0),
+                #[cfg(test)]
+                empty_native_payloads: AtomicUsize::new(0),
+                #[cfg(test)]
+                empty_lane_payloads: AtomicUsize::new(0),
                 nexus_limits: RwLock::new(limits),
                 #[cfg(feature = "telemetry")]
                 tx_teu: DashMap::new(),
@@ -2530,14 +2545,116 @@ impl Queue {
         queue.publish_backpressure_state(0, None);
         queue
     }
+    /// Reserve one native startup before any executor attachment or driver launch.
+    /// A Queue has one successful native owner for its lifetime; ordinary restart uses a
+    /// fresh Queue and the existing authenticated State/journal recovery. Retiring wake
+    /// delivery never releases that exclusion while physical workers may still be joining.
+    pub(crate) fn reserve_sumeragi_start(
+        self: &Arc<Self>,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<SumeragiQueueReservation, &'static str> {
+        let (ticket, retired) = self.with_resident_refunds(
+            || {
+                // One critical section excludes every earlier native reservation/owner,
+                // including terminal retirement, before touching another startup owner.
+                let mut binding = self.sumeragi_wake.lock();
+                #[cfg(not(all(test, sumeragi_core_mutation = "HC191")))]
+                if binding.is_some() {
+                    return Err("transaction queue already has an original native owner; restart with a fresh Queue");
+                }
+                #[cfg(not(all(test, sumeragi_core_mutation = "HC193")))]
+                if self.resident_accounting.get().is_some_and(|ledger| !ledger.belongs_to(budget)) {
+                    return Err("transaction queue resident custody belongs to a different original State pool");
+                }
+                let ticket = self.sumeragi_start_ticket
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |previous| previous.checked_add(1))
+                    .map_err(|_| "transaction queue startup identity is exhausted")?;
+                Ok((ticket, binding.replace(SumeragiQueueWake::Reserved { ticket, budget: budget.clone() })))
+            },
+            |completed| completed,
+        )?;
+        // Only the deliberate HC191 mutant can replace an earlier owner. Even there,
+        // original charged wake/input references retire after both guards have released.
+        drop(retired);
+        Ok(SumeragiQueueReservation {
+            queue: Arc::downgrade(self),
+            ticket,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn set_sumeragi_wake(&self, wake: mpsc::SyncSender<()>) {
-        let _ = self.sumeragi_wake.set(wake);
+        let retired = self
+            .sumeragi_wake
+            .lock()
+            .replace(SumeragiQueueWake::Probe(wake));
+        drop(retired);
     }
-    pub(crate) fn wake_sumeragi(&self) {
-        if let Some(wake) = self.sumeragi_wake.get() {
-            let _ = wake.try_send(());
+
+    /// Check the original startup/active pool without retaining its driver or lane owners.
+    pub(crate) fn belongs_to_sumeragi_pool(
+        &self,
+        original: &iroha_allocation::AllocationBudget,
+    ) -> bool {
+        let binding = self.sumeragi_wake.lock();
+        match binding.as_ref() {
+            Some(SumeragiQueueWake::Reserved { budget, .. })
+            | Some(SumeragiQueueWake::Node { budget, .. }) => budget.same_pool(original),
+            Some(SumeragiQueueWake::Retired { .. }) | None => false,
+            #[cfg(test)]
+            Some(SumeragiQueueWake::Probe(_)) => true,
         }
+    }
+
+    /// A durable certified lane frame makes new merge work available only to the root.
+    /// Preserve Queue retirement and drop the original charged notification owner outside
+    /// the binding lock. No lane-map walk or lane-build feedback is needed for this edge.
+    pub(crate) fn wake_sumeragi_root(&self, original: &iroha_allocation::AllocationBudget) {
+        let root = {
+            let binding = self.sumeragi_wake.lock();
+            match binding.as_ref() {
+                Some(SumeragiQueueWake::Node { budget, root, .. })
+                    if budget.same_pool(original) =>
+                {
+                    Some(root.clone())
+                }
+                #[cfg(test)]
+                Some(SumeragiQueueWake::Probe(sender)) => {
+                    let _ = sender.try_send(());
+                    None
+                }
+                _ => None,
+            }
+        };
+        if let Some(root) = root {
+            root.notify();
+        }
+    }
+
+    pub(crate) fn wake_sumeragi(&self) {
+        // No queue lock survives a driver notification or a last charged-reference drop.
+        let wake = self.sumeragi_wake.lock().clone();
+        if let Some(wake) = wake {
+            wake.notify();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_empty_native_payload(&self) {
+        self.empty_native_payloads.fetch_add(1, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_empty_lane_payload(&self) {
+        self.empty_lane_payloads.fetch_add(1, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn empty_payload_answers_for_test(&self) -> (usize, usize) {
+        (
+            self.empty_native_payloads.load(Ordering::Acquire),
+            self.empty_lane_payloads.load(Ordering::Acquire),
+        )
     }
     /// Checks if the transaction is expired at a specific time.
     fn is_expired_at(&self, tx: &AcceptedTransaction<'static>, now: Duration) -> bool {
@@ -2913,9 +3030,12 @@ impl Queue {
                 if tx.is_in_blockchain(state_view) || self.is_expired(tx.as_accepted()) {
                     return None;
                 }
+                // Eligibility is judged against the committed parent World, exactly as block
+                // validation counts it (`specs/sccp.md` §4.19).
                 sccp_budget
                     .admit(
-                        crate::smartcontracts::isi::sccp::admission::exempt_shape_of_entrypoint(
+                        crate::smartcontracts::isi::sccp::admission::exempt_class_of_entrypoint(
+                            state_view.world(),
                             tx.as_accepted().entrypoint(),
                         ),
                     )
@@ -3333,12 +3453,21 @@ impl Queue {
     }
     fn check_startup_admission(&self) -> Result<(), Error> {
         if self.admission_faulted() {
-            Err(Error::AdmissionInvariant {
+            return Err(Error::AdmissionInvariant {
                 reason: "queue admission requires restart recovery".to_owned(),
-            })
-        } else {
-            Ok(())
+            });
         }
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC194")))]
+        if matches!(
+            self.sumeragi_wake.lock().as_ref(),
+            Some(SumeragiQueueWake::Retired { .. })
+        ) {
+            return Err(Error::AdmissionInvariant {
+                reason: "transaction queue native owner has retired; restart with a fresh Queue"
+                    .to_owned(),
+            });
+        }
+        Ok(())
     }
     fn push_with_lane_internal(
         &self,
@@ -3546,6 +3675,9 @@ impl Queue {
             }
         }
         // SCCP exemption checks use this exact committed view; there is no inherited queue authority.
+        // A transaction that is not eligible for an SCCP exemption classifies as `None` and
+        // pays the ordinary fee below; only an eligible transaction that fails pre-verification
+        // is rejected here (`specs/sccp.md` §4.19).
         let sccp_exempt = Self::sccp_signed_transaction(checked.as_accepted().entrypoint())
             .map(|transaction| state_access.sccp_exempt_admission(transaction))
             .transpose()
@@ -8963,6 +9095,10 @@ pub mod tests {
                 let active = binding.active.as_mut().expect("active bridge key");
                 active.public_key = key.public_key().expect("bridge public key");
                 active.address = key.address().expect("bridge address");
+                // A registered key's owner index makes its attestations eligible.
+                world
+                    .sccp_bridge_key_owners
+                    .insert(active.address, peer.clone());
                 world.sccp_bridge_keys.insert(peer, binding);
             }
             world.commit();
@@ -9081,7 +9217,7 @@ pub mod tests {
         assert_eq!(
             selected,
             vec![hashes[0], hashes[2]],
-            "one exempt-shaped SCCP transaction fits the cap; ordinary work is unaffected"
+            "one eligible SCCP transaction fits the cap; ordinary work is unaffected"
         );
         assert!(
             queue.contains_entrypoint_hash(hashes[1]),
@@ -9091,7 +9227,7 @@ pub mod tests {
         let classes = snapshot
             .iter()
             .filter_map(|transaction| {
-                admission::exempt_shape_of_entrypoint(transaction.entrypoint())
+                admission::exempt_class_of_entrypoint(view.world(), transaction.entrypoint())
             })
             .collect::<Vec<_>>();
         assert_eq!(classes, vec![SccpExemptClassV1::Attestation]);
