@@ -38,26 +38,52 @@ fn validate_bounded(current: &History, maximum: usize) -> Result<()> {
     // The original local census already authenticates its own before/after state. With no
     // predecessor, preserve that common path without replaying it a second time.
     if count == 0 {
-        return current.require_current_local(None);
+        return with_native_read_tree(current, |tree| {
+            current.require_current_local_in_tree(None, tree)
+        });
     }
     // Authenticate all ancestors before the selected node, then recheck in reverse order.
     // References keep every original File/Arc owner live across both complete passes.
-    // Each original traversal has its own full snapshot entry/exit fence. The opaque
-    // borrowed pass shares only pointer-identical immutable prefixes; local attempt,
-    // inventory, receipt and native handle checks still run in their original order.
+    // The adjacent, read-only pair shares one full immutable snapshot entry/exit fence.
+    // Its borrowed pass covers only pointer-identical immutable prefixes. Both complete
+    // mutable traversals retain their own native ancestry bracket, local attempt census,
+    // inventory and receipt checks, with no wallet callback or effect between directions.
     current.scope.with_snapshot_read_pass(&mut |pass| {
-        for prior in predecessors[..count].iter().rev().flatten() {
-            prior.require_retained_local(pass)?;
-        }
-        current.require_current_local(pass)
-    })?;
-    current.scope.with_snapshot_read_pass(&mut |pass| {
-        current.require_current_local(pass)?;
-        for prior in predecessors[..count].iter().flatten() {
-            prior.require_retained_local(pass)?;
-        }
-        Ok(())
+        with_native_read_tree(current, |mut tree| {
+            for prior in predecessors[..count].iter().rev().flatten() {
+                prior.require_retained_local(pass, tree.as_deref_mut())?;
+            }
+            current.require_current_local_in_tree(pass, tree.as_deref_mut())
+        })?;
+        #[cfg(test)]
+        after_forward_for_test()?;
+        with_native_read_tree(current, |mut tree| {
+            current.require_current_local_in_tree(pass, tree.as_deref_mut())?;
+            for prior in predecessors[..count].iter().flatten() {
+                prior.require_retained_local(pass, tree.as_deref_mut())?;
+            }
+            Ok(())
+        })
     })
+}
+
+// Each full traversal or parser-local census owns a separate native ancestry bracket.
+// Both graph directions, snapshot fences, local inventories and receipt checks retain their
+// order. Only the exact complete original native prefix can be shared; nonshared handles
+// fall back in iroha_fs. Every ordinary Result closes the original anchor, including a local
+// semantic refusal. A local bracket ends before any wallet callback or effectful operation.
+pub(super) fn with_native_read_tree<T>(
+    current: &History,
+    read: impl FnOnce(Option<&mut iroha_fs::PrivateReadTreeScope<'_>>) -> Result<T>,
+) -> Result<T> {
+    if norito::core::decode_limits_active() {
+        return read(None);
+    }
+    let anchor = match &current.scope {
+        HistoryScope::FixedBody => &current.operation,
+        HistoryScope::Enrollment(_) => current.scope.enrollment()?.root(),
+    };
+    anchor.read_tree_scope(|tree| read(Some(tree)))
 }
 
 // Instrument the actual local census only in tests. The fixed scratch records borrowed object
@@ -68,6 +94,7 @@ fn validate_bounded(current: &History, maximum: usize) -> Result<()> {
 pub(in crate::managed) struct TestRetainedHistoryCensus {
     pub(in crate::managed) visits: usize,
     pub(in crate::managed) distinct_histories: usize,
+    pub(in crate::managed) native_tree_visits: usize,
 }
 
 #[cfg(test)]
@@ -82,6 +109,22 @@ std::thread_local! {
     static VALIDATION_VISITS: std::cell::RefCell<Option<VisitCounter>> = const {
         std::cell::RefCell::new(None)
     };
+}
+
+// A one-shot test observer runs only after the first complete native bracket closes.
+// It can mutate genuine retained files or refuse; it never supplies a custody verdict.
+#[cfg(test)]
+type AfterForward = Box<dyn FnOnce() -> Result<()>>;
+#[cfg(test)]
+std::thread_local! {
+    static AFTER_FORWARD: std::cell::RefCell<Option<AfterForward>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+#[cfg(test)]
+fn after_forward_for_test() -> Result<()> {
+    let action = AFTER_FORWARD.with(|state| state.take());
+    action.map_or(Ok(()), |action| action())
 }
 
 #[cfg(test)]
@@ -112,13 +155,54 @@ pub(super) fn record_validation_visit(history: &History) -> Result<()> {
 }
 
 #[cfg(test)]
+pub(super) fn record_native_tree_visit(shared: bool) {
+    if shared {
+        VALIDATION_VISITS.with(|state| {
+            if let Some(counter) = state.borrow_mut().as_mut() {
+                counter.census.native_tree_visits += 1;
+            }
+        });
+    }
+}
+
+#[cfg(test)]
 impl History {
+    pub(in crate::managed) fn test_native_read_tree<T>(
+        &self,
+        action: impl FnOnce(Option<&mut iroha_fs::PrivateReadTreeScope<'_>>) -> Result<T>,
+    ) -> Result<T> {
+        with_native_read_tree(self, action)
+    }
+
+    pub(in crate::managed) fn test_require_current_after_forward(
+        &self,
+        maximum_visits: usize,
+        action: impl FnOnce() -> Result<()> + 'static,
+    ) -> (Result<()>, TestRetainedHistoryCensus) {
+        struct Restore(Option<AfterForward>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                AFTER_FORWARD.with(|state| {
+                    state.replace(self.0.take());
+                });
+            }
+        }
+        let _restore = Restore(AFTER_FORWARD.with(|state| state.replace(Some(Box::new(action)))));
+        self.test_require_current(maximum_visits)
+    }
+
     // Counts actual local validation calls, including accidental nested full-walker reentry.
     // Only a test-local observer is installed; no successful custody result is manufactured.
     pub(in crate::managed) fn test_require_current(
         &self,
         maximum_visits: usize,
     ) -> (Result<()>, TestRetainedHistoryCensus) {
+        Self::test_validation_work(maximum_visits, || self.require_current())
+    }
+    pub(in crate::managed) fn test_validation_work<T>(
+        maximum_visits: usize,
+        action: impl FnOnce() -> T,
+    ) -> (T, TestRetainedHistoryCensus) {
         struct Restore(Option<VisitCounter>);
         impl Drop for Restore {
             fn drop(&mut self) {
@@ -134,7 +218,7 @@ impl History {
                 histories: [0; MAX_RETAINED_BODIES],
             }))
         }));
-        let result = self.require_current();
+        let result = action();
         let census =
             VALIDATION_VISITS.with(|state| state.take().expect("test observer retained").census);
         (result, census)

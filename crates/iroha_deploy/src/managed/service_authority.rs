@@ -26,6 +26,9 @@ use iroha_fs::PrivateDirectory;
 use iroha_model_base::peer::PeerId;
 use std::{fs::File, sync::Arc, time::Instant};
 
+#[path = "service_authority/certificate_seed.rs"]
+mod certificate_seed;
+
 #[path = "service_authority/checkpoint_cache.rs"]
 mod checkpoint_cache;
 pub(in crate::managed) use checkpoint_cache::{CheckpointImportScope, CheckpointImports};
@@ -36,6 +39,7 @@ pub(super) use inventory::ServiceChildInventory;
 
 pub(super) enum NetworkPurpose {
     BuildRegistry,
+    ServiceObservation,
     InitialReservePolicy,
     InitialReputationPolicy,
     ServiceBootstrap,
@@ -45,6 +49,7 @@ impl NetworkPurpose {
     fn directory_name(self) -> &'static str {
         match self {
             Self::BuildRegistry => "build-registry",
+            Self::ServiceObservation => "service-observation",
             Self::InitialReservePolicy => "initial-reserve-policy",
             Self::InitialReputationPolicy => "initial-reputation-policy",
             Self::ServiceBootstrap => "service-bootstrap",
@@ -120,6 +125,7 @@ pub(super) struct ServiceAuthority {
     transport_seed: Client,
     checkpoint_cache: checkpoint_cache::CheckpointCache,
     checkpoint_import_scope: Option<CheckpointImportScope>,
+    certificate_scope: certificate_seed::Scope,
     pub(super) prepared: PreparedLocalnet,
     pub(super) directory: PrivateDirectory,
     pub(super) _lock: File,
@@ -416,6 +422,9 @@ impl ServiceAuthority {
             // Eligible construction is outside active admission and from the shared profile.
             // Default/profile-only callers supply None and retain their original local memo.
             owner.checkpoint_import_scope = scope.cloned();
+            if let Err(error) = owner.certificate_scope.inherit(&parent.certificate_scope) {
+                result = Err(error);
+            }
         }
         #[cfg(test)]
         if create {
@@ -485,6 +494,7 @@ impl ServiceAuthority {
             transport_seed,
             checkpoint_cache: checkpoint_cache::CheckpointCache::default(),
             checkpoint_import_scope: None,
+            certificate_scope: certificate_seed::Scope::default(),
             prepared: prepared.clone(),
             directory,
             _lock: lock,

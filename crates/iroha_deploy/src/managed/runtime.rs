@@ -22,6 +22,16 @@ mod readiness;
 mod renewal;
 use owned::PeerProcesses;
 
+/// Exercise the production lexical custody scope with genuine renderer fixtures.
+#[cfg(test)]
+pub(in crate::managed) fn test_with_renewal_custody<T>(
+    prepared: &PreparedLocalnet,
+    provider: iroha_data_model::sorafs::capacity::ProviderId,
+    action: impl FnOnce(&mut super::ManagedStreamTokenCustody) -> Result<T>,
+) -> Result<T> {
+    renewal::with_custody(prepared, provider, action)
+}
+
 /// Run the long-lived private localnet worker inside the installed Kagami executable.
 ///
 /// The CLI dispatches its internal `_managed-worker` entry point here. The worker retains the

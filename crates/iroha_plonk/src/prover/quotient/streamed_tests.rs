@@ -6,7 +6,7 @@
 use super::*;
 use crate::{
     cs::{Advice, Column, ConstraintSystem, Fixed, Rotation},
-    frontend::{Error, Layouter, SimpleFloorPlanner},
+    frontend::{Error, Layouter, SimpleFloorPlanner, Value},
     keys::{CosetCachePolicy, keygen_pk},
     pcs::ipa::PinnedParams,
     protocol::AllTerms,
@@ -400,7 +400,7 @@ fn streamed_parity<C: PastaCurve>() {
                     + if lookup_count == 0 {
                         0
                     } else {
-                        lookup_count + 3
+                        lookup_count + 3_usize.saturating_sub(base)
                     }
             );
             let mut omissions = vec![
@@ -554,4 +554,202 @@ fn reference_refresh_key_cosets<'a, C: PastaCurve>(
         }
     }
     Ok(())
+}
+
+/// Lookup-only keys with zero through three reusable gate-stage columns.
+#[derive(Clone, Copy)]
+struct SmallLookup(usize);
+
+impl<F: PastaField> Circuit<F> for SmallLookup {
+    type Config = (Vec<Column<Advice>>, Column<Fixed>);
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = usize;
+
+    fn without_witnesses(&self) -> Self {
+        *self
+    }
+    fn params(&self) -> usize {
+        self.0
+    }
+    fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+        Self::configure_with_params(meta, 0)
+    }
+    fn configure_with_params(meta: &mut ConstraintSystem<F>, count: usize) -> Self::Config {
+        let advice: Vec<_> = (0..count).map(|_| meta.advice_column()).collect();
+        let fixed = meta.fixed_column();
+        meta.lookup_any("small lookup", |cells| {
+            let table = cells.query_fixed(fixed, Rotation::cur());
+            if advice.is_empty() {
+                vec![(table.clone(), table)]
+            } else {
+                advice
+                    .iter()
+                    .map(|column| (cells.query_advice(*column, Rotation::cur()), table.clone()))
+                    .collect()
+            }
+        });
+        (advice, fixed)
+    }
+    fn synthesize(
+        &self,
+        config: Self::Config,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
+        layouter.assign_region(
+            || "zero lookup values",
+            |mut region| {
+                for row in 0..8 {
+                    region.assign_fixed(config.1, row, F::ZERO)?;
+                    for column in &config.0 {
+                        region.assign_advice(*column, row, Value::known(F::ZERO))?;
+                    }
+                }
+                Ok(())
+            },
+        )
+    }
+}
+
+struct CancelLookup<'a>(&'a CancellationToken);
+impl ConstraintFilter for CancelLookup<'_> {
+    fn keeps(&self, term: ConstraintTerm) -> bool {
+        if matches!(term, ConstraintTerm::Lookup { .. }) {
+            self.0.cancel();
+        }
+        true
+    }
+}
+struct PanicLookup;
+impl ConstraintFilter for PanicLookup {
+    fn keeps(&self, term: ConstraintTerm) -> bool {
+        assert!(
+            !matches!(term, ConstraintTerm::Lookup { .. }),
+            "injected lookup unwind"
+        );
+        true
+    }
+}
+
+#[test]
+fn tiny_lookup_scratch_shortfall_reuse_and_failures_both_fields() {
+    fn check<C: PastaCurve>() {
+        let params = PinnedParams::<C>::derive(K).unwrap();
+        let mut rng = ChaCha20Rng::seed_from_u64(6242);
+        for advice_count in 0..=3 {
+            for policy in [CosetCachePolicy::Eager, CosetCachePolicy::OnDemand] {
+                let mut config = crate::test_circuits::keygen_config(CHOICES[0]);
+                config.coset_cache = policy;
+                let pk = keygen_pk(&params, &SmallLookup(advice_count), &config).unwrap();
+                let protocol = Protocol::new(pk.binding().descriptor()).unwrap();
+                let shape = protocol.shape();
+                assert_eq!(shape.num_advice, advice_count);
+                assert_eq!(shape.permutation_sets, 0);
+                assert_eq!(shape.num_instance, 0);
+                assert_eq!(shape.lookups, 1);
+                assert_eq!(shape.num_fixed, 1);
+                let base = advice_count + usize::from(policy == CosetCachePolicy::OnDemand);
+                let required_columns = base.max(3) + 2; // one numerator and one powers column
+                let elements = workspace_elements(&pk, &protocol).unwrap();
+                assert_eq!(elements, required_columns * shape.n);
+                let compiled =
+                    CompiledExpressions::compile(pk.binding().descriptor(), true).unwrap();
+                let mut columns = |count| {
+                    (0..count)
+                        .map(|_| {
+                            (0..shape.n)
+                                .map(|_| C::ScalarExt::random(&mut rng))
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let advice = columns(advice_count);
+                let lookup = columns(3);
+                let inputs = QuotientInputs {
+                    advice: &advice,
+                    instance: &[],
+                    permutation_products: Vec::new(),
+                    lookups: vec![LookupPolys {
+                        product: &lookup[0],
+                        input: &lookup[1],
+                        table: &lookup[2],
+                    }],
+                };
+                let challenges = Challenges {
+                    theta: C::ScalarExt::from(3),
+                    beta: C::ScalarExt::from(5),
+                    gamma: C::ScalarExt::from(7),
+                    y: C::ScalarExt::from(11),
+                };
+                let expected =
+                    row_wise_reference(&pk, &protocol, &compiled, &inputs, challenges, &AllTerms)
+                        .unwrap();
+                let mut workspace = QuotientWorkspace::new(elements * size_of::<C::ScalarExt>());
+                let addresses = workspace
+                    .lease(shape.n, required_columns)
+                    .unwrap()
+                    .columns
+                    .iter()
+                    .map(|c| c.as_ptr())
+                    .collect::<Vec<_>>();
+                for workers in [1, 4] {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(workers)
+                        .build()
+                        .unwrap();
+                    let evaluate = |workspace: &mut QuotientWorkspace<C::ScalarExt>| {
+                        evaluate_with_workspace(
+                            &pk, &protocol, &compiled, &inputs, challenges, &AllTerms, workspace,
+                        )
+                    };
+                    assert_eq!(pool.install(|| evaluate(&mut workspace)).unwrap(), expected);
+                    assert!(workspace.is_zeroized());
+                    assert_eq!(workspace.allocated_bytes(), workspace.maximum_bytes());
+                    let token = CancellationToken::new();
+                    let cancelled = pool.install(|| {
+                        evaluate_with_workspace_cancellable(
+                            &pk,
+                            &protocol,
+                            &compiled,
+                            &inputs,
+                            challenges,
+                            &CancelLookup(&token),
+                            &mut workspace,
+                            Some(&token),
+                        )
+                    });
+                    assert!(matches!(cancelled, Err(ProverError::Cancelled)));
+                    assert!(workspace.is_zeroized());
+                    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        pool.install(|| {
+                            evaluate_with_workspace(
+                                &pk,
+                                &protocol,
+                                &compiled,
+                                &inputs,
+                                challenges,
+                                &PanicLookup,
+                                &mut workspace,
+                            )
+                        })
+                    }));
+                    assert!(unwind.is_err());
+                    assert!(workspace.is_zeroized());
+                    assert_eq!(pool.install(|| evaluate(&mut workspace)).unwrap(), expected);
+                    let retained = workspace
+                        .lease(shape.n, required_columns)
+                        .unwrap()
+                        .columns
+                        .iter()
+                        .map(|c| c.as_ptr())
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        retained, addresses,
+                        "same shape retains exactly the same allocations"
+                    );
+                }
+            }
+        }
+    }
+    check::<Ep>();
+    check::<Eq>();
 }

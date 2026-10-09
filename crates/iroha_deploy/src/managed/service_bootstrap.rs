@@ -535,6 +535,12 @@ impl ManagedServiceBootstrap {
         Ok(progress.progress)
     }
 
+    /// A closed original census selects scheduling only, never execution or readiness.
+    pub(super) fn gateway_catalog_purposes_absent(&self) -> Result<bool> {
+        super::service_authority::ServiceChildInventory::begin(&self.authority)?
+            .gateway_catalog_purposes_absent()
+    }
+
     /// Recover the same retained public intent for later runtime configuration.
     /// This accessor supplies no evidence of transaction execution or current eligibility.
     pub(super) fn selected_policies(&self) -> Result<GeneratedServicePolicies> {

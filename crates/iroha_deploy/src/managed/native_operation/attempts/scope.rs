@@ -55,12 +55,18 @@ pub(in crate::managed) trait BodyReplacementTarget:
     fn successor_selection(&self) -> [u8; 32];
     fn fees(&self) -> &super::super::Fees;
     fn validate_target(&self) -> Result<()>;
+    fn validate_target_with_snapshot_read_pass(
+        &self,
+        pass: Option<&SnapshotReadPass<'_>>,
+    ) -> Result<()>;
 }
 pub(in crate::managed) trait SemanticSuccessor:
     sealed::SemanticSuccessor
 {
     fn target(&self) -> &dyn BodyReplacementTarget;
     fn revalidate(&self) -> Result<()>;
+    fn revalidate_with_snapshot_read_pass(&self, pass: Option<&SnapshotReadPass<'_>>)
+    -> Result<()>;
 }
 
 struct BodyScopeState {
@@ -77,8 +83,9 @@ impl BodyDispatchScope {
     pub(in crate::managed) fn verify(
         evidence: Arc<dyn EnrollmentScopeEvidence>,
         predecessor: Option<VerifiedUnsignedClosure>,
+        pass: Option<&EnrollmentReadPass<'_>>,
     ) -> Result<Self> {
-        evidence.revalidate()?;
+        evidence.revalidate_with_snapshot_read_pass(pass.and_then(EnrollmentReadPass::snapshot))?;
         let binding = evidence.binding();
         if !is_enrollment(binding.purpose)
             || binding.outer_intent == [0; 32]
@@ -95,7 +102,7 @@ impl BodyDispatchScope {
         let root_identity = evidence.root().identity()?;
         let operation_identity = evidence.operation().identity()?;
         if let Some(prior) = &predecessor {
-            prior.require_retained()?;
+            prior.require_retained_with_pass(pass)?;
             if prior.purpose() != binding.purpose
                 || prior.outer_intent() != binding.outer_intent
                 || prior.root_identity() != root_identity
@@ -115,12 +122,20 @@ impl BodyDispatchScope {
                 operation_identity,
             }),
         };
-        value.revalidate()?;
+        value.revalidate_with_pass(pass)?;
         Ok(value)
     }
     fn duplicate(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
+        }
+    }
+    fn revalidate_with_pass(&self, pass: Option<&EnrollmentReadPass<'_>>) -> Result<()> {
+        match pass {
+            Some(pass) if pass.covers_predecessor(self.state.predecessor.as_ref()) => {
+                self.revalidate_local(pass.snapshot())
+            }
+            _ => self.revalidate(),
         }
     }
     fn revalidate(&self) -> Result<()> {
@@ -189,10 +204,13 @@ impl HistoryScope {
         operation: &PrivateDirectory,
         purpose: Purpose,
         semantic: [u8; 32],
+        pass: Option<&EnrollmentReadPass<'_>>,
     ) -> Result<()> {
         match self {
             Self::FixedBody if !is_enrollment(purpose) => {}
-            Self::Enrollment(value) if is_enrollment(purpose) => value.revalidate()?,
+            Self::Enrollment(value) if is_enrollment(purpose) => {
+                value.revalidate_with_pass(pass)?
+            }
             _ => {
                 return Err(invalid(
                     "dispatch purpose requires its exact closed body scope",

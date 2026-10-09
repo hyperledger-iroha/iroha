@@ -62,7 +62,10 @@ fn scoped_parser_preserves_metadata_and_row_validation_before_later_record_reads
     assert_eq!(counts.reads, 1);
     assert_eq!(counts.decoded, 1);
     assert_eq!(
-        history.require_metadata().unwrap_err().to_string(),
+        history
+            .require_metadata_in_tree(None)
+            .unwrap_err()
+            .to_string(),
         "dispatch inventory changed during native operation"
     );
     fixture

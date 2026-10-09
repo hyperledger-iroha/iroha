@@ -3,6 +3,17 @@
 use super::*;
 
 impl GeneratedServiceRuntime {
+    /// Only fresh catalog activation may overlap independent provider operations. Existing
+    /// purposes, including empty prefixes, retain serial recovery. Under active codec limits
+    /// even the scheduling census is omitted so the caller keeps its original decode recipe.
+    pub(in crate::managed) fn fresh_catalog_round(&self) -> Result<bool> {
+        if norito::core::decode_limits_active() {
+            return Ok(false);
+        }
+        let parent = self.open_original_bootstrap(&self.authority.prepared)?;
+        parent.gateway_catalog_purposes_absent()
+    }
+
     /// Reopen the already-created Bootstrap purpose from this exact renderer generation.
     /// This grants no signing authority or current-state verdict; each child keeps its own
     /// fresh native lock and profile admission. Active decode limits and owned profiles

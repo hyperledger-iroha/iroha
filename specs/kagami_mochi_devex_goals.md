@@ -26,6 +26,10 @@ roots use the minimal `Standard` profile. Each provider has an original HTTPS li
 build-registry factory selects that exact provider and origin through fresh authenticated native
 discovery. Both control and CAR clients validate its original CA, hostname and leaf, with the
 original loopback address and port. Public remote discovery retains its public-address rules.
+Prepared archive clients retain their exclusive build-registry discovery journal for their full
+lifetime. Startup and Ready maintenance use an independent service-observation journal and lock;
+both authenticate the original profile and fresh native finality. A build holding its archive
+client therefore does not block the worker's bounded freshness observations.
 Generation leaves token services disabled. The startup worker composes one reserve activation,
 three independent funded provider/custody/gateway histories and one reputation policy through
 their native owners. It promotes each signed compliance catalog and restarts all four owned peers
@@ -42,8 +46,19 @@ parallelism creates no signing authority, budget extension or readiness from par
 Within that initial invocation, each admitted provider worker retries its own incomplete or
 nonterminal operation under the same authorization and deadline, without waiting for another
 provider's full chain. Terminal bootstrap failures stop that worker; every worker is joined.
-Reopening a retained startup still uses serial dispatch. This combined path still needs
-native qualification. Reopen preserves each original finite interval, endpoint and profile;
+Reopening a retained startup still uses serial dispatch. Within one joined advance, a new
+purpose with no retained cursor may start finality verification from an authenticated immutable
+carrier certificate owned by the same original network profile. This avoids replaying genesis
+for every purpose. It still obtains a fresh independent quorum and current-state proofs; original
+certificate custody is checked before and after observation, including error returns. Equal-height
+certificates must identify the same native execution result; alternate valid quorum witnesses are
+accepted. The scope ends after every worker joins and is never retained as current authority.
+Fresh catalog activation also joins the three independent provider head/proof reads and catalog
+promotions. Each phase checks that all catalog purposes are absent; existing purposes and active
+Norito budgets keep ordered serial execution. Full live renderer validation remains exclusive
+because it reopens shared bootstrap and custody owners; its deadline-aware guard closes before
+catalog HTTP calls. Every worker joins before aggregate publication or failure, and renewal
+retains serial execution. This combined path still needs native qualification. Reopen preserves each original finite interval, endpoint and profile;
 it never upgrades a retained generation in place.
 An attached private dataspace has four local validators with owner-only application
 data, works behind NAT, and publishes only authenticated commitments and certificates
@@ -496,13 +511,14 @@ qualify the full native service graph or cold-package fetch. Signed native relea
 reference-host twenty-run p95 measurements remain separate DX6/DX7 outcomes; the 30-second
 admission budget is a configured limit, not measured latency evidence.
 
-This verifier does not supply an official Taira trust key or published release
-artifact. Its HTTP adapter binds explicit SDK contexts to the release-approved
-HTTPS roots, overlaps up to eight independent committee reads, and retains one
-operation deadline plus bounded per-peer tip retries. Every successful read still
-requires independent contiguous-chain and exact-committee verification. Their
-authenticated release installation/publication, actual fresh committee observation
-and dataspace provisioning remain required for the remote command's qualification.
+The committed `defaults/developer/network-profiles.nrt` supplies the Taira installation
+profile selected by both release packagers, and its published checkpoint has passed
+native signature and finality verification. The HTTP adapter binds explicit SDK contexts
+to the release-approved HTTPS roots, overlaps up to eight independent committee reads,
+and retains one operation deadline plus bounded per-peer tip retries. Every successful
+read still requires independent contiguous-chain and exact-committee verification.
+Authenticated bundle distribution, recurring signed checkpoint publication, fresh committee
+observation and combined dataspace provisioning remain required for remote qualification.
 Key rotation requires an authenticated
 migration of retained release custody, not a silent fresh store.
 

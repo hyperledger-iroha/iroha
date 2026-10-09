@@ -258,7 +258,7 @@ pub(super) fn verify_public_originals(
         "runtime chain selection or exact original closure differs",
     )?;
     let mut trust = original.clone();
-    let mut previous = None;
+    let mut previous: Option<(BTreeMap<String, json::Value>, String)> = None;
     let mut projections = Vec::new();
     let mut seen_sources = std::collections::BTreeSet::new();
     for (index, step) in chain.updates.iter().enumerate() {

@@ -17,9 +17,11 @@ What exists so far:
   `SignedNetworkCheckpoint`, and atomically prepares `checkpoint.nrt` and `network-profiles.nrt`
   for an explicitly selected release authority and HTTPS publication location. The schema in its
   public receipt binds the compiled candidate; preparation does not qualify a live network,
-  publish the endpoint, or authenticate a bundle installation. Release packaging consumes the
-  profile through `cargo xtask kagami-bundle --network-profiles` for the matching client/worker/daemon CLI
-  package, or `cargo xtask mochi-bundle --network-profiles` for the desktop application.
+  publish the endpoint, or authenticate a bundle installation. Release packaging selects the exact
+  committed `defaults/developer/network-profiles.nrt` image automatically: use
+  `cargo xtask kagami-bundle --profile release --out <fresh-directory>` for the matching
+  client/worker/daemon CLI package, or `cargo xtask mochi-bundle --profile release --out <fresh-directory>`
+  for the desktop application. `--network-profiles` is an override for development bundles only.
 - `managed`: workspace-scoped private contexts, four-validator process ownership,
   authenticated native control IPC, durable stop/restart/reset and signed readiness.
   `ManagedStore::up` retains the same generation and signer across starts; readiness
@@ -67,8 +69,10 @@ What exists so far:
   independently installed authority, with private durable release/clock rollback
   protection and explicit network reset identity. `ParentFinalityStore` retains
   the advancing native prefix separately and publishes before returning fresh
-  readiness; reopening an older release never rewinds it. Official Taira release-key
-  installation, artifact publication and combined parent-provisioning qualification remain outstanding.
+  readiness; reopening an older release never rewinds it. The Taira installation profile is
+  bundled from its committed image, and the published checkpoint has passed native verification.
+  Authenticated bundle distribution, recurring signed checkpoint publication and combined
+  parent-provisioning qualification remain outstanding.
   Native installation profiles and bounded unsigned HTTPS retrieval select the release
   independently. Signed account profiles, committee endpoints and optional faucet
   allowances feed exact parent SDK contexts without forwarding child credentials.

@@ -1630,8 +1630,9 @@ impl Queue {
         state.install_lane_manifests_for_testing(manifests);
         self.install_lane_manifests_unchecked_in_queue(manifests);
     }
-    /// Install a materialized manifest source into State and this queue during
-    /// startup, while ingress is paused.
+    /// Validate materialized startup authority and install this Queue projection
+    /// while ingress is paused. Identical State authority keeps its original handles
+    /// and generation; Queue receives the refreshed local diagnostics.
     ///
     /// # Errors
     /// Rejects a status-only, stale, or incomplete manifest before either
@@ -1667,8 +1668,8 @@ impl Queue {
         state: Option<&State>,
     ) -> bool {
         // Admission holds a read guard while checking manifest semantics. Keep
-        // this write guard across the state-side install so no transaction can
-        // observe a queue/state split generation.
+        // this write guard across State authority validation so no transaction
+        // observes an unvalidated Queue policy.
         let mut guard = self.lane_manifests.write();
         if require_consensus_compatibility {
             let current_digest = guard.consensus_policy_digest();
@@ -1742,7 +1743,10 @@ impl Queue {
             Ok(registry)
         }
     }
-    /// Background task that reloads lane manifests on the configured schedule.
+    /// Refresh local manifest diagnostics on the configured schedule.
+    ///
+    /// Complete materialized State authority must remain unchanged; policy changes
+    /// are rejected rather than installed by this watcher.
     pub async fn watch_lane_manifests_task(
         self: Arc<Self>,
         telemetry: Option<StateTelemetry>,
@@ -7449,6 +7453,74 @@ pub mod tests {
         assert_eq!(installed.consensus_policy_digest(), baseline_digest);
     }
     #[test]
+    fn materialized_manifest_refresh_updates_local_diagnostics_without_state_publication() {
+        use iroha_config::parameters::actual::LaneRegistry;
+
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let nexus = state.nexus_snapshot();
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let original_directory = tempfile::tempdir().unwrap();
+        let relocated_directory = tempfile::tempdir().unwrap();
+        let alias = &nexus.lane_catalog.lanes()[0].alias;
+        let manifest = norito::json::to_vec(&norito::json!({ "lane": alias })).unwrap();
+        let load = |directory: &std::path::Path| {
+            std::fs::write(directory.join(format!("{alias}.manifest.json")), &manifest).unwrap();
+            Arc::new(LaneManifestRegistry::from_config(
+                &nexus.lane_catalog,
+                &nexus.governance,
+                &LaneRegistry {
+                    manifest_directory: Some(directory.to_path_buf()),
+                    ..LaneRegistry::default()
+                },
+            ))
+        };
+        let original = load(original_directory.path());
+        let relocated = load(relocated_directory.path());
+        queue
+            .install_materialized_lane_manifests_with_state(
+                &original,
+                &state,
+                &nexus.lane_catalog,
+                &nexus.governance,
+            )
+            .unwrap();
+        let generation = state.state_view_generation();
+        let original_privacy = state.lane_privacy_registry.read().clone();
+        assert!(
+            queue.install_lane_manifests_with_state_if_consensus_compatible(&relocated, &state,)
+        );
+        assert_eq!(state.state_view_generation(), generation);
+        assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
+        assert!(Arc::ptr_eq(
+            &state.lane_privacy_registry.read(),
+            &original_privacy
+        ));
+        assert!(Arc::ptr_eq(&queue.lane_manifests.read(), &relocated));
+        let refreshed = queue.lane_manifests.read();
+        assert_eq!(
+            refreshed.statuses()[0].manifest_path,
+            Some(
+                relocated_directory
+                    .path()
+                    .join(format!("{alias}.manifest.json"))
+            )
+        );
+        assert_eq!(
+            refreshed
+                .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance,)
+                .unwrap(),
+            original
+                .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance,)
+                .unwrap(),
+        );
+    }
+
+    #[test]
     fn materialized_queue_manifest_handoff_rejects_status_only_without_mutation() {
         let state = State::new(
             world_with_test_domains(),
@@ -7458,6 +7530,7 @@ pub mod tests {
         let nexus = state.nexus_snapshot();
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
+        let state_generation_before = state.state_view_generation();
         let state_before = state.lane_manifests.read().clone();
         let state_privacy_before = state.lane_privacy_registry.read().clone();
         let queue_before = queue.lane_manifests.read().clone();
@@ -7472,6 +7545,7 @@ pub mod tests {
             )
             .expect_err("status-only authority must not reach State or Queue");
         assert!(error.to_string().contains("materialized frozen source"));
+        assert_eq!(state.state_view_generation(), state_generation_before);
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &state_before));
         assert!(Arc::ptr_eq(
             &*state.lane_privacy_registry.read(),
@@ -7488,6 +7562,14 @@ pub mod tests {
             &nexus.governance,
             &nexus.registry,
         ));
+        assert_eq!(
+            state_before
+                .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance)
+                .unwrap(),
+            source_backed
+                .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance)
+                .unwrap(),
+        );
         queue
             .install_materialized_lane_manifests_with_state(
                 &source_backed,
@@ -7495,8 +7577,13 @@ pub mod tests {
                 &nexus.lane_catalog,
                 &nexus.governance,
             )
-            .expect("complete source authority installs into both owners");
-        assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &source_backed));
+            .expect("equal source authority refreshes Queue without State publication");
+        assert_eq!(state.state_view_generation(), state_generation_before);
+        assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &state_before));
+        assert!(Arc::ptr_eq(
+            &*state.lane_privacy_registry.read(),
+            &state_privacy_before
+        ));
         assert!(Arc::ptr_eq(&*queue.lane_manifests.read(), &source_backed));
     }
     #[test]

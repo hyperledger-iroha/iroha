@@ -221,8 +221,17 @@ impl ServiceAuthority {
             "current-checkpoint.nrt",
             MAX_CHECKPOINT_BYTES,
         )?;
+        // A seed is only a previously certified immutable receipt from this joined advance.
+        // Retained cursors keep their independent native bytes; no current verdict is shared.
+        let seed = if retained.is_none() {
+            self.certificate_seed()?
+        } else {
+            None
+        };
         let mut verifier = if let Some(bytes) = retained {
             self.decode_checkpoint(&bytes)?
+        } else if let Some(seed) = &seed {
+            seed.verifier()
         } else {
             let source = source(1, deadline)?;
             let proof = source
@@ -231,10 +240,25 @@ impl ServiceAuthority {
             FinalityVerifier::from_genesis(&self.genesis, &proof)
                 .map_err(|_| invalid("original genesis finality differs"))?
         };
-        let source = source(verifier.checkpoint().height(), deadline)?;
-        let observation = verifier.observe(&source, &rand::random());
-        let verified = observation.as_ref().map_or(0, AttestationQuorum::verified);
-        retain_observation(&self.directory, &mut verifier, observation)?;
+        let result = source(verifier.checkpoint().height(), deadline).and_then(|source| {
+            let observation = verifier.observe(&source, &rand::random());
+            let verified = observation.as_ref().map_or(0, AttestationQuorum::verified);
+            if let Some(seed) = &seed {
+                self.validate_profile()?;
+                seed.revalidate()?;
+                require_deadline(deadline)?;
+            }
+            retain_observation(&self.directory, &mut verifier, observation)?;
+            Ok(verified)
+        });
+        // Close source custody on every ordinary result, including source construction refusal.
+        // A certificate never substitutes for an available source or a fresh attestation quorum.
+        if let Some(seed) = &seed {
+            self.validate_profile()?;
+            seed.revalidate()?;
+            require_deadline(deadline)?;
+        }
+        let verified = result?;
         Ok((verifier, verified))
     }
 
@@ -314,7 +338,12 @@ impl ServiceAuthority {
             .transpose()?;
         let mut verifier = replay_start(original_verifier, progress, height)?;
         let source = self.source(verifier.checkpoint().height(), deadline)?;
-        retain_carrier_progress(directory, transaction, &mut verifier, height, &source)
+        let finalized =
+            retain_carrier_progress(directory, transaction, &mut verifier, height, &source)?;
+        if finalized.is_some() {
+            self.remember_certificate(directory, &verifier)?;
+        }
+        Ok(finalized)
     }
 }
 

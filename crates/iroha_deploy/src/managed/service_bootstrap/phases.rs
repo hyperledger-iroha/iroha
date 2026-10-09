@@ -137,6 +137,13 @@ pub(super) fn run(
 ) -> Result<RunOutcome> {
     #[cfg(test)]
     test_passes::record(mode);
+    // One joined advance may borrow exact immutable receipt certificates for new child cursors.
+    // Every child still obtains its own fresh challenge, quorum and current predecessor proof.
+    let _certificate_scope = if mode == Mode::Advance {
+        Some(authority.begin_certificate_scope()?)
+    } else {
+        None
+    };
     let checkpoint_import_scope = if mode == Mode::Advance {
         None
     } else {

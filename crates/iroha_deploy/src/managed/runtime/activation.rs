@@ -32,6 +32,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "activation/catalog.rs"]
+mod catalog;
+
 pub(super) struct Budget {
     pub(super) started: Instant,
     pub(super) timeout: Duration,
@@ -244,6 +247,7 @@ pub(super) fn initial(
         .last()
         .copied()
         .ok_or_else(|| budget.progress.unconfirmed())?;
+    budget.progress.enter(Phase::CustodyMaterial);
     loop {
         validate_gateways(prepared, &mut live, budget)?;
         let material = owner.retain_current_custody_material(budget.deadline()?);
@@ -257,9 +261,11 @@ pub(super) fn initial(
             Err(_) => budget.wait()?,
         }
     }
+    budget.progress.enter(Phase::CustodyRenewal);
     for gateway in &mut live {
         renewal::reconcile(prepared, budget, gateway, terminal, None)?;
     }
+    budget.progress.enter(Phase::StreamTokenRevision);
     let revision = budget.call(|deadline| owner.prepare_current_stream_tokens(deadline))?;
     budget.call(|_| {
         require_carriers(&revision)?;
@@ -268,31 +274,15 @@ pub(super) fn initial(
     let required = revision.required_transactions().to_vec();
     confirm_carriers(prepared, &required, budget)?;
     budget.progress.enter(Phase::Catalog);
-    let mut catalogs = Vec::with_capacity(3);
-    for gateway in &mut live {
-        let publisher =
-            budget.call(|_| ManagedGatewayCompliance::open(prepared, gateway.provider()))?;
-        let catalog = loop {
-            validate_live(prepared, gateway, budget)?;
-            let result = publisher.advance(gateway, budget.deadline()?);
-            budget.check()?;
-            validate_live(prepared, gateway, budget)?;
-            if let Ok(catalog) = result {
-                break catalog;
-            }
-            budget.wait()?;
-        };
-        catalogs.push(catalog);
-    }
+    let parallel = budget.call(|_| owner.fresh_catalog_round())?;
+    let catalogs = catalog::promote(prepared, &mut live, budget, parallel)?;
     validate_gateways(prepared, &mut live, budget)?;
     Ok(Outcome::Restart(Restart {
         receipt,
         owner,
         revision,
         required,
-        catalogs: catalogs
-            .try_into()
-            .map_err(|_| budget.progress.unconfirmed())?,
+        catalogs,
         retained: None,
     }))
 }

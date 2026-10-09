@@ -21,6 +21,7 @@ mod provider_capacity;
 mod provider_credit;
 mod provider_economics;
 mod provider_funding;
+mod provider_round;
 mod remote;
 mod remote_failure;
 mod remote_status;

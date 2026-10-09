@@ -870,6 +870,42 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn finality_attestation_direct_http_admission_reaches_inactive_native_worker() {
+            let fixture = ReadinessNode::start_at_tip(true);
+            let app = &fixture.app;
+            for route in [
+                iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY,
+                iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION,
+                iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION_LATEST,
+            ] {
+                assert!(crate::app_routed_read_http_endpoint(route.stable_route_id()).is_none());
+            }
+            // Exercise the same real public handler's admission and physical worker boundary.
+            // An inactive-only native producer must not silently become unreachable here.
+            let admission = crate::acquire_query_admission(app.as_ref(), true)
+                .await
+                .unwrap();
+            let active =
+                crate::routing::run_admitted_blocking(admission, "attestation scope check", || {
+                    Ok(norito::core::decode_limits_active())
+                })
+                .await
+                .unwrap();
+            assert!(!active);
+            let response = router(app).oneshot(request(2, [0x63; 32])).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024 * 1024)
+                .await
+                .unwrap();
+            let attestation: SumeragiFinalityAttestation = norito::decode_canonical_with_limits(
+                &bytes,
+                norito::canonical_decode_limits(bytes.len()),
+            )
+            .unwrap();
+            attestation.verify().unwrap();
+        }
+
+        #[tokio::test]
         async fn finality_attestation_handler_binds_current_node_success_and_actual_tip_race() {
             let fixture = ReadinessNode::start_at_tip(true);
             let app = &fixture.app;

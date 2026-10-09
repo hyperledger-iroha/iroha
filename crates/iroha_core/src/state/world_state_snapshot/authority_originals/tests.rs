@@ -784,7 +784,7 @@ fn identifier_originals_refuse_missing_wrong_key_oversized_and_changed_program_r
             .clone();
         match mode {
             0 => {
-                block.ram_lfe_program_policies.remove(&policy.program_id);
+                block.ram_lfe_program_policies.remove(policy.program_id);
             }
             1 => {
                 policy.id = "other#retail".parse().unwrap();
@@ -883,16 +883,10 @@ fn identifier_originals_refuse_oversized_rows_from_the_same_cut() {
             .unwrap();
         }
         let called = Cell::new(false);
-        let error = consume_identifier(
-            &captured.snapshot,
-            &block,
-            &id,
-            &budget,
-            |_, _, _| {
-                called.set(true);
-                Ok(())
-            },
-        )
+        let error = consume_identifier(&captured.snapshot, &block, &id, &budget, |_, _, _| {
+            called.set(true);
+            Ok(())
+        })
         .unwrap_err();
         assert_eq!(
             error,
@@ -908,7 +902,13 @@ fn identifier_originals_refuse_oversized_rows_from_the_same_cut() {
 #[test]
 fn certified_identifier_originals_keep_read_root_budget_and_tip_fences() {
     let (mut world, id) = identifier_world();
-    let reader = world.identifier_policies.get(&id).unwrap().owner.clone();
+    let reader = world
+        .identifier_policies
+        .view()
+        .get(&id)
+        .unwrap()
+        .owner
+        .clone();
     world.account_permissions.insert(
         reader.clone(),
         BTreeSet::from([iroha_executor_data_model::permission::query::CanReadAllLedgerData.into()]),

@@ -358,7 +358,7 @@ impl GeneratedServiceRuntime {
         )?;
         drop(custody);
         // A successor never carries the other two providers forward from stale local intent.
-        self.verify_current_components(&selection, &components, &required, deadline)?;
+        self.verify_current_components(&selection, &components, &required, deadline, false)?;
         self.publish(&selection, Some(components), Some(required), deadline)
     }
     pub(super) fn validate_for(
@@ -451,21 +451,47 @@ impl GeneratedServiceRuntime {
         components: &[Arc<ProviderComponent>; 3],
         required: &RequiredTransactions,
         deadline: Instant,
+        parallel: bool,
     ) -> Result<()> {
         let floor = required.observation_floor()?;
-        for (index, plan) in selection.plans.iter().enumerate() {
-            require_deadline(deadline)?;
-            let mut custody =
-                ManagedStreamTokenCustody::open(&self.authority.prepared, plan.provider_id())?;
+        self.current_provider_round(selection, deadline, parallel, |index, custody| {
+            let provider = selection.plans[index].provider_id();
             custody.verify_current_enrollment(
                 components[index].enrollment(),
-                &selection.policies.provider(plan.provider_id())?.custody,
+                &selection.policies.provider(provider)?.custody,
                 floor.height,
                 *floor.block_hash.as_ref(),
                 deadline,
-            )?;
-        }
-        Ok(())
+            )
+        })
+        .map(|_| ())
+    }
+
+    /// Only provider-local custody and fresh observations run here. Parent selection and
+    /// historical reconstruction stay outside, and every original owner closes before return.
+    fn current_provider_round<T: Send>(
+        &self,
+        selection: &RuntimeSelection,
+        deadline: Instant,
+        parallel: bool,
+        read: impl Fn(usize, &mut ManagedStreamTokenCustody) -> Result<T> + Sync,
+    ) -> Result<[T; 3]> {
+        let result = super::provider_round::run(
+            [0, 1, 2],
+            parallel,
+            |index| {
+                require_deadline(deadline)?;
+                let mut custody = ManagedStreamTokenCustody::open(
+                    &self.authority.prepared,
+                    selection.plans[index].provider_id(),
+                )?;
+                read(index, &mut custody)
+            },
+            || invalid("generated provider observation worker did not complete"),
+        );
+        // Even an ordinary member error waits for every worker and closes the common timer.
+        require_deadline(deadline)?;
+        result
     }
     fn publication_intent(
         &self,

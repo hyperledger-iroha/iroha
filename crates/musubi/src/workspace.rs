@@ -1013,7 +1013,7 @@ fn require_selected_manifest_path(
     }
     Ok(())
 }
-fn read_manifest_selected(
+pub(crate) fn read_manifest_selected(
     path: &Path,
     selected: Option<&iroha_fs::SelectedRegularFile>,
 ) -> Result<Manifest, WorkspaceError> {

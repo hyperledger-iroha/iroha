@@ -370,6 +370,218 @@ are in `target/qualification/c12-omega-mask-boundary-audit-1`. This establishes
 the stated predicate on that pinned artifact, not a current wallet witness or
 current source-key admission.
 
+An alternative setup-before-pins experiment now has small executable controls.
+Knowing the discrete logs of independently simulated setup points lets the
+simulator sample every IPA L/R in native order, use the unchanged RP57 transcript,
+compute the actual folded generator and solve the final blind. Eight controls
+pass on both curves, including four k6 ordinary/contradictory relation examples
+and scalar, generator and instance mutations. All reference verifier sources
+are unchanged; only each isolated test's parameter-authority table differs.
+The current repository authority rejects those synthetic parameters. This is
+conditional setup algebra, not a proof for the release's fixed parameter bytes.
+Records are in `target/qualification/c12-known-log-setup-model-1` and
+`c12-known-log-setup-controls-1`.
+
+The exact generalized-SWU map also has a source-reviewed inverse using two
+quadratic equations and complete branch/sign filtering. Six controls pass,
+including all132 retained generator/W/U encodings. A bounded two-map inverse
+is uniform in its fiber conditional on success; that does not establish the
+forward map's regularity or a bound on its target-dependent failure. The records
+are in `target/qualification/c12-swu-preimage-controls-1` and
+`c12-small-controls-execution-20261009-1`. Those controls alone establish no
+quantitative regularity or raw-XMD theorem. Subsequent source-bound arithmetic
+and setup arguments are described below. Neither experiment changes production
+parameters or closes C12.
+
+The subsequent conditional composition note retains the finite sampler's
+failure atom and target-dependent success probability. Given an explicit
+two-SWU regularity bound, its total-variation calculation includes deficient
+targets, draw exhaustion and the exact bias from lifting uniform residues to
+512-bit words. The algebraic auxiliary-curve certificate separately verifies
+the complete rational-map polynomial identity, reduced degree three, an
+explicit order-r point and the unique Hasse-interval multiple on both curves.
+The maintained [Pasta certificates](../formal/kagemusha_pasta/README.md) now
+verify both source moduli with supplied recursive Lucas certificates before
+checking the curve identities, orders and exact SWU cover hypotheses. The
+combined checker and all sixteen controls pass, including a Fermat pseudoprime
+that must fail the Lucas-order test and a mutated cover polynomial that must
+fail the cleared identity. The maintained [regularity argument](../formal/kagemusha_pasta/REGULARITY.md)
+applies FFSTV's general character-sum theorem to the two genus-six, totally
+ramified covers. It preserves the native finite zero-input branch through an
+explicit coupling cost, yielding TV at most `(441/8)*sqrt(r-1)/p + 2/p-1/p²`
+for the sum of two uniform-field SWU images. The checker establishes the exact
+arithmetic hypotheses; it does not execute the geometric theorem or Lean.
+The earlier conditional results
+remain in `target/qualification/c12-swu-conditional-composition-1` and
+`c12-auxiliary-group-controls-1`; the maintained execution is in
+`c12-pasta-cover-durable-publication-1/controls`. Current setup pins and recursive
+privacy composition remain outside these local results.
+
+A conditional raw-XMD adapter now intercepts each designated setup input at
+its first raw oracle query, including predictable early queries. It reserves
+the two inner XMD answers before exposing the first answer, reuses exact
+generator-prefix/W/U queries, and refuses occupied inputs without overwriting
+them. Eight controls pass, including both source maps, forced collisions,
+identity outputs and finite failure paths. Its stopped coupling counts prior
+hidden entries and retains the inverse/lift and scalar-sampling errors. This
+uses an ideal 512-bit raw oracle; it neither establishes concrete BLAKE2b
+security nor retroactively programs the current parameter pins. Source review
+and execution are retained in `target/qualification/c12-raw-xmd-setup-model-1`
+and `c12-raw-xmd-setup-controls-1`.
+
+A subsequent fresh-target sampler removes the regularity premise from that
+setup simulation route. Each attempt independently draws a private scalar t,
+a field input u and one of nine complete inverse slots for `tB-F(u)`. Every
+ordered pair `(u,v)` has exactly one t and one slot, hence equal probability
+`1/(9rp)` per attempt. Success is exactly `p/(9r)`; holes or unequal target
+fibers introduce no bias in the accepted pair. The bounded sampler retains
+draw exhaustion and its terminal failure atom, whose probability is its exact
+TV distance from an always-successful uniform pair. Five exhaustive small-map
+and rational controls pass, with independent mathematical review, in
+`target/qualification/c12-fresh-target-inverse-1` and
+`c12-fresh-target-controls-1`. The proposed `J=4096`, 256-draw inner limits,
+512-bit lifts and 131,076 unique setup inputs give an aggregate local error
+below `2^-224`, plus the explicit raw-query collision term. This is a local
+simulator bound, not a protocol security level. Six subsequent source-map
+controls pass for the exact raw-XMD interface and native parameter ordering:
+both k0/k2/k3 curve families, twenty shared derivation contexts, early queries,
+exact replay, one-normalization Lagrange derivation and native identity refusal.
+Sources remain unchanged through execution in
+`target/qualification/c12-parameter-setup-seam-execution-1`. The subsequent
+raw-setup integration passes nine controls and four complete k6 fixed-RP57
+proof cases, using one source-derived parameter family per curve across the
+ordinary and contradictory relation examples. All132 setup contexts share
+one raw-query table; all parameter/log/IFFT and derived opening identities
+are checked. The unchanged complete verifier accepts those cases only under
+their private test authority; current release pins and changed f/c/G/instance
+values reject. The two examples on each curve use common diagnostic coins,
+not independent multi-request randomness. Raw exit, logs and unchanged
+source/tool pins are retained in
+`target/qualification/c12-raw-setup-proof-execution-1` (result SHA
+`16be203eaa8c7d129dc7425ddcb02641a4d9c29bbf56288f34583938dc1db5ac`).
+The repository-relative [maintained package](../formal/kagemusha_setup/README.md)
+passes all77 inverse, finite-law, raw-query, setup, proof, custody, sequential
+request and generic public-table controls. All prior60 methods and assertions
+remain, with seventeen generic cases added. One generic fixed-RP57 algorithm
+now handles the ordinary/contradictory examples, public-only opening groups and
+multiple product/lookup layouts. It preserves the earlier parameter bytes and
+four relation-comparison proof goldens. Explicit coins and one bounded owner
+retain exact success/failure outcomes without reseeding. Retry identity includes
+the exact public preprocessing original as well as descriptor/key/parameters
+and instances; commitments alone cannot bind that table when logs are known.
+Preflight refusals remain public exceptions.
+
+All fourteen actual k6 proofs fully verify on the two curves, including four
+sequential-stream adaptive-input cases and six generic cases. Controls retain
+legal-bit rejection exhaustion, provider/draw failures, interrupts, reentrancy,
+immutable outcomes, storage and late-metadata failures. Descriptor-derived
+simulator budgets are separate from native polynomial randomness. Direct
+private-reference entry rejects malformed digest/authority inputs and requires
+large-mode opt-in before path creation or hashing supplied large bytes.
+Injected failure fixtures are not counted as proofs. The complete157.94s run has
+zero failures/errors/skips and unchanged source/tool pins in
+`target/qualification/c12-generic-setup-durable-publication-3/result.json`, SHA
+`e669dd9be09f2ff89860761c159c81d8ccbf37134e3268a1eba78f5c12a57318`.
+The historical rebind changes outer parameters and public commitments only;
+embedded recursive constants stay unchanged. No coherent recursive re-key or
+k16 experiment is established by these controls.
+
+The bounded producer's final wires must match generated sizes/hashes and exact
+output namespace; traced allocations do not impose an instantaneous OS/RSS cap.
+The separately retained small k0/k2 CLI reproduces all four earlier parameter
+outputs. No full-size family or native proof runs in these controls. Ideal
+unused-tail independence does not establish OS entropy, operational privacy,
+all-history simulation or current parameter authority. C12 remains open.
+
+Independent source/mathematical review also accepts the conditional known-log
+IPA joint law with unchanged deterministic RP57. Fresh W blinds make the public
+round path independent of the hidden coefficient vector in K_x. Its final
+coefficient is zero on the exact rank-collapse branch and uniform otherwise;
+nonzero W determines a unique final blind for that path and coefficient.
+The actual folded generator is still computed and its obligation must be
+decided. This removes the programmed-outer/fixed-inner transcript mismatch
+within a coherent setup-before-pins experiment. It retains the joint masked
+prefix premise, explicit prefix failure probabilities, finite entropy and
+operational assumptions. It neither bounds those failures for concrete RP57
+nor supplies the remaining operation witnesses or recursive wallet simulation.
+The argument and independent reviews are retained in
+`target/qualification/c12-known-log-outer-composition-1`. Actual Omega
+integration, current fixed parameter pins, soundness and C12 remain open.
+
+The source-bound composition review separates two hybrids: replace Omega on
+real valid public accumulators, then replace the accumulator pair while applying
+the same total public-instance-only known-log simulator. The second step needs
+no replacement Omega witness. It still requires joint fold indistinguishability
+under that private-log continuation; public-only computational hiding does not
+imply this stronger auxiliary-state property. One fixed salted fold has support
+at most its salt field, ruling out a statistical fixed-H claim against sixteen
+independent mapped challenges. Computational hiding remains an open premise.
+
+The pre-erasure online boundary is before the first fold record is published,
+with exact public fields, P/V accumulators, burn result and map roots retained.
+The inspected completion tail verifies and records one selected proof, then
+clears the active checkpoint selection. Later consuming capsules, signatures,
+Payments, credit roots and checkpoints must be generated from that single
+record. Already signed or retained objects cannot be patched. A source audit
+now enumerates all fourteen operation roles and the six successor native
+owners. Their original-input preparation consumes the accepted replacement
+proof and its actual opening without requiring the discarded Omega witness.
+It preserves Load's separate finality claims and Receive/Archive's immutable
+incoming evidence. Fresh consuming capsules, receipts and downstream map
+bindings must be reconstructed normally; stale capsules and checkpoints fail.
+This establishes only a conditional input-construction argument. Completeness
+of the native-to-circuit verifier boundary, stage contexts, soft modes and the
+actual prover, with bounded total failure, remains necessary for an
+all-operation forward-closure theorem. An outer coupling must also preserve
+needed honest source witnesses; arbitrary auxiliary state containing the
+original Omega coins/trace cannot be assumed hidden. Source reviews are retained in
+`c12-fixed-rp57-hidden-fold-composition-1` and
+`c12-proof-substitution-transition-audit-1`; the fourteen-role argument and its
+source pins are in `c12-all-operation-forward-closure-1` under
+`target/qualification`. These are source arguments, not executed continuation
+tests or C12 qualification.
+
+The common native-to-hard-verifier boundary has a separate conditional source
+argument. Given an already constructible coherent A plan and the exact admitted
+Omega descriptor, key, parameters, public18 and P/V, full native acceptance
+supplies the shared hard predecessor verifier's message cells and arithmetic
+witnesses directly from the replacement bytes. The key/lineage digests,
+typed instances, RP57 schedule, PLONK identity, multiopen grouping and IPA
+equation agree in the inspected sources. The exported suffix and sixteen
+ordered challenges match the native opening; the operation must still retain
+that generator obligation. This local deterministic implication requires no
+discarded Omega witness or new challenge-distribution assumption. It remains
+conditional on gadget completeness, actual row/table capacity and byte
+provenance in the source owner. It neither proves complete operation/prover
+continuation nor re-synthesizes a coherent experimental catalog. The pinned
+argument, independent review and unexecuted Omega-specific test matrix are in
+`target/qualification/c12-native-omega-hard-predecessor-1`. Existing small
+differential tests do not establish this installed k16 integration; C12 remains
+open.
+
+For the inspected historical Omega descriptor, a Cauchy-minor argument extends
+padding rank to each of the five common fresh product-domain rows. Each group's
+last masked slot has Horner coefficient one for every grouping challenge,
+including zero. Eight bounded algebra/inventory controls pass with no generated
+proof (`c12-omega-pointwise-mask-rank-execution-1`). The unmasked product boundary
+is an explicit counterexample to admitting all domain points. No frozen generic
+simulator was relaxed, and the challenge-law, denominator and valid-witness
+premises remain separate.
+
+The generalized prefix implementation subsequently passes twelve controls and
+six k6 proof cases across both curves. It derives fixed/sigma evaluations from
+exact public preprocessing, handles public-only groups and multiple permutation
+products/lookups, and retains unchanged RP57 and the complete IPA decision.
+The ordinary cases reproduce the earlier proof bytes exactly. Rebinding changes
+only the outer parameter digest and corresponding key commitments, preserving
+relation fields, copy digest, selectors and public table scalars. Mutated
+originals, logs, keys and proofs reject. Sources remain unchanged during the
+26.91s run in `target/qualification/c12-known-log-generic-omega-execution-1`
+(result SHA `e67722cc171910391d74f7a040faa41134cf35db1f53f7e881e87b3586944063`).
+Its exact historical Omega adapter has not run at k16. That historical relation
+still contains its old inner-verifier constants; changing outer commitments
+does not establish a coherently re-keyed recursive catalog or complete C12.
+
 The production wallet trace now identifies those draws. All six ordinary owner
 families give the final A a fresh Fp salt; Bootstrap does so in its separate
 terminal circuit. Native terminal extraction carries that checked Pallas result
@@ -451,58 +663,79 @@ simulation or concrete-sponge theorem.
 
 ### Conditional honest-fold abort bound
 
-One exceptional-event term has a source-reviewed conditional bound. Let
-`N = 2^K`, `K = 16`, and `m` be the nonempty ordered input count. Fix every
-input before alpha; require that every input actually decides, at least one has
-source k16, and all real source challenges are nonzero. Syntax acceptance alone
-is insufficient: a false deferred commitment can fail the fold equation with
-probability one. Cancellation, storage, allocation, invalid parameters and entropy
-source failures are separate operational outcomes.
+The native non-hiding fold has a source-reviewed polynomial bound that permits
+knowledge of every parameter logarithm. Let `n=2^k`, `k=16`, `m` be the ordered
+input count and `d=m−1`. Fix inputs and finite generators before this fold's
+challenges; require nonzero real source challenges and at least one full-length
+source. Actually deciding every input is additionally required for successful
+fold verification: syntax alone cannot prevent a final `FoldEquation` failure.
 
-Work in a stopped lazy-sampling game. At each challenge the typed query address
-is fixed by the prior transcript and oracle-table history. A fresh answer has
-maximum mapped scalar atom `lambda`; encountering a prequeried or conflicting
-prefix stops the game. Never condition earlier answers on eventual freshness of
-all later queries. For uniform fresh base-field answers and the actual challenge
-map, `lambda = 1/p` for Pallas Fp→Fq and `lambda = 2/q` for Vesta Fq→Fp,
-where `p < q < 2p`. The still-missing hidden-prefix/shared-oracle argument must
-bound the stopped game's freshness failures separately.
+The experiment supplies an independent tape of mapped scalar challenges
+`alpha,z,zeta,u_0,…,u_(k−1)`, each with maximum atom `lambda`. For uniform
+base-field answers under the actual maps, `lambda=1/p` for Pallas Fp→Fq and
+`lambda=2/q` for Vesta Fq→Fp, where `p<q<2p`. Sample the whole virtual tape,
+including unused answers after a stop. A separate coupling term must account
+for prequeried, conflicting or otherwise non-fresh shared-oracle paths. This
+independent-tape premise is not established for concrete fixed RP57.
 
-Write the combined polynomial coefficient as
-`H_j(alpha) = sum_i alpha^i s_i[j]`. The full slot makes each `H_j` a nonzero
-formal polynomial of degree at most `m−1`. Consequently any coefficient with
-`j > 0` vanishes with total probability at most `(N−1)(m−1)lambda`.
-The shifted constant is `a_0 = −sum_{j>0} H_j z^j`; outside that event it
-vanishes at at most `N−1` values of the fresh z. The actual IPA update is
-`a'_i = a_i + u^−1 a_{i+half}`. For nonzero inputs, each updated coefficient
-vanishes only at `u = −a_{i+half}/a_i`; zero u is separately rejected.
-Summing half-vector sizes and the K zero-challenge events gives the conservative
-bound
+Write unshifted coefficients as `A_i(alpha)`. Their degree is at most `d`, and
+`A_(n−1)` is a nonzero polynomial: each full input contributes its nonzero
+challenge product at a distinct alpha power. Initially only the first
+coefficient is shifted, to `a_0=−sum_(i>0) A_i z^i`; all other `a_i=A_i`.
+Before round `j`, put `N=n/2^j`, `h=N/2`, `D_j=prod_(l<j)u_l`, and
+`B_j(z)=prod_(l<j)(1+u_l z^(n/2^(l+1)))`. Source folding gives
+`b_i=z^i B_j(z)` and `a_i=sum_(s<2^j) a_(i+sN) M_s(u^-1)`, with distinct
+squarefree monomials `M_s` and final monomial `1/D_j`.
 
-`epsilon_field = min(1, ((m+1)(N−1)+K)lambda)`.
+Clearing denominators by `D_j`, the L auxiliary inner product has highest
+z-degree `n−h−1`, with coefficient `D_j [D_j a_(N−1)]`. The bracket's constant
+monomial in earlier u variables is `A_(n−1)`, so it is nonzero. R has highest
+z-degree `2n−h−1`, uniquely contributed by the shifted first coefficient; its
+cleared coefficient is `−D_j² A_(n−1)`. In any scalar-log analysis basis,
+finite U has nonzero log. Thus each full point polynomial `D_j L_j` and
+`D_j R_j` has a nonzero zeta coefficient; its MSM term contains no zeta.
+Knowing the generator logs does not make either polynomial identically zero.
 
-No independence between coordinate events is required. Some counted coefficient
-zeros would not themselves abort a proof, so this deliberately overcounts.
-Outside this event, the exact generator update `g'_i = g_i + u g_{i+half}`
-preserves disjoint, nonempty supports over the original generators, with every
-support coefficient nonzero. An identity L or R therefore exposes a nonzero
-linear relation among the pinned `g_j` and U; its U coefficient may be zero.
-An identity intermediate generator or final G does likewise. The actual setup
-derives those generators using distinct hash-to-curve messages, and authenticated
-parameter pinning fixes their bytes. This is a computational relation-finding
-assumption for that setup, not an assertion of linear independence in a cyclic
-group. A reduction outputs the first extracted relation, charged to the whole
-execution's work/query budget.
+Conservative total degrees are `d+2j+n−h` for L and `d+2j+2n−h` for R.
+For independent coordinates with atom at most `lambda`, a nonzero polynomial
+of total degree t vanishes with probability at most `t*lambda`. On `D_j≠0`,
+a native point identity implies the corresponding cleared polynomial vanishes.
+Charge any zero round challenge separately by `k*lambda`. Final G has a
+multiaffine scalar-log polynomial of degree at most k with nonzero constant
+g_0, adding `k*lambda`. Complete operations permit intermediate identity
+generators; they require no separate rejection event.
 
-The relevant honest-fold algebraic abort probability is thus at most
-`epsilon_field + epsilon_relation + epsilon_prefix`, with the latter two terms
-explicit assumptions or remaining proof obligations. Repeated fresh attempts
-need a bounded-execution union bound; exact retained-byte retries are not fresh
-trials. The source review and exhaustive small-field falsification checks are
-retained in `target/qualification/fold-abort-bound-1` and
-`target/qualification/c12-fold-abort-independent-review-1`. This lemma supplies
-one conditional term; it establishes neither concrete Poseidon pseudorandomness
-nor the C12 joint simulator or privacy qualification.
+Summing before conditioning on success gives the encoding/zero-event bound
+
+`epsilon_fold = min(1, [2kd + 2k² + (3k−2)n + 2] lambda)`.
+
+For k16 this coefficient is `3,015,170+32(m−1)`. No all-coordinate-nonzero
+condition or generic relation-finding assumption is needed in this experiment.
+Cancellation, storage, allocation, invalid/undecided inputs and entropy-source
+failures retain separate treatment. Fresh attempts require bounded aggregation;
+exact retained retries do not consume another experiment. The source derivation
+and independent review are retained in
+`target/qualification/c12-nonhiding-ipa-polynomial-audit-1`. This replaces the
+older relation-finding route within the ideal-tape lemma, and establishes no
+concrete Poseidon pseudorandomness, recursive composition or C12 qualification.
+
+The maintained [fold controls](../formal/kagemusha_fold/README.md) pass
+all20 tests with unchanged source/tool pins. The ten polynomial cases check
+exact leading coefficients and degrees through four rounds, dependent generator
+logs, the short-only and missing-shift counterexamples, and the k16 bound's
+arithmetic. An exhaustive F17 control checks all14,739 one-round challenge tapes
+across three generator choices without conditioning away earlier failures.
+Ten transcript cases reproduce the two native prelude KATs using the independent
+RP57 reference, check its constants against the native tables, and compare every
+primitive input across all19 squeezes with a separate rate-two block scheduler.
+They retain canonical scalar/map boundaries, empty/even/odd padding and its
+logical-history alias, unsqueezed final c/unabsorbed G, and mutation/refusal
+controls. Exact counts are `52+ceil(35m/2)` for Pallas and `52+ceil(19m/2)` for
+Vesta; the test traces use syntactic points and do not assert the IPA equation.
+The current captured result is `c12-rp57-fold-maintained-execution-1/result.json`
+(SHA `436afbb313668a890ea479c33be0fd084a8b5726920c85fb0a4b201afb37687a`).
+These finite algebra and transcript checks generate no native proof or key and
+supply neither a general theorem proof nor the independent-tape premise.
 
 ### Conditional joint view in the full-prefix model
 
@@ -530,8 +763,9 @@ each G from its challenges and pinned generators, retaining zero/identity
 failures. Internal re-verification of the same hidden transcript is memoized,
 as are exact retained retries. Fresh unpublished retries count as new attempts.
 
-Add the preceding fold field bounds using deterministic per-attempt maxima
-`M_{C,i}` for input counts, plus the whole-execution relation-finding bound.
+Add the preceding polynomial fold bounds using deterministic per-attempt
+maxima `M_{C,i}` for input counts; no relation-finding term is needed in that
+independent-tape experiment.
 An observed random sum over one adaptive run is not an unconditional probability
 bound. Entropy replacement, sampler exhaustion and operational disclosures need
 their stated separate treatment. The result is an unconditional coupling of

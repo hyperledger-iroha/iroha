@@ -19,7 +19,8 @@ use norito::codec::Encode as _;
 
 use super::{
     certified_chain::{
-        CertifiedChain, ChainReadError, QcVerification, proof_source_append, proof_source_start,
+        CertifiedBlock, CertifiedChain, ChainReadError, QcVerification, proof_source_append,
+        proof_source_start,
     },
     node::NodeIdentity,
 };
@@ -40,6 +41,9 @@ pub enum ProofError {
     /// The portable verifier rejected the produced proof.
     #[error(transparent)]
     Portable(#[from] FinalityError),
+    /// The captured original execution source refused a current-tip certificate.
+    #[error(transparent)]
+    NativeExecution(iroha_data_model::query::error::QueryExecutionFail),
     /// Original local history acquisition has not completed.
     #[error(transparent)]
     Deferred(crate::execution_attempt::ExecutionDeferred),
@@ -212,7 +216,13 @@ fn proof_from_chain<V: StateReadOnly>(
     chain: &CertifiedChain<'_, V>,
     height: u64,
 ) -> Result<SumeragiFinalityProof, ProofError> {
-    let certified = chain.certified(height)?;
+    proof_from_certified(chain.certified(height)?, height)
+}
+
+fn proof_from_certified(
+    certified: CertifiedBlock,
+    height: u64,
+) -> Result<SumeragiFinalityProof, ProofError> {
     if !matches!(
         (height, certified.verification()),
         (1, QcVerification::Genesis) | (2.., QcVerification::Verified)
@@ -359,6 +369,12 @@ pub fn status_is_consistent(status: &SumeragiStatus) -> bool {
 
 /// Sign an exact durable-tip capture using the installed current node identity.
 ///
+/// Past H2, ordinary State-backed captures join the current certificate to the
+/// genesis successor through the original execution ancestry. Every native frame
+/// remains required, while intervening local quorum witnesses need no independent
+/// re-verification. Standalone exports and active Norito callers retain their
+/// full-prefix verification contract.
+///
 /// # Errors
 /// Missing proofs, mismatched heights/identity/instance, halted state or invalid signing.
 pub fn build_attestation(
@@ -399,15 +415,29 @@ pub fn build_attestation(
             committed,
         });
     }
-    // Both proof reads borrow this same immutable State cut. Retain the bounded native
-    // prefix only across genesis -> tip, while every original QC, availability relation and
-    // independent portable proof check remains mandatory. Drop it before the fresh fence.
+    // The active caller keeps its original full-prefix recipe and cumulative charges.
+    // Ordinary current captures use this same State generation's original execution tip.
+    // One reverse source walk joins the target to H2 and genesis, checking both
+    // selected QCs/availability and the exact separately projected genesis result.
+    // No producer cursor, source verdict or challenge is retained across calls.
     let (genesis_finality_proof, finality_proof) = {
         let proof_chain =
             CertifiedChain::new(view).map_err(|error| Error::GenesisFinalityProof(error.into()))?;
-        let genesis = proof_from_chain(&proof_chain, 1).map_err(Error::GenesisFinalityProof)?;
+        let native_genesis = proof_chain
+            .certified(1)
+            .map_err(|error| Error::GenesisFinalityProof(error.into()))?;
+        let genesis_decision = GenesisDecision {
+            block_hash: native_genesis.block_hash(),
+            core_hash: native_genesis.core_hash(),
+            result: native_genesis.result(),
+        };
+        let genesis =
+            proof_from_certified(native_genesis, 1).map_err(Error::GenesisFinalityProof)?;
         let tip = if height == 1 {
             genesis.clone()
+        } else if height > 2 && !norito::core::decode_limits_active() {
+            current_execution_proof(&proof_chain, height, genesis_decision)
+                .map_err(Error::FinalityProof)?
         } else {
             proof_from_chain(&proof_chain, height).map_err(Error::FinalityProof)?
         };
@@ -427,6 +457,56 @@ pub fn build_attestation(
             tip: finality_proof,
         },
     )
+}
+
+// Coordinates of the exact native receipt projected into the returned genesis proof.
+// A signed genesis proposal alone never authenticates its attached execution R.
+struct GenesisDecision {
+    block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+    core_hash: iroha_sumeragi::types::Hash32,
+    result: iroha_sumeragi::types::Hash32,
+}
+
+// Current statements retain every native ancestry read, but need not independently
+// reverify each intervening local QC after that execution was published into State.
+// Generic proof, checkpoint and sequential export keep their full-prefix contracts.
+fn current_execution_proof<V: StateReadOnly>(
+    chain: &CertifiedChain<'_, V>,
+    height: u64,
+    genesis: GenesisDecision,
+) -> Result<SumeragiFinalityProof, ProofError> {
+    let target = usize::try_from(height)
+        .ok()
+        .and_then(std::num::NonZeroUsize::new)
+        .ok_or(ChainReadError::NotInView { height })?;
+    // The existing single reverse walk retains bounded receipts and uses the original
+    // State allocation pool. No codec scope, allowance or imported trust is installed.
+    let (tip, anchor) = chain
+        .certified_with_ancestor_from_execution(
+            target,
+            |_, _| Ok(()),
+            |_| Ok(std::num::NonZeroUsize::new(2)),
+        )
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                ProofError::NativeExecution(error)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(local) => {
+                ProofError::Deferred(local)
+            }
+        })?;
+    let anchor = anchor.ok_or(ProofError::UnverifiedCommittee(2))?;
+    if anchor.height() != 2
+        || anchor.block().header().prev_block_hash() != Some(genesis.block_hash)
+        || !anchor.header().is_some_and(|header| {
+            header.parent_hash == genesis.core_hash && header.parent_result == genesis.result
+        })
+    {
+        return Err(ChainReadError::Discontinuous { height: 2 }.into());
+    }
+    drop(anchor);
+    // Clients still receive and independently verify the same complete portable proof.
+    proof_from_certified(tip, height)
 }
 
 // Only the two genuinely produced portable proofs and Copy source projections leave

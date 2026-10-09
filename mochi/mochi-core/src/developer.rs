@@ -818,6 +818,18 @@ mod tests {
                 )
                 .is_err()
         );
+        // Desktop input selection uses the same early native admission as Kagami. Invalid
+        // content cannot reach deploy/start, change selection, or create a managed generation.
+        for (name, contents) in [
+            ("invalid.to", "not an IVM artifact"),
+            ("Musubi.toml", "[broken"),
+        ] {
+            let path = temporary.path().join(name);
+            std::fs::write(&path, contents).unwrap();
+            assert!(ContractInput::from_path(&path, None, None, false).is_err());
+            assert!(desktop.contexts().unwrap().is_empty());
+            assert_eq!(desktop.selected_name().unwrap(), None);
+        }
         assert!(desktop.contexts().unwrap().is_empty());
     }
     #[test]

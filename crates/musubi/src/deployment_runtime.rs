@@ -50,12 +50,52 @@ impl ContractInput {
     /// Native selection runs before provisioning and retains the original root file through
     /// startup and build. An explicitly selected non-root member deploys only its owning package;
     /// an actual workspace root retains declared defaults and explicit package selection.
-    /// Declared companions and package graphs are still read by their owners.
+    /// The selected artifact or manifest passes network-independent admission before startup.
+    /// Declared companions, full package graphs and source compilation still belong to their
+    /// canonical owners under the actual selected network. Later validation is never skipped.
     ///
     /// # Errors
     /// Rejects missing or nonregular inputs, missing package manifests, package selectors on
-    /// standalone files and unsupported file names.
+    /// standalone files, unsupported file names, malformed artifacts and invalid manifests.
     pub fn from_path(
+        path: &Path,
+        package: Option<String>,
+        contract: Option<String>,
+        locked: bool,
+    ) -> Result<Self> {
+        let input = Self::select_path(path, package, contract, locked)?;
+        input.validate_local()?;
+        Ok(input)
+    }
+
+    fn validate_local(&self) -> Result<()> {
+        // Keep the captured original file alive. Every read uses that same native owner;
+        // close ordinary parser failures as well as success before returning the selection.
+        // Do not install/reset a decode budget or retain a validation result across startup.
+        let (selected, result) = match self {
+            Self::Source(_) => return Ok(()),
+            Self::Bytecode(selected) => (
+                selected,
+                selected
+                    .read(MAX_DEPLOYMENT_ARTIFACT_BYTES)
+                    .wrap_err("read exact contract bytecode")
+                    .and_then(BuiltArtifact::from_bytes)
+                    .map(|_| ()),
+            ),
+            Self::Package { manifest, .. } => (
+                manifest,
+                crate::workspace::read_manifest_selected(manifest.path(), Some(manifest))
+                    .map(|_| ())
+                    .map_err(Into::into),
+            ),
+        };
+        selected
+            .revalidate()
+            .wrap_err("retain original deployment input")?;
+        result
+    }
+
+    fn select_path(
         path: &Path,
         package: Option<String>,
         contract: Option<String>,
@@ -669,10 +709,14 @@ mod tests {
         let bytecode = temp.path().join("x.to");
         let manifest = temp.path().join("Musubi.toml");
         fs::write(&source, SOURCE)?;
-        fs::write(&bytecode, b"build validates the actual bytes")?;
+        let artifact = kotodama_lang::compiler::Compiler::new()
+            .compile_source(SOURCE)
+            .map_err(|error| eyre!(error))?;
+        fs::write(&bytecode, artifact)?;
         assert!(ContractInput::from_path(temp.path(), None, None, false).is_err());
         assert!(ContractInput::from_path(&manifest, None, None, false).is_err());
-        fs::write(&manifest, "manifest-version = 1")?;
+        let package_manifest = "manifest-version = 1\n[package]\nnamespace = \"demo\"\nname = \"coffee\"\nversion = \"0.1.0\"\nedition = \"1\"\nabi-version = 1\n[[contract]]\nname = \"coffee\"\npath = \"x.ko\"\n";
+        fs::write(&manifest, package_manifest)?;
         assert!(matches!(
             ContractInput::from_path(&source, None, None, false)?,
             ContractInput::Source(_)
@@ -691,10 +735,7 @@ mod tests {
         let source_named_directory = temp.path().join("package.ko");
         fs::create_dir(&source_named_directory)?;
         assert!(ContractInput::from_path(&source_named_directory, None, None, false).is_err());
-        fs::write(
-            source_named_directory.join("Musubi.toml"),
-            "manifest-version = 1",
-        )?;
+        fs::write(source_named_directory.join("Musubi.toml"), package_manifest)?;
         assert!(matches!(
             ContractInput::from_path(&source_named_directory, None, None, false)?,
             ContractInput::Package { .. }
@@ -717,6 +758,71 @@ mod tests {
             assert!(ContractInput::from_path(&link, None, None, false).is_err());
             assert!(ContractInput::from_path(Path::new("/dev/null"), None, None, false).is_err());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn input_preflight_rejects_local_content_and_preserves_active_decode_limits() -> Result<()> {
+        let temporary = TempDir::new()?;
+        let artifact_path = temporary.path().join("invalid.to");
+        for bytes in [b"".as_slice(), b"not an IVM artifact"] {
+            fs::write(&artifact_path, bytes)?;
+            let error = ContractInput::from_path(&artifact_path, None, None, false).unwrap_err();
+            assert!(format!("{error:#}").contains("contract artifact"));
+        }
+        fs::File::create(&artifact_path)?.set_len((MAX_DEPLOYMENT_ARTIFACT_BYTES + 1) as u64)?;
+        assert!(ContractInput::from_path(&artifact_path, None, None, false).is_err());
+        let manifest = temporary.path().join("Musubi.toml");
+        fs::File::create(&manifest)?.set_len(crate::workspace::MAX_MANIFEST_BYTES + 1)?;
+        assert!(ContractInput::from_path(&manifest, None, None, false).is_err());
+        for bytes in [b"[broken".as_slice(), b"manifest-version = 1", &[0xff]] {
+            fs::write(&manifest, bytes)?;
+            assert!(ContractInput::from_path(&manifest, None, None, false).is_err());
+            assert!(ContractInput::from_path(temporary.path(), None, None, false).is_err());
+        }
+        // A virtual root needs no invented package/network binding during local admission.
+        fs::write(
+            &manifest,
+            "manifest-version = 1\n[workspace]\nmembers = []\n",
+        )?;
+        assert!(ContractInput::from_path(&manifest, None, None, false).is_ok());
+        let bytes = kotodama_lang::compiler::Compiler::new()
+            .compile_source(SOURCE)
+            .map_err(|error| eyre!(error))?;
+        fs::write(&artifact_path, &bytes)?;
+        for allocation in [0, 1] {
+            let limits = norito::DecodeLimits::new(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                allocation,
+                usize::MAX,
+            );
+            let result = norito::core::with_decode_limits_scope(limits, || {
+                ContractInput::from_path(&artifact_path, None, None, false)
+            });
+            assert!(
+                result.is_err(),
+                "selection must retain the caller's decode refusal"
+            );
+        }
+        let selected = ContractInput::from_path(&artifact_path, None, None, false)?;
+        let runtime = DeploymentRuntime::new(
+            config(),
+            temporary.path().join("journals"),
+            temporary.path().join("cache"),
+        );
+        // Early admission does not bypass a later active owner or replace authoritative build.
+        assert!(
+            norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                || runtime.build(&selected),
+            )
+            .is_err()
+        );
+        assert_eq!(runtime.build(&selected)?.bytes(), bytes);
+        assert!(!temporary.path().join("journals").exists());
+        assert!(!temporary.path().join("cache").exists());
         Ok(())
     }
 
