@@ -21,11 +21,11 @@ use iroha_data_model::{
         governance::{
             SCCP_GOVERNANCE_MAX_ACTIONS_V1, SCCP_GOVERNANCE_MEMO_MAX_BYTES_V1,
             SCCP_JSON_SAFE_U64_MAX_V1, SCCP_TON_MAX_WRAPPED_SUPPLY_EXCLUSIVE_V1,
-            SccpClearBridgeKeyFaultActionV1, SccpFreezeLightClientActionV1, SccpGovernanceActionV1,
-            SccpGovernanceBaseRevisionV1, SccpGovernanceProposalV1, SccpGovernanceStaticError,
-            SccpGovernanceSubjectV1, SccpInitializeLightClientActionV1,
-            SccpInstallTrustedCheckpointActionV1, SccpRegisterRouteActionV1,
-            SccpReleaseStrandedActionV1, SccpRouteRevisionActionV1,
+            SccpActivateLightClientProfileActionV1, SccpClearBridgeKeyFaultActionV1,
+            SccpFreezeLightClientActionV1, SccpGovernanceActionV1, SccpGovernanceBaseRevisionV1,
+            SccpGovernanceProposalV1, SccpGovernanceStaticError, SccpGovernanceSubjectV1,
+            SccpInitializeLightClientActionV1, SccpInstallTrustedCheckpointActionV1,
+            SccpRegisterRouteActionV1, SccpReleaseStrandedActionV1, SccpRouteRevisionActionV1,
             SccpSetDestinationPausedActionV1, SccpSetParametersActionV1,
             SccpSetTairaPausedActionV1, SccpSwitchRevisionActionV1,
         },
@@ -209,6 +209,14 @@ fn freeze(network: SccpNetworkV1) -> SccpGovernanceActionV1 {
     SccpGovernanceActionV1::FreezeLightClient(SccpFreezeLightClientActionV1 { network })
 }
 
+fn activate_profile(network: SccpNetworkV1, version: u32) -> SccpGovernanceActionV1 {
+    SccpGovernanceActionV1::ActivateLightClientProfile(SccpActivateLightClientProfileActionV1 {
+        network,
+        version,
+        profile_hash: [0x5f; 32],
+    })
+}
+
 fn set_parameters(next: SccpParametersV1) -> SccpGovernanceActionV1 {
     SccpGovernanceActionV1::SetParameters(SccpSetParametersActionV1 { next })
 }
@@ -244,6 +252,7 @@ fn every_action() -> Vec<SccpGovernanceActionV1> {
         freeze(TRON),
         set_parameters(SccpParametersV1::taira_default()),
         clear_fault(3, 1_000),
+        activate_profile(BSC, 2),
     ]
 }
 
@@ -479,6 +488,10 @@ fn governance_schema_names_are_stable() {
             "iroha_data_model::sccp::governance::SccpClearBridgeKeyFaultActionV1",
         ),
         (
+            SccpActivateLightClientProfileActionV1::nominal_name(),
+            "iroha_data_model::sccp::governance::SccpActivateLightClientProfileActionV1",
+        ),
+        (
             SccpGovernanceActionV1::nominal_name(),
             "iroha_data_model::sccp::governance::SccpGovernanceActionV1",
         ),
@@ -589,6 +602,7 @@ fn every_type_roundtrips_through_binary_frame_and_json() {
             SccpGovernanceActionV1::FreezeLightClient(inner) => roundtrip(inner),
             SccpGovernanceActionV1::SetParameters(inner) => roundtrip(inner),
             SccpGovernanceActionV1::ClearBridgeKeyFault(inner) => roundtrip(inner),
+            SccpGovernanceActionV1::ActivateLightClientProfile(inner) => roundtrip(inner),
         }
     }
     roundtrip(&register(TRON, tron(tron_address([0x34; 20]))));
@@ -624,6 +638,7 @@ fn json_tags_are_snake_case() {
         "freeze_light_client",
         "set_parameters",
         "clear_bridge_key_fault",
+        "activate_light_client_profile",
     ];
     let every = every_action();
     assert_eq!(every.len(), actions.len());
@@ -751,7 +766,7 @@ fn proposal_json_carries_exact_integers_and_decimal_amounts() {
 
 #[test]
 fn unknown_binary_tags_are_rejected() {
-    for tag in [14_u32, 15, 255, u32::MAX] {
+    for tag in [15_u32, 16, 255, u32::MAX] {
         let mut encoded = tag.encode();
         encoded.extend_from_slice(&[0x11; 256]);
         assert!(
@@ -1327,9 +1342,10 @@ fn every_action_has_its_spec_subject() {
         SccpGovernanceSubjectV1::LightClient(TRON),
         SccpGovernanceSubjectV1::Parameters,
         SccpGovernanceSubjectV1::BridgeKeyFault(peer(3)),
+        SccpGovernanceSubjectV1::LightClient(BSC),
     ];
     let actions = every_action();
-    assert_eq!(actions.len(), 14, "§4.14.3 defines fourteen actions");
+    assert_eq!(actions.len(), 15, "§4.14.3 defines fifteen actions");
     for (action, subject) in actions.iter().zip(expected) {
         assert_eq!(action.subject(), subject, "{action:?}");
     }
@@ -1353,6 +1369,7 @@ fn every_action_has_its_spec_subject() {
             Some(TRON),
             None,
             None,
+            Some(BSC),
         ]
     );
 }
@@ -1407,6 +1424,7 @@ fn subject_list_is_sorted_and_deduplicated() {
             SccpGovernanceSubjectV1::Route(TON),
             SccpGovernanceSubjectV1::RouteControl(BSC),
             SccpGovernanceSubjectV1::LightClient(ETH),
+            SccpGovernanceSubjectV1::LightClient(BSC),
             SccpGovernanceSubjectV1::LightClient(TRON),
             SccpGovernanceSubjectV1::LightClient(TON),
             SccpGovernanceSubjectV1::Parameters,
@@ -1523,8 +1541,9 @@ fn every_network_bearing_action_rejects_taira() {
         }),
         install_checkpoint(TAIRA, checkpoint()),
         freeze(TAIRA),
+        activate_profile(TAIRA, 2),
     ];
-    assert_eq!(taira_actions.len(), 12);
+    assert_eq!(taira_actions.len(), 13);
     for action in taira_actions {
         assert_eq!(
             validate(vec![freeze(ETH), action.clone()]),
@@ -1532,6 +1551,49 @@ fn every_network_bearing_action_rejects_taira() {
             "{action:?}"
         );
     }
+}
+
+#[test]
+fn light_client_profile_activation_starts_at_version_two_with_a_nonzero_hash() {
+    assert_eq!(validate(vec![activate_profile(ETH, 2)]), Ok(()));
+    assert_eq!(
+        validate(vec![freeze(ETH), activate_profile(TRON, 1)]),
+        Err(
+            SccpGovernanceStaticError::GenesisLightClientProfileVersion {
+                action: 1,
+                version: 1,
+            }
+        )
+    );
+    assert_eq!(
+        validate(vec![activate_profile(TON, 0)]),
+        Err(
+            SccpGovernanceStaticError::GenesisLightClientProfileVersion {
+                action: 0,
+                version: 0,
+            }
+        )
+    );
+    let SccpGovernanceActionV1::ActivateLightClientProfile(mut zero) = activate_profile(BSC, 2)
+    else {
+        panic!("activation");
+    };
+    zero.profile_hash = [0; 32];
+    assert_eq!(
+        validate(vec![SccpGovernanceActionV1::ActivateLightClientProfile(
+            zero
+        )]),
+        Err(SccpGovernanceStaticError::ZeroLightClientProfileHash { action: 0 })
+    );
+    // An activation and a re-initialization of the same light client share one subject.
+    let bundle = proposal(vec![
+        SccpGovernanceActionV1::InitializeLightClient(initialize(ETH)),
+        activate_profile(ETH, 2),
+    ]);
+    assert_eq!(
+        bundle.subjects(),
+        vec![SccpGovernanceSubjectV1::LightClient(ETH)]
+    );
 }
 
 #[test]

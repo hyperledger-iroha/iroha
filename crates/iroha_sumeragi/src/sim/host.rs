@@ -60,6 +60,9 @@ pub enum Op {
         op: u64,
         /// The block.
         block: Box<AvailableBody>,
+        /// The core's `Execute.certified` flag: the application clock guard skips the block
+        /// (§4.5).
+        certified: bool,
     },
     /// Drop the cached post-states of the blocks at `height` other than `keep`.
     Discard {
@@ -727,10 +730,12 @@ mod tests {
                 Op::Execute {
                     op: 3,
                     block: Box::new(b1.clone()),
+                    certified: false,
                 },
                 Op::Execute {
                     op: 4,
                     block: Box::new(orphan),
+                    certified: false,
                 },
             ],
             500,
@@ -879,6 +884,7 @@ mod tests {
                 Op::Execute {
                     op: 13,
                     block: Box::new(b1.clone()),
+                    certified: false,
                 },
             ],
             3_500,

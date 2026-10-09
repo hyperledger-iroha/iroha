@@ -430,25 +430,6 @@ pub mod isi {
             self.ensure_numeric_asset_holding_limit(id, &candidate)?;
             Ok(candidate)
         }
-        /// Check that the exact balance `id` can receive `amount` under every recipient-side
-        /// rule of an ordinary credit (incoming transfer availability, holding limit, custody
-        /// and definition spec) without mutating state.
-        ///
-        /// SCCP settlement bounces a message whose recipient fails this check
-        /// (`specs/sccp.md` §4.12.3).
-        pub(crate) fn precheck_numeric_asset_receivable(
-            &self,
-            id: &AssetId,
-            amount: &Quantity,
-        ) -> Result<(), Error> {
-            self.ensure_numeric_asset_transfer_availability(
-                id,
-                amount.clone(),
-                AssetTransferDirection::Incoming,
-            )?;
-            self.precheck_numeric_asset_credit_exact(id, amount)
-                .map(|_| ())
-        }
         fn apply_prechecked_numeric_asset_credit_exact(
             &mut self,
             id: &AssetId,
@@ -4816,6 +4797,102 @@ pub mod isi {
             ),
         )
     }
+    /// Check, without mutating state, that [`execute_sccp_escrow_release`] of `amount` from the
+    /// SCCP route escrow `escrow_id` to the existing account of `destination_id` passes every
+    /// guard of the release movement (`specs/sccp.md` §4.12.3, §4.16).
+    ///
+    /// It mirrors `PreparedNumericTransferPlan::prepare` for the retained
+    /// `SccpEscrowRelease` authorization (ambient scope, enforced transfer control, existing
+    /// destination) and shares its policy gate
+    /// ([`ensure_resolved_numeric_asset_transfer_policies`]), so SCCP settlement holds a
+    /// message whose credit the movement would refuse instead of failing the proof or void
+    /// that triggered it.
+    ///
+    /// TODO(ws41): the movement settles retail-fee balances before its balance precheck; this
+    /// read-only precheck evaluates the stored balances.
+    pub(in crate::smartcontracts::isi) fn precheck_sccp_escrow_release(
+        state_transaction: &StateTransaction<'_, '_>,
+        escrow_id: &AssetId,
+        destination_id: &AssetId,
+        amount: &Quantity,
+    ) -> Result<(), Error> {
+        if escrow_id.definition() != destination_id.definition() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP escrow release must credit the escrowed asset".into(),
+            ));
+        }
+        if amount.is_zero() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "asset transfer amount must be non-zero".into(),
+            ));
+        }
+        let source_policy = NumericAssetTransferSourcePolicy::SccpEscrowRelease;
+        ensure_global_asset_write_on_authoritative_route(
+            state_transaction,
+            escrow_id.definition(),
+            "transfer",
+        )?;
+        let source_dataspace = transfer_source_dataspace_hint(state_transaction, escrow_id)?;
+        let resolved_source = state_transaction
+            .world
+            .resolve_asset_id_for_scope_hint(escrow_id, source_dataspace)?;
+        ensure_privacy_public_reserve_source_policy(
+            state_transaction,
+            &resolved_source,
+            source_policy,
+        )?;
+        active_control_record(
+            state_transaction,
+            escrow_id.account(),
+            escrow_id.definition(),
+        )?;
+        prepare_outbound_asset_transfer_control_update(state_transaction, escrow_id, amount)?;
+        state_transaction.world.account(destination_id.account())?;
+        let (source_id, destination_id) = resolve_numeric_asset_transfer_scope(
+            state_transaction,
+            escrow_id,
+            destination_id,
+            NumericAssetTransferScopePolicy::Ambient,
+        )?;
+        let spec = state_transaction
+            .world
+            .asset_definition(source_id.definition())?
+            .spec();
+        ensure_resolved_numeric_asset_transfer_policies(
+            state_transaction,
+            &source_id,
+            &destination_id,
+            amount,
+            spec,
+            source_policy,
+        )?;
+        prepare_retail_daily_usage_update(
+            state_transaction,
+            &source_id,
+            &destination_id,
+            amount,
+            source_policy,
+        )?;
+        let delta = state_transaction
+            .world
+            .precheck_numeric_asset_transfer_delta_exact_with_control_policy(
+                &source_id,
+                &destination_id,
+                amount,
+                NumericAssetTransferControlPolicy::Enforce,
+            )?;
+        let source_after = if source_id == destination_id {
+            &delta.to_balance_after
+        } else {
+            &delta.from_balance_after
+        };
+        crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
+            state_transaction.world(),
+            &source_id,
+            source_after,
+        )?;
+        Ok(())
+    }
     /// Consume one native AMX movement after independently rejoining exact canonical custody.
     /// The producer is the signed-root participant owner; generic escrow has no constructor.
     pub(crate) fn execute_verified_amx_movement(
@@ -7001,7 +7078,34 @@ pub mod isi {
         source_policy: NumericAssetTransferSourcePolicy,
         scope_policy: NumericAssetTransferScopePolicy,
     ) -> Result<(AssetId, AssetId), Error> {
-        let (source_id, destination_id) = match scope_policy {
+        let (source_id, destination_id) = resolve_numeric_asset_transfer_scope(
+            state_transaction,
+            source_id,
+            destination_id,
+            scope_policy,
+        )?;
+        let spec = state_transaction
+            .numeric_spec_for(source_id.definition())
+            .map_err(Error::from)?;
+        ensure_resolved_numeric_asset_transfer_policies(
+            state_transaction,
+            &source_id,
+            &destination_id,
+            amount,
+            spec,
+            source_policy,
+        )?;
+        Ok((source_id, destination_id))
+    }
+    /// Resolve the balance scopes of a numeric movement under `scope_policy` without
+    /// mutating state.
+    fn resolve_numeric_asset_transfer_scope(
+        state_transaction: &StateTransaction<'_, '_>,
+        source_id: &AssetId,
+        destination_id: &AssetId,
+        scope_policy: NumericAssetTransferScopePolicy,
+    ) -> Result<(AssetId, AssetId), Error> {
+        Ok(match scope_policy {
             NumericAssetTransferScopePolicy::Ambient => {
                 ensure_global_asset_write_on_authoritative_route(
                     state_transaction,
@@ -7085,7 +7189,20 @@ pub mod isi {
                     .resolve_asset_id_for_scope_hint(destination_id, explicit_dataspace)?;
                 (source_id, destination_id)
             }
-        };
+        })
+    }
+    /// Check every definition, custody, usage and privacy policy of a numeric movement between
+    /// the resolved balances `source_id` and `destination_id` under `source_policy`, given the
+    /// definition's numeric `spec`, without mutating state. Every movement path and the SCCP
+    /// release precheck ([`precheck_sccp_escrow_release`]) share this gate.
+    fn ensure_resolved_numeric_asset_transfer_policies(
+        state_transaction: &StateTransaction<'_, '_>,
+        source_id: &AssetId,
+        destination_id: &AssetId,
+        amount: &Quantity,
+        spec: NumericSpec,
+        source_policy: NumericAssetTransferSourcePolicy,
+    ) -> Result<(), Error> {
         if source_id.definition() != destination_id.definition() {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
@@ -7096,7 +7213,7 @@ pub mod isi {
                 .into(),
             ));
         }
-        ensure_privacy_public_reserve_source_policy(state_transaction, &source_id, source_policy)?;
+        ensure_privacy_public_reserve_source_policy(state_transaction, source_id, source_policy)?;
         if state_transaction
             .world
             .game_custody_by_account
@@ -7108,9 +7225,6 @@ pub mod isi {
                 "native game custody accepts only exact native entry funding".into(),
             ));
         }
-        let spec = state_transaction
-            .numeric_spec_for(source_id.definition())
-            .map_err(Error::from)?;
         assert_numeric_spec_with(amount.as_numeric(), spec)?;
         if source_policy != NumericAssetTransferSourcePolicy::KagemushaReserveCustody {
             ensure_not_kagemusha_reserve_source(state_transaction.world(), &source_id)?;
@@ -7122,7 +7236,7 @@ pub mod isi {
         // retained protocol record. Definition, balance scope, and amount
         // precision were still validated above.
         if source_policy.uses_protocol_custody_precheck() {
-            return Ok((source_id, destination_id));
+            return Ok(());
         }
         ensure_transparent_allowed(
             state_transaction,
@@ -7135,29 +7249,29 @@ pub mod isi {
             [
                 (
                     source_id.account(),
-                    asset_id_dataspace_hint(state_transaction, &source_id),
+                    asset_id_dataspace_hint(state_transaction, source_id),
                 ),
                 (
                     destination_id.account(),
-                    asset_id_dataspace_hint(state_transaction, &destination_id),
+                    asset_id_dataspace_hint(state_transaction, destination_id),
                 ),
             ],
             Some(amount),
         )?;
         if source_policy != NumericAssetTransferSourcePolicy::SorafsReserveCustody {
-            ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
+            ensure_not_sorafs_reserve_custody_source(state_transaction, source_id)?;
         }
         if source_policy != NumericAssetTransferSourcePolicy::SccpEscrowRelease {
-            ensure_not_sccp_escrow_source(state_transaction, &source_id)?;
+            ensure_not_sccp_escrow_source(state_transaction, source_id)?;
         }
         if source_policy != NumericAssetTransferSourcePolicy::SccpEscrowLock {
-            ensure_not_sccp_escrow_destination(state_transaction, &destination_id)?;
+            ensure_not_sccp_escrow_destination(state_transaction, destination_id)?;
         }
         if source_policy != NumericAssetTransferSourcePolicy::FxEscrowRelease {
-            ensure_not_fx_corridor_escrow_source(state_transaction, &source_id)?;
+            ensure_not_fx_corridor_escrow_source(state_transaction, source_id)?;
         }
         if source_policy != NumericAssetTransferSourcePolicy::FxEscrowDeposit {
-            ensure_not_fx_corridor_escrow_destination(state_transaction, &destination_id)?;
+            ensure_not_fx_corridor_escrow_destination(state_transaction, destination_id)?;
         }
         match source_policy {
             NumericAssetTransferSourcePolicy::User
@@ -7179,7 +7293,7 @@ pub mod isi {
             NumericAssetTransferSourcePolicy::NativeEscrowCustody => {
                 if !crate::smartcontracts::isi::escrow::is_native_escrow_custody_asset(
                     state_transaction,
-                    &source_id,
+                    source_id,
                 )? {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "native escrow settlement source is not a recorded custody asset".into(),
@@ -7203,7 +7317,7 @@ pub mod isi {
             NumericAssetTransferSourcePolicy::SorafsReserveCustody => {
                 if !crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_asset(
                     state_transaction.world(),
-                    &source_id,
+                    source_id,
                 )? {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "SoraFS reserve withdrawal source is not active protocol custody".into(),
@@ -7212,7 +7326,7 @@ pub mod isi {
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
             }
             NumericAssetTransferSourcePolicy::FxEscrowRelease => {
-                if !is_fx_corridor_escrow_asset(state_transaction, &source_id)? {
+                if !is_fx_corridor_escrow_asset(state_transaction, source_id)? {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "FX corridor escrow release source is not governed protocol custody".into(),
                     )
@@ -7267,7 +7381,7 @@ pub mod isi {
                 }
             }
         }
-        Ok((source_id, destination_id))
+        Ok(())
     }
     /// Consume one exact fee-sponsor charge capability produced after sponsor debit admission.
     pub(crate) fn execute_verified_fee_sponsor_charge(

@@ -3030,9 +3030,12 @@ impl Queue {
                 if tx.is_in_blockchain(state_view) || self.is_expired(tx.as_accepted()) {
                     return None;
                 }
+                // Eligibility is judged against the committed parent World, exactly as block
+                // validation counts it (`specs/sccp.md` §4.19).
                 sccp_budget
                     .admit(
-                        crate::smartcontracts::isi::sccp::admission::exempt_shape_of_entrypoint(
+                        crate::smartcontracts::isi::sccp::admission::exempt_class_of_entrypoint(
+                            state_view.world(),
                             tx.as_accepted().entrypoint(),
                         ),
                     )
@@ -3672,6 +3675,9 @@ impl Queue {
             }
         }
         // SCCP exemption checks use this exact committed view; there is no inherited queue authority.
+        // A transaction that is not eligible for an SCCP exemption classifies as `None` and
+        // pays the ordinary fee below; only an eligible transaction that fails pre-verification
+        // is rejected here (`specs/sccp.md` §4.19).
         let sccp_exempt = Self::sccp_signed_transaction(checked.as_accepted().entrypoint())
             .map(|transaction| state_access.sccp_exempt_admission(transaction))
             .transpose()
@@ -9089,6 +9095,10 @@ pub mod tests {
                 let active = binding.active.as_mut().expect("active bridge key");
                 active.public_key = key.public_key().expect("bridge public key");
                 active.address = key.address().expect("bridge address");
+                // A registered key's owner index makes its attestations eligible.
+                world
+                    .sccp_bridge_key_owners
+                    .insert(active.address, peer.clone());
                 world.sccp_bridge_keys.insert(peer, binding);
             }
             world.commit();
@@ -9207,7 +9217,7 @@ pub mod tests {
         assert_eq!(
             selected,
             vec![hashes[0], hashes[2]],
-            "one exempt-shaped SCCP transaction fits the cap; ordinary work is unaffected"
+            "one eligible SCCP transaction fits the cap; ordinary work is unaffected"
         );
         assert!(
             queue.contains_entrypoint_hash(hashes[1]),
@@ -9217,7 +9227,7 @@ pub mod tests {
         let classes = snapshot
             .iter()
             .filter_map(|transaction| {
-                admission::exempt_shape_of_entrypoint(transaction.entrypoint())
+                admission::exempt_class_of_entrypoint(view.world(), transaction.entrypoint())
             })
             .collect::<Vec<_>>();
         assert_eq!(classes, vec![SccpExemptClassV1::Attestation]);

@@ -79,6 +79,7 @@ fun emitVector(
         config: config.toCell(),
         roster: roster.toCell(),
         prevRoster: null,
+        retries: [],
     };
     val data = storage.toCell();
     val code = build("SccpTairaXorMinter");

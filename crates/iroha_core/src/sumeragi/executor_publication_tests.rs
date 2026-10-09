@@ -1393,6 +1393,7 @@ fn original_worker_consuming_failure_halts_driver_status_without_reexecution() {
         kernel.route(vec![Action::Execute {
             block: block.clone(),
             req: 88,
+            certified: true,
         }]);
         for now in [1, 1000, 10_000] {
             kernel.handle(now, Event::Tick);

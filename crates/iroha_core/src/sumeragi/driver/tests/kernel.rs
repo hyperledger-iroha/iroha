@@ -288,6 +288,7 @@ fn barrier_and_ordered_persistence() {
         Action::Execute {
             block: b1.clone(),
             req: 1,
+            certified: false,
         },
         Action::LocalFault(LocalFault::RecordMissing),
         Action::CommitBlock {
@@ -307,10 +308,13 @@ fn barrier_and_ordered_persistence() {
             _ => None,
         })
         .expect("the body is written first");
-    assert!(
-        ops.iter()
-            .any(|op| matches!(op, Op::Exec(ExecOp::Execute { .. })))
-    );
+    assert!(ops.iter().any(|op| matches!(
+        op,
+        Op::Exec(ExecOp::Execute {
+            certified: false,
+            ..
+        })
+    )));
     assert!(!ops.iter().any(|op| matches!(
         op,
         Op::Send { .. }
@@ -645,7 +649,11 @@ fn publication_recovery_halts_before_poll_and_preserves_safety_persistence() {
             to: vec![vals.key(1)],
             msg: request(2),
         },
-        Action::Execute { block, req: 444 },
+        Action::Execute {
+            block,
+            req: 444,
+            certified: true,
+        },
         Action::BuildPayload {
             req: 445,
             height: 1,

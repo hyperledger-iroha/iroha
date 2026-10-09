@@ -209,6 +209,7 @@ fn sccp_governance_openapi_tracks_the_v1_parliament_proposal() {
             "freeze_light_client",
             "set_parameters",
             "clear_bridge_key_fault",
+            "activate_light_client_profile",
         ]
     );
     let ton = schemas

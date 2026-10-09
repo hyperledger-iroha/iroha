@@ -265,6 +265,30 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Accumulator("sccp_message_accumulator"),
     ),
     function(
+        "crates/iroha_core/src/smartcontracts/isi/sccp/read/history.rs",
+        "leaves",
+        1,
+        UseOwner::Accumulator("sccp_message_accumulator"),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/sccp/read/history.rs",
+        "peaks",
+        1,
+        UseOwner::Accumulator("sccp_message_accumulator"),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/sccp/read/history.rs",
+        "root_and_path",
+        1,
+        UseOwner::Accumulator("sccp_message_accumulator"),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/sccp/read/views.rs",
+        "history_proof",
+        1,
+        UseOwner::Accumulator("sccp_message_accumulator"),
+    ),
+    function(
         "crates/iroha_core/src/smartcontracts/isi/sccp/roster.rs",
         "install",
         1,
@@ -659,6 +683,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "require_transfer_transcript_identity",
         1,
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/state.rs",
+        "sccp_policy_hash_v1",
+        1,
+        UseOwner::Roots(&["confidential_feature_digest"]),
     ),
     function(
         "crates/iroha_core/src/state.rs",

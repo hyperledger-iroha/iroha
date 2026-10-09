@@ -7,10 +7,10 @@ Response (first release; single policy V1)
 ```json
 {
   "policy": "V1",
-  "abi_hash_hex": "c7281066ec6f2fb47a2b0051c1d2ac95562f6ca7a576011cf173e07e845fdec1"
+  "abi_hash_hex": "32a1fc6e3ca277e857d4aed4c12c8fd47f76ee9fb4c3f4bbdca13e702d0a32bd"
 }
 ```
 
 Notes
-- The hash is the canonical digest of the allowed syscall surface for the policy.
+- The hash binds the complete V1 ABI surface, including syscall signatures, pointer types, program metadata and canonical value layouts.
 - Contracts may embed this value in manifests (abi_hash) to bind to the node's ABI.

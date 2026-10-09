@@ -287,6 +287,23 @@ fun SccpTairaXorMinter.sendSccpDeployBuckets(
     return net.send(from, genericMsg);
 }
 
+fun SccpTairaXorMinter.sendSccpRetry(
+    self,
+    from: address,
+    queryId: uint64,
+    response: address,
+    nonce: uint64,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpRetry { queryId, response, nonce },
+    });
+    return net.send(from, genericMsg);
+}
+
 fun SccpTairaXorMinter.sendSccpConsumed(
     self,
     from: address,
@@ -329,6 +346,23 @@ fun SccpTairaXorMinter.sendSccpAlreadyConsumed(
             amount,
             tail: tail.toCell(),
         },
+    });
+    return net.send(from, genericMsg);
+}
+
+fun SccpTairaXorMinter.sendSccpConsumeReverted(
+    self,
+    from: address,
+    queryId: uint64,
+    nonce: uint64,
+    amount: uint96,
+    config: SendParams = {},
+): SendResultList {
+    val genericMsg = createMessage({
+        bounce: config.bounce,
+        value: config.value,
+        dest: self.address,
+        body: SccpConsumeReverted { queryId, nonce, amount },
     });
     return net.send(from, genericMsg);
 }
@@ -474,4 +508,24 @@ fun SccpTairaXorMinter.voidFrozenRequiredValue(self, firstNonce: int): int {
 
 fun SccpTairaXorMinter.deployBucketsRequiredValue(self, count: int): int {
     return net.runGetMethod(self.address, "deploy_buckets_required_value", [count]);
+}
+
+fun SccpTairaXorMinter.applyControlRequiredValue(self): int {
+    return net.runGetMethod(self.address, "apply_control_required_value");
+}
+
+fun SccpTairaXorMinter.rotateRequiredValue(self): int {
+    return net.runGetMethod(self.address, "rotate_required_value");
+}
+
+fun SccpTairaXorMinter.retryRequiredValue(self): int {
+    return net.runGetMethod(self.address, "retry_required_value");
+}
+
+fun SccpTairaXorMinter.minterFloor(self): int {
+    return net.runGetMethod(self.address, "minter_floor");
+}
+
+fun SccpTairaXorMinter.getSccpRetry(self, nonce: int): int {
+    return net.runGetMethod(self.address, "get_sccp_retry", [nonce]);
 }

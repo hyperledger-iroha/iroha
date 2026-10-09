@@ -158,8 +158,10 @@ Endpoints
     shape; those are not validation-fee authorization inputs.
   - `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft` is retired
     and is not registered. Requests to that path fail at routing. Validation-fee
-    authorization is produced only by the canonical timed-private Parliament
-    lifecycle and its complete certificate; Torii does not translate a public
+    authorization is produced only by the canonical Parliament attempt
+    lifecycle and its complete certificate (in current source, the timed-OVN
+    ballot that the [ballot decision](parliament_private_ballot_design.md)
+    retires); Torii does not translate a public
     ballot into that protocol.
 
 ## Attempt-based Parliament native surface
@@ -265,6 +267,11 @@ trigger payload-minimal `FailPublicFindingNoResult`; Core derives
 `DeadlineExpired`, sets the body to `NoResult`, and rejects the attempt. No
 manager may select a winner, though progress assumes an eligible transaction
 eventually submits the permissionless deadline trigger.
+
+The timed-OVN and Parliament TLE ballot surface in this and the following
+sections describes current source. The
+[anonymous-ballot decision](parliament_private_ballot_design.md) retires it; it
+is not the release target.
 
 Private jury ballot transitions carry exact canonical timed-OVN registration
 or dropout records only from the exact seated authority named by the record.
@@ -413,8 +420,9 @@ publication manifest validator is a release-tooling gate, not a runtime feature
 switch; no independent audit report or evidence archive is bundled or claimed.
 The BLS12-381 threshold release, pairing-based timed-OVN ballot, and classical
 beacon are not post-quantum; ML-DSA use elsewhere in Iroha does not change that
-claim boundary. A replacement requires a separately versioned, reviewed, and
-consensus-enacted protocol revision.
+claim boundary. The [ballot decision](parliament_private_ballot_design.md)
+replaces the threshold release and timed-OVN ballot with a canonical V1
+post-quantum membership/nullifier ballot; the classical beacon remains.
 The authenticated
 `GET /v1/gov/parliament/ballots/{ballot_attempt_id}/release-context` endpoint
 returns Core's exact opening authorization as public data, including the full
@@ -476,14 +484,10 @@ signer input, but that public projection does not prove committed-state origin;
 an operational transport must authenticate and scope the daemon, and the daemon
 must independently verify the returned share. This is not an OS-custody,
 hardware-backed, secure-erasure, or operational-availability guarantee.
-Qualification of the deployment-selected signer—software custody or an
-authenticated external broker—plus restart evidence and four-peer execution of
-the source-implemented canonical multi-peer collection and operator transaction
-signing remain release gates. Signer implementation details are deployment-owned, and neither
-signer mode permits a plaintext ballot or manual-release fallback. Aggregate
-opening is therefore not yet an operationally automatic four-peer runtime path,
-and the intended V1 corridor remains operator-coordinated rather than a daemon
-signing with account keys.
+This release path is retired by the ballot decision; its signer, restart and
+four-peer collection evidence are no longer release gates. Signer implementation
+details are deployment-owned, and neither signer mode permits a plaintext ballot
+or manual-release fallback.
 
 The app-signed
 `GET /v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context` source path
@@ -547,10 +551,9 @@ borrowed seed after one JNI operation, and returns only fixed-width public
 records. Focused Kotlin, isolated Java, JavaScript, static native-contract, and
 Swift parse checks cover legitimate proofs plus malformed, fake-chain,
 wrong-network, wrong-context, wrong-ballot, intermediate-page, and archive-binding
-tampering. These checks are not native artifact execution: native Cargo
-qualification and a rebuilt same-source ABI-23 XCFramework remain required. The
-packaged ABI-21 XCFramework is intentionally not relabeled. Four-peer end-to-end
-evidence also remains a release gate. No OS-backed erasure of caller or
+tampering. These checks are not native artifact execution. These timed-OVN
+wallet entry points are retired by the ballot decision rather than qualified;
+the packaged ABI-21 XCFramework is intentionally not relabeled. No OS-backed erasure of caller or
 cryptographic-library temporaries is claimed.
 
 - POST `/v1/gov/proposals/deploy-contract`
@@ -717,7 +720,8 @@ Code Size Cap
     closure emits the same event instead.
 
 - POST `/v1/gov/parliament/ballots` is retired and is not registered. Parliament
-  jury participation uses only the authority-bound timed-OVN lifecycle above;
+  jury participation uses only the canonical Parliament attempt lifecycle above
+  (timed-OVN in current source, retired by the ballot decision);
   Torii does not translate an equal public stage ballot into that protocol.
 
 ### Governance defaults (iroha_config `gov.*`)

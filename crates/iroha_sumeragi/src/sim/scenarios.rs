@@ -1,4 +1,4 @@
-//! Fault scenarios F1–F38 of §13.3, each a function of the seed. Committee sizes rotate over
+//! Fault scenarios F1–F39 of §13.3, each a function of the seed. Committee sizes rotate over
 //! `n ∈ {1, 4, 5, 7, 22}` where meaningful (small sizes first, so that the few default seeds of
 //! a debug run stay fast); every other random choice is drawn from a side stream of the seed.
 
@@ -8,7 +8,7 @@ use super::{
     net::{Partition, Spike},
     oracle::leader_turns_bound,
     rng::{Rng, seed_of},
-    scenario::{Churn, CrashPoint, Fault, Perf, Profile, Scenario, Workload},
+    scenario::{Churn, ClockGuard, CrashPoint, Fault, Perf, Profile, Scenario, Workload},
     world::preview,
 };
 use crate::{pacemaker::t_req_nominal, types::Millis};
@@ -56,6 +56,7 @@ pub const ALL: &[(&str, Builder)] = &[
     ("F36", f36),
     ("exact-quorum", exact_quorum_adversary),
     ("F38", f38),
+    ("F39", f39),
 ];
 
 fn pick<T: Copy>(seed: u64, options: &[T]) -> T {
@@ -1583,6 +1584,94 @@ pub fn f38(seed: u64) -> Scenario {
     sc.checks.windows = vec![(0, 10_000, 25_000, 3)];
     sc.heal_at = 22_000;
     sc.duration = 60_000;
+    sc.checks.progress = 5;
+    sc
+}
+
+/// F39: the application clock guard (§4.5) under skewed honest wall clocks. Every honest wall
+/// clock is within `[0, max_clock_drift_ms]` of real time (the liveness assumption
+/// `2ε ≤ max_clock_drift_ms`), a third of the transactions apply due work (CT5), and `f`
+/// Byzantine members run no guard and build blocks post-dated by up to `2·max_clock_drift_ms`,
+/// far-future or back-dated past `due_work_max_lag_ms`, in turn. By variant (`seed % 3`): (0)
+/// the Byzantine members vote or withhold every vote; (1) as (0), and one honest wall clock
+/// jumps 30 s ahead (outside the assumption) for 15 s, then converges back; (2) a Byzantine
+/// proxy tail hides `PrepareQC`s (F33) of blocks that all apply due work, so their
+/// re-proposals are older than the lag and execute only as certified (§4.5 "Certified
+/// re-proposals", MS51). Oracles: O-TIME, O-LIVE, O-AGR, O-FAULT (the guard's refusals are
+/// local faults).
+pub fn f39(seed: u64) -> Scenario {
+    let n = pick(seed / 3, &[4, 7, 10]);
+    let mut sc = sized("F39", seed, n);
+    let mut rng = side("F39", seed);
+    let f = f_of(n);
+    let drift: Millis = 1_000;
+    let lag = 2 * drift + 4 * sc.params.block_time;
+    let drift_ms = i64::try_from(drift).unwrap_or(i64::MAX);
+    let lag_ms = i64::try_from(lag).unwrap_or(i64::MAX);
+    let variant = seed % 3;
+    let byz = if variant == 2 {
+        vec![role(&sc, 2 + seed % 4, 0, true)]
+    } else {
+        distinct(&mut rng, n, f)
+    };
+    sc.byz = byz
+        .iter()
+        .map(|m| {
+            let strategies = match variant {
+                2 => vec![Strategy::HiddenPqc],
+                _ if rng.chance(500_000) => vec![Strategy::WithholdVotes],
+                _ => Vec::new(),
+            };
+            (*m, strategies)
+        })
+        .collect();
+    let wall_offsets: Vec<i64> = (0..n)
+        .map(|_| i64::try_from(rng.range(0, drift)).unwrap_or(0))
+        .collect();
+    let leads = if variant == 2 {
+        Vec::new()
+    } else {
+        byz.iter()
+            .map(|m| {
+                let lead = |rng: &mut Rng| i64::try_from(rng.range(0, drift)).unwrap_or(0);
+                let leads = vec![
+                    lead(&mut rng),
+                    3_600_000,
+                    -lag_ms - 2_000,
+                    drift_ms + lead(&mut rng),
+                ];
+                (*m, leads)
+            })
+            .collect()
+    };
+    if variant == 1 {
+        let honest: Vec<usize> = (0..n).filter(|m| !byz.contains(m)).collect();
+        if let Some(&fast) = rng.pick(&honest) {
+            let back = wall_offsets[fast];
+            for (at, offset) in [(15_000, 30_000), (30_000, back)] {
+                sc.script.push((
+                    at,
+                    Fault::Custom(Box::new(move |w| w.set_wall_offset(fast, offset))),
+                ));
+            }
+        }
+    }
+    sc.workload = Some(Workload {
+        due_every: if variant == 2 { 1 } else { 3 },
+        ..Workload::default()
+    });
+    sc.clock_guard = Some(ClockGuard {
+        max_clock_drift_ms: drift,
+        due_work_max_lag_ms: lag,
+        wall_offsets,
+        leads,
+    });
+    sc.checks.may_fault = (0..n).collect();
+    sc.demotion_window = 8;
+    if variant == 2 {
+        sc.heal_at = 45_000;
+        sc.duration = 95_000;
+    }
     sc.checks.progress = 5;
     sc
 }

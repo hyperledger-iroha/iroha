@@ -904,6 +904,16 @@ for (const profile of Object.values(PROFILES)) {
         await expectRevert(voidExpired(ctx, 42, a, expiring), "DeadlineNotReached");
         const after = ctx.chain.time + HOUR + 1n;
         await expectRevert(voidExpired(ctx, 41, a, expiring, { at: after }), "BadNonce", [42n]);
+        const expiredData = ctx.dest.iface.encodeFunctionData("voidExpired", [
+          42,
+          a.attestation,
+          a.roster,
+          a.signatures,
+          messageProof(a, expiring),
+        ]);
+        for (const tail of ["0x00", m.word(0)]) {
+          await expectRevert(ctx.dest.raw(ethers.concat([expiredData, tail])), "NonCanonicalCalldata");
+        }
         const receipt = await voidExpired(ctx, 42, a, expiring);
         h.recordGas(profile, "voidExpired n=4 t=3", receipt);
         const logs = receipt.logs.filter((log) => ethers.getAddress(log.address) === ctx.dest.address);
@@ -1332,6 +1342,47 @@ for (const profile of Object.values(PROFILES)) {
     );
 
     it(
+      "bounds the attested history at 2^32 blocks (§3.5, §5.1.3)",
+      withDestination(profile, {}, async (ctx) => {
+        const messages = [transfer(ctx, { nonce: 70 }), transfer(ctx, { nonce: 71 })];
+        const blocks = messages.map((message) => attest(ctx, [message]).block);
+        const heartbeat = attest(ctx, []);
+        const leafOf = (block) => m.historyLeaf(block.height, block.sccpRoot, block.messageCount);
+        const sibling = ethers.keccak256("0x5a");
+        const limit = 1n << 32n;
+        // At 2^32 leaves the last leaf has 32 siblings; at 2^32 + 1 the last leaf is promoted
+        // 32 times and needs one sibling, so only the size bound refuses that statement.
+        const full = { size: limit, index: limit - 1n, path: Array(32).fill(sibling), block: blocks[0] };
+        const over = { size: limit + 1n, index: limit, path: [sibling], block: blocks[1] };
+        const historical = (shape, message) => {
+          const root = m.merkleRootFromPath(leafOf(shape.block), shape.index, shape.size, shape.path);
+          const a = attest(ctx, [], {
+            block: heartbeat.block,
+            mutate: () => ({ historySize: shape.size, historyRoot: root }),
+          });
+          const history = {
+            height: shape.block.height,
+            sccpRoot: shape.block.sccpRoot,
+            messageCount: shape.block.messageCount,
+            leafIndex: shape.index,
+            path: shape.path,
+          };
+          return ctx.dest.tx("finalizeFromTairaHistorical", [
+            a.attestation,
+            a.roster,
+            a.signatures,
+            history,
+            messageProofOf(shape.block, message),
+          ]);
+        };
+        await expectRevert(historical(over, messages[1]), "BadProof");
+        assert.equal(await ctx.dest.view("isConsumed", [71]), false);
+        await historical(full, messages[0]);
+        assert.equal(await ctx.dest.view("isConsumed", [70]), true);
+      }),
+    );
+
+    it(
       "burns with per-sender nonces and emits the canonical inbound payload (§5.1.7)",
       withDestination(profile, {}, async (ctx) => {
         await mintTo(ctx, { nonce: 1, amount: 100n * UNIT });
@@ -1475,6 +1526,11 @@ for (const profile of Object.values(PROFILES)) {
         await expectRevert(ctx.dest.tx("voidFrozen", [0, 0], { at: frozen }), "BadAmount");
         await expectRevert(ctx.dest.tx("voidFrozen", [0, 257]), "BadAmount");
         await expectRevert(ctx.dest.tx("voidFrozen", [U64_MAX, 2]), "BadAmount");
+        const frozenData = ctx.dest.iface.encodeFunctionData("voidFrozen", [0, 1]);
+        for (const tail of ["0x00", m.word(0)]) {
+          await expectRevert(ctx.dest.raw(ethers.concat([frozenData, tail])), "NonCanonicalCalldata");
+        }
+        await expectRevert(ctx.dest.raw(ethers.dataSlice(frozenData, 0, 67)), null);
         await expectRevert(ctx.dest.tx("voidFrozen", [290, 20]), "AlreadyConsumed", [300n]);
         assert.equal(await ctx.dest.view("isConsumed", [290]), false, "a reverted range consumes nothing");
         const opBefore = await ctx.dest.view("opCount");

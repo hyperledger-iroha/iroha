@@ -394,7 +394,11 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
     - `advance_after_ms` (default: `0` ⇒ `ws_bound_ms / 4` of each light client): staleness
       after which the keeper submits a proof-carrying advance from the bridge key's account.
     - `poll_interval_ms` / `request_timeout_ms` (defaults: `60000` / `10000`, both non-zero):
-      light-client state check cadence and per-request RPC timeout before failover.
+      per-network light-client state check cadence (plus up to 25 % jitter, doubling after each
+      consecutive failed poll up to 64 × the interval) and per-attempt RPC timeout before
+      failover.
+    - `poll_budget_ms` (default: `120000`, non-zero): wall-clock budget of one network's poll,
+      covering every RPC request of one advance build.
     - `max_advance_bytes` (default: `262144`, non-zero): largest advance the keeper submits; it
       drops a larger built advance with a warning. The on-chain per-instruction bounds still apply.
     - `[sccp.light_client_keeper.endpoints]`: `ethereum_execution`, `ethereum_beacon`, `bsc`

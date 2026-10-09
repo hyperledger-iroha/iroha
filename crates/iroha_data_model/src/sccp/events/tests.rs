@@ -390,7 +390,7 @@ fn enum_payloads_roundtrip_in_every_variant() {
         SccpBounceReasonV1::UndecodableRecipient,
         SccpBounceReasonV1::EscrowRecipient,
         SccpBounceReasonV1::InadmissibleController,
-        SccpBounceReasonV1::CreditRefused,
+        SccpBounceReasonV1::UnregistrableRecipient,
     ] {
         roundtrip(&reason);
     }

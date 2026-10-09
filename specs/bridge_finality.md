@@ -41,9 +41,13 @@ internal error. Nothing is served from unverified data.
 - `block_wire`: the canonical result-bearing `SignedBlockWire`, at most
   `MAX_FINALITY_BLOCK_BYTES` (32 MiB). It embeds the block's
   `CommitCertificate`: the core header, the `CommitQC`, the signed RS16
-  availability table and the preimage of the execution result `R`. Genesis
-  carries a result-only certificate (no core header, `CommitQC` or
-  availability table).
+  availability table and the preimage of the execution result `R`. Under
+  [`sumeragi.md`](sumeragi.md) §4.1.1 that preimage is `F ‖ body`: the
+  221-byte finality header (`SccpFinalityHeaderV1`, called `X` in
+  [`sccp.md`](sccp.md) §3.6) followed by the canonical
+  `ExecutionResultCommitment`, at most 64 KiB together, and
+  `R = SHA-256(RESULT_TAG ‖ F ‖ H(RESULT_BODY_TAG ‖ body))`. Genesis carries a
+  result-only certificate (no core header, `CommitQC` or availability table).
 - `committee`: the committee of that height as
   `FinalityValidator { public_key, proof_of_possession }` entries in canonical
   key order.
@@ -62,21 +66,46 @@ trust root. It requires:
 2. a committee of the exact first-release global geometry (`3f + 1`, 4..=31
    members) of distinct BLS-normal keys, each with a valid proof of
    possession, in canonical order;
-3. an `ExecutionResultCommitment` preimage that names the block's height, lists
-   exactly this committee as its current epoch context, and commits the exact
-   executed-wire length and hash and the block's transaction input and output
-   commitments; a beacon pulse in the result must name the block's parent;
+3. a result preimage that decodes through `CertifiedResultV1::decode`, the
+   only decoder of `F ‖ body`, with scope `TairaGlobal` for the global
+   instance (kind 0, index 0) and `NonGlobal` for every other root. It checks
+   ([`sccp.md`](sccp.md) §3.6, C1–C5): `F` parses (fixed magic and flags; an
+   inactive `F` is all zero after its flags; an active `F` has a nonzero
+   generation and committee root, consistent message-count, history and
+   rotation fields, and a nonzero height) and `F.height` equals the body's
+   height; `F.network_id` equals the network of the epoch context the schedule
+   assigns to that height; an active `F` names `committee_root` of that
+   context's committee, and a boundary decision in the body whose successor
+   committee differs is reflected as a rotation to exactly that root;
+   `F.timestamp_ms` and `F.height` equal the block's time and height; and a
+   `NonGlobal` scope requires an inactive `F`. The body names the block's
+   height, lists exactly this committee as its current epoch context, and
+   commits the exact executed-wire length and hash and the block's transaction
+   input and output commitments; a beacon pulse in the result must name the
+   block's parent. `R` is `result_of_preimage(F ‖ body)`;
 4. at height 1, a result-only certificate; at every later height, a non-empty
    block and a Commit `CommitQC` of the core header's height, instance, block
    hash, result `R` and `attest` flag, in the committee's epoch, over the
    canonical resultless proposal (payload length and hash), with a
    structurally valid availability table, the attestation count required by
    the `attest` flag, and an exact-quorum BLS aggregate signature that verifies
-   under the committee.
+   under the committee with the consensus suite of
+   [`sumeragi.md`](sumeragi.md) §1 item 6 (`DST_SIG` over `SHA-256` of the
+   Commit preimage).
 
 A successful structural check is not authentication: the committee is the
 proof's own claim. Embedded application attestations (§3.7) are separate
-evidence; a proof grants no attestation capability.
+evidence; a proof grants no attestation capability. The SCCP fields of an
+active `F` (commitment root, message count, history, generation, rotation
+validity) cannot be derived from the body; their only authority is the
+quorum signature, and SCCP's forgery evidence holds the signers to them
+([`sccp.md`](sccp.md) §4.9).
+
+**Status.** The `F ‖ body` layout, `CertifiedResultV1` and the consensus suite
+are the target of `sccp.md` revision 5 and are not yet implemented
+(`TODO:` WP-C1, WP-C2); until they land, the as-built result is
+`R = H("iroha/sumeragi/result/v1" ‖ body)` and check 3 decodes the body alone
+([`sumeragi.md`](sumeragi.md) Appendix E51).
 
 ### Contiguous verification
 
@@ -145,7 +174,10 @@ challenge, the genesis-derived network id, the node's BLS `PeerId` and its
 fingerprint, the build and configuration fingerprints, the genesis block hash,
 the genesis proof, the node's `SumeragiStatus` at the tip and the tip proof.
 The node signs `H("iroha:sumeragi-finality-attestation:v1\0" ‖ Norito(body))`
-with its BLS-normal node key. `SumeragiFinalityAttestation::verify` checks the
+with its BLS-normal node key, under the existing w3f transcript, never under
+the consensus suite's `DST_SIG`: a chosen-challenge statement can never verify
+as a vote or a certificate share ([`sumeragi.md`](sumeragi.md) §1 item 6).
+`SumeragiFinalityAttestation::verify` checks the
 body's internal bindings (nonzero challenge, node identity and fingerprint,
 genesis-derived network, a non-halted status of the current protocol version
 whose committed and applied heights equal the tip, the status instance, and

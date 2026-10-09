@@ -9,7 +9,9 @@
 //! Only three movements touch an escrow: [`lock`] (credit by `RecordSccpMessage`), [`release`]
 //! (debit by an inbound release, an outbound refund or a Parliament-enacted
 //! `ReleaseStranded`) and [`strand`], which keeps the amount in the escrow and books it as
-//! `stranded(route)`. Liability bookkeeping belongs to the callers.
+//! `stranded(route)`. Liability bookkeeping belongs to the callers. [`precheck_release`] runs
+//! every guard of a release without mutating state, so settlement can hold a message whose
+//! credit the movement would refuse.
 
 use super::{Error, store};
 use crate::{
@@ -153,6 +155,31 @@ pub fn release(
         destination,
         xor_quantity(amount)?,
         record_id,
+    )
+}
+
+/// Check, without mutating state, that [`release`] of `amount` Taira units from `network`'s
+/// route escrow to the existing account `to` passes every guard of the release movement
+/// (§4.12.3 step 6, §4.16).
+///
+/// # Errors
+///
+/// Returns the refusal the release would report: the route is not registered, `to` does not
+/// exist, or the movement's transfer control, holding limit, custody, usage or privacy policy
+/// refuses the credit.
+pub fn precheck_release(
+    state_transaction: &StateTransaction<'_, '_>,
+    network: SccpNetworkV1,
+    to: &AccountId,
+    amount: u128,
+) -> Result<(), Error> {
+    let escrow = escrow_asset(&*state_transaction.world, network)?;
+    let destination = AssetId::of(escrow.definition().clone(), to.clone());
+    asset_isi::precheck_sccp_escrow_release(
+        state_transaction,
+        &escrow,
+        &destination,
+        &xor_quantity(amount)?,
     )
 }
 
@@ -325,7 +352,14 @@ mod tests {
         assert_eq!(balance(&stx, &holder), xor_quantity(3_500_000_000).unwrap());
 
         let unknown = authority(9);
+        precheck_release(&stx, network, &unknown, 1).expect_err("absent recipient");
         release(&mut stx, network, &unknown, 1, [4; 32]).expect_err("absent recipient");
+        precheck_release(&stx, network, &holder, 1_500_000_000).expect("the whole escrow");
+        precheck_release(&stx, network, &holder, 1_500_000_001).expect_err("beyond the escrow");
+        precheck_release(&stx, network, &holder, 0).expect_err("a zero release");
+        precheck_release(&stx, network, &escrow, 1).expect_err("an escrow destination");
+        precheck_release(&stx, SccpNetworkV1::BscMainnet, &holder, 1)
+            .expect_err("another route's escrow is empty");
         release(&mut stx, SccpNetworkV1::BscMainnet, &holder, 1, [5; 32])
             .expect_err("another route's escrow is empty");
     }

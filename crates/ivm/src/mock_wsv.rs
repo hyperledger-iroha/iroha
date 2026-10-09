@@ -6065,6 +6065,50 @@ mod tests_null_decode {
         );
     }
     #[test]
+    fn smartcontract_instruction_rejects_record_sccp_message_under_every_tag() {
+        // specs/sccp.md §4.4: contracts record no SCCP messages. ABI v1 defines only tag
+        // `1=SubmitBallot`, so the canonical encoded record fails under it, under the retired
+        // tag 2 and under every other tag, without touching the mock world.
+        let caller: AccountId = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "wonderland",
+        );
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(WsvHost::new_with_subject(MockWorldStateView::new(), caller));
+        let record = iroha_data_model::isi::sccp::RecordSccpMessage {
+            network: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+            expected_revision: 1,
+            amount: Numeric::new(2_u32, 0),
+            recipient: vec![0x22; 20],
+        };
+        let payload = encode_canonical_norito(&DMInstructionBox::from(record))
+            .expect("encode canonical RecordSccpMessage");
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload))
+            .expect("alloc canonical RecordSccpMessage");
+        vm.set_register(10, ptr);
+        for tag in [
+            0,
+            syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
+            2,
+            u64::MAX,
+        ] {
+            vm.set_register(11, tag);
+            assert_eq!(
+                call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
+                Err(VMError::PermissionDenied),
+                "tag {tag} must not execute RecordSccpMessage"
+            );
+        }
+        let host = vm
+            .host_mut_any()
+            .expect("host")
+            .downcast_ref::<WsvHost>()
+            .expect("WsvHost");
+        assert!(host.wsv.zk_events.is_empty() && host.wsv.elections.is_empty());
+        assert!(host.state_overlay.is_empty() && host.fastpq_batch_entries.is_none());
+    }
+    #[test]
     fn smartcontract_instruction_accepts_only_canonical_instruction_box() {
         let caller: AccountId = test_account_id(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",

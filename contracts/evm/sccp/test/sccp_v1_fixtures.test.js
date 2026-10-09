@@ -14,7 +14,13 @@
 //   (the signatures come from the fixtures' fixed keys);
 // - the Rust-built calldata of `finalizeFromTaira`, `applyControl`,
 //   `rotateRosters`, their historical forms and the voids is canonical ABI and is
-//   accepted by the contract, with the expected state changes and events.
+//   accepted by the contract, with the expected state changes and events;
+// - under chain ids 1, 56 and 0x2b6653dc the contract accepts exactly the
+//   entries of the shared void and burn calldata conformance table
+//   (`calldata_conformance`) that the Rust decoders accept (the decoders
+//   Taira's TRON light client uses), and reverts on every other entry with the
+//   recorded error (§5.1.7, §5.1.8, §5.2.2); its calldata check also admits a
+//   void with every integer at its full declared ABI width.
 //
 // The fixtures bind leaves to the destination word `word(0x22…22)`, so each
 // test deploys the contract with the scenario's roster g7 and relocates its
@@ -39,6 +45,10 @@ const DESTINATION = "0x2222222222222222222222222222222222222222";
 const T0_S = 1_800_000_000n;
 const CAP = 1_000_000_000_000_000_000n;
 const STORAGE_SLOTS = 8;
+// §5.2.3 slots of `totalSupply` and the `balanceOf` mapping.
+const TOTAL_SUPPLY_SLOT = 6n;
+const BALANCE_OF_SLOT = 7n;
+const UNIT = 1_000_000_000n;
 
 function load(name) {
   return JSON.parse(fs.readFileSync(path.join(FIXTURES, name), "utf8"));
@@ -118,9 +128,9 @@ function payloadFields(payload) {
   return { nonce, amount, recipient };
 }
 
-/** Deploys the scenario destination (g7) and relocates it to `DESTINATION`. */
-async function scenarioDestination() {
-  const chain = await Chain.open(PROFILES.ethereum);
+/** Deploys the scenario destination (g7) on `profile` and relocates it to `DESTINATION`. */
+async function scenarioDestination(profile = PROFILES.ethereum) {
+  const chain = await Chain.open(profile);
   const { destination: deployed } = await h.deploy(chain, {
     networkId: NETWORK_ID,
     revision: SCENARIO.destination.route_revision,
@@ -146,8 +156,8 @@ async function scenarioDestination() {
 
 const chains = [];
 
-async function open() {
-  const context = await scenarioDestination();
+async function open(profile) {
+  const context = await scenarioDestination(profile);
   chains.push(context.chain);
   return context;
 }
@@ -357,4 +367,160 @@ describe("SCCP v1 fixtures: Rust calldata on EDR", () => {
     // Both rosters are still accepted, so the destination is not frozen.
     await expectRevert(destination.raw(call("void_frozen").calldata), "NotFrozen");
   });
+});
+
+// ---------------------------------------------------------------------------
+// Shared void and burn calldata conformance (§5.1.7, §5.1.8, §5.2.2)
+// ---------------------------------------------------------------------------
+
+const CONFORMANCE = CALLDATA.calldata_conformance;
+const CONFORMANCE_FUNCTIONS = ["voidExpired", "voidExpiredHistorical", "transferToTaira", "voidFrozen"];
+
+function conformanceEntries(name) {
+  const entries = CONFORMANCE.filter((entry) => entry.function === name);
+  assert(entries.length > 0, `the table has ${name} entries`);
+  return entries;
+}
+
+/** Gives `holder` a balance of `amount` (and the matching supply) through storage. */
+async function fund(chain, destination, holder, amount) {
+  const balanceKey = ethers.solidityPackedKeccak256(["uint256", "uint256"], [BigInt(holder), BALANCE_OF_SLOT]);
+  await chain.rpc("hardhat_setStorageAt", [destination.address, ethers.toQuantity(BigInt(balanceKey)), m.word(amount)]);
+  await chain.rpc("hardhat_setStorageAt", [destination.address, ethers.toQuantity(TOTAL_SUPPLY_SLOT), m.word(amount)]);
+  assert.equal(await destination.view("balanceOf", [holder]), amount);
+  assert.equal(await destination.view("totalSupply"), amount);
+}
+
+/**
+ * Sends one table entry from account 5 and checks the recorded outcome. The
+ * `voidExpired*` payloads are bound to the Ethereum lane, so on BSC and TRON
+ * an accepted entry passes the calldata check and then reverts `BadPayload`.
+ */
+async function runEntry(profile, destination, entry, at) {
+  const what = `${profile.name} ${entry.function} ${entry.label}`;
+  const send = () => destination.raw(entry.calldata, { from: 5, at });
+  if (entry.contract !== "accept") {
+    let failure = null;
+    try {
+      await send();
+    } catch (error) {
+      failure = error;
+    }
+    assert(failure, `${what}: expected a revert, but the call succeeded`);
+    const data = h.revertData(failure);
+    assert(data !== null, `${what}: expected a revert, got ${failure.message}`);
+    const name = data === "0x" ? "empty" : loadArtifacts().iface.parseError(data)?.name;
+    assert.equal(name, entry.contract, `${what}: revert`);
+    return;
+  }
+  if (entry.function.startsWith("voidExpired") && profile !== PROFILES.ethereum) {
+    await expectRevert(send(), "BadPayload");
+    return;
+  }
+  const receipt = await send();
+  const { iface } = loadArtifacts();
+  const args = iface.decodeFunctionData(entry.function, entry.calldata);
+  if (entry.function === "transferToTaira") {
+    const [event] = destination.events(receipt, "SccpTransferToTaira");
+    assert.equal(event.parsed.args.nonce, args[2], what);
+    assert.equal(await destination.view("transferNonces", [destination.chain.accounts[5]]), args[2] + 1n, what);
+    return;
+  }
+  const voided = destination.events(receipt, "SccpVoided");
+  const [first, count] = entry.function === "voidFrozen" ? [args[0], args[1]] : [args[0], 1n];
+  assert.equal(BigInt(voided.length), count, what);
+  voided.forEach((event, index) => assert.equal(event.parsed.args.nonce, first + BigInt(index), what));
+  assert.equal(await destination.view("isConsumed", [first]), true, what);
+  assert.equal(await destination.view("isConsumed", [first + count - 1n]), true, what);
+}
+
+/** `value` of ABI type `type` with every `uintN` inside it set to `2^N - 1`. */
+function atFullWidth(type, value) {
+  if (type.baseType === "tuple") return type.components.map((component, index) => atFullWidth(component, value[index]));
+  if (type.baseType === "array") return [...value].map((item) => atFullWidth(type.arrayChildren, item));
+  const bits = /^uint(\d+)$/.exec(type.type);
+  return bits ? (1n << BigInt(bits[1])) - 1n : value;
+}
+
+describe("SCCP v1 fixtures: void and burn calldata conformance", () => {
+  it("covers every TRON-observed entry point, and the decoder and contract verdicts agree", () => {
+    const { iface } = loadArtifacts();
+    assert.deepEqual([...new Set(CONFORMANCE.map((entry) => entry.function))].sort(), [...CONFORMANCE_FUNCTIONS].sort());
+    const labels = new Set();
+    for (const entry of CONFORMANCE) {
+      const key = `${entry.function}/${entry.label}`;
+      assert(!labels.has(key), `duplicate entry ${key}`);
+      labels.add(key);
+      assert.equal(ethers.dataSlice(entry.calldata, 0, 4), iface.getFunction(entry.function).selector, key);
+      assert.equal(entry.decoder === "accept", entry.contract === "accept", key);
+      if (entry.contract === "accept") {
+        const parsed = iface.parseTransaction({ data: entry.calldata });
+        assert.equal(iface.encodeFunctionData(parsed.fragment, parsed.args), entry.calldata, `${key} is canonical`);
+      }
+    }
+    for (const [name, label] of [
+      ["voidExpired", "void_expired"],
+      ["voidExpiredHistorical", "void_expired_historical"],
+      ["voidFrozen", "void_frozen"],
+      ["transferToTaira", "transfer_to_taira"],
+    ]) {
+      const canonical = conformanceEntries(name).find((entry) => entry.label === "canonical");
+      assert.equal(canonical.calldata, call(label).calldata, `${name} canonical entry is the golden call`);
+    }
+  });
+
+  for (const profile of Object.values(PROFILES)) {
+    it(`accepts exactly the entries the Rust decoder accepts on ${profile.name} (chain id ${profile.chainId})`, async () => {
+      const { chain, destination } = await open(profile);
+      await fund(chain, destination, chain.accounts[5], 10n * UNIT);
+      await destination.raw(call("rotate_one").calldata, { at: T0_S + 200n });
+      // After the deadline and within g7's previous-roster grace.
+      const deadlineS = BigInt(SCENARIO.deadline_ms) / 1000n;
+      let at = deadlineS + 1n;
+      for (const name of ["voidExpired", "voidExpiredHistorical", "transferToTaira"]) {
+        for (const entry of conformanceEntries(name)) {
+          await runEntry(profile, destination, entry, at);
+          at = undefined;
+        }
+      }
+      assert(chain.time * 1000n <= (T0_S + 200n) * 1000n + m.PREVIOUS_ROSTER_GRACE_MS, "g7 stays accepted");
+      // Frozen: g8 and g7's grace have both expired.
+      at = BigInt(SCENARIO.roster_g8.valid_until_ms) / 1000n + 1n;
+      for (const entry of conformanceEntries("voidFrozen")) {
+        await runEntry(profile, destination, entry, at);
+        at = undefined;
+      }
+      const accepted = CONFORMANCE.filter((entry) => entry.contract === "accept").length;
+      const voidExpiredAccepted = profile === PROFILES.ethereum ? 2n : 0n;
+      assert.equal(await destination.view("opCount"), BigInt(accepted) - 2n + voidExpiredAccepted);
+    });
+
+    it(`admits every void integer at its full ABI width on ${profile.name} (chain id ${profile.chainId})`, async () => {
+      // Widths come from the ABI, so a check narrower than a declared type fails
+      // here; the Rust side is `void_expired_accepts_every_integer_at_its_full_width`.
+      const { destination } = await open(profile);
+      const { iface } = loadArtifacts();
+      for (const name of ["voidExpired", "voidExpiredHistorical"]) {
+        const canonical = conformanceEntries(name).find((entry) => entry.label === "canonical").calldata;
+        const fragment = iface.getFunction(name);
+        const args = iface.decodeFunctionData(fragment, canonical);
+        const data = iface.encodeFunctionData(
+          fragment,
+          fragment.inputs.map((input, index) => atFullWidth(input, args[index])),
+        );
+        assert.equal(ethers.dataLength(data), ethers.dataLength(canonical), name);
+        assert.notEqual(data, canonical, name);
+        let failure = null;
+        try {
+          await destination.raw(data, { from: 5 });
+        } catch (error) {
+          failure = error;
+        }
+        assert(failure, `${name}: the forged attestation cannot succeed`);
+        const revert = h.revertData(failure);
+        assert(revert !== null && revert !== "0x", `${name}: expected a custom error, got ${failure.message}`);
+        assert.notEqual(iface.parseError(revert)?.name, "NonCanonicalCalldata", `${name}: the calldata check admits it`);
+      }
+    });
+  }
 });

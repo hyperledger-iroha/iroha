@@ -81,6 +81,7 @@ fn empty_config_yields_every_default_with_key_dir_under_kura_store_dir() {
     );
     assert_eq!(keeper.poll_interval, Duration::from_millis(60_000));
     assert_eq!(keeper.request_timeout, Duration::from_millis(10_000));
+    assert_eq!(keeper.poll_budget, Duration::from_millis(120_000));
     assert_eq!(keeper.max_advance_bytes.get(), 262_144);
     assert!(keeper.secret_headers.is_empty());
     let endpoints = &keeper.endpoints;
@@ -146,6 +147,7 @@ fn explicit_attestor_and_keeper_values_are_kept() {
          advance_after_ms = 3600000\n\
          poll_interval_ms = 5000\n\
          request_timeout_ms = 2500\n\
+         poll_budget_ms = 30000\n\
          max_advance_bytes = 65536\n",
     )
     .expect("valid");
@@ -162,6 +164,7 @@ fn explicit_attestor_and_keeper_values_are_kept() {
     assert_eq!(keeper.advance_after_for(1), Duration::from_secs(3_600));
     assert_eq!(keeper.poll_interval, Duration::from_secs(5));
     assert_eq!(keeper.request_timeout, Duration::from_millis(2_500));
+    assert_eq!(keeper.poll_budget, Duration::from_secs(30));
     assert_eq!(keeper.max_advance_bytes.get(), 65_536);
 }
 
@@ -241,6 +244,10 @@ fn zero_intervals_and_bounds_are_rejected() {
     assert_rejected(
         "[sccp.light_client_keeper]\nrequest_timeout_ms = 0\n",
         "sccp.light_client_keeper.request_timeout_ms must be nonzero",
+    );
+    assert_rejected(
+        "[sccp.light_client_keeper]\npoll_budget_ms = 0\n",
+        "sccp.light_client_keeper.poll_budget_ms must be nonzero",
     );
     assert_rejected(
         "[sccp.light_client_keeper]\nmax_advance_bytes = 0\n",

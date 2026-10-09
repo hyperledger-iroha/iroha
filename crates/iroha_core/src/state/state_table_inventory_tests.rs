@@ -596,8 +596,8 @@ const ROOTS: &[Root] = &[
         class: RootClass::ProtocolFingerprint,
         carrier: "BlockHeader.confidential_features of every block, and the confidential capabilities of the peer handshake",
         keyed: false,
-        scope: "the effective verifying-key projection, selected parameter identifiers and their registry-effectiveness checks, and ZK policy. Source fields: world.verifying_keys, world.poseidon_params, world.pedersen_params and state.zk",
-        construction: "composite summary: an undomained flat hash of the sorted effective entries of the complete verifying-key table, the Poseidon and Pedersen parameter identifiers that state.zk selects while their registry rows are effective, the confidential rules version, and a SHA-256 digest of the ZK consensus policy combined with the constant SCCP policy hash",
+        scope: "the effective verifying-key projection, selected parameter identifiers and their registry-effectiveness checks, ZK policy, and the SCCP light-client profile versions and hashes active at the block height. Source fields: world.verifying_keys, world.poseidon_params, world.pedersen_params, world.sccp_light_client_profiles and state.zk",
+        construction: "composite summary: an undomained flat hash of the sorted effective entries of the complete verifying-key table, the Poseidon and Pedersen parameter identifiers that state.zk selects while their registry rows are effective, the confidential rules version, and a SHA-256 digest of the ZK consensus policy combined with the SCCP policy hash of the active profile selection; absent profile activations select the compiled version-1 genesis profiles",
         witnesses: "none",
         owner: "G.3",
         disposition: "Removed, or retained solely as an inventoried comparison value recomputed at the specified height from committed registry entries and committed policy. All canonical source entries are committed under the keyed State root. It authenticates no State read; consumers requiring State reads use keyed State witnesses. Policy hashes, parameter selectors and transition limits follow G1-D3/F.4",
@@ -1646,6 +1646,14 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         path: "crates/iroha_core/src/smartcontracts/isi/sccp/commitment.rs",
         uses: &[("HistoryAccumulator", 3)],
         owner: UseOwner::Accumulator("sccp_message_accumulator"),
+    },
+    ConstructionUse {
+        path: "crates/iroha_core/src/smartcontracts/isi/sccp/read/history.rs",
+        uses: &[("HistoryAccumulator", 2)],
+        owner: UseOwner::Other(
+            Use::Test,
+            "Reference history accumulator for the inline cached-history root and path parity tests",
+        ),
     },
     ConstructionUse {
         path: "crates/iroha_core/src/smartcontracts/isi/sccp/witness.rs",
@@ -5717,7 +5725,7 @@ const DEFECTS: &[Defect] = &[
         title: "Confidential-feature registry comparisons are not backed by the keyed State commitment",
         assigned: "G.3",
         related: &["F.4", "G1-D3"],
-        required: "Every block header carries a flat, undomained digest of the effective verifying-key registry and the selected parameter identifiers, and block validation rejects a block whose digest differs from the value recomputed from State. Remove the digest, or retain it solely as an inventoried comparison value recomputed at the specified height from committed registry entries and committed policy. The registry rows are committed under the keyed State root, the digest authenticates no State read, and consumers requiring State reads use keyed State witnesses. The policy hashes, parameter selectors and transition limits that enter the digest follow G1-D3 and F.4.",
+        required: "Every block header carries a confidential-feature summary of the effective verifying-key registry, selected parameter identifiers, ZK policy, and SCCP light-client profile versions and hashes active at its height; block validation rejects a summary that differs from the value recomputed from State. Remove the summary, or retain it solely as an inventoried comparison value recomputed at the specified height from committed registry entries and committed policy. The registry rows, including active SCCP profile activations, are committed under the keyed State root, the summary authenticates no State read, and consumers requiring State reads use keyed State witnesses. Node-configured policy hashes, parameter selectors and transition limits that enter the summary follow G1-D3 and F.4.",
         evidence: &[
             (
                 "crates/iroha_core/src/state.rs",
@@ -5796,6 +5804,7 @@ fn defect_fields(id: &str, rows: &[Row]) -> Vec<String> {
             "world.verifying_keys",
             "world.poseidon_params",
             "world.pedersen_params",
+            "world.sccp_light_client_profiles",
         ]),
         "G1-D11" => named(&["world.axt_policies", "world.axt_handle_counters"]),
         other => panic!("defect {other} has no field rule"),
@@ -8594,10 +8603,14 @@ fn every_listed_commitment_has_one_owner_and_disposition() {
         defect_fields("G1-D11", &rows()),
         ["world.axt_policies", "world.axt_handle_counters"]
     );
-    assert!(listed("confidential_feature_digest").scope.starts_with(
+    assert_eq!(
+        listed("confidential_feature_digest").scope,
         "the effective verifying-key projection, selected parameter identifiers and their \
-             registry-effectiveness checks, and ZK policy."
-    ));
+         registry-effectiveness checks, ZK policy, and the SCCP light-client profile versions \
+         and hashes active at the block height. Source fields: world.verifying_keys, \
+         world.poseidon_params, world.pedersen_params, world.sccp_light_client_profiles and \
+         state.zk"
+    );
     assert!(listed("execution_policy_digest").scope.ends_with(
         "The Nexus policy digest also incorporates `state.lane_manifests` and \
          `state.lane_compliance` through their policy digests"
@@ -9871,7 +9884,8 @@ fn inventory_text_helpers_escape_and_cite_exactly() {
         [
             "world.verifying_keys",
             "world.poseidon_params",
-            "world.pedersen_params"
+            "world.pedersen_params",
+            "world.sccp_light_client_profiles"
         ]
     );
     assert_eq!(DEFECTS.last().map(|defect| defect.id), Some("G1-D11"));

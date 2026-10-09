@@ -356,12 +356,24 @@ def test_minter_initial_data_layout() -> None:
     members = [golden.golden_member(i) for i in range(1, 5)]
     cells = builder.minter_initial_data(golden.NETWORK_ID, 1, 10**18, 7, 1, 2, members, wallet, bucket)
     root = cells["root"]
-    assert len(root.bits) == 267 and root.refs == [cells["config"], cells["roster"]]
+    assert len(root.bits) == 268 and root.refs == [cells["config"], cells["roster"]]
     assert set(root.bits) == {"0"}
     assert cells["config"].refs == [wallet, bucket]
     assert len(cells["roster"].bits) == 256 + 3 * 64 + 16
     si = builder.state_init(OpaqueCell("cc" * 32, 9), root)
     assert si.bits == "00110"
+
+
+def test_bucket_initial_data_layout() -> None:
+    data = golden.bucket_initial_data(int("cd" * 32, 16), 5)
+    # addr_std (267) ‖ index:uint64 ‖ activated:Bool ‖ bits:uint512
+    assert len(data.bits) == 267 + 64 + 1 + 512 and not data.refs
+    assert data.bits[267:331] == format(5, "064b")
+    assert data.bits[331] == "0"
+    assert set(data.bits[332:]) == {"0"}
+    assert golden.bucket_address(int("cd" * 32, 16), 5, OpaqueCell("bb" * 32, 5)) != golden.bucket_address(
+        int("cd" * 32, 16), 6, OpaqueCell("bb" * 32, 5)
+    )
 
 
 def test_state_init_hash_matches_tvm_formula() -> None:

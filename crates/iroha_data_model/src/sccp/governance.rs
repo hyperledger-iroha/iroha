@@ -17,8 +17,9 @@ use super::{
     deployment::SccpDeploymentV1,
     keys::SccpFaultRefV1,
     light_client::{
-        SCCP_LC_BOOTSTRAP_MAX_BYTES_V1, SccpLcBootstrapV1, SccpLcCheckpointDataV1,
-        SccpLcInitExpectationV1, SccpLightClientParamsError, SccpLightClientParamsV1,
+        SCCP_LC_BOOTSTRAP_MAX_BYTES_V1, SCCP_LC_GENESIS_PROFILE_VERSION_V1, SccpLcBootstrapV1,
+        SccpLcCheckpointDataV1, SccpLcInitExpectationV1, SccpLightClientParamsError,
+        SccpLightClientParamsV1,
     },
     params::{SccpParametersError, SccpParametersV1},
 };
@@ -76,7 +77,7 @@ pub enum SccpGovernanceSubjectV1 {
     #[codec(index = 1)]
     #[norito(rename = "route_control")]
     RouteControl(SccpNetworkV1),
-    /// Light client of one external network.
+    /// Light client of one external network, including its active compiled profile version.
     #[codec(index = 2)]
     #[norito(rename = "light_client")]
     LightClient(SccpNetworkV1),
@@ -360,6 +361,40 @@ pub struct SccpFreezeLightClientActionV1 {
     pub network: SccpNetworkV1,
 }
 
+/// `ActivateLightClientProfile`: make a compiled light-client profile version the network's
+/// active version from the block after enactment (§4.13.2).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::sccp::governance::SccpActivateLightClientProfileActionV1"
+)]
+pub struct SccpActivateLightClientProfileActionV1 {
+    /// External source chain.
+    pub network: SccpNetworkV1,
+    /// Compiled profile version; at least 2 and above the network's newest recorded version.
+    pub version: u32,
+    /// Keccak-256 of the version's canonical profile bytes; the enacting release must compile
+    /// the version with exactly this hash.
+    pub profile_hash: [u8; 32],
+}
+
 /// `SetParameters`: replace the complete SCCP parameter value.
 #[derive(
     Debug,
@@ -492,6 +527,10 @@ pub enum SccpGovernanceActionV1 {
     #[codec(index = 13)]
     #[norito(rename = "clear_bridge_key_fault")]
     ClearBridgeKeyFault(SccpClearBridgeKeyFaultActionV1),
+    /// Activate a compiled light-client profile version (subject `LightClient`).
+    #[codec(index = 14)]
+    #[norito(rename = "activate_light_client_profile")]
+    ActivateLightClientProfile(SccpActivateLightClientProfileActionV1),
 }
 
 /// One entry of `base_revisions`: a subject and the `rev(s)` the proposer saw.
@@ -663,6 +702,30 @@ pub enum SccpGovernanceStaticError {
         /// Bootstrap length in bytes.
         len: usize,
     },
+    /// `ActivateLightClientProfile` names version 0 or 1; version 1 is active from genesis.
+    #[error(
+        "action {action} activates light-client profile version {version}; version 1 is active \
+         from genesis, so activations start at version 2"
+    )]
+    GenesisLightClientProfileVersion {
+        /// Index of the offending action.
+        action: usize,
+        /// Named version.
+        version: u32,
+    },
+    /// `ActivateLightClientProfile` names a zero profile hash.
+    #[error("action {action} activates a light-client profile with a zero profile hash")]
+    ZeroLightClientProfileHash {
+        /// Index of the offending action.
+        action: usize,
+    },
+    /// `InstallTrustedCheckpoint` names TON, whose light client reads no checkpoints (old
+    /// masterchain blocks are reached through `OldMcBlocksInfo`).
+    #[error("action {action} installs a TON checkpoint; the TON light client reads none")]
+    TonTrustedCheckpoint {
+        /// Index of the offending action.
+        action: usize,
+    },
     /// `SetParameters` carries parameters that break a §4.1 rule.
     #[error("action {action} parameters are invalid: {error}")]
     InvalidParameters {
@@ -705,9 +768,11 @@ impl SccpGovernanceActionV1 {
                 network,
                 ..
             })
-            | Self::FreezeLightClient(SccpFreezeLightClientActionV1 { network }) => {
-                SccpGovernanceSubjectV1::LightClient(*network)
-            }
+            | Self::FreezeLightClient(SccpFreezeLightClientActionV1 { network })
+            | Self::ActivateLightClientProfile(SccpActivateLightClientProfileActionV1 {
+                network,
+                ..
+            }) => SccpGovernanceSubjectV1::LightClient(*network),
             Self::SetParameters(_) => SccpGovernanceSubjectV1::Parameters,
             Self::ClearBridgeKeyFault(action) => {
                 SccpGovernanceSubjectV1::BridgeKeyFault(action.peer.clone())
@@ -751,7 +816,8 @@ impl SccpGovernanceActionV1 {
             | Self::ReleaseStranded(_)
             | Self::SetTairaPaused(_)
             | Self::SetDestinationPaused(_)
-            | Self::FreezeLightClient(_) => None,
+            | Self::FreezeLightClient(_)
+            | Self::ActivateLightClientProfile(_) => None,
         }
     }
 
@@ -834,10 +900,29 @@ impl SccpGovernanceActionV1 {
                 .next
                 .validate()
                 .map_err(|error| SccpGovernanceStaticError::InvalidParameters { action, error }),
-            Self::SetTairaPaused(_)
-            | Self::InstallTrustedCheckpoint(_)
-            | Self::FreezeLightClient(_)
-            | Self::ClearBridgeKeyFault(_) => Ok(()),
+            Self::ActivateLightClientProfile(activate) => {
+                if activate.version <= SCCP_LC_GENESIS_PROFILE_VERSION_V1 {
+                    return Err(
+                        SccpGovernanceStaticError::GenesisLightClientProfileVersion {
+                            action,
+                            version: activate.version,
+                        },
+                    );
+                }
+                if activate.profile_hash == [0; 32] {
+                    return Err(SccpGovernanceStaticError::ZeroLightClientProfileHash { action });
+                }
+                Ok(())
+            }
+            Self::InstallTrustedCheckpoint(install) => {
+                if install.network == SccpNetworkV1::TonMainnet {
+                    return Err(SccpGovernanceStaticError::TonTrustedCheckpoint { action });
+                }
+                Ok(())
+            }
+            Self::SetTairaPaused(_) | Self::FreezeLightClient(_) | Self::ClearBridgeKeyFault(_) => {
+                Ok(())
+            }
         }
     }
 }
@@ -861,7 +946,8 @@ impl SccpGovernanceProposalV1 {
     /// `network_id` equals `live`; there are 1..=16 actions; every action names an external
     /// network, nonzero revisions, a positive amount and cap (TON cap below `2^96`), a
     /// deployment that fits its network, a memo of at most 256 bytes, valid light-client params
-    /// and a bounded bootstrap of the same network, and valid parameters; no two
+    /// and a bounded bootstrap of the same network, no trusted checkpoint for TON, a light-client
+    /// profile version of at least 2 with a nonzero profile hash, and valid parameters; no two
     /// `RegisterRoute` actions share a destination word; `base_revisions` lists exactly `S(P)`
     /// in ascending order; and every `u64` is at most `2^53 − 1`.
     ///

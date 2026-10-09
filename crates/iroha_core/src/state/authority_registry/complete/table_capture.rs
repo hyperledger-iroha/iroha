@@ -743,6 +743,11 @@ capture_world_table_once!(
     sccp_light_client_stride_index,
     "world.sccp_light_client_stride_index"
 );
+capture_world_table_once!(
+    capture_sccp_light_client_profiles_once,
+    sccp_light_client_profiles,
+    "world.sccp_light_client_profiles"
+);
 
 const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     TableMaterializer::Single {
@@ -1011,6 +1016,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_sccp_light_client_sets_once::MATERIALIZER,
     capture_sccp_light_client_checkpoints_once::MATERIALIZER,
     capture_sccp_light_client_stride_index_once::MATERIALIZER,
+    capture_sccp_light_client_profiles_once::MATERIALIZER,
     TableMaterializer::TransactionMembership,
 ];
 
@@ -1412,6 +1418,7 @@ mod tests {
             "world.sccp_light_client_sets",
             "world.sccp_light_client_checkpoints",
             "world.sccp_light_client_stride_index",
+            "world.sccp_light_client_profiles",
             "state.transactions.current",
             "state.transactions.rollback",
         ];

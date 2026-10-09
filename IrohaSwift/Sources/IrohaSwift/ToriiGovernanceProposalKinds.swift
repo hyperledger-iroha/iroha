@@ -514,6 +514,7 @@ public struct ToriiGovernanceSccpRouteProposal: Decodable, Sendable, Equatable {
         "retire_revision", "remove_staged", "release_stranded", "set_taira_paused",
         "set_destination_paused", "initialize_light_client", "install_trusted_checkpoint",
         "freeze_light_client", "set_parameters", "clear_bridge_key_fault",
+        "activate_light_client_profile",
     ]
 
     public init(from decoder: Decoder) throws {

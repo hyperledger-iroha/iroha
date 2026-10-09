@@ -174,7 +174,7 @@ impl Core {
             bh,
             |defect| match defect {
                 Defect::ParentHash | Defect::ParentResult => !cfg!(sumeragi_mutation = "MS19"),
-                Defect::EmptyPayload => !cfg!(sumeragi_mutation = "MS51"),
+                Defect::EmptyPayload => !cfg!(sumeragi_mutation = "MS53"),
                 Defect::TcRule => !NO_TC_RULE,
                 _ => true,
             },
@@ -278,7 +278,9 @@ impl Core {
         }
     }
 
-    /// `request_exec(bh)` (§6.2): a fresh request id per request, never reused.
+    /// `request_exec(bh)` (§6.2): a fresh request id per request, never reused. The
+    /// `certified` flag is evaluated at every emission, so a due `RetryAt` re-evaluates it
+    /// (§4.5 "Certified re-proposals").
     pub(super) fn request_exec(&mut self, bh: Hash32, attempt: u32) {
         let Some(block) = self.blocks.get(&bh).cloned() else {
             self.exec.remove(&bh);
@@ -294,7 +296,13 @@ impl Core {
                 attempt,
             },
         );
-        self.out.push(Action::Execute { block, req });
+        // MS51: the machine always emits `certified = false`.
+        let certified = !self.certified_results(bh).is_empty() && !cfg!(sumeragi_mutation = "MS51");
+        self.out.push(Action::Execute {
+            block,
+            req,
+            certified,
+        });
     }
 
     /// `discard_exec(keep)` (§6.2): the only source of `DiscardExecution`. Every `Pending`

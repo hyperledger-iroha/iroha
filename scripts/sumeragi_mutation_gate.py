@@ -132,6 +132,7 @@ SCENARIOS = {
     "f34": "sim::tests::f34_late_entrants",
     "f35": "sim::tests::f35_local_queue_asymmetry",
     "f36": "sim::tests::f36_late_leaders",
+    "f39": "sim::tests::f39_clock_guard",
     "exact-quorum": "sim::tests::exact_quorum_under_genuine_superset_attack",
     # F9 variant for ML5a: a vote blackout ending at GST (sim/mutation_group_2.rs).
     "f09r": "sim::mutation_group_2::f09r_vote_blackout_until_gst",
@@ -273,6 +274,15 @@ MUTATIONS = [
        "codec_resource_errors_survive_lossless_norito_conversion"], []),
     m("MS50", "static byte-domain bounds become retryable local decode refusals",
       ["protocol_byte_lengths_are_terminal_codec_errors"], []),
+    # The application clock guard of §4.5: the core's `Execute.certified` flag (MS51) and the
+    # simulator's model of the node executor's CT1 (MS52, a fake-driver mutation; the
+    # production guard is the planned Core case SC5).
+    m("MS51", "request_exec: emits Execute{certified: false} for a block a held PrepareQC certifies",
+      ["f33_hidden_prepareqc_due_work_block_commits_after_lag",
+       "det_s51_execute_certified_flag"], ["f39"]),
+    m("MS52", "fake driver executor: the application clock guard CT1 deleted",
+      ["clock_guard_certified_time_within_two_drifts",
+       "clock_guard_liveness_with_f_plus_one_slow_clocks"], ["f39"]),
     # ---- liveness rules
     m("ML1", "level returns start(h)", ["det_l1_levels_grow"], ["f15"]),
     m("ML2", "on_tick rebroadcast 1 deleted", ["det_l2_lost_timeout_resent"], ["f09"]),
@@ -334,7 +344,7 @@ MUTATIONS = [
     m("MS46", "header signatures omit application control", ["det_s46_control_witness_is_bound_by_header_hash_and_proposal_signature"], []),
     m("MS47", "real work invents an absent authenticated control response", ["det_s47_nonempty_work_waits_for_independent_control_and_preserves_original_payload"], []),
     m("MS48", "control response accepts another exact source", ["det_s48_control_response_requires_exact_request_epoch_view_and_parent_source"], []),
-    m("MS51", "on_proposal: zero-payload signed-defect rejection omitted",
+    m("MS53", "on_proposal: zero-payload signed-defect rejection omitted",
       ["empty_proposals_are_rejected_at_every_view"], []),
     # ---- as-built rules of Appendix E (E1-E7) and their regression tests
     m("ME1", "on_status: rate-limited Status drops its fresh CommitQC (E1)",
@@ -887,6 +897,8 @@ CORE_MUTATIONS = [
       ["sumeragi::lanes::store::publication_tests::lane_merge_wake_binding_preserves_original_queue_and_pool_across_retry"]),
     m("HC197", "durable lane merge source: accept a foreign original Queue identity",
       ["sumeragi::lanes::store::publication_tests::lane_merge_wake_binding_preserves_original_queue_and_pool_across_retry"]),
+    m("HC199", "completed certified lane payload: discard original source and output on same-scope build retry",
+      ["sumeragi::executor::payload_owner::tests::completed_certified_lane_payload_keeps_original_output_across_same_scope_build_retry"]),
 
 
 

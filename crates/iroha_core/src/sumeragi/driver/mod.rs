@@ -481,9 +481,13 @@ impl Kernel {
                         self.persist.push(Write::Body(Box::new(block)));
                     }
                 }
-                Action::Execute { block, req } => {
+                Action::Execute {
+                    block,
+                    req,
+                    certified,
+                } => {
                     let block_hash = block.hash(&*self.hasher);
-                    self.exec.execute(req, block_hash, block);
+                    self.exec.execute(req, block_hash, block, certified);
                 }
                 Action::DiscardExecution { height, keep } => {
                     self.exec.discard(height, keep.clone());
@@ -1849,7 +1853,14 @@ fn run_exec<E: Executor, K: BlockStore + ?Sized>(
 ) -> ExecDone {
     let failed = |what: &str| format!("executor panicked in {what}");
     match op {
-        ExecOp::Execute { block, block_hash } => ExecDone::Executed(
+        // TODO: SC17 / spec §4.5: pass this flag into the production executor when CT1/CT5
+        // wall-clock guards land. The current executor has no such guards; the scheduler
+        // and conformance host retain the core's flag without inferring it from local state.
+        ExecOp::Execute {
+            block,
+            block_hash,
+            certified: _,
+        } => ExecDone::Executed(
             catch_unwind(AssertUnwindSafe(|| executor.execute(&block, &block_hash)))
                 .unwrap_or_else(|_| {
                     Some(iroha_sumeragi::api::ExecOutcome::Failed(failed("execute")))

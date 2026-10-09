@@ -6,10 +6,11 @@
 //! the next period (3-second slots). Blocks are produced round-robin by the set of the parent's
 //! period (so the maintenance block is produced by the outgoing set), signatures use the same
 //! secp256k1 recovery the verifier checks, and any block may commit to real transactions, so
-//! tests prove calls through the production light client.
+//! tests prove calls through the production light client. A witness may miss a slot: the next
+//! block then occupies the following slot.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Mutex, PoisonError},
 };
 
@@ -72,6 +73,7 @@ pub struct SyntheticTronChainV1 {
     rosters: Vec<RosterV1>,
     transactions: BTreeMap<u64, Vec<Vec<u8>>>,
     salts: BTreeMap<u64, [u8; 32]>,
+    missed: BTreeSet<u64>,
     blocks: Mutex<BTreeMap<u64, SyntheticTronBlockV1>>,
     members: Mutex<BTreeMap<u64, Vec<MemberV1>>>,
 }
@@ -84,6 +86,7 @@ impl Clone for SyntheticTronChainV1 {
             rosters: self.rosters.clone(),
             transactions: self.transactions.clone(),
             salts: self.salts.clone(),
+            missed: self.missed.clone(),
             blocks: Mutex::new(BTreeMap::new()),
             members: Mutex::new(BTreeMap::new()),
         }
@@ -181,9 +184,31 @@ impl SyntheticTronChainV1 {
             }],
             transactions: BTreeMap::new(),
             salts: BTreeMap::new(),
+            missed: BTreeSet::new(),
             blocks: Mutex::new(BTreeMap::new()),
             members: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// The same chain in which the witnesses scheduled at `slots` produce nothing. Slot `s` is
+    /// the one block `s` occupies when no slot is missed; every later block moves one slot on
+    /// per missed slot before it, so heights before the first missed slot keep their times.
+    #[must_use]
+    pub fn with_missed_slots(mut self, slots: &[u64]) -> Self {
+        self.missed.extend(slots.iter().copied());
+        self.blocks = Mutex::new(BTreeMap::new());
+        self
+    }
+
+    /// The slot block `height` occupies.
+    fn slot(&self, height: u64) -> u64 {
+        let mut slot = height;
+        for missed in &self.missed {
+            if *missed <= slot {
+                slot += 1;
+            }
+        }
+        slot
     }
 
     /// The same chain whose active set from `period` on has its last `replaced` witnesses
@@ -234,7 +259,7 @@ impl SyntheticTronChainV1 {
             .profile
             .period_start_ms(SYNTHETIC_TRON_FIRST_PERIOD)
             .expect("period start");
-        let offset = i128::from(height) - i128::from(SYNTHETIC_TRON_BOUNDARY_HEIGHT);
+        let offset = i128::from(self.slot(height)) - i128::from(SYNTHETIC_TRON_BOUNDARY_HEIGHT);
         u64::try_from(i128::from(start) + offset * 3_000 + 1_500).expect("positive time")
     }
 
@@ -289,6 +314,12 @@ impl SyntheticTronChainV1 {
         members
     }
 
+    /// The witness account scheduled at slot `slot` (round-robin over the set of `period`).
+    #[must_use]
+    pub fn scheduled_account(&self, period: u64, slot: u64) -> [u8; 21] {
+        self.members(period)[usize::try_from(slot % 27).expect("small")].account
+    }
+
     /// The active witness set of `period`.
     #[must_use]
     pub fn witness_set(&self, period: u64) -> TronWitnessSetV1 {
@@ -317,7 +348,7 @@ impl SyntheticTronChainV1 {
     fn build(&self, height: u64, parent_id: [u8; 32]) -> SyntheticTronBlockV1 {
         let producer_period = self.period(height - 1);
         let members = self.members(producer_period);
-        let producer = members[usize::try_from(height % 27).expect("small")];
+        let producer = members[usize::try_from(self.slot(height) % 27).expect("small")];
         let tx_root = self.transaction_leaves(height).map_or_else(
             || {
                 seeded(&[
@@ -454,5 +485,25 @@ mod tests {
         assert_eq!(shared, 24);
         assert_eq!(chain.block(5).time_ms + 3_000, chain.block(6).time_ms);
         assert!(!trigger_transaction(&[0x41; 21], &[0x41; 21], &[1], 1, 0).is_empty());
+    }
+
+    #[test]
+    fn missed_slots_shift_later_blocks_and_skip_their_witness() {
+        let base = SyntheticTronChainV1::new([2; 32]);
+        let chain = base.clone().with_missed_slots(&[5, 6]);
+        assert_eq!(chain.block(4).time_ms, base.block(4).time_ms);
+        assert_eq!(chain.block(5).time_ms, base.block(7).time_ms);
+        assert_eq!(chain.block(5).time_ms + 3_000, chain.block(6).time_ms);
+        let period = chain.period(5);
+        let producer = |block: &SyntheticTronBlockV1| {
+            crate::light_client::tron::header_summary(&block.raw)
+                .expect("header")
+                .witness
+        };
+        assert_eq!(
+            producer(&chain.block(5)),
+            chain.scheduled_account(period, 7)
+        );
+        assert_eq!(producer(&base.block(5)), base.scheduled_account(period, 5));
     }
 }

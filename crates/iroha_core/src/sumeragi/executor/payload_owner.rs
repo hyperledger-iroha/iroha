@@ -1,4 +1,4 @@
-//! Original completed global payload custody under an exact physical parent and Queue lease.
+//! Original global payload custody under an exact physical parent, lane plan and Queue lease.
 
 use super::*;
 use crate::state::NativeExecutionTip;
@@ -96,7 +96,7 @@ pub(super) fn lease_admission_error(
 }
 
 impl Worker<'_> {
-    /// Resume a partial job only under its fresh physical parent, exact current lane
+    /// Resume a partial or completed job only under its fresh physical parent, exact current lane
     /// proposal and original Queue admission. A transient refusal preserves the paid job.
     pub(super) fn retained_payload_build_is_current(
         &mut self,
@@ -332,6 +332,13 @@ impl Worker<'_> {
         {
             self.completed_payload = None;
         }
+        if self
+            .payload_build
+            .as_ref()
+            .is_some_and(|original| original.scope.height == height && original.job.is_completed())
+        {
+            self.payload_build = None;
+        }
     }
 }
 
@@ -388,15 +395,18 @@ mod tests {
         *const u8,
         iroha_crypto::HashOf<iroha_data_model::transaction::TransactionEntrypoint>,
     ) {
-        let state = worker.state;
-        let budget = state.ivm_execution_budget();
-        let current_view = state.view();
-        let generation = state.state_view_generation();
         let height = worker
             .applied
             .0
             .checked_add(1)
             .expect("actual next global height");
+        // Test staging replaces only a retired completion, before any original
+        // State view or Queue guard is acquired. Refused partial work is unchanged.
+        worker.retire_completed_payload(height);
+        let state = worker.state;
+        let budget = state.ivm_execution_budget();
+        let current_view = state.view();
+        let generation = state.state_view_generation();
         assert_eq!(current_view.height() as u64, worker.applied.0);
         let parent = current_view
             .canonical_history()
@@ -965,7 +975,7 @@ mod tests {
                             worker.completed_payload.is_none(),
                             "mixed work grants no completed Queue-only lease"
                         );
-                        assert!(worker.payload_build.is_none());
+                        assert!(worker.payload_build.as_ref().unwrap().job.is_completed());
                         assert!(queue.contains_pending_hash(original_hash, worker.state));
                         drop((output, block));
 
@@ -1020,7 +1030,7 @@ mod tests {
                                 .all(|entry| entry.hash() != original_hash)
                         );
                         assert!(worker.completed_payload.is_none());
-                        assert!(worker.payload_build.is_none());
+                        assert!(worker.payload_build.as_ref().unwrap().job.is_completed());
                         assert_eq!(queue.queued_len(), 1);
                         assert_eq!(
                             worker.state.view().height(),
@@ -1816,6 +1826,260 @@ mod tests {
                         worker.retire_completed_payload(height);
                         assert!(worker.payload_build.is_none());
                         drop((retry, original));
+                    },
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn completed_certified_lane_payload_rechecks_actual_journal_and_mixed_queue_admission() {
+        lanes::merge::with_original_lane_merge_fixture(
+            |chain, lane_blocks, certify, [first, second]| {
+                super::super::publication_tests::with_worker_chain(
+                    chain,
+                    ConsensusMode::Permissioned,
+                    lane_blocks,
+                    |chain, worker, _blocks, _events| {
+                        let parent_height = chain.height();
+                        let height = parent_height.checked_add(1).unwrap();
+                        let (queue, clock, time) = attach_queue(chain, worker);
+                        let first_hash = certify(1, parent_height, vec![first]);
+                        let original = worker.build(height, 0, 1 << 20, 100).unwrap().unwrap();
+                        let budget = worker.state.ivm_execution_budget();
+                        let source = worker.payload_build.as_ref().unwrap().job.source();
+                        assert!(source.block.signatures_admitted_to(&budget));
+                        assert!(source.pending_inputs.as_ref().unwrap().belongs_to(&budget));
+                        let original_range = source.block.lane_merge().unwrap().merges.as_ptr();
+                        let original_hash = {
+                            let block = payload::decode(original.as_slice()).unwrap();
+                            assert_eq!(block.network_entrypoint_count(), 1);
+                            assert_eq!(
+                                block.lane_merge().unwrap().merges[0].tip_hash,
+                                first_hash.0
+                            );
+                            block.network_entrypoints().next().unwrap().hash()
+                        };
+                        let held = budget.reserved_bytes();
+                        let retry = worker.build(height, 0, 1 << 20, 100).unwrap().unwrap();
+                        assert!(std::ptr::eq(
+                            original.as_slice().as_ptr(),
+                            retry.as_slice().as_ptr()
+                        ));
+                        assert_eq!(
+                            worker
+                                .payload_build
+                                .as_ref()
+                                .unwrap()
+                                .job
+                                .source()
+                                .block
+                                .lane_merge()
+                                .unwrap()
+                                .merges
+                                .as_ptr(),
+                            original_range
+                        );
+                        assert_eq!(budget.reserved_bytes(), held);
+                        drop(retry);
+
+                        // The actual certified journal changes without changing global
+                        // height or generation. Its new exact range and time floor revoke
+                        // the old complete source; copied tip scalars grant no reuse.
+                        let second_hash = certify(2, parent_height, vec![second]);
+                        let expected = lanes::merge::propose(
+                            &worker.state.view(),
+                            &*worker.context.lane_blocks,
+                            height,
+                        )
+                        .unwrap();
+                        let grown = worker.build(height, 0, 1 << 20, 100).unwrap().unwrap();
+                        assert!(!std::ptr::eq(
+                            original.as_slice().as_ptr(),
+                            grown.as_slice().as_ptr()
+                        ));
+                        {
+                            let block = payload::decode(grown.as_slice()).unwrap();
+                            let section = block.lane_merge().unwrap();
+                            assert_eq!(section.merges, expected.merges);
+                            assert_eq!(section.time_floor_ms, expected.time_floor_ms);
+                            assert_eq!(section.merges[0].to, 2);
+                            assert_eq!(section.merges[0].tip_hash, second_hash.0);
+                        }
+                        assert!(worker.payload_build.as_ref().unwrap().job.is_completed());
+
+                        // Exact current lane work does not hide withdrawal/readmission
+                        // of the independently funded original Queue selection.
+                        queue.clear_all();
+                        clock.advance(Duration::from_millis(1));
+                        let new_hash = queue_work(chain, 2_001, &queue, &time);
+                        assert_ne!(new_hash, original_hash);
+                        let replaced = worker.build(height, 0, 1 << 20, 100).unwrap().unwrap();
+                        assert!(!std::ptr::eq(
+                            grown.as_slice().as_ptr(),
+                            replaced.as_slice().as_ptr()
+                        ));
+                        {
+                            let block = payload::decode(replaced.as_slice()).unwrap();
+                            assert_eq!(block.network_entrypoint_count(), 1);
+                            assert_eq!(
+                                block.network_entrypoints().next().unwrap().hash(),
+                                new_hash
+                            );
+                            assert_eq!(block.lane_merge().unwrap().merges, expected.merges);
+                            assert_eq!(
+                                block.lane_merge().unwrap().time_floor_ms,
+                                expected.time_floor_ms
+                            );
+                        }
+                        assert!(replaced.admitted_to(&budget));
+                        assert!(worker.completed_payload.is_none());
+                        assert_eq!(queue.queued_len(), 1);
+                        assert!(!queue.contains_entrypoint_hash(original_hash));
+                        clock.advance(queue.tx_time_to_live + Duration::from_secs(1));
+                        assert!(worker.payload_storage_wait().is_none());
+                        assert!(
+                            worker.payload_build.is_none(),
+                            "completed mixed work retires at actual input expiry"
+                        );
+                        assert_eq!(
+                            queue.queued_len(),
+                            1,
+                            "storage retirement never removes signed Queue work"
+                        );
+                        drop((replaced, grown, original));
+                    },
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn completed_certified_lane_payload_preserves_original_busy_source_and_retires_on_request_or_execution()
+     {
+        lanes::merge::with_original_lane_merge_fixture(
+            |chain, lane_blocks, certify, [first, _second]| {
+                super::super::publication_tests::with_worker_chain(
+                    chain,
+                    ConsensusMode::Permissioned,
+                    lane_blocks,
+                    |chain, worker, blocks, _events| {
+                        let height = chain.height().checked_add(1).unwrap();
+                        let (_, time) = iroha_primitives::time::TimeSource::new_mock(
+                            Duration::from_millis(2_001),
+                        );
+                        worker.queue = Some(Arc::new(Queue::test(
+                            iroha_config::parameters::actual::Queue::default(),
+                            &time,
+                        )));
+                        certify(1, chain.height(), vec![first]);
+                        let original = worker.build(height, 0, 1 << 20, 100).unwrap().unwrap();
+                        let state = worker.state;
+                        let budget = state.ivm_execution_budget();
+                        let scope = worker.payload_build.as_ref().unwrap().scope;
+                        let range = worker
+                            .payload_build
+                            .as_ref()
+                            .unwrap()
+                            .job
+                            .source()
+                            .block
+                            .lane_merge()
+                            .unwrap()
+                            .merges
+                            .as_ptr();
+                        let held = budget.reserved_bytes();
+                        state.with_held_header_for_reader_test(|release| {
+                            let PublicationError::Deferred(PublicationDeferral::StateViewBusy(
+                                actual,
+                            )) = worker.build(height, 0, 1 << 20, 100).unwrap_err()
+                            else {
+                                panic!("actual State reader must preserve its original release");
+                            };
+                            assert_eq!(actual, release);
+                            assert!(
+                                worker.payload_storage_wait().is_none(),
+                                "lane-only work borrows no Queue expiry"
+                            );
+                            assert_eq!(worker.payload_build.as_ref().unwrap().scope, scope);
+                            assert_eq!(
+                                worker
+                                    .payload_build
+                                    .as_ref()
+                                    .unwrap()
+                                    .job
+                                    .source()
+                                    .block
+                                    .lane_merge()
+                                    .unwrap()
+                                    .merges
+                                    .as_ptr(),
+                                range
+                            );
+                            assert_eq!(budget.reserved_bytes(), held);
+                        });
+                        let retry = worker.build(height, 0, 1 << 20, 100).unwrap().unwrap();
+                        assert!(std::ptr::eq(
+                            original.as_slice().as_ptr(),
+                            retry.as_slice().as_ptr()
+                        ));
+                        assert_eq!(budget.reserved_bytes(), held);
+                        drop(retry);
+                        let new_view = worker.build(height, 1, 1 << 20, 100).unwrap().unwrap();
+                        assert!(!std::ptr::eq(
+                            original.as_slice().as_ptr(),
+                            new_view.as_slice().as_ptr()
+                        ));
+                        assert_eq!(worker.payload_build.as_ref().unwrap().scope.view, 1);
+                        let new_policy = worker.build(height, 1, 1 << 20, 101).unwrap().unwrap();
+                        assert!(!std::ptr::eq(
+                            new_view.as_slice().as_ptr(),
+                            new_policy.as_slice().as_ptr()
+                        ));
+                        let new_cap = worker
+                            .build(height, 1, (1 << 20) - 1, 101)
+                            .unwrap()
+                            .unwrap();
+                        assert!(!std::ptr::eq(
+                            new_policy.as_slice().as_ptr(),
+                            new_cap.as_slice().as_ptr()
+                        ));
+                        worker.reject(height, 1, Hash32::ZERO);
+                        assert!(
+                            worker.payload_build.is_none(),
+                            "explicit original-view rejection retires completion"
+                        );
+                        let rebuilt = worker.build(height, 0, 1 << 20, 100).unwrap().unwrap();
+                        worker.discard(height, &[]);
+                        assert!(
+                            worker.payload_build.is_none(),
+                            "explicit original-height discard retires completion"
+                        );
+                        let before_execution =
+                            worker.build(height, 0, 1 << 20, 100).unwrap().unwrap();
+                        let (block, qc) = super::super::publication_tests::executed(chain, worker);
+                        assert!(
+                            worker.payload_build.is_none(),
+                            "actual native execution retires the completed lane owner"
+                        );
+                        worker.prepare(&block, &qc).unwrap();
+                        blocks.append(&block, &qc).unwrap();
+                        worker.commit(&block, &qc).unwrap();
+                        assert_eq!(
+                            worker.state.view().height(),
+                            usize::try_from(height).unwrap()
+                        );
+                        assert_ne!(state.state_view_generation(), scope.generation);
+                        assert_eq!(worker.build(height, 0, 1 << 20, 100).unwrap(), None);
+                        assert!(worker.payload_build.is_none());
+                        drop((
+                            before_execution,
+                            rebuilt,
+                            new_cap,
+                            new_policy,
+                            new_view,
+                            original,
+                        ));
                     },
                 );
             },

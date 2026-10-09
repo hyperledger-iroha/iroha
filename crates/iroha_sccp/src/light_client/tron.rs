@@ -18,11 +18,17 @@
 //! parent-linked signed headers. A segment may reach at most one period past the newest set;
 //! then it must contain that period's maintenance block (the first header of the period, whose
 //! parent is still in the previous period) and the set is learned: the distinct producers
-//! (account and recovered signer) of the headers within the first 27 slots after the maintenance
-//! block (plus the two skipped slots), each of which must be solid under the previous set. At
-//! least 19 producers are required; witnesses that produced nothing there are evicted. Each
-//! segment must make a header solid; the newest solid header becomes a checkpoint and the head.
-//! A witness's rotated key is learned at the next boundary, where its window header carries it.
+//! (account and recovered signer) of the headers within the first two rounds of 27 slots after
+//! the maintenance block (plus the two skipped slots), each of which must be solid under the
+//! previous set. At least 19 producers are required; witnesses that produced nothing in either
+//! round are evicted, so one missed slot does not evict a witness. A witness's key is the one its
+//! newest window header recovers to, so a key rotated at or before the window is learned there.
+//! Each segment must make a header solid; the newest solid header becomes a checkpoint and the
+//! head.
+//!
+//! **Signatures:** a witness signature recovers as java-tron recovers it: `v ∈ {0, 1, 27, 28}`
+//! or its compressed-key form `v + 4`, and a high `s` is accepted through its low twin (the same
+//! key), so a non-canonical but java-tron-valid header never fails a segment.
 //!
 //! **Backfill:** at most `min(params.max_backfill_headers, 1200)` unsigned `raw_data` headers
 //! ending at a stored checkpoint; the first one becomes a checkpoint.
@@ -32,7 +38,12 @@
 //! path in the SHA-256 promote-odd binary Merkle tree under `txTrieRoot` and must be one
 //! successful (`contractRet = SUCCESS`) `TriggerSmartContract` with no TRX or token value. Its
 //! calldata is a canonical `transferToTaira` call (the normalized event carries the caller and
-//! the call; Taira rebuilds the payload) or a void call. TRON logs are not header-committed.
+//! the call; Taira rebuilds the payload) or a canonical void call (`voidFrozen` with 1..=256
+//! nonces). The destination reverts on every other encoding (§5.1.7, §5.1.8), so the decoders
+//! accept exactly its successful calls. TRON logs are not header-committed. The locator's
+//! `index_in_block` is the prover's leaf index: `txTrieRoot` does not commit to the
+//! transaction count, so a promoted (odd) node lets one transaction be opened at more than one
+//! index. It is informational; Taira keys inbound records by message id and voids by nonce.
 //!
 //! **Equivocation:** a record is a signed segment; it asserts its solid headers. Two records
 //! conflict when solid headers share a height with different ids, or their heights and times are
@@ -71,8 +82,8 @@ use super::{
     },
 };
 use crate::v1::{
-    constants::MAX_VOID_FROZEN_RANGE_EVM,
-    evm_abi::{AbiError, TransferToTairaCallV1, VoidCallV1},
+    constants::SELECTOR_TRANSFER_TO_TAIRA,
+    evm_abi::{AbiError, TransferToTairaCallV1, VoidCallV1, selector_of},
     hashes::keccak256,
     network::tag,
 };
@@ -364,8 +375,6 @@ pub enum TronLcError {
         /// Period.
         period: u64,
     },
-    /// One witness produced window headers with two different keys.
-    ConflictingWitnessKey,
     /// Fewer than 19 witnesses produced in a new period's learning window.
     TooFewProducers {
         /// Period.
@@ -427,9 +436,6 @@ impl fmt::Display for TronLcError {
                 formatter,
                 "the segment ends inside the learning window of period {period}"
             ),
-            Self::ConflictingWitnessKey => {
-                formatter.write_str("a witness produced window headers with two keys")
-            }
             Self::TooFewProducers { period, count } => write!(
                 formatter,
                 "only {count} witnesses produced in the learning window of period {period}"
@@ -668,30 +674,66 @@ fn decode_header(raw: &[u8]) -> Result<HeaderV1, TronLcError> {
     })
 }
 
-/// Recover the 21-byte signer address of a witness signature (`v ∈ {0, 1, 27, 28}`, low `s`).
+/// `n − value` for a scalar `0 < value < n` (big-endian), the low-`s` twin of a high `s`.
+fn order_minus(value: &[u8; 32]) -> [u8; 32] {
+    let mut out = [0_u8; 32];
+    let mut borrow = 0_u16;
+    for index in (0..32).rev() {
+        let minuend = u16::from(SECP256K1_ORDER[index]);
+        let subtrahend = u16::from(value[index]) + borrow;
+        let (digit, next) = if minuend >= subtrahend {
+            (minuend - subtrahend, 0)
+        } else {
+            (minuend + 0x100 - subtrahend, 1)
+        };
+        out[index] = u8::try_from(digit).unwrap_or(u8::MAX);
+        borrow = next;
+    }
+    out
+}
+
+/// Recover the 21-byte signer address of a witness signature as java-tron's
+/// `BlockCapsule.validateSignature` does: the recovery byte is `v ∈ {0, 1, 27, 28}` or its
+/// compressed-key form (`v + 4`), `r` and `s` lie in `[1, n)`, and a high `s` is accepted by
+/// recovering from its low twin `n − s` with the recovery parity flipped (the same key). Recovery
+/// ids 2 and 3 (`R.x ≥ n`, probability about 2⁻¹²⁷ per signature) are refused.
 fn recover_signer(
     raw_hash: &[u8; 32],
     signature: &[u8],
 ) -> Result<[u8; ADDRESS_BYTES], TronLcError> {
-    let signature = <[u8; 65]>::try_from(signature).map_err(|_| TronLcError::MalformedSignature)?;
-    let r = &signature[..32];
-    let s = &signature[32..64];
-    let recovery = match signature[64] {
-        v @ (0 | 1) => v,
-        v @ (27 | 28) => v - 27,
-        _ => return Err(TronLcError::MalformedSignature),
+    let malformed = TronLcError::MalformedSignature;
+    let signature = <[u8; 65]>::try_from(signature).map_err(|_| malformed)?;
+    let header = match signature[64] {
+        v @ 0..=7 => v + 27,
+        v @ 27..=34 => v,
+        _ => return Err(malformed),
     };
+    let mut recovery = if header >= 31 {
+        header - 31
+    } else {
+        header - 27
+    };
+    if recovery > 1 {
+        return Err(malformed);
+    }
+    let r = &signature[..32];
+    let mut s: [u8; 32] = signature[32..64].try_into().map_err(|_| malformed)?;
     if r.iter().all(|byte| *byte == 0)
         || r >= &SECP256K1_ORDER[..]
         || s.iter().all(|byte| *byte == 0)
-        || s > &SECP256K1_HALF_ORDER[..]
+        || s >= SECP256K1_ORDER
     {
-        return Err(TronLcError::MalformedSignature);
+        return Err(malformed);
+    }
+    if s > SECP256K1_HALF_ORDER {
+        s = order_minus(&s);
+        recovery ^= 1;
     }
     let mut normalized = signature;
+    normalized[32..64].copy_from_slice(&s);
     normalized[64] = recovery + 27;
     let public_key = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(raw_hash, &normalized)
-        .map_err(|_| TronLcError::MalformedSignature)?;
+        .map_err(|_| malformed)?;
     let mut address = [0_u8; ADDRESS_BYTES];
     address[0] = ADDRESS_PREFIX;
     address[1..].copy_from_slice(&EcdsaSecp256k1Sha256::evm_address(&public_key));
@@ -959,7 +1001,8 @@ fn set_record(set: TronWitnessSetV1, valid_from: u64) -> Result<SccpLcConsensusS
 }
 
 /// Learn the set of period `ctx.newest + 1` from `chain`, which must contain its maintenance
-/// block and complete learning window.
+/// block and complete learning window (two production rounds, so a witness that misses one slot
+/// is still learned). A witness's key is the one its newest window header recovers to.
 fn learn_next<V: SccpLcStateView + ?Sized>(
     ctx: &Ctx<'_>,
     sets: &Sets<'_, V>,
@@ -991,11 +1034,9 @@ fn learn_next<V: SccpLcStateView + ?Sized>(
             }
             .into());
         }
-        if let Some(existing) = producers.insert(signed.header.witness, signed.signer)
-            && existing != signed.signer
-        {
-            return Err(TronLcError::ConflictingWitnessKey.into());
-        }
+        // A witness that rotated its key inside the window signs later headers with the new
+        // key; the newest window header names the key of the rest of the period.
+        producers.insert(signed.header.witness, signed.signer);
     }
     if producers.len() < TRON_SOLID_THRESHOLD {
         return Err(TronLcError::TooFewProducers {
@@ -1398,12 +1439,19 @@ fn select_event(
     }
     let call = decode_trigger_call(&proof.transaction)?;
     let emitter = SccpSourceEmitterV1::Tron(call.contract);
+    // TODO(WP13): `index_in_block` is prover-chosen among the Merkle-consistent positions (the
+    // header commits to no transaction count); a canonical TRON locator needs the transaction id
+    // in `SccpSourceLocatorV1`.
     let locator = SccpSourceLocatorV1 {
         source_height: header.number,
         block_hash: header.id,
         index_in_block: proof.transaction_index,
     };
-    if let Ok(transfer) = TransferToTairaCallV1::decode(&call.data) {
+    // Both decoders accept exactly the canonical calls the destination lets succeed (§5.1.7,
+    // §5.1.8), including the `voidFrozen` range bounds.
+    if selector_of(&call.data) == Ok(SELECTOR_TRANSFER_TO_TAIRA) {
+        let transfer =
+            TransferToTairaCallV1::decode(&call.data).map_err(TronLcError::NotSccpCall)?;
         let mut caller = [0_u8; 20];
         caller.copy_from_slice(&call.owner[1..]);
         return Ok(SccpNormalizedEventV1::TransferCall {
@@ -1415,9 +1463,6 @@ fn select_event(
     }
     let void = VoidCallV1::decode(&call.data).map_err(TronLcError::NotSccpCall)?;
     let (first_nonce, count) = void.range();
-    if count == 0 || count > MAX_VOID_FROZEN_RANGE_EVM {
-        return Err(TronLcError::NotSccpCall(AbiError::BadLength));
-    }
     Ok(SccpNormalizedEventV1::Void {
         emitter,
         kind: match void {
