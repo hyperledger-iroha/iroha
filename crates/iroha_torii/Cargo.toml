@@ -20,6 +20,8 @@ categories.workspace = true
 workspace = true
 
 [features]
+# Owning unit-test mutations only; never enable this in a shipping dependency.
+mutation-testing = []
 default = ["node-api"]
 # Shipping HTTP/WebSocket surface. The integration-test marker is deliberately
 # excluded; tests can request `ws_integration_tests` explicitly.

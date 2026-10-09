@@ -46,6 +46,8 @@ Purpose
     `--model` selects DataModel unit tests in the test profile and its separate `SUMERAGI_MODEL_MUTATION`.
     `--sdk` and `--deploy` select their own unit-test crates in the test profile, with
     `SUMERAGI_SDK_MUTATION` and `SUMERAGI_DEPLOY_MUTATION`.
+    `--torii` selects Torii canonical-outcome custody unit tests in the test profile
+    with `SUMERAGI_TORII_MUTATION`.
     Each test-only feature guards only its own crate, without mutating dependencies.
 
 Prerequisites
@@ -70,6 +72,7 @@ Examples
     scripts/sumeragi_mutation_gate.py --list
     scripts/sumeragi_mutation_gate.py --core --strict --jobs 1
     scripts/sumeragi_mutation_gate.py --daemon --only HC93 --strict --jobs 1
+    scripts/sumeragi_mutation_gate.py --torii --only TOR1 --strict --jobs 1
 """
 
 from __future__ import annotations
@@ -848,6 +851,17 @@ CORE_MUTATIONS = [
 
     m("HC179", "retained World cut: discard completed original tail after final shared control refusal",
       ["sumeragi::executor::publication_tests::original_worker_world_cut_retains_completed_tail_after_final_control_refusal"]),
+    m("HC180", "verified evidence attribution: substitute a fresh pool for the original offender graph",
+      ["sumeragi::evidence_history::lane::tests::lane_verified_offender_graph_refuses_occupied_original_pool_and_retries"]),
+    m("HC181", "World evidence COW: recopy the original proof and offender graph instead of sharing its immutable body",
+      ["sumeragi::evidence::lifecycle_tests::world_evidence_current_undo_and_cow_retain_original_proof_and_offender_allocations"]),
+    m("HC182", "detached native AMX source: discard its original acquired archive frame on transfer",
+      ["sumeragi::amx::proof_tests::persisted_amx_detached_source_keeps_original_frame_pool_and_retry_after_view_drop"]),
+    m("HC183", "native Prepared publication: acknowledge the original commit without its durable outbound intent",
+      ["sumeragi::executor::amx_intent_tests::original_paid_prepared_commit_captures_durable_intent_before_acknowledgement"]),
+    m("HC184", "off-chain G1 status source: substitute the State execution pool for the original admitted query frame pool",
+      ["smartcontracts::isi::tx::native_carrier_reader_tests::genesis_status_prefix_retains_original_admitted_pool_and_cumulative_refusal_work"]),
+
 
 ]
 
@@ -925,6 +939,8 @@ DEPLOY_MUTATIONS = [
     m("DEP5", "Managed AMX sources: reopen replaced G1/H2 from an unchanged local record",
       ["bootstrap::amx_sources::tests::managed_amx_sources_reopen_refuses_identical_g1_h2_replacement_without_http_repair",
        "bootstrap::amx_sources::tests::managed_amx_sources_reopen_preserves_original_native_pair_and_directory_without_new_reads"]),
+    m("DEP6", "Administrative AMX registration: accept a substituted original child or signer",
+      ["attachment::amx_registration::tests::original_amx_administrator_child_fees_time_and_checkpoint_survive_reopen_and_refuse_substitution"]),
 ]
 
 
@@ -942,7 +958,18 @@ BY_ID = index_mutations(MUTATIONS)
 
 
 
+TORII_MUTATIONS = [
+    m("TOR1", "Pipeline cache: accept a block outcome without its exact canonical transaction binding",
+      ["tests_runtime_handlers::pipeline_status_cached_applied_refuses_removed_original_membership",
+       "tests_runtime_handlers::prepared_submit_outcome_cached_applied_refuses_removed_original_membership"]),
+    m("TOR2", "Pipeline pending refresh: use execution capacity before original query admission and mutate the cache on refusal",
+      ["tests_runtime_handlers::pipeline_status_pending_refresh_retains_original_query_refusal_and_pending_source"]),
+]
+
+
 def package_options(args):
+    if getattr(args, "torii", False):
+        return "iroha_torii", "mutation-testing", "SUMERAGI_TORII_MUTATION"
     """Select the actual implementation owner without propagating a mutation to dependencies."""
     if getattr(args, "sdk", False):
         return "iroha", "mutation-testing", "SUMERAGI_SDK_MUTATION"
@@ -1018,6 +1045,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     env.pop("SUMERAGI_MODEL_MUTATION", None)
     env.pop("SUMERAGI_SDK_MUTATION", None)
     env.pop("SUMERAGI_DEPLOY_MUTATION", None)
+    env.pop("SUMERAGI_TORII_MUTATION", None)
     crate, features, mutation_env = package_options(args)
     env.pop("SUMERAGI_SIM_SEED", None)
     env.pop("SUMERAGI_SIM_SEED_BASE", None)
@@ -1028,7 +1056,7 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     else:
         env.pop("SUMERAGI_SIM_SEEDS", None)
     env["CARGO_TARGET_DIR"] = str(target_dir)
-    profile = ("test" if any(getattr(args, owner, False) for owner in ("model", "sdk", "deploy")) else
+    profile = ("test" if any(getattr(args, owner, False) for owner in ("model", "sdk", "deploy", "torii")) else
                (getattr(args, "core_profile", None) or "test") if getattr(args, "core", False) else None)
     profile_options = ["--profile", profile] if profile else ["--release"]
     cmd = ["cargo", "test", "--locked", "-p", crate, *profile_options, "--features", features, "--lib"]
@@ -1165,10 +1193,12 @@ def build(args, target_dir, mutation, log_path):
                 detail=detail, log=str(log_path))
 
 
-def has_switch(mid, *, core=False, daemon=False, model=False, sdk=False, deploy=False):
-    if sum((core, daemon, model, sdk, deploy)) > 1:
+def has_switch(mid, *, core=False, daemon=False, model=False, sdk=False, deploy=False, torii=False):
+    if sum((core, daemon, model, sdk, deploy, torii)) > 1:
         raise ValueError("a mutation has exactly one implementation owner")
-    if sdk:
+    if torii:
+        cfg, source = "sumeragi_torii_mutation", REPO / "crates" / "iroha_torii" / "src"
+    elif sdk:
         cfg, source = "sumeragi_sdk_mutation", REPO / "crates" / "iroha" / "src"
     elif deploy:
         cfg, source = "sumeragi_deploy_mutation", REPO / "crates" / "iroha_deploy" / "src"
@@ -1216,7 +1246,9 @@ def evaluate(args, target_dir, mu):
         result.update(verdict="error", reason="no named test selectors")
         return result
     started = time.monotonic()
-    if getattr(args, "sdk", False):
+    if getattr(args, "torii", False):
+        present = has_switch(mu.id, torii=True)
+    elif getattr(args, "sdk", False):
         present = has_switch(mu.id, sdk=True)
     elif getattr(args, "deploy", False):
         present = has_switch(mu.id, deploy=True)
@@ -1307,6 +1339,8 @@ def main():
                        help="qualify registered SDK public-read rules with owning unit tests in the test profile")
     owner.add_argument("--deploy", action="store_true",
                        help="qualify registered Deploy managed-bootstrap custody rules with owning unit tests in the test profile")
+    owner.add_argument("--torii", action="store_true",
+                       help="qualify registered Torii canonical-outcome custody rules with owning unit tests in the test profile")
     parser.add_argument("--only", help="comma-separated mutation ids (default: all)")
     parser.add_argument("--jobs", type=int, default=1,
                         help="parallel jobs, each with its own target sub-directory")
@@ -1315,7 +1349,7 @@ def main():
     parser.add_argument("--seeds", type=int, default=200,
                         help="SUMERAGI_SIM_SEEDS for the scenarios (default 200)")
     parser.add_argument("--target-dir", type=Path,
-                        help="dedicated target root (default: target/sumeragi-mutants; --core: target/sumeragi-core-mutants; --daemon: target/sumeragi-daemon-mutants; --model: target/sumeragi-model-mutants; --sdk: target/sumeragi-sdk-mutants; --deploy: target/sumeragi-deploy-mutants)")
+                        help="dedicated target root (default: target/sumeragi-mutants; --core: target/sumeragi-core-mutants; --daemon: target/sumeragi-daemon-mutants; --model: target/sumeragi-model-mutants; --sdk: target/sumeragi-sdk-mutants; --deploy: target/sumeragi-deploy-mutants; --torii: target/sumeragi-torii-mutants)")
     parser.add_argument("--skip-baseline", action="store_true",
                         help="do not run the unmutated build")
     parser.add_argument("--strict", action="store_true",
@@ -1338,7 +1372,8 @@ def main():
     if args.strict and args.skip_baseline:
         parser.error("--strict requires the unmutated baseline")
     if args.target_dir is None:
-        name = ("sumeragi-sdk-mutants" if args.sdk else
+        name = ("sumeragi-torii-mutants" if args.torii else
+                "sumeragi-sdk-mutants" if args.sdk else
                 "sumeragi-deploy-mutants" if args.deploy else
                 "sumeragi-model-mutants" if args.model else
                 "sumeragi-daemon-mutants" if args.daemon else
@@ -1347,7 +1382,7 @@ def main():
     args.target_dir = args.target_dir.resolve()
     if args.core_profile is not None and not args.core:
         parser.error("--core-profile requires --core; protocol and daemon qualification use release")
-    table = (SDK_MUTATIONS if args.sdk else DEPLOY_MUTATIONS if args.deploy else
+    table = (TORII_MUTATIONS if args.torii else SDK_MUTATIONS if args.sdk else DEPLOY_MUTATIONS if args.deploy else
              MODEL_MUTATIONS if args.model else DAEMON_MUTATIONS if args.daemon else
              CORE_MUTATIONS if args.core else MUTATIONS)
     by_id = index_mutations(table)
@@ -1434,7 +1469,7 @@ def main():
         "generated": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "command": sys.argv,
         "package": package_options(args)[0],
-        "profile": ("test" if args.model or args.sdk or args.deploy else
+        "profile": ("test" if args.model or args.sdk or args.deploy or args.torii else
                     (args.core_profile or "test") if args.core else "release"),
         "seeds": None if args.fast else args.seeds,
         "fast": args.fast,

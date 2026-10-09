@@ -616,6 +616,47 @@ impl RemoteProvisioning {
         )?)
     }
 
+    /// Run one explicit administrative AMX registration turn under a separately selected signer.
+    /// This never infers CanSetParameters from the SNS owner or schedules itself in relay_once.
+    /// The retained signed child and namespace must already exist; all recovery uses the original
+    /// administrative journal and original exclusive UTC/fee authorization.
+    ///
+    /// # Errors
+    /// Rejects incomplete custody, changed parent/source/signer/terms, exhausted authorization,
+    /// unavailable fresh parent quorum or unauthenticated native transaction inclusion.
+    pub fn register_amx_once(
+        &mut self,
+        bootstrap: &AuthenticatedBootstrap,
+        administrator: &Config,
+        deadline_unix_ms: u64,
+        options: &BoundedTransactionOptions,
+    ) -> Result<crate::attachment::AmxRegistrationProgress> {
+        let deadline = self.turn_deadline(bootstrap, options.deadline)?;
+        self.require_active()?;
+        let attachment = self.attachment.as_mut().ok_or(ProvisioningError::Invalid(
+            "namespace provisioning is incomplete; administrative AMX registration is separate",
+        ))?;
+        let source = bootstrap
+            .parent_http_source(administrator, deadline)
+            .map_err(|_| {
+                ProvisioningError::Invalid(
+                    "selected AMX administrator differs from approved parent roots",
+                )
+            })?;
+        let mut options = options.clone();
+        options.deadline = deadline;
+        let progress = attachment.advance_amx_registration(
+            administrator,
+            bootstrap,
+            &mut self.finality,
+            &source,
+            deadline_unix_ms,
+            &options,
+        )?;
+        self.revalidate()?;
+        Ok(progress)
+    }
+
     fn turn_deadline(
         &self,
         bootstrap: &AuthenticatedBootstrap,

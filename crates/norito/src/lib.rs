@@ -3968,10 +3968,68 @@ pub mod json {
         }
         /// Parse a JSON string with escaping support.
         pub fn parse_string(&mut self) -> Result<String, Error> {
+            let bytes =
+                self.parse_string_with_output(exact_string::allocate, |bytes, _, chunk| {
+                    bytes.extend_from_slice(chunk);
+                    Ok(())
+                })?;
+            // SAFETY: the shared parser consumes UTF-8 input and validates every escape.
+            Ok(unsafe { String::from_utf8_unchecked(bytes) })
+        }
+        /// Decode a string into an exact caller-owned initialized byte destination.
+        ///
+        /// The ordinary string's exact length and active logical allocation charge are
+        /// determined in the same order before `allocate` runs. The callback may refuse
+        /// with its original typed local cause. Every byte is initialized through the
+        /// shared string decoder; the destination must expose exactly `length` bytes.
+        /// This funds no enclosing source, control, key or diagnostic allocation.
+        ///
+        /// # Errors
+        /// Preserves original JSON syntax/resource errors and callback refusals. A caller
+        /// destination with a different length is rejected before any copied byte.
+        pub fn parse_string_with_buffer<B, E>(
+            &mut self,
+            allocate: impl FnOnce(usize) -> Result<B, E>,
+        ) -> Result<B, E>
+        where
+            B: AsMut<[u8]>,
+            E: From<Error>,
+        {
+            self.parse_string_with_output(
+                |length| {
+                    let mut buffer = allocate(length)?;
+                    if buffer.as_mut().len() != length {
+                        return Err(Error::Message(
+                            "JSON string destination length differs".into(),
+                        )
+                        .into());
+                    }
+                    Ok(buffer)
+                },
+                |buffer: &mut B, start, chunk| {
+                    let end = start.checked_add(chunk.len()).ok_or_else(|| {
+                        E::from(Error::Message(
+                            "JSON string destination length overflow".into(),
+                        ))
+                    })?;
+                    let destination = buffer.as_mut().get_mut(start..end).ok_or_else(|| {
+                        E::from(Error::Message(
+                            "JSON string destination length differs".into(),
+                        ))
+                    })?;
+                    destination.copy_from_slice(chunk);
+                    Ok(())
+                },
+            )
+        }
+        fn parse_string_with_output<B, E: From<Error>>(
+            &mut self,
+            allocate: impl FnOnce(usize) -> Result<B, E>,
+            mut write: impl FnMut(&mut B, usize, &[u8]) -> Result<(), E>,
+        ) -> Result<B, E> {
             self.skip_ws();
             let token_start = self.i;
             self.expect(b'"')?;
-            // Fast path: scan for closing quote without encountering escapes or controls.
             let start = self.i;
             let bytes = self.s;
             let mut i = start;
@@ -3980,29 +4038,68 @@ pub mod json {
                 if b == b'"' {
                     let slice = &bytes[start..i];
                     self.i = i + 1;
-                    let st = std::str::from_utf8(slice)
+                    let text = std::str::from_utf8(slice)
                         .map_err(|_| self.err_at(start, "invalid utf8"))?;
-                    crate::core::reserve_decode_allocation(st.len())
+                    crate::core::reserve_decode_allocation(text.len())
                         .map_err(Error::from_decode_resource)?;
-                    let mut value = exact_string::allocate(st.len())?;
-                    value.extend_from_slice(st.as_bytes());
-                    // SAFETY: `st` was validated as UTF-8 and copied exactly.
-                    return Ok(unsafe { String::from_utf8_unchecked(value) });
+                    let mut buffer = allocate(text.len())?;
+                    write(&mut buffer, 0, text.as_bytes())?;
+                    return Ok(buffer);
                 }
                 if b == b'\\' || b < 0x20 {
                     break;
                 }
                 i += 1;
             }
-            // Slow path: first determine the exact decoded length without
-            // allocating, then reserve and decode into that admitted buffer.
             let decoded_bytes = {
                 let mut preflight = Parser::new_at(self.input(), token_start);
                 preflight.skip_string_bounded(usize::MAX)?
             };
             crate::core::reserve_decode_allocation(decoded_bytes)
                 .map_err(Error::from_decode_resource)?;
-            let mut out = exact_string::allocate(decoded_bytes)?;
+            let mut buffer = allocate(decoded_bytes)?;
+            self.decode_string_with_output(&mut buffer, write, decoded_bytes)?;
+            Ok(buffer)
+        }
+        fn decode_string_with_output<B, E: From<Error>>(
+            &mut self,
+            buffer: &mut B,
+            write: impl FnMut(&mut B, usize, &[u8]) -> Result<(), E>,
+            expected: usize,
+        ) -> Result<(), E> {
+            struct Output<'a, B, W, E> {
+                buffer: &'a mut B,
+                write: W,
+                written: usize,
+                expected: usize,
+                error: std::marker::PhantomData<E>,
+            }
+            impl<B, E: From<Error>, W: FnMut(&mut B, usize, &[u8]) -> Result<(), E>> Output<'_, B, W, E> {
+                fn push(&mut self, byte: u8) -> Result<(), E> {
+                    self.extend_from_slice(&[byte])
+                }
+                fn extend_from_slice(&mut self, bytes: &[u8]) -> Result<(), E> {
+                    let end = self
+                        .written
+                        .checked_add(bytes.len())
+                        .filter(|end| *end <= self.expected)
+                        .ok_or_else(|| {
+                            E::from(Error::Message(
+                                "JSON string preflight length differs".into(),
+                            ))
+                        })?;
+                    (self.write)(self.buffer, self.written, bytes)?;
+                    self.written = end;
+                    Ok(())
+                }
+            }
+            let mut output = Output {
+                buffer,
+                write,
+                written: 0,
+                expected,
+                error: std::marker::PhantomData,
+            };
             loop {
                 let b = self.bump().ok_or_else(|| {
                     let (byte, line, col) = self.pos_meta(self.i);
@@ -4016,14 +4113,14 @@ pub mod json {
                             Error::EofEscape { byte, line, col }
                         })?;
                         match esc {
-                            b'"' => out.push(b'"'),
-                            b'\\' => out.push(b'\\'),
-                            b'/' => out.push(b'/'),
-                            b'b' => out.push(0x08),
-                            b'f' => out.push(0x0C),
-                            b'n' => out.push(b'\n'),
-                            b'r' => out.push(b'\r'),
-                            b't' => out.push(b'\t'),
+                            b'"' => output.push(b'"')?,
+                            b'\\' => output.push(b'\\')?,
+                            b'/' => output.push(b'/')?,
+                            b'b' => output.push(0x08)?,
+                            b'f' => output.push(0x0C)?,
+                            b'n' => output.push(b'\n')?,
+                            b'r' => output.push(b'\r')?,
+                            b't' => output.push(b'\t')?,
                             b'u' => {
                                 let mut hi: u32 = 0;
                                 for _ in 0..4 {
@@ -4038,7 +4135,12 @@ pub mod json {
                                             b'A'..=b'F' => (h - b'A' + 10) as u32,
                                             _ => {
                                                 let (byte, line, col) = self.pos_meta(self.i - 1);
-                                                return Err(Error::InvalidHex { byte, line, col });
+                                                return Err((Error::InvalidHex {
+                                                    byte,
+                                                    line,
+                                                    col,
+                                                })
+                                                .into());
                                             }
                                         };
                                 }
@@ -4046,22 +4148,24 @@ pub mod json {
                                     // Expect a following \uDC00..\uDFFF low surrogate
                                     if self.peek() != Some(b'\\') {
                                         let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
+                                        return Err((Error::WithPos {
                                             msg: "expected low surrogate",
                                             byte,
                                             line,
                                             col,
-                                        });
+                                        })
+                                        .into());
                                     }
                                     self.bump();
                                     if self.bump() != Some(b'u') {
                                         let (byte, line, col) = self.pos_meta(self.i);
-                                        return Err(Error::WithPos {
+                                        return Err((Error::WithPos {
                                             msg: "expected \\u for low surrogate",
                                             byte,
                                             line,
                                             col,
-                                        });
+                                        })
+                                        .into());
                                     }
                                     let mut lo: u32 = 0;
                                     for _ in 0..4 {
@@ -4077,78 +4181,87 @@ pub mod json {
                                                 _ => {
                                                     let (byte, line, col) =
                                                         self.pos_meta(self.i - 1);
-                                                    return Err(Error::InvalidHex {
+                                                    return Err((Error::InvalidHex {
                                                         byte,
                                                         line,
                                                         col,
-                                                    });
+                                                    })
+                                                    .into());
                                                 }
                                             };
                                     }
                                     if !(0xDC00..=0xDFFF).contains(&lo) {
                                         let (byte, line, col) = self.pos_meta(self.i - 1);
-                                        return Err(Error::WithPos {
+                                        return Err((Error::WithPos {
                                             msg: "invalid low surrogate",
                                             byte,
                                             line,
                                             col,
-                                        });
+                                        })
+                                        .into());
                                     }
                                     let cp: u32 = 0x10000 + (((hi - 0xD800) << 10) | (lo - 0xDC00));
                                     if let Some(ch) = char::from_u32(cp) {
                                         let mut buf = [0u8; 4];
                                         let n = ch.encode_utf8(&mut buf).len();
-                                        out.extend_from_slice(&buf[..n]);
+                                        output.extend_from_slice(&buf[..n])?;
                                     } else {
                                         let (byte, line, col) = self.pos_meta(self.i - 1);
-                                        return Err(Error::WithPos {
+                                        return Err((Error::WithPos {
                                             msg: "invalid codepoint",
                                             byte,
                                             line,
                                             col,
-                                        });
+                                        })
+                                        .into());
                                     }
                                 } else if (0xDC00..=0xDFFF).contains(&hi) {
                                     let (byte, line, col) = self.pos_meta(self.i - 1);
-                                    return Err(Error::WithPos {
+                                    return Err((Error::WithPos {
                                         msg: "unexpected low surrogate",
                                         byte,
                                         line,
                                         col,
-                                    });
+                                    })
+                                    .into());
                                 } else if let Some(ch) = char::from_u32(hi) {
                                     let mut buf = [0u8; 4];
                                     let n = ch.encode_utf8(&mut buf).len();
-                                    out.extend_from_slice(&buf[..n]);
+                                    output.extend_from_slice(&buf[..n])?;
                                 } else {
                                     let (byte, line, col) = self.pos_meta(self.i - 1);
-                                    return Err(Error::WithPos {
+                                    return Err((Error::WithPos {
                                         msg: "invalid codepoint",
                                         byte,
                                         line,
                                         col,
-                                    });
+                                    })
+                                    .into());
                                 }
                             }
                             _ => {
                                 let (byte, line, col) = self.pos_meta(self.i - 1);
-                                return Err(Error::WithPos {
+                                return Err((Error::WithPos {
                                     msg: "bad escape",
                                     byte,
                                     line,
                                     col,
-                                });
+                                })
+                                .into());
                             }
                         }
                     }
                     b if b < 0x20 => {
                         let (byte, line, col) = self.pos_meta(self.i - 1);
-                        return Err(Error::ControlInString { byte, line, col });
+                        return Err((Error::ControlInString { byte, line, col }).into());
                     }
-                    b => out.push(b),
+                    b => output.push(b)?,
                 }
             }
-            String::from_utf8(out).map_err(|_| self.err_here("invalid utf8"))
+            if output.written != expected {
+                return Err(Error::Message("JSON string preflight length differs".into()).into());
+            }
+            Ok(())
         }
         /// Parse a JSON array into `Vec<T>` using `JsonDeserialize` for elements.
         pub fn parse_array<T: JsonDeserialize>(&mut self) -> Result<Vec<T>, Error> {

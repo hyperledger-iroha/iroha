@@ -1884,17 +1884,28 @@ impl<'s> Worker<'s> {
             .finishing
             .as_mut()
             .expect("original completed execution");
-        if original.native_contexts.is_some() {
-            return Ok(());
-        }
-        match self.context.native_context_archive.prepare(
-            &original.overlay,
-            original.valid.as_ref(),
-            original.phase.ready().expect("original prepared result"),
-            &original.witness,
-        ) {
-            Ok(projection) => {
-                original.native_contexts = Some(projection);
+        let capture = (|| {
+            if original.native_contexts.is_none() {
+                original.native_contexts = Some(self.context.native_context_archive.prepare(
+                    &original.overlay,
+                    original.valid.as_ref(),
+                    original.phase.ready().expect("original prepared result"),
+                    &original.witness,
+                )?);
+            }
+            self.context.native_context_archive.prepare_amx_intents(
+                original
+                    .native_contexts
+                    .as_mut()
+                    .expect("original context capture"),
+                &original.overlay,
+                original.valid.as_ref(),
+                original.phase.ready().expect("original prepared result"),
+                &original.witness,
+            )
+        })();
+        match capture {
+            Ok(()) => {
                 original.archive_refusal = None;
                 Ok(())
             }
@@ -3449,3 +3460,7 @@ mod local_signature_preparation_tests;
 #[cfg(test)]
 #[path = "executor_amx_retry_tests.rs"]
 mod amx_retry_tests;
+
+#[cfg(test)]
+#[path = "executor_amx_intent_tests.rs"]
+mod amx_intent_tests;

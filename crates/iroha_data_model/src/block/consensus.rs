@@ -407,7 +407,21 @@ impl Evidence {
     pub fn decode_native(
         &self,
     ) -> Result<iroha_sumeragi::message::Evidence, iroha_sumeragi::message::CodecError> {
-        let native = iroha_sumeragi::message::Evidence::decode(&self.native)?;
+        Self::decode_native_frame(self.native_frame())
+    }
+
+    /// Decode borrowed original frame bytes through the sole canonical proof validator.
+    ///
+    /// This creates no replacement owned Evidence or source buffer. Decoded native
+    /// artifacts and pair-comparison scratch keep their existing independent custody.
+    /// Historical signer authority is not supplied by this syntax operation.
+    ///
+    /// # Errors
+    /// Preserves the same bounded framing, artifact and pair-order error as decode_native.
+    pub fn decode_native_frame(
+        bytes: &[u8],
+    ) -> Result<iroha_sumeragi::message::Evidence, iroha_sumeragi::message::CodecError> {
+        let native = iroha_sumeragi::message::Evidence::decode(bytes)?;
         let mut canonical = native.clone();
         Self::canonicalize_pairs(&mut canonical)?;
         if canonical != native {

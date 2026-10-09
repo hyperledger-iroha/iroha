@@ -781,10 +781,10 @@ def default_base(root: Path = ROOT) -> str | None:
 
 
 # These owning features select spec §13.4 mutations and are deliberately rejected
-# by ordinary non-test Model/Core/daemon/SDK/Deploy compilation (Sumeragi isolates its cfg
+# by ordinary non-test Model/Core/daemon/SDK/Deploy/Torii compilation (Sumeragi isolates its cfg
 # through build.rs). Dedicated nightly mutation jobs own their valid libtests.
 MUTATION_FEATURE_OWNERS = frozenset(
-    {"iroha_data_model", "iroha_core", "irohad_lib", "iroha_sumeragi", "iroha", "iroha_deploy"}
+    {"iroha_data_model", "iroha_core", "irohad_lib", "iroha_sumeragi", "iroha", "iroha_deploy", "iroha_torii"}
 )
 
 

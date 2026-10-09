@@ -5,6 +5,11 @@ pub use iroha_allocation::AllocationBudget;
 /// Read-only access to the original storage views exposed by [`WorldReadOnly`].
 pub use mv::storage::StorageReadOnly;
 
+/// Immutable original-pool evidence value used by World current/undo generations.
+pub use crate::sumeragi::evidence::record::{
+    EvidenceRecordBodyFields, EvidenceRecordRestoreError, RetainedEvidenceRecord,
+};
+
 use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
 use crate::private_settlement::{
@@ -57,7 +62,7 @@ use iroha_data_model::{
     },
     block::{
         BlockHeader, SignedBlock,
-        consensus::{EvidenceRecord, ExecKv, ExecWitness},
+        consensus::{ExecKv, ExecWitness},
         proofs::BlockProofs,
     },
     confidential::ConfidentialFeatureDigest,
@@ -4164,7 +4169,7 @@ pub struct WorldData {
     /// Latest reduced global state root advertised by the merge ledger.
     pub(crate) merge_global_state_root: Cell<Option<Hash>>,
     /// Persisted consensus evidence records keyed by deterministic digest.
-    pub(crate) consensus_evidence: Storage<Hash, EvidenceRecord>,
+    pub(crate) consensus_evidence: Storage<Hash, RetainedEvidenceRecord>,
     /// Registry of contract manifests by exact dataspace artifact identity (on-chain).
     pub(crate) contract_manifests:
         Storage<ContractArtifactId, iroha_data_model::smart_contract::manifest::ContractManifest>,
@@ -5126,7 +5131,7 @@ pub struct WorldBlockFields<'world> {
     /// Inverted index from TLV tag to proof ids.
     pub(crate) proofs_by_tag: StorageField<'world, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
     /// Consensus-owned evidence keyed by deterministic digest; staged serialization must retain it.
-    pub(crate) consensus_evidence: StorageField<'world, Hash, EvidenceRecord>,
+    pub(crate) consensus_evidence: StorageField<'world, Hash, RetainedEvidenceRecord>,
     /// Contract manifests
     pub(crate) contract_manifests: StorageField<
         'world,
@@ -6776,7 +6781,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) proofs_by_tag:
         StorageTransaction<'block, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
     /// Persisted consensus evidence records keyed by deterministic digest.
-    pub(crate) consensus_evidence: StorageTransaction<'block, Hash, EvidenceRecord>,
+    pub(crate) consensus_evidence: StorageTransaction<'block, Hash, RetainedEvidenceRecord>,
     /// Contract manifests
     pub(crate) contract_manifests: StorageTransaction<
         'block,
@@ -9068,7 +9073,7 @@ pub struct WorldView<'world> {
     pub(crate) sccp_light_client_stride_index:
         StorageView<'world, (iroha_data_model::bridge::SccpNetworkV1, u64), u64>,
     /// Persisted consensus evidence records keyed by deterministic digest.
-    pub(crate) consensus_evidence: StorageView<'world, Hash, EvidenceRecord>,
+    pub(crate) consensus_evidence: StorageView<'world, Hash, RetainedEvidenceRecord>,
     /// Contract manifests
     pub(crate) contract_manifests: StorageView<
         'world,
@@ -20661,7 +20666,7 @@ macro_rules! world_ro_accessors {
             /// Latest reduced global state root advertised by the merge ledger.
             cell_ref merge_global_state_root: Option<Hash>;
             /// Persisted consensus evidence log (read-only).
-            storage consensus_evidence: Hash => EvidenceRecord;
+            storage consensus_evidence: Hash => RetainedEvidenceRecord;
             /// Proof verification records (read-only).
             storage proofs:
                 iroha_data_model::proof::ProofId => iroha_data_model::proof::ProofRecord;
@@ -30081,13 +30086,44 @@ impl State {
             iroha_data_model::query::error::QueryExecutionFail,
         >,
     > {
-        crate::smartcontracts::isi::tx::read_executed_carrier_from_checkpoints(
-            &self.view(),
+        use iroha_data_model::query::error::QueryExecutionFail;
+        if max_work == 0 || max_bytes == 0 {
+            return Err(QueryExecutionFail::GasBudgetExceeded.into());
+        }
+        // Capture only the actual immutable journal and opaque executed tip. No World,
+        // transactions or configuration view crosses the storage/crypto handoff. The same
+        // publication interval binds this immutable history cut before any source I/O.
+        let (hashes, tip) = loop {
+            let before = self.state_view_generation();
+            if before % 2 != 0 {
+                std::thread::yield_now();
+                continue;
+            }
+            let hashes = self.block_hashes.view();
+            let tip = *self.native_execution_tip.view().get();
+            if is_stable_state_view_generation(before, self.state_view_generation()) {
+                break (hashes, tip);
+            }
+            drop(hashes);
+            std::thread::yield_now();
+        };
+        let expected = hashes.get(height.get() - 1).copied();
+        let source =
+            CanonicalHistorySource::new(&self.kura, &hashes, tip, read_budget.frames().clone());
+        let carrier = crate::smartcontracts::isi::tx::read_executed_carrier_from_checkpoints(
+            source,
             height,
             max_work,
             max_bytes,
             read_budget,
-        )
+        )?;
+        if self.block_hashes.view().get(height.get() - 1).copied() != expected {
+            return Err(QueryExecutionFail::Conversion(
+                "canonical carrier changed during finalized read".into(),
+            )
+            .into());
+        }
+        Ok(carrier)
     }
 
     /// Read an authenticated canonical summary source in the caller's original cold owner.
@@ -30131,6 +30167,58 @@ impl State {
             iroha_data_model::query::error::QueryExecutionFail,
         >,
     > {
+        self.read_finalized_execution_carrier_in_pool(
+            height,
+            max_work,
+            max_bytes,
+            &self.ivm_execution_budget(),
+        )
+    }
+
+    /// Read the complete signed-genesis prefix under an off-chain caller's original owner.
+    ///
+    /// Unlike a checkpoint walk, a G1 execution requires its actual H2 successor. The
+    /// synchronous scope retains the caller's cumulative decoder work and physical frame
+    /// pool through the returned carrier; it grants no query admission or State mutation.
+    /// # Errors
+    /// Preserves original local refusal, missing/substituted history and finite read limits.
+    pub fn read_finalized_execution_carrier_with_read_budget(
+        &self,
+        height: NonZeroUsize,
+        max_work: u64,
+        max_bytes: u64,
+        read_budget: &CanonicalHistoryReadBudget,
+    ) -> Result<
+        crate::smartcontracts::isi::tx::FinalizedExecutionCarrier,
+        crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::query::error::QueryExecutionFail,
+        >,
+    > {
+        read_budget.with(|| {
+            #[cfg(all(test, sumeragi_core_mutation = "HC184"))]
+            let budget = self.ivm_execution_budget();
+            #[cfg(all(test, sumeragi_core_mutation = "HC184"))]
+            let pool = &budget;
+            #[cfg(not(all(test, sumeragi_core_mutation = "HC184")))]
+            let pool = read_budget.frames();
+            self.read_finalized_execution_carrier_in_pool(height, max_work, max_bytes, pool)
+        })
+    }
+
+    // One unchanged full-prefix source/error kernel serves the deterministic execution
+    // owner and the explicitly admitted off-chain owner. Neither substitutes for the other.
+    fn read_finalized_execution_carrier_in_pool(
+        &self,
+        height: NonZeroUsize,
+        max_work: u64,
+        max_bytes: u64,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<
+        crate::smartcontracts::isi::tx::FinalizedExecutionCarrier,
+        crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::query::error::QueryExecutionFail,
+        >,
+    > {
         use iroha_data_model::query::error::QueryExecutionFail;
         if max_work == 0 || max_bytes == 0 {
             return Err(QueryExecutionFail::GasBudgetExceeded.into());
@@ -30148,7 +30236,7 @@ impl State {
             expected,
             max_work,
             max_bytes,
-            &self.ivm_execution_budget(),
+            budget,
         )?;
         if self.block_hashes.view().get(height.get() - 1).copied() != Some(expected) {
             return Err(QueryExecutionFail::Conversion(

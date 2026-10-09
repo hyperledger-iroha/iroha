@@ -61,9 +61,9 @@ fn prepared_signature_decodes_and_seals_exact_original_backing_without_allocatio
 
 #[test]
 fn prepared_public_key_matches_canonical_validator_and_exact_owned_bytes() {
-    let mut algorithms = vec![Algorithm::Ed25519, Algorithm::Secp256k1];
+    let algorithms = [Algorithm::Ed25519, Algorithm::Secp256k1].into_iter();
     #[cfg(feature = "bls")]
-    algorithms.extend([Algorithm::BlsNormal, Algorithm::BlsSmall]);
+    let algorithms = algorithms.chain([Algorithm::BlsNormal, Algorithm::BlsSmall]);
     for algorithm in algorithms {
         let pair = KeyPair::from_seed(vec![0x59; 32], algorithm);
         let key = pair.public_key();
@@ -754,5 +754,244 @@ fn one_pass_public_key_unwind_deallocates_before_original_pool_notification() {
     );
     registration.cancel();
     drop((wait, registration));
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn funded_raw_material_key_preserves_validator_pool_and_exact_physical_backing() {
+    let algorithms = [Algorithm::Ed25519, Algorithm::Secp256k1].into_iter();
+    #[cfg(feature = "bls")]
+    let algorithms = algorithms.chain([Algorithm::BlsNormal, Algorithm::BlsSmall]);
+    for algorithm in algorithms {
+        let pair = KeyPair::from_seed(vec![0x83; 32], algorithm);
+        let source = pair.public_key();
+        let (actual_algorithm, material) = source.borrowed_parts().unwrap();
+        let pointer = material.as_ptr();
+        let exact = source.retained_allocation_layout();
+        let pool = AllocationBudget::new(exact.size());
+        let context = norito::core::DecodeBudgetContext::new(DecodeLimits::new(0, 0, 0, 0, 0));
+        let key = context
+            .with(|| PreparedPublicKeyDecode::try_from_material(actual_algorithm, material, &pool))
+            .unwrap();
+        assert_eq!(key.get(), source);
+        assert!(key.belongs_to(&pool));
+        assert_eq!(context.consumed_allocated_bytes(), 0);
+        assert_eq!(pool.reserved_bytes(), exact.size());
+        let expected = pool.try_reserve(exact).unwrap_err();
+        let (result, requests) = allocations_during(|| {
+            PreparedPublicKeyDecode::try_from_material(actual_algorithm, material, &pool)
+        });
+        assert_eq!(requests, 0);
+        assert!(
+            matches!(result, Err(PublicKeyDecodeAdmissionError::Allocation(
+            ChargedBufferError::Admission(actual))) if actual == expected)
+        );
+        let invalid = [0; 1];
+        let failure = without_allocations(|| {
+            PreparedPublicKeyDecode::try_from_material(actual_algorithm, &invalid, &pool)
+        });
+        assert!(
+            matches!(failure, Err(PublicKeyDecodeAdmissionError::Codec(_))),
+            "canonical invalid material precedes the occupied-pool refusal"
+        );
+        let ((), freed) = with_deallocation_observation(exact.size(), || drop(key));
+        assert_eq!(freed, 1);
+        assert_eq!(pool.reserved_bytes(), 0);
+        let failure = with_allocation_failure(exact.size(), || {
+            PreparedPublicKeyDecode::try_from_material(actual_algorithm, material, &pool)
+        });
+        assert!(
+            matches!(failure, Err(PublicKeyDecodeAdmissionError::Allocation(
+            ChargedBufferError::Allocator { requested_bytes })) if requested_bytes == exact.size())
+        );
+        assert_eq!(pool.reserved_bytes(), 0);
+        assert_eq!(material.as_ptr(), pointer);
+        let retried =
+            PreparedPublicKeyDecode::try_from_material(actual_algorithm, material, &pool).unwrap();
+        assert_eq!(retried.get(), source);
+        drop(retried);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn json_key_destination_preserves_canonical_text_escape_and_original_pool() {
+    use norito::json::JsonDeserialize as _;
+    let pair = KeyPair::from_seed(vec![0x9a; 32], Algorithm::Ed25519);
+    let plain = norito::json::to_json(pair.public_key()).unwrap();
+    let mut escaped = String::from("\"");
+    for byte in pair.public_key().to_string().bytes() {
+        use std::fmt::Write as _;
+        write!(&mut escaped, "\\u{byte:04X}").unwrap();
+    }
+    escaped.push('"');
+    for source in [plain.as_str(), escaped.as_str()] {
+        let pool = AllocationBudget::new(1 << 20);
+        let foreign = AllocationBudget::new(pool.limit_bytes());
+        let mut parser = norito::json::Parser::new(source);
+        let key = PreparedPublicKeyDecode::try_from_json(&mut parser, &pool).unwrap();
+        assert_eq!(key.get(), pair.public_key());
+        assert!(key.belongs_to(&pool));
+        assert!(!key.belongs_to(&foreign));
+        assert!(parser.eof());
+        assert_eq!(
+            pool.reserved_bytes(),
+            pair.public_key().retained_allocation_layout().size()
+        );
+        let ordinary = PublicKey::json_deserialize(&mut norito::json::Parser::new(source)).unwrap();
+        assert_eq!(key.get(), &ordinary);
+        drop(key);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn json_key_destination_refuses_string_and_late_compact_in_original_pool() {
+    let pair = KeyPair::from_seed(vec![0x9b; 32], Algorithm::Ed25519);
+    let source = norito::json::to_json(pair.public_key()).unwrap();
+    let text_bytes = pair.public_key().to_string().len();
+    let key_layout = pair.public_key().retained_allocation_layout();
+    let pool = AllocationBudget::new(1 << 20);
+    let blocker = pool.try_reserve_bytes(pool.limit_bytes()).unwrap();
+    let result = without_allocations(|| {
+        PreparedPublicKeyDecode::try_from_json(&mut norito::json::Parser::new(&source), &pool)
+    });
+    assert!(
+        matches!(result, Err(PublicKeyJsonAdmissionError::Allocation(
+        ChargedBufferError::Admission(iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. })
+    )) if requested_bytes == text_bytes)
+    );
+    assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
+    drop(blocker);
+    let blocker = pool
+        .try_reserve_bytes(pool.limit_bytes() - text_bytes)
+        .unwrap();
+    let result =
+        PreparedPublicKeyDecode::try_from_json(&mut norito::json::Parser::new(&source), &pool);
+    // The temporary text consumes the remaining credit before compact admission.
+    let Err(PublicKeyJsonAdmissionError::Allocation(ChargedBufferError::Admission(actual))) =
+        result
+    else {
+        panic!("late compact backing must refuse")
+    };
+    assert!(
+        matches!(actual, iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. } if requested_bytes == key_layout.size())
+    );
+    assert_eq!(pool.reserved_bytes(), pool.limit_bytes() - text_bytes);
+    drop(blocker);
+    let key =
+        PreparedPublicKeyDecode::try_from_json(&mut norito::json::Parser::new(&source), &pool)
+            .unwrap();
+    assert!(key.belongs_to(&pool));
+    drop(key);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn json_key_destination_preserves_active_logical_prefix_and_late_invalid_key_order() {
+    let pair = KeyPair::from_seed(vec![0x9c; 32], Algorithm::Ed25519);
+    let source = norito::json::to_json(pair.public_key()).unwrap();
+    let text_bytes = pair.public_key().to_string().len();
+    let key_bytes = pair.public_key().retained_allocation_layout().size();
+    let pool = AllocationBudget::new(1 << 20);
+    let limits = DecodeLimits::new(4096, 4096, 4096, text_bytes, 64);
+    norito::core::with_decode_limits_scope(limits, || {
+        let first =
+            PreparedPublicKeyDecode::try_from_json(&mut norito::json::Parser::new(&source), &pool);
+        assert!(
+            matches!(first, Err(PublicKeyJsonAdmissionError::Codec(ref error)) if error.is_decode_resource_limit())
+        );
+        assert_eq!(pool.reserved_bytes(), 0);
+        // Successful string work is not replenished by physical retirement.
+        let retry =
+            PreparedPublicKeyDecode::try_from_json(&mut norito::json::Parser::new(&source), &pool);
+        assert!(
+            matches!(retry, Err(PublicKeyJsonAdmissionError::Json(ref error)) if error.is_decode_resource_limit())
+        );
+    });
+    let admitted = DecodeLimits::new(4096, 4096, 4096, text_bytes + key_bytes, 64);
+    norito::core::with_decode_limits_scope(admitted, || {
+        let key =
+            PreparedPublicKeyDecode::try_from_json(&mut norito::json::Parser::new(&source), &pool)
+                .unwrap();
+        assert_eq!(key.get(), pair.public_key());
+        drop(key);
+    });
+    let invalid = "not a public key";
+    let result =
+        PreparedPublicKeyDecode::try_from_canonical_text(invalid, &AllocationBudget::new(0));
+    assert!(matches!(
+        result,
+        Err(PublicKeyDecodeAdmissionError::Codec(
+            Error::InvalidValue { .. }
+        ))
+    ));
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn json_key_canonical_invalid_point_preserves_compact_admission_before_validation() {
+    let pair = KeyPair::from_seed(vec![0x9d; 32], Algorithm::Secp256k1);
+    let canonical = pair.public_key().to_string();
+    let decoded = crate::multihash::decode_public_key_str_borrowed(&canonical).unwrap();
+    let mut invalid = canonical[..canonical.len() - decoded.payload_hex.len()].to_owned();
+    invalid.push_str(&"0".repeat(decoded.payload_hex.len()));
+    assert!(crate::multihash::decode_public_key_str_borrowed(&invalid).is_some());
+    let exact = pair.public_key().retained_allocation_layout();
+    let pool = AllocationBudget::new(exact.size());
+    let blocker = pool.try_reserve(exact).unwrap();
+    let failure = PreparedPublicKeyDecode::try_from_canonical_text(&invalid, &pool);
+    assert!(
+        matches!(failure, Err(PublicKeyDecodeAdmissionError::Allocation(
+        ChargedBufferError::Admission(iroha_allocation::AllocationRefusal::Capacity { requested_bytes, .. })
+    )) if requested_bytes == exact.size())
+    );
+    drop(blocker);
+    let failure = with_allocation_failure(exact.size(), || {
+        PreparedPublicKeyDecode::try_from_canonical_text(&invalid, &pool)
+    });
+    assert!(
+        matches!(failure, Err(PublicKeyDecodeAdmissionError::Allocation(
+        ChargedBufferError::Allocator { requested_bytes }
+    )) if requested_bytes == exact.size())
+    );
+    assert_eq!(pool.reserved_bytes(), 0);
+    assert!(matches!(
+        PreparedPublicKeyDecode::try_from_canonical_text(&invalid, &pool),
+        Err(PublicKeyDecodeAdmissionError::Codec(_))
+    ));
+    assert!(invalid.parse::<PublicKey>().is_err());
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn json_key_physical_text_and_compact_refusals_keep_exact_cause_and_retire_text() {
+    let pair = KeyPair::from_seed(vec![0x9e; 32], Algorithm::Ed25519);
+    let source = norito::json::to_json(pair.public_key()).unwrap();
+    let text_bytes = pair.public_key().to_string().len();
+    let compact_bytes = pair.public_key().retained_allocation_layout().size();
+    let pool = AllocationBudget::new(1 << 20);
+    let failure = with_allocation_failure(text_bytes, || {
+        PreparedPublicKeyDecode::try_from_json(&mut norito::json::Parser::new(&source), &pool)
+    });
+    assert!(
+        matches!(failure, Err(PublicKeyJsonAdmissionError::Allocation(ChargedBufferError::Allocator {requested_bytes})) if requested_bytes == text_bytes)
+    );
+    assert_eq!(pool.reserved_bytes(), 0);
+    let (failure, retired_text) = with_deallocation_observation(text_bytes, || {
+        with_allocation_failure(compact_bytes, || {
+            PreparedPublicKeyDecode::try_from_json(&mut norito::json::Parser::new(&source), &pool)
+        })
+    });
+    assert!(
+        matches!(failure, Err(PublicKeyJsonAdmissionError::Allocation(ChargedBufferError::Allocator {requested_bytes})) if requested_bytes == compact_bytes)
+    );
+    assert_eq!(retired_text, 1);
+    assert_eq!(pool.reserved_bytes(), 0);
+    let key =
+        PreparedPublicKeyDecode::try_from_json(&mut norito::json::Parser::new(&source), &pool)
+            .unwrap();
+    assert!(key.belongs_to(&pool));
+    drop(key);
     assert_eq!(pool.reserved_bytes(), 0);
 }

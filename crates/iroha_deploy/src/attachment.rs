@@ -36,6 +36,8 @@ use crate::{
     verify::finality::{FinalityError, FinalityVerifier},
 };
 
+mod amx_registration;
+pub use amx_registration::{AmxRegistrationFinality, AmxRegistrationProgress};
 mod operations;
 mod relay;
 mod replay;
@@ -64,6 +66,9 @@ pub enum AttachmentError {
     /// Fresh parent observation or durable checkpoint publication failed.
     #[error(transparent)]
     Bootstrap(#[from] crate::bootstrap::BootstrapError),
+    /// Original administrative carrier or durable native operation validation failed.
+    #[error(transparent)]
+    NativeOperation(#[from] crate::managed::Error),
     /// An exact wallet or SDK operation could not be completed; details stay in its private journal.
     #[error("private attachment: {0}")]
     Operation(&'static str),

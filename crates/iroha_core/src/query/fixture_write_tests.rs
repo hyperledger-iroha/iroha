@@ -102,7 +102,13 @@ fn evidence_fixture_publishes_signed_record_without_finality() {
     insert_evidence_record_for_test(&mut state, record.clone());
     assert_no_finality(&state);
     let view = state.view();
-    assert_eq!(view.world().consensus_evidence().get(&key), Some(&record));
+    assert_eq!(
+        view.world()
+            .consensus_evidence()
+            .get(&key)
+            .map(crate::state::RetainedEvidenceRecord::canonical_projection),
+        Some(record.clone())
+    );
     assert_eq!(evidence_count(&view), 1);
     assert_eq!(evidence_list_snapshot(&view), vec![record]);
 }

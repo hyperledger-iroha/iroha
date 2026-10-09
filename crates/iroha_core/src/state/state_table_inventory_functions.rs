@@ -962,6 +962,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/state/authority_registry/complete/table_capture/frozen.rs",
+        "capture_original_membership_once",
+        1,
+        UseOwner::Roots(&["state_table_substrate", "transaction_membership_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/authority_registry/complete/table_capture/frozen.rs",
         "capture_original_table_once",
         1,
         UseOwner::Roots(&["state_table_substrate"]),
@@ -981,6 +987,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     function(
         "crates/iroha_core/src/state/authority_registry/complete/transaction_membership.rs",
         "capture_observed",
+        1,
+        UseOwner::Roots(&["state_table_substrate", "transaction_membership_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/authority_registry/complete/transaction_membership.rs",
+        "capture_original_membership_group_once",
         1,
         UseOwner::Roots(&["state_table_substrate", "transaction_membership_root"]),
     ),
@@ -1103,6 +1115,18 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "publication_state_delta",
         1,
         UseOwner::Roots(&["world_net_delta_fold"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/world_state_accumulator.rs",
+        "apply_block",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/world_state_accumulator.rs",
+        "capture",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
     ),
     function(
         "crates/iroha_core/src/state/world_state_accumulator.rs",

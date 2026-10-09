@@ -113,6 +113,17 @@ impl RetainedNativeAmx {
             .as_ref()
             .is_none_or(|owner| owner.belongs_to(budget))
     }
+    /// Borrow this already-authenticated original parent source for local outbound capture.
+    /// Decoded snapshots and equivalent foreign pools cannot supply this runtime capability.
+    /// The returned claim still needs original carrier certification before relaying.
+    pub(crate) fn authenticated_parent_source(
+        &self,
+        budget: &AllocationBudget,
+    ) -> Option<&NativeAmxParticipantStateV1> {
+        (self.authenticated && self.belongs_to(budget))
+            .then(|| self.canonical())
+            .flatten()
+    }
     pub(super) const fn is_authenticated(&self) -> bool {
         self.authenticated
     }

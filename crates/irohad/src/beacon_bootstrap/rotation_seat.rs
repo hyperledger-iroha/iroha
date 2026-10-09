@@ -62,6 +62,7 @@ pub(super) fn encode_local_seat_credential(
 )> {
     use iroha_core::beacon::credential::{
         GlobalBeaconCredentialEncodeErrorV1, PreparedGlobalBeaconCredentialV1,
+        RuntimeGlobalBeaconShareProvisioningV1,
     };
     let digest = global_beacon_partial_signer_public_inventory_digest_v1(
         public.network_id,

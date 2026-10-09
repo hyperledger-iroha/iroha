@@ -10,17 +10,18 @@
 
 use crate::external_software_signer::GLOBAL_BEACON_PARTIAL_SIGNER_CREDENTIAL_NAME_V1;
 use clap::{Parser, Subcommand};
+#[cfg(test)]
+use iroha_core::beacon::validate_global_threshold_beacon_session_v1;
 use iroha_core::beacon::{
     AdaptiveGlobalThresholdBeaconDkgCryptoV1, FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    GlobalThresholdBeaconDkgSnapshotV1, GlobalThresholdBeaconDkgStateV1,
-    GlobalThresholdBeaconSessionBindingV1, GlobalThresholdBeaconSessionError,
-    LocalGlobalThresholdBeaconDkgErrorV1, PreparedLocalGlobalThresholdBeaconDkgSeatV1,
-    ValidatedGlobalThresholdBeaconSessionV1,
+    GlobalThresholdBeaconDkgStateV1, GlobalThresholdBeaconSessionBindingV1,
+    GlobalThresholdBeaconSessionError, LocalGlobalThresholdBeaconDkgErrorV1,
+    PreparedLocalGlobalThresholdBeaconDkgSeatV1, ValidatedGlobalThresholdBeaconSessionV1,
     credential::{
-        RuntimeGlobalBeaconShareProvisioningV1, encode_global_beacon_partial_signer_credential_v1,
+        encode_global_beacon_partial_signer_credential_v1,
         global_beacon_partial_signer_public_inventory_digest_v1,
     },
-    global_threshold_beacon_roster_hash_v1, validate_global_threshold_beacon_session_v1,
+    global_threshold_beacon_roster_hash_v1,
 };
 use iroha_core::state::{
     THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
@@ -200,6 +201,7 @@ impl std::error::Error for Error {
 }
 type Result<T> = std::result::Result<T, Error>;
 
+#[cfg(test)]
 fn retain_public_session(
     public: &GlobalThresholdBeaconKeySessionV1,
     budget: &iroha_allocation::AllocationBudget,

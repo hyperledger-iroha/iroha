@@ -5,6 +5,7 @@ pub(in crate::state) mod musubi_universal_policy;
 
 use super::{Canonical, DerivationCheck, Field, Role, Schema, V1_LAYOUT, schema};
 use crate::state::*;
+use iroha_data_model::block::consensus::EvidenceRecord;
 
 classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldReadReleases, {
     parameters: Cell<Parameters> => ("world.parameters",
@@ -280,7 +281,7 @@ classified_owner!(WorldData, check_world_fields, WORLD_FIELDS, readers = WorldRe
         Role::Canonical(Canonical::Cell(schema::<Vec<Hash>>()))), release = merge_hint_roots;
     merge_global_state_root: Cell<Option<Hash>> => ("world.merge_global_state_root",
         Role::Canonical(Canonical::Cell(schema::<Option<Hash>>()))), release = merge_global_state_root;
-    consensus_evidence: Storage<Hash, EvidenceRecord> => ("world.consensus_evidence",
+    consensus_evidence: Storage<Hash, RetainedEvidenceRecord> => ("world.consensus_evidence",
         Role::Canonical(Canonical::Table { key: schema::<Hash>(), value: schema::<EvidenceRecord>() })), release = consensus_evidence;
     contract_manifests: Storage<iroha_data_model::smart_contract::ContractArtifactId, iroha_data_model::smart_contract::manifest::ContractManifest> => ("world.contract_manifests",
         Role::Canonical(Canonical::Table { key: schema::<iroha_data_model::smart_contract::ContractArtifactId>(), value: schema::<iroha_data_model::smart_contract::manifest::ContractManifest>() })), release = contract_manifests;

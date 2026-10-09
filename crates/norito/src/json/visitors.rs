@@ -75,8 +75,19 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
         &mut self,
         parse: impl FnOnce(&mut Parser<'a>) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        self.parse_value_with_parser_typed(parse)
+    }
+    /// Parse one pending value while retaining an original typed caller refusal.
+    ///
+    /// Syntax and delimiter errors use the same kernel as ordinary field parsing;
+    /// no owned intermediate JSON value is created. `E` must retain conversion
+    /// from the original JSON error rather than relabel a local refusal as syntax.
+    pub fn parse_value_with_parser_typed<T, E: From<Error>>(
+        &mut self,
+        parse: impl FnOnce(&mut Parser<'a>) -> Result<T, E>,
+    ) -> Result<T, E> {
         if !self.value_pending {
-            return Err(Error::Message("no pending value for current key".into()));
+            return Err(Error::Message("no pending value for current key".into()).into());
         }
         let value = parse(self.parser)?;
         self.finish_value()?;
@@ -224,16 +235,18 @@ pub struct SeqVisitor<'a, 'p> {
     parser: &'p mut Parser<'a>,
     finished: bool,
     after_comma: bool,
+    total_entries: usize,
 }
 impl<'a, 'p> SeqVisitor<'a, 'p> {
     /// Begin visiting an array at the parser's current position.
     pub fn new(parser: &'p mut Parser<'a>) -> Result<Self, Error> {
-        parser.preflight_array_entries()?;
+        let total_entries = parser.preflight_array_entries()?;
         parser.expect(b'[')?;
         let mut visitor = Self {
             parser,
             finished: false,
             after_comma: false,
+            total_entries,
         };
         if visitor.parser.try_consume_char(b']')? {
             visitor.finished = true;
@@ -250,13 +263,25 @@ impl<'a, 'p> SeqVisitor<'a, 'p> {
     pub fn is_finished(&self) -> bool {
         self.finished
     }
+    /// Exact entries admitted by the original lexical/count preflight.
+    #[doc(hidden)]
+    pub fn total_entries(&self) -> usize {
+        self.total_entries
+    }
     /// Parse the next typed array element.
     pub fn next_element<T: JsonDeserialize>(&mut self) -> Result<Option<T>, Error> {
+        self.next_element_with_parser_typed(T::json_deserialize)
+    }
+    /// Parse one element with no intermediate value or erasure of caller refusal.
+    pub fn next_element_with_parser_typed<T, E: From<Error>>(
+        &mut self,
+        parse: impl FnOnce(&mut Parser<'a>) -> Result<T, E>,
+    ) -> Result<Option<T>, E> {
         if self.finished {
             return Ok(None);
         }
         self.prepare_element()?;
-        let value = T::json_deserialize(self.parser)?;
+        let value = parse(self.parser)?;
         self.finish_element()?;
         Ok(Some(value))
     }
@@ -335,3 +360,7 @@ impl<'a, 'p> SeqVisitor<'a, 'p> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "visitors/destination_tests.rs"]
+mod destination_tests;

@@ -8613,8 +8613,10 @@ fn decode_world_fields(
     let merge_hint_roots: Cell<Vec<Hash>> = take_required(&mut map, "merge_hint_roots")?;
     let merge_global_state_root: Cell<Option<Hash>> =
         take_required(&mut map, "merge_global_state_root")?;
-    let consensus_evidence: Storage<Hash, EvidenceRecord> =
-        take_required(&mut map, "consensus_evidence")?;
+    let consensus_evidence = map
+        .remove("consensus_evidence")
+        .ok_or_else(|| json::Error::missing_field("consensus_evidence"))?
+        .decode_evidence(execution_budget)?;
     let da_pin_intents_by_ticket = take_required(&mut map, "da_pin_intents_by_ticket")?;
     let da_pin_intents_by_alias = take_required(&mut map, "da_pin_intents_by_alias")?;
     let da_pin_intents_by_manifest = take_required(&mut map, "da_pin_intents_by_manifest")?;

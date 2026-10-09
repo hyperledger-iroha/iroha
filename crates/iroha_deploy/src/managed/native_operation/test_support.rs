@@ -179,3 +179,6 @@ pub(in crate::managed) fn provider_id(
 
 #[path = "test_support/musubi_namespace_tests.rs"]
 mod musubi_namespace_tests;
+
+#[path = "test_support/amx_registration_native_tests.rs"]
+mod amx_registration_native_tests;

@@ -222,6 +222,7 @@ impl From<AttachmentError> for ManagedAttachmentFailure {
             AttachmentError::Proof(_) => Self::EvidenceRejected,
             AttachmentError::Finality(error) => error.into(),
             AttachmentError::Bootstrap(error) => error.into(),
+            AttachmentError::NativeOperation(error) => error.into(),
             AttachmentError::Operation(_) => Self::RelayIncomplete,
             AttachmentError::Cancelled => Self::SupervisorStopped,
         }

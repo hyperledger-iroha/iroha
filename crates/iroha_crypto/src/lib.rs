@@ -117,7 +117,7 @@ pub use blake2;
 mod prepared_decode;
 pub use prepared_decode::{
     PreparedCryptoDecodeError, PreparedPublicKeyDecode, PreparedSignatureDecode,
-    PublicKeyDecodeAdmissionError,
+    PublicKeyDecodeAdmissionError, PublicKeyJsonAdmissionError,
 };
 mod public_key_allocation;
 mod public_key_decode;

@@ -118,7 +118,13 @@ async fn pipeline_status_cache_refreshes_pending_block() {
         .record_block_event(&event, &unavailable.state);
     assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
     assert_eq!(app.pipeline_status_cache.pending_blocks.len(), 1);
-    app.pipeline_status_cache.refresh_pending_blocks(&app.state);
+    let outcome = reconcile_pending_pipeline_transaction(&app, &tx_hash)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        CanonicalTransactionOutcome::Applied { .. }
+    ));
     let stored = app.pipeline_status_cache.lookup(&tx_hash).expect("entry");
     assert_eq!(stored.kind, PipelineStatusKind::Committed);
     assert_eq!(stored.block_height, NonZeroU64::new(2));
@@ -138,7 +144,11 @@ async fn pipeline_status_cache_rejects_uncertified_block_custody() {
     };
     app.pipeline_status_cache
         .record_block_event(&event, &app.state);
-    app.pipeline_status_cache.refresh_pending_blocks(&app.state);
+    assert!(
+        reconcile_pending_pipeline_transaction(&app, &tx_hash)
+            .unwrap()
+            .is_none()
+    );
     assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
     assert_eq!(app.pipeline_status_cache.pending_blocks.len(), 1);
 }
@@ -373,7 +383,7 @@ async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visi
         "refusal cannot poison or delete original history"
     );
 
-    let cache = PipelineStatusCache::new();
+    let cache = &app.pipeline_status_cache;
     cache.record_block_event(
         &BlockEvent {
             header,
@@ -447,7 +457,14 @@ async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visi
 
     drop(occupied);
     drop(occupied_cold);
-    cache.refresh_pending_blocks(&app.state);
+    let outcome = owner
+        .scope(|| reconcile_pending_pipeline_transaction(&app, &tx_hash))
+        .expect("retry uses the original admitted query owner and exact pending source")
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        CanonicalTransactionOutcome::Applied { .. }
+    ));
     assert!(cache.pending_blocks.is_empty());
     assert_eq!(
         cache.lookup(&tx_hash).unwrap().kind,

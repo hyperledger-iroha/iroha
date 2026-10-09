@@ -147,6 +147,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "zk-tests": ("test-utils",),
     },
     "iroha_torii": {
+        "mutation-testing": (),
         "default": ("node-api",),
         "node-api": (
             "app_api",
@@ -466,6 +467,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     ),
     "iroha_torii": (
         "bench",
+        "mutation-testing",
         "pprof",
         "profiling",
         "test-fixtures",

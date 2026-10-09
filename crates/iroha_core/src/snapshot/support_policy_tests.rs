@@ -831,14 +831,18 @@ fn staged_and_committed_wsv_hashes_commit_consensus_evidence() {
     let mut staged = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     staged.world.consensus_evidence.insert(
         evidence_key,
-        EvidenceRecord {
-            evidence,
-            attribution,
-            recorded_at_height: 2,
-            recorded_at_view: 0,
-            recorded_at_ms: 2_000,
-            penalty_status: EvidencePenaltyStatus::Pending,
-        },
+        crate::state::RetainedEvidenceRecord::from_fixture(
+            EvidenceRecord {
+                evidence,
+                attribution,
+                recorded_at_height: 2,
+                recorded_at_view: 0,
+                recorded_at_ms: 2_000,
+                penalty_status: EvidencePenaltyStatus::Pending,
+            },
+            &state.ivm_execution_budget(),
+        )
+        .unwrap(),
     );
     let staged_with_evidence = canonical_staged_state_snapshot_hash(&staged);
     assert_ne!(
@@ -943,14 +947,18 @@ async fn staged_snapshot_wsv_hash_commits_consensus_evidence() {
             let key = crate::sumeragi::evidence::evidence_key(&evidence);
             state_block.world.consensus_evidence.insert(
                 key,
-                EvidenceRecord {
-                    evidence,
-                    attribution,
-                    recorded_at_height: 1,
-                    recorded_at_view: 0,
-                    recorded_at_ms: 1_000,
-                    penalty_status: EvidencePenaltyStatus::Pending,
-                },
+                crate::state::RetainedEvidenceRecord::from_fixture(
+                    EvidenceRecord {
+                        evidence,
+                        attribution,
+                        recorded_at_height: 1,
+                        recorded_at_view: 0,
+                        recorded_at_ms: 1_000,
+                        penalty_status: EvidencePenaltyStatus::Pending,
+                    },
+                    &state.ivm_execution_budget(),
+                )
+                .unwrap(),
             );
         }
         let staged_hash = canonical_staged_state_snapshot_hash(&state_block);
