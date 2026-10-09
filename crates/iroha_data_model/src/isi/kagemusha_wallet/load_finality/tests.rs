@@ -166,6 +166,42 @@ fn native_event_inclusion_authenticates_the_same_receipt_as_full_transaction() {
 }
 
 #[test]
+fn event_path_original_is_bounded_canonical_data_that_still_needs_native_finality() {
+    let mut fixture = NativeFinalityFixture::start("load-event-path-original");
+    let (verified, _, receipt, tree) = certify_event(&mut fixture);
+    let proof = tree.get_proof(1).unwrap();
+    let original = encode_frame_v1(&proof, KAGEMUSHA_WALLET_LOAD_EVENT_PATH_MAX_BYTES_V1).unwrap();
+    let decoded = decode_kagemusha_wallet_load_event_path_v1(&original).unwrap();
+    assert_eq!(decoded, proof);
+    assert!(
+        verify_finalized_kagemusha_wallet_load_event_v1(
+            &verified,
+            &decoded,
+            fixture.network_id(),
+            fixture.chain_id(),
+            &receipt,
+        )
+        .is_ok()
+    );
+    let mut trailing = original.clone();
+    trailing.push(0);
+    for invalid in [
+        Vec::new(),
+        trailing,
+        original[..original.len() - 1].to_vec(),
+        vec![0; KAGEMUSHA_WALLET_LOAD_EVENT_PATH_MAX_BYTES_V1 + 1],
+    ] {
+        assert!(decode_kagemusha_wallet_load_event_path_v1(&invalid).is_err());
+    }
+    let deep: MerkleProof<EventBox> = MerkleProof::from_audit_path(
+        0,
+        vec![None; KAGEMUSHA_WALLET_LOAD_EVENT_PATH_MAX_DEPTH_V1 + 1],
+    );
+    let deep = encode_frame_v1(&deep, KAGEMUSHA_WALLET_LOAD_EVENT_PATH_MAX_BYTES_V1).unwrap();
+    assert!(decode_kagemusha_wallet_load_event_path_v1(&deep).is_err());
+}
+
+#[test]
 fn native_event_inclusion_rejects_every_substituted_receipt_term_and_bad_geometry() {
     let mut fixture = NativeFinalityFixture::start("load-event-negative");
     let (verified, _, receipt, tree) = certify_event(&mut fixture);

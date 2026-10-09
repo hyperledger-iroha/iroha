@@ -366,7 +366,8 @@ include additions.
 `musubi new` creates a contract package named after its directory: a counter
 seiyaku with state, `hajimari`, an authorized `kotoage fn`, a `view fn` and an error
 enum, four standalone tests, a README and `.gitignore`. `--namespace` defaults to
-`local` until the package is published.
+`local`, which `musubi publish` refuses until `[package] namespace` names a
+registry namespace.
 `--template library` creates a library module with a TODO-marked unit-returning
 function for each requested export. Export names must be canonical Kotodama
 identifiers permitted for those generated declarations. `musubi init` preserves

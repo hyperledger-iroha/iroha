@@ -709,6 +709,12 @@ impl NativeProofs for TestProofs {
             )
         }))
     }
+    fn ledger_genesis(
+        &self,
+    ) -> Result<Arc<iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier>, Error> {
+        // Host mock: Load acceptance tests pass the fixture genesis explicitly.
+        Err(Error::ArtifactsUnavailable("mock native ledger genesis"))
+    }
 
     fn fold_schedule(
         &self,
@@ -886,6 +892,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         ledger_retired: None,
         ledger_load_plans: IndexRoot::default(),
         ledger_load_ordinals: IndexRoot::default(),
+        ledger_load_confirmations: IndexRoot::default(),
         ledger_unload_confirmations: IndexRoot::default(),
         ledger_unload_proofs: IndexRoot::default(),
         ledger_unload_retired: None,

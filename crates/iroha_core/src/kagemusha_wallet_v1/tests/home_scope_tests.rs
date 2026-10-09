@@ -50,6 +50,12 @@ fn registration_scope_must_equal_the_definition_home() {
                     description: None,
                     fault_tolerance: 1,
                 },
+                DataSpaceMetadata {
+                    id: cbsi,
+                    alias: "cbsi".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
             ])
             .unwrap(),
             ..Default::default()

@@ -6,7 +6,7 @@
 
 use crate::{
     NetworkId,
-    block::SignedBlock,
+    block::{BlockHeader, SignedBlock},
     isi::SetParameter,
     parameter::{
         Parameter,
@@ -18,7 +18,8 @@ use crate::{
     },
     transaction::{Executable, TransactionDomain},
 };
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf, PublicKey};
+use iroha_model_base::peer::PeerId;
 
 /// An invalid signed genesis or its original, unfinished JSON decoding attempt.
 ///
@@ -206,4 +207,199 @@ pub fn signed_genesis_consensus_metadata(
         .validate()
         .map_err(|error| format!("invalid signed genesis consensus metadata: {error}"))?;
     Ok(metadata)
+}
+
+/// Upper bound on an independently selected signed genesis original.
+pub const MAX_SIGNED_GENESIS_BYTES_V1: usize = 8 * 1024 * 1024;
+
+/// Independently selected pins for one exact signed genesis original.
+///
+/// Every field must come from an authenticated source other than the genesis bytes (for
+/// example a signed release manifest). `roster` is the complete genesis committee in canonical
+/// order; its `3f + 1` size is enforced by [`genesis_epoch`]. Callers may add stricter rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignedGenesisPinsV1 {
+    /// Exact chain label.
+    pub chain_id: String,
+    /// Genesis-derived network identity.
+    pub network_id: NetworkId,
+    /// Signed genesis header hash.
+    pub genesis_hash: HashOf<BlockHeader>,
+    /// SHA-256 of the exact framed signed genesis bytes.
+    pub signed_genesis_sha256: [u8; 32],
+    /// The genesis signing authority.
+    pub genesis_public_key: PublicKey,
+    /// The complete ordered genesis validator roster.
+    pub roster: Vec<PeerId>,
+    /// Signed consensus mode.
+    pub mode: ConsensusMode,
+}
+
+/// A signed genesis original authenticated against independently selected pins.
+///
+/// It has no decoder: only [`authenticate_signed_genesis_v1`] constructs it.
+#[derive(Clone)]
+pub struct AuthenticatedSignedGenesisV1 {
+    pins: SignedGenesisPinsV1,
+    block: SignedBlock,
+    metadata: crate::parameter::system::ConsensusHandshakeMetadata,
+    epoch: ValidatorEpochContextV1,
+    validators: Vec<super::FinalityValidator>,
+}
+
+impl core::fmt::Debug for AuthenticatedSignedGenesisV1 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthenticatedSignedGenesisV1")
+            .field("network_id", &self.pins.network_id)
+            .field("genesis_hash", &self.pins.genesis_hash)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AuthenticatedSignedGenesisV1 {
+    /// The pins this original was authenticated against.
+    #[must_use]
+    pub fn pins(&self) -> &SignedGenesisPinsV1 {
+        &self.pins
+    }
+    /// The exact authenticated signed genesis block.
+    #[must_use]
+    pub fn block(&self) -> &SignedBlock {
+        &self.block
+    }
+    /// The unique signed consensus metadata.
+    #[must_use]
+    pub fn metadata(&self) -> &crate::parameter::system::ConsensusHandshakeMetadata {
+        &self.metadata
+    }
+    /// The reconstructed signed genesis epoch.
+    #[must_use]
+    pub fn epoch(&self) -> &ValidatorEpochContextV1 {
+        &self.epoch
+    }
+    /// The genesis committee as finality validators.
+    #[must_use]
+    pub fn validators(&self) -> &[super::FinalityValidator] {
+        &self.validators
+    }
+    /// SHA-256 of the exact framed signed genesis bytes.
+    #[must_use]
+    pub fn signed_genesis_sha256(&self) -> [u8; 32] {
+        self.pins.signed_genesis_sha256
+    }
+}
+
+/// Authenticate one exact framed signed genesis original against independent pins.
+///
+/// # Errors
+/// Invalid pins; bytes that differ from the pinned digest, are not one canonical resultless
+/// height-one block, or carry a different hash or network; anything other than the sole
+/// index-zero authority signature; non-explicit or foreign-authority transactions; an invalid
+/// transaction signature; or a reconstructed epoch whose mode, network or ordered committee
+/// differs from the pins.
+pub fn authenticate_signed_genesis_v1(
+    wire: &[u8],
+    pins: &SignedGenesisPinsV1,
+) -> Result<AuthenticatedSignedGenesisV1, GenesisReadError> {
+    use crate::transaction::TransactionEntrypoint;
+    use iroha_crypto::Algorithm;
+    use sha2::{Digest as _, Sha256};
+    if wire.is_empty()
+        || wire.len() > MAX_SIGNED_GENESIS_BYTES_V1
+        || pins.chain_id.is_empty()
+        || pins.chain_id.len() > 512
+        || pins.chain_id.trim() != pins.chain_id
+        || pins.chain_id.as_bytes().contains(&0)
+        || pins.signed_genesis_sha256 == [0; 32]
+        || pins.roster.is_empty()
+        || pins.roster.windows(2).any(|peers| peers[0] >= peers[1])
+        || pins
+            .roster
+            .iter()
+            .any(|peer| peer.public_key().try_algorithm() != Ok(Algorithm::BlsNormal))
+    {
+        return Err("invalid independently selected native genesis pins".into());
+    }
+    if <[u8; 32]>::from(Sha256::digest(wire)) != pins.signed_genesis_sha256 {
+        return Err("signed genesis original differs from selected raw hash".into());
+    }
+    let block =
+        norito::core::with_decode_limits_scope(norito::canonical_decode_limits(wire.len()), || {
+            crate::block::decode_framed_signed_block(wire)
+        })
+        .map_err(|_| "signed genesis original is not an exact canonical block")?;
+    if block
+        .encode_wire()
+        .map_err(|_| "signed genesis cannot encode canonically")?
+        != wire
+        || !block.header().is_genesis()
+        || !block.is_resultless_proposal()
+        || block.hash() != pins.genesis_hash
+        || NetworkId::from_genesis_hash(block.hash()) != pins.network_id
+    {
+        return Err("signed genesis differs from selected root or network".into());
+    }
+    let mut signatures = block.signatures();
+    let signature = signatures
+        .next()
+        .ok_or("signed genesis has no authority signature")?;
+    if signature.index() != 0 || signatures.next().is_some() {
+        return Err("signed genesis requires its sole index-zero signature".into());
+    }
+    signature
+        .signature()
+        .verify_hash(&pins.genesis_public_key, pins.genesis_hash)
+        .map_err(|_| "signed genesis signature differs from selected authority")?;
+    drop(signatures);
+    if block.external_entrypoint_count() == 0
+        || block
+            .network_entrypoints()
+            .any(|entry| !matches!(entry, TransactionEntrypoint::External(_)))
+    {
+        return Err("signed genesis requires only explicit signed transactions".into());
+    }
+    for transaction in block.external_transactions() {
+        if transaction.authority().try_signatory() != Some(&pins.genesis_public_key)
+            || transaction.domain() != &TransactionDomain::Genesis
+        {
+            return Err("genesis transaction differs from selected authority or domain".into());
+        }
+        transaction
+            .verify_signature()
+            .map_err(|_| "signed genesis transaction signature is invalid")?;
+    }
+    // Native epoch validation verifies canonical BLS keys, all proofs of possession,
+    // signed current metadata and the complete signed genesis authority generation.
+    let epoch = genesis_epoch(&block).map_err(|_| "signed genesis native epoch is invalid")?;
+    if epoch.mode != pins.mode
+        || epoch.network_id != pins.network_id
+        || epoch.committee.len() != pins.roster.len()
+        || !epoch
+            .committee
+            .iter()
+            .zip(&pins.roster)
+            .all(|(member, peer)| &member.validator == peer)
+    {
+        return Err(
+            "signed genesis epoch differs from independently selected mode or roster".into(),
+        );
+    }
+    let validators: Vec<_> = epoch
+        .committee
+        .iter()
+        .map(|member| super::FinalityValidator {
+            public_key: member.validator.public_key().clone(),
+            proof_of_possession: member.proof_of_possession.clone(),
+        })
+        .collect();
+    super::SumeragiFinalityVerifier::new(&block, &pins.chain_id, validators.clone())
+        .map_err(|_| "signed genesis selected native BLS roster is invalid")?;
+    let metadata = signed_genesis_consensus_metadata(&block)?;
+    Ok(AuthenticatedSignedGenesisV1 {
+        pins: pins.clone(),
+        block,
+        metadata,
+        epoch,
+        validators,
+    })
 }

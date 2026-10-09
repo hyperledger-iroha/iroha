@@ -471,7 +471,10 @@ impl PreparationV1<'_> {
                 .ok_or(state::Error::Invalid("native intent kind"))?
                 .action
             {
-                Action::Load { receipt, finality } => {
+                Action::Load {
+                    receipt,
+                    event_path,
+                } => {
                     let decoded = model(KagemushaWalletLoadReceiptV1::decode_canonical(receipt))?;
                     let leaf = KagemushaWalletLoadLeafV1 {
                         ordinal: decoded.ordinal,
@@ -486,10 +489,9 @@ impl PreparationV1<'_> {
                     Step::Load(Box::new(proof(self.prepare_load(
                         &owner,
                         released,
-                        sources.finality(),
                         LoadOriginalsV1 {
                             receipt,
-                            finality,
+                            event_path,
                             insertion: &insertion,
                         },
                         nonce,

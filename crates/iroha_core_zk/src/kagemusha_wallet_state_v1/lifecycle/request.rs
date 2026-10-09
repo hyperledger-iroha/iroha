@@ -1,6 +1,8 @@
 //! Bounded lifecycle inputs; only native preparation may derive state or witnesses.
 
-use iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadReceiptV1;
+use iroha_data_model::isi::kagemusha_wallet::{
+    KagemushaWalletLoadReceiptV1, load_finality::decode_kagemusha_wallet_load_event_path_v1,
+};
 
 use super::*;
 
@@ -24,12 +26,13 @@ pub struct ChargeOriginalsV1 {
 #[derive(Debug, Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::OperationActionV1")]
 pub enum OperationActionV1 {
-    /// Exact ordinary-ledger receipt and its compact finality proof.
+    /// Exact ordinary-ledger receipt and its counted event path. Native authenticates both
+    /// against its ledger light client's certified receipt block before accepting the Load.
     Load {
         /// Original canonical receipt.
         receipt: Vec<u8>,
-        /// Original canonical finality evidence; still requires the installed verifier.
-        finality: Vec<u8>,
+        /// Original canonical event path of the receipt's `KagemushaLoadCommitted` event.
+        event_path: Vec<u8>,
     },
     /// Irreversible Send to the exact receiver-signed Request.
     Send {
@@ -121,12 +124,15 @@ impl OperationRequestV1 {
         }
         let id = scheme.scheme_id();
         match &self.action {
-            OperationActionV1::Load { receipt, finality } => {
+            OperationActionV1::Load {
+                receipt,
+                event_path,
+            } => {
                 let receipt = valid(KagemushaWalletLoadReceiptV1::decode_canonical(receipt))?;
                 if receipt.scheme_id != id {
                     return Err(Error::Invalid("load request scheme"));
                 }
-                valid(KagemushaWalletLoadFinalityV1::decode_canonical(finality))?;
+                valid(decode_kagemusha_wallet_load_event_path_v1(event_path))?;
             }
             OperationActionV1::Send { request } => {
                 bounded(request, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)?;

@@ -960,12 +960,6 @@
       "type": "u8"
     }
   },
-  "Array<u8, 544>": {
-    "Array": {
-      "len": 544,
-      "type": "u8"
-    }
-  },
   "Array<u8, 64>": {
     "Array": {
       "len": 64,
@@ -11671,34 +11665,6 @@
       {
         "name": "beneficiary",
         "type": "AccountId"
-      }
-    ]
-  },
-  "KagemushaWalletLoadFinalityV1": {
-    "Struct": [
-      {
-        "name": "version",
-        "type": "u16"
-      },
-      {
-        "name": "anchor_digest",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "receipt_digest",
-        "type": "Array<u8, 32>"
-      },
-      {
-        "name": "proof",
-        "type": "Vec<u8>"
-      },
-      {
-        "name": "pallas_claim",
-        "type": "Array<u8, 544>"
-      },
-      {
-        "name": "vesta_claim",
-        "type": "Array<u8, 544>"
       }
     ]
   },

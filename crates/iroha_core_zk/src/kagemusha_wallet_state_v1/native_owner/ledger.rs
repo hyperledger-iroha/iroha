@@ -1,5 +1,6 @@
 //! Online native finality progress and payout evidence under the selected wallet archive.
 use super::*;
+mod load;
 use iroha_data_model::sumeragi_finality::{
     MAX_FINALITY_BLOCK_BYTES, MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint,
     SumeragiFinalityProof, WorldStateSnapshotV1,

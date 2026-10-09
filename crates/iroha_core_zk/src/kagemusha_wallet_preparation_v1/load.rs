@@ -1,20 +1,21 @@
-//! Pre-Advance Load preparation from a native BLS-authenticated ordinary receipt.
+//! Pre-Advance Load preparation from a natively finalized ordinary receipt.
 //!
-//! Local preparation can extend an unfolded head. It verifies ordinary finality
-//! before deriving the state and preserves the exact receipt/certificate originals.
+//! Local preparation can extend an unfolded head. The coordinator accepts a Load only
+//! after its native owner verified the receipt block's CommitQC and the counted event
+//! inclusion through the ledger light client and durably retained that confirmation
+//! (R10 Load carve-out); Advance refuses a Load capsule without it. This derivation
+//! binds the exact receipt terms and preserves the receipt/event-path originals.
 //! It creates no folded state or permission to spend before the required fold.
-
-use crate::kagemusha_wallet_artifacts_v1::producer_inventory::QualifiedReceiptSourceV1;
 
 use super::*;
 
-/// Exact ordinary finality originals and the current recovery-map insertion.
+/// Exact ordinary Load originals and the current recovery-map insertion.
 #[derive(Clone, Copy)]
 pub struct LoadOriginalsV1<'a> {
     /// Canonical original ordinary receipt, including its original online charge.
     pub receipt: &'a [u8],
-    /// Canonical native BLS evidence under the independently installed global root.
-    pub finality: &'a [u8],
+    /// Canonical counted event path, natively verified before the Load was accepted.
+    pub event_path: &'a [u8],
     /// Actual low-leaf and intermediate empty-slot openings for this receipt.
     pub insertion: &'a KagemushaWalletIndexedInsertV1,
 }
@@ -42,7 +43,7 @@ impl LoadStepV1 {
     pub const fn statement(&self) -> &KagemushaWalletStatementV1 {
         &self.statement
     }
-    /// Original receipt/finality frames and the two authenticated insertion paths.
+    /// Original receipt/event-path frames and the two authenticated insertion paths.
     pub fn originals(&self) -> (&[KagemushaWalletRetainedInputV1; 2], &[Vec<u8>; 2]) {
         (&self.retained, &self.openings)
     }
@@ -56,8 +57,8 @@ impl LoadStepV1 {
     }
 }
 
-// Arithmetic/map derivation only. The public entry point first verifies the exact
-// retained receipt proof and current released source; this helper admits neither.
+// Arithmetic/map derivation only. The public entry point checks the exact retained
+// originals and current released source; native finality belongs to the coordinator.
 fn derive(
     credential: &KagemushaWalletCredentialV1,
     before: &KagemushaWalletStateV1,
@@ -139,36 +140,32 @@ fn derive(
 }
 
 impl PreparationV1<'_> {
-    /// Verify ordinary receipt finality, then derive a local Load from the released head.
-    /// A current-head Omega is not required. The native receipt authority must belong
-    /// to this exact installation; the caller cannot replace its signed genesis.
-    /// Every required epoch transition, receipt-block BLS certificate and event inclusion
-    /// must verify before any prepared result or signed Advance can be produced.
+    /// Derive a local Load from the released head for a natively finalized receipt.
+    /// A current-head Omega is not required. The coordinator calls this only after its
+    /// native owner verified the receipt block's CommitQC and the event inclusion against
+    /// the installation's independently selected signed genesis and retained that record;
+    /// Advance requires the same record. This method grants no finality by itself.
     ///
     /// # Errors
-    /// Foreign installation, invalid source/receipt/finality, wrong wallet or ordinal,
+    /// Foreign installation, invalid source/receipt/event path, wrong wallet or ordinal,
     /// reused/nonempty recovery slot, malformed original, overflow or invalid nonce.
     pub fn prepare_load(
         &self,
         owner: &AuthenticatedCredentialV1,
         source: &ReleasedStep,
-        finality: &QualifiedReceiptSourceV1,
         originals: LoadOriginalsV1<'_>,
         successor_nonce: [u8; 32],
         budget: MemoryBudget,
     ) -> Result<LoadStepV1, Error> {
         self.credential_owner(owner)?;
         let scheme = self.installed.verifier().scheme();
-        if finality.installation() != (scheme.scheme_id(), owner.manifest_digest) {
-            return Err(Error::Authority);
-        }
         self.receipt_tape(owner, source, budget)?;
         let receipt = authority(KagemushaWalletLoadReceiptV1::decode_canonical(
             originals.receipt,
         ))?;
         // Bound both originals before retaining/copying untrusted network bytes.
-        authority(KagemushaWalletLoadFinalityV1::decode_canonical(
-            originals.finality,
+        authority(decode_kagemusha_wallet_load_event_path_v1(
+            originals.event_path,
         ))?;
         let retained = [
             KagemushaWalletRetainedInputV1 {
@@ -176,15 +173,12 @@ impl PreparationV1<'_> {
                 bytes: originals.receipt.to_vec(),
             },
             KagemushaWalletRetainedInputV1 {
-                role: KagemushaWalletRetainedInputRoleV1::LoadFinality,
-                bytes: originals.finality.to_vec(),
+                role: KagemushaWalletRetainedInputRoleV1::LoadEventPath,
+                bytes: originals.event_path.to_vec(),
             },
         ];
         let digest = authority(receipt.receipt_digest())?;
-        let (_, evidence) = retained_load_source(&retained, digest)?;
-        finality
-            .verify_receipt_evidence(&receipt, &evidence)
-            .map_err(|_| Error::Proof)?;
+        retained_load_source(&retained, digest)?;
         let capsule = &source.frozen.capsule;
         let (state, statement, witness) = derive(
             &owner.credential,

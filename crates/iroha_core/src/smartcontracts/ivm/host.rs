@@ -18435,6 +18435,69 @@ seiyaku OpaqueInstructionSubmission {
         assert!(host.queued.is_empty());
     }
     #[test]
+    fn transfer_asset_scoped_syscall_without_dataspace_is_global_or_rejected() {
+        // `ledger::asset::transfer` without `dataspace:` passes r14 = 0: a global
+        // definition moves its global balance, and a dataspace-restricted one is
+        // rejected instead of falling back to any dataspace.
+        let authority: AccountId = fixture_account("alice");
+        let destination: AccountId = fixture_account("bob");
+        let owning_domain = fixture_domain_id();
+        let amount = Quantity::from(5_u32);
+        for (asset_name, policy) in [
+            ("xor", AssetBalancePolicy::Global),
+            ("rose", AssetBalancePolicy::DataspaceRestricted),
+        ] {
+            let asset_def = AssetDefinitionId::derive_from_components(
+                owning_domain.clone(),
+                asset_name.parse().unwrap(),
+            );
+            let state = scoped_transfer_state(
+                &authority,
+                &destination,
+                asset_def.clone(),
+                asset_name,
+                policy,
+                matches!(policy, AssetBalancePolicy::DataspaceRestricted)
+                    .then(|| owning_domain.clone()),
+            );
+            let view = state.view();
+            let mut host = CoreHostImpl::new(authority.clone());
+            host.set_query_state(&view);
+            let mut vm = IVM::new(1_000);
+            prepare_scoped_transfer_syscall(
+                &mut vm,
+                &authority,
+                &destination,
+                &asset_def,
+                &amount,
+                DataSpaceId::new(7),
+            );
+            vm.set_register(14, 0);
+            assert_eq!(
+                host.prepare_syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
+                Ok(crate::gas::BASE_TRANSFER),
+                "an omitted scope is a valid quote for {asset_name}"
+            );
+            let result = host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm);
+            match policy {
+                AssetBalancePolicy::Global => {
+                    result.expect("global transfer without a scope should enqueue");
+                    let expected =
+                        InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
+                            AssetId::of(asset_def, authority.clone()),
+                            amount.clone(),
+                            destination.clone(),
+                        )));
+                    assert_eq!(host.queued, vec![expected]);
+                }
+                AssetBalancePolicy::DataspaceRestricted => {
+                    assert_eq!(result, Err(ivm::VMError::NoritoInvalid));
+                    assert!(host.queued.is_empty());
+                }
+            }
+        }
+    }
+    #[test]
     fn fastpq_batch_apply_syscall_returns_batch_gas() {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());

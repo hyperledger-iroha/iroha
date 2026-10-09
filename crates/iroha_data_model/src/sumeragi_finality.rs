@@ -30,7 +30,16 @@ pub use beacon::{
     global_threshold_beacon_pulse_payload_v1, validate_beacon_pulse_shape,
 };
 mod genesis;
-pub use genesis::{GenesisReadError, genesis_epoch, signed_genesis_consensus_metadata};
+pub use genesis::{
+    AuthenticatedSignedGenesisV1, GenesisReadError, MAX_SIGNED_GENESIS_BYTES_V1,
+    SignedGenesisPinsV1, authenticate_signed_genesis_v1, genesis_epoch,
+    signed_genesis_consensus_metadata,
+};
+mod genesis_dataspace;
+pub use genesis_dataspace::{
+    GENESIS_DATASPACE_VERIFICATION_SCHEMA_V1, GenesisDataspaceAuthorityV1, GenesisDataspaceError,
+    GenesisDataspaceSelectorV1, VerifiedGenesisDataspaceCutV1, verify_genesis_dataspace_v1,
+};
 mod lane_state_commitment;
 mod native_lanes;
 pub use lane_state_commitment::SumeragiLaneStateCommitment;

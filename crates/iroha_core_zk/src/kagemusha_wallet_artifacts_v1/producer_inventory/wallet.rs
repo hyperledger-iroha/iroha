@@ -4,7 +4,9 @@
 //! resident; each Q/A/W/Omega acquisition streams all three exact signed originals.
 //! There is no constructor from an Omega-only grant, readiness flag or subset.
 
-use iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier;
+use iroha_data_model::{
+    block::consensus::SumeragiRootScope, sumeragi_finality::SumeragiFinalityVerifier,
+};
 use iroha_kagemusha_proof::a_relation::schedule::compiled::OperationRoute;
 use iroha_plonk::{
     keys::{SourceBoundViewV2, pk::artifact::ReadConfig},
@@ -23,9 +25,9 @@ pub enum WalletSourcesErrorV1 {
     /// One of the sixteen compiled sigma sources did not qualify.
     #[error(transparent)]
     Sigma(#[from] SigmaQualificationErrorV1),
-    /// The complete ordinary receipt graph differs from native genesis or its sources.
-    #[error(transparent)]
-    Finality(#[from] FinalityQualificationErrorV1),
+    /// The independently selected native ledger root does not authenticate this network.
+    #[error("wallet ledger finality requires the installed network's signed global genesis")]
+    NativeRoot,
     /// A Q source or exact signature policy did not qualify.
     #[error(transparent)]
     Q(#[from] QQualificationErrorV1),
@@ -51,7 +53,7 @@ impl WalletSourcesErrorV1 {
                     false
                 }
             },
-            Self::Finality(_) => false,
+            Self::NativeRoot => false,
             Self::Q(error) => match error {
                 QQualificationErrorV1::Original(error) => error.is_cancelled(),
                 QQualificationErrorV1::Sigma(error) => error.is_cancelled(),
@@ -103,7 +105,6 @@ pub struct QualifiedWalletSourcesV1 {
     authenticated: AuthenticatedProducerInventoryV1,
     scope: SourceScopeV1,
     sigmas: QualifiedSigmasV1,
-    finality: QualifiedReceiptSourceV1,
     q: Vec<QualifiedQProgramV1>,
     routes: Vec<QualifiedOperationRouteV1>,
     omega: QualifiedOmegaProgramV1,
@@ -116,6 +117,20 @@ fn route_index(route: OperationRoute) -> Result<usize, Error> {
         .iter()
         .position(|candidate| *candidate == route)
         .ok_or(Error::Inventory)
+}
+
+// The wallet's ledger light client must be rooted in this network's signed global genesis.
+fn require_native_root(
+    installed: &InstalledVerifierPackV1,
+    native: &SumeragiFinalityVerifier,
+) -> Result<(), WalletSourcesErrorV1> {
+    if native.root_scope().ok() != Some(SumeragiRootScope::Global)
+        || native.initial_epoch().network_id.as_bytes()
+            != &installed.verifier().scheme().network_id
+    {
+        return Err(WalletSourcesErrorV1::NativeRoot);
+    }
+    Ok(())
 }
 
 fn require_installation(
@@ -131,8 +146,9 @@ fn require_installation(
 impl AuthenticatedProducerInventoryV1 {
     /// Consume this authenticated inventory only after every compiled source has
     /// been reconstructed and every selected wallet PK strictly imported.
-    /// Ordinary finality uses native BLS commit certificates and needs no circuit artifacts.
-    /// The native finality verifier must be independently selected from signed genesis.
+    /// Load finality is verified natively from the receipt block's `CommitQC` and needs no
+    /// circuit artifacts; the native ledger root must be independently selected signed
+    /// global genesis of the installed network.
     /// All imports are sequential; only exact descriptor/VK metadata survives each.
     /// # Errors
     /// Another installation/native genesis, any incomplete route or source graph,
@@ -160,8 +176,7 @@ impl AuthenticatedProducerInventoryV1 {
         ];
         let q_parameters = Arc::clone(installed.verifier().pallas_parameters());
         // Native genesis binding happens before any source-original read.
-        let finality =
-            self.qualify_finality(installed, native_finality)?;
+        require_native_root(installed, native_finality)?;
         let sigmas = self.qualify_sigmas(originals, config)?;
         let mut q = Vec::with_capacity(self.inventory.operations.len());
         for program in 0..self.inventory.operations.len() {
@@ -191,7 +206,6 @@ impl AuthenticatedProducerInventoryV1 {
             authenticated: self,
             scope,
             sigmas,
-            finality,
             q,
             routes,
             omega,
@@ -217,10 +231,6 @@ impl QualifiedWalletSourcesV1 {
     /// Every exact sigma verifier in the global selector order.
     pub const fn sigmas(&self) -> &QualifiedSigmasV1 {
         &self.sigmas
-    }
-    /// Direct certificate verifier bound to independently authenticated native genesis.
-    pub const fn finality(&self) -> &QualifiedReceiptSourceV1 {
-        &self.finality
     }
     /// Complete sole Omega source; partial owners cannot construct this grant.
     pub const fn omega(&self) -> &QualifiedOmegaProgramV1 {

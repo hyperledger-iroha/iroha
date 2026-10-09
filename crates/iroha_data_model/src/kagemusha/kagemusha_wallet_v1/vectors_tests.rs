@@ -2019,10 +2019,6 @@ fn frame_pins() -> Vec<FramePin> {
             "KagemushaWalletLoadReceiptV1",
             KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1,
         ),
-        frame_pin::<KagemushaWalletLoadFinalityV1>(
-            "KagemushaWalletLoadFinalityV1",
-            KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1,
-        ),
         frame_pin::<KagemushaWalletUnloadClaimV1>(
             "KagemushaWalletUnloadClaimV1",
             KAGEMUSHA_WALLET_UNLOAD_CLAIM_MAX_BYTES_V1,
@@ -2706,26 +2702,6 @@ fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
                 false,
             )
         },
-        {
-            let evidence = KagemushaWalletLoadFinalityV1 {
-                version: 1,
-                anchor_digest: field_value(0x95),
-                receipt_digest: w.load_receipt.receipt_digest().unwrap(),
-                proof: vec![0x5a; 9_856],
-                pallas_claim: [0; 544],
-                vesta_claim: [0; 544],
-            };
-            let frame = evidence.to_canonical_bytes().unwrap();
-            let decoded = KagemushaWalletLoadFinalityV1::decode_canonical(&frame).unwrap();
-            object_pin(
-                "KagemushaWalletLoadFinalityV1",
-                "shape-only proof stand-in",
-                &evidence,
-                frame,
-                &decoded,
-                true,
-            )
-        },
         framed_pin!(
             KagemushaWalletUnloadClaimV1,
             "quoted",
@@ -3111,7 +3087,7 @@ fn enum_tag_table(w: &VectorWorld) -> Vec<EnumTags> {
                 "PolicyUpdate",
                 "CertificateSet",
                 "Credential",
-                "LoadFinality",
+                "LoadEventPath",
                 "QuotaRefreshWitness",
             ],
             KagemushaWalletRetainedInputRoleV1::tag,

@@ -370,6 +370,33 @@ fn contract_arguments_are_admitted_before_decode_and_bind_local_schema() -> Resu
     Ok(())
 }
 #[test]
+fn hook_arguments_are_checked_without_a_contract_address() -> Result<()> {
+    let artifact = kotodama_lang::compiler::Compiler::new()
+        .compile_source(
+            "seiyaku Vault { state int limit; hajimari(int start) { limit = start; } view fn current() -> int { return limit; } }",
+        )
+        .map_err(|error| eyre!(error))?;
+    check_contract_arguments(&artifact, "hajimari", &norito::json!({"start": "5"}), false)?;
+    let missing = check_contract_arguments(&artifact, "hajimari", &norito::json!({}), false)
+        .expect_err("the hook declares one argument");
+    assert!(
+        missing.to_string().contains("argument `start`"),
+        "{missing:#}"
+    );
+    let number =
+        check_contract_arguments(&artifact, "hajimari", &norito::json!({"start": 5}), false)
+            .expect_err("JSON numbers are not int arguments");
+    assert!(
+        number.to_string().contains("found JSON number 5"),
+        "{number:#}"
+    );
+    assert!(check_contract_arguments(&artifact, "current", &norito::json!({}), true).is_ok());
+    assert!(check_contract_arguments(&artifact, "current", &norito::json!({}), false).is_err());
+    assert!(check_contract_arguments(&artifact, "absent", &norito::json!({}), false).is_err());
+    assert!(check_contract_arguments(b"", "hajimari", &norito::json!({}), false).is_err());
+    Ok(())
+}
+#[test]
 fn call_rejects_retired_payload_and_conflicting_retained_evidence() -> Result<()> {
     let (_, prepared, step) = fixture()?;
     let temporary = tempfile::tempdir()?;

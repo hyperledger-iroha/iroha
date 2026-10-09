@@ -100,12 +100,14 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
             asset_original,
         ) = self.into_parts();
         let verified = (|| {
-            let selected = sources.finality().verifier();
-            if native_genesis.instance() != selected.instance()
-                || native_genesis.chain_id() != selected.chain_id()
-                || native_genesis.initial_epoch() != selected.initial_epoch()
+            // The ledger light client root must be this network's signed global genesis.
+            if !matches!(
+                native_genesis.root_scope(),
+                Ok(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+            ) || native_genesis.initial_epoch().network_id.as_bytes()
+                != &installed.verifier().scheme().network_id
             {
-                return Err(Error::Proof("native finality source binding"));
+                return Err(Error::Proof("native ledger root binding"));
             }
             NativeFoldWorkerV1::new(Arc::clone(&installed), Arc::clone(&sources), read, budget)
         })();
@@ -262,6 +264,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     }
     fn ledger_scope(&self) -> Result<(KagemushaWalletSchemeV1, String), Error> {
         Ok((*self.installed.verifier().scheme(), self.chain.clone()))
+    }
+    fn ledger_genesis(&self) -> Result<Arc<SumeragiFinalityVerifier>, Error> {
+        Ok(Arc::clone(&self.genesis))
     }
     fn verify_transition(
         &self,

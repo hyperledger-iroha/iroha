@@ -155,3 +155,39 @@ test("arguments without a schema reject JSON numbers instead of guessing their t
     /expects no arguments for this zero-parameter entrypoint/u,
   );
 });
+
+test("schema counts accept every manifest number form and reject a missing list capacity", () => {
+  const schemaWith = (tupleArity, listCapacity) => ({
+    fields: [
+      {
+        name: "pair",
+        ty: {
+          nodes: [
+            { kind: "Tuple", value: tupleArity },
+            { kind: "Leaf", value: { kind: "Int", value: null } },
+            { kind: "List", value: { capacity: listCapacity } },
+            { kind: "Leaf", value: { kind: "Quantity", value: null } },
+          ],
+        },
+      },
+    ],
+  });
+  for (const [arity, capacity] of [[2, 2], [2n, 2n], ["2", "2"]]) {
+    assert.deepEqual(
+      canonicalContractArguments({ pair: [7, [1n, "2"]] }, { argumentSchema: schemaWith(arity, capacity) }),
+      { pair: ["7", ["1", "2"]] },
+    );
+  }
+  assert.throws(
+    () => canonicalContractArguments({ pair: [7, [1, 2, 3]] }, { argumentSchema: schemaWith("2", "2") }),
+    /argument `pair\[1\]` expects a list as a JSON array of at most 2 element\(s\)/u,
+  );
+  assert.throws(
+    () => canonicalContractArguments({ pair: [7, [1]] }, { argumentSchema: schemaWith(2, undefined) }),
+    /argument `pair\[1\]` has an invalid V1 argument schema node/u,
+  );
+  assert.throws(
+    () => canonicalContractArguments({ pair: [7, [1]] }, { argumentSchema: schemaWith("02", 2) }),
+    /argument `pair` has an invalid V1 argument schema node/u,
+  );
+});

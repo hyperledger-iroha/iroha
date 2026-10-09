@@ -254,10 +254,6 @@ fn qualify_authenticated(
         (installation.scheme_id, installation.manifest_digest)
     );
     assert_eq!(qualified.scope(), fixture_scope());
-    assert_eq!(
-        qualified.finality().verifier().initial_epoch(),
-        native.initial_epoch()
-    );
     for route in compiled_routes() {
         qualified.route(route).unwrap();
         qualified.q(route).unwrap();
@@ -456,35 +452,4 @@ pub(crate) fn open_pinned_engineering_wallet_sources(output: &Path) -> Engineeri
         native,
         sealed,
     )
-}
-
-/// Native finality owner selected independently of any proving original.
-pub(crate) type EngineeringFinalitySources = (
-    std::sync::Arc<InstalledVerifierPackV1>,
-    QualifiedReceiptSourceV1,
-    SumeragiFinalityVerifier,
-    DirectoryOriginalsV1,
-);
-
-/// Bind a signed engineering wallet installation to authenticated native genesis.
-pub(crate) fn open_pinned_engineering_finality_sources(
-    output: &Path,
-) -> EngineeringFinalitySources {
-    let PinnedEngineeringInputs { installed, authenticated, native, .. } =
-        pinned_engineering_inputs(output);
-    let qualified = authenticated.qualify_finality(&installed, &native).unwrap();
-    assert_eq!(qualified.verifier().initial_epoch(), native.initial_epoch());
-    let private = iroha_fs::PrivateDirectory::open_or_create(output.join("originals")).unwrap();
-    let sealed = DirectoryOriginalsV1::open_existing(
-        private.path(), PROVING_KEY_MAX_BYTES_V1,
-    ).unwrap();
-    (std::sync::Arc::new(installed), qualified, native, sealed)
-}
-
-#[test]
-#[ignore = "independently pinned signed catalog and native genesis"]
-fn qualify_native_finality_without_proof_artifacts() {
-    let output = PathBuf::from(std::env::var_os("KAGEMUSHA_FINALITY_ACCEPTANCE_OUTPUT").unwrap());
-    let (_, qualified, native, _) = open_pinned_engineering_finality_sources(&output);
-    assert_eq!(qualified.verifier().initial_epoch(), native.initial_epoch());
 }

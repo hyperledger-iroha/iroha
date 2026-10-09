@@ -72,8 +72,9 @@ pub(super) struct InitArgs {
     #[arg(long)]
     force: bool,
 }
-/// Namespace for packages that have not chosen a registry namespace yet.
-const DEFAULT_NAMESPACE: &str = "local";
+/// Namespace for packages that have not chosen a registry namespace yet; `musubi publish`
+/// refuses it.
+pub(super) const DEFAULT_NAMESPACE: &str = "local";
 pub(super) fn run_new(args: &NewArgs) -> CommandResult {
     match fs::symlink_metadata(&args.path) {
         Ok(_) => {

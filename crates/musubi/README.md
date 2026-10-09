@@ -99,7 +99,8 @@ account-address profile (SORA, `0x02F1` = 753) unless a network binding or
 literals compile identically in both tools. `--zk` enables the Kotodama ZK surface for
 the selected contracts and tests. `musubi new <dir>` creates a counter seiyaku named
 after the package, four tests, a README and `.gitignore`; `--namespace` defaults to
-`local` until the package is published.
+`local`, which `musubi publish` refuses until `[package] namespace` names a registry
+namespace you own.
 
 Kotodama lints warn by default. A `[lints]` table in `Musubi.toml` sets a level per lint
 name, and `deny-warnings = true` turns every warning into an error; a package without
@@ -120,7 +121,8 @@ Path dependencies stay below one workspace root. For two standalone sibling pack
 `musubi add <alias> --path ../<dir> --create-workspace` writes the shared parent
 `Musubi.toml` listing both as members before adding the dependency; it refuses packages
 that already hold network bindings, deployment or call journals, or publication state,
-because that state is scoped to the old root.
+because that state is scoped to the old root. A member's earlier `Musubi.lock` is no
+longer read once the workspace exists, and the command lists each one to delete.
 
 ## Command output and exit codes
 
@@ -155,9 +157,11 @@ depend on the format:
 `--artifact <file.to> --artifact-manifest <file.manifest.json>` it deploys that exact
 prebuilt artifact only when the locked build reproduces its code and ABI hashes. A
 seiyaku that declares `hajimari`/`始まり` rejects every other call and view until the
-hook runs: `musubi deploy --activate [--args JSON]` runs it as a recoverable call after
-the deployment is Applied, and otherwise the deploy output prints the exact activation
-command. Its JSON `activation.status` is `pending` when this command completed the
+hook runs: `musubi deploy --activate [--args JSON]` checks the arguments against the hook's
+schema before anything is signed, then runs it as a recoverable call after the deployment
+is Applied. Otherwise the deploy output prints the exact activation command; for a hook
+that takes arguments, its `--args` lists every parameter with a `<type>` placeholder to
+replace. Its JSON `activation.status` is `pending` when this command completed the
 deployment and `unverified` when it returns an earlier completed deployment whose hook may
 already have run. `call`, `view` and `deploy --activate` all take named arguments with `--args
 JSON` or `--args-file PATH`.

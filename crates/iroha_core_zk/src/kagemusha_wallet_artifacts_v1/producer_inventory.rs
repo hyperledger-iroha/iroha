@@ -28,13 +28,7 @@ pub use compiler::{
     WalletArtifactDraftV1, WalletArtifactOriginalsV1, q_classes,
 };
 #[cfg(test)]
-pub(crate) use compiler::{
-    open_pinned_engineering_finality_sources, open_pinned_engineering_wallet_sources,
-};
-
-#[path = "producer_inventory/finality.rs"]
-mod finality;
-pub use finality::{FinalityQualificationErrorV1, QualifiedReceiptSourceV1};
+pub(crate) use compiler::open_pinned_engineering_wallet_sources;
 
 #[path = "producer_inventory/sigma.rs"]
 mod sigma;

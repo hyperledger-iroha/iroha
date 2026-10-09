@@ -580,9 +580,10 @@ pub enum KagemushaWalletRetainedInputRoleV1 {
     /// Canonical credential the operation consumed.
     #[codec(index = 8)]
     Credential,
-    /// Canonical compact ordinary-transaction finality evidence consumed by Load.
+    /// Canonical counted event path of the ordinary Load receipt, which Native verified
+    /// against its ledger light client's certified receipt block before accepting the Load.
     #[codec(index = 9)]
-    LoadFinality,
+    LoadEventPath,
     /// Canonical typed predecessor quota-usage array consumed by a quota refresh.
     #[codec(index = 10)]
     QuotaRefreshWitness,
@@ -599,7 +600,7 @@ impl KagemushaWalletRetainedInputRoleV1 {
         Self::PolicyUpdate,
         Self::CertificateSet,
         Self::Credential,
-        Self::LoadFinality,
+        Self::LoadEventPath,
         Self::QuotaRefreshWitness,
     ];
 
@@ -615,7 +616,7 @@ impl KagemushaWalletRetainedInputRoleV1 {
             Self::PolicyUpdate => 6,
             Self::CertificateSet => 7,
             Self::Credential => 8,
-            Self::LoadFinality => 9,
+            Self::LoadEventPath => 9,
             Self::QuotaRefreshWitness => 10,
         }
     }
@@ -652,8 +653,9 @@ impl KagemushaWalletRetainedInputV1 {
 ///
 /// Send retains the Request it consumed: the compact Payment binds the receiver's fee schedule
 /// only by digest, and `Λ_send` checks the fee terms against it (§§3.2, 6.2). Load retains
-/// the original receipt and compact finality evidence so restoration verifies the same
-/// ordinary transaction under the independently installed history anchor and source key.
+/// the original receipt and its counted event path: Native verified both against the
+/// receipt block's native `CommitQC` before Advance (the R10 Load carve-out), and `Λ_load`
+/// binds the receipt terms. Neither retained original is a proof-carried finality claim.
 /// Archive retains the historical payer credential and its certificate set because
 /// a later credential renewal must not replace the exact Send credential.
 // TODO(owner): interim choices kept as is until the owner decides: a Send capsule retains the
@@ -675,7 +677,7 @@ const fn required_retained_roles_v1(
             R::CertificateSet,
         ],
         KagemushaWalletOperationKindV1::Send => &[R::Request],
-        KagemushaWalletOperationKindV1::Load => &[R::LoadReceipt, R::LoadFinality],
+        KagemushaWalletOperationKindV1::Load => &[R::LoadReceipt, R::LoadEventPath],
         KagemushaWalletOperationKindV1::RefreshPolicy => &[R::PolicyUpdate, R::CertificateSet],
         KagemushaWalletOperationKindV1::Bootstrap
         | KagemushaWalletOperationKindV1::Unload

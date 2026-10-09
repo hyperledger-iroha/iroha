@@ -1280,9 +1280,12 @@ expectation, or an actor lookup) is reported at the call's own
 name the seiyaku function and its declaration location. `koto test` exits with
 status `11` when at least one test failed.
 
-`koto test coverage` reports which functions of the seiyaku under test executed,
-counting only seiyaku execution (the nested calls, or the test projection of a
-pure unit-test target). `koto test trace` prints every executed instruction,
+`koto test coverage` reports which functions of the seiyaku under test executed
+and how many instructions each executed across the selected tests, counting only
+seiyaku execution (the nested calls, or the test projection of a pure unit-test
+target). A declared function that the compiler inlined into its callers or
+omitted as unused has no code of its own; it is listed as such and never counted
+as covered. `koto test trace` prints every executed instruction,
 grouped into the test function and each seiyaku call, with the function and
 its declaration location and only the registers the instruction changed;
 `--format json` emits one object per instruction.
@@ -1632,9 +1635,11 @@ It does not make ABI, vector, or pointer policy selectable.
 the parser's syntax roles. They refuse syntactically invalid input, preserve
 comments and literal spelling, and keep each branded keyword in the script
 written at that site. A comment that follows a token on the same line stays a
-trailing comment of that token, after any `,` or `;` that ends the token's
-member or statement, and an attribute stays on its own line above the item or
-error variant it annotates. Formatting canonicalizes four-space
+trailing comment of that token: a line comment follows any `,` or `;` that ends
+the token's member or statement, while a block comment on that line stays ahead
+of it (`amount /* in nanos */, fee`). A block comment that leads code on its
+line stays with that code, and an attribute stays on its own line above the
+item or error variant it annotates. Formatting canonicalizes four-space
 indentation, declaration spacing, operators, and block layout with a
 100-column target: an argument list, parameter list, tuple or list literal
 that does not fit is laid out one item per line, a declaration head breaks its
@@ -1663,9 +1668,12 @@ generation, but it never invents imports or exports from the set of open
 documents. `koto lsp --project kotodama.project.json` loads the same exact
 locked graph as `check` and `build`; open buffers overlay their matching
 canonical project files while unopened files are read from that graph. Without
-`--project`, open documents have standalone-source validation semantics and cross-file
-calls report `E_PROJECT_MANIFEST_REQUIRED` rather than appearing valid only in
-the editor.
+`--project`, each open seiyaku is validated as its own root together with the
+sources its `include`/`import` directives name, as `koto check <file>` does, so
+unrelated seiyaku open side by side are never checked as one graph; other open
+documents have standalone-source validation semantics and cross-file calls
+report `E_PROJECT_MANIFEST_REQUIRED` rather than appearing valid only in the
+editor.
 Positional `koto check` paths are independent sources: one seiyaku has
 an empty import graph, reusable modules are checked without linking, multiple
 seiyaku roots are rejected, and mixing a root with modules requires `--project`.
@@ -1838,15 +1846,18 @@ reporting a mismatch.
 with `Musubi.toml`, a counter seiyaku named after the package (state, `hajimari`,
 an authorized `kotoage fn`, a `view fn` and an error enum), four standalone tests
 including `test::expect_reject_as`, a README, and ignore rules for `target/`. The
-namespace defaults to `local` until the package is published. `musubi check`,
+namespace defaults to `local`, which `musubi publish` refuses until the package names
+a registry namespace. `musubi check`,
 `musubi build`, and `musubi test` consume the package's exact declared source and
 dependency graph. Without a selected network binding they compile for the
 data-model default account-address profile (SORA, `0x02F1` = 753), the same default
 as `koto`; a binding or `--chain-discriminant` selects another profile. Network
 bindings select the exact client context and contract alias for deployment and
-views. `musubi deploy --activate [--args <JSON>]` runs the deployed seiyaku's
-`hajimari`/`始まり` hook as a recoverable call after the deployment is Applied;
-without it, `musubi deploy` prints the exact activation command.
+views. `musubi deploy --activate [--args <JSON>]` checks the arguments against the
+hook's schema before signing, then runs the deployed seiyaku's `hajimari`/`始まり`
+hook as a recoverable call after the deployment is Applied; without it, `musubi
+deploy` prints the exact activation command, with a `<type>` placeholder for each
+hook parameter.
 `musubi deploy --artifact <file.to> --artifact-manifest <file.manifest.json>`
 deploys a prebuilt artifact only when the locked package source reproduces it.
 These package declarations are distinct from the lower-level compiler source

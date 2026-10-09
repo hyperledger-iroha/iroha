@@ -651,17 +651,3 @@ fn lifecycle_keeps_dataspace_classes_and_lanes_for_homed_dataspaces() {
             if dataspace_id == DataSpaceId::new(6)
     ));
 }
-
-#[test]
-fn tmp_allocation_probe() {
-    use crate::state::authority_registry::grouped_ownership::asset_definition_test_support as fx;
-    use crate::test_allocations::allocations_during;
-    let world = fx::world(true, None);
-    let a = allocations_during(|| {
-        let _ = crate::state::authority_registry::grouped_ownership::probe_capture_asset_definitions(&world);
-    });
-    let b = allocations_during(|| {
-        let _ = crate::state::authority_registry::grouped_ownership::probe_capture_asset_definitions(&world);
-    });
-    panic!("probe a={a} b={b}");
-}

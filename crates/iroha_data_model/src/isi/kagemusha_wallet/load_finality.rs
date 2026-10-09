@@ -26,6 +26,10 @@ use iroha_crypto::{HashOf, MerkleProof};
 
 /// Maximum complete canonical original receipt, including its fixed payer account digest.
 pub const KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1: usize = 512;
+/// Maximum complete canonical counted Load event path: at most 32 levels plus framing.
+pub const KAGEMUSHA_WALLET_LOAD_EVENT_PATH_MAX_BYTES_V1: usize = 8_192;
+/// Deepest counted event-stream audit path; certified event counts fit in `u32`.
+pub const KAGEMUSHA_WALLET_LOAD_EVENT_PATH_MAX_DEPTH_V1: usize = 32;
 
 pub use crate::kagemusha::KAGEMUSHA_WALLET_LOAD_RECEIPT_DOMAIN_V1;
 /// Exact fixed transcript width: version, four identities, three amounts, quote, transaction,
@@ -444,6 +448,33 @@ impl VerifiedKagemushaWalletLoadEventV1 {
     pub const fn height(&self) -> u64 {
         self.receipt.block_height
     }
+}
+
+/// Bound and decode one complete canonical counted Load event path.
+///
+/// The decoded path is DATA. Only [`verify_finalized_kagemusha_wallet_load_event_v1`],
+/// given a block from a native finality verifier rooted in independently selected
+/// signed genesis, authenticates the receipt's inclusion.
+///
+/// # Errors
+/// Rejects empty, oversized, noncanonical or trailing bytes and audit paths deeper
+/// than [`KAGEMUSHA_WALLET_LOAD_EVENT_PATH_MAX_DEPTH_V1`].
+pub fn decode_kagemusha_wallet_load_event_path_v1(
+    bytes: &[u8],
+) -> Result<MerkleProof<EventBox>, KagemushaWalletValidationErrorV1> {
+    if bytes.is_empty() {
+        return Err(KagemushaWalletValidationErrorV1::InvalidField {
+            field: "load_event_path",
+        });
+    }
+    let path: MerkleProof<EventBox> =
+        decode_frame_v1(bytes, KAGEMUSHA_WALLET_LOAD_EVENT_PATH_MAX_BYTES_V1)?;
+    if path.audit_path().len() > KAGEMUSHA_WALLET_LOAD_EVENT_PATH_MAX_DEPTH_V1 {
+        return Err(KagemushaWalletValidationErrorV1::InvalidField {
+            field: "load_event_path.audit_path",
+        });
+    }
+    Ok(path)
 }
 
 /// Authenticate an exact original Load receipt through its system execution event.

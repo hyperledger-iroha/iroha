@@ -1696,7 +1696,7 @@ impl Prover {
     }
     /// Exact installed descriptors in actual A1/W0/A2/W1/A3/W2/A4 checkpoint order.
     #[must_use]
-    pub fn descriptors(&self) -> [&DescriptorBinding; 9] {
+    pub fn descriptors(&self) -> [&DescriptorBinding; A_STAGE_COUNT + W_STAGE_COUNT] {
         [
             self.a[0].binding(),
             self.w[0].binding(),
@@ -1705,8 +1705,6 @@ impl Prover {
             self.a[2].binding(),
             self.w[2].binding(),
             self.a[3].binding(),
-            self.w[3].binding(),
-            self.a[4].binding(),
         ]
     }
 }

@@ -649,7 +649,7 @@ const ROOTS: &[Root] = &[
             ),
             (
                 "crates/iroha_config/src/parameters/actual.rs",
-                "let mut preimage = b\"sumeragi:nexus-amx-context\\0v1\".to_vec();",
+                "let mut preimage = NexusAmxContextWriterV1::new();",
             ),
             (
                 "crates/iroha_data_model/src/block/consensus.rs",

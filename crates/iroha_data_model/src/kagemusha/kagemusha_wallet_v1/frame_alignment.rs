@@ -95,7 +95,6 @@ assert_frame_padding! {
     KagemushaWalletCompletionRecordV1 => 0, KAGEMUSHA_WALLET_COMPLETION_RECORD_MAX_BYTES_V1;
     KagemushaWalletFoldRecordV1 => 8, KAGEMUSHA_WALLET_FOLD_RECORD_MAX_BYTES_V1;
     KagemushaWalletLoadReceiptV1 => 8, KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1;
-    KagemushaWalletLoadFinalityV1 => 0, KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1;
     KagemushaWalletUnloadClaimV1 => 8, KAGEMUSHA_WALLET_UNLOAD_CLAIM_MAX_BYTES_V1;
     KagemushaWalletFeeClaimV1 => 8, KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1;
     KagemushaWalletLedgerControlV1 => 8, KAGEMUSHA_WALLET_LEDGER_CONTROL_MAX_BYTES_V1;

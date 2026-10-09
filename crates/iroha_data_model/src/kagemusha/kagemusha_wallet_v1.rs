@@ -70,7 +70,6 @@ mod identity;
 mod keys;
 mod ledger;
 mod ledger_records;
-mod load_finality;
 mod messages;
 mod policy;
 mod poseidon;
@@ -182,10 +181,6 @@ pub use self::{
     },
     ledger_records::{
         KagemushaWalletLedgerKeyV1, KagemushaWalletPayoutKeyV1, KagemushaWalletPayoutRecordV1,
-    },
-    load_finality::{
-        KAGEMUSHA_WALLET_LOAD_FINALITY_CLAIM_BYTES_V1, KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1,
-        KagemushaWalletLoadFinalityV1,
     },
     messages::{
         KAGEMUSHA_WALLET_CREDIT_OPENING_TRANSCRIPT_BYTES_V1,

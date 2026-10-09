@@ -198,13 +198,14 @@ impl CallAuthorization {
             .map(|remaining| remaining.min(original_ttl_ms))
             .ok_or_else(|| eyre!("original call signing authorization expired"))
     }
-    fn check_fees<'a>(
+    fn check_fees(
         &self,
-        intents: impl IntoIterator<Item = &'a FeePaymentIntent>,
+        intents: impl IntoIterator<Item = impl std::borrow::Borrow<FeePaymentIntent>>,
     ) -> Result<()> {
         self.validate()?;
         let mut totals = BTreeMap::<AssetDefinitionId, Quantity>::new();
         for intent in intents {
+            let intent = intent.borrow();
             intent.validate()?;
             for component in intent.charge_limits() {
                 let total = totals
@@ -230,24 +231,51 @@ impl CallAuthorization {
     }
 }
 
-/// Build an exact native intent from admission-verified local code and its argument schema.
+/// Canonical argument record and retained JSON payload of one checked entrypoint invocation.
+type CheckedArguments = (
+    Option<iroha::data_model::transaction::executable::ContractArgumentRecord>,
+    Option<Value>,
+);
+
+/// Check named arguments against one entrypoint of admission-verified local code.
+///
+/// This is the argument half of [`trusted_contract_intent`]; it needs no contract address, so a
+/// deployment can reject activation arguments before anything is signed.
 ///
 /// # Errors
-/// Rejects unknown or wrong-kind entrypoints, malformed arguments and oversized payloads.
-pub fn trusted_contract_intent(
+/// Rejects unknown or wrong-kind entrypoints, malformed arguments and oversized payloads, naming
+/// the rejected argument path and its expected IVM type.
+pub fn check_contract_arguments(
     artifact: &[u8],
-    address: ContractAddress,
     entrypoint: &str,
-    payload: Value,
+    payload: &Value,
     view: bool,
-) -> Result<(ContractCallDraftIntent, Option<Value>)> {
+) -> Result<()> {
+    let verified = verified_call_artifact(artifact, payload)?;
+    entrypoint_arguments(&verified, entrypoint, payload.clone(), view).map(|_| ())
+}
+
+/// Admit the bounded artifact and argument JSON, then verify the artifact.
+fn verified_call_artifact(
+    artifact: &[u8],
+    payload: &Value,
+) -> Result<ivm_artifact_admission::VerifiedContractArtifact> {
     if artifact.is_empty() || artifact.len() > MAX_DEPLOYMENT_ARTIFACT_BYTES {
         return Err(eyre!(
             "contract intent exceeds fixed artifact or argument bounds"
         ));
     }
-    admit_arguments(&payload)?;
-    let verified = ivm_artifact_admission::verify_contract_artifact(artifact)?;
+    admit_arguments(payload)?;
+    Ok(ivm_artifact_admission::verify_contract_artifact(artifact)?)
+}
+
+/// Encode named arguments for one entrypoint of verified code.
+fn entrypoint_arguments(
+    verified: &ivm_artifact_admission::VerifiedContractArtifact,
+    entrypoint: &str,
+    payload: Value,
+    view: bool,
+) -> Result<CheckedArguments> {
     let descriptor = verified
         .contract_interface
         .entrypoints
@@ -259,7 +287,7 @@ pub fn trusted_contract_intent(
             "entrypoint kind differs from the requested view or mutable call"
         ));
     }
-    let (arguments, payload) = match &descriptor.argument_schema {
+    Ok(match &descriptor.argument_schema {
         Some(schema) => {
             let canonical = Json::from_norito_value_ref(&payload)?;
             // The detailed form names the rejected argument path and its expected IVM type.
@@ -287,7 +315,22 @@ pub fn trusted_contract_intent(
                 "zero-parameter entrypoints accept only omitted arguments or {{}}"
             ));
         }
-    };
+    })
+}
+
+/// Build an exact native intent from admission-verified local code and its argument schema.
+///
+/// # Errors
+/// Rejects unknown or wrong-kind entrypoints, malformed arguments and oversized payloads.
+pub fn trusted_contract_intent(
+    artifact: &[u8],
+    address: ContractAddress,
+    entrypoint: &str,
+    payload: Value,
+    view: bool,
+) -> Result<(ContractCallDraftIntent, Option<Value>)> {
+    let verified = verified_call_artifact(artifact, &payload)?;
+    let (arguments, payload) = entrypoint_arguments(&verified, entrypoint, payload, view)?;
     let mut metadata = Metadata::default();
     for (key, value) in [
         ("contract_address", address.to_string()),

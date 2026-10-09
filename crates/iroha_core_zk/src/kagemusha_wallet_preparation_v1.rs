@@ -11,7 +11,10 @@
 
 use ff::PrimeField;
 use iroha_data_model::{
-    isi::kagemusha_wallet::KagemushaWalletLoadReceiptV1, kagemusha::kagemusha_wallet_v1::*,
+    isi::kagemusha_wallet::{
+        KagemushaWalletLoadReceiptV1, load_finality::decode_kagemusha_wallet_load_event_path_v1,
+    },
+    kagemusha::kagemusha_wallet_v1::*,
 };
 use iroha_kagemusha_proof::admin_sigma::{
     BootstrapWitness, ConsumingWitness, LoadWitness, StateWitness,
@@ -115,30 +118,24 @@ fn retained_original(
     Ok(&first.bytes)
 }
 
-// Shape and exact-original conversion only. Native authenticates direct BLS
-// finality before Advance; A authenticates the resulting receipt-bound signature.
+// Shape and exact-original conversion only. Before Advance, Native verified the receipt
+// block's CommitQC and the retained event path through its ledger light client (R10 Load
+// carve-out); A authenticates the receipt-bound Advance signature and the receipt terms.
 fn retained_load_source(
     inputs: &[KagemushaWalletRetainedInputV1],
     digest: [u8; 32],
-) -> Result<
-    (
-        KagemushaWalletLoadReceiptV1,
-        KagemushaWalletLoadFinalityV1,
-    ),
-    Error,
-> {
+) -> Result<KagemushaWalletLoadReceiptV1, Error> {
     let ordinary = authority(KagemushaWalletLoadReceiptV1::decode_canonical(
         retained_original(inputs, KagemushaWalletRetainedInputRoleV1::LoadReceipt)?,
     ))?;
-    let original = authority(KagemushaWalletLoadFinalityV1::decode_canonical(
-        retained_original(inputs, KagemushaWalletRetainedInputRoleV1::LoadFinality)?,
-    ))?;
-    if authority(ordinary.receipt_digest())? != digest
-        || original.receipt_digest != digest
-    {
+    authority(decode_kagemusha_wallet_load_event_path_v1(retained_original(
+        inputs,
+        KagemushaWalletRetainedInputRoleV1::LoadEventPath,
+    )?))?;
+    if authority(ordinary.receipt_digest())? != digest {
         return Err(Error::Authority);
     }
-    Ok((ordinary, original))
+    Ok(ordinary)
 }
 
 /// Immutable conversion context selected by the authenticated installation owner.
@@ -248,7 +245,6 @@ pub(crate) struct LoadFieldsV1 {
     pub(crate) receipt: [u8; 282],
     /// Own Advance receipt, Enrollment certificate and current credential.
     pub(crate) objects: [Vec<u8>; 3],
-    /// Original retained finality wrapper and both claims; native Plan re-verifies all three.
 }
 
 /// Typed post-Advance Unload/Retiring fields for their actual consuming sigma relation.
@@ -638,9 +634,10 @@ impl<'a> PreparationV1<'a> {
         })
     }
 
-    /// Convert retained ordinary receipt originals and own signed fields. Native
-    /// verified BLS finality before Advance; the producer verifies the receipt-bound
-    /// Advance signature and every state transition in the four Load stages.
+    /// Convert retained ordinary receipt originals and own signed fields. Native verified
+    /// the receipt block's CommitQC and event inclusion before Advance; the producer
+    /// verifies the receipt-bound Advance signature and every state transition in the
+    /// four Load stages.
     /// # Errors
     /// Another operation, missing/ambiguous original, noncanonical fields, changed
     /// receipt terms or source digest.
@@ -665,7 +662,7 @@ impl<'a> PreparationV1<'a> {
         if capsule.kind != KagemushaWalletOperationKindV1::Load {
             return Err(Error::Authority);
         }
-        let (ordinary, _) = retained_load_source(&capsule.retained_inputs, digest)?;
+        let ordinary = retained_load_source(&capsule.retained_inputs, digest)?;
         let previous = &predecessor.source_state.core;
         if ordinary.scheme_id != self.installed.verifier().scheme().scheme_id()
             || ordinary.asset_digest != previous.asset_digest

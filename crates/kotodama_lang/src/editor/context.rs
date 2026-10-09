@@ -59,49 +59,16 @@ enum Block {
     Other,
 }
 
-/// Whether the token is one of the V1 keywords.
-pub(super) const fn is_keyword(kind: &TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::Fn
-            | TokenKind::Let
-            | TokenKind::Var
-            | TokenKind::Const
-            | TokenKind::Return
-            | TokenKind::Break
-            | TokenKind::Continue
-            | TokenKind::State
-            | TokenKind::Struct
-            | TokenKind::Error
-            | TokenKind::Enum
-            | TokenKind::Authorize
-            | TokenKind::Trigger
-            | TokenKind::If
-            | TokenKind::Match
-            | TokenKind::Else
-            | TokenKind::For
-            | TokenKind::In
-            | TokenKind::Seiyaku
-            | TokenKind::Module
-            | TokenKind::Include
-            | TokenKind::Import
-            | TokenKind::As
-            | TokenKind::Export
-            | TokenKind::Kotoage
-            | TokenKind::Hajimari
-            | TokenKind::Kaizen
-            | TokenKind::View
-            | TokenKind::True
-            | TokenKind::False
-    )
+/// Whether the token is one of the V1 keywords of the generated `grammar/v1.lex` table.
+pub(super) fn is_keyword(kind: &TokenKind) -> bool {
+    crate::lexer::v1_keyword_spelling(kind).is_some()
 }
 
-/// Whether the token is one of the four branded keywords, in either spelling.
-pub(super) const fn is_branded_keyword(kind: &TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::Seiyaku | TokenKind::Kotoage | TokenKind::Hajimari | TokenKind::Kaizen
-    )
+/// Whether the token is one of the glossary's branded keywords, in either spelling. Both
+/// spellings lex to one token kind, so the script never affects the answer.
+pub(super) fn is_branded_keyword(kind: &TokenKind) -> bool {
+    crate::lexer::v1_keyword_spelling(kind)
+        .is_some_and(|spelling| glossary::by_spelling(spelling).is_some())
 }
 
 fn without_attributes<'a>(run: &'a [&'a TokenKind]) -> &'a [&'a TokenKind] {
@@ -720,6 +687,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["seiyaku", "誓約", "module"]
         );
+    }
+
+    #[test]
+    fn keyword_predicates_follow_the_generated_table_in_both_scripts() {
+        for spelling in crate::lexer::V1_KEYWORDS {
+            let kind = crate::lexer::v1_keyword_kind(spelling).expect("V1 keyword");
+            assert!(is_keyword(&kind), "`{spelling}` is a keyword");
+            assert_eq!(
+                is_branded_keyword(&kind),
+                glossary::by_spelling(spelling).is_some(),
+                "`{spelling}` branding"
+            );
+        }
+        for keyword in &BRANDED_KEYWORDS {
+            let romaji = crate::lexer::v1_keyword_kind(keyword.romaji).expect("romaji");
+            let kanji = crate::lexer::v1_keyword_kind(keyword.kanji).expect("kanji");
+            assert_eq!(romaji, kanji, "both spellings are one token");
+            assert!(is_branded_keyword(&kanji));
+        }
+        for kind in [
+            TokenKind::Ident("kotoage_total".into()),
+            TokenKind::Semicolon,
+            TokenKind::String("seiyaku".into()),
+        ] {
+            assert!(!is_keyword(&kind) && !is_branded_keyword(&kind), "{kind:?}");
+        }
     }
 
     #[test]

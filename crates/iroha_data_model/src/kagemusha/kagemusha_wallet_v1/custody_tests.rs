@@ -274,7 +274,7 @@ fn kagemusha_wallet_v1_custody_layouts_and_tags() {
     );
     assert_eq!(
         required_retained_roles_v1(KagemushaWalletOperationKindV1::Load),
-        &[R::LoadReceipt, R::LoadFinality]
+        &[R::LoadReceipt, R::LoadEventPath]
     );
     assert_eq!(
         required_retained_roles_v1(KagemushaWalletOperationKindV1::RefreshPolicy),

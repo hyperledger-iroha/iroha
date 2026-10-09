@@ -237,6 +237,15 @@ pub trait NativeProofs {
     /// # Errors
     /// Artifacts or their independently configured scheme/chain binding are unavailable.
     fn ledger_scope(&self) -> Result<(KagemushaWalletSchemeV1, String), Error>;
+    /// Independently selected signed-genesis root of this wallet's native ledger light client.
+    /// Load acceptance verifies the receipt block's `CommitQC` and event inclusion under it;
+    /// no network response, checkpoint import or caller verdict can replace this root.
+    ///
+    /// # Errors
+    /// The authenticated native root is unavailable to this owner.
+    fn ledger_genesis(
+        &self,
+    ) -> Result<std::sync::Arc<iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier>, Error>;
 
     /// Verify exact delivery evidence against the original Request and Payment, including
     /// every native signature/binding check and the installed package or lineage proof.
@@ -603,6 +612,10 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 .map_err(Error::from);
         }
         let (_, manifest) = self.sync_manifest()?;
+        if c.kind == KagemushaWalletOperationKindV1::Load {
+            // Native ledger finality is verified before acceptance; Advance requires its record.
+            self.require_load_confirmation(&manifest, c)?;
+        }
         if let KagemushaWalletEffectV1::Receive { credit_id, .. } = c.statement.effect {
             if let Some(credit) = self.indexed_credit(&manifest, &credit_id)? {
                 let original = c

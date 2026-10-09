@@ -1374,6 +1374,68 @@ mod tests {
         assert!(workspace.snapshot.is_complete());
         assert_eq!(workspace.snapshot.sources().count(), 2);
     }
+    #[test]
+    fn every_open_seiyaku_is_checked_as_its_own_local_graph() {
+        // Several unrelated seiyaku in one directory, without a project manifest, as in a
+        // folder of samples. One module is imported by two of them.
+        let directory = SourceDirectory::new();
+        let files = [
+            (
+                "counter.ko",
+                "seiyaku Counter {\n    import \"./math.ko\" as shared;\n    state int value;\n    hajimari() {\n        value = shared::one();\n    }\n    view fn read() -> int { value }\n}\n",
+            ),
+            (
+                "ledger.ko",
+                "誓約 Ledger {\n    import \"./math.ko\" as shared;\n    view fn read() -> int { shared::one() }\n}\n",
+            ),
+            (
+                "broken.ko",
+                "seiyaku Broken {\n    view fn read() -> int {\n        return missing;\n    }\n}\n",
+            ),
+            (
+                "math.ko",
+                "module Math {\n    export fn one() -> int {\n        let unused = 2;\n        1\n    }\n}\n",
+            ),
+        ];
+        for (name, text) in files {
+            std::fs::write(directory.0.join(name), text).unwrap();
+        }
+        let documents = files
+            .iter()
+            .map(|(name, text)| (directory.uri(name), (*text).to_owned()))
+            .collect::<HashMap<_, _>>();
+        let driver = BuildDriver::new(
+            CompilerSession::new(CompilerOptions::default()),
+            "lsp-local-roots",
+        );
+        let diagnostics = collect_lsp_workspace_diagnostics(&driver, &documents, None);
+        let codes = |name: &str| {
+            diagnostics[&directory.uri(name)]
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.clone())
+                .collect::<Vec<_>>()
+        };
+        for name in ["counter.ko", "ledger.ko", "broken.ko", "math.ko"] {
+            assert!(
+                !codes(name)
+                    .iter()
+                    .any(|code| code == "E_MULTIPLE_SEIYAKU_ROOTS"),
+                "{name}: {:?}",
+                codes(name)
+            );
+        }
+        assert!(codes("counter.ko").is_empty(), "{:?}", codes("counter.ko"));
+        assert!(codes("ledger.ko").is_empty(), "{:?}", codes("ledger.ko"));
+        // The unrelated seiyaku still reports its own error.
+        assert_eq!(codes("broken.ko"), ["K2002"]);
+        // The shared module is checked through both importers but reports its lint once.
+        assert_eq!(codes("math.ko"), ["K5013"]);
+        assert_eq!(
+            lsp_local_source_projects_with_root(&documents, None, None, usize::MAX).len(),
+            3
+        );
+    }
     fn request_at(uri: &str, text: &str, needle: &str, delta: usize) -> norito::json::Value {
         let offset = text.find(needle).expect("cursor needle") + delta;
         let line = text[..offset].matches('\n').count();

@@ -114,9 +114,12 @@ fn require_frozen(
             .ok_or(Error::Invalid("native intent kind"))?
             .action
         {
-            OperationActionV1::Load { receipt, finality } => {
+            OperationActionV1::Load {
+                receipt,
+                event_path,
+            } => {
                 original(frozen, R::LoadReceipt, receipt)
-                    && original(frozen, R::LoadFinality, finality)
+                    && original(frozen, R::LoadEventPath, event_path)
             }
             OperationActionV1::Send { request } => original(frozen, R::Request, request),
             OperationActionV1::Receive {
@@ -438,6 +441,23 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         let (mut selected, mut manifest) = self.sync_manifest()?;
         if request.kind() == KagemushaWalletOperationKindV1::Load {
             self.require_ledger_activation(&manifest)?;
+            let Some(OperationActionV1::Load {
+                receipt,
+                event_path,
+            }) = request.user_request().map(|request| &request.action)
+            else {
+                return Err(Error::Invalid("native Load intent"));
+            };
+            // R10 Load carve-out: native CommitQC and event inclusion through the selected
+            // ledger light client, durably retained before any preparation is published.
+            let genesis = self.proofs.ledger_genesis()?;
+            self.confirm_load_finality(
+                &genesis,
+                &mut selected,
+                &mut manifest,
+                receipt,
+                event_path,
+            )?;
         }
         // This dispatcher starts from an enrolled/released wallet. Enrollment is a separate
         // pre-wallet owner; no preparation may manufacture a Bootstrap source.
