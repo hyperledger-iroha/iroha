@@ -47,8 +47,9 @@ retired surface and show the type-first replacement.
 Exact `Amount` is forbidden in every source identifier position. The other
 retired spellings are reserved only when declaring or referring to a type and
 remain ordinary value-namespace identifiers; lowercase `amount` therefore
-remains valid, so `fn amount(quantity amount) -> quantity` is valid and
-unambiguous.
+remains valid, so `fn total(quantity amount) -> quantity` is valid and
+unambiguous. (A parameter still cannot share its function's name: functions and
+locals live in one value namespace.)
 
 V1 exposes three numeric types:
 
@@ -564,10 +565,12 @@ ABI V1 contains the unconditional numeric syscall blocks:
 ```
 
 Typed exact-number JSON getters occupy exactly `0x010160..0x010162`: `int`,
-`decimal`, and `quantity`. They accept only a canonical base-10 JSON string. A
-JSON number token, exponent spelling, leading plus or zero, negative quantity,
-removable fractional zero, or out-of-domain string returns `Option::none`; it
-is never rounded or converted through a host floating-point type. Numbers
+`decimal`, and `quantity`. They accept only a canonical base-10 JSON string and
+return `Option::none` only when the key is absent. A present JSON number token,
+exponent spelling, leading plus or zero, negative quantity, removable
+fractional zero, or out-of-domain string traps with `DecodeError`, so malformed
+input never reads as a missing field; it is never rounded or converted through
+a host floating-point type. Numbers
 `0x010163..0x010165` are unassigned and return `UnknownSyscall` before syscall
 gas charging, allocation, or state mutation. Generic `JSON_SET_I64` remains a
 number-token constructor outside the exact-number surface.

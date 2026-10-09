@@ -621,7 +621,7 @@ impl CoreHost {
         self.sm_enabled = enabled;
         self
     }
-    /// Set the trusted host time returned by `current_time_ms()`.
+    /// Set the logical execution time returned by `CURRENT_TIME_MS` (`context::transaction_time_ms()`).
     pub fn with_current_time_ms(mut self, current_time_ms: u64) -> Self {
         self.current_time_ms = current_time_ms;
         self
@@ -936,7 +936,9 @@ impl CoreHost {
             | syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
             | syscalls::SYSCALL_JSON_GET_INT
             | syscalls::SYSCALL_JSON_GET_DECIMAL
-            | syscalls::SYSCALL_JSON_GET_QUANTITY => {
+            | syscalls::SYSCALL_JSON_GET_QUANTITY
+            | syscalls::SYSCALL_JSON_GET_STRING
+            | syscalls::SYSCALL_JSON_GET_BOOL => {
                 let output_bound = if number == syscalls::SYSCALL_JSON_GET_JSON {
                     Self::maximum_host_pointer_output_payload()
                 } else {
@@ -1975,12 +1977,14 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                 // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId,
-                // r13=&Quantity, r14=&DataSpaceId
+                // r13=&Quantity, r14=&DataSpaceId or 0 when the call names no dataspace.
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
                 Self::expect_amount(vm, 13)?;
-                Self::expect_tlv(vm, 14, PointerType::DataSpaceId)?;
+                if vm.register(14) != 0 {
+                    Self::expect_tlv(vm, 14, PointerType::DataSpaceId)?;
+                }
                 Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
@@ -2446,6 +2450,54 @@ mod tests {
             VMError::AbiTypeNotAllowed { abi: 2, type_id }
                 if type_id == PointerType::NoritoBytes as u16
         ));
+    }
+    #[test]
+    fn core_host_transfer_accepts_an_omitted_dataspace_scope() {
+        let account = iroha_data_model::account::AccountId::new(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .expect("public key"),
+        );
+        let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("asset name"),
+        );
+        let mut vm = IVM::new(u64::MAX);
+        let account_tlv = make_pointer_tlv(
+            PointerType::AccountId,
+            &norito::to_bytes(&account).expect("encode account"),
+        );
+        let from = vm.alloc_input_tlv(&account_tlv).expect("from");
+        let to = vm.alloc_input_tlv(&account_tlv).expect("to");
+        let asset_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(
+                PointerType::AssetDefinitionId,
+                &norito::to_bytes(&asset).expect("encode asset"),
+            ))
+            .expect("asset");
+        let amount = vm
+            .alloc_input_tlv(&make_amount_tlv(Quantity::from(1_u64)))
+            .expect("amount");
+        vm.set_register(10, from);
+        vm.set_register(11, to);
+        vm.set_register(12, asset_ptr);
+        vm.set_register(13, amount);
+        vm.set_register(14, 0);
+        let mut host = CoreHost::new();
+        assert!(
+            host.syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
+                .is_ok(),
+            "r14 = 0 names no dataspace scope"
+        );
+        let not_a_dataspace = vm
+            .alloc_input_tlv(&make_tlv(b"payload"))
+            .expect("non-dataspace pointer");
+        vm.set_register(14, not_a_dataspace);
+        assert!(
+            host.syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
+                .is_err(),
+            "a supplied scope must still be a DataSpaceId pointer"
+        );
     }
     #[test]
     fn core_host_amount_arguments_require_canonical_quantity_pointer() {
@@ -4054,6 +4106,18 @@ mod tests {
         );
         vm.set_register(10, object_with_value_ptr);
         vm.set_register(11, key_name_ptr);
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_JSON_GET_INT, &mut vm),
+            Err(VMError::DecodeError),
+            "generic JSON_SET_I64 number tokens stay outside the exact-number surface"
+        );
+        let missing: Name = "missing".parse().expect("missing key");
+        let missing_bytes = norito::to_bytes(&missing).expect("encode missing key");
+        let missing_ptr = vm
+            .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &missing_bytes))
+            .expect("alloc missing key");
+        vm.set_register(10, object_with_value_ptr);
+        vm.set_register(11, missing_ptr);
         let get_gas = host
             .syscall(syscalls::SYSCALL_JSON_GET_INT, &mut vm)
             .expect("json get");
@@ -4063,14 +4127,11 @@ mod tests {
             crate::sum::SumLayoutV1::option(1).expect("int Option layout"),
         )
         .expect("read int Option");
-        assert!(
-            !present,
-            "generic JSON_SET_I64 number tokens stay outside the exact-number surface"
-        );
+        assert!(!present, "an absent key reads as Option::none");
         assert!(words.is_empty());
         assert_eq!(
             get_gas,
-            CoreHost::json_gas(object_with_value_len + key_name_bytes.len(), 16)
+            CoreHost::json_gas(object_with_value_len + missing_bytes.len(), 16)
         );
         let name: Name = "wonderland".parse().expect("name");
         let name_bytes = norito::to_bytes(&name).expect("encode name");
@@ -4687,15 +4748,11 @@ mod tests {
                 .expect("allocate key");
             vm.set_register(10, token_json_ptr);
             vm.set_register(11, key_ptr);
-            host.syscall(syscall, &mut vm)
-                .expect("numeric token is Option::none");
+            // A present JSON number token is malformed input for an exact
+            // getter, never an absent field.
             assert_eq!(
-                crate::sum::read_words(
-                    &vm,
-                    vm.register(10),
-                    crate::sum::SumLayoutV1::option(1).expect("exact-number option layout"),
-                ),
-                Ok((false, vec![])),
+                host.syscall(syscall, &mut vm),
+                Err(VMError::DecodeError),
                 "{key} must reject a JSON number token",
             );
         }

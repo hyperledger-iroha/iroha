@@ -39,9 +39,7 @@ use iroha_primitives::{
     json::Json,
     numeric::{MAX_MANTISSA_BYTES, Numeric, NumericError, RoundingMode},
 };
-use kotodama_surface::builtins::{
-    Builtin, BuiltinCallPolicy, BuiltinMode, BuiltinSurface, PointerConstructor,
-};
+use kotodama_surface::builtins::{Builtin, BuiltinMode, BuiltinSurface, PointerConstructor};
 use kotodama_surface::source_policy::{
     V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, V1_STATE_MAP_KEY_TYPE_NAMES,
     is_reserved_source_declaration, is_reserved_source_type_declaration,
@@ -63,9 +61,12 @@ pub const COLLECTION_ITERATION_LIMIT: i64 = 64;
 /// compiler allocate more expanded type nodes than a source could contain lexical tokens. Expansion
 /// is measured with saturating arithmetic before any recursive type materialization occurs.
 pub const MAX_EXPANDED_TYPE_NODES: usize = ivm_abi::call::MAX_CALL_SCHEMA_NODES_V1;
+mod effect_sites;
+mod id_literals;
 #[cfg(test)]
 mod multifile_tests;
 mod trigger_lowering;
+mod type_help;
 mod value_traits;
 
 use trigger_lowering::analyze_trigger;
@@ -204,6 +205,8 @@ impl FunctionEffects {
 struct FunctionSummary {
     direct_effects: FunctionEffects,
     calls: IndexSet<String>,
+    /// Diagnostic-only source sites for the effects and calls above.
+    sites: effect_sites::EffectSites,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedParam {
@@ -500,6 +503,13 @@ impl SemanticFailures {
             .error
     }
 }
+/// One statement failure kept while analysis continues past it.
+type RecoveredFailure = (
+    SemanticError,
+    Option<crate::semantic_diagnostics::SemanticDiagnostic>,
+);
+/// Upper bound on independent statement failures reported for one function.
+const MAX_RECOVERED_FAILURES_PER_FUNCTION: usize = 8;
 fn record_semantic_failure(
     failures: &mut Vec<SemanticFailure>,
     omitted: &mut usize,
@@ -599,6 +609,9 @@ pub struct SemanticContext {
     current_state_param_names: RefCell<HashSet<String>>,
     zk_enabled: bool,
     test_builtins_enabled: bool,
+    /// The analyzed source is a standalone `koto_test` module: every function in it is test-only,
+    /// so private helpers may call test builtins too.
+    standalone_test_module: std::cell::Cell<bool>,
     error_codes: RefCell<HashMap<String, u32>>,
     error_types: RefCell<BTreeMap<String, Arc<ContractErrorTypeDescriptor>>>,
     package_identity: RefCell<Option<String>>,
@@ -610,6 +623,17 @@ pub struct SemanticContext {
     resolved_binding_types: RefCell<BTreeMap<(SourceId, crate::resolved::BindingId), Type>>,
     typed_hir_nodes: RefCell<BTreeMap<TypedHirNodeId, Type>>,
     pending_diagnostic: RefCell<Option<crate::semantic_diagnostics::SemanticDiagnostic>>,
+    /// Unannotated locals of the current function and their `let` statements.
+    inferred_locals: RefCell<HashMap<String, crate::source::SourceRange>>,
+    /// Declared return type range of the function being analyzed.
+    current_return_source: RefCell<Option<crate::source::SourceRange>>,
+    /// Whether a failing statement of the current function body may be
+    /// recorded and skipped so later independent errors are also reported.
+    statement_recovery: Cell<bool>,
+    /// Statement failures recovered in the current function, in source order.
+    recovered_failures: RefCell<Vec<RecoveredFailure>>,
+    /// Further failures of the last failed function, reported after its first.
+    extra_failures: RefCell<Vec<RecoveredFailure>>,
     required_list_capacity: RefCell<Option<u8>>,
     resolved_named_types: RefCell<HashMap<String, Type>>,
     resolved_named_type_resources: RefCell<HashMap<String, ExpandedTypeResources>>,
@@ -640,6 +664,8 @@ impl SemanticContext {
         self.package_identity.replace(Some(identity.into()));
     }
     fn swap_state(&self, other: &Self) {
+        self.standalone_test_module
+            .swap(&other.standalone_test_module);
         self.structs.swap(&other.structs);
         self.states.swap(&other.states);
         self.consts.swap(&other.consts);
@@ -671,6 +697,12 @@ impl SemanticContext {
             .swap(&other.resolved_binding_types);
         self.typed_hir_nodes.swap(&other.typed_hir_nodes);
         self.pending_diagnostic.swap(&other.pending_diagnostic);
+        self.inferred_locals.swap(&other.inferred_locals);
+        self.statement_recovery.swap(&other.statement_recovery);
+        self.recovered_failures.swap(&other.recovered_failures);
+        self.extra_failures.swap(&other.extra_failures);
+        self.current_return_source
+            .swap(&other.current_return_source);
         self.required_list_capacity
             .swap(&other.required_list_capacity);
         self.resolved_named_types.swap(&other.resolved_named_types);
@@ -1016,6 +1048,8 @@ impl SemanticContext {
         Vec<TypedHirNode>,
     ) {
         self.reset();
+        self.standalone_test_module
+            .set(self.test_builtins_enabled && program.program().test_target.is_some());
         self.resolved_arenas.replace(
             program
                 .arenas()
@@ -1679,11 +1713,9 @@ impl SemanticContext {
         };
         let mut pending = self.pending_diagnostic.borrow_mut();
         if pending.is_none() {
-            *pending = Some(crate::semantic_diagnostics::SemanticDiagnostic {
-                primary,
-                labels: Vec::new(),
-                fix,
-            });
+            *pending = Some(crate::semantic_diagnostics::SemanticDiagnostic::at(
+                primary, fix,
+            ));
         }
     }
     fn replace_diagnostic(
@@ -1695,11 +1727,39 @@ impl SemanticContext {
             return;
         };
         self.pending_diagnostic
-            .replace(Some(crate::semantic_diagnostics::SemanticDiagnostic {
-                primary,
-                labels: Vec::new(),
-                fix,
-            }));
+            .replace(Some(crate::semantic_diagnostics::SemanticDiagnostic::at(
+                primary, fix,
+            )));
+    }
+    /// Record structured metadata unless an inner failure already did.
+    fn capture_structured(&self, diagnostic: crate::semantic_diagnostics::SemanticDiagnostic) {
+        let mut pending = self.pending_diagnostic.borrow_mut();
+        if pending.is_none() {
+            *pending = Some(diagnostic);
+        }
+    }
+    /// Record a primary range with site-specific help.
+    fn capture_help(&self, primary: Option<crate::source::SourceRange>, help: String) {
+        if let Some(primary) = primary {
+            self.capture_structured(
+                crate::semantic_diagnostics::SemanticDiagnostic::at(primary, None).with_help(help),
+            );
+        }
+    }
+    /// Label explaining how an unannotated local received its type.
+    fn inferred_local_label(
+        &self,
+        name: &str,
+        ty: &Type,
+    ) -> Option<crate::semantic_diagnostics::SemanticDiagnosticLabel> {
+        let source = self.inferred_locals.borrow().get(name).copied()?;
+        Some(crate::semantic_diagnostics::SemanticDiagnosticLabel {
+            source,
+            message: format!(
+                "`{name}` has no type annotation, so its type `{}` was inferred from this initializer",
+                render_type_name(ty)
+            ),
+        })
     }
     fn capture_expression_diagnostic(
         &self,
@@ -1759,11 +1819,7 @@ impl SemanticContext {
             .borrow()
             .get(name)
             .copied()
-            .map(|primary| crate::semantic_diagnostics::SemanticDiagnostic {
-                primary,
-                labels: Vec::new(),
-                fix: None,
-            })
+            .map(|primary| crate::semantic_diagnostics::SemanticDiagnostic::at(primary, None))
     }
     fn reset(&self) {
         self.structs.borrow_mut().clear();
@@ -1789,11 +1845,54 @@ impl SemanticContext {
         self.resolved_binding_types.borrow_mut().clear();
         self.typed_hir_nodes.borrow_mut().clear();
         self.pending_diagnostic.borrow_mut().take();
+        self.inferred_locals.borrow_mut().clear();
+        self.current_return_source.borrow_mut().take();
+        self.statement_recovery.set(false);
+        self.recovered_failures.borrow_mut().clear();
+        self.extra_failures.borrow_mut().clear();
         self.required_list_capacity.borrow_mut().take();
         self.resolved_named_types.borrow_mut().clear();
         self.resolved_named_type_resources.borrow_mut().clear();
         self.next_synthetic_binding.set(0);
     }
+}
+/// Reject a private `fn` whose name is a builtin lowering name.
+///
+/// Typed calls to private helpers and to builtins share one call namespace
+/// after semantic analysis, so only public selectors (kotoage, view and
+/// lifecycle declarations), which source never calls, may use these names.
+fn validate_private_helper_lowering_names(
+    context: &SemanticContext,
+    program: &Program,
+) -> Result<(), SemanticError> {
+    for item in &program.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        if function.modifiers.kind != FunctionKind::Private {
+            continue;
+        }
+        let Some(builtin) =
+            kotodama_surface::source_policy::builtin_lowering_collision(&function.name)
+        else {
+            continue;
+        };
+        let kotoage = crate::glossary::by_spelling("kotoage")
+            .expect("kotoage is a branded keyword")
+            .label();
+        if let Some(diagnostic) = context.declaration_diagnostic(&function.name) {
+            context.capture_structured(diagnostic);
+        }
+        return Err(SemanticError {
+            code: "E_RESERVED_DECLARATION",
+            message: format!(
+                "private `fn {}` reuses the compiler lowering name of `{}`; rename the helper (a {kotoage} or `view fn` may use this name)",
+                function.name,
+                builtin.source_name()
+            ),
+        });
+    }
+    Ok(())
 }
 fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, SemanticError> {
     let mut functions = HashSet::new();
@@ -2463,6 +2562,10 @@ fn validate_acyclic_function_calls(context: &SemanticContext) -> Result<(), Sema
 pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     SemanticContext::new().analyze(program)
 }
+/// Diagnostic for a standalone test module reaching a production compilation.
+const TEST_MODULE_PRODUCTION_MESSAGE: &str = "this file is a `koto_test` module; run it with `koto test`, which compiles it against its target in test mode (deployable builds never include test modules)";
+/// Help for test code found in a deployable seiyaku.
+const TEST_CODE_PRODUCTION_HELP: &str = "`koto check` and `koto build` reject test code instead of stripping it, so the artifact always matches the reviewed source. Move the tests into `<name>.test.ko` and run them with `koto test`.";
 fn reject_test_surface_without_test_mode(
     context: &SemanticContext,
     program: &Program,
@@ -2473,18 +2576,18 @@ fn reject_test_surface_without_test_mode(
     let mut failures = Vec::new();
     let mut omitted = 0_usize;
     if program.test_target.is_some() {
-        record_semantic_failure(
-            &mut failures,
-            &mut omitted,
-            SemanticFailure {
+        // A standalone test module is test code as a whole; one diagnostic says so instead of
+        // one per test function.
+        return Err(SemanticFailures {
+            failures: vec![SemanticFailure {
                 error: SemanticError {
                     code: "E_TEST_ONLY_PRODUCTION",
-                    message: "`koto_test` declarations require explicit compiler test mode".into(),
+                    message: TEST_MODULE_PRODUCTION_MESSAGE.into(),
                 },
                 location: None,
                 diagnostic: None,
-            },
-        );
+            }],
+        });
     }
     for fixture in &program.fixtures {
         record_semantic_failure(
@@ -2494,7 +2597,7 @@ fn reject_test_surface_without_test_mode(
                 error: SemanticError {
                     code: "E_TEST_ONLY_PRODUCTION",
                     message: format!(
-                        "fixture `{}` requires explicit compiler test mode",
+                        "fixture `{}` belongs in a `*.test.ko` module that declares `koto_test {{ target: \"...\" }}`, not in a deployable seiyaku",
                         fixture.name
                     ),
                 },
@@ -2515,12 +2618,14 @@ fn reject_test_surface_without_test_mode(
                     error: SemanticError {
                         code: "E_TEST_ONLY_PRODUCTION",
                         message: format!(
-                            "test function `{}` requires explicit compiler test mode",
+                            "test function `{}` belongs in a `*.test.ko` module that declares `koto_test {{ target: \"...\" }}`, not in a deployable seiyaku",
                             function.name
                         ),
                     },
                     location: Some(function.location),
-                    diagnostic: context.declaration_diagnostic(&function.name),
+                    diagnostic: context
+                        .declaration_diagnostic(&function.name)
+                        .map(|diagnostic| diagnostic.with_help(TEST_CODE_PRODUCTION_HELP)),
                 },
             );
         }
@@ -2598,6 +2703,7 @@ fn validate_linked_program_inline(
         let summary = FunctionSummary {
             direct_effects: block_effects(&context, &function.body),
             calls: collect_called_functions(&context, &function.body),
+            sites: effect_sites::effect_sites(&context, &function.body),
         };
         context
             .function_summaries
@@ -2608,7 +2714,8 @@ fn validate_linked_program_inline(
     validate_acyclic_function_calls(&context)?;
     validate_scalar_state_initialization(&context, &program.items, &program.states)?;
     crate::secret::validate_program(program, zk_enabled)?;
-    enforce_permission_requirements(&context, &program.items)
+    effect_sites::enforce_permission_requirements(&context, &program.items)
+        .map_err(SemanticFailures::into_first)
 }
 /// Derive the production HIR from a test-capable target without returning to AST.
 ///
@@ -2791,7 +2898,7 @@ fn validate_production_projection_expr(
                         return Err(SemanticError {
                             code: "E_TEST_ONLY_PRODUCTION",
                             message: format!(
-                                "retained function `{owner}` calls test-only builtin `{}`",
+                                "`{owner}` belongs to the deployable seiyaku, so it cannot call test-only builtin `{}`; call it from a `#[test] fn`, or move the helper into a `*.test.ko` module",
                                 builtin.source_name()
                             ),
                         });
@@ -2811,7 +2918,7 @@ fn validate_production_projection_expr(
                 return Err(SemanticError {
                     code: "E_TEST_ONLY_PRODUCTION",
                     message: format!(
-                        "retained function `{owner}` calls removed test function `{name}`"
+                        "`{owner}` belongs to the deployable seiyaku, so it cannot call test function `{name}`, which deployable builds omit"
                     ),
                 });
             } else if !retained.contains(name) && compiler_intrinsic_kind(name).is_none() {
@@ -3107,6 +3214,7 @@ fn analyze_with_context(
     let mut trigger_callbacks: HashSet<String> = HashSet::new();
     let mut error_codes = external_error_codes;
     let struct_names = validate_declaration_uniqueness(program)?;
+    validate_private_helper_lowering_names(context, program)?;
     predeclare_integer_constants(context, program)?;
     let mut global_declarations = std::iter::once(program.unit.name.clone())
         .chain(program.items.iter().map(|item| match item {
@@ -3314,17 +3422,31 @@ fn analyze_with_context(
                     context.required_list_capacity.borrow_mut().take();
                     items.push(TypedItem::Function(function));
                 }
-                Err(error) => record_semantic_failure(
-                    &mut failures,
-                    &mut omitted_failures,
-                    SemanticFailure {
-                        error,
-                        location: Some(f.location),
-                        diagnostic: context
-                            .take_diagnostic()
-                            .or_else(|| context.declaration_diagnostic(&f.name)),
-                    },
-                ),
+                Err(error) => {
+                    record_semantic_failure(
+                        &mut failures,
+                        &mut omitted_failures,
+                        SemanticFailure {
+                            error,
+                            location: Some(f.location),
+                            diagnostic: context
+                                .take_diagnostic()
+                                .or_else(|| context.declaration_diagnostic(&f.name)),
+                        },
+                    );
+                    let extra = std::mem::take(&mut *context.extra_failures.borrow_mut());
+                    for (error, diagnostic) in extra {
+                        record_semantic_failure(
+                            &mut failures,
+                            &mut omitted_failures,
+                            SemanticFailure {
+                                error,
+                                location: Some(f.location),
+                                diagnostic,
+                            },
+                        );
+                    }
+                }
             },
             Item::Trigger(trigger) => {
                 if !trigger_names.insert(trigger.name.clone()) {
@@ -3428,7 +3550,7 @@ fn analyze_with_context(
         test_support_enabled: context.test_builtins_enabled,
     };
     crate::secret::validate_program(&typed_program, context.zk_enabled)?;
-    enforce_permission_requirements(context, &typed_program.items)?;
+    effect_sites::enforce_permission_requirements(context, &typed_program.items)?;
     Ok(typed_program)
 }
 
@@ -3527,14 +3649,14 @@ fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
                 .iter()
                 .map(|parameter| !parameter.ends_with('?'))
                 .collect::<Vec<_>>();
-            let plan = reorder_call_arguments(
+            let plan = reorder_builtin_call_arguments(
+                builtin,
                 name,
                 args,
                 argument_names.as_deref(),
                 false,
                 &parameter_names,
                 &required,
-                builtin_positional_prefix(builtin, false),
             )?;
             if plan.ordered.len() != 1 {
                 return Err(SemanticError {
@@ -3703,13 +3825,230 @@ fn parse_decimal_literal(spelling: &str) -> Result<Numeric, SemanticError> {
             message: format!("invalid decimal literal: {error}"),
         })
 }
-fn builtin_positional_prefix(builtin: Builtin, implicit_receiver: bool) -> usize {
-    match builtin.call_policy() {
-        BuiltinCallPolicy::Named => 0,
-        BuiltinCallPolicy::PositionalPrefix(prefix) => {
-            prefix.saturating_sub(usize::from(implicit_receiver))
+/// Normalize builtin argument labels under the registry's published rule.
+///
+/// A label equal to the declared parameter name is always accepted. An
+/// unlabeled argument in a slot whose label is optional
+/// ([`kotodama_surface::builtins::BuiltinCallPolicy::label_required`]) is positional. In a slot that
+/// requires a label, a bare identifier spelled exactly like the label is label
+/// punning: it is the labelled argument `label: label` and produces the same
+/// typed call. Returns the per-argument labels for
+/// [`reorder_call_arguments`] and whether the source labelled any argument.
+fn builtin_argument_labels(
+    builtin: Builtin,
+    call_name: &str,
+    args: &[Expr],
+    argument_names: Option<&[Option<String>]>,
+    implicit_receiver: bool,
+    parameter_names: &[String],
+) -> Result<(Vec<Option<String>>, bool), SemanticError> {
+    let receiver_count = usize::from(implicit_receiver);
+    let user_args = args.get(receiver_count..).unwrap_or_default();
+    let policy = builtin.call_policy();
+    let mut labels = Vec::with_capacity(user_args.len());
+    let mut labelled = false;
+    let mut named_seen = false;
+    for (index, argument) in user_args.iter().enumerate() {
+        if let Some(label) = argument_names.and_then(|names| names.get(index).cloned().flatten()) {
+            named_seen = true;
+            labelled = true;
+            labels.push(Some(label));
+            continue;
+        }
+        let Some(parameter) = parameter_names.get(index).filter(|_| !named_seen) else {
+            // Positional-after-named and surplus arguments keep their source
+            // shape so the shared reorder reports the precise error.
+            labels.push(None);
+            continue;
+        };
+        if !policy.label_required(index + receiver_count) {
+            labels.push(Some(parameter.clone()));
+        } else if matches!(argument.kind(), Expr::Ident(name) if name == parameter) {
+            labelled = true;
+            labels.push(Some(parameter.clone()));
+        } else {
+            return Err(SemanticError {
+                code: "E_NAMED_ARGUMENTS_REQUIRED",
+                message: format!(
+                    "parameter `{parameter}` of `{call_name}` requires its label; write `{parameter}: ...` or pass a variable named `{parameter}`"
+                ),
+            });
         }
     }
+    Ok((labels, labelled))
+}
+/// Reorder builtin call arguments after applying [`builtin_argument_labels`].
+fn reorder_builtin_call_arguments(
+    builtin: Builtin,
+    call_name: &str,
+    args: &[Expr],
+    argument_names: Option<&[Option<String>]>,
+    implicit_receiver: bool,
+    parameter_names: &[String],
+    required: &[bool],
+) -> Result<CallArgumentPlan, SemanticError> {
+    let (labels, labelled) = builtin_argument_labels(
+        builtin,
+        call_name,
+        args,
+        argument_names,
+        implicit_receiver,
+        parameter_names,
+    )?;
+    let mut plan = reorder_call_arguments(
+        call_name,
+        args,
+        Some(&labels),
+        implicit_receiver,
+        parameter_names,
+        required,
+        0,
+    )?;
+    plan.is_named = labelled;
+    Ok(plan)
+}
+/// Reorder a compiler-owned receiver method or numeric conversion call whose
+/// every parameter accepts either a positional value or its declared label.
+///
+/// This is the label rule's "receiver methods and pure helpers" case for the
+/// List, StateMap paging, rounding and conversion intrinsics that are not
+/// registry builtins.
+fn reorder_flexible_call_arguments(
+    call_name: &str,
+    args: &[Expr],
+    argument_names: Option<&[Option<String>]>,
+    implicit_receiver: bool,
+    parameter_names: &[String],
+    required: &[bool],
+) -> Result<CallArgumentPlan, SemanticError> {
+    let receiver_count = usize::from(implicit_receiver);
+    let user_args = args.get(receiver_count..).unwrap_or_default();
+    let mut labelled = false;
+    let mut named_seen = false;
+    let labels = (0..user_args.len())
+        .map(|index| {
+            let label = argument_names.and_then(|names| names.get(index).cloned().flatten());
+            if label.is_some() {
+                named_seen = true;
+                labelled = true;
+                return label;
+            }
+            if named_seen {
+                return None;
+            }
+            parameter_names.get(index).cloned()
+        })
+        .collect::<Vec<_>>();
+    let mut plan = reorder_call_arguments(
+        call_name,
+        args,
+        Some(&labels),
+        implicit_receiver,
+        parameter_names,
+        required,
+        0,
+    )?;
+    plan.is_named = labelled;
+    Ok(plan)
+}
+/// Render the corrected, fully labelled builtin call for a machine fix-it.
+///
+/// Only arguments whose source spelling can be reproduced exactly from the
+/// AST (identifiers, literals, member paths and calls over those) are
+/// rendered; any other argument suppresses the fix and leaves the help text.
+/// A bare identifier spelled like a parameter label keeps that label, so the
+/// fix for a swapped `ledger::nft::mint(owner, nft)` is
+/// `ledger::nft::mint(owner: owner, nft: nft)` and never encodes the swap.
+fn labelled_builtin_call_fix(
+    call_name: &str,
+    args: &[Expr],
+    argument_names: Option<&[Option<String>]>,
+    parameter_names: &[String],
+) -> Option<String> {
+    let explicit =
+        |index: usize| argument_names.and_then(|names| names.get(index).cloned().flatten());
+    let punned = |argument: &Expr| match argument.kind() {
+        Expr::Ident(name) if parameter_names.contains(name) => Some(name.clone()),
+        _ => None,
+    };
+    // Labels already claimed by explicit labels or by punned identifiers.
+    let claimed = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, argument)| explicit(index).or_else(|| punned(argument)))
+        .collect::<Vec<_>>();
+    let mut free = parameter_names
+        .iter()
+        .filter(|name| !claimed.contains(name))
+        .cloned();
+    let mut rendered = Vec::with_capacity(args.len());
+    let mut named_seen = false;
+    for (index, argument) in args.iter().enumerate() {
+        let label = match explicit(index) {
+            Some(label) => {
+                named_seen = true;
+                label
+            }
+            None if !named_seen => match punned(argument) {
+                Some(label) => label,
+                None => free.next()?,
+            },
+            None => return None,
+        };
+        rendered.push(format!("{label}: {}", render_simple_expr(argument)?));
+    }
+    Some(format!("{call_name}({})", rendered.join(", ")))
+}
+/// Reproduce the source spelling of a simple expression, if it has one.
+fn render_simple_expr(expression: &Expr) -> Option<String> {
+    Some(match expression.kind() {
+        Expr::Ident(name) => name.clone(),
+        Expr::Bool(value) => value.to_string(),
+        Expr::IntLiteral(value) => value.to_string(),
+        Expr::DecimalLiteral(spelling) => spelling.clone(),
+        Expr::String(value) => {
+            let mut quoted = String::from("\"");
+            for character in value.chars() {
+                match character {
+                    '"' => quoted.push_str("\\\""),
+                    '\\' => quoted.push_str("\\\\"),
+                    '\n' => quoted.push_str("\\n"),
+                    '\t' => quoted.push_str("\\t"),
+                    '\r' => quoted.push_str("\\r"),
+                    character if character.is_control() => return None,
+                    character => quoted.push(character),
+                }
+            }
+            quoted.push('"');
+            quoted
+        }
+        Expr::Member { object, field } => format!("{}.{field}", render_simple_expr(object)?),
+        Expr::Call {
+            name,
+            args,
+            argument_names,
+            implicit_receiver: false,
+        } => {
+            let arguments = args
+                .iter()
+                .enumerate()
+                .map(|(index, argument)| {
+                    let value = render_simple_expr(argument)?;
+                    Some(
+                        match argument_names
+                            .as_ref()
+                            .and_then(|names| names.get(index).cloned().flatten())
+                        {
+                            Some(label) => format!("{label}: {value}"),
+                            None => value,
+                        },
+                    )
+                })
+                .collect::<Option<Vec<_>>>()?;
+            format!("{name}({})", arguments.join(", "))
+        }
+        _ => return None,
+    })
 }
 #[derive(Debug)]
 struct CallArgumentPlan {
@@ -3719,6 +4058,139 @@ struct CallArgumentPlan {
     evaluation_order: Vec<usize>,
     /// Whether the source call supplied any named arguments.
     is_named: bool,
+}
+/// Point a builtin argument-type failure at the first argument that does not fit.
+fn capture_builtin_argument_help(
+    context: &SemanticContext,
+    builtin: Builtin,
+    error: &SemanticError,
+    args: &[Expr],
+    argument_types: &[Type],
+) {
+    if error.code == "E_INVALID_ID_LITERAL"
+        && let (Builtin::PointerConstructor(constructor), Some(argument)) = (builtin, args.first())
+        && let Expr::String(raw) = argument.kind()
+        && let Err(invalid) = id_literals::validate(
+            constructor,
+            raw,
+            iroha_data_model::account::address::chain_discriminant(),
+        )
+        && let Some(primary) = context.expression_source(argument)
+    {
+        context.capture_structured(
+            crate::semantic_diagnostics::SemanticDiagnostic::at(
+                primary,
+                invalid.canonical.map(|canonical| {
+                    crate::semantic_diagnostics::SemanticFix::Replace {
+                        replacement: format!("\"{canonical}\""),
+                    }
+                }),
+            )
+            .with_help(invalid.help),
+        );
+        return;
+    }
+    if error.code != "K2003" {
+        return;
+    }
+    if builtin == Builtin::Require
+        && let (Some(argument), Some(Type::String)) = (args.get(1), argument_types.get(1))
+    {
+        context.capture_help(
+            context.expression_source(argument),
+            "`require` rejects with a typed error value, not a message string. Declare the reason once \
+             in the seiyaku, for example `error enum VaultError { AmountMustBePositive = 1 }`, and \
+             write `require(amount > 0, VaultError::AmountMustBePositive);`."
+                .to_owned(),
+        );
+        return;
+    }
+    let signature = builtin.signature();
+    // Only simple descriptors are interpreted here; anything else keeps the
+    // statement-level span rather than guessing which argument failed.
+    let accepts = |descriptor: &str, ty: &Type| -> Option<bool> {
+        let ty = resolve_struct_type(ty);
+        Some(match descriptor.strip_suffix('?').unwrap_or(descriptor) {
+            "AccountId" => ty == Type::AccountId,
+            "AssetDefinitionId" => ty == Type::AssetDefinitionId,
+            "AssetId" => ty == Type::AssetId,
+            "DataSpaceId" => ty == Type::DataSpaceId,
+            "DomainId" => ty == Type::DomainId,
+            "Json" => ty == Type::Json,
+            "Name" => ty == Type::Name,
+            "NftId" => ty == Type::NftId,
+            "bool" => ty == Type::Bool,
+            "bytes" => is_blob_like(&ty),
+            // Exact numeric literals adopt a decimal or quantity context.
+            "decimal" => matches!(ty, Type::Decimal | Type::Int),
+            "int" => is_int_like(&ty),
+            "quantity" => matches!(ty, Type::Quantity | Type::Decimal | Type::Int),
+            "string" => ty == Type::String,
+            _ => return None,
+        })
+    };
+    let mismatch = argument_types
+        .iter()
+        .zip(signature.parameters.iter().copied())
+        .enumerate()
+        .find(|(_, (ty, descriptor))| accepts(descriptor, ty) == Some(false));
+    if let Some((index, (ty, descriptor))) = mismatch
+        && let Some(argument) = args.get(index)
+    {
+        let label = signature.parameter_names.get(index).map_or_else(
+            || format!("argument {}", index + 1),
+            |name| format!("`{name}:`"),
+        );
+        context.capture_help(
+            context.expression_source(argument),
+            format!(
+                "{label} of `{}` expects `{}`, but this argument is {}.",
+                builtin.source_name(),
+                descriptor.trim_end_matches('?'),
+                type_help::quoted(ty)
+            ),
+        );
+    }
+}
+/// Attach declared-parameter help to an unknown-label failure.
+fn capture_named_argument_help(
+    context: &SemanticContext,
+    call: &Expr,
+    error: &SemanticError,
+    call_name: &str,
+    argument_names: Option<&[Option<String>]>,
+    argument_count: usize,
+    parameter_names: &[String],
+) {
+    if error.code == "K2003" && argument_count > parameter_names.len() {
+        let declared = parameter_names
+            .iter()
+            .map(|parameter| format!("`{parameter}`"))
+            .collect::<Vec<_>>();
+        context.capture_help(
+            context.expression_source(call),
+            if declared.is_empty() {
+                format!("`{call_name}` takes no arguments; remove them.")
+            } else {
+                format!(
+                    "`{call_name}` declares {} parameter(s): {}. Remove the extra arguments.",
+                    declared.len(),
+                    declared.join(", ")
+                )
+            },
+        );
+        return;
+    }
+    if error.code != "E_UNKNOWN_NAMED_ARGUMENT" {
+        return;
+    }
+    let unknown = argument_names
+        .map(|names| type_help::unknown_labels(names, parameter_names))
+        .unwrap_or_default();
+    context.capture_help(
+        context.expression_source(call),
+        type_help::unknown_labels_help(call_name, &unknown, parameter_names),
+    );
 }
 fn reorder_call_arguments(
     call_name: &str,
@@ -3765,7 +4237,12 @@ fn reorder_call_arguments(
                 .position(|parameter| parameter == name)
                 .ok_or_else(|| SemanticError {
                     code: "E_UNKNOWN_NAMED_ARGUMENT",
-                    message: format!("call `{call_name}` has no parameter named `{name}`"),
+                    message: type_help::unknown_labels_message(
+                        call_name,
+                        &argument_names
+                            .map(|names| type_help::unknown_labels(names, parameter_names))
+                            .unwrap_or_default(),
+                    ),
                 })?;
             if index < positional_prefix {
                 return Err(SemanticError {
@@ -3846,6 +4323,55 @@ fn reorder_call_arguments(
         evaluation_order,
         is_named: named_seen,
     })
+}
+/// Append the compiler-owned [`crate::testing::TestCallSite`] record of a `test::` helper call as
+/// its trailing argument, so test-mode lowering can report a failing seiyaku call or actor lookup
+/// at the call's own source location.
+///
+/// The record is a literal with no runtime evaluation; a named call keeps its source evaluation
+/// order and gains the record as its last slot.
+fn append_test_call_site(
+    context: &SemanticContext,
+    call: &Expr,
+    typed: TypedExpr,
+) -> Result<TypedExpr, SemanticError> {
+    let range = context.expression_source(call);
+    let site = crate::testing::TestCallSite {
+        source_id: range.map_or(0, |range| range.source.0),
+        byte_start: range.map_or(0, |range| range.range.start),
+        byte_end: range.map_or(0, |range| range.range.end),
+    };
+    let encoded =
+        ivm_abi::codec::encode_canonical_norito(&site).map_err(|error| SemanticError {
+            code: "K2003",
+            message: format!("cannot encode the test call site: {error}"),
+        })?;
+    let site = TypedExpr {
+        expr: ExprKind::Bytes(encoded),
+        ty: Type::Bytes,
+    };
+    let TypedExpr { expr, ty } = typed;
+    let expr = match expr {
+        ExprKind::Call { name, mut args } => {
+            args.push(site);
+            ExprKind::Call { name, args }
+        }
+        ExprKind::NamedCall {
+            name,
+            mut args,
+            mut evaluation_order,
+        } => {
+            evaluation_order.push(args.len());
+            args.push(site);
+            ExprKind::NamedCall {
+                name,
+                args,
+                evaluation_order,
+            }
+        }
+        other => other,
+    };
+    Ok(TypedExpr { expr, ty })
 }
 fn retain_named_call_evaluation_order(typed: TypedExpr, plan: &CallArgumentPlan) -> TypedExpr {
     if !plan.is_named {
@@ -4663,6 +5189,10 @@ fn analyze_function(
             ),
         });
     }
+    context.inferred_locals.borrow_mut().clear();
+    context
+        .current_return_source
+        .replace(func.ret_ty.as_ref().and_then(|ty| context.type_source(ty)));
     let previous_modifiers = context
         .current_function_modifiers
         .borrow_mut()
@@ -4679,6 +5209,8 @@ fn analyze_function(
     );
     let unit_return = Type::Unit;
     let expected_tail = expected_ret.as_ref().unwrap_or(&unit_return);
+    context.recovered_failures.borrow_mut().clear();
+    let recovery = context.statement_recovery.replace(true);
     let body_result = analyze_block(
         context,
         &func.body,
@@ -4688,16 +5220,39 @@ fn analyze_function(
         Some(expected_tail),
         0,
     );
+    context.statement_recovery.set(recovery);
+    let mut recovered = std::mem::take(&mut *context.recovered_failures.borrow_mut());
+    if !recovered.is_empty() {
+        // The first recovered failure is the function's failure; later ones,
+        // including a terminal error, are reported after it in source order.
+        if let Err(error) = body_result {
+            recovered.push((error, context.take_diagnostic()));
+        }
+        *context.current_function_modifiers.borrow_mut() = previous_modifiers;
+        *context.current_function_name.borrow_mut() = previous_name;
+        *context.current_mutable_bindings.borrow_mut() = previous_mutable_bindings;
+        *context.current_state_param_names.borrow_mut() = previous_state_params;
+        let (error, diagnostic) = recovered.remove(0);
+        context.pending_diagnostic.replace(diagnostic);
+        context.extra_failures.replace(recovered);
+        return Err(error);
+    }
     *context.current_function_modifiers.borrow_mut() = previous_modifiers;
     *context.current_function_name.borrow_mut() = previous_name;
     *context.current_mutable_bindings.borrow_mut() = previous_mutable_bindings;
     *context.current_state_param_names.borrow_mut() = previous_state_params;
     let body = body_result?;
-    crate::result_use::check(
+    if let Err(failure) = crate::result_use::check_with_diagnostic(
         &param_types,
         &body,
         context.states.borrow().keys().cloned().collect(),
-    )?;
+    ) {
+        let (error, diagnostic) = *failure;
+        if let Some(diagnostic) = diagnostic {
+            context.pending_diagnostic.replace(Some(diagnostic));
+        }
+        return Err(error);
+    }
     // Enforce declared return coverage and shape
     if let Some(t) = &expected_ret {
         if *t != Type::Unit && body.tail.is_none() && !typed_block_diverges(&body) {
@@ -4718,6 +5273,7 @@ fn analyze_function(
     let summary = FunctionSummary {
         direct_effects: block_effects(context, &body),
         calls: collect_called_functions(context, &body),
+        sites: effect_sites::effect_sites(context, &body),
     };
     context
         .function_summaries
@@ -4767,12 +5323,17 @@ fn current_public_trigger_callback_allows_payload_helper(context: &SemanticConte
         .borrow()
         .contains(&current)
 }
+/// Whether the current function may use test-function-only builtins: a `#[test]` function, or
+/// a private helper of a standalone `koto_test` module (which never reaches a deployable artifact).
 fn current_function_is_test(context: &SemanticContext) -> bool {
     context
         .current_function_modifiers
         .borrow()
         .as_ref()
-        .is_some_and(|modifiers| modifiers.is_test)
+        .is_some_and(|modifiers| {
+            modifiers.is_test
+                || (context.standalone_test_module.get() && modifiers.kind == FunctionKind::Private)
+        })
 }
 fn function_is_runtime_entrypoint(modifiers: &FunctionModifiers) -> bool {
     modifiers.kind != FunctionKind::Private
@@ -4803,6 +5364,98 @@ fn typed_string_literal(value: String) -> TypedExpr {
         ty: Type::String,
     }
 }
+/// Text of a `Json::parse("...")` literal argument, if the expression is one.
+fn json_parse_literal_text(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
+            json_parse_literal_text(expression)
+        }
+        Expr::Call { name, args, .. }
+            if args.len() == 1
+                && matches!(
+                    Builtin::from_name(&normalize_namespaced(name)),
+                    Some(Builtin::PointerConstructor(PointerConstructor::Json))
+                ) =>
+        {
+            match args[0].kind() {
+                Expr::String(text) => Some(text.as_str()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+/// Check a literal argument record passed to `test::invoke_kotoage`/`_as` against the target's
+/// exact `EntrypointArgumentSchemaV1`, the same boundary schema Torii and the CLIs enforce.
+///
+/// Dynamic records are checked by the test runner when the call executes.
+fn check_literal_argument_record(
+    context: &SemanticContext,
+    target_name: &str,
+    payload: &Expr,
+) -> Result<(), SemanticError> {
+    let Some(text) = json_parse_literal_text(payload) else {
+        return Ok(());
+    };
+    let params = context
+        .function_params
+        .borrow()
+        .get(target_name)
+        .cloned()
+        .or_else(|| {
+            context
+                .external_functions
+                .borrow()
+                .get(target_name)
+                .map(|signature| signature.params.clone())
+        });
+    let Some(params) = params else {
+        return Ok(());
+    };
+    let Ok(json) = Json::from_str_norito(text) else {
+        return Ok(());
+    };
+    let Ok(schema) = crate::ir::entrypoint_argument_schema(&params) else {
+        return Ok(());
+    };
+    let Some(schema) = schema else {
+        if json.get() == "{}" {
+            return Ok(());
+        }
+        return Err(SemanticError {
+            code: "K2003",
+            message: format!(
+                "`{target_name}` takes no arguments, so its argument record must be `Json::parse(\"{{}}\")`"
+            ),
+        });
+    };
+    ivm_abi::arguments::argument_record_from_json_detailed(&schema, &json)
+        .map(|_| ())
+        .map_err(|error| {
+            let mut message = format!("arguments for `{target_name}`: {error}");
+            if let Some(number) = error.found.strip_prefix("JSON number ")
+                && error.expected.contains("decimal")
+            {
+                message.push_str(&format!(
+                    "; int, decimal and quantity arguments are canonical strings, write \"{number}\""
+                ));
+            }
+            let declared = schema
+                .fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>();
+            if let Some(hint) = crate::testing::undeclared_argument_keys_hint(&declared, json.get())
+            {
+                message.push_str("; ");
+                message.push_str(&hint);
+            }
+            SemanticError {
+                code: "K2003",
+                message,
+            }
+        })
+}
 fn analyze_invoke_entrypoint_call(
     context: &SemanticContext,
     args: &[Expr],
@@ -4811,7 +5464,7 @@ fn analyze_invoke_entrypoint_call(
     if !current_function_is_test(context) {
         return Err(SemanticError {
             code: "E_TEST_BUILTIN_CONTEXT",
-            message: "`test::invoke_kotoage` is only available inside #[test] Kotodama functions"
+            message: "`test::invoke_kotoage` is available only in #[test] functions and in helpers of a `koto_test` module"
                 .into(),
         });
     }
@@ -4835,6 +5488,7 @@ fn analyze_invoke_entrypoint_call(
         });
     }
     let ret_ty = runtime_entrypoint_return_type(context, &target_name)?;
+    check_literal_argument_record(context, &target_name, &args[1])?;
     Ok(TypedExpr {
         expr: ExprKind::Call {
             name: "invoke_entrypoint".to_owned(),
@@ -4886,8 +5540,46 @@ fn runtime_entrypoint_return_type(
     }
     Err(SemanticError {
         code: "K2002",
-        message: format!("unknown runtime public or lifecycle target `{target_name}`"),
+        message: unknown_runtime_target_message(context, target_name),
     })
+}
+/// Explain an unknown `test::invoke_kotoage` target: a lifecycle keyword written as a selector,
+/// or the closest declared kotoage, view, or lifecycle declaration.
+fn unknown_runtime_target_message(context: &SemanticContext, target_name: &str) -> String {
+    let mut declared = context
+        .function_modifiers
+        .borrow()
+        .iter()
+        .filter(|(_, modifiers)| function_is_runtime_entrypoint(modifiers))
+        .map(|(name, _)| name.clone())
+        .chain(
+            context
+                .external_functions
+                .borrow()
+                .iter()
+                .filter(|(_, signature)| function_is_runtime_entrypoint(&signature.modifiers))
+                .map(|(name, _)| name.clone()),
+        )
+        .collect::<Vec<_>>();
+    declared.sort_unstable();
+    declared.dedup();
+    let mut message = format!("unknown runtime public or lifecycle target `{target_name}`");
+    // Lifecycle declarations are selected by their canonical selector whichever keyword spelling
+    // declared them; the call site names the spelling the test wrote.
+    if let Some(keyword) = crate::glossary::by_spelling(target_name)
+        && target_name != keyword.romaji
+        && declared.iter().any(|name| name == keyword.romaji)
+    {
+        message.push_str(&format!(
+            "; the `{target_name}` declaration is selected as \"{}\"",
+            keyword.romaji
+        ));
+    } else if let Some(closest) =
+        crate::diagnostic::suggest::closest(target_name, declared.iter().map(String::as_str))
+    {
+        message.push_str(&format!("; did you mean \"{closest}\"?"));
+    }
+    message
 }
 fn analyze_invoke_entrypoint_as_call(
     context: &SemanticContext,
@@ -4898,7 +5590,7 @@ fn analyze_invoke_entrypoint_as_call(
         return Err(SemanticError {
             code: "E_TEST_BUILTIN_CONTEXT",
             message:
-                "`test::invoke_kotoage_as` is only available inside #[test] Kotodama functions"
+                "`test::invoke_kotoage_as` is available only in #[test] functions and in helpers of a `koto_test` module"
                     .into(),
         });
     }
@@ -4924,6 +5616,7 @@ fn analyze_invoke_entrypoint_as_call(
         });
     }
     let ret_ty = runtime_entrypoint_return_type(context, &target_name)?;
+    check_literal_argument_record(context, &target_name, &args[2])?;
     Ok(TypedExpr {
         expr: ExprKind::Call {
             name: "invoke_entrypoint_as".to_string(),
@@ -4952,7 +5645,7 @@ fn analyze_rejection_expectation_call(
     if !current_function_is_test(context) {
         return Err(SemanticError {
             code: "E_TEST_BUILTIN_CONTEXT",
-            message: "`expect_reject_as` is only available inside #[test] Kotodama functions"
+            message: "`expect_reject_as` is available only in #[test] functions and in helpers of a `koto_test` module"
                 .into(),
         });
     }
@@ -5037,7 +5730,7 @@ fn analyze_actor_account_call(
     if !current_function_is_test(context) {
         return Err(SemanticError {
             code: "E_TEST_BUILTIN_CONTEXT",
-            message: "`actor_account` is only available inside #[test] Kotodama functions".into(),
+            message: "`actor_account` is available only in #[test] functions and in helpers of a `koto_test` module".into(),
         });
     }
     if args.len() != 1 {
@@ -5067,7 +5760,7 @@ fn analyze_actor_public_key_call(
     if !current_function_is_test(context) {
         return Err(SemanticError {
             code: "E_TEST_BUILTIN_CONTEXT",
-            message: "`actor_public_key` is only available inside #[test] Kotodama functions"
+            message: "`actor_public_key` is available only in #[test] functions and in helpers of a `koto_test` module"
                 .into(),
         });
     }
@@ -5091,6 +5784,125 @@ fn analyze_actor_public_key_call(
         ty: Type::Bytes,
     })
 }
+/// Type-check `test::assert(condition, message:)` or `test::assert_eq(actual:, expected:,
+/// message:)` and append the compiler-owned assertion site the test runner reports on failure.
+///
+/// `assert_eq` accepts any pair of values of one equality-comparable type, using the same rules
+/// as `==`. The appended site records the call's exact source range, the literal message, and the
+/// compared type; test-mode lowering hands it to the host-private assertion syscall only when the
+/// assertion fails.
+fn analyze_test_assertion_call(
+    context: &SemanticContext,
+    call: &Expr,
+    builtin: Builtin,
+    plan: &CallArgumentPlan,
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    use crate::testing::{AssertionKind, AssertionSite};
+    validate_builtin_mode(context, builtin)?;
+    let args = plan.ordered.as_slice();
+    let (kind, mut typed, value_type) = match builtin {
+        Builtin::Assert => {
+            if !(1..=2).contains(&args.len()) {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "test::assert expects (condition: bool[, message: string|int])".into(),
+                });
+            }
+            let condition = analyze_expr_expected(context, &args[0], vars, Some(&Type::Bool))?;
+            if resolve_struct_type(&condition.ty) != Type::Bool {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: format!(
+                        "test::assert expects a bool condition, found `{}`",
+                        type_name(&condition.ty)
+                    ),
+                });
+            }
+            (AssertionKind::Assert, vec![condition], None)
+        }
+        _ => {
+            if !(2..=3).contains(&args.len()) {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message:
+                        "test::assert_eq expects (actual: T, expected: T[, message: string|int])"
+                            .into(),
+                });
+            }
+            let mut actual = analyze_expr(context, &args[0], vars)?;
+            let context_ty = actual.ty.clone();
+            let mut expected = analyze_expr_expected(context, &args[1], vars, Some(&context_ty))?;
+            coerce_contextual_numeric_literals(BinaryOp::Eq, None, &mut actual, &mut expected)?;
+            let same_type = resolve_struct_type(&actual.ty) == resolve_struct_type(&expected.ty)
+                || (is_blob_like(&actual.ty) && is_blob_like(&expected.ty));
+            if !same_type {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: format!(
+                        "test::assert_eq compares `actual` and `expected` of one type, found `{}` and `{}`",
+                        type_name(&actual.ty),
+                        type_name(&expected.ty)
+                    ),
+                });
+            }
+            if !is_eq_comparable_type(&actual.ty) {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: format!(
+                        "test::assert_eq cannot compare `{}`: the type does not support `==`",
+                        type_name(&actual.ty)
+                    ),
+                });
+            }
+            let value_type = type_name(&actual.ty);
+            (
+                AssertionKind::AssertEq,
+                vec![actual, expected],
+                Some(value_type),
+            )
+        }
+    };
+    let message_index = typed.len();
+    let mut literal_message = None;
+    if let Some(message) = args.get(message_index) {
+        let message = analyze_expr(context, message, vars)?;
+        if resolve_struct_type(&message.ty) != Type::String && !is_int_like(&message.ty) {
+            return Err(SemanticError {
+                code: "K2003",
+                message: format!(
+                    "`{}` expects `message` to be a string or int, found `{}`",
+                    builtin.source_name(),
+                    type_name(&message.ty)
+                ),
+            });
+        }
+        if let ExprKind::String(text) = message.kind() {
+            literal_message = Some(text.clone());
+        }
+        typed.push(message);
+    }
+    crate::secret::validate_builtin_call(builtin, &typed)?;
+    let range = context.expression_source(call);
+    let site = AssertionSite {
+        kind,
+        source_id: range.map_or(0, |range| range.source.0),
+        byte_start: range.map_or(0, |range| range.range.start),
+        byte_end: range.map_or(0, |range| range.range.end),
+        message: literal_message,
+        value_type,
+    };
+    let encoded =
+        ivm_abi::codec::encode_canonical_norito(&site).map_err(|error| SemanticError {
+            code: "K2003",
+            message: format!("cannot encode the assertion site: {error}"),
+        })?;
+    typed.push(TypedExpr {
+        expr: ExprKind::Bytes(encoded),
+        ty: Type::Bytes,
+    });
+    Ok(typed_call(builtin.name(), typed, Type::Unit))
+}
 fn analyze_actor_sign_call(
     context: &SemanticContext,
     args: &[Expr],
@@ -5099,7 +5911,7 @@ fn analyze_actor_sign_call(
     if !current_function_is_test(context) {
         return Err(SemanticError {
             code: "E_TEST_BUILTIN_CONTEXT",
-            message: "`actor_sign` is only available inside #[test] Kotodama functions".into(),
+            message: "`actor_sign` is available only in #[test] functions and in helpers of a `koto_test` module".into(),
         });
     }
     if args.len() != 2 {
@@ -5143,15 +5955,24 @@ fn analyze_block(
     let result = (|| {
         let _ = loop_depth;
         let mut statements = Vec::new();
+        let mut statement_sources = Vec::new();
         for stmt in &block.statements {
-            let mut v = analyze_statement(
+            let mut v = match analyze_statement(
                 context,
                 stmt,
                 vars,
                 mutable_bindings,
                 expected_ret,
                 loop_depth,
-            )?;
+            ) {
+                Ok(statements) => statements,
+                Err(error) => {
+                    recover_statement_failure(context, stmt, error, vars, mutable_bindings)?;
+                    continue;
+                }
+            };
+            let source = context.statement_source(stmt);
+            statement_sources.resize(statement_sources.len() + v.len(), source);
             statements.append(&mut v);
         }
         let tail = if let Some(expression) = &block.tail {
@@ -5168,12 +5989,78 @@ fn analyze_block(
         } else {
             None
         };
-        Ok(TypedBlock { statements, tail })
+        Ok(TypedBlock {
+            statements,
+            tail,
+            provenance: TypedBlockProvenance {
+                statements: statement_sources,
+                tail: block
+                    .tail
+                    .as_ref()
+                    .and_then(|expression| context.expression_source(expression)),
+            },
+        })
     })();
     context
         .current_mutable_bindings
         .replace(previous_mutable_bindings);
     result
+}
+/// Record a failed statement and continue when skipping it cannot cascade.
+///
+/// Recovery is active only for statement blocks of a function body, never
+/// while analyzing an expression (including speculative checks). A statement
+/// is skipped only when it introduces no binding, or when it is an annotated
+/// `let` whose declared type can still be bound. Anything else ends analysis of
+/// the function with the error, as before.
+fn recover_statement_failure(
+    context: &SemanticContext,
+    statement: &Statement,
+    error: SemanticError,
+    vars: &mut HashMap<String, Type>,
+    mutable_bindings: &mut HashSet<String>,
+) -> Result<(), SemanticError> {
+    if !context.statement_recovery.get()
+        || error.code == "K0003"
+        || context.recovered_failures.borrow().len() >= MAX_RECOVERED_FAILURES_PER_FUNCTION
+    {
+        return Err(error);
+    }
+    let binding = match statement.kind() {
+        Statement::Let {
+            mutable,
+            pat: Pattern::Name(name),
+            ty: Some(annotation),
+            ..
+        } => {
+            let pending = context.pending_diagnostic.borrow_mut().take();
+            let declared = convert_type_expr(context, annotation)
+                .and_then(|ty| resolve_struct_type_with_context(context, &ty));
+            context.pending_diagnostic.replace(pending);
+            let Ok(declared) = declared else {
+                return Err(error);
+            };
+            Some((name.clone(), declared, *mutable))
+        }
+        Statement::Let { .. } => return Err(error),
+        _ => None,
+    };
+    let diagnostic = context.take_diagnostic();
+    context.required_list_capacity.borrow_mut().take();
+    context
+        .recovered_failures
+        .borrow_mut()
+        .push((error, diagnostic));
+    if let Some((name, declared, mutable)) = binding
+        && name != "_"
+    {
+        vars.insert(name.clone(), declared);
+        if mutable {
+            mutable_bindings.insert(name.clone());
+            context.current_mutable_bindings.borrow_mut().insert(name);
+        }
+    }
+    Ok(())
 }
 fn validate_v1_bounded_for_shape(
     context: &SemanticContext,
@@ -5354,7 +6241,28 @@ fn analyze_named_struct_binding(
             None
         };
         if let Some(error) = error {
-            context.capture_diagnostic(field.source, None);
+            let suggestion = (error.code == "E_UNKNOWN_STRUCT_FIELD")
+                .then(|| {
+                    crate::diagnostic::suggest::closest(
+                        &field.name,
+                        declared_fields
+                            .iter()
+                            .map(|(declared, _)| declared.as_str()),
+                    )
+                })
+                .flatten();
+            match (suggestion, field.source) {
+                (Some(suggestion), Some(source)) => context.capture_structured(
+                    crate::semantic_diagnostics::SemanticDiagnostic::at(
+                        source,
+                        Some(crate::semantic_diagnostics::SemanticFix::Replace {
+                            replacement: suggestion.to_owned(),
+                        }),
+                    )
+                    .with_help(format!("did you mean `{suggestion}`?")),
+                ),
+                _ => context.capture_diagnostic(field.source, None),
+            }
             return Err(error);
         }
         if field.binding != "_" {
@@ -5611,6 +6519,16 @@ fn analyze_statement_inner(
             ty,
             value,
         } => {
+            if ty.is_none()
+                && let Pattern::Name(name) = pat
+                && name != "_"
+                && let Some(source) = context.statement_source(stmt)
+            {
+                context
+                    .inferred_locals
+                    .borrow_mut()
+                    .insert(name.clone(), source);
+            }
             let declared = ty
                 .as_ref()
                 .map(|annotation| convert_type_expr(context, annotation))
@@ -5640,7 +6558,10 @@ fn analyze_statement_inner(
             };
             if let Some(dt) = &declared {
                 apply_map_new_type_hint(&mut expr, dt);
-                if let Err(error) = ensure_assignable_and_coerce(dt, &mut expr) {
+                if let Err(mut error) = ensure_assignable_and_coerce(dt, &mut expr) {
+                    if error.code == "E_TYPE_ANNOTATION_MISMATCH" {
+                        error.message = format!("type annotation mismatch: {}", error.message);
+                    }
                     if error.code == "E_QUERY_RESULT_TYPE"
                         && let Some(annotation) = ty.as_ref()
                     {
@@ -5691,7 +6612,7 @@ fn analyze_statement_inner(
                 });
             }
             apply_map_new_type_hint(&mut expr, &expected);
-            ensure_assignable_and_coerce(&expected, &mut expr)?;
+            inferred_assignment(context, stmt, name, &expected, &mut expr)?;
             // Rebind SSA name to new value
             vars.insert(name.clone(), expr.ty.clone());
             let mut out = Vec::new();
@@ -5732,15 +6653,21 @@ fn analyze_statement_inner(
                             &mut replacement,
                         )?;
                         reject_implicit_int_decimal_mix(&left.ty, &replacement.ty)?;
-                        let ty = arithmetic_result_type(binary, &left.ty, &replacement.ty)
-                            .ok_or_else(|| SemanticError {
+                        let Some(ty) = arithmetic_result_type(binary, &left.ty, &replacement.ty)
+                        else {
+                            context.capture_help(
+                                context.statement_source(stmt),
+                                type_help::operator_help(binary, &left.ty, &replacement.ty),
+                            );
+                            return Err(SemanticError {
                                 code: "K2003",
-                                message: format!(
-                                    "compound operator {op:?} is not defined for {} and {}",
-                                    type_name(&left.ty),
-                                    type_name(&replacement.ty)
+                                message: type_help::operator_message(
+                                    type_help::assign_symbol(*op),
+                                    &left.ty,
+                                    &replacement.ty,
                                 ),
-                            })?;
+                            });
+                        };
                         replacement = TypedExpr {
                             expr: ExprKind::Binary {
                                 op: binary,
@@ -5875,7 +6802,7 @@ fn analyze_statement_inner(
                     }
                     apply_map_new_type_hint(&mut expr, &expected);
                     if *op == AssignOp::Set {
-                        ensure_assignable_and_coerce(&expected, &mut expr)?;
+                        inferred_assignment(context, stmt, name, &expected, &mut expr)?;
                         vars.insert(name.clone(), expr.ty.clone());
                         let mut out = Vec::new();
                         out.push(TypedStatement::Let {
@@ -5901,22 +6828,46 @@ fn analyze_statement_inner(
                     )?;
                     reject_implicit_int_decimal_mix(&left.ty, &expr.ty)?;
                     let Some(result_ty) = arithmetic_result_type(bin_op, &left.ty, &expr.ty) else {
+                        if let Some(primary) = context.statement_source(stmt) {
+                            let mut diagnostic =
+                                crate::semantic_diagnostics::SemanticDiagnostic::at(primary, None)
+                                    .with_help(type_help::operator_help(
+                                        bin_op, &left.ty, &expr.ty,
+                                    ));
+                            diagnostic
+                                .labels
+                                .extend(context.inferred_local_label(name, &expected));
+                            context.capture_structured(diagnostic);
+                        }
                         return Err(SemanticError {
                             code: "K2003",
-                            message: format!(
-                                "compound operator {op:?} is not defined for {} and {}",
-                                type_name(&left.ty),
-                                type_name(&expr.ty),
+                            message: type_help::operator_message(
+                                type_help::assign_symbol(*op),
+                                &left.ty,
+                                &expr.ty,
                             ),
                         });
                     };
                     if resolve_struct_type(&result_ty) != resolve_struct_type(&expected) {
+                        if let Some(primary) = context.statement_source(stmt) {
+                            let mut diagnostic =
+                                crate::semantic_diagnostics::SemanticDiagnostic::at(primary, None)
+                                    .with_help(format!(
+                                        "Assign the result to a binding of type {}, or convert it explicitly.",
+                                        type_help::quoted(&result_ty)
+                                    ));
+                            diagnostic
+                                .labels
+                                .extend(context.inferred_local_label(name, &expected));
+                            context.capture_structured(diagnostic);
+                        }
                         return Err(SemanticError {
                             code: "K2003",
                             message: format!(
-                                "compound operator {op:?} produces {}, which cannot be assigned to {} without an explicit conversion",
-                                type_name(&result_ty),
-                                type_name(&expected),
+                                "`{name} {} ...` produces {}, which cannot be stored in `{name}` of type {}",
+                                type_help::assign_symbol(*op),
+                                type_help::quoted(&result_ty),
+                                type_help::quoted(&expected),
                             ),
                         });
                     }
@@ -5973,6 +6924,20 @@ fn analyze_statement_inner(
                         if let Err(mut err) = ensure_assignable_and_coerce(exp, expr) {
                             err.code = "E_RETURN_TYPE_MISMATCH";
                             err.message = format!("return type mismatch: {}", err.message);
+                            if let Some(primary) = context.statement_source(stmt) {
+                                context.capture_structured(
+                                    crate::semantic_diagnostics::SemanticDiagnostic::at(
+                                        primary, None,
+                                    )
+                                    .with_label(
+                                        *context.current_return_source.borrow(),
+                                        format!(
+                                            "the function declares return type {} here",
+                                            type_help::quoted(exp)
+                                        ),
+                                    ),
+                                );
+                            }
                             return Err(err);
                         }
                     }
@@ -6184,7 +7149,7 @@ fn analyze_statement_inner(
             let mut local_vars = vars.clone();
             local_vars.insert(item.clone(), element.as_ref().clone());
             let mut local_mutability = mutable_bindings.clone();
-            let mut bindings = analyze_binding_pattern(
+            let bindings = analyze_binding_pattern(
                 context,
                 pat,
                 false,
@@ -6204,8 +7169,7 @@ fn analyze_statement_inner(
                 None,
                 loop_depth + 1,
             )?;
-            bindings.append(&mut body_t.statements);
-            body_t.statements = bindings;
+            body_t.prepend_unsourced(bindings);
             Ok(vec![TypedStatement::ForEachMap {
                 key: item,
                 value: None,
@@ -6404,14 +7368,13 @@ fn analyze_state_page_call(
         } else {
             vec!["limit".into()]
         };
-        let plan = reorder_call_arguments(
+        let plan = reorder_flexible_call_arguments(
             name,
             args,
             argument_names,
             true,
             &names,
             &vec![true; names.len()],
-            usize::from(name == "take"),
         )?;
         let bound =
             static_collection_bound(context, &plan.ordered[if name == "page" { 2 } else { 1 }])?;
@@ -6654,6 +7617,9 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         Builtin::Sm4GcmSeal | Builtin::Sm4GcmOpen => {
             M::NameSuffix(" expects (bytes, bytes, bytes, bytes)")
         }
+        Builtin::VerifySignature => M::SourceNameSuffix(
+            " expects (message: bytes, signature: bytes, public_key: bytes, scheme: SignatureScheme)",
+        ),
         Builtin::GetAccountBalance => {
             M::Static("get_account_balance expects (AccountId, AssetDefinitionId)")
         }
@@ -6662,15 +7628,17 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         Builtin::DebugLog => M::Static("debug_log expects (Json|bytes payload)"),
         Builtin::Require => M::Static("require expects (bool, ErrorEnum::Variant)"),
         Builtin::Info => M::Static("info expects (string|int)"),
-        Builtin::AssertEq => M::Static("assert_eq expects two int args"),
-        Builtin::SetAccountDetail => {
-            M::Static("set_account_detail expects (AccountId, Name, Json)")
+        Builtin::AssertEq => {
+            M::Static("assert_eq expects (actual: T, expected: T[, message: string|int])")
+        }
+        Builtin::SetAccountMetadata => {
+            M::Static("set_account_metadata expects (AccountId, Name, Json)")
         }
         Builtin::MintAsset | Builtin::BurnAsset => {
             M::NameSuffix(" expects (AccountId, AssetDefinitionId, quantity)")
         }
         Builtin::TransferAsset => M::Static(
-            "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, quantity, DataSpaceId)",
+            "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, quantity[, DataSpaceId])",
         ),
         Builtin::SetAssetTransferAvailability => M::Static(
             "ledger::asset::set_transfer_availability expects (AccountId, AssetDefinitionId, int, bool, bool, Option<string>)",
@@ -6701,10 +7669,7 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
             M::NameSuffix(" expects (AccountId)")
         }
         Builtin::RegisterAsset => {
-            M::Static("register_asset expects (AssetDefinitionId, string, int, int)")
-        }
-        Builtin::CreateNewAsset => {
-            M::Static("create_new_asset expects (AssetDefinitionId, string, int, AccountId, int)")
+            M::Static("register_asset expects (AssetDefinitionId, string, NumericSpec, Mintable)")
         }
         Builtin::UnregisterAsset => M::Static("unregister_asset expects (AssetDefinitionId)"),
         Builtin::RegisterPeer | Builtin::UnregisterPeer | Builtin::RegisterTrigger => {
@@ -6715,9 +7680,9 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         | Builtin::EscrowMarkPaymentSent
         | Builtin::EscrowRelease
         | Builtin::EscrowCancel => M::NameSuffix(" expects (Name)"),
-        Builtin::SetTriggerEnabled => M::Static("set_trigger_enabled expects (Name, int)"),
-        Builtin::CreateRole => M::Static("create_role expects (Name, Json)"),
-        Builtin::DeleteRole => M::Static("delete_role expects (Name)"),
+        Builtin::SetTriggerEnabled => M::Static("set_trigger_enabled expects (Name, bool)"),
+        Builtin::RegisterRole => M::Static("register_role expects (Name, Json)"),
+        Builtin::UnregisterRole => M::Static("unregister_role expects (Name)"),
         Builtin::GrantRole | Builtin::RevokeRole => M::NameSuffix(" expects (AccountId, Name)"),
         Builtin::GrantPermission | Builtin::RevokePermission => {
             M::NameSuffix(" expects (AccountId, Name|Json)")
@@ -6803,11 +7768,13 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         Builtin::GetAccountId => M::NameSuffix(" expects (Json, Name)"),
         Builtin::GetAssetDefinitionId => M::NameSuffix(" expects (Json, Name)"),
         Builtin::GetNftId => M::NameSuffix(" expects (Json, Name)"),
-        Builtin::GetBlobHex => M::NameSuffix(" expects (Json, Name)"),
+        Builtin::GetBytesHex | Builtin::GetString | Builtin::GetBool => {
+            M::NameSuffix(" expects (Json, Name)")
+        }
         Builtin::Authority | Builtin::SysvarAuthority | Builtin::ContractSubject => {
             M::NameSuffix(" expects no arguments")
         }
-        Builtin::CurrentTimeMs | Builtin::BlockHeight | Builtin::BlockTimeMs => {
+        Builtin::TransactionTimeMs | Builtin::BlockHeight | Builtin::BlockTimeMs => {
             M::NameSuffix(" expects no arguments")
         }
         Builtin::ChainId | Builtin::ContractAddress | Builtin::Entrypoint => {
@@ -6826,7 +7793,7 @@ fn fixed_builtin_arg_accepts(builtin: Builtin, index: usize, descriptor: &str, t
             let ty = resolve_struct_type(ty);
             is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json
         }
-        _ => match descriptor {
+        _ => match descriptor.strip_suffix('?').unwrap_or(descriptor) {
             "AccountId" => ty == &Type::AccountId,
             "AssetDefinitionId" => ty == &Type::AssetDefinitionId,
             "AxtDescriptor" => ty == &Type::AxtDescriptor,
@@ -6844,6 +7811,8 @@ fn fixed_builtin_arg_accepts(builtin: Builtin, index: usize, descriptor: &str, t
             "Option<string>" => resolve_struct_type(ty) == Type::Option(Box::new(Type::String)),
             "Secret<int|decimal|quantity>" => crate::secret::is_secret_numeric(ty),
             "SoracloudRequest" => resolve_struct_type(ty) == Type::SoracloudRequest,
+            // Folded by `nominal_argument_word` into the host register word.
+            "NumericSpec" | "Mintable" | "SignatureScheme" => ty == &Type::Int,
             "bool" => ty == &Type::Bool,
             "bytes" => is_blob_like(ty),
             "int" => is_int_like(ty),
@@ -6875,6 +7844,8 @@ fn fixed_builtin_result_type(descriptor: &str) -> Type {
         "Option<Name>" => option(Type::Name),
         "Option<NftId>" => option(Type::NftId),
         "Option<bytes>" => option(Type::Bytes),
+        "Option<bool>" => option(Type::Bool),
+        "Option<string>" => option(Type::String),
         "Option<decimal>" => option(Type::Decimal),
         "Option<int>" => option(Type::Int),
         "Option<quantity>" => option(Type::Quantity),
@@ -6893,7 +7864,14 @@ fn analyze_fixed_builtin_call(
 ) -> Result<TypedExpr, SemanticError> {
     let message = fixed_builtin_message(builtin).expect("remaining builtin has a fixed signature");
     let signature = builtin.signature();
-    if args.len() != signature.parameters.len()
+    // Optional parameters are trailing (`T?`); omitted ones are simply absent.
+    let required = signature
+        .parameters
+        .iter()
+        .filter(|parameter| !parameter.ends_with('?'))
+        .count();
+    if args.len() < required
+        || args.len() > signature.parameters.len()
         || args
             .iter()
             .enumerate()
@@ -6932,17 +7910,16 @@ fn analyze_fixed_builtin_call(
     }
 }
 
-fn analyze_map_get_or(
+fn analyze_map_get_or_insert(
     context: &SemanticContext,
     builtin: Builtin,
     mut args: Vec<TypedExpr>,
 ) -> Result<TypedExpr, SemanticError> {
     let name = builtin.name();
-    let original_len = args.len();
-    if original_len != 2 && original_len != 3 {
+    if args.len() != 3 {
         return Err(sem_err(
             "K2003",
-            format!("{name} expects (StateMap<K,V>, K[, V])"),
+            format!("{name} expects (StateMap<K,V>, K, V); absence never defaults implicitly"),
         ));
     }
     let (key, value) = match resolve_struct_type(&args[0].ty) {
@@ -6961,32 +7938,343 @@ fn analyze_map_get_or(
     let value = resolve_struct_type(&value);
     ensure_assignable_and_coerce(&key, &mut args[1])?;
     ensure_in_memory_map_word_types(context, &args[0])?;
-    if original_len == 3 {
-        ensure_assignable_and_coerce(&value, &mut args[2])?;
-    } else {
-        match resolve_struct_type(&value) {
-            Type::Int => args.push(typed_expr(ExprKind::IntLiteral(BigInt::zero()), Type::Int)),
-            other if is_pointer_type(&other) => {
-                return Err(sem_err(
-                    "K2003",
-                    format!(
-                        "{name} requires an explicit default for pointer-valued maps (value type {})",
-                        type_name(&other)
-                    ),
-                ));
-            }
-            other => {
-                return Err(sem_err(
-                    "K2003",
-                    format!(
-                        "{name} auto-default is only available for StateMap<*,int>; provide an explicit default for value type {}",
-                        type_name(&other)
-                    ),
-                ));
-            }
+    ensure_assignable_and_coerce(&value, &mut args[2])?;
+    Ok(typed_call(name, args, value))
+}
+
+/// Check `ledger::seiyaku::grant_kotoage`/`revoke_kotoage`: the selector must be
+/// a string literal naming a kotoage (言挙げ) declared by the current seiyaku.
+fn analyze_kotoage_grant_call(
+    context: &SemanticContext,
+    builtin: Builtin,
+    args: Vec<TypedExpr>,
+) -> Result<TypedExpr, SemanticError> {
+    let kotoage = crate::glossary::by_spelling("kotoage")
+        .expect("kotoage is a branded keyword")
+        .label();
+    if args.len() != 2
+        || args[0].ty != Type::AccountId
+        || resolve_struct_type(&args[1].ty) != Type::String
+    {
+        return Err(sem_err(
+            "K2003",
+            format!(
+                "{} expects (account: AccountId, kotoage: \"selector\")",
+                builtin.source_name()
+            ),
+        ));
+    }
+    let ExprKind::String(selector) = args[1].kind() else {
+        return Err(sem_err(
+            "E_KOTOAGE_SELECTOR",
+            format!(
+                "{} takes its selector as a string literal naming a {kotoage} of this seiyaku",
+                builtin.source_name()
+            ),
+        ));
+    };
+    let modifiers = context.function_modifiers.borrow();
+    match modifiers
+        .get(selector.as_str())
+        .map(|modifiers| modifiers.kind)
+    {
+        Some(FunctionKind::Kotoage) => {}
+        Some(other) => {
+            let declared = match other {
+                FunctionKind::View => "a `view fn`",
+                FunctionKind::Private => "a private `fn`",
+                FunctionKind::Hajimari | FunctionKind::Kaizen => "a lifecycle hook",
+                FunctionKind::Kotoage => unreachable!("kotoage selectors are accepted above"),
+            };
+            return Err(sem_err(
+                "E_KOTOAGE_SELECTOR",
+                format!(
+                    "`{selector}` is {declared}; {} applies only to {kotoage} declarations",
+                    builtin.source_name()
+                ),
+            ));
+        }
+        None => {
+            let candidates = modifiers
+                .iter()
+                .filter(|(_, modifiers)| modifiers.kind == FunctionKind::Kotoage)
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>();
+            let suggestion = crate::diagnostic::suggest::closest(selector, candidates)
+                .map(|candidate| format!("; did you mean `{candidate}`?"))
+                .unwrap_or_default();
+            return Err(sem_err(
+                "E_KOTOAGE_SELECTOR",
+                format!("this seiyaku declares no {kotoage} named `{selector}`{suggestion}"),
+            ));
         }
     }
-    Ok(typed_call(name, args, value))
+    drop(modifiers);
+    Ok(typed_call(builtin.name(), args, Type::Unit))
+}
+
+/// Check `ledger::asset::register` after its `spec:` and `mintable:` arguments
+/// were folded into register words by [`nominal_argument_word`].
+fn analyze_register_asset_call(
+    builtin: Builtin,
+    args: Vec<TypedExpr>,
+) -> Result<TypedExpr, SemanticError> {
+    if args.len() != 4
+        || args[0].ty != Type::AssetDefinitionId
+        || resolve_struct_type(&args[1].ty) != Type::String
+        || !matches!(args[2].kind(), ExprKind::IntLiteral(_))
+        || !matches!(args[3].kind(), ExprKind::IntLiteral(_))
+    {
+        return Err(sem_err(
+            "K2003",
+            "ledger::asset::register expects (asset_definition: AssetDefinitionId, name: string, spec: NumericSpec::..., mintable: Mintable::...)".into(),
+        ));
+    }
+    if let ExprKind::String(name) = args[1].kind()
+        && let Err(error) = iroha_data_model::asset::definition::validate_asset_name(name)
+    {
+        return Err(sem_err(
+            "E_ASSET_NAME_INVALID",
+            format!("asset display name {error}"),
+        ));
+    }
+    Ok(typed_call(builtin.name(), args, Type::Unit))
+}
+
+/// Analyze builtin arguments whose meaning is fixed at compile time.
+///
+/// `NumericSpec`, `Mintable` and `SignatureScheme` parameters fold their
+/// compile-time nominal value into the register word the host decodes, and a
+/// string-literal JSON getter key becomes the same compile-time-validated
+/// `Name` as `Name::parse("...")`. Every other argument returns `None` and is
+/// analyzed as an ordinary expression.
+fn analyze_builtin_literal_argument(
+    context: &SemanticContext,
+    name: &str,
+    index: usize,
+    argument: &Expr,
+) -> Result<Option<TypedExpr>, SemanticError> {
+    let Some(builtin) = Builtin::from_name(name) else {
+        return Ok(None);
+    };
+    let Some(descriptor) = builtin.signature().parameters.get(index).copied() else {
+        return Ok(None);
+    };
+    if matches!(descriptor, "NumericSpec" | "Mintable" | "SignatureScheme") {
+        return nominal_argument_word(context, builtin, index, descriptor, argument).map(Some);
+    }
+    if builtin.is_payload_helper()
+        && builtin.surface() == BuiltinSurface::MethodOnly
+        && descriptor == "Name"
+        && let Expr::String(raw) = argument.kind()
+    {
+        if let Err(invalid) = id_literals::validate(
+            PointerConstructor::Name,
+            raw,
+            iroha_data_model::account::address::chain_discriminant(),
+        ) {
+            return Err(sem_err(
+                "E_INVALID_ID_LITERAL",
+                format!("JSON key {}", invalid.message),
+            ));
+        }
+        return Ok(Some(TypedExpr {
+            expr: ExprKind::Call {
+                name: PointerConstructor::Name.name().to_owned(),
+                args: vec![typed_expr(ExprKind::String(raw.clone()), Type::String)],
+            },
+            ty: Type::Name,
+        }));
+    }
+    Ok(None)
+}
+
+/// Reject a compile-time nominal value used anywhere but as the argument of
+/// the builtin parameter of its type.
+fn misplaced_nominal_value(builtin: Builtin) -> SemanticError {
+    let descriptor = builtin.signature().return_type;
+    let target = Builtin::all()
+        .filter(|candidate| candidate.surface() != BuiltinSurface::CompilerInternal)
+        .find_map(|candidate| {
+            let signature = candidate.signature();
+            signature
+                .parameters
+                .iter()
+                .position(|parameter| *parameter == descriptor)
+                .map(|index| {
+                    format!(
+                        "the `{}:` argument of `{}`",
+                        signature.parameter_names[index],
+                        candidate.source_name()
+                    )
+                })
+        })
+        .unwrap_or_else(|| "its builtin argument".to_owned());
+    SemanticError {
+        code: "E_NOMINAL_ARGUMENT",
+        message: format!(
+            "`{}` is a compile-time `{descriptor}` value; write it directly as {target}",
+            builtin.source_name()
+        ),
+    }
+}
+
+/// The source forms a compile-time nominal parameter accepts, for diagnostics.
+fn nominal_value_forms(descriptor: &str) -> String {
+    Builtin::all()
+        .filter(|builtin| {
+            builtin.is_compile_time_nominal() && builtin.signature().return_type == descriptor
+        })
+        .map(|builtin| {
+            let path = builtin.source_name();
+            let call = |arguments: &str| format!("`{path}({arguments})`");
+            if builtin.is_nominal_path() {
+                format!("`{path}`")
+            } else {
+                call(&builtin.signature().parameter_names.join(", "))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Fold a compile-time `NumericSpec`, `Mintable` or `SignatureScheme` argument
+/// into the register word shared with every contract host.
+///
+/// `Mintable` and `SignatureScheme` are compiler-owned nominal enums: a
+/// payloadless variant is a path (`Mintable::Once`), the payload variant a call
+/// (`Mintable::Limited(3)`). `NumericSpec` values are constructor calls
+/// (`NumericSpec::integer()`). Integers and runtime values are rejected, so an
+/// unknown mintability, numeric spec or signature scheme cannot be expressed.
+fn nominal_argument_word(
+    context: &SemanticContext,
+    target: Builtin,
+    index: usize,
+    descriptor: &str,
+    expression: &Expr,
+) -> Result<TypedExpr, SemanticError> {
+    use iroha_data_model::asset::definition::{Mintable, ivm_registration};
+    use iroha_primitives::numeric::NumericSpec;
+    let label = target
+        .signature()
+        .parameter_names
+        .get(index)
+        .copied()
+        .unwrap_or("argument");
+    let expected = |found: &str| SemanticError {
+        code: "E_NOMINAL_ARGUMENT",
+        message: format!(
+            "`{label}:` of `{}` takes a `{descriptor}` value written directly at the call ({}){found}",
+            target.source_name(),
+            nominal_value_forms(descriptor)
+        ),
+    };
+    let (path, args) = match expression.kind() {
+        Expr::Ident(path) => (path.as_str(), None),
+        Expr::Call {
+            name,
+            args,
+            implicit_receiver: false,
+            ..
+        } => (name.as_str(), Some(args)),
+        _ => return Err(expected("")),
+    };
+    let Some(builtin) = Builtin::nominal_value(path)
+        .filter(|builtin| builtin.signature().return_type == descriptor)
+    else {
+        let found = Builtin::all()
+            .filter(|builtin| {
+                builtin.is_compile_time_nominal() && builtin.signature().return_type == descriptor
+            })
+            .find(|builtin| builtin.source_name().eq_ignore_ascii_case(path))
+            .map(|builtin| format!("; did you mean `{}`?", builtin.source_name()))
+            .unwrap_or_default();
+        return Err(expected(&found));
+    };
+    let args: &[Expr] = match (builtin.is_nominal_path(), args) {
+        (true, None) => &[],
+        (false, Some(args)) => args,
+        (true, Some(_)) => {
+            return Err(SemanticError {
+                code: "E_NOMINAL_ARGUMENT",
+                message: format!(
+                    "`{path}` is a value, not a call; write `{path}` without parentheses"
+                ),
+            });
+        }
+        (false, None) => {
+            return Err(SemanticError {
+                code: "E_NOMINAL_ARGUMENT",
+                message: format!("`{path}` is a call; write `{path}(...)`"),
+            });
+        }
+    };
+    let arity = builtin.signature().parameters.len();
+    if args.len() != arity {
+        return Err(SemanticError {
+            code: "E_NOMINAL_ARGUMENT",
+            message: format!(
+                "`{}` expects {arity} argument{}",
+                builtin.source_name(),
+                if arity == 1 { "" } else { "s" }
+            ),
+        });
+    }
+    let constant = |range: core::ops::RangeInclusive<u64>| -> Result<u64, SemanticError> {
+        let value = static_integer_constant(context, &args[0]).map_err(|error| SemanticError {
+            code: "E_NOMINAL_ARGUMENT",
+            message: format!(
+                "`{}` requires a compile-time integer: {}",
+                builtin.source_name(),
+                error.message
+            ),
+        })?;
+        literal_int(&value)
+            .and_then(|value| value.try_to_u64())
+            .filter(|value| range.contains(value))
+            .ok_or_else(|| SemanticError {
+                code: "E_NOMINAL_ARGUMENT",
+                message: format!(
+                    "`{}` argument must be in {}..={}",
+                    builtin.source_name(),
+                    range.start(),
+                    range.end()
+                ),
+            })
+    };
+    let word = match builtin {
+        Builtin::NumericSpecUnconstrained => {
+            ivm_registration::numeric_spec_word(NumericSpec::unconstrained())
+        }
+        Builtin::NumericSpecInteger => ivm_registration::numeric_spec_word(NumericSpec::integer()),
+        Builtin::NumericSpecFractional => {
+            let scale = constant(0..=u64::from(ivm_registration::MAX_SCALE))?;
+            let scale = u32::try_from(scale).expect("scale range fits u32");
+            ivm_registration::numeric_spec_word(NumericSpec::fractional(scale))
+        }
+        Builtin::MintableInfinitely => ivm_registration::mintable_word(Mintable::Infinitely),
+        Builtin::MintableOnce => ivm_registration::mintable_word(Mintable::Once),
+        Builtin::MintableNot => ivm_registration::mintable_word(Mintable::Not),
+        Builtin::MintableLimited => {
+            let tokens = constant(1..=u64::from(u32::MAX))?;
+            let tokens = u32::try_from(tokens).expect("token range fits u32");
+            ivm_registration::mintable_word(
+                Mintable::limited_from_u32(tokens).expect("token range excludes zero"),
+            )
+        }
+        Builtin::SignatureSchemeEd25519
+        | Builtin::SignatureSchemeSecp256k1
+        | Builtin::SignatureSchemeMlDsa => u64::from(
+            builtin
+                .signature_scheme_code()
+                .expect("signature scheme value has a host code"),
+        ),
+        _ => return Err(expected("")),
+    };
+    Ok(typed_expr(
+        ExprKind::IntLiteral(BigInt::from(word)),
+        Type::Int,
+    ))
 }
 
 fn validate_builtin_mode(context: &SemanticContext, builtin: Builtin) -> Result<(), SemanticError> {
@@ -7022,7 +8310,7 @@ fn validate_builtin_mode(context: &SemanticContext, builtin: Builtin) -> Result<
             return Err(SemanticError {
                 code: "E_TEST_BUILTIN_CONTEXT",
                 message: format!(
-                    "builtin `{}` is available only inside a #[test] function",
+                    "builtin `{}` is available only in #[test] functions and in helpers of a `koto_test` module",
                     builtin.source_name()
                 ),
             });
@@ -7092,6 +8380,15 @@ fn analyze_surface_builtin_call(
             if arg_ty != Type::String {
                 return Err(sem_err("K2003", format!("{name} expects string")));
             }
+            if let ExprKind::String(raw) = arg_typed[0].kind()
+                && let Err(invalid) = id_literals::validate(
+                    constructor,
+                    raw,
+                    iroha_data_model::account::address::chain_discriminant(),
+                )
+            {
+                return Err(sem_err("E_INVALID_ID_LITERAL", invalid.message));
+            }
             if constructor == PointerConstructor::Json {
                 let ExprKind::String(raw) = arg_typed[0].kind() else {
                     return Err(sem_err(
@@ -7108,38 +8405,6 @@ fn analyze_surface_builtin_call(
                 },
                 ty,
             })
-        }
-        Builtin::GetOrDefault => {
-            if arg_typed.len() != 3 {
-                return Err(sem_err(
-                    "K2003",
-                    "get_or_default expects (StateMap<K,V>, K, V)".into(),
-                ));
-            }
-            let (key_ty, value_ty) = match &arg_typed[0].ty {
-                Type::StateMap(k, v) => (k.as_ref().clone(), v.as_ref().clone()),
-                other => {
-                    return Err(SemanticError {
-                        code: "K2003",
-                        message: format!(
-                            "get_or_default expects StateMap<K,V> as first arg, got {}",
-                            type_name(other)
-                        ),
-                    });
-                }
-            };
-            ensure_assignable_and_coerce(&key_ty, &mut arg_typed[1])?;
-            ensure_assignable_and_coerce(&value_ty, &mut arg_typed[2])?;
-            ensure_in_memory_map_word_types(context, &arg_typed[0])?;
-            let value_ty = match resolve_struct_type(&arg_typed[0].ty) {
-                Type::StateMap(_, v) => *v,
-                _ => Type::Int,
-            };
-            Ok(typed_call(
-                builtin.name(),
-                arg_typed,
-                resolve_struct_type(&value_ty),
-            ))
         }
         Builtin::Contains => {
             if arg_typed.len() != 2 {
@@ -7163,18 +8428,22 @@ fn analyze_surface_builtin_call(
                 }),
             }
         }
-        Builtin::GetOr => analyze_map_get_or(context, builtin, arg_typed),
-        Builtin::Ensure => {
+        Builtin::GetOrInsert => {
             let in_view = context
                 .current_function_modifiers
                 .borrow()
                 .as_ref()
                 .is_some_and(|modifiers| modifiers.kind == FunctionKind::View);
             if in_view {
-                return Err(sem_err("K2004", "`view fn` functions cannot use mutating map helper `ensure`; use `get_or` instead".into()));
+                return Err(sem_err("K2004", "`view fn` functions cannot use the state-writing map helper `get_or_insert`; read with `map.get(key)` and handle `Option::none`".into()));
             }
-            analyze_map_get_or(context, builtin, arg_typed)
+            analyze_map_get_or_insert(context, builtin, arg_typed)
         }
+        Builtin::RegisterAsset => analyze_register_asset_call(builtin, arg_typed),
+        Builtin::GrantContractEntrypoint | Builtin::RevokeContractEntrypoint => {
+            analyze_kotoage_grant_call(context, builtin, arg_typed)
+        }
+        builtin if builtin.is_compile_time_nominal() => Err(misplaced_nominal_value(builtin)),
         Builtin::StateMapRemove => {
             if arg_typed.len() != 2 {
                 return Err(sem_err(
@@ -7368,28 +8637,6 @@ fn analyze_surface_builtin_call(
                 return Err(sem_err(
                     "K2003",
                     "sm2_verify optional distid must be provided as bytes pointer".into(),
-                ));
-            }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Bool))
-        }
-        Builtin::VerifySignature => {
-            if arg_typed.len() != 4 {
-                return Err(sem_err(
-                    "K2003",
-                    "verify_signature expects (bytes, bytes, bytes, int) arguments".into(),
-                ));
-            }
-            if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "verify_signature expects message, signature, and public key as bytes pointers"
-                        .into(),
-                });
-            }
-            if !is_int_like(&arg_typed[3].ty) {
-                return Err(sem_err(
-                    "K2003",
-                    "verify_signature expects scheme code as int".into(),
                 ));
             }
             Ok(typed_call(builtin.name(), arg_typed, Type::Bool))
@@ -7704,7 +8951,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "E_QUANTITY_REMAINDER",
-                    message: "quantity does not support `%`; use exact `/` or quantity.div_round"
+                    message: "quantity does not support `%`; divide with an explicit rounding mode, for example `value.div_round(divisor: d, scale: 6, mode: Rounding::floor)`"
                         .into(),
                 });
             }
@@ -7779,6 +9026,21 @@ fn analyze_surface_builtin_call(
                 ));
             }
             Ok(typed_call(builtin.name(), arg_typed, Type::Json))
+        }
+        Builtin::TestSetBlockHeight
+        | Builtin::TestAdvanceBlocks
+        | Builtin::TestSetTransactionTimeMs => {
+            if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: format!(
+                        "`{}` expects one non-negative int ({})",
+                        builtin.source_name(),
+                        builtin.signature().parameter_names[0]
+                    ),
+                });
+            }
+            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
         }
         Builtin::TestInvokeEntrypoint
         | Builtin::TestInvokeEntrypointAs
@@ -8454,18 +9716,13 @@ fn analyze_list_method_call(
         .iter()
         .map(|name| (*name).to_owned())
         .collect::<Vec<_>>();
-    let positional_prefix = usize::from(matches!(
-        source_name,
-        STATE_MAP_GET_INTRINSIC | "get" | "push" | "try_push" | "contains" | "take"
-    ));
-    let plan = match reorder_call_arguments(
+    let plan = match reorder_flexible_call_arguments(
         source_name,
         args,
         argument_names,
         true,
         &parameter_names,
         &vec![true; parameter_names.len()],
-        positional_prefix,
     ) {
         Ok(plan) => plan,
         Err(error) => return Some(Err(error)),
@@ -8672,14 +9929,13 @@ fn analyze_decimal_to_int_round_call(
         return None;
     }
     let names = ["value".to_owned(), "mode".to_owned()];
-    let plan = match reorder_call_arguments(
+    let plan = match reorder_flexible_call_arguments(
         source_name,
         args,
         argument_names,
         false,
         &names,
         &[true, true],
-        1,
     ) {
         Ok(plan) => plan,
         Err(error) => return Some(Err(error)),
@@ -8769,7 +10025,8 @@ fn analyze_numeric_mul_div_method_call(
             }
         };
         let names = ["multiplier", "divisor", "scale", "mode"].map(str::to_owned);
-        let plan = reorder_call_arguments(name, args, argument_names, true, &names, &[true; 4], 0)?;
+        let plan =
+            reorder_flexible_call_arguments(name, args, argument_names, true, &names, &[true; 4])?;
         if plan.ordered.len() != 5 {
             return Err(sem_err(
                 "E_NUMERIC_ROUND_ARITY",
@@ -8930,14 +10187,13 @@ fn analyze_numeric_round_method_call(
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    let plan = match reorder_call_arguments(
+    let plan = match reorder_flexible_call_arguments(
         display_name,
         args,
         argument_names,
         true,
         &parameter_names,
         &[true, true, true],
-        0,
     ) {
         Ok(plan) => plan,
         Err(error) => return Some(Err(error)),
@@ -9143,7 +10399,11 @@ fn analyze_expr_expected(
     vars: &mut HashMap<String, Type>,
     expected: Option<&Type>,
 ) -> Result<TypedExpr, SemanticError> {
-    let result = analyze_expr_expected_inner(context, expr, vars, expected).and_then(|typed| {
+    // Blocks nested in expressions are analyzed all-or-nothing.
+    let recovery = context.statement_recovery.replace(false);
+    let result = analyze_expr_expected_inner(context, expr, vars, expected);
+    context.statement_recovery.set(recovery);
+    let result = result.and_then(|typed| {
         if matches!(
             typed.kind(),
             ExprKind::JsonObject(_) | ExprKind::JsonArray(_)
@@ -9667,12 +10927,16 @@ fn analyze_expr_expected_inner(
                         }
                         typed_error_value(context, name, code)
                     }
-                    ResolvedValueTarget::Intrinsic => Err(SemanticError {
-                        code: "E_INTRINSIC_CONTEXT",
-                        message: format!(
-                            "intrinsic value `{name}` is only valid in its declared operation context"
-                        ),
-                    }),
+                    ResolvedValueTarget::Intrinsic => Err(Builtin::nominal_value(name)
+                        .map_or_else(
+                            || SemanticError {
+                                code: "E_INTRINSIC_CONTEXT",
+                                message: format!(
+                                    "intrinsic value `{name}` is only valid in its declared operation context"
+                                ),
+                            },
+                            misplaced_nominal_value,
+                        )),
                 };
             }
             if let Some(ty) = vars.get(name).cloned() {
@@ -9815,6 +11079,10 @@ fn analyze_expr_expected_inner(
                     });
                 } else {
                     let avail: Vec<&str> = fields.iter().map(|(f, _)| f.as_str()).collect();
+                    context.capture_help(
+                        context.expression_source(expr),
+                        type_help::unknown_field_help(name, field, &avail),
+                    );
                     return Err(SemanticError {
                         code: "K2002",
                         message: format!(
@@ -9936,7 +11204,7 @@ fn analyze_expr_expected_inner(
             {
                 return Err(SemanticError {
                     code: "E_QUANTITY_REMAINDER",
-                    message: "quantity does not support `%`; use exact `/` or quantity.div_round"
+                    message: "quantity does not support `%`; divide with an explicit rounding mode, for example `value.div_round(divisor: d, scale: 6, mode: Rounding::floor)`"
                         .into(),
                 });
             }
@@ -9947,12 +11215,16 @@ fn analyze_expr_expected_inner(
                     reject_implicit_int_decimal_mix(&left_t.ty, &right_t.ty)?;
                     let Some(result_ty) = arithmetic_result_type(*op, &left_t.ty, &right_t.ty)
                     else {
+                        context.capture_help(
+                            context.expression_source(expr),
+                            type_help::operator_help(*op, &left_t.ty, &right_t.ty),
+                        );
                         return Err(SemanticError {
                             code: "K2003",
-                            message: format!(
-                                "operator {op:?} is not defined for {} and {}",
-                                type_name(&left_t.ty),
-                                type_name(&right_t.ty),
+                            message: type_help::operator_message(
+                                type_help::binary_symbol(*op),
+                                &left_t.ty,
+                                &right_t.ty,
                             ),
                         });
                     };
@@ -9977,7 +11249,12 @@ fn analyze_expr_expected_inner(
                     if left_t.ty != Type::Bool || right_t.ty != Type::Bool {
                         return Err(SemanticError {
                             code: "K2003",
-                            message: format!("{op:?} expects bool operands"),
+                            message: format!(
+                                "`{}` expects `bool` operands, found {} and {}",
+                                type_help::binary_symbol(*op),
+                                type_help::quoted(&left_t.ty),
+                                type_help::quoted(&right_t.ty),
+                            ),
                         });
                     }
                     Ok(TypedExpr {
@@ -9999,7 +11276,12 @@ fn analyze_expr_expected_inner(
                     {
                         return Err(SemanticError {
                             code: "K2003",
-                            message: "type mismatch in equality".into(),
+                            message: format!(
+                                "`{}` compares values of one type, found {} and {}",
+                                type_help::binary_symbol(*op),
+                                type_help::quoted(&left_t.ty),
+                                type_help::quoted(&right_t.ty),
+                            ),
                         });
                     }
                     if !is_eq_comparable_type(&left_t.ty) {
@@ -10026,9 +11308,10 @@ fn analyze_expr_expected_inner(
                         return Err(SemanticError {
                             code: "K2003",
                             message: format!(
-                                "comparison {op:?} is not defined for {} and {}",
-                                type_name(&left_t.ty),
-                                type_name(&right_t.ty),
+                                "comparison `{}` is not defined for {} and {}",
+                                type_help::binary_symbol(*op),
+                                type_help::quoted(&left_t.ty),
+                                type_help::quoted(&right_t.ty),
                             ),
                         });
                     };
@@ -10077,6 +11360,17 @@ fn analyze_expr_expected_inner(
                     .iter()
                     .any(|(declared, _)| declared == &field.name)
                 {
+                    if let Some(suggestion) = crate::diagnostic::suggest::closest(
+                        &field.name,
+                        declared_fields
+                            .iter()
+                            .map(|(declared, _)| declared.as_str()),
+                    ) {
+                        context.capture_help(
+                            context.expression_source(&field.value),
+                            format!("did you mean `{suggestion}`?"),
+                        );
+                    }
                     return Err(SemanticError {
                         code: "E_UNKNOWN_STRUCT_FIELD",
                         message: format!("struct `{name}` has no field named `{}`", field.name),
@@ -10263,15 +11557,59 @@ fn analyze_expr_expected_inner(
                     .iter()
                     .map(|parameter| !parameter.ends_with('?'))
                     .collect::<Vec<_>>();
-                argument_plan = reorder_call_arguments(
+                argument_plan = reorder_builtin_call_arguments(
+                    builtin,
                     &source_name,
                     args,
                     argument_names.as_deref(),
                     *implicit_receiver,
                     &parameter_names,
                     &required,
-                    builtin_positional_prefix(builtin, *implicit_receiver),
-                )?;
+                )
+                .inspect_err(|error| {
+                    if error.code == "E_NAMED_ARGUMENTS_REQUIRED" && !*implicit_receiver {
+                        let fix = labelled_builtin_call_fix(
+                            &source_name,
+                            args,
+                            argument_names.as_deref(),
+                            &parameter_names,
+                        );
+                        let example = fix.clone().unwrap_or_else(|| {
+                            format!(
+                                "{source_name}({})",
+                                parameter_names
+                                    .iter()
+                                    .map(|name| format!("{name}: ..."))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        });
+                        if let Some(primary) = context.expression_source(expr) {
+                            context.capture_structured(
+                                crate::semantic_diagnostics::SemanticDiagnostic::at(
+                                    primary,
+                                    fix.map(|replacement| {
+                                        crate::semantic_diagnostics::SemanticFix::Replace {
+                                            replacement,
+                                        }
+                                    }),
+                                )
+                                .with_help(format!(
+                                    "`{source_name}` takes labelled arguments: `{example}`. A variable spelled exactly like a label may be passed bare."
+                                )),
+                            );
+                        }
+                    }
+                    capture_named_argument_help(
+                        context,
+                        expr,
+                        error,
+                        &source_name,
+                        argument_names.as_deref(),
+                        args.len().saturating_sub(usize::from(*implicit_receiver)),
+                        &parameter_names,
+                    );
+                })?;
             } else if let Some(signature) = context.function_params.borrow().get(&name).cloned() {
                 let receiver_count = usize::from(*implicit_receiver);
                 if argument_names
@@ -10322,7 +11660,18 @@ fn analyze_expr_expected_inner(
                     &parameter_names,
                     &required,
                     positional_prefix,
-                )?;
+                )
+                .inspect_err(|error| {
+                    capture_named_argument_help(
+                        context,
+                        expr,
+                        error,
+                        &source_name,
+                        Some(&optional_labels),
+                        optional_labels.len(),
+                        &parameter_names,
+                    );
+                })?;
                 argument_plan.is_named = first_named != usize::MAX;
             } else if argument_names.is_some() {
                 let intrinsic_names: &[&str] = match name.as_str() {
@@ -10344,14 +11693,13 @@ fn analyze_expr_expected_inner(
                         .iter()
                         .map(|name| (*name).to_owned())
                         .collect::<Vec<_>>();
-                    argument_plan = reorder_call_arguments(
+                    argument_plan = reorder_flexible_call_arguments(
                         &source_name,
                         args,
                         argument_names.as_deref(),
                         *implicit_receiver,
                         &parameter_names,
                         &vec![true; parameter_names.len()],
-                        parameter_names.len(),
                     )?;
                 }
             }
@@ -10372,49 +11720,67 @@ fn analyze_expr_expected_inner(
                     Builtin::TestInvokeEntrypoint,
                     analyze_invoke_entrypoint_call(context, args, vars),
                 )
-                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
+                .and_then(|typed| append_test_call_site(context, expr, typed));
             }
             if name == "invoke_entrypoint_as" {
                 return canonicalize_builtin_result(
                     Builtin::TestInvokeEntrypointAs,
                     analyze_invoke_entrypoint_as_call(context, args, vars),
                 )
-                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
+                .and_then(|typed| append_test_call_site(context, expr, typed));
             }
             if name == "expect_reject_as" {
                 return canonicalize_builtin_result(
                     Builtin::TestExpectRejectAs,
                     analyze_expect_reject_as_call(context, args, vars),
                 )
-                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
+                .and_then(|typed| append_test_call_site(context, expr, typed));
             }
             if name == "expect_any_reject_as" {
                 return canonicalize_builtin_result(
                     Builtin::TestExpectAnyRejectAs,
                     analyze_rejection_expectation_call(context, args, vars, true),
                 )
-                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
+                .and_then(|typed| append_test_call_site(context, expr, typed));
             }
             if name == "actor_account" {
                 return canonicalize_builtin_result(
                     Builtin::TestActorAccount,
                     analyze_actor_account_call(context, args),
                 )
-                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
+                .and_then(|typed| append_test_call_site(context, expr, typed));
             }
             if name == "actor_public_key" {
                 return canonicalize_builtin_result(
                     Builtin::TestActorPublicKey,
                     analyze_actor_public_key_call(context, args),
                 )
-                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
+                .and_then(|typed| append_test_call_site(context, expr, typed));
             }
             if name == "actor_sign" {
                 return canonicalize_builtin_result(
                     Builtin::TestActorSign,
                     analyze_actor_sign_call(context, args, vars),
                 )
-                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
+                .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
+                .and_then(|typed| append_test_call_site(context, expr, typed));
+            }
+            if matches!(name.as_str(), "assert" | "assert_eq") {
+                let builtin = if name == "assert" {
+                    Builtin::Assert
+                } else {
+                    Builtin::AssertEq
+                };
+                return canonicalize_builtin_result(
+                    builtin,
+                    analyze_test_assertion_call(context, expr, builtin, &argument_plan, vars),
+                );
             }
             // analyze builtin calls
             let mut typed_slots = (0..args.len()).map(|_| None).collect::<Vec<_>>();
@@ -10447,6 +11813,12 @@ fn analyze_expr_expected_inner(
                         .and_then(|parameters| parameters.get(index))
                         .map(|parameter| &parameter.ty)
                 });
+                if let Some(typed) =
+                    analyze_builtin_literal_argument(context, &name, index, argument)?
+                {
+                    typed_slots[index] = Some(typed);
+                    continue;
+                }
                 typed_slots[index] =
                     Some(analyze_expr_expected(context, argument, vars, expected)?);
             }
@@ -10471,9 +11843,22 @@ fn analyze_expr_expected_inner(
                     .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
             if let Some(builtin) = Builtin::from_name(&name) {
+                let argument_types = arg_typed
+                    .iter()
+                    .map(|argument| argument.ty.clone())
+                    .collect::<Vec<_>>();
                 return canonicalize_builtin_result(
                     builtin,
-                    analyze_surface_builtin_call(context, builtin, arg_typed, expected),
+                    analyze_surface_builtin_call(context, builtin, arg_typed, expected)
+                        .inspect_err(|error| {
+                            capture_builtin_argument_help(
+                                context,
+                                builtin,
+                                error,
+                                args,
+                                &argument_types,
+                            );
+                        }),
                 )
                 .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
@@ -10498,6 +11883,10 @@ fn analyze_expr_expected_inner(
                             function_is_runtime_entrypoint(&signature.modifiers)
                         });
                     if local_runtime_entrypoint || external_runtime_entrypoint {
+                        context.capture_help(
+                            context.expression_source(expr),
+                            type_help::runtime_entrypoint_call_help(&name),
+                        );
                         return Err(SemanticError {
                             code: "K2004",
                             message: format!(
@@ -10523,7 +11912,9 @@ fn analyze_expr_expected_inner(
                             ),
                         });
                     }
-                    for (arg, param) in arg_typed.iter_mut().zip(signature.iter()) {
+                    for (index, (arg, param)) in
+                        arg_typed.iter_mut().zip(signature.iter()).enumerate()
+                    {
                         if param.is_state {
                             if !is_state_handle_expr(context, arg) {
                                 return Err(SemanticError {
@@ -10542,7 +11933,25 @@ fn analyze_expr_expected_inner(
                                         .into(),
                             });
                         }
-                        ensure_assignable_and_coerce(&param.ty, arg)?;
+                        if let Err(mut error) = ensure_assignable_and_coerce(&param.ty, arg) {
+                            if error.code == "E_TYPE_ANNOTATION_MISMATCH" {
+                                error.code = "K2003";
+                                error.message = format!(
+                                    "argument `{}` of `{source_name}`: {}",
+                                    param.name, error.message
+                                );
+                                context.capture_help(
+                                    args.get(index)
+                                        .and_then(|argument| context.expression_source(argument)),
+                                    format!(
+                                        "`{source_name}` declares `{} {}`; pass a value of that type or convert it explicitly.",
+                                        render_type_name(&param.ty),
+                                        param.name
+                                    ),
+                                );
+                            }
+                            return Err(error);
+                        }
                     }
                     let ret_ty = context
                         .function_returns
@@ -10795,14 +12204,14 @@ fn analyze_const_expr_inner(
                 .iter()
                 .map(|name| (*name).to_owned())
                 .collect::<Vec<_>>();
-            let plan = reorder_call_arguments(
+            let plan = reorder_builtin_call_arguments(
+                builtin,
                 name,
                 args,
                 argument_names.as_deref(),
                 *implicit_receiver,
                 &names,
                 &vec![true; names.len()],
-                builtin_positional_prefix(builtin, *implicit_receiver),
             )?;
             let mut arguments = vec![None; plan.ordered.len()];
             for index in &plan.evaluation_order {
@@ -10834,9 +12243,22 @@ fn analyze_const_expr_inner(
                 ));
             }
             if matches!(builtin, Builtin::PointerConstructor(_)) {
+                let argument_types = arguments
+                    .iter()
+                    .map(|argument| argument.ty.clone())
+                    .collect::<Vec<_>>();
                 canonicalize_builtin_result(
                     builtin,
-                    analyze_surface_builtin_call(context, builtin, arguments, expected),
+                    analyze_surface_builtin_call(context, builtin, arguments, expected)
+                        .inspect_err(|error| {
+                            capture_builtin_argument_help(
+                                context,
+                                builtin,
+                                error,
+                                &plan.ordered,
+                                &argument_types,
+                            );
+                        }),
                 )
             } else {
                 analyze_fixed_builtin_call(builtin, arguments)
@@ -10858,7 +12280,7 @@ fn analyze_const_expr_inner(
             {
                 return Err(SemanticError {
                     code: "E_QUANTITY_REMAINDER",
-                    message: "quantity does not support `%`; use exact `/` or quantity.div_round"
+                    message: "quantity does not support `%`; divide with an explicit rounding mode, for example `value.div_round(divisor: d, scale: 6, mode: Rounding::floor)`"
                         .into(),
                 });
             }
@@ -11257,7 +12679,7 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
                 return Err(SemanticError {
                     code: "E_TYPE_ANNOTATION_MISMATCH",
                     message: format!(
-                        "type annotation mismatch: expected tuple of length {}, got {}",
+                        "expected a tuple of length {}, found one of length {}",
                         exp_elems.len(),
                         act_elems.len()
                     ),
@@ -11278,9 +12700,9 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
         _ => Err(SemanticError {
             code: "E_TYPE_ANNOTATION_MISMATCH",
             message: format!(
-                "type annotation mismatch: expected {}, got {}",
-                type_name(&expected),
-                type_name(&actual)
+                "expected {}, found {}",
+                type_help::quoted(&expected),
+                type_help::quoted(&actual)
             ),
         }),
     }
@@ -11384,6 +12806,38 @@ fn exact_numeric_literal_expression(expr: &TypedExpr) -> bool {
         } => exact_numeric_literal_expression(expr),
         _ => false,
     }
+}
+/// Check an assignment to a local, explaining inferred types when they do not fit.
+fn inferred_assignment(
+    context: &SemanticContext,
+    statement: &Statement,
+    name: &str,
+    expected: &Type,
+    value: &mut TypedExpr,
+) -> Result<(), SemanticError> {
+    let Err(mut error) = ensure_assignable_and_coerce(expected, value) else {
+        return Ok(());
+    };
+    if error.code == "E_TYPE_ANNOTATION_MISMATCH"
+        && let Some(label) = context.inferred_local_label(name, expected)
+    {
+        error.code = "K2003";
+        error.message = format!(
+            "`{name}` has inferred type {}, so it cannot be assigned {}",
+            type_help::quoted(expected),
+            type_help::quoted(&value.ty)
+        );
+        if let Some(primary) = context.statement_source(statement) {
+            let mut diagnostic = crate::semantic_diagnostics::SemanticDiagnostic::at(primary, None)
+                .with_help(format!(
+                    "Declare the type you need at the binding, for example `var {} {name} = ...;`.",
+                    render_type_name(&value.ty)
+                ));
+            diagnostic.labels.push(label);
+            context.capture_structured(diagnostic);
+        }
+    }
+    Err(error)
 }
 fn assign_op_to_binary(op: AssignOp) -> Option<BinaryOp> {
     match op {
@@ -11549,11 +13003,63 @@ pub struct TypedFunction {
     pub name_source: Option<crate::source::SourceRange>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct TypedBlock {
     pub statements: Vec<TypedStatement>,
     /// Final expression without a semicolon.
     pub tail: Option<Box<TypedExpr>>,
+    /// Source ranges of the statements and tail, used only for diagnostics.
+    ///
+    /// Provenance never participates in typed-HIR equality, lowering, or
+    /// artifact identity.
+    pub(crate) provenance: TypedBlockProvenance,
+}
+impl TypedBlock {
+    /// Construct a block without source provenance.
+    #[must_use]
+    pub fn new(statements: Vec<TypedStatement>, tail: Option<Box<TypedExpr>>) -> Self {
+        Self {
+            statements,
+            tail,
+            provenance: TypedBlockProvenance::default(),
+        }
+    }
+    /// Source range of the AST statement that produced `statements[index]`.
+    pub(crate) fn statement_source(&self, index: usize) -> Option<crate::source::SourceRange> {
+        self.provenance.statements.get(index).copied().flatten()
+    }
+    /// Source range of the tail expression.
+    pub(crate) fn tail_source(&self) -> Option<crate::source::SourceRange> {
+        self.provenance.tail
+    }
+    /// Insert compiler-created statements before the block's own statements.
+    ///
+    /// The inserted statements have no source of their own, so provenance stays
+    /// aligned: `statement_source(i)` still names the AST statement that
+    /// produced `statements[i]`.
+    pub(crate) fn prepend_unsourced(&mut self, mut statements: Vec<TypedStatement>) {
+        let count = statements.len();
+        statements.append(&mut self.statements);
+        self.statements = statements;
+        if !self.provenance.statements.is_empty() {
+            self.provenance
+                .statements
+                .splice(0..0, std::iter::repeat_n(None, count));
+        }
+    }
+}
+impl PartialEq for TypedBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.statements == other.statements && self.tail == other.tail
+    }
+}
+/// Diagnostic-only source provenance retained beside one typed block.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TypedBlockProvenance {
+    /// One entry per typed statement; desugared statements share their AST source.
+    pub(crate) statements: Vec<Option<crate::source::SourceRange>>,
+    /// Source of the block tail expression.
+    pub(crate) tail: Option<crate::source::SourceRange>,
 }
 
 pub enum TypedStatement {
@@ -11731,7 +13237,7 @@ fn expr_effects(context: &SemanticContext, expression: &TypedExpr) -> FunctionEf
                 effects.host_side_effects = builtin_effects.host_side_effects;
                 effects.emits_instructions = builtin_effects.emits_instructions;
                 effects.mutates_durable_state = builtin_effects.mutates_durable_state;
-                if builtin == Builtin::Ensure {
+                if builtin == Builtin::GetOrInsert {
                     effects.mutates_durable_state |= args
                         .first()
                         .is_some_and(|arg| typed_map_expr_is_state(context, arg));
@@ -12044,7 +13550,7 @@ fn collect_state_accesses_expr(
         ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
             if matches!(
                 Builtin::from_name(name),
-                Some(Builtin::Ensure | Builtin::StateMapRemove)
+                Some(Builtin::GetOrInsert | Builtin::StateMapRemove)
             ) && let Some(map_name) = args.first().and_then(|argument| match argument.kind() {
                 ExprKind::Ident(map_name) => Some(map_name),
                 _ => None,
@@ -12388,37 +13894,6 @@ fn describe_view_violation(effect: FunctionEffects) -> &'static str {
     } else {
         "host side effects"
     }
-}
-fn find_first_view_violation(
-    root: &str,
-    summaries: &HashMap<String, FunctionSummary>,
-    effects: &HashMap<String, FunctionEffects>,
-) -> Option<(String, &'static str)> {
-    let mut visited = HashSet::new();
-    let mut stack = vec![root.to_owned()];
-    while let Some(name) = stack.pop() {
-        if !visited.insert(name.clone()) {
-            continue;
-        }
-        let summary = summaries.get(&name)?;
-        if summary.direct_effects.forbids_view() {
-            return Some((name, describe_view_violation(summary.direct_effects)));
-        }
-        let mut callees = summary
-            .calls
-            .iter()
-            .filter(|callee| {
-                effects
-                    .get(*callee)
-                    .copied()
-                    .is_some_and(FunctionEffects::forbids_view)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        callees.reverse();
-        stack.extend(callees);
-    }
-    None
 }
 fn validate_scalar_state_initialization(
     context: &SemanticContext,
@@ -13158,44 +14633,6 @@ fn compute_definite_state_write_summaries(
             .into(),
     })
 }
-fn enforce_permission_requirements(
-    context: &SemanticContext,
-    items: &[TypedItem],
-) -> Result<(), SemanticError> {
-    let summaries = context.function_summaries.borrow().clone();
-    let effects = compute_transitive_effects(&summaries);
-    for func in items.iter().map(|item| match item {
-        TypedItem::Function(func) => func,
-    }) {
-        if func.modifiers.kind == FunctionKind::View
-            && let Some((offender, effect_kind)) =
-                find_first_view_violation(&func.name, &summaries, &effects)
-        {
-            let message = if offender == func.name {
-                format!("view function `{}` cannot perform {effect_kind}", func.name)
-            } else {
-                format!(
-                    "view function `{}` cannot call `{offender}` because `{offender}` performs {effect_kind}",
-                    func.name
-                )
-            };
-            return Err(SemanticError {
-                code: "K2004",
-                message,
-            });
-        }
-        if func.modifiers.kind == FunctionKind::Kotoage && func.modifiers.permission.is_none() {
-            return Err(SemanticError {
-                code: "K2004",
-                message: format!(
-                    "kotoage function `{}` requires `authorize(\"Permission\")`",
-                    func.name
-                ),
-            });
-        }
-    }
-    Ok(())
-}
 
 #[cfg(test)]
 use kotodama_surface::source_policy::{
@@ -13258,10 +14695,7 @@ mod tests {
             name: "wide".to_owned(),
             params: Vec::new(),
             param_types: Vec::new(),
-            body: TypedBlock {
-                statements,
-                tail: None,
-            },
+            body: TypedBlock::new(statements, None),
             ret_ty: None,
             modifiers: FunctionModifiers::default(),
             location: SourceLocation { line: 1, column: 1 },
@@ -13335,17 +14769,14 @@ mod tests {
                         expr: ExprKind::Bool(true),
                         ty: Type::Bool,
                     }),
-                    then_branch: TypedBlock {
-                        statements: vec![TypedStatement::Expr(expression)],
-                        tail: None,
-                    },
-                    else_branch: TypedBlock {
-                        statements: Vec::new(),
-                        tail: Some(Box::new(TypedExpr {
+                    then_branch: TypedBlock::new(vec![TypedStatement::Expr(expression)], None),
+                    else_branch: TypedBlock::new(
+                        Vec::new(),
+                        Some(Box::new(TypedExpr {
                             expr: ExprKind::IntLiteral(BigInt::zero()),
                             ty: Type::Int,
                         })),
-                    },
+                    ),
                 },
                 ty: Type::Unit,
             };
@@ -13719,20 +15150,49 @@ mod tests {
         )
         .expect_err("removed test calls must take precedence over intrinsic classification");
         assert_eq!(error.code, "E_TEST_ONLY_PRODUCTION");
+        assert!(
+            error
+                .message
+                .starts_with("`retained_helper` belongs to the deployable seiyaku"),
+            "{}",
+            error.message
+        );
+        let test_builtin = TypedExpr {
+            expr: ExprKind::Call {
+                name: "assert".to_owned(),
+                args: Vec::new(),
+            },
+            ty: Type::Unit,
+        };
+        let error = validate_production_projection_expr(
+            &test_builtin,
+            "retained_helper",
+            &retained,
+            &removed,
+            false,
+        )
+        .expect_err("deployable helpers cannot call test builtins");
+        assert_eq!(error.code, "E_TEST_ONLY_PRODUCTION");
+        assert!(
+            error.message.contains("test-only builtin `test::assert`")
+                && error
+                    .message
+                    .ends_with("move the helper into a `*.test.ko` module"),
+            "{}",
+            error.message
+        );
     }
     #[test]
     fn pending_diagnostic_fills_first_spanless_failure_without_masking_structured_failure() {
         let source = crate::source::SourceId(9);
-        let structured = crate::semantic_diagnostics::SemanticDiagnostic {
-            primary: crate::source::SourceRange::new(source, crate::source::TextRange::new(1, 2)),
-            labels: Vec::new(),
-            fix: None,
-        };
-        let pending = crate::semantic_diagnostics::SemanticDiagnostic {
-            primary: crate::source::SourceRange::new(source, crate::source::TextRange::new(3, 4)),
-            labels: Vec::new(),
-            fix: None,
-        };
+        let structured = crate::semantic_diagnostics::SemanticDiagnostic::at(
+            crate::source::SourceRange::new(source, crate::source::TextRange::new(1, 2)),
+            None,
+        );
+        let pending = crate::semantic_diagnostics::SemanticDiagnostic::at(
+            crate::source::SourceRange::new(source, crate::source::TextRange::new(3, 4)),
+            None,
+        );
         let failure = |code, diagnostic| SemanticFailure {
             error: SemanticError {
                 code,
@@ -14017,17 +15477,15 @@ mod tests {
         assert_eq!(error.code, "E_LIST_MUTABLE_RECEIVER");
         let error = analyze_error("fn temporary() { let pushed = [1].try_push(2); }");
         assert_eq!(error.code, "E_LIST_MUTABLE_RECEIVER");
-        let error = analyze_error(
-            "fn ambiguous() { var List<int, 2> values = [1]; values.try_set(0, 1); }",
-        );
-        assert_eq!(error.code, "E_NAMED_ARGUMENTS_REQUIRED");
-        let error = analyze_error(
-            "fn distinct() { var List<string, 2> values = [\"a\"]; values.try_set(0, \"b\"); }",
-        );
-        assert_eq!(
-            error.code, "E_NAMED_ARGUMENTS_REQUIRED",
-            "labels do not depend on argument types"
-        );
+        // Receiver methods accept positional arguments or their declared labels.
+        for source in [
+            "fn positional() { var List<int, 2> values = [1]; let _ = values.try_set(0, 1); values.set(0, 2); }",
+            "fn labelled() { var List<string, 2> values = [\"a\"]; let _ = values.try_set(index: 0, value: \"b\"); values.set(index: 0, value: \"c\"); }",
+            "fn mixed() { var List<int, 2> values = [1]; values.set(0, value: 2); }",
+        ] {
+            analyze(&parse(source).expect("List method call parses"))
+                .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        }
     }
     #[test]
     fn sourced_mutable_list_receiver_retains_its_binding_identity() {
@@ -14364,11 +15822,17 @@ mod tests {
     }
     #[test]
     fn rounded_numeric_methods_reject_noncanonical_signatures() {
-        let positional = analyze_error(
-            "fn value(decimal input) -> decimal { \
-                input.div_round(2.0, 2, Rounding::nearest_even) }",
-        );
-        assert_eq!(positional.code, "E_NAMED_ARGUMENTS_REQUIRED");
+        // Rounded methods are receiver methods: positional and labelled
+        // arguments are the same call.
+        analyze(
+            &parse(
+                "fn value(decimal input) -> decimal { \
+                    input.div_round(2.0, 2, Rounding::nearest_even) }",
+            )
+            .expect("positional rounded call parses"),
+        )
+        .expect("rounded receiver methods accept positional arguments");
+
         let int_receiver = analyze_error(
             "fn value(int input) -> decimal { \
                 input.div_round( \
@@ -14583,10 +16047,313 @@ mod tests {
     analyze_error_code_cases! {
         declared_call_labels_are_independent_of_effects:
         privileged = "kotoage fn publish(int first, string second, bool third) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }" => "K2004";
-        effectful = "fn main(AccountId account, Name key, Json value) { ledger::account::set_detail(account, key, value); }" => "E_NAMED_ARGUMENTS_REQUIRED";
-        transitive = "fn sink(AccountId account, Name key, Json value) { ledger::account::set_detail(account: account, key: key, value: value); } fn wrapper(AccountId account, Name key, Json value) { sink(account: account, key: key, value: value); } fn main(AccountId account, Name key, Json value) { wrapper(account, key); }" => "E_MISSING_NAMED_ARGUMENT";
+        effectful = "fn main(AccountId holder, Name key, Json value) { ledger::account::set_metadata(holder, key, value); }" => "E_NAMED_ARGUMENTS_REQUIRED";
+        transitive = "fn sink(AccountId account, Name key, Json value) { ledger::account::set_metadata(account: account, key: key, value: value); } fn wrapper(AccountId account, Name key, Json value) { sink(account: account, key: key, value: value); } fn main(AccountId account, Name key, Json value) { wrapper(account, key); }" => "E_MISSING_NAMED_ARGUMENT";
     }
-    analyze_ok_tests! { named_method_arguments_do_not_mix_with_the_receiver: "state StateMap<int, int> values; fn lookup(int key) -> int { return values.get_or(default: 0, key: key); }" => "parse named method call", "implicit receiver must not count as a positional argument"; }
+    analyze_ok_tests! { named_method_arguments_do_not_mix_with_the_receiver: "state StateMap<int, int> values; fn lookup(int key) -> int { return values.get_or_insert(default: 0, key: key); }" => "parse named method call", "implicit receiver must not count as a positional argument"; }
+    #[test]
+    fn kotoage_grants_name_a_declared_kotoage_selector() {
+        let source = |selector: &str| {
+            format!(
+                "seiyaku Grants {{ kotoage fn pay() authorize(\"Pay\") {{}} view fn peek() -> int {{ 0 }} \
+                 kotoage fn grant(AccountId account) authorize(\"Admin\") {{ \
+                 ledger::seiyaku::grant_kotoage(account, kotoage: {selector}); }} }}"
+            )
+        };
+        analyze(&parse(&source("\"pay\"")).expect("parse grant")).expect("a declared kotoage");
+        for (selector, fragment) in [
+            ("\"pya\"", "declares no kotoage (言挙げ) named `pya`"),
+            ("\"peek\"", "`peek` is a `view fn`"),
+        ] {
+            let error = analyze(&parse(&source(selector)).expect("parse grant"))
+                .expect_err("invalid grant selector");
+            assert_eq!(error.code, "E_KOTOAGE_SELECTOR", "{selector}");
+            assert!(error.message.contains(fragment), "{}", error.message);
+        }
+        let dynamic = analyze_error(
+            "seiyaku Grants { kotoage fn grant(AccountId account, string selector) authorize(\"Admin\") { \
+             ledger::seiyaku::grant_kotoage(account, kotoage: selector); } }",
+        );
+        assert_eq!(dynamic.code, "E_KOTOAGE_SELECTOR");
+        assert!(
+            dynamic.message.contains("string literal"),
+            "{}",
+            dynamic.message
+        );
+        let error = analyze(
+            &parse(&source("\"gran\"").replace("pay()", "payout()"))
+                .expect("parse misspelled grant"),
+        )
+        .expect_err("unknown selector");
+        assert!(
+            error.message.contains("did you mean `grant`"),
+            "{}",
+            error.message
+        );
+    }
+    #[test]
+    fn asset_registration_takes_compile_time_spec_and_mintability() {
+        let source = |spec: &str, mintable: &str| {
+            format!(
+                "fn reg(AssetDefinitionId asset) {{ ledger::asset::register(asset_definition: asset, \
+                 name: \"Rose\", spec: {spec}, mintable: {mintable}); }}"
+            )
+        };
+        let typed = analyze(
+            &parse(&source(
+                "NumericSpec::fractional(2)",
+                "Mintable::Limited(3)",
+            ))
+            .expect("parse register"),
+        )
+        .expect("nominal constructors fold");
+        let TypedItem::Function(function) = &typed.items[0];
+        let TypedStatement::Expr(call) = &function.body.statements[0] else {
+            panic!("register statement");
+        };
+        let (ExprKind::Call { args, .. } | ExprKind::NamedCall { args, .. }) = call.kind() else {
+            panic!("register call");
+        };
+        assert!(
+            matches!(args[2].kind(), ExprKind::IntLiteral(word) if word.try_to_u64() == Some(3))
+        );
+        assert!(
+            matches!(args[3].kind(), ExprKind::IntLiteral(word) if word.try_to_u64() == Some((3 << 2) | 3))
+        );
+        for (spec, mintable, fragment) in [
+            (
+                "2",
+                "Mintable::Once",
+                "`spec:` of `ledger::asset::register` takes",
+            ),
+            (
+                "NumericSpec::integer()",
+                "1",
+                "`mintable:` of `ledger::asset::register` takes",
+            ),
+            (
+                "NumericSpec::integer()",
+                "Mintable::once",
+                "did you mean `Mintable::Once`?",
+            ),
+            (
+                "NumericSpec::integer()",
+                "Mintable::Once()",
+                "write `Mintable::Once` without parentheses",
+            ),
+            (
+                "NumericSpec::integer",
+                "Mintable::Once",
+                "write `NumericSpec::integer(...)`",
+            ),
+            (
+                "NumericSpec::fractional(29)",
+                "Mintable::Once",
+                "must be in 0..=28",
+            ),
+            (
+                "NumericSpec::integer()",
+                "Mintable::Limited(0)",
+                "must be in 1..=",
+            ),
+        ] {
+            let error = analyze(&parse(&source(spec, mintable)).expect("parse register"))
+                .expect_err("invalid nominal argument");
+            assert_eq!(error.code, "E_NOMINAL_ARGUMENT", "{}", error.message);
+            assert!(error.message.contains(fragment), "{}", error.message);
+        }
+        for misplaced in [
+            "fn f() { let _ = Mintable::Limited(2); }",
+            "fn f() { let _ = NumericSpec::integer(); }",
+        ] {
+            let error = analyze_error(misplaced);
+            assert_eq!(error.code, "E_NOMINAL_ARGUMENT", "{}", error.message);
+            assert!(
+                error.message.contains("write it directly as the `"),
+                "{}",
+                error.message
+            );
+        }
+        let error = analyze_error(
+            "fn reg(AssetDefinitionId asset) { ledger::asset::register(asset_definition: asset, name: \"a#b\", spec: NumericSpec::integer(), mintable: Mintable::Not); }",
+        );
+        assert_eq!(error.code, "E_ASSET_NAME_INVALID");
+    }
+    #[test]
+    fn signature_scheme_arguments_fold_to_host_codes() {
+        let source = |scheme: &str| {
+            format!(
+                "fn check(bytes payload) -> bool {{ return crypto::verify_signature(message: payload, \
+                 signature: payload, public_key: payload, scheme: {scheme}); }}"
+            )
+        };
+        for (scheme, code) in [
+            ("SignatureScheme::Ed25519", 1_u64),
+            ("SignatureScheme::Secp256k1", 2),
+            ("SignatureScheme::MlDsa", 3),
+        ] {
+            let typed = analyze(&parse(&source(scheme)).expect("parse verify"))
+                .expect("scheme value folds");
+            let TypedItem::Function(function) = &typed.items[0];
+            let TypedStatement::Return(Some(call)) = &function.body.statements[0] else {
+                panic!("return statement");
+            };
+            let (ExprKind::Call { args, .. } | ExprKind::NamedCall { args, .. }) = call.kind()
+            else {
+                panic!("verify call");
+            };
+            assert!(
+                matches!(args[3].kind(), ExprKind::IntLiteral(word) if word.try_to_u64() == Some(code)),
+                "{scheme}"
+            );
+        }
+        for (scheme, fragment) in [
+            (
+                "1",
+                "`scheme:` of `crypto::verify_signature` takes a `SignatureScheme` value",
+            ),
+            (
+                "SignatureScheme::Sm2",
+                "`SignatureScheme::Ed25519`, `SignatureScheme::Secp256k1`, `SignatureScheme::MlDsa`",
+            ),
+            (
+                "SignatureScheme::ed25519",
+                "did you mean `SignatureScheme::Ed25519`?",
+            ),
+            ("Mintable::Once", "takes a `SignatureScheme` value"),
+        ] {
+            let error = analyze(&parse(&source(scheme)).expect("parse verify"))
+                .expect_err("invalid scheme");
+            assert_eq!(error.code, "E_NOMINAL_ARGUMENT", "{}", error.message);
+            assert!(error.message.contains(fragment), "{}", error.message);
+        }
+    }
+    #[test]
+    fn json_string_and_bool_getters_return_typed_options() {
+        for (method, payload) in [("get_string", Type::String), ("get_bool", Type::Bool)] {
+            let source = format!(
+                "fn read(Json value) -> bool {{ return value.{method}(\"k\").is_some(); }}"
+            );
+            analyze(&parse(&source).expect("parse getter")).expect("getter type-checks");
+            let typed = analyze(
+                &parse(&format!(
+                    "fn read(Json value) {{ let field = value.{method}(\"k\"); }}"
+                ))
+                .expect("parse getter binding"),
+            )
+            .expect("getter binding type-checks");
+            let TypedItem::Function(function) = &typed.items[0];
+            let TypedStatement::Let { value, .. } = &function.body.statements[0] else {
+                panic!("let statement");
+            };
+            assert_eq!(value.ty, Type::Option(Box::new(payload)), "{method}");
+        }
+    }
+    #[test]
+    fn json_getters_accept_string_literal_keys_as_names() {
+        let typed = analyze(
+            &parse("fn read(Json value) -> Option<int> { return value.get_int(\"count\"); }")
+                .expect("parse getter"),
+        )
+        .expect("literal keys are compile-time names");
+        let TypedItem::Function(function) = &typed.items[0];
+        let TypedStatement::Return(Some(call)) = &function.body.statements[0] else {
+            panic!("return statement");
+        };
+        let ExprKind::Call { args, .. } = call.kind() else {
+            panic!("getter call");
+        };
+        assert_eq!(args[1].ty, Type::Name);
+        let error = analyze_error(
+            "fn read(Json value) -> Option<int> { return value.get_int(\"two words\"); }",
+        );
+        assert_eq!(error.code, "E_INVALID_ID_LITERAL");
+    }
+    #[test]
+    fn rejected_builtin_labels_render_the_labelled_call_fix() {
+        let parsed = parse("fn f(NftId token, AccountId who) { ledger::nft::mint(token, who); }")
+            .expect("parse call");
+        let Item::Function(function) = &parsed.items[0] else {
+            panic!("function");
+        };
+        let Statement::Expr(call) = function.body.statements[0].kind() else {
+            panic!("call statement");
+        };
+        let Expr::Call {
+            args,
+            argument_names,
+            ..
+        } = call.kind()
+        else {
+            panic!("call");
+        };
+        assert_eq!(
+            labelled_builtin_call_fix(
+                "ledger::nft::mint",
+                args,
+                argument_names.as_deref(),
+                &["nft".to_owned(), "owner".to_owned()],
+            )
+            .as_deref(),
+            Some("ledger::nft::mint(nft: token, owner: who)")
+        );
+        assert_eq!(
+            render_simple_expr(&Expr::String("a\"b\\c".into())).as_deref(),
+            Some("\"a\\\"b\\\\c\"")
+        );
+        assert_eq!(render_simple_expr(&Expr::Tuple(Vec::new())), None);
+        let error =
+            analyze_error("fn f(NftId token, AccountId who) { ledger::nft::mint(token, who); }");
+        assert_eq!(error.code, "E_NAMED_ARGUMENTS_REQUIRED");
+        let error =
+            analyze_error("fn f(NftId nft, AccountId owner) { ledger::nft::mint(owner, nft); }");
+        assert_eq!(
+            error.code, "E_NAMED_ARGUMENTS_REQUIRED",
+            "punning follows the slot"
+        );
+        // The fix for a swapped call labels each identifier by its own name
+        // instead of encoding the swap.
+        let swapped = parse("fn f(NftId nft, AccountId owner) { ledger::nft::mint(owner, nft); }")
+            .expect("parse swapped call");
+        let Item::Function(function) = &swapped.items[0] else {
+            panic!("function");
+        };
+        let Statement::Expr(call) = function.body.statements[0].kind() else {
+            panic!("call statement");
+        };
+        let Expr::Call {
+            args,
+            argument_names,
+            ..
+        } = call.kind()
+        else {
+            panic!("call");
+        };
+        assert_eq!(
+            labelled_builtin_call_fix(
+                "ledger::nft::mint",
+                args,
+                argument_names.as_deref(),
+                &["nft".to_owned(), "owner".to_owned()],
+            )
+            .as_deref(),
+            Some("ledger::nft::mint(owner: owner, nft: nft)")
+        );
+    }
+    #[test]
+    fn kotoage_and_views_may_use_builtin_lowering_names() {
+        analyze(
+            &parse("seiyaku Names { kotoage fn mint_asset() authorize(\"Mint\") {} view fn chain_id() -> int { 1 } view fn authority() -> int { 2 } }")
+                .expect("parse public selectors"),
+        )
+        .expect("public selectors may reuse lowering names");
+        let error = analyze_error("fn min(int a, int b) -> int { a }");
+        assert_eq!(error.code, "E_RESERVED_DECLARATION");
+        assert!(error.message.contains("`math::min`"), "{}", error.message);
+    }
+    analyze_ok_tests! { label_punning_satisfies_required_builtin_labels: "fn main(AccountId account, Name key, Json value) { ledger::account::set_metadata(account, key, value); }" => "parse punned call", "identifiers spelled like the labels are labelled arguments"; }
+    analyze_ok_tests! { declared_builtin_labels_are_always_accepted: "fn main(int amount) -> int { return math::min(left: math::abs(value: amount), right: 3); }" => "parse labelled pure helpers", "a label equal to the declared name is accepted"; }
+    analyze_ok_tests! { pure_math_helpers_accept_positional_arguments: "fn main(int amount) -> int { return math::div_ceil(math::max(amount, 1), 2); }" => "parse positional pure helpers", "pure helpers accept positional arguments"; }
     #[test]
     fn offset_state_enumeration_is_not_a_source_api() {
         for source in [
@@ -14660,7 +16427,7 @@ mod tests {
         for (source, expected) in [
             (
                 "fn account_id(string value) -> int { return 1; }",
-                "function `account_id` uses a compiler-reserved name",
+                "private `fn account_id` reuses the compiler lowering name of `AccountId::parse`; rename the helper (a kotoage (言挙げ) or `view fn` may use this name)",
             ),
             (
                 "fn __kotodama_link_private() {}",
@@ -14843,7 +16610,7 @@ mod tests {
             .expect("same named struct reference should be assignable");
         let err = ensure_assignable(&alpha, &beta)
             .expect_err("unrelated named struct references must not be assignable");
-        assert!(err.message.contains("expected Alpha, got Beta"));
+        assert!(err.message.contains("expected `Alpha`, found `Beta`"));
     }
     #[test]
     fn cyclic_value_structs_are_rejected_before_resolution() {
@@ -15359,6 +17126,150 @@ mod tests {
         assert_eq!(err.code, "E_MISSING_STRUCT_PATTERN_FIELD");
     }
     #[test]
+    fn assert_eq_compares_any_equality_type_and_checks_literal_argument_records() {
+        let accepted = parse(
+            r#"seiyaku S {
+                struct P { int a, string b }
+                fn f() {
+                    test::assert_eq(actual: P { a: 1, b: "x" }, expected: P { a: 1, b: "x" }, message: "same");
+                    test::assert_eq(actual: 1.5, expected: 1.5);
+                    test::assert_eq(actual: "x", expected: "x");
+                    test::assert(true, message: 7);
+                }
+            }"#,
+        )
+        .expect("parse generic assertions");
+        SemanticContext::with_capabilities(false, true)
+            .analyze(&accepted)
+            .expect("assert_eq accepts every equality-comparable type");
+        let mismatched = parse(r#"fn f() { test::assert_eq(actual: 1, expected: "x"); }"#)
+            .expect("parse mismatched assertion");
+        let err = SemanticContext::with_capabilities(false, true)
+            .analyze(&mismatched)
+            .expect_err("operands of different types are rejected");
+        assert!(
+            err.message
+                .contains("compares `actual` and `expected` of one type, found `int` and `string`"),
+            "{}",
+            err.message
+        );
+        let record = parse(
+            r#"seiyaku S {
+                kotoage fn run(int count) authorize("Run") {}
+                #[test] fn t() {
+                    test::invoke_kotoage(kotoage: "run", arguments: Json::parse("{\"count\":3}"));
+                }
+            }"#,
+        )
+        .expect("parse literal record");
+        let err = SemanticContext::with_capabilities(false, true)
+            .analyze(&record)
+            .expect_err("a JSON number for an int argument is rejected at compile time");
+        assert!(
+            err.message
+                .contains("arguments for `run`: argument `count`")
+                && err.message.ends_with("write \"3\""),
+            "{}",
+            err.message
+        );
+    }
+    #[test]
+    fn unknown_invocation_targets_and_argument_keys_get_spelling_hints() {
+        let analyze = |test_body: &str| {
+            let source = format!(
+                r#"seiyaku S {{
+                    state int value;
+                    始まり(int start) {{ value = start; }}
+                    kotoage fn withdraw(int amount) authorize("Teller") {{ value = value - amount; }}
+                    #[test] fn t() {{ {test_body} }}
+                }}"#
+            );
+            let program = parse(&source).expect("parse invocation fixture");
+            SemanticContext::with_capabilities(false, true)
+                .analyze(&program)
+                .expect_err("invalid invocation")
+        };
+        // A lifecycle keyword written as a selector, in either script, names the selector.
+        let err = analyze(
+            r#"test::invoke_kotoage(kotoage: "始まり", arguments: Json::parse("{\"start\":\"1\"}"));"#,
+        );
+        assert_eq!(err.code, "K2002");
+        assert!(
+            err.message
+                .ends_with("; the `始まり` declaration is selected as \"hajimari\""),
+            "{}",
+            err.message
+        );
+        let err =
+            analyze(r#"test::invoke_kotoage(kotoage: "withdrw", arguments: Json::parse("{}"));"#);
+        assert!(
+            err.message.ends_with("; did you mean \"withdraw\"?"),
+            "{}",
+            err.message
+        );
+        let err = analyze(
+            r#"test::invoke_kotoage(kotoage: "hajimari", arguments: Json::parse("{\"strat\":\"1\"}"));"#,
+        );
+        assert!(
+            err.message
+                .ends_with("; `strat` is not a parameter; did you mean `start`?"),
+            "{}",
+            err.message
+        );
+    }
+    #[test]
+    fn test_helper_calls_gain_a_trailing_call_site_record() {
+        let context = SemanticContext::with_capabilities(false, true);
+        let literal = |text: &str| TypedExpr {
+            expr: ExprKind::String(text.to_owned()),
+            ty: Type::String,
+        };
+        let decode_site = |typed: &TypedExpr| match typed.kind() {
+            ExprKind::Bytes(bytes) => {
+                norito::decode_canonical::<crate::testing::TestCallSite>(bytes)
+                    .expect("canonical call-site record")
+            }
+            other => panic!("expected a call-site literal, found {other:?}"),
+        };
+        let named = TypedExpr {
+            expr: ExprKind::NamedCall {
+                name: "invoke_entrypoint".to_owned(),
+                args: vec![literal("run"), literal("{}")],
+                evaluation_order: vec![1, 0],
+            },
+            ty: Type::Unit,
+        };
+        let appended = append_test_call_site(&context, &Expr::String("call".to_owned()), named)
+            .expect("append call site");
+        let ExprKind::NamedCall {
+            args,
+            evaluation_order,
+            ..
+        } = appended.kind()
+        else {
+            panic!("named calls stay named");
+        };
+        assert_eq!(args.len(), 3);
+        assert_eq!(evaluation_order, &[1, 0, 2]);
+        assert_eq!(
+            decode_site(&args[2]),
+            crate::testing::TestCallSite {
+                source_id: 0,
+                byte_start: 0,
+                byte_end: 0,
+            }
+        );
+        let positional = typed_call("actor_account", vec![literal("alice")], Type::AccountId);
+        let appended =
+            append_test_call_site(&context, &Expr::String("call".to_owned()), positional)
+                .expect("append call site");
+        let ExprKind::Call { args, .. } = appended.kind() else {
+            panic!("positional calls stay positional");
+        };
+        assert_eq!(args.len(), 2);
+        let _ = decode_site(&args[1]);
+    }
+    #[test]
     fn assert_rejects_extra_args() {
         let program =
             parse("fn f() { test::assert(true, message: false); }").expect("parse assert");
@@ -15367,7 +17278,9 @@ mod tests {
             .expect_err("assert message type should error");
         assert!(
             err.message
-                .contains("assert expects (bool) or (bool, string|int)")
+                .contains("`test::assert` expects `message` to be a string or int, found `bool`"),
+            "{}",
+            err.message
         );
     }
     #[test]
@@ -15456,14 +17369,10 @@ mod tests {
     analyze_reject_contains_tests! { immutable_field_assignment_is_rejected: "fn f() { let t = (1, 2); t.0 = 3; }" => "parse field assignment", err = "field assignment should error", "cannot assign to immutable binding"; }
     analyze_ok_tests! { info_accepts_int: "fn f() { debug::info(42); }" => "parse info", "info should accept int"; }
     #[test]
-    fn view_entrypoints_reject_observable_debug_logging() {
+    fn view_entrypoints_accept_diagnostic_logging() {
         let program = parse("seiyaku Demo { view fn inspect() { debug::info(42); } }")
             .expect("parse debug logging in a view");
-        let error = analyze(&program).expect_err("views must not emit observable logs");
-        assert!(
-            error.message.contains("view") && error.message.contains("host side effects"),
-            "{error:?}"
-        );
+        analyze(&program).expect("debug::info is diagnostics-only and allowed in views");
     }
     #[test]
     fn vector_length_control_is_not_a_source_builtin() {
@@ -15482,7 +17391,7 @@ mod tests {
     analyze_ok_tests! { namespaced_trigger_callback_does_not_require_local_entrypoint: include_str!("semantic/test_sources/namespaced_trigger_callback_does_not_require_local_entrypoint_1.ko") => "parse namespaced trigger callback", "namespaced trigger callback target is resolved at activation"; }
     analyze_reject_contains_diagnostic_tests! { namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback: include_str!("semantic/test_sources/namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback_1.ko") => "parse namespaced trigger callback", err = "remote trigger callback must not permit local trigger_event access", "cannot use `context::trigger_event` here", "unexpected error message: {}"; }
     analyze_test_ok_tests! { invoke_entrypoint_accepts_test_functions: include_str!( "semantic/test_sources/invoke_entrypoint_accepts_test_functions_1.ko" ) => "parse invoke_entrypoint", "invoke_entrypoint in tests should type-check"; }
-    analyze_test_reject_contains_tests! { invoke_entrypoint_rejects_non_test_functions: include_str!( "semantic/test_sources/invoke_entrypoint_rejects_non_test_functions_1.ko" ) => "parse non-test invoke_entrypoint", err = "non-test invoke_entrypoint should fail", "available only inside a #[test] function"; }
+    analyze_test_reject_contains_tests! { invoke_entrypoint_rejects_non_test_functions: include_str!( "semantic/test_sources/invoke_entrypoint_rejects_non_test_functions_1.ko" ) => "parse non-test invoke_entrypoint", err = "non-test invoke_entrypoint should fail", "available only in #[test] functions"; }
     analyze_test_ok_tests! { invoke_entrypoint_accepts_name_literal_target: include_str!( "semantic/test_sources/invoke_entrypoint_accepts_name_literal_target_1.ko" ) => "parse name literal invoke_entrypoint", "name literal invoke_entrypoint should type-check"; }
     #[test]
     fn invoke_entrypoint_rejects_non_literal_target() {
@@ -15542,10 +17451,11 @@ mod tests {
             .expect_err("external entrypoints must retain the contract-call boundary");
         assert_eq!(error.code(), "K2004");
     }
-    analyze_test_reject_contains_tests! { actor_helpers_reject_non_test_functions: include_str!( "semantic/test_sources/actor_helpers_reject_non_test_functions_1.ko" ) => "parse non-test actor helper", err = "actor helper outside test should fail", "available only inside a #[test] function"; }
+    analyze_test_reject_contains_tests! { actor_helpers_reject_non_test_functions: include_str!( "semantic/test_sources/actor_helpers_reject_non_test_functions_1.ko" ) => "parse non-test actor helper", err = "actor helper outside test should fail", "available only in #[test] functions"; }
     analyze_ok_tests! { view_entrypoints_accept_explicit_json_getter_on_typed_json_parameter: "seiyaku Demo { view fn f(Json ev) -> Option<int> { return ev.get_int(Name::parse(\"n\")); } }" => "parse view get_int", "typed Json parameters may use explicit JSON getters"; }
-    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_ensure: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.ensure(key: 7, default: 9); } }" => "parse ensure", err = "view ensure should fail", "`view fn` functions cannot use mutating map helper `ensure`", "unexpected error message: {}"; }
-    analyze_ok_tests! { view_entrypoints_accept_get_or: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.get_or(key: 7, default: 9); } }" => "parse get_or", "view get_or should type-check"; }
+    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_get_or_insert: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.get_or_insert(7, 9); } }" => "parse get_or_insert", err = "view get_or_insert should fail", "`view fn` functions cannot use the state-writing map helper `get_or_insert`", "unexpected error message: {}"; }
+    analyze_ok_tests! { view_entrypoints_read_with_get_and_unwrap_or: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.get(7).unwrap_or(9); } }" => "parse get", "view get with unwrap_or should type-check"; }
+    analyze_ok_tests! { views_may_log_with_debug_info: "seiyaku Demo { view fn f() -> int { debug::info(\"quote\"); helper() } fn helper() -> int { debug::info(1); 1 } }" => "parse debug info", "debug::info is diagnostics-only and allowed in views"; }
     #[test]
     fn state_map_get_returns_option_without_intercepting_user_get_function() {
         let program = parse(
@@ -15939,7 +17849,7 @@ mod tests {
     fn privileged_effect_table_covers_release_mutators() {
         for name in [
             "transfer_asset",
-            "create_new_asset",
+            "register_asset",
             "create_nfts_for_all_users",
             "transfer_batch",
             "axt_begin",
@@ -16079,7 +17989,7 @@ mod tests {
     #[rustfmt::skip]
     analyze_reject_contains_tests! { quantity_remains_nominal_in_mixed_numeric_operations: "seiyaku C { fn f(quantity a, int b) { \
                 let _x = a + b; \
-            } }" => "parse nominal numeric types", err = "mixed numeric types should error", "not defined for quantity and int"; }
+            } }" => "parse nominal numeric types", err = "mixed numeric types should error", "operator `+` is not defined for `quantity` and `int`"; }
     #[test]
     fn exact_literals_infer_decimal_without_runtime_conversion() {
         let constant = returned_expr("fn value() -> decimal { return 2 + 0.5; }");
@@ -16211,7 +18121,7 @@ mod tests {
             } }" => "parse ledger amount call", "whole literal must coerce exactly at a quantity boundary"; }
     #[rustfmt::skip]
     analyze_ok_tests! { canonical_trigger_operations_type_check: "fn f() { \
-                ledger::trigger::register(trigger: Json::parse(\"{}\")); \
+                ledger::trigger::register(trigger_spec: Json::parse(\"{}\")); \
                 ledger::trigger::unregister(trigger: Name::parse(\"wake\")); \
             }" => "parse canonical trigger operations", "analyze canonical trigger operations"; }
     include!("semantic/tests/trigger_semantics_tests.rs");

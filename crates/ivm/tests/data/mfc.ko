@@ -10,7 +10,6 @@ seiyaku MakotoFreeCash {
             destination: to_account,
             asset_definition: mfc,
             amount: amount,
-            dataspace: DataSpaceId::parse("0"),
         );
     }
 
@@ -23,7 +22,6 @@ seiyaku MakotoFreeCash {
                 destination: to_account,
                 asset_definition: mfc,
                 amount: current_quantity,
-                dataspace: DataSpaceId::parse("0"),
             );
             current_quantity = current_quantity + 1;
         }
@@ -35,7 +33,12 @@ seiyaku MakotoFreeCash {
     kotoage fn main(AccountId from, AccountId to) authorize("ManageMfc") {
         // Register the asset definition before minting any tokens.
         let mfc = mfc_asset();
-        ledger::asset::register(asset_definition: mfc, name: "MFC", scale: 0, mintable: 1);
+        ledger::asset::register(
+            asset_definition: mfc,
+            name: "MFC",
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+        );
         ledger::asset::mint(account: from, asset_definition: mfc, amount: 1337);
         let dest = to;
         send_mfc(from_account: from, to_account: dest, amount: 369);

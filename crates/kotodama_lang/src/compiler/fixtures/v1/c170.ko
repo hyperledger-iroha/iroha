@@ -7,7 +7,6 @@ seiyaku Test {
       destination: to,
       asset_definition: asset,
       amount: amount,
-      dataspace: DataSpaceId::parse("0"),
     );
   }
 }

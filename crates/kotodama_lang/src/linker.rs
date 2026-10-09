@@ -2800,10 +2800,7 @@ fn environment_import_diagnostics(
         let error = if !environment.aliases.contains(alias) {
             Some((
                 "E_UNKNOWN_IMPORT_ALIAS",
-                format!(
-                    "source `{}` uses unknown import alias `{alias}`",
-                    module.source_name
-                ),
+                format!("unknown import alias `{alias}` in type `{}`", ty.name),
             ))
         } else if !environment.typed.types.contains_key(&ty.name) {
             Some((
@@ -2844,10 +2841,7 @@ fn environment_import_diagnostics(
         } else if !environment.aliases.contains(alias) {
             Some((
                 "E_UNKNOWN_IMPORT_ALIAS",
-                format!(
-                    "source `{}` uses unknown import alias `{alias}`",
-                    module.source_name
-                ),
+                format!("unknown import alias `{alias}` in call `{}`", call.name),
             ))
         } else if !environment.typed.functions.contains_key(&call.name) {
             Some((

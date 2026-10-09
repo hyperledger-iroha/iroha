@@ -1,6 +1,6 @@
 seiyaku ContractViewTrapTest {
     error enum ViewError {
-        Boom = 1
+        Boom = 1,
     }
 
     view fn explode() -> int {

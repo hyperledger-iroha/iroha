@@ -176,9 +176,7 @@
     "div_round",
     "mul_div_round",
     "ratio_round",
-    "get_or_default",
-    "get_or",
-    "ensure",
+    "get_or_insert",
     "remove",
     "path",
     "get_int",
@@ -189,7 +187,9 @@
     "get_account_id",
     "get_asset_definition_id",
     "get_nft_id",
-    "get_blob_hex"
+    "get_bytes_hex",
+    "get_string",
+    "get_bool"
   ],
   "numeric_schemas": [
     {

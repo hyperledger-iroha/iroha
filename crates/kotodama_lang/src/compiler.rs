@@ -5440,8 +5440,8 @@ impl Compiler {
                         }
                         Instr::RegisterAsset {
                             asset,
-                            symbol,
-                            quantity,
+                            name,
+                            spec,
                             mintable,
                         } => {
                             if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
@@ -5452,59 +5452,13 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(10, r_asset, 0)?);
                             }
                             code.extend_from_slice(&publish_tlv);
-                            let r_symbol = src_reg(symbol, scratch1, &mut code)?;
-                            let r_qty = src_reg(quantity, scratch2, &mut code)?;
+                            let r_name = src_reg(name, scratch1, &mut code)?;
+                            let r_spec = src_reg(spec, scratch2, &mut code)?;
                             let r_mint = src_reg(mintable, scratchd, &mut code)?;
-                            push_word(&mut code, encode_addi(11, r_symbol, 0)?);
-                            push_word(&mut code, encode_addi(12, r_qty, 0)?);
+                            push_word(&mut code, encode_addi(11, r_name, 0)?);
+                            push_word(&mut code, encode_addi(12, r_spec, 0)?);
                             push_word(&mut code, encode_addi(13, r_mint, 0)?);
                             push_syscall_imm8(&mut code, syscalls::SYSCALL_REGISTER_ASSET);
-                        }
-                        Instr::CreateNewAsset {
-                            asset,
-                            symbol,
-                            quantity,
-                            account,
-                            mintable,
-                        } => {
-                            let r_symbol = src_reg(symbol, scratch2, &mut code)?;
-                            let r_qty = src_reg(quantity, scratchd, &mut code)?;
-                            let r_mint = src_reg(mintable, scratch1, &mut code)?;
-                            if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
-                                let key_asset = DataKey(DataKind::AssetDef, asset_str.clone());
-                                emit_literal_load(&mut code, &fixups, 10, key_asset);
-                            } else {
-                                let r_asset = src_reg(asset, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r_asset, 0)?);
-                            }
-                            push_word(&mut code, encode_addi(11, r_symbol, 0)?);
-                            push_word(&mut code, encode_addi(12, r_qty, 0)?);
-                            push_word(&mut code, encode_addi(13, r_mint, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_REGISTER_ASSET);
-                            let r_acc = src_reg(account, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(10, r_acc, 0)?);
-                            if let Some(asset_str) = string_map.get(&(func_idx, *asset)) {
-                                let key_asset = DataKey(DataKind::AssetDef, asset_str.clone());
-                                emit_literal_load(&mut code, &fixups, 11, key_asset);
-                            } else {
-                                let r_asset = src_reg(asset, scratch2, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r_asset, 0)?);
-                            }
-                            push_word(&mut code, encode_addi(12, r_qty, 0)?);
-                            // Publish r10 and preserve it in x13.
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(13, 10, 0)?);
-                            // Publish r11: x10 <- x11; publish; x11 <- x10.
-                            push_word(&mut code, encode_addi(10, 11, 0)?);
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
-                            // Publish r12: x10 <- x12; publish; x12 <- x10.
-                            push_word(&mut code, encode_addi(10, 12, 0)?);
-                            code.extend_from_slice(&publish_tlv);
-                            push_word(&mut code, encode_addi(12, 10, 0)?);
-                            // Restore account pointer: x10 <- x13.
-                            push_word(&mut code, encode_addi(10, 13, 0)?);
-                            push_syscall_imm8(&mut code, syscalls::SYSCALL_MINT_ASSET);
                         }
                         Instr::TransferAsset {
                             from,
@@ -7874,7 +7828,9 @@ impl Compiler {
                         | Instr::JsonGetAccountId { dest, json, key }
                         | Instr::JsonGetAssetDefinitionId { dest, json, key }
                         | Instr::JsonGetNftId { dest, json, key }
-                        | Instr::JsonGetBlobHex { dest, json, key } => {
+                        | Instr::JsonGetBlobHex { dest, json, key }
+                        | Instr::JsonGetString { dest, json, key }
+                        | Instr::JsonGetBool { dest, json, key } => {
                             // Typed JSON getters return one active-only Option handle in r10.
                             load_pointer(json, 10, scratch1, DataKind::Json, &mut code)?;
                             code.extend_from_slice(&publish_tlv);
@@ -7895,9 +7851,13 @@ impl Compiler {
                                 }
                                 Instr::JsonGetNftId { .. } => syscalls::SYSCALL_JSON_GET_NFT_ID,
                                 Instr::JsonGetBlobHex { .. } => syscalls::SYSCALL_JSON_GET_BLOB_HEX,
+                                Instr::JsonGetString { .. } => syscalls::SYSCALL_JSON_GET_STRING,
+                                Instr::JsonGetBool { .. } => syscalls::SYSCALL_JSON_GET_BOOL,
                                 _ => unreachable!(),
                             };
-                            push_syscall_imm8(&mut code, syscall);
+                            // `push_syscall` keeps the 8-bit form for the original
+                            // getters and uses the extended form above 0xFF.
+                            push_syscall(&mut code, syscall);
                             spill_syscall_result(dest, &mut code)?;
                         }
                         Instr::NameDecode { dest, blob } => {
@@ -8873,14 +8833,20 @@ impl Compiler {
         let ssa = self.construct_ssa_program(lowered)?;
         let optimized = self.optimize_ssa_program(ssa)?;
         let codegen = self.destroy_ssa_program(optimized)?;
+        // Typed-identifier literals are rejected during semantic analysis, so
+        // codegen failures carry no fabricated source position.
+        // TODO: move the source-level checks that still run in `compile_codegen`
+        // (literal-only arguments such as `build_submit_ballot_inline` and
+        // pointer constructors, `E_ACCESS_INCOMPLETE`) into semantic analysis;
+        // K3099 can then be worded as a compiler defect only.
         let artifacts = self.compile_codegen(codegen).map_err(|message| {
-            native_diagnostic_bundle(
+            let unit = source_name.map_or_else(String::new, |name| format!(" for `{name}`"));
+            DiagnosticBundle::single(Diagnostic::error(
                 "K3099",
                 DiagnosticPhase::Lowering,
-                source_name,
+                format!("bytecode generation failed{unit}: {message}"),
                 None,
-                message,
-            )
+            ))
         })?;
         self.manifest_from_artifacts(artifacts).map_err(|message| {
             native_diagnostic_bundle(
@@ -10069,24 +10035,6 @@ fn record_isi_access(
                 add_asset_def_rw(access_set, &id);
             } else {
                 add_dynamic_asset_definition_rw(access_set);
-            }
-        }
-        ir::Instr::CreateNewAsset { asset, account, .. } => {
-            let account = account_access_hint_for_temp(
-                string_map,
-                authority_account_temps,
-                func_idx,
-                *account,
-            );
-            if let Some(asset_def) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
-                add_asset_definition_ownership_r(access_set, &asset_def);
-                add_asset_def_rw(access_set, &asset_def);
-                add_asset_rw_for_optional_account_hint(access_set, &asset_def, account.as_ref());
-            } else {
-                add_dynamic_asset_definition_rw_for_optional_account_hint(
-                    access_set,
-                    account.as_ref(),
-                );
             }
         }
         ir::Instr::CreateTrigger { json } => {
@@ -11803,6 +11751,8 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         | ir::Instr::JsonGetAssetDefinitionId { .. }
         | ir::Instr::JsonGetNftId { .. }
         | ir::Instr::JsonGetBlobHex { .. }
+        | ir::Instr::JsonGetString { .. }
+        | ir::Instr::JsonGetBool { .. }
         | ir::Instr::NameDecode { .. }
         | ir::Instr::SchemaEncode { .. }
         | ir::Instr::SchemaDecode { .. }
@@ -11822,7 +11772,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::Sm4CcmOpen { .. } => access_class_for_builtin(Builtin::Sm4CcmOpen),
         ir::Instr::PrivateNumericValcom { .. } => access_class_for_builtin(Builtin::Valcom),
         ir::Instr::RegisterAsset { .. } => access_class_for_builtin(Builtin::RegisterAsset),
-        ir::Instr::CreateNewAsset { .. } => access_class_for_builtin(Builtin::CreateNewAsset),
         ir::Instr::TransferAsset { .. } => access_class_for_builtin(Builtin::TransferAsset),
         ir::Instr::TransferBatchAsset { .. } => access_class_for_builtin(Builtin::TransferBatch),
         ir::Instr::EscrowOpenOffer { .. } => access_class_for_builtin(Builtin::EscrowOpenOffer),
@@ -11851,7 +11800,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         }
         ir::Instr::SetExecutionDepth { .. } => access_class_for_builtin(Builtin::SetExecutionDepth),
         ir::Instr::SetVl { .. } => access_class_for_builtin(Builtin::SetVl),
-        ir::Instr::SetAccountDetail { .. } => access_class_for_builtin(Builtin::SetAccountDetail),
+        ir::Instr::SetAccountDetail { .. } => access_class_for_builtin(Builtin::SetAccountMetadata),
         ir::Instr::CreateNft { .. } => access_class_for_builtin(Builtin::NftMintAsset),
         ir::Instr::SetNftData { .. } => access_class_for_builtin(Builtin::NftSetMetadata),
         ir::Instr::BurnNft { .. } => access_class_for_builtin(Builtin::NftBurnAsset),
@@ -11877,9 +11826,16 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::RevokeContractEntrypoint { .. } => {
             access_class_for_builtin(Builtin::RevokeContractEntrypoint)
         }
-        ir::Instr::CreateRole { .. } => access_class_for_builtin(Builtin::CreateRole),
-        ir::Instr::DeleteRole { .. } => access_class_for_builtin(Builtin::DeleteRole),
+        ir::Instr::CreateRole { .. } => access_class_for_builtin(Builtin::RegisterRole),
+        ir::Instr::DeleteRole { .. } => access_class_for_builtin(Builtin::UnregisterRole),
         ir::Instr::GrantRole { .. } => access_class_for_builtin(Builtin::GrantRole),
+        // Host-private local-test helpers (assertion reports, block height and time control)
+        // touch only the test host, never ledger state; they exist only in test projections.
+        ir::Instr::DirectHelperSyscall { syscall, .. }
+            if ivm_abi::syscalls::is_koto_test_syscall(*syscall) =>
+        {
+            IrAccessClass::None
+        }
         ir::Instr::DirectHelperSyscall { syscall, .. } => {
             use ivm_abi::syscalls::SyscallAccess;
             match ivm_abi::syscalls::registered_syscall_access(*syscall) {

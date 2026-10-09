@@ -183,14 +183,14 @@ mod effect_budget {
             .compile_source_with_manifest(r#"
 seiyaku ActualEffectGroups {
   kotoage fn first() authorize("CanInvokeContractEntrypoint") {
-    ledger::account::set_detail(account: context::authority(), key: Name::parse("effect_first"), value: Json::parse("true"));
+    ledger::account::set_metadata(account: context::authority(), key: Name::parse("effect_first"), value: Json::parse("true"));
   }
   kotoage fn second() authorize("CanInvokeContractEntrypoint") {
-    ledger::account::set_detail(account: context::authority(), key: Name::parse("effect_second"), value: Json::parse("true"));
+    ledger::account::set_metadata(account: context::authority(), key: Name::parse("effect_second"), value: Json::parse("true"));
   }
   kotoage fn pair() authorize("CanInvokeContractEntrypoint") {
-    ledger::account::set_detail(account: context::authority(), key: Name::parse("effect_first"), value: Json::parse("true"));
-    ledger::account::set_detail(account: context::authority(), key: Name::parse("effect_second"), value: Json::parse("true"));
+    ledger::account::set_metadata(account: context::authority(), key: Name::parse("effect_first"), value: Json::parse("true"));
+    ledger::account::set_metadata(account: context::authority(), key: Name::parse("effect_second"), value: Json::parse("true"));
   }
 }
 "#).expect("compile genuine effect-producing contract");

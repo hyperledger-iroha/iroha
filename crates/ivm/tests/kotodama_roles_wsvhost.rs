@@ -28,7 +28,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
     let src_create = r#"
         seiyaku CreateRole {
         kotoage fn main() authorize("ManageRoles") {
-          ledger::role::create(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
+          ledger::role::register(role: Name::parse("minter"), permissions: Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
         }
         }
     "#;
@@ -82,7 +82,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
         seiyaku RevokeAndDeleteRole {
         kotoage fn main() authorize("ManageRoles") {
           ledger::role::revoke(account: context::authority(), role: Name::parse("minter"));
-          ledger::role::delete(role: Name::parse("minter"));
+          ledger::role::unregister(role: Name::parse("minter"));
         }
         }
     "#;

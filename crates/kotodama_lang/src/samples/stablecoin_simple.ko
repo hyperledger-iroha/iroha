@@ -6,9 +6,11 @@ seiyaku StablecoinSimple {
     }
 
     // Return how much stable to mint for given collateral and target ratio (bps).
-    kotoage fn mintable_amount(quantity collateral_amount, decimal price, decimal target_ratio_bps) -> quantity authorize(
-        "Entry"
-    ) {
+    kotoage fn mintable_amount(
+        quantity collateral_amount,
+        decimal price,
+        decimal target_ratio_bps,
+    ) -> quantity authorize("Entry") {
         // collateral_value = collateral_amount * price
         let value = collateral_amount * price;
         // mint limited by target ratio: minted * target_ratio_bps <= value * 10_000
@@ -34,7 +36,6 @@ seiyaku StablecoinSimple {
             destination: vault_account,
             asset_definition: collateral_asset,
             amount: collateral_amount,
-            dataspace: DataSpaceId::parse("0"),
         );
         // health check
         let value = collateral_amount * price;

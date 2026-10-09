@@ -2554,26 +2554,13 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         }
         RegisterAsset {
             asset,
-            symbol,
-            quantity,
+            name,
+            spec,
             mintable,
         } => {
             f(asset);
-            f(symbol);
-            f(quantity);
-            f(mintable);
-        }
-        CreateNewAsset {
-            asset,
-            symbol,
-            quantity,
-            account,
-            mintable,
-        } => {
-            f(asset);
-            f(symbol);
-            f(quantity);
-            f(account);
+            f(name);
+            f(spec);
             f(mintable);
         }
         TransferAsset {
@@ -2981,7 +2968,9 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         | JsonGetAccountId { json, key, .. }
         | JsonGetAssetDefinitionId { json, key, .. }
         | JsonGetNftId { json, key, .. }
-        | JsonGetBlobHex { json, key, .. } => {
+        | JsonGetBlobHex { json, key, .. }
+        | JsonGetString { json, key, .. }
+        | JsonGetBool { json, key, .. } => {
             f(json);
             f(key);
         }
@@ -3151,7 +3140,9 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::JsonGetAccountId { dest, .. }
         | ir::Instr::JsonGetAssetDefinitionId { dest, .. }
         | ir::Instr::JsonGetNftId { dest, .. }
-        | ir::Instr::JsonGetBlobHex { dest, .. } => Some(dest),
+        | ir::Instr::JsonGetBlobHex { dest, .. }
+        | ir::Instr::JsonGetString { dest, .. }
+        | ir::Instr::JsonGetBool { dest, .. } => Some(dest),
         ir::Instr::NameDecode { dest, .. } => Some(dest),
         ir::Instr::SchemaEncode { dest, .. } => Some(dest),
         ir::Instr::SchemaDecode { dest, .. } => Some(dest),
@@ -3165,7 +3156,6 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::GrantContractEntrypoint { .. }
         | ir::Instr::RevokeContractEntrypoint { .. }
         | ir::Instr::RegisterAsset { .. }
-        | ir::Instr::CreateNewAsset { .. }
         | ir::Instr::TransferAsset { .. }
         | ir::Instr::TransferBatchAsset { .. }
         | ir::Instr::EscrowOpenOffer { .. }

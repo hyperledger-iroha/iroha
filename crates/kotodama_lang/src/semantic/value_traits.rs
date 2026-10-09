@@ -799,6 +799,7 @@ enum TypedCloneTask<'a> {
     BuildBlock {
         statement_count: usize,
         has_tail: bool,
+        provenance: &'a crate::semantic::TypedBlockProvenance,
     },
     BuildMatchArm(&'a TypedSumPattern),
 }
@@ -1232,6 +1233,7 @@ fn clone_typed_semantic(initial: TypedCloneTask<'_>) -> TypedCloneValue {
                 pending.push(TypedCloneTask::BuildBlock {
                     statement_count: block.statements.len(),
                     has_tail: block.tail.is_some(),
+                    provenance: &block.provenance,
                 });
                 if let Some(tail) = &block.tail {
                     pending.push(TypedCloneTask::Expr(tail));
@@ -1468,10 +1470,15 @@ fn clone_typed_semantic(initial: TypedCloneTask<'_>) -> TypedCloneValue {
             TypedCloneTask::BuildBlock {
                 statement_count,
                 has_tail,
+                provenance,
             } => {
                 let tail = has_tail.then(|| Box::new(pop_cloned_expr(&mut values)));
                 let statements = pop_cloned_statements(&mut values, statement_count);
-                values.push(TypedCloneValue::Block(TypedBlock { statements, tail }));
+                values.push(TypedCloneValue::Block(TypedBlock {
+                    statements,
+                    tail,
+                    provenance: provenance.clone(),
+                }));
             }
             TypedCloneTask::BuildMatchArm(pattern) => {
                 let body = pop_cloned_block(&mut values);

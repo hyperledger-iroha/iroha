@@ -90,7 +90,7 @@ gas = "G_set_detail + bytes(val)"
 
 [[syscall]]
 number = "0x20"
-args = "r10=&AssetDefinitionId"
+args = "r10=&AssetDefinitionId, r11=&Blob(name), r12=numeric_spec:u64, r13=mintability:u64"
 ret = "u64=0"
 gas = "G_reg_asset"
 
@@ -162,7 +162,7 @@ gas = "G_transfer per entry"
 
 [[syscall]]
 number = "0x2C"
-args = "r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity, r14=&DataSpaceId"
+args = "r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity, r14=&DataSpaceId or 0"
 ret = "u64=0"
 gas = "G_transfer"
 
@@ -1347,6 +1347,18 @@ gas = "G_json_get + input bytes + active payload + sum allocation"
 number = "0x010162"
 args = "r10=&Json(object), r11=&Name(key)"
 ret = "r10=Option<&Quantity> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x010166"
+args = "r10=&Json(object), r11=&Name(key)"
+ret = "r10=Option<&Blob(UTF-8)> sum handle"
+gas = "G_json_get + input bytes + active payload + sum allocation"
+
+[[syscall]]
+number = "0x010167"
+args = "r10=&Json(object), r11=&Name(key)"
+ret = "r10=Option<bool> sum handle"
 gas = "G_json_get + input bytes + active payload + sum allocation"
 
 [[syscall]]

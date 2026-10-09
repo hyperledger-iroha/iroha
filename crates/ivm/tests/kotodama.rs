@@ -735,7 +735,7 @@ fn compile_emits_get_authority_syscall() {
 }
 #[test]
 fn compile_emits_current_time_syscall() {
-    let src = r#"seiyaku Time { view fn f() -> int { return context::current_time_ms(); } }"#;
+    let src = r#"seiyaku Time { view fn f() -> int { return context::transaction_time_ms(); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
@@ -770,8 +770,8 @@ fn compile_emits_extended_sysvar_helpers() {
     let code_region = &code[off..];
     for (name, syscall) in [
         (
-            "SYSVAR_BLOCK_TIME_MS",
-            syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS,
+            "SYSVAR_BLOCK_HEIGHT",
+            syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT,
         ),
         ("SYSVAR_CHAIN_ID", syscalls::SYSCALL_SYSVAR_CHAIN_ID),
         (
@@ -1055,7 +1055,7 @@ fn compile_and_run_add() {
 }
 #[test]
 fn compile_builtin_create_nfts_and_set_detail() {
-    let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")); } }";
+    let src = "seiyaku CanonicalHostCalls { kotoage fn main() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_metadata(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")); } }";
     let code = test_compiler().compile_source(src).expect("compile failed");
     // Sanity: code contains at least three syscalls (order preserved)
     // Byte-pattern search for SCALL encodings (LE): [imm8, 0x00, 0x00, 0x60]
@@ -1106,7 +1106,7 @@ fn semantic_type_enforcement_for_typed_syscalls() {
     )
     .unwrap();
     assert!(analyze(&bad).is_err());
-    let bad2 = parse("module InvalidDetail { fn f() { ledger::account::set_detail(account: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), key: Json::parse(\"1\"), value: Name::parse(\"k\")); } }").unwrap();
+    let bad2 = parse("module InvalidDetail { fn f() { ledger::account::set_metadata(account: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), key: Json::parse(\"1\"), value: Name::parse(\"k\")); } }").unwrap();
     assert!(analyze(&bad2).is_err());
 }
 #[test]
@@ -1786,7 +1786,7 @@ fn parse_register_asset_builtin() {
     );
 }
 #[test]
-fn parse_create_new_asset_builtin() {
+fn parse_register_then_mint_builtins() {
     use kotodama_lang::ir::Instr;
     let src = include_str!("../fixtures/koto_v1/kotodama/064.ko")
         .strip_suffix('\n')
@@ -1798,8 +1798,9 @@ fn parse_create_new_asset_builtin() {
     assert!(
         instrs
             .iter()
-            .any(|i| matches!(i, Instr::CreateNewAsset { .. }))
+            .any(|i| matches!(i, Instr::RegisterAsset { .. }))
     );
+    assert!(instrs.iter().any(|i| matches!(i, Instr::MintAsset { .. })));
 }
 #[test]
 fn parse_mfc_example() {

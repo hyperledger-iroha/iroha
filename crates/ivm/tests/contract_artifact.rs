@@ -1627,7 +1627,11 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
         "言挙げ",
         "始まり_",
         "fn",
-        "account_id",
+        // Unnamespaced source builtins and compile-time value types stay
+        // reserved; compiler-internal lowering spellings such as `account_id`
+        // are ordinary public selector names.
+        "require",
+        "Mintable",
         "Amount",
         "__kotodama_link_private",
     ] {

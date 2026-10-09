@@ -26945,7 +26945,7 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
         seiyaku ProtectedRawTrigger {
           kotoage fn main(int marker, Json event) authorize("raw_trigger_run") {
             let _marker = marker;
-            ledger::account::set_detail(
+            ledger::account::set_metadata(
               account: context::seiyaku_subject(),
               key: Name::parse("raw_trigger_marker"),
               value: event
@@ -27413,7 +27413,7 @@ state_test! { sync contract_call_trigger_enforces_entrypoint_and_hold_before_arg
         seiyaku ProtectedContractCallTrigger {
           kotoage fn run(int marker) authorize("contract_trigger_run") {
             let _marker = marker;
-            ledger::account::set_detail(
+            ledger::account::set_metadata(
               account: context::seiyaku_subject(),
               key: Name::parse("contract_trigger_marker"),
               value: Json::parse("{\"authorized\":true}")

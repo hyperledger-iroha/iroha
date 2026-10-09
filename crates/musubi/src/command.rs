@@ -117,12 +117,15 @@ enum OutputArg {
     #[default]
     Human,
     Json,
+    /// SARIF 2.1.0 with canonical Kotodama diagnostics; `check`, `build` and `test` only.
+    Sarif,
 }
 impl From<OutputArg> for OutputFormat {
     fn from(value: OutputArg) -> Self {
         match value {
             OutputArg::Human => Self::Human,
             OutputArg::Json => Self::Json,
+            OutputArg::Sarif => Self::Sarif,
         }
     }
 }
@@ -134,7 +137,7 @@ impl From<OutputArg> for OutputFormat {
     disable_help_subcommand = true
 )]
 struct Cli {
-    /// Render human text or one versioned JSON document.
+    /// Render human text, one versioned JSON document, or one SARIF document (check/build/test).
     #[arg(long, global = true, value_enum, default_value_t)]
     format: OutputArg,
     /// Use this manifest instead of ancestor discovery.
@@ -257,6 +260,10 @@ struct AddArgs {
     /// Replace an existing entry with the same alias.
     #[arg(long)]
     replace: bool,
+    /// For a standalone package and a sibling `--path` package, first create their shared parent
+    /// workspace (`<parent>/Musubi.toml` listing both as members).
+    #[arg(long, requires = "path", conflicts_with_all = ["workspace_dependency", "workspace"])]
+    create_workspace: bool,
 }
 #[derive(Args, Debug)]
 struct RemoveArgs {
@@ -331,12 +338,16 @@ struct BuildArgs {
     mode: GraphModeArgs,
     #[command(flatten)]
     registry: RegistryReadArgs,
-    /// Named deployment network; defaults to the workspace selection or Taira.
+    /// Named network binding whose address profile is compiled for; defaults to the workspace's
+    /// configured default, or local compilation with the data-model default profile (753).
     #[arg(long)]
     network: Option<String>,
     /// Account-address chain discriminant for local compilation. Must match the registry when used.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     chain_discriminant: Option<u16>,
+    /// Enable the Kotodama ZK compilation surface for every selected contract and test.
+    #[arg(long)]
+    zk: bool,
 }
 #[derive(Args, Debug)]
 struct PackageArgs {
@@ -657,12 +668,35 @@ where
         Ok(cli) => {
             let format = cli.format.into();
             let command_name = cli.command.name();
-            let result = dispatch(cli.manifest_path.as_deref(), &cli.command, &mut |message| {
-                report_progress(format, message, progress);
-            });
-            let output = match result {
-                Ok(success) => CommandOutput::success(command_name, success.message, success.data),
-                Err(diagnostic) => CommandOutput::failure(command_name, diagnostic),
+            let mut report = |message: &str| report_progress(format, message, progress);
+            let output = match &cli.command {
+                Command::Check(args) | Command::Build(args) | Command::Test(args) => {
+                    match build::run_build_with_warnings(
+                        cli.manifest_path.as_deref(),
+                        command_name,
+                        args,
+                    ) {
+                        Ok((success, warnings)) => {
+                            CommandOutput::success(command_name, success.message, success.data)
+                                .with_warnings(warnings)
+                        }
+                        Err(diagnostic) => CommandOutput::failure(command_name, diagnostic),
+                    }
+                }
+                _ if format == OutputFormat::Sarif => CommandOutput::failure(
+                    command_name,
+                    Diagnostic::new(
+                        ErrorCode::Usage,
+                        "SARIF output is available for `check`, `build` and `test`",
+                    )
+                    .with_help("use `--format human` or `--format json` for this command"),
+                ),
+                command => match dispatch(cli.manifest_path.as_deref(), command, &mut report) {
+                    Ok(success) => {
+                        CommandOutput::success(command_name, success.message, success.data)
+                    }
+                    Err(diagnostic) => CommandOutput::failure(command_name, diagnostic),
+                },
             };
             Invocation { format, output }
         }
@@ -681,11 +715,18 @@ where
             format: detected_format,
             output: CommandOutput::failure(
                 "cli",
-                Diagnostic::new(ErrorCode::Usage, error.to_string())
+                Diagnostic::new(ErrorCode::Usage, clap_error_message(&error))
                     .with_help("run `musubi --help` for the first-release command surface"),
             ),
         },
     }
+}
+/// Clap's rendered error without its own `error: ` prefix, which Musubi's diagnostic adds.
+fn clap_error_message(error: &clap::Error) -> String {
+    let rendered = error.to_string();
+    rendered
+        .strip_prefix("error: ")
+        .map_or_else(|| rendered.clone(), ToOwned::to_owned)
 }
 fn report_progress(format: OutputFormat, message: &str, progress: &mut dyn FnMut(&str)) {
     if format == OutputFormat::Human {
@@ -695,10 +736,17 @@ fn report_progress(format: OutputFormat, message: &str, progress: &mut dyn FnMut
 fn detect_output_format(argv: &[OsString]) -> OutputFormat {
     for (index, argument) in argv.iter().enumerate() {
         let argument = argument.to_string_lossy();
-        if argument == "--format=json"
-            || (argument == "--format" && argv.get(index + 1).is_some_and(|value| value == "json"))
-        {
-            return OutputFormat::Json;
+        let value = match argument.strip_prefix("--format=") {
+            Some(value) => Some(value.to_owned()),
+            None if argument == "--format" => argv
+                .get(index + 1)
+                .map(|value| value.to_string_lossy().into_owned()),
+            None => None,
+        };
+        match value.as_deref() {
+            Some("json") => return OutputFormat::Json,
+            Some("sarif") => return OutputFormat::Sarif,
+            _ => {}
         }
     }
     OutputFormat::Human
@@ -780,23 +828,54 @@ fn run_add(explicit_manifest: Option<&Path>, args: &AddArgs) -> CommandResult {
     if matches!(dependency, DependencySpec::Workspace) {
         validate_workspace_inheritance(&manifest_path, &alias)?;
     }
-    if let DependencySpec::Concrete(concrete) = &dependency {
-        validate_added_path_dependency(&manifest_path, section, &alias, concrete)?;
+    let created_workspace = match (&dependency, args.create_workspace) {
+        (DependencySpec::Concrete(ConcreteDependency::Path { path, .. }), true) => {
+            Some(scaffold::create_sibling_workspace(&manifest_path, path)?)
+        }
+        _ => None,
+    };
+    let edited = (|| {
+        if let DependencySpec::Concrete(concrete) = &dependency {
+            validate_added_path_dependency(&manifest_path, section, &alias, concrete)?;
+        }
+        let edited = upsert_dependency(&source, section, alias.as_ref(), &dependency)
+            .map_err(|error| manifest_diagnostic(&manifest_path, &error))?;
+        atomic_replace_manifest(&manifest_path, edited.as_bytes())
+    })();
+    if let Err(diagnostic) = edited {
+        if let Some(created) = &created_workspace {
+            // Leave no half-applied change: remove the workspace manifest this command created.
+            let _ = fs::remove_file(created);
+        }
+        return Err(diagnostic);
     }
-    let edited = upsert_dependency(&source, section, alias.as_ref(), &dependency)
-        .map_err(|error| manifest_diagnostic(&manifest_path, &error))?;
-    atomic_replace_manifest(&manifest_path, edited.as_bytes())?;
     let kind = match section {
         DependencySection::Normal => "normal",
         DependencySection::Development => "development",
         DependencySection::Workspace => "workspace",
     };
+    let mut message = format!("added {alias} ({kind})");
+    if let Some(created) = &created_workspace {
+        let root = created.parent().unwrap_or(created);
+        let _ = write!(
+            message,
+            "\ncreated workspace {}; Musubi.lock and target/ now live in {}",
+            created.display(),
+            root.display()
+        );
+    }
     Ok(Success {
-        message: format!("added {alias} ({kind})"),
+        message,
         data: object([
             ("alias", Value::from(alias.to_string())),
             ("kind", Value::from(kind)),
             ("manifest", Value::from(manifest_path.display().to_string())),
+            (
+                "created_workspace",
+                created_workspace
+                    .as_ref()
+                    .map_or(Value::Null, |path| Value::from(path.display().to_string())),
+            ),
         ]),
     })
 }
@@ -906,6 +985,25 @@ fn validate_workspace_inheritance(manifest_path: &Path, alias: &Name) -> Result<
     }
     Ok(())
 }
+/// Explain how to place a package and its local dependency under one workspace root.
+///
+/// Every path dependency stays below one root so lockfiles, build outputs and compiler source
+/// identities remain relative to it; sibling packages therefore share a parent workspace.
+fn shared_workspace_help(package_root: &Path, dependency_root: &Path) -> String {
+    let mut parent = package_root.to_path_buf();
+    while !dependency_root.starts_with(&parent) && parent.pop() {}
+    let relative = |path: &Path| {
+        path.strip_prefix(&parent)
+            .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default()
+    };
+    format!(
+        "path dependencies must stay below one workspace root; rerun with `--create-workspace` to create `{}` containing `manifest-version = 1`, `[workspace]` and `members = [\"{}\", \"{}\"]`",
+        parent.join(MANIFEST_FILE_NAME).display(),
+        relative(package_root),
+        relative(dependency_root)
+    )
+}
 fn validate_added_path_dependency(
     manifest_path: &Path,
     section: DependencySection,
@@ -949,7 +1047,8 @@ fn validate_added_path_dependency(
             "local dependency path escapes the workspace root",
         )
         .with_context("alias", alias.to_string())
-        .with_context("path", path.to_string()));
+        .with_context("path", path.to_string())
+        .with_help(shared_workspace_help(workspace.root(), &candidate)));
     }
     let target = load_workspace(&candidate).map_err(workspace_diagnostic)?;
     let target_member = target
@@ -1344,6 +1443,11 @@ fn workspace_diagnostic(error: crate::workspace::WorkspaceError) -> Diagnostic {
     let mut diagnostic = Diagnostic::new(ErrorCode::WorkspaceInvalid, error.message());
     if let Some(path) = error.path() {
         diagnostic = diagnostic.with_context("path", path.display().to_string());
+    }
+    if error.kind() == WorkspaceErrorKind::Escape {
+        diagnostic = diagnostic.with_help(
+            "path dependencies must stay below one workspace root; add a parent `Musubi.toml` with `manifest-version = 1` and a `[workspace]` table whose `members` list both packages",
+        );
     }
     diagnostic
 }
@@ -2209,9 +2313,26 @@ fn compiler_bridge_diagnostic(error: &CompilerBridgeErrorV1) -> Diagnostic {
         CompilerBridgeErrorV1::Lock(_) => ErrorCode::LockfileInvalid,
         CompilerBridgeErrorV1::Cache(_) => ErrorCode::CacheCorrupt,
         CompilerBridgeErrorV1::Package(_) => ErrorCode::PackageInvalid,
+        CompilerBridgeErrorV1::Diagnostics(bundle) => {
+            return compiler_bundle_diagnostic(bundle.clone());
+        }
         CompilerBridgeErrorV1::Compiler(_) => ErrorCode::Compiler,
     };
     Diagnostic::new(code, error.to_string())
+}
+/// Summarize canonical compiler diagnostics without re-rendering them into the message.
+fn compiler_bundle_diagnostic(bundle: kotodama_lang::diagnostic::DiagnosticBundle) -> Diagnostic {
+    let errors = bundle
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == kotodama_lang::diagnostic::Severity::Error)
+        .count();
+    let noun = if errors == 1 { "error" } else { "errors" };
+    Diagnostic::new(
+        ErrorCode::Compiler,
+        format!("Kotodama rejected the selected sources with {errors} {noun}"),
+    )
+    .with_compiler_diagnostics(bundle)
 }
 fn graph_mode_compiler_diagnostic(
     error: &CompilerBridgeErrorV1,
@@ -2237,6 +2358,19 @@ fn test_runner_diagnostic(error: &WorkspaceTestErrorV1) -> Diagnostic {
         WorkspaceTestErrorV1::ExternalModules(_) | WorkspaceTestErrorV1::Runner(_) => {
             ErrorCode::Compiler
         }
+        WorkspaceTestErrorV1::Compilation(rendered) => {
+            // The summary stays one line; the compiler's own rendering follows it unchanged
+            // instead of being nested after a second error prefix.
+            return Diagnostic::new(
+                ErrorCode::Compiler,
+                "Kotodama rejected the selected test sources",
+            )
+            .with_details(
+                rendered.clone(),
+                &object([("compiler_output", Value::from(rendered.clone()))]),
+            );
+        }
+        WorkspaceTestErrorV1::Execution(_) => ErrorCode::TestFailed,
     };
     Diagnostic::new(code, error.to_string())
 }

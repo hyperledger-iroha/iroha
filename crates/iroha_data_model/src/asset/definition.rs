@@ -534,6 +534,158 @@ impl NewAssetDefinition {
         Ok(self)
     }
 }
+/// Register-word encoding of asset-definition registration parameters carried
+/// by the IVM `REGISTER_ASSET` syscall.
+///
+/// The Kotodama compiler encodes `NumericSpec::*` and `Mintable::*` source
+/// values with these functions and every contract host decodes them with the
+/// same functions, so a contract registers exactly the numeric spec and
+/// mintability it names.
+pub mod ivm_registration {
+    use super::{Mintable, NumericSpec};
+    use core::fmt;
+
+    /// Largest scale an encoded [`NumericSpec`] may bound.
+    pub const MAX_SCALE: u32 = iroha_primitives::numeric::MAX_DECIMAL_SCALE;
+    /// Low two bits of a mintability word select the [`Mintable`] variant.
+    const MINTABLE_TAG_MASK: u64 = 0b11;
+    const MINTABLE_TAG_INFINITELY: u64 = 0;
+    const MINTABLE_TAG_ONCE: u64 = 1;
+    const MINTABLE_TAG_NOT: u64 = 2;
+    const MINTABLE_TAG_LIMITED: u64 = 3;
+
+    /// A register word that does not encode a valid registration parameter.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum RegistrationWordError {
+        /// The numeric-spec word is neither `0` nor `scale + 1` for a scale up to 28.
+        NumericSpec(u64),
+        /// The mintability word has an unknown tag, stray bits, or a zero/oversized
+        /// limited token budget.
+        Mintable(u64),
+    }
+
+    impl fmt::Display for RegistrationWordError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::NumericSpec(word) => {
+                    write!(f, "invalid REGISTER_ASSET numeric spec word {word:#x}")
+                }
+                Self::Mintable(word) => {
+                    write!(f, "invalid REGISTER_ASSET mintability word {word:#x}")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for RegistrationWordError {}
+
+    /// Encode a [`NumericSpec`]: `0` is unconstrained and `scale + 1` bounds the scale.
+    #[must_use]
+    pub const fn numeric_spec_word(spec: NumericSpec) -> u64 {
+        match spec.scale() {
+            None => 0,
+            Some(scale) => scale as u64 + 1,
+        }
+    }
+
+    /// Decode a numeric-spec word produced by [`numeric_spec_word`].
+    ///
+    /// # Errors
+    /// Returns [`RegistrationWordError::NumericSpec`] for a scale above [`MAX_SCALE`].
+    pub fn numeric_spec_from_word(word: u64) -> Result<NumericSpec, RegistrationWordError> {
+        if word == 0 {
+            return Ok(NumericSpec::unconstrained());
+        }
+        u32::try_from(word - 1)
+            .ok()
+            .and_then(|scale| NumericSpec::try_fractional(scale).ok())
+            .ok_or(RegistrationWordError::NumericSpec(word))
+    }
+
+    /// Encode a [`Mintable`]: the low two bits select `Infinitely`, `Once`, `Not` or
+    /// `Limited`, and the remaining bits carry the limited token budget.
+    #[must_use]
+    pub fn mintable_word(mintable: Mintable) -> u64 {
+        match mintable {
+            Mintable::Infinitely => MINTABLE_TAG_INFINITELY,
+            Mintable::Once => MINTABLE_TAG_ONCE,
+            Mintable::Not => MINTABLE_TAG_NOT,
+            Mintable::Limited(tokens) => (u64::from(u32::from(tokens)) << 2) | MINTABLE_TAG_LIMITED,
+        }
+    }
+
+    /// Decode a mintability word produced by [`mintable_word`].
+    ///
+    /// # Errors
+    /// Returns [`RegistrationWordError::Mintable`] when a non-limited tag carries
+    /// payload bits or a limited budget is zero or does not fit `u32`.
+    pub fn mintable_from_word(word: u64) -> Result<Mintable, RegistrationWordError> {
+        let payload = word >> 2;
+        match word & MINTABLE_TAG_MASK {
+            MINTABLE_TAG_INFINITELY if payload == 0 => Ok(Mintable::Infinitely),
+            MINTABLE_TAG_ONCE if payload == 0 => Ok(Mintable::Once),
+            MINTABLE_TAG_NOT if payload == 0 => Ok(Mintable::Not),
+            MINTABLE_TAG_LIMITED => u32::try_from(payload)
+                .ok()
+                .and_then(|tokens| Mintable::limited_from_u32(tokens).ok())
+                .ok_or(RegistrationWordError::Mintable(word)),
+            _ => Err(RegistrationWordError::Mintable(word)),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn numeric_spec_words_round_trip_and_reject_oversized_scales() {
+            for spec in [
+                NumericSpec::unconstrained(),
+                NumericSpec::integer(),
+                NumericSpec::fractional(2),
+                NumericSpec::fractional(MAX_SCALE),
+            ] {
+                assert_eq!(numeric_spec_from_word(numeric_spec_word(spec)), Ok(spec));
+            }
+            assert_eq!(numeric_spec_word(NumericSpec::unconstrained()), 0);
+            assert_eq!(numeric_spec_word(NumericSpec::integer()), 1);
+            let oversized = u64::from(MAX_SCALE) + 2;
+            assert_eq!(
+                numeric_spec_from_word(oversized),
+                Err(RegistrationWordError::NumericSpec(oversized))
+            );
+            assert!(numeric_spec_from_word(u64::MAX).is_err());
+        }
+
+        #[test]
+        fn mintable_words_round_trip_and_reject_malformed_words() {
+            for mintable in [
+                Mintable::Infinitely,
+                Mintable::Once,
+                Mintable::Not,
+                Mintable::limited_from_u32(1).expect("one token"),
+                Mintable::limited_from_u32(u32::MAX).expect("max tokens"),
+            ] {
+                assert_eq!(mintable_from_word(mintable_word(mintable)), Ok(mintable));
+            }
+            assert_eq!(mintable_word(Mintable::Infinitely), 0);
+            assert_eq!(mintable_word(Mintable::Once), 1);
+            assert_eq!(mintable_word(Mintable::Not), 2);
+            for malformed in [
+                0b100,
+                0b101,
+                0b110,
+                MINTABLE_TAG_LIMITED,
+                (u64::from(u32::MAX) + 1) << 2 | MINTABLE_TAG_LIMITED,
+            ] {
+                assert_eq!(
+                    mintable_from_word(malformed),
+                    Err(RegistrationWordError::Mintable(malformed))
+                );
+            }
+        }
+    }
+}
 impl Default for AssetConfidentialPolicy {
     fn default() -> Self {
         Self {

@@ -210,6 +210,7 @@ fn complete(plan: &Plan) -> Result<DeploymentReceipt> {
             block_height: 2,
             scope: "global".into(),
             resolved_from: "state".into(),
+            charge: None,
         })
         .collect();
     for (index, ((name, tx), evidence)) in plan.transactions.iter().zip(&stages).enumerate() {
@@ -538,7 +539,11 @@ fn completed_historical_resume_keeps_newer_active_pointer_and_never_dispatches()
                 .iter()
                 .any(|(head, _)| head.starts_with("GET /v1/pipeline/transactions/status?"))
         );
-        assert!(requests.iter().all(|(head, _)| head.starts_with("GET ")));
+        // Only reads: status polls and the signed, read-only transaction-details query that
+        // reports the settled gas and fee. Nothing is submitted.
+        assert!(requests.iter().all(|(head, _)| {
+            head.starts_with("GET ") || head.starts_with("POST /v1/pipeline/transactions/details ")
+        }));
     }
     Ok(())
 }
@@ -984,6 +989,7 @@ pub(crate) fn assert_package_fresh_retry_preserves_original(
             panic!("prepare-only retry dispatched")
         })?;
         assert!(prepared.receipt.is_none());
+        assert!(!prepared.completed_earlier);
         assert_eq!(prepared.journal, original.journal);
         assert_eq!(
             prepared.preflight.transaction_hashes,

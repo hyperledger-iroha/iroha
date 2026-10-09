@@ -20,6 +20,7 @@ fn empty_targets() -> GlobalTargets {
         external_structs: BTreeSet::new(),
         external_consts: BTreeSet::new(),
         external_error_codes: BTreeMap::new(),
+        declarations: BTreeMap::new(),
     }
 }
 

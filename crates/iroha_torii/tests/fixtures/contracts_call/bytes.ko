@@ -11,9 +11,10 @@ seiyaku ContractViewBytesTest {
         Target = b"";
     }
 
-    kotoage fn configure(AssetDefinitionId asset_input, bytes target_bytes) authorize(
-        "CanEnactGovernance"
-    ) {
+    kotoage fn configure(
+        AssetDefinitionId asset_input,
+        bytes target_bytes,
+    ) authorize("CanEnactGovernance") {
         configure_impl(asset_input: asset_input, target_bytes: target_bytes);
     }
 

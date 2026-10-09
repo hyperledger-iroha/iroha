@@ -238,7 +238,7 @@ seiyaku OwnerPermission {
     owner_authorized = 1;
   }
   kotoage fn touch_caller() authorize("CanInvokeContractEntrypoint") {
-    ledger::account::set_detail(
+    ledger::account::set_metadata(
       account: context::authority(),
       key: Name::parse("owner_authorized"),
       value: Json::parse("{\"written\":true}")

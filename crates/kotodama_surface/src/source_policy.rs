@@ -170,13 +170,41 @@ pub const V1_LIST_MEMBER_NAMES: &[&str] = &[
 /// Prefix reserved for linker-synthesised symbols.
 pub const LINKED_SYMBOL_PREFIX: &str = "__kotodama_link_";
 /// Return whether a source declaration collides with compiler-owned names.
+///
+/// Only names source code can refer to are reserved: types, keywords handled
+/// by the lexer, compiler-owned extras and unnamespaced source builtins such
+/// as `require`. Compiler-internal lowering spellings (`min`, `authority`,
+/// `mint_asset`, ...) are not source names, so kotoage and view functions may
+/// use them as public selectors; [`builtin_lowering_collision`] identifies the
+/// private helpers whose calls would still be ambiguous with builtin lowering.
 pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
         || V1_SOURCE_TYPE_NAMES.contains(&name)
         || V1_DECLARATION_RESERVED_EXTRA_NAMES.contains(&name)
         || V1_FORBIDDEN_SOURCE_IDENTIFIERS.contains(&name)
-        || (is_function
-            && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
+        || is_compile_time_nominal_type(name)
+        || (is_function && Builtin::from_source_name(name).is_some())
+}
+/// Return whether `name` is a compiler-owned compile-time value type such as
+/// `Mintable`, whose values (`Mintable::Once`) are builtin arguments.
+///
+/// The set is derived from the builtin registry, so a declaration can never
+/// shadow the namespace of a nominal value the compiler folds.
+pub fn is_compile_time_nominal_type(name: &str) -> bool {
+    Builtin::all()
+        .any(|builtin| builtin.is_compile_time_nominal() && builtin.signature().return_type == name)
+}
+/// Return the builtin whose compiler-internal lowering name equals `name`.
+///
+/// Typed calls to a private helper and to a builtin share one call namespace
+/// after semantic analysis, so a private `fn` must not reuse a lowering name.
+/// Public selectors (kotoage, view and lifecycle declarations) are never
+/// called from source and may use these names.
+// TODO: give typed builtin calls their own HIR identity so private helpers can
+// reuse lowering names too; this needs semantic, IR, secret-flow and lint
+// passes to stop dispatching builtins by call name.
+pub fn builtin_lowering_collision(name: &str) -> Option<Builtin> {
+    Builtin::from_name(name)
 }
 /// Return whether a declared source type collides with an active or retired
 /// compiler-owned type spelling.
@@ -193,28 +221,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_names_are_reserved_only_for_functions() {
-        let mut checked = 0;
-        for builtin in Builtin::all() {
-            for name in [builtin.name(), builtin.source_name()] {
-                if Builtin::from_name(name).is_none() && Builtin::from_source_name(name).is_none() {
-                    continue;
-                }
-                assert!(is_reserved_source_declaration(name, true), "{name}");
-                if V1_SOURCE_TYPE_NAMES.contains(&name)
-                    || V1_DECLARATION_RESERVED_EXTRA_NAMES.contains(&name)
-                    || V1_FORBIDDEN_SOURCE_IDENTIFIERS.contains(&name)
-                {
-                    continue;
-                }
-                assert!(!is_reserved_source_declaration(name, false), "{name}");
-                checked += 1;
-            }
+    fn only_source_visible_builtin_names_are_reserved_for_functions() {
+        assert!(is_reserved_source_declaration("require", true));
+        assert!(!is_reserved_source_declaration("require", false));
+        for name in [
+            "min",
+            "max",
+            "authority",
+            "chain_id",
+            "mint_asset",
+            "burn_asset",
+            "grant_role",
+            "register_account",
+            "info",
+            "name",
+        ] {
+            assert!(!is_reserved_source_declaration(name, true), "{name}");
+            assert!(builtin_lowering_collision(name).is_some(), "{name}");
         }
-        assert!(
-            checked > 0,
-            "no builtin name is reserved only for functions"
-        );
+        assert_eq!(builtin_lowering_collision("min"), Some(Builtin::Min));
+        assert_eq!(builtin_lowering_collision("transfer"), None);
+    }
+
+    #[test]
+    fn compile_time_nominal_types_are_reserved() {
+        for name in ["NumericSpec", "Mintable", "SignatureScheme"] {
+            assert!(is_compile_time_nominal_type(name), "{name}");
+            assert!(is_reserved_source_declaration(name, false), "{name}");
+            assert!(is_reserved_source_type_declaration(name), "{name}");
+        }
+        assert!(!is_compile_time_nominal_type("Rounding"));
+        assert!(!is_compile_time_nominal_type("Vault"));
     }
 
     #[test]

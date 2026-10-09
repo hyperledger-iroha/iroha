@@ -19,9 +19,36 @@ Source is UTF-8 and V1 identifiers are ASCII. Keywords are case-sensitive.
 Four branded declaration features each have a romanized Japanese spelling and
 its exact Japanese-language equivalent: `seiyaku`/`誓約`,
 `kotoage`/`言挙げ`, `hajimari`/`始まり`, and `kaizen`/`改善`.
-Those eight spellings are first-class keywords, not compatibility aliases.
-Other non-ASCII text is permitted only inside strings and comments; English
-`contract`, `entry`, `init`, and `upgrade` are not Kotodama V1 keywords.
+Those eight spellings are first-class keywords, not compatibility aliases. The
+two spellings of a feature are the same token and may be mixed freely, even
+within one file; no tool normalizes or prefers either script. Other non-ASCII
+text is permitted only inside strings and comments; English `contract`,
+`entry`, `init`, and `upgrade` are ordinary identifiers, not Kotodama V1
+keywords. Where they stand in place of a declaration keyword
+(`contract Name {`, `init() { ... }`, `pub fn`, `entry fn`), they and similar
+English concept words are rejected with `E_ENGLISH_DECLARATION_WORD`, which
+offers both spellings of the branded keyword (inside a module, whose public
+surface is `export`, `pub fn` is answered with `export fn`); as ordinary names
+(`fn init()`) they remain valid identifiers.
+
+| Keyword | Reading | Literal meaning | Role |
+| --- | --- | --- | --- |
+| `seiyaku` / `誓約` | せいやく | solemn pledge | Declares the deployable unit compiled to one IVM `.to` artifact |
+| `kotoage` / `言挙げ` | ことあげ | raising one's words | Declares an authorized, state-changing public function of a seiyaku |
+| `hajimari` / `始まり` | はじまり | beginning | Declares the one-shot activation hook that initializes durable state |
+| `kaizen` / `改善` | かいぜん | improvement | Declares the migration hook run once when an active seiyaku's code is replaced in place |
+
+Tokens are separated by ASCII whitespace or by the ideographic space U+3000
+that Japanese input methods insert; `koto fmt` rewrites U+3000 to an ASCII
+space. Other Unicode spaces are rejected (`E_NON_ASCII_WHITESPACE`), and
+full-width forms of ASCII characters such as `（`, `；` or `ａ` are rejected
+outside strings and comments (`E_FULLWIDTH_ASCII`). Characters that make
+reviewed text read differently from what compiles are rejected anywhere in a
+source file, including comments and string literals: the bidirectional
+controls U+202A–U+202E, U+2066–U+2069, U+200E, U+200F, and U+061C
+(`E_BIDI_CONTROL_CHARACTER`) and the line separators U+2028, U+2029, and U+0085
+(`E_UNICODE_LINE_SEPARATOR`). A string that needs one of them spells it with a
+`\u{...}` escape.
 
 The following lexical tables are generated from
 `crates/kotodama_lang/grammar/v1.lex`; edits belong in that machine-readable
@@ -119,6 +146,7 @@ binary-literal  = "0b" ("0" | "1" | "_")+ ;
 string-literal  = '"' string-character* '"' ;
 bytes-literal   = "b" string-literal ;
 comment         = "//" non-newline-character* ;
+whitespace      = U+0009 | U+000A | U+000B | U+000C | U+000D | U+0020 | U+3000 ;
 ```
 
 String escapes are `\\`, `\"`, `\n`, `\r`, `\t`, `\0`, `\xNN`, and
@@ -221,6 +249,22 @@ localization is outside the deployable language. Constructors are ordinary
 typed calls (`AccountId::parse("...")`, `Json::parse("{...}")`); bytes use
 `b"..."`. There is no compatibility parser or edition switch.
 
+String literals passed to the typed identifier constructors (`AccountId`,
+`AssetDefinitionId`, `AssetId`, `NftId`, `DomainId`, `DataSpaceId`, and `Name`)
+are validated during semantic analysis with the same parsers lowering uses, so
+`koto check` and editors report them as `E_INVALID_ID_LITERAL` on the literal.
+Account literals are checked against the compilation's chain discriminant; a
+literal encoded for another network reports both discriminants, and a literal
+whose katakana were widened by an input method receives a fix to the canonical
+half-width spelling (`ヰ` and `ヱ` have no half-width form and stay as they are).
+Alias-shaped account literals containing `@` are resolved by the host at
+execution time and are not validated statically. A call through a
+compiler-owned namespace such as `context::`, `ledger::`, `math::`, `Option::`,
+or `Result::` that names no builtin is `E_UNKNOWN_BUILTIN`, never an import
+error; such roots can never be import aliases. The diagnostic suggests the
+closest builtin and points English concept spellings such as
+`context::entrypoint` at their branded names (`context::kotoage`).
+
 ## Declarations
 
 ```ebnf
@@ -280,14 +324,20 @@ Ordinary function parameters accept positional values or their declared names.
 `int _ value` declares a positional-only parameter; these parameters form a
 contiguous prefix of the signature. For example,
 `fn clamp(int _ value, int minimum, int maximum)` accepts both `clamp(7, 0, 10)`
-and `clamp(7, minimum: 0, maximum: 10)`. Builtins retain their explicit registry
-call policies, including required names for ledger operations.
+and `clamp(7, minimum: 0, maximum: 10)`. Builtin calls follow the single
+argument-label rule in [Namespaced host API](#namespaced-host-api).
 Declaration types always precede names; the retired `name: Type` form is a
-syntax error with a type-first diagnostic. Every error variant has an explicit,
+syntax error with a type-first diagnostic, reported once for each declaration
+written that way with a fix that swaps it to `Type name`. Every error variant has an explicit,
 non-zero `u32` code, and names and codes are unique within the
 enum. Missing types, unknown types, duplicate declarations, reserved names,
 ambiguous resolution, recursive value types, duplicate parameters, and
-shadowing are compile errors.
+shadowing are compile errors. Shadowing includes a parameter or local that
+reuses the name of any seiyaku-level declaration, such as a parameter `stake`
+in a seiyaku that also declares `kotoage fn stake(...)`. The diagnostic names
+the colliding declaration as it is spelled and labels where it is declared; the
+rejected binding still resolves its own later uses, so one collision produces
+one error rather than a cascade of unknown-name errors.
 
 A `kotoage fn`/`言挙げ fn` mutates or submits ledger state and always declares
 caller authorization. Authorization is checked at runtime and is separate from
@@ -494,7 +544,10 @@ Retired type spellings are reserved only in the type namespace and in declared
 type names. Except for exact `Amount`, which is forbidden in every identifier
 position, the other retired type spellings remain available for ordinary
 function, parameter, and local value names; for example,
-`fn amount(quantity amount) -> quantity` is valid.
+`fn total(quantity amount) -> quantity` is valid. Functions, parameters,
+locals, state, and constants share one value namespace, so a parameter may not
+reuse the name of its own or any other function: `fn amount(quantity amount)`
+is a shadowing error.
 Unit is written `()` in both type and value position. Omitted return annotations
 mean `()`, and an omitted return value is the same canonical Unit value. Unit
 occupies one zero scalar word and renders as JSON `null`; schemas carry an
@@ -549,7 +602,7 @@ another.
 
 ## Control flow and expressions
 
-V1 supports `if`/`else`, `return`, and compiler-proven bounded `for` loops. It rejects `while`, recursion, indirect source calls, and loops whose bound cannot be proven.
+V1 supports `if`/`else`, `return`, and compiler-proven bounded `for` loops. It rejects `while`, `loop` and three-clause `for (init; condition; step)` headers (`E_UNSUPPORTED_LOOP`), recursion, indirect source calls, and loops whose bound cannot be proven. A counted loop is written `for i in range(N)`; `..` appears only in struct patterns, so `0..10` is not a range (`E_RANGE_SYNTAX`, with a `range(N)` fix when the start is `0`).
 
 Collection iteration accepts `List<T, N>` with a static capacity of at most
 64. The loop binding accepts a name, tuple pattern, or named struct pattern.
@@ -658,8 +711,10 @@ Functions, `if`/`if let`, and `match` all use the same tail rule; explicit
 values. Sum matches are exhaustive and use only the namespaced patterns above.
 Postfix `?` propagates only the same `Option` family or the exact same `Result`
 error type returned by the enclosing function; V1 performs no implicit error
-conversion. The retired lowercase placeholder constructors are syntax errors
-with active-only fix-its.
+conversion. The lowercase placeholder constructors, mis-cased paths such as
+`Option::Some`, and bare `Some(x)`, `None`, `Ok(x)`, and `Err(x)` are syntax
+errors (`E_LEGACY_SUM_CONSTRUCTOR`) with fixes to the canonical spelling. A
+match has no `_` wildcard arm (`E_MATCH_WILDCARD`).
 
 Ordinary function calls accept a positional prefix followed by optional named
 arguments. Named arguments may appear in any order; argument expressions always
@@ -669,7 +724,9 @@ missing required argument is an error.
 Keywords are contextual argument labels immediately before `:`, so canonical
 builtins can use labels such as `trigger:`. This does not make keywords valid
 local binding names. Call labels depend only on the signature and are included in package interface
-fingerprints. Builtin call modes are explicit registry metadata. Structs are
+fingerprints. Builtin label requirements come from the registry's call policy;
+builtin label punning is sugar for the labelled call and never changes a
+fingerprint. Structs are
 constructed with named fields. Locked packages may explicitly export struct
 and error types, referenced as `Alias::Type` in declarations and patterns.
 
@@ -700,7 +757,8 @@ math::wrapping_sub(int left, int right) -> int
 math::wrapping_mul(int left, int right) -> int
 ```
 
-The binary forms are named-only. These are the complete V1 modular-arithmetic
+Like every pure helper, the binary forms accept positional operands or their
+declared `left:`/`right:` labels. These are the complete V1 modular-arithmetic
 APIs; the corresponding flat names and all generic `numeric::*` helpers are
 retired source spellings.
 
@@ -734,7 +792,9 @@ quantity.div_round(decimal divisor, int scale, rounding-mode mode) -> quantity
 quantity.ratio_round(quantity divisor, int scale, rounding-mode mode) -> decimal
 ```
 
-All three arguments are named-only. `rounding-mode` denotes one of the seven
+Like every receiver method, these accept positional arguments or their
+declared labels (`divisor:`, `scale:`, `mode:`); labels keep the two numeric
+operands distinct at the call site. `rounding-mode` denotes one of the seven
 `Rounding::*` paths listed above, not an integer tag or a user-declarable type.
 The scale is checked in `0..=28`; `div_round` is not an `int` method, and
 `ratio_round` is not a `decimal` method.
@@ -754,8 +814,10 @@ The bounded API includes `len`, `get(index) -> Option<T>`,
 `set(index: int, value: T) -> ()`, `push(value) -> ()`,
 `try_set(index: int, value: T) -> Result<(), ListError>`,
 `try_push(value) -> Result<(), ListError>`, `pop() -> Option<T>`, `contains`,
-`take(constant_limit)`, and bounded `enumerate`. `push` and `try_push` take their
-single value positionally. All four writes and `pop` require a mutable `var`
+`take(constant_limit)`, and bounded `enumerate`. Like every receiver method,
+List methods accept positional arguments or their declared labels, so
+`xs.set(0, value)` and `xs.set(index: 0, value: value)` are the same call.
+All four writes and `pop` require a mutable `var`
 receiver. Checked `set`/`push` abort and revert the invocation with the same
 nominal `ListError` their fallible counterpart returns. `IndexOutOfBounds = 1`
 and `CapacityExceeded = 2` are the complete compiler-owned ListError schema.
@@ -808,6 +870,10 @@ seiyaku NativeJsonExample {
 }
 ```
 
+Like a struct literal, a `json { ... }` object is not recognised directly in
+the head of an `if`, `match`, or `for` (`for x in json { ... }` iterates a
+local named `json`); parenthesize it there.
+
 JSON object keys are identifiers or string literals, duplicates are errors,
 and encoded keys are sorted canonically regardless of source order. Each
 object or array node contains at most 64 entries or elements. JSON
@@ -820,9 +886,39 @@ Options always use the same tagged objects as public arguments and returns:
 nested Options and list elements retain every active tag. No nullable Option
 encoding is accepted. Literal-only and dynamic native JSON expressions use
 the same schema-bound construction operation. `Result` and arbitrary structs require explicit handling. Typed
-getters return `Option<T>` and use `.get_int(key)`, `.get_decimal(key)`, and
-`.get_quantity(key)` for the three numeric domains. Retired numeric getter
-spellings are errors.
+getters are receiver methods that return `Option<T>`: `.get_int(key)`,
+`.get_decimal(key)` and `.get_quantity(key)` for the three numeric domains,
+`.get_string(key)` and `.get_bool(key)` for JSON strings and booleans, plus
+`.get_json`, `.get_name`, `.get_account_id`, `.get_asset_definition_id`,
+`.get_nft_id` and `.get_bytes_hex`. The key is a `Name` or a string literal; a
+literal key is validated as a `Name` at compile time, so
+`value.get_int("count")` and `value.get_int(Name::parse("count"))` are the same
+call. Retired numeric getter spellings are errors.
+
+A getter returns `Option::none` only when the key is absent from the JSON
+object. A present field of the wrong JSON type aborts the invocation with the
+host trap `DecodeError` instead of reading as absent: for example a JSON number
+token where `.get_int` requires a canonical decimal string such as `"5"`, a
+quoted `"true"` read by `.get_bool`, or a number read by `.get_string`. A
+non-object receiver aborts the same way. The numeric getters never accept JSON
+number tokens, because a client that encodes integers as floating-point numbers
+may already have rounded them; exact values travel as canonical strings.
+
+```kotodama
+seiyaku Orders {
+    view fn doubled_size() -> int {
+        return order_size(json { size: 4, double: true });
+    }
+
+    fn order_size(Json order) -> int {
+        let size = order.get_int("size").unwrap_or(0);
+        if order.get_bool("double").unwrap_or(false) {
+            return size * 2;
+        }
+        return size;
+    }
+}
+```
 
 `Json::parse` accepts exactly one direct string literal and validates that
 literal at compile time. Parameters, locals, and constants are not accepted as
@@ -888,7 +984,9 @@ string, or implicit default. `map.get(key).expect(Error::Missing)` extracts a
 present value and rejects absence with the exact nominal error. It evaluates
 the receiver and error once in source order, and aborts before reading the
 absent payload. `value.unwrap_or(default)` explicitly supplies an eager fallback;
-`value.is_some()` and `value.is_none()` inspect presence. Rvalue indexing such
+`value.is_some()` and `value.is_none()` inspect presence. A fallback that must
+only be evaluated on absence is written as a `match` over the returned
+`Option<V>`. Rvalue indexing such
 as `map[key]` and compound
 indexed assignment such as `map[key] += value` are errors because both would
 read a possibly absent value without handling `Option<V>`. Simple
@@ -896,7 +994,26 @@ read a possibly absent value without handling `Option<V>`. Simple
 `get(map, key)` is not a StateMap operation; only the receiver form
 `map.get(key)` invokes the intrinsic, while an unrelated user-declared function
 named `get` resolves normally. `StateMap.remove(key)` returns the removed
-`Option<V>` and is not permitted in views. Every scalar or aggregate state root
+`Option<V>` and is not permitted in views.
+
+The complete StateMap helper surface is:
+
+| Helper | Returns | Durable effect | In `view fn` |
+| --- | --- | --- | --- |
+| `map.get(key)` | `Option<V>` | read | yes |
+| `map.contains(key)` | `bool` | read | yes |
+| `map.get_or_insert(key, default)` | `V` | writes `default` when `key` is absent | no |
+| `map.remove(key)` | `Option<V>` | delete | no |
+| `map[key] = value` | `()` | write | no |
+| `map.page(after, limit)`, `map.take(limit)` | `StatePage` | bounded read | yes |
+
+`get_or_insert` evaluates `default` only when the key is absent, writes it, and
+returns it; the write makes its caller a state writer for authorization and
+access analysis. Like every receiver method these helpers accept positional
+arguments or their declared labels. There is no implicit-default read: a
+missing key is never read as zero.
+
+Every scalar or aggregate state root
 and every `StateMap` value is encoded once as one canonical, schema-bound record
 under one durable key. Its domain-separated schema hash covers the exact type
 and named-field layout; mismatched schemas, malformed typed leaves, invalid
@@ -914,8 +1031,8 @@ Map keys are capped at 4 KiB, map bases retain the 255-byte `Name` bound,
 complete paths are capped at 16 KiB, and iteration pages are canonical
 `Vec<StatePath>` values limited to 64 items. The source helper
 `base.path(key)` therefore returns `bytes` containing a framed `StatePath`;
-passing a `Name` directly to `state::get`, `set`, `delete`, `keys`, `has`,
-`len`, or `count` is a type error.
+passing a `Name` directly to `state::get`, `state::set`, `state::delete`,
+`state::contains`, `state::len`, or `state::count` is a type error.
 
 Record updates keep the absence check and durable write explicit:
 
@@ -946,7 +1063,7 @@ package, source unit, and enum name. The variant schema is hashed separately;
 link order never determines identity. Exported errors and structs resolve through
 the locked module graph. The signed interface includes the complete descriptors.
 
-`require(condition, error)` takes both arguments positionally and aborts with
+`require(condition, error)` takes both arguments positionally (or labelled) and aborts with
 that exact nominal error value. `Option.expect(error)` uses the same rejection
 identity and returns the contained value without a placeholder or sentinel. Rejections preserve the error identity, variant
 schema hash and code, as well as the originating contract and symbolic variant,
@@ -987,12 +1104,43 @@ selects test mode. A production `check` or `build` rejects these constructs
 with `E_TEST_ONLY_PRODUCTION`; it never removes them silently before semantic
 analysis or artifact hashing. Typed HIR records whether test capabilities were
 enabled, and production code generation rejects test-capable HIR as well.
+Tests therefore live in a standalone module, conventionally
+`tests/<name>.test.ko`, that names the seiyaku under test:
+
+```text
+module VaultTests {
+    koto_test { target: "../contracts/vault.ko" }
+
+    fixture tellers {
+        actor("alice");
+        grant_permission("alice", "Teller");
+    }
+
+    #[test(fixture = "tellers")]
+    fn withdraw_reduces_balance() {
+        test::invoke_kotoage_as(actor: "alice", kotoage: "hajimari", arguments: Json::parse("{}"));
+        let left = test::invoke_kotoage_as(
+            actor: "alice",
+            kotoage: "withdraw",
+            arguments: Json::parse("{\"amount\":\"30\"}"),
+        );
+        test::assert_eq(actual: left, expected: 70, message: "withdraw returns the new balance");
+    }
+}
+```
+
+A standalone test module may declare only private functions, `#[test]`
+functions, structs, error enums, constants, and fixtures. `test::` builtins are
+available in `#[test]` functions and in the module's private helpers, which never
+reach a deployable artifact; a private helper of the seiyaku itself cannot call
+them. `koto check` checks a `koto_test` module in test mode against its target
+instead of rejecting it.
 
 The `koto test` driver is the explicit test-mode boundary. It compiles the full
 suite in test mode, then derives a test-free runtime seiyaku when the target has
 an invocable public or lifecycle declaration. A pure unit-test target containing
 only private helpers and `#[test]` functions needs no runtime artifact; its
-tests, coverage, and profile data run from the test projection. This runner-only
+tests, coverage, and trace data run from the test projection. This runner-only
 derivation is not available to ordinary production builds. The two projections
 retain separate immutable prepared artifacts, compiler reports, and code hashes.
 The test projection is a generic IVM 1.1 harness without deployable `CNTR` or
@@ -1001,45 +1149,345 @@ image, checked against the current ABI hash, and structurally validates the
 terminal `HALT` through the reserved `__koto_test_return` descriptor. Production
 admission accepts only IVM 1.1 contracts with an embedded interface, and rejects
 both the generic test profile and that selector. Host-private
-`0x00FE0001..=0x00FE0005` helpers require the crate-private test loader plus an
+`0x00FE0001..=0x00FE000A` helpers require the crate-private test loader plus an
 explicit host opt-in (the runner supplies `KotoTestHost`), remain outside ABI v1
 and its hash, and cannot be enabled by public VM loaders or a permissive custom
 host.
-Typed fixture values use the same constructors as seiyaku code, including
-`AccountId::parse`, `AssetDefinitionId::parse`, `DomainId::parse`,
-`Name::parse`, and `Json::parse`; flat fixture-only constructor aliases are
-errors.
+
+### Assertions
+
+`test::assert(condition, message:)` takes a `bool` and an optional `string` or
+`int` message. `test::assert_eq(actual:, expected:, message:)` accepts any two
+values of one equality-comparable type under the same rules as `==`, including
+`decimal`, `quantity`, identifiers, `Option`, `Result`, bounded `List`, tuples,
+and structs; an unsuffixed numeric literal takes the other operand's numeric
+type. Test-mode lowering embeds a canonical `kotodama_lang::testing::AssertionSite`
+record (source identity, byte range, literal message, compared type) and, only
+on failure, passes it with both values encoded as canonical state-value records
+and their schema to the host-private assertion helper `0x00FE0006`. The runner
+reports the exact `file:line:column`, the asserted source text, the message, and
+the actual and expected values in Kotodama literal syntax; an `AccountId` equal
+to a fixture actor is annotated with the actor's name.
+
+### Seiyaku calls and lifecycle
+
+`test::invoke_kotoage(kotoage:, arguments:)` calls a kotoage, view, or lifecycle
+declaration as the current caller; `test::invoke_kotoage_as(actor:, ...)` calls
+it as a fixture actor. Calls use the production runtime artifact and the
+canonical argument boundary: `arguments` is a JSON object keyed by parameter
+name and is validated against the target's exact `EntrypointArgumentSchemaV1`.
+`int`, `decimal`, and `quantity` values are canonical decimal strings (`"30"`,
+`"1.25"`); `bool` is a JSON boolean; `string`, `Name`, and identifier types are
+JSON strings in their canonical literal form; `bytes` and `StateCursor<K>` are
+`0x`-prefixed lowercase hexadecimal strings; `DataSpaceId` is a JSON integer;
+`Option<T>` is `{"some": value}` or `{"none": true}`; `Result<T, E>` is
+`{"ok": value}` or `{"err": value}`; structs are objects with exactly their
+fields, tuples and lists are arrays, and error enums are variant-name strings.
+Native `json { ... }` construction does not convert `StateCursor` values, so a
+test cannot pass a cursor returned by a view back into a later call. A
+`Json::parse` literal record is checked against
+the schema at compile time (`K2003`), naming the field path and the expected
+encoding; dynamic records are checked when the call runs and fail as invalid
+arguments.
+
+The harness models the seiyaku lifecycle. When the target declares
+`hajimari`/`始まり`, every other call and view is rejected as a lifecycle
+violation until the test invokes `hajimari`, and a second `hajimari` call is
+rejected as a replay. Lifecycle declarations are selected as `"hajimari"` and
+`"kaizen"` whichever spelling declared them, as in the signed interface; a
+selector written as `"始まり"` or `"改善"` is rejected with that hint. The
+harness runs one code version, so no `kaizen`/`改善` transition is ever pending
+and calling `kaizen` is rejected, as it is on chain without an in-place code
+replacement. Durable state read
+directly by a test before `hajimari` is uninitialized.
+
+`test::set_block_height(height:)`, `test::advance_blocks(count:)`, and
+`test::set_transaction_time_ms(time_ms:)` change the block height and
+transaction time that later seiyaku calls observe through
+`context::block_height()` and `context::transaction_time_ms()`. They use
+host-private helpers `0x00FE0007`, `0x00FE0008`, and `0x00FE0009` and exist only
+in test mode.
+
+### Fixtures
+
+```ebnf
+fixture-decl   = "fixture" identifier "{" fixture-action* "}" ;
+fixture-action = identifier "(" (expression ("," expression)* ","?)? ")" ";"? ;
+```
+
+`#[test(fixture = "name")]` applies a fixture's actions, in order, to a fresh
+world before the test runs. Wherever an action takes an account, it accepts a
+declared actor alias such as `"alice"`, the string `"seiyaku_subject"` for the
+seiyaku's own account, or `AccountId::parse("...")`. Numeric arguments accept
+literals, `const` names, and `+`, `-`, `*` over them. Typed fixture values use
+the same constructors as seiyaku code, including `AccountId::parse`,
+`AssetDefinitionId::parse`, `DomainId::parse`, `Name::parse`, and
+`Json::parse`; flat fixture-only constructor aliases are errors. A failing
+action is reported at its `file:line:column`, and an unknown fixture at the
+test that names it; misspelt fixture, action, and actor names suggest the
+closest declared one.
+
+Tests refer to actors by alias. `test::actor_account(actor:)` returns an
+actor's `AccountId` for assertions and argument records,
+`test::actor_public_key(actor:)` its Ed25519 public key, and
+`test::actor_sign(actor:, payload:)` an Ed25519 signature over `payload` by an
+actor whose key is known (a derived actor, or one declared with a seed).
+
+| Action | Effect |
+| --- | --- |
+| `actor(alias)` | Declare an actor whose Ed25519 key is derived deterministically from the alias and the chain discriminant. |
+| `actor(alias, account[, seed])` | Declare an actor bound to an explicit account; a 32-byte `"0x..."` seed must derive that account and enables signing. |
+| `caller(account)` | Make `account` the current caller of `test::invoke_kotoage`. |
+| `register_account(account)` | Register an account. |
+| `register_account_alias(alias, account[, dataspace])` | Bind an account alias. |
+| `register_domain(domain)` | Register a domain. |
+| `register_asset_definition(asset_definition[, mintability])` | Register an asset definition (`"infinitely"`, `"once"`, or `"not"`). |
+| `set_balance(account, asset_definition, amount)` | Register the asset definition if needed and mint `amount`. |
+| `set_account_detail(account, key, value)` | Set one account metadata entry. |
+| `grant_permission([account,] permission)` | Grant a permission token to `account`, or to the current caller. |
+| `grant_seiyaku_kotoage_permission(account, kotoage)` | Grant `CanInvokeContractEntrypoint` for one kotoage of this seiyaku. |
+| `grant_seiyaku_effect_permission(permission)` | Grant a permission to the seiyaku's own account. |
+| `grant_seiyaku_transfer_effect_permission(account, asset_definition, dataspace)` | Let the seiyaku transfer `account`'s balance of `asset_definition`. |
+| `state_set(path, value)` | Seed one durable-state value directly. |
+| `public_input(name, value)` | Provide a named public input to every call. |
+
+Permission names are the declared `authorize(...)` names, the scoped forms
+`read_assets:<account>`, `add_signatory:<account>`, `remove_signatory:<account>`,
+`set_account_quorum:<account>`, `set_account_detail:<account>`,
+`mint_asset:<asset_definition>`, `burn_asset:<asset_definition>`,
+`transfer_asset:<asset_definition>`, and `register_zk_asset:<asset_definition>`,
+or a typed `Json::parse` permission object.
+
+### Reports
+
+Each test result names the test's own file and `line:column`, the execution gas
+of the code under test (the seiyaku calls it made, or the test itself for a pure
+unit-test target; transaction admission fees are excluded), and its cycles; the
+JSON report also lists every seiyaku call with its gas and cycles, and the JUnit
+report records gas and cycles as test-case properties. `koto test run
+--gas-report` adds a per-kotoage table of calls and minimum, mean, and maximum
+gas. A failure has one kind: assertion, seiyaku call rejected (nominal error
+enum and variant), permission denied, numeric fault (named by its
+`kotodama::NumericError` variant), out of gas, invalid arguments (with the JSON
+field path, pairing each undeclared key with the closest omitted parameter),
+decode error, lifecycle violation,
+unexpected outcome of `test::expect_reject_as`, test harness error, or another
+VM trap. A failing `test::` helper call (a seiyaku call, a rejection
+expectation, or an actor lookup) is reported at the call's own
+`file:line:column` with its source text: test-mode lowering passes a canonical
+`kotodama_lang::testing::TestCallSite` record to the host-private helper
+`0x00FE000A` immediately before the call. Failures inside seiyaku calls also
+name the seiyaku function and its declaration location. `koto test` exits with
+status `11` when at least one test failed.
+
+`koto test coverage` reports which functions of the seiyaku under test executed,
+counting only seiyaku execution (the nested calls, or the test projection of a
+pure unit-test target). `koto test trace` prints every executed instruction,
+grouped into the test function and each seiyaku call, with the function and
+its declaration location and only the registers the instruction changed;
+`--format json` emits one object per instruction.
 
 ## Namespaced host API
 
 Source code uses namespaced capabilities. Representative roots are:
 
-- `context::authority`, `context::block_height`, and other immutable call context
+- `context::authority`, `context::block_height`,
+  `context::transaction_time_ms`, and other immutable call context
 - `context::seiyaku_subject`, `context::seiyaku_address`, and
   `context::kotoage` for the branded execution identity and selected public or
   lifecycle declaration
-- `ledger::asset::transfer`, `ledger::asset::mint`, and `ledger::asset::burn`
-- `ledger::account::set_detail`
+- `ledger::asset::register`, `ledger::asset::transfer`, `ledger::asset::mint`,
+  and `ledger::asset::burn`
+- `ledger::account::set_metadata` and `ledger::nft::set_metadata`
+- `ledger::role::register`, `ledger::role::unregister`, `ledger::role::grant`,
+  and `ledger::role::revoke`
 - `ledger::query::seiyaku_manifest` and `ledger::query::seiyaku_instance`
 - `ledger::seiyaku::grant_kotoage` and
   `ledger::seiyaku::revoke_kotoage` for the current immutable seiyaku address
   and an exact kotoage selector
-- `state::get`, `state::set`, and `state::delete`
+- `state::get`, `state::set`, `state::delete`, and `state::contains`
 - `bytes::len(value)` for the exact payload length of a first-class `bytes`
   value; it does not accept `Json`, IDs, strings, or generic pointer-ABI values
-- `crypto::sha256`, `crypto::sha3`, and signature/proof operations
+- `crypto::sha256`, `crypto::sha3`, `crypto::verify_signature`,
+  `crypto::sm2::verify`, and proof operations
 - `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and
   `math::wrapping_neg` for explicitly modular 512-bit integer arithmetic
 - `debug::info` for diagnostics
 - `test::assert`, `test::assert_eq`, `test::invoke_kotoage`, and
   `test::invoke_kotoage_as` in test builds only
 
-Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. In particular, `tlv_len` and `codec::tlv_len` remain internal; source uses only the typed `bytes::len`. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, and permitted execution modes.
+Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. In particular, `tlv_len` and `codec::tlv_len` remain internal; source uses only the typed `bytes::len`. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, permitted execution modes, and call policy.
+
+### Argument labels
+
+Every builtin call follows one rule, published by the registry's call policy:
+
+1. A label equal to the declared parameter name is always accepted.
+2. Single-argument calls, receiver methods (`map.get_or_insert(key, 0)`,
+   `xs.set(0, value)`, `amount.div_round(divisor, 2, Rounding::floor)`) and pure
+   helpers (`math::*`, `require`, the numeric conversions) also accept
+   positional arguments.
+3. Every other builtin requires its labels. This covers each multi-argument
+   `ledger::*` mutation, where same-typed arguments such as `source` and
+   `destination` must not be swapped silently, and helpers with several inputs
+   of one type such as `crypto::verify_signature` and `state::set`.
+
+A bare identifier spelled exactly like the label of the slot it fills
+satisfies that label: `ledger::nft::mint(nft, owner)` is the call
+`ledger::nft::mint(nft: nft, owner: owner)`, while `ledger::nft::mint(owner,
+nft)` is rejected. A punned identifier is written without `:`, so like any
+positional argument it must precede the first `label: value` argument. Punning
+is pure syntax; it produces the same typed call and never changes an interface
+fingerprint. A rejected positional argument reports
+`E_NAMED_ARGUMENTS_REQUIRED` with the fully labelled call as a fix-it.
+
+<!-- BEGIN GENERATED: kotodama-v1-builtin-call-policy -->
+| Builtin | Required labels |
+| --- | --- |
+| `axt::touch` | `dataspace:`, `manifest:` |
+| `contract::invoke` | `contract:`, `entrypoint:`, `returns:`, `amount_in:`, `min_out:` |
+| `crypto::sm2::verify` | `message:`, `signature:`, `public_key:`, `distid:` (optional) |
+| `crypto::sm4_ccm::open` | `key:`, `nonce:`, `aad:`, `payload:`, `tag_length:` (optional) |
+| `crypto::sm4_ccm::seal` | `key:`, `nonce:`, `aad:`, `payload:`, `tag_length:` (optional) |
+| `crypto::sm4_gcm::open` | `key:`, `nonce:`, `aad:`, `payload:` |
+| `crypto::sm4_gcm::seal` | `key:`, `nonce:`, `aad:`, `payload:` |
+| `crypto::valcom` | `left:`, `right:` |
+| `crypto::verify_signature` | `message:`, `signature:`, `public_key:`, `scheme:` |
+| `json::set_account_id` | `object:`, `key:`, `value:` |
+| `ledger::account::add_signatory` | `account:`, `signatory:` |
+| `ledger::account::recovery::approve` | `alias:`, `request_generation:` |
+| `ledger::account::recovery::cancel` | `alias:`, `request_generation:` |
+| `ledger::account::recovery::finalize` | `alias:`, `request_generation:` |
+| `ledger::account::recovery::propose` | `alias:`, `replacement:`, `request_generation:` |
+| `ledger::account::remove_signatory` | `account:`, `signatory:` |
+| `ledger::account::set_metadata` | `account:`, `key:`, `value:` |
+| `ledger::account::set_quorum` | `account:`, `quorum:` |
+| `ledger::asset::balance` | `account:`, `asset_definition:` |
+| `ledger::asset::burn` | `account:`, `asset_definition:`, `amount:` |
+| `ledger::asset::mint` | `account:`, `asset_definition:`, `amount:` |
+| `ledger::asset::register` | `asset_definition:`, `name:`, `spec:`, `mintable:` |
+| `ledger::asset::set_holding_limit` | `account:`, `asset_definition:`, `limit:` |
+| `ledger::asset::set_transfer_availability` | `account:`, `asset_definition:`, `expected_revision:`, `incoming:`, `outgoing:`, `reason:` |
+| `ledger::asset::set_transfer_daily_limit` | `account:`, `asset_definition:`, `cap:` |
+| `ledger::asset::transfer` | `source:`, `destination:`, `asset_definition:`, `amount:`, `dataspace:` (optional) |
+| `ledger::domain::transfer` | `source:`, `domain:`, `destination:` |
+| `ledger::escrow::open_dispute` | `offer:`, `evidence:` (optional) |
+| `ledger::escrow::open_offer` | `offer:`, `asset_definition:`, `amount:`, `evidence:` (optional) |
+| `ledger::escrow::resolve_dispute` | `offer:`, `buyer_amount:`, `seller_amount:`, `evidence:` (optional) |
+| `ledger::governance::build_submit_ballot` | `election_id:`, `ciphertext:`, `nullifier:`, `backend:`, `proof:`, `verification_key:` |
+| `ledger::nft::mint` | `nft:`, `owner:` |
+| `ledger::nft::set_metadata` | `nft:`, `key:`, `value:` |
+| `ledger::nft::transfer` | `source:`, `nft:`, `destination:` |
+| `ledger::permission::grant` | `account:`, `permission:` |
+| `ledger::permission::revoke` | `account:`, `permission:` |
+| `ledger::query::accounts` | `offset:`, `limit:` |
+| `ledger::query::asset_definitions` | `offset:`, `limit:` |
+| `ledger::query::assets` | `offset:`, `limit:` |
+| `ledger::query::domains` | `offset:`, `limit:` |
+| `ledger::query::nfts` | `offset:`, `limit:` |
+| `ledger::role::grant` | `account:`, `role:` |
+| `ledger::role::register` | `role:`, `permissions:` |
+| `ledger::role::revoke` | `account:`, `role:` |
+| `ledger::seiyaku::grant_kotoage` | `account:`, `kotoage:` |
+| `ledger::seiyaku::revoke_kotoage` | `account:`, `kotoage:` |
+| `ledger::trigger::set_enabled` | `trigger:`, `enabled:` |
+| `state::set` | `path:`, `value:` |
+<!-- END GENERATED: kotodama-v1-builtin-call-policy -->
+
+### Assets
+
+`ledger::asset::register(asset_definition:, name:, spec:, mintable:)` registers
+exactly the definition it names. `name` is the human-readable display name;
+`spec` is the data model's numeric spec, written with its constructors
+`NumericSpec::unconstrained()`, `NumericSpec::integer()`, or
+`NumericSpec::fractional(scale)` with a constant scale in `0..=28`; `mintable`
+is one variant of the data model's `Mintable` enum: `Mintable::Infinitely`,
+`Mintable::Once`, `Mintable::Not`, or `Mintable::Limited(tokens)` with a
+constant positive token budget. Like `ListError::IndexOutOfBounds`, the
+compiler-owned `Mintable` and `SignatureScheme` enums write payloadless
+variants as paths and the payload variant as a call. These are compile-time
+values written directly at the call: integers, runtime values, and a value used
+anywhere else are `E_NOMINAL_ARGUMENT`, and `NumericSpec`, `Mintable`, and
+`SignatureScheme` cannot be declared as source names. Registration never
+mints: issue the initial supply with `ledger::asset::mint` afterwards.
+
+```kotodama
+seiyaku RoseIssuer {
+    kotoage fn issue(AssetDefinitionId rose, AccountId treasury) authorize("RegisterAssetDefinition") {
+        ledger::asset::register(
+            asset_definition: rose,
+            name: "Rose",
+            spec: NumericSpec::fractional(2),
+            mintable: Mintable::Once,
+        );
+        ledger::asset::mint(account: treasury, asset_definition: rose, amount: 1000);
+    }
+}
+```
+
+`ledger::asset::transfer(source:, destination:, asset_definition:, amount:)`
+moves a globally scoped balance. The optional trailing `dataspace:` argument
+selects the balance bucket of a dataspace-restricted definition. A restricted
+definition transferred without `dataspace:` is rejected by the host; it never
+falls back to an ambient or universal dataspace, and a global definition
+ignores a supplied dataspace. `DataSpaceId::parse` takes the decimal dataspace
+number, for example `DataSpaceId::parse("7")`.
+
+### Typed flags, schemes and selectors
+
+Flags are `bool` (`ledger::trigger::set_enabled(trigger:, enabled: true)`).
+`crypto::verify_signature(message:, signature:, public_key:, scheme:)` takes a
+compile-time `SignatureScheme::Ed25519`, `SignatureScheme::Secp256k1`, or
+`SignatureScheme::MlDsa`, which the compiler maps to the host's scheme codes
+`1`, `2`, and `3`; an integer or any other value is `E_NOMINAL_ARGUMENT`, so an
+unknown scheme cannot be expressed. SM2 keeps its own verifier,
+`crypto::sm2::verify`, because it takes an optional distinguishing identifier.
+The selector of
+`ledger::seiyaku::grant_kotoage`/`revoke_kotoage` is a string literal checked at
+compile time against the current seiyaku: it must name a `kotoage`/`言挙げ`
+declaration, so an unknown name or a `view fn`, private `fn`, or lifecycle
+hook is `E_KOTOAGE_SELECTOR`.
+
+### Call context
+
+`context::authority()` is the immediate caller. For a top-level transaction or
+trigger call it is the transaction or trigger authority; inside a seiyaku
+called by another seiyaku it is the calling seiyaku's subject account
+(`context::seiyaku_subject()` of the caller), never the original signer.
+`context::seiyaku_subject()` is the executing seiyaku's own account.
+
+`context::transaction_time_ms()` is the logical execution time. For a
+transaction call it is the signed transaction's creation time, which the
+signer chooses within the node's admission tolerance; do not treat it as an
+independent clock for deadlines that the signer must not influence. Trigger
+calls receive the block-header creation time. Test hosts use an explicitly
+configured value that defaults to `0`. No host reads wall-clock time, and
+there is no separate block clock for transaction calls because the enclosing
+block is not finalized while they execute. `context::block_height()` is the
+height of the block being built.
+
+### Diagnostics
+
+`debug::info(value)` is diagnostics only. It has no ledger or durable-state
+effect, so views and the helpers they call may log. Hosts charge its gas and
+record the value only in development and test builds; release nodes discard it
+deterministically.
+
+### Reserved names
+
+Only names that source can refer to are reserved for declarations. Compiler
+lowering names such as `min`, `authority`, `chain_id` or `mint_asset` are not
+source names: a `kotoage`/`言挙げ` or `view fn` may use them as public
+selectors. A private `fn` may not reuse one, because calls to private helpers
+and builtins share one lowering namespace; the diagnostic names the builtin
+that owns the spelling. The compile-time value types `NumericSpec`,
+`Mintable`, and `SignatureScheme` are reserved like other compiler-owned type
+names.
 
 The integer helpers `math::isqrt(value)`, `math::abs(value)`, and binary
-`math::min(left:, right:)`, `math::max(left:, right:)`,
-`math::div_ceil(left:, right:)`, `math::gcd(left:, right:)`, and
-`math::mean(left:, right:)` operate over the complete signed 512-bit domain.
+`math::min(left, right)`, `math::max(left, right)`,
+`math::div_ceil(dividend, divisor)`, `math::gcd(left, right)`, and
+`math::mean(left, right)` operate over the complete signed 512-bit domain.
 Compiler folding and typed runtime syscalls share the primitive algorithms.
 See [numeric semantics](kotodama_numeric_v1.md) for checked boundaries and
 staged limb-work charging; operands never narrow to machine integers.
@@ -1136,25 +1584,78 @@ koto build --format sarif seiyaku.ko
 koto check --zk proof_seiyaku.ko
 koto build --zk proof_seiyaku.ko
 koto test seiyaku.test.ko
+koto test run --gas-report --junit report.xml seiyaku.test.ko
+koto test list --format json seiyaku.test.ko
+koto test coverage seiyaku.test.ko
+koto test trace --filter withdraw seiyaku.test.ko
 koto fmt seiyaku.ko
+koto fmt --check .
 koto doc seiyaku.ko
 koto explain K0001
+koto explain unused-parameter
+koto explain 言挙げ
+koto explain --list
 koto lsp --project kotodama.project.json
 koto lsp --zk --project zk.project.json
 ```
 
+Every subcommand prints its options with `--help`/`-h`; `koto --version` prints
+the toolchain version, the `kotodama_lang` compiler fingerprint, the IVM
+bytecode target, and the ABI v1 hash. Options are spelled the same way on every
+subcommand: `--format`, `--project` or `--source-root`, `--chain-discriminant`
+(the account-address chain discriminant of the target network: `AccountId`
+literals must be encoded for it and `koto test` derives fixture actors from it;
+it defaults to `753`), and `--zk`. Unknown options print
+the subcommand's usage. The exit status follows `musubi`: `0` success, `2`
+usage error, `8` compiler diagnostics, formatting drift, or a `--verify`
+mismatch, `10` a file that cannot be read or written, `11` a test suite that
+ran with at least one failing test, and `70` an internal toolchain error. `koto check` checks a `koto_test` module in test mode
+against its target. `koto fmt` accepts files and directories; a directory is
+searched recursively for `*.ko` files, skipping hidden and `target`
+directories, and the default is the current directory. `koto explain` accepts a
+diagnostic code, a lint name, or a branded keyword in either spelling and prints
+the registered summary, help, worked examples when registered, and the
+specification section; `--format markdown` renders a reference page with one
+anchor per code. `koto doc` renders each public declaration in source syntax
+with its authorization, an example JSON argument record, and access analysis,
+and lists compiler-owned list and numeric errors separately from the seiyaku's
+own error enums.
+
 `--zk` is an explicit build capability, not source metadata. It is required for
 `Secret<T>` and the approved proof/commitment operations; ordinary builds reject
-those constructs. `koto check|build|doc|lsp` and `musubi build` pass this policy to the same in-process compiler session.
+those constructs. `koto check|build|doc|lsp` and `musubi check|build|test --zk` pass this policy to the same in-process compiler session.
 It does not make ABI, vector, or pointer policy selectable.
 
-`koto fmt` and LSP formatting consume the compiler's lossless token stream.
-They refuse syntactically invalid input, preserve comments and literal spelling,
-and canonicalize four-space indentation, declaration spacing, operators, and
-block layout with a 100-column target. A comma-delimited construct expanded
-over multiple lines has a trailing comma. Formatting is deterministic and
-idempotent, and fails rather than producing a source larger than the mandatory
-1 MiB limit. `koto fmt --check` performs no writes.
+`koto fmt` and LSP formatting consume the compiler's lossless token stream and
+the parser's syntax roles. They refuse syntactically invalid input, preserve
+comments and literal spelling, and keep each branded keyword in the script
+written at that site. A comment that follows a token on the same line stays a
+trailing comment of that token, after any `,` or `;` that ends the token's
+member or statement, and an attribute stays on its own line above the item or
+error variant it annotates. Formatting canonicalizes four-space
+indentation, declaration spacing, operators, and block layout with a
+100-column target: an argument list, parameter list, tuple or list literal
+that does not fit is laid out one item per line, a declaration head breaks its
+parameter list first and keeps `-> T authorize("...")` together, and a
+statement or condition that still does not fit breaks before its
+lowest-precedence top-level operators, or, when it has none, before each call
+of a method chain with two or more calls; a continuation line that still does
+not fit breaks again before its own lowest-precedence operators, one level
+deeper. A statement with no other break point
+moves its value onto a continuation line after `=` or `=>`, and a line break
+forced by a comment inside a statement continues it one level deeper. Struct fields, error variants and
+`match` arms, and struct literals and JSON objects with more than one member,
+are laid out one member per line, while a struct pattern stays on one line
+whenever it fits; struct fields, error variants and `koto_test` entries are
+separated by `,`, and trigger fields and fixture actions end with `;` unless
+they end with a block (`on data ... { ... }`, `metadata { ... }`), which takes
+none, so each field and action starts its own line. A comma-delimited
+construct laid out over multiple lines has a trailing comma (tuples excepted)
+and a single-line one has none. At most one blank line between members or
+declarations is kept, and parentheses around a whole `if` condition are
+removed. Formatting is deterministic and idempotent, and fails rather than
+producing a source larger than the mandatory 1 MiB limit. `koto fmt --check`
+performs no writes.
 LSP validation analyzes reusable `module Name` files without artifact
 generation, but it never invents imports or exports from the set of open
 documents. `koto lsp --project kotodama.project.json` loads the same exact
@@ -1178,13 +1679,38 @@ input.
 The compiler-owned `EditorSnapshot` retains source/package identities, resolved
 symbols and lexical bindings, exact argument-label ranges, typed expression
 facts, and canonical callable signatures. LSP completion filters by source,
-scope, explicit import/export graph, and receiver type. Argument templates use
-the declaration's positional-only prefix and optional named parameters. Optional
-receivers offer `expect`, `unwrap_or`, and presence checks, including after
-chained reads such as `Requests.get(id).`; signatures retain the extracted
-payload type. Result receivers offer their supported extraction and status
-methods without advertising `Option.expect`. Hover and
-signature help expose types and effect/permission metadata; definition,
+scope, explicit import/export graph, and receiver type, and by syntactic
+position: a file's top level offers only `seiyaku`/`誓約` and `module`; a
+source-unit body offers declarations (`fn`, `view fn`, `kotoage fn`/`言挙げ fn`,
+`hajimari`/`始まり`, `kaizen`/`改善`, `state`, `const`, `struct`, `error enum`,
+`trigger`, `include`, `import`, and `export` in modules); a function body
+offers statements, visible locals, callable private functions, types, and
+builtins. Runtime functions are never offered as callees. Both spellings of a
+branded keyword are always offered as adjacent items, the Japanese item also
+filters on the romanized spelling, and neither script is preferred. Argument
+templates use the declaration's positional-only prefix and optional named
+parameters. Optional receivers offer `expect`, `unwrap_or`, and presence checks,
+including after chained reads such as `Requests.get(id).`, and member
+completion works mid-statement (`let x = Scores.`, `require(Scores.`,
+`return Scores.`): completion-only recovery also terminates the statement,
+closes its open delimiters, or isolates the receiver. Candidates never depend
+on the partially typed word, so completion lists are complete. Signatures
+retain the extracted payload type. Result receivers offer their supported
+extraction and status methods without advertising `Option.expect`. Hover,
+completion and signature help render declarations in source syntax with the
+keyword spelling written at the declaration (`言挙げ fn bump(int delta) -> int
+authorize("CanBump")`), branded keywords with the shared glossary entry, and
+builtins with their registry summary, access class, effects, mode, and call
+policy in words. The server also provides the document outline, workspace
+symbols, highlights, folding ranges, semantic tokens (one `brandedKeyword` type
+for both spellings of every branded keyword), and a "Run test" code lens on each
+`#[test]` function whose command arguments are
+`koto test run --filter <name> --exact <source>`. A standalone test module with
+`koto_test { target: ... }` is checked in compiler test mode against its target,
+and its plain `kotoage: "name"` selector strings are references to the target's
+`kotoage`/`言挙げ` or `view fn` declaration, so definition, references,
+completion, and rename include them; a seiyaku's editor graph attaches the test
+modules that target it. Definition,
 references, and rename use resolved identities. Rename rechecks the complete
 source and export graph and verifies that every reference retains its resolver
 identity, preventing capture while allowing names in disjoint scopes. A local
@@ -1193,7 +1719,9 @@ its exact JSON string token together with declarations, references and call labe
 Unrelated strings and import aliases are unchanged. External graphs without local
 manifest authority remain immutable. LSP edits include open-document versions,
 including unsaved manifest buffers; changed unopened sources or manifests require
-a reload. Incomplete graphs cannot produce rename edits.
+a reload. Incomplete graphs cannot produce rename edits; the refusal names the
+first blocking diagnostic, and a non-ASCII new name is refused because V1
+identifiers are ASCII.
 Completion-only recovery never returns a compilable recovered AST.
 The server invalidates its bounded snapshot on document versions and source or
 project-manifest changes, and all protocol ranges use UTF-16 coordinates.
@@ -1210,13 +1738,80 @@ Exceeding an input bound closes the transport rather than accumulating work.
 Human diagnostics capture immutable source text when their exact spans are
 produced. Bounded source excerpts underline the selected bytes using deterministic
 Unicode 15.1 display widths and four-column tab stops, including Japanese and
-combining characters.
-Related locations and help are projected into LSP diagnostics. JSON and SARIF
-retain canonical structured ranges and do not embed source contents.
+combining characters. Locations are shown as `path:line:column-line:column`;
+exact byte ranges appear only in JSON and SARIF. Messages render tokens with
+their source spelling and echo a branded keyword exactly as written at the
+diagnosed site (`言挙げ function ...`), while lists of expected keywords name
+both spellings (`` `kotoage`/`言挙げ` ``). A missing terminator such as `;` is
+reported at the insertion point after the previous token. Each diagnostic
+carries site-specific help; the registry help of its code is a fallback.
+Machine-applicable fixes have exact ranges; when more than one replacement is
+equally valid, such as the two spellings of a branded keyword, the first is the
+preferred fix and the rest are listed as alternatives. Near-miss keyword
+suggestions use a bounded edit distance with deterministic tie-breaking; the
+same bounded matcher suggests locals, types, functions, struct fields, error
+variants, argument labels, and builtins, and unknown argument labels are all
+reported together with the callee's declared names. Semantic diagnostics carry
+site-specific help: operators are named by their source symbols, expected and
+found types are rendered in source syntax, a mismatch on an unannotated local
+labels the `let` that inferred its type, and view-purity errors (`K2004`) point
+at the offending statement or call with labels along the call chain. Every
+violating view is reported. Within one function, a failing statement that
+introduces no binding (or an annotated `let`) is skipped so later independent
+errors are also reported, up to eight per function; and a function whose body
+fails name resolution does not hide type errors in other functions of a
+single-file check.
+Related locations and help are projected into LSP diagnostics; rendered source
+excerpts are not repeated in LSP messages. Code actions are limited to
+diagnostics that touch the requested range, have short titles naming the edit,
+and offer alternative fixes as non-preferred actions. The `initialize` response
+reports `serverInfo` with the `koto` version. JSON and SARIF
+retain canonical structured ranges and do not embed source contents. Their
+`message` is always the canonical English text; a translation, when the
+locale has one, is carried in a separate `localized` object. Human output uses
+a translation only when it covers the message and help together, so one
+diagnostic never mixes languages. SARIF lists one rule per diagnostic code with
+the registry summary and help, and carries fixes in standard `fixes` objects.
 Compiler lint locations come from the same parser-owned declaration, binding,
 statement, and expression ranges. Warnings from one source share its immutable
 text and use the same diagnostic projection in `koto`, LSP, and
 `musubi check`, including dependencies that are not open in the editor.
+
+Lints have stable slugs and `K50xx` codes:
+
+| Code | Slug | Finding |
+| --- | --- | --- |
+| `K5001` | `unused-state` | durable state is never used |
+| `K5002` | `state-shadowed` | a declaration shadows durable state |
+| `K5003` | `unused-parameter` | a private function parameter is never used |
+| `K5004` | `unreachable-return` | a statement follows `return` |
+| `K5005` | `duplicate-pointer-literal` | the same typed literal appears more than once in a seiyaku; declare it once as a `const` |
+| `K5006` | `unused-pointer-constructor` | a constructed typed value is discarded |
+| `K5007` | `nonliteral-trigger-spec` | a trigger specification is not a literal |
+| `K5008` | `nonliteral-state-path` | a raw state path is not a literal |
+| `K5009` | `opaque-access-hints` | host access the scheduler cannot describe precisely; the transaction is scheduled conservatively |
+| `K5010` | `unpersisted-state-copy` | a copy read from a `StateMap` entry or whole state value is changed but never written back |
+| `K5011` | `kotoage-without-effects` | a kotoage/言挙げ performs no state, ledger, or host effects and can be a `view fn` |
+| `K5012` | `exact-division` | `decimal`/`quantity` `/` by a non-constant divisor, which reverts on non-terminating quotients |
+| `K5013` | `unused-local` | a local binding is never read |
+| `K5014` | `dead-store` | a stored value is overwritten before it is read |
+| `K5015` | `underscore-public-parameter` | a public parameter name starts with `_` and becomes the argument key |
+| `K5016` | `never-mutated-var` | a `var` binding is read but never reassigned or mutated; declare it with `let` |
+| `K5017` | `unused-private-fn` | a private `fn` that nothing in its seiyaku or module calls (exported module functions and `_`-prefixed names are exempt) |
+| `K5018` | `seiyaku-without-entrypoint` | a seiyaku/誓約 declares no kotoage, `view fn`, or lifecycle hook, so nothing can call it |
+
+Effects for `K5011` are computed conservatively: calls to imported functions
+count as effects. `K5003` covers private `fn` parameters only, where a leading
+`_` keeps an unused parameter deliberately. Parameters of kotoage/言挙げ, view,
+and lifecycle declarations are argument keys of the public interface, so they
+are never reported as unused and a leading `_` on them only changes the key
+(`K5015`). `K5014` does not report a store followed by a `break` or `continue`
+before the overwrite, since leaving the loop keeps the first value live.
+Fixes never choose a rounding mode or scale for `K5012`; the
+help names `div_round`, `ratio_round`, and `mul_div_round`. Each lint has a
+level of `allow`, `warn` (the default), or `deny`, configured per slug, and a
+deny-warnings mode promotes every warning to an error. A denied finding fails
+the check.
 
 The local-only test helper requires
 `test::expect_reject_as(actor:, kotoage:, arguments:, expected:)`. The expected
@@ -1230,13 +1825,23 @@ r14 and r15 are zero. Production admission does not enable test syscalls.
 Nested execution checkpoints are restored before accepting a rejection or
 reporting a mismatch.
 
-`musubi new <directory> --namespace <namespace>` creates a contract package
-with `Musubi.toml`, a contract, four standalone tests, README, and ignore rules.
-`musubi check`, `musubi build`, and `musubi test` consume the package's exact
-declared source and dependency graph. Network bindings select the exact client
-context and contract alias for deployment and views. These package declarations
-are distinct from the lower-level compiler source graph below; no additional
-app manifest participates in package builds.
+`musubi new <directory> [--namespace <namespace>]` creates a contract package
+with `Musubi.toml`, a counter seiyaku named after the package (state, `hajimari`,
+an authorized `kotoage fn`, a `view fn` and an error enum), four standalone tests
+including `test::expect_reject_as`, a README, and ignore rules for `target/`. The
+namespace defaults to `local` until the package is published. `musubi check`,
+`musubi build`, and `musubi test` consume the package's exact declared source and
+dependency graph. Without a selected network binding they compile for the
+data-model default account-address profile (SORA, `0x02F1` = 753), the same default
+as `koto`; a binding or `--chain-discriminant` selects another profile. Network
+bindings select the exact client context and contract alias for deployment and
+views. `musubi deploy --activate [--args <JSON>]` runs the deployed seiyaku's
+`hajimari`/`始まり` hook as a recoverable call after the deployment is Applied;
+without it, `musubi deploy` prints the exact activation command.
+`musubi deploy --artifact <file.to> --artifact-manifest <file.manifest.json>`
+deploys a prebuilt artifact only when the locked package source reproduces it.
+These package declarations are distinct from the lower-level compiler source
+graph below; no additional app manifest participates in package builds.
 
 The project graph is canonical Norito JSON. Every field is explicit, version 1
 is the only accepted schema, source paths are relative to and contained by the
@@ -1284,8 +1889,14 @@ Diagnostic spans keep package identity separate from the logical source path,
 so two locked packages may both own `src/lib.ko` without ambiguous JSON, SARIF,
 or human output.
 
-`koto build --format human|json|sarif` and `musubi build --format
-human|json|sarif` use the same canonical diagnostic bundle. Typed-module link
+`koto build --format human|json|sarif` and `musubi check|build|test --format
+human|json|sarif` use the same canonical diagnostic bundle; Musubi JSON embeds the
+canonical records under `error.diagnostics`, and a failing test exits with
+`MUSUBI_E_TEST_FAILED` (status 11) rather than the compiler category. Musubi names
+sources of local workspace packages by their workspace-relative path without a
+package identity; registry package sources keep their identity. Compilation failures
+of `musubi test` sources currently carry the compiler's rendering under
+`error.details.compiler_output` rather than structured records. Typed-module link
 failures retain all semantic fields rather than embedding a rendered error in a
 wrapper string. Imported-call failures point at the exact resolver-owned call
 name, and ambiguous exports label every conflicting function declaration.
@@ -1293,12 +1904,27 @@ name, and ambiguous exports label every conflicting function declaration.
 The test driver supports deterministic discovery and selection:
 
 ```text
-koto test list seiyaku.test.ko
-koto test run --filter exact_test_name --exact --jobs 4 --seed 7 seiyaku.test.ko
-koto test run --format json seiyaku.test.ko
-koto test run --junit target/kotodama-tests.xml seiyaku.test.ko
-koto test run --zk zk_seiyaku.test.ko
+koto test list tests/seiyaku.test.ko
+koto test run --filter exact_test_name --exact --jobs 4 --seed 7 tests/seiyaku.test.ko
+koto test run --format json tests/seiyaku.test.ko
+koto test run --junit target/kotodama-tests.xml tests/seiyaku.test.ko
+koto test run --gas-report tests/seiyaku.test.ko
+koto test coverage tests/seiyaku.test.ko
+koto test trace --filter exact_test_name tests/seiyaku.test.ko
+koto test run --zk tests/zk_seiyaku.test.ko
 ```
+
+`koto test <source>` is `koto test run <source>`. Without `--source-root`, a
+standalone test module's source root is the nearest directory containing both
+the module and its `koto_test` target. `--format` selects `human`, `json`, or
+`junit` on stdout; `--junit <file>` additionally writes a JUnit report. Every
+result names the test's file and `line:column`, its execution gas and cycles;
+`--gas-report` adds a per-kotoage table of calls and minimum, mean, and maximum
+gas. `coverage` reports which seiyaku functions the selected tests executed,
+counting only seiyaku execution. `trace` prints each executed instruction
+grouped into the test function and each seiyaku call, with the function, its
+declaration location, and the registers the instruction changed (`--format
+json` emits one object per instruction).
 
 The Rust compiler library behind `koto` is canonical. Musubi calls that library
 in process. Their physical paths are normalized to

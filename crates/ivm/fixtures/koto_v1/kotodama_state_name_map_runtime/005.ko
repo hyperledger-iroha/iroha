@@ -3,7 +3,7 @@
             state StateMap<Name, int> Foo;
 
             fn read_value(Name key) -> int {
-                return Foo.ensure(key: key, default: 0);
+                return Foo.get_or_insert(key, 0);
             }
 
             kotoage fn main() -> int authorize("WriteState") {

@@ -1,7 +1,5 @@
 module CoffeeRewardsTests {
-    koto_test {
-        target: "../contracts/coffee-club.ko"
-    }
+    koto_test { target: "../contracts/coffee-club.ko" }
 
     #[test]
     fn zero_coffees_quote_zero_points() {

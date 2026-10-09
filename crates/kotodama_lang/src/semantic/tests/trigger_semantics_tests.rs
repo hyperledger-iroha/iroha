@@ -48,17 +48,14 @@ fn trigger_metadata_json_parse_obeys_the_canonical_call_contract() {
             "#,
         )
     };
-    let value = r#"Json::parse("{}")"#;
-    let program =
-        parse(&trigger_source(value)).expect("canonical Json::parse metadata should parse");
-    analyze(&program)
-        .unwrap_or_else(|error| panic!("canonical trigger metadata `{value}` failed: {error:?}"));
+    for value in [r#"Json::parse("{}")"#, r#"Json::parse(value: "{}")"#] {
+        let program =
+            parse(&trigger_source(value)).expect("canonical Json::parse metadata should parse");
+        analyze(&program).unwrap_or_else(|error| {
+            panic!("canonical trigger metadata `{value}` failed: {error:?}")
+        });
+    }
     for (value, code, message) in [
-        (
-            r#"Json::parse(value: "{}")"#,
-            "E_POSITIONAL_ARGUMENT_REQUIRED",
-            "parameter `value` of `Json::parse` is declared positional; omit its label",
-        ),
         (
             r#"Json::parse(raw: "{}")"#,
             "E_UNKNOWN_NAMED_ARGUMENT",

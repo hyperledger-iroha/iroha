@@ -42,7 +42,11 @@ use iroha_model_base::state_path::StatePath;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_primitives::numeric::Numeric;
-use iroha_primitives::{json::Json, numeric::Quantity, numeric_abi::QuantityValueV1};
+use iroha_primitives::{
+    json::Json,
+    numeric::{NumericSpec, Quantity},
+    numeric_abi::QuantityValueV1,
+};
 use ivm_abi::codec::{decode_canonical_norito, encode_canonical_norito};
 use norito::{
     decode_from_bytes,
@@ -60,18 +64,40 @@ use std::{
 /// Definition of an asset type.
 #[derive(Clone, Debug)]
 struct AssetDefinition {
+    /// Human-readable display name supplied at registration.
+    name: String,
+    /// Numeric spec every minted quantity must satisfy.
+    spec: NumericSpec,
     mintable: Mintable,
     total_supply: Quantity,
     owner: AccountId,
 }
 impl AssetDefinition {
-    fn new(mintable: Mintable, owner: AccountId) -> Self {
+    fn new(name: String, spec: NumericSpec, mintable: Mintable, owner: AccountId) -> Self {
         Self {
+            name,
+            spec,
             mintable,
             total_supply: Quantity::zero(),
             owner,
         }
     }
+}
+/// Decode the `REGISTER_ASSET` numeric-spec (`r12`) and mintability (`r13`)
+/// words with the data-model encoding every contract host shares.
+///
+/// # Errors
+/// Returns [`VMError::DecodeError`] for a word outside the encoding.
+fn decode_asset_registration_words(
+    spec_word: u64,
+    mintable_word: u64,
+) -> Result<(NumericSpec, Mintable), VMError> {
+    use iroha_data_model::asset::definition::ivm_registration;
+    let spec =
+        ivm_registration::numeric_spec_from_word(spec_word).map_err(|_| VMError::DecodeError)?;
+    let mintable =
+        ivm_registration::mintable_from_word(mintable_word).map_err(|_| VMError::DecodeError)?;
+    Ok((spec, mintable))
 }
 /// NFT state tracking the current owner, stored metadata, and the issuing authority.
 #[derive(Clone, Debug)]
@@ -313,6 +339,8 @@ pub struct MockWorldStateView {
     contract_instances: HashMap<ContractAddress, CryptoHash>,
     /// Logical wall-clock timestamp used for time-gated operations (ms since epoch).
     current_time_ms: u64,
+    /// Deterministic block height reported to contracts; local tests advance it explicitly.
+    current_block_height: u64,
     /// Slot length (ms) used to derive current slot for expiry checks.
     slot_length_ms: u64,
     /// Maximum wall-clock skew (ms) tolerated for AXT expiry calculations.
@@ -349,6 +377,7 @@ impl MockWorldStateView {
             contract_code: HashMap::new(),
             contract_instances: HashMap::new(),
             current_time_ms: 0,
+            current_block_height: 0,
             slot_length_ms: 1,
             axt_max_clock_skew_ms: 0,
             verifying_keys: BTreeMap::new(),
@@ -456,6 +485,14 @@ impl MockWorldStateView {
     /// Return the logical wall-clock timestamp used for gating elections.
     pub fn current_time_ms(&self) -> u64 {
         self.current_time_ms
+    }
+    /// Override the block height reported by `context::block_height()`.
+    pub fn set_current_block_height(&mut self, height: u64) {
+        self.current_block_height = height;
+    }
+    /// Return the block height reported by `context::block_height()`.
+    pub fn current_block_height(&self) -> u64 {
+        self.current_block_height
     }
     // -----------------------------
     // Smart-contract durable state (mock)
@@ -904,7 +941,14 @@ impl MockWorldStateView {
             wsv.accounts.entry(subject.clone()).or_default();
             wsv.asset_definitions
                 .entry(asset.clone())
-                .or_insert_with(|| AssetDefinition::new(Mintable::Infinitely, account.clone()));
+                .or_insert_with(|| {
+                    AssetDefinition::new(
+                        asset.to_string(),
+                        NumericSpec::unconstrained(),
+                        Mintable::Infinitely,
+                        account.clone(),
+                    )
+                });
             wsv.balances
                 .insert((subject, asset.clone()), amount.clone());
             if let Some(def) = wsv.asset_definitions.get_mut(asset) {
@@ -1042,12 +1086,51 @@ impl MockWorldStateView {
         id: AssetDefinitionId,
         mintable: Mintable,
     ) -> bool {
-        if !self.has_permission(caller, &PermissionToken::RegisterAssetDefinition) {
+        let name = id.to_string();
+        self.register_asset_definition_with_spec(
+            caller,
+            id,
+            name,
+            NumericSpec::unconstrained(),
+            mintable,
+        )
+    }
+    /// Register an asset definition with the display name, numeric spec and
+    /// mintability a contract supplied through `REGISTER_ASSET`.
+    pub fn register_asset_definition_with_spec(
+        &mut self,
+        caller: &AccountId,
+        id: AssetDefinitionId,
+        name: String,
+        spec: NumericSpec,
+        mintable: Mintable,
+    ) -> bool {
+        if !self.has_permission(caller, &PermissionToken::RegisterAssetDefinition)
+            || iroha_data_model::asset::definition::validate_asset_name(&name).is_err()
+        {
             return false;
         }
-        self.asset_definitions
-            .insert(id, AssetDefinition::new(mintable, caller.clone()))
-            .is_none()
+        if self.asset_definitions.contains_key(&id) {
+            return false;
+        }
+        self.asset_definitions.insert(
+            id,
+            AssetDefinition::new(name, spec, mintable, caller.clone()),
+        );
+        true
+    }
+    /// Display name, numeric spec and mintability recorded for an asset definition.
+    pub fn asset_definition_registration(
+        &self,
+        id: &AssetDefinitionId,
+    ) -> Option<(&str, NumericSpec, Mintable)> {
+        self.asset_definitions.get(id).map(|definition| {
+            (
+                definition.name.as_str(),
+                definition.spec,
+                definition.mintable,
+            )
+        })
     }
     /// Unregister an asset definition when no non-zero balances exist for it.
     pub fn unregister_asset_definition(&mut self, id: &AssetDefinitionId) -> bool {
@@ -1220,6 +1303,9 @@ impl MockWorldStateView {
         let Some(def) = self.asset_definitions.get_mut(&asset_id) else {
             return false;
         };
+        if def.spec.check(amount.as_numeric()).is_err() {
+            return false;
+        }
         let balance_key = (Self::account_subject(&account_id), asset_id.clone());
         let current = self
             .balances
@@ -3739,8 +3825,9 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_REGISTER_ASSET => {
-                // r10 = &AssetDefinitionId. Bare names no longer inherit any account-domain
-                // context now that account identity is canonical and domainless.
+                // r10 = &AssetDefinitionId, r11 = &Blob UTF-8 display name,
+                // r12 = numeric-spec word, r13 = mintability word. The words use
+                // the data-model `ivm_registration` encoding shared with CoreHost.
                 let id = match vm.validate_tlv(vm.register(10)) {
                     Ok(tlv) => match tlv.type_id {
                         PointerType::AssetDefinitionId => self.decode_asset_payload(tlv.payload)?,
@@ -3751,16 +3838,21 @@ impl IVMHost for WsvHost {
                     },
                     Err(error) => return Err(error),
                 };
-                // Determine mintability from r13 (0 → Infinitely, 1 → Once, otherwise Not)
-                let mintable = match vm.register(13) {
-                    0 => Mintable::Infinitely,
-                    1 => Mintable::Once,
-                    _ => Mintable::Not,
-                };
-                if self
-                    .wsv
-                    .register_asset_definition(&self.caller, id, mintable)
-                {
+                let name_tlv = vm.validate_tlv(vm.register(11))?;
+                if name_tlv.type_id != PointerType::Blob {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let name = String::from_utf8(name_tlv.payload.to_vec())
+                    .map_err(|_| VMError::DecodeError)?;
+                let (spec, mintable) =
+                    decode_asset_registration_words(vm.register(12), vm.register(13))?;
+                if self.wsv.register_asset_definition_with_spec(
+                    &self.caller,
+                    id,
+                    name,
+                    spec,
+                    mintable,
+                ) {
                     Ok(Self::mutation_gas(0))
                 } else {
                     Err(VMError::PermissionDenied)
@@ -3983,7 +4075,7 @@ impl IVMHost for WsvHost {
                 Ok(Self::sysvar_gas(0))
             }
             syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT => {
-                vm.set_register(10, 0);
+                vm.set_register(10, self.wsv.current_block_height());
                 Ok(Self::sysvar_gas(0))
             }
             syscalls::SYSCALL_SYSVAR_CHAIN_ID => {
@@ -4214,14 +4306,19 @@ impl IVMHost for WsvHost {
                 let to_id = self.decode_canonical_account_reg(vm, 11)?;
                 let asset_id = self.decode_asset_reg(vm, 12)?;
                 let amount = self.decode_amount_reg(vm, 13)?;
-                let dataspace_id = self.decode_dataspace_reg(vm, 14)?;
+                // r14 = 0 means the call named no `dataspace:`; mock definitions are
+                // all globally scoped, so the transfer uses the global bucket.
+                let scope = match vm.register(14) {
+                    0 => AssetBalanceScope::Global,
+                    _ => AssetBalanceScope::Dataspace(self.decode_dataspace_reg(vm, 14)?),
+                };
                 let transfers_external_bucket = MockWorldStateView::account_subject(&from_id)
                     != MockWorldStateView::account_subject(&self.caller);
                 if transfers_external_bucket {
                     let exact = PermissionToken::TransferAssetBucket(AssetId::with_scope(
                         asset_id.clone(),
                         from_id.clone(),
-                        AssetBalanceScope::Dataspace(dataspace_id),
+                        scope,
                     ));
                     let definition_wide = PermissionToken::TransferAsset(asset_id.clone());
                     if !self.wsv.has_permission(&self.caller, &exact)
@@ -6559,6 +6656,18 @@ mod tests_null_decode {
         );
         vm.set_register(10, object_with_value_ptr);
         vm.set_register(11, key_name_ptr);
+        assert_eq!(
+            call_syscall_with_quote(&mut vm, syscalls::SYSCALL_JSON_GET_INT),
+            Err(VMError::DecodeError),
+            "generic JSON_SET_I64 number tokens stay outside the exact-number surface"
+        );
+        let missing: Name = "missing".parse().expect("missing key");
+        let missing_bytes = norito::to_bytes(&missing).expect("encode missing key");
+        let missing_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Name, &missing_bytes))
+            .expect("alloc missing key");
+        vm.set_register(10, object_with_value_ptr);
+        vm.set_register(11, missing_ptr);
         let get_gas =
             call_syscall_with_quote(&mut vm, syscalls::SYSCALL_JSON_GET_INT).expect("json get");
         let (present, words) = crate::sum::read_words(
@@ -6567,14 +6676,11 @@ mod tests_null_decode {
             crate::sum::SumLayoutV1::option(1).expect("int Option layout"),
         )
         .expect("read int Option");
-        assert!(
-            !present,
-            "generic JSON_SET_I64 number tokens stay outside the exact-number surface"
-        );
+        assert!(!present, "an absent key reads as Option::none");
         assert!(words.is_empty());
         assert_eq!(
             get_gas,
-            WsvHost::json_gas(object_with_value_len + key_name_bytes.len(), 16)
+            WsvHost::json_gas(object_with_value_len + missing_bytes.len(), 16)
         );
         let name: Name = "wonderland".parse().expect("name");
         let name_bytes = norito::to_bytes(&name).expect("encode name");
@@ -7098,15 +7204,10 @@ mod tests_null_decode {
             .expect("allocate negative JSON");
         vm.set_register(10, negative_ptr);
         vm.set_register(11, key_ptr);
-        host.syscall(syscalls::SYSCALL_JSON_GET_QUANTITY, &mut vm)
-            .expect("invalid quantity is Option::none");
+        // A present negative amount is malformed input, never an absent field.
         assert_eq!(
-            crate::sum::read_words(
-                &vm,
-                vm.register(10),
-                crate::sum::SumLayoutV1::option(1).expect("quantity option layout"),
-            ),
-            Ok((false, vec![]))
+            host.syscall(syscalls::SYSCALL_JSON_GET_QUANTITY, &mut vm),
+            Err(VMError::DecodeError)
         );
     }
     #[test]
@@ -7465,5 +7566,163 @@ mod tests_core_asset_definition {
             Err(VMError::NoritoInvalid)
         );
         assert!(host.wsv.asset_definitions.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_asset_registration_and_scope {
+    use super::*;
+    use iroha_data_model::asset::definition::ivm_registration;
+
+    fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
+        out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+        out.push(1);
+        out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        out.extend_from_slice(payload);
+        let hash: [u8; 32] = iroha_crypto::Hash::new(payload).into();
+        out.extend_from_slice(&hash);
+        out
+    }
+
+    fn asset() -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("asset name"),
+        )
+    }
+
+    fn registering_host() -> WsvHost {
+        let caller = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "wonderland",
+        );
+        let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
+        let subject = host.caller_subject();
+        host.wsv
+            .grant_permission(&subject, PermissionToken::RegisterAssetDefinition);
+        host
+    }
+
+    fn register(
+        host: &mut WsvHost,
+        name: &[u8],
+        spec_word: u64,
+        mintable_word: u64,
+    ) -> Result<u64, VMError> {
+        let mut vm = IVM::new(u64::MAX);
+        let asset_ptr = vm
+            .alloc_input_tlv(&tlv(
+                PointerType::AssetDefinitionId,
+                &norito::to_bytes(&asset()).expect("encode asset definition"),
+            ))
+            .expect("asset TLV");
+        let name_ptr = vm
+            .alloc_input_tlv(&tlv(PointerType::Blob, name))
+            .expect("name TLV");
+        vm.set_register(10, asset_ptr);
+        vm.set_register(11, name_ptr);
+        vm.set_register(12, spec_word);
+        vm.set_register(13, mintable_word);
+        host.syscall(syscalls::SYSCALL_REGISTER_ASSET, &mut vm)
+    }
+
+    #[test]
+    fn register_asset_records_the_display_name_spec_and_mintability() {
+        let mut host = registering_host();
+        let spec = NumericSpec::fractional(2);
+        let mintable = Mintable::limited_from_u32(3).expect("token budget");
+        register(
+            &mut host,
+            b"Rose",
+            ivm_registration::numeric_spec_word(spec),
+            ivm_registration::mintable_word(mintable),
+        )
+        .expect("register asset");
+        assert_eq!(
+            host.wsv.asset_definition_registration(&asset()),
+            Some(("Rose", spec, mintable))
+        );
+    }
+
+    #[test]
+    fn register_asset_rejects_malformed_words_and_display_names() {
+        for (name, spec_word, mintable_word, expected) in [
+            (&b"Rose"[..], 30, 0, VMError::DecodeError),
+            (&b"Rose"[..], 0, 0b100, VMError::DecodeError),
+            (&b"Rose"[..], 0, 3, VMError::DecodeError),
+            (&b""[..], 0, 0, VMError::PermissionDenied),
+            (&b"ro#se"[..], 0, 0, VMError::PermissionDenied),
+        ] {
+            let mut host = registering_host();
+            assert_eq!(
+                register(&mut host, name, spec_word, mintable_word),
+                Err(expected)
+            );
+            assert_eq!(host.wsv.asset_definition_registration(&asset()), None);
+        }
+    }
+
+    #[test]
+    fn minting_respects_the_registered_numeric_spec_and_mintability() {
+        let mut wsv = MockWorldStateView::new();
+        let owner = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "wonderland",
+        );
+        wsv.accounts
+            .entry(MockWorldStateView::account_subject(&owner))
+            .or_default();
+        wsv.grant_permission(&owner, PermissionToken::RegisterAssetDefinition);
+        wsv.grant_permission(&owner, PermissionToken::MintAsset(asset()));
+        assert!(wsv.register_asset_definition_with_spec(
+            &owner,
+            asset(),
+            "Rose".to_owned(),
+            NumericSpec::integer(),
+            Mintable::Once,
+        ));
+        assert!(wsv.mint(&owner, owner.clone(), asset(), Quantity::from(5_u64)));
+        assert!(!wsv.mint(&owner, owner.clone(), asset(), Quantity::from(1_u64)));
+    }
+
+    #[test]
+    fn transfer_without_dataspace_uses_the_global_bucket() {
+        let caller = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "wonderland",
+        );
+        let wsv = MockWorldStateView::with_balances(&[(
+            (caller.clone(), asset()),
+            Quantity::from(3_u64),
+        )]);
+        let mut host = WsvHost::new_with_subject(wsv, caller.clone());
+        let mut vm = IVM::new(u64::MAX);
+        let account = norito::to_bytes(&caller).expect("encode account");
+        let from = vm
+            .alloc_input_tlv(&tlv(PointerType::AccountId, &account))
+            .expect("from TLV");
+        let to = vm
+            .alloc_input_tlv(&tlv(PointerType::AccountId, &account))
+            .expect("to TLV");
+        let asset_ptr = vm
+            .alloc_input_tlv(&tlv(
+                PointerType::AssetDefinitionId,
+                &norito::to_bytes(&asset()).expect("encode asset definition"),
+            ))
+            .expect("asset TLV");
+        let amount = vm
+            .alloc_input_tlv(
+                &ivm_abi::numeric_tlv::encode_quantity(&Quantity::from(1_u64))
+                    .expect("quantity envelope"),
+            )
+            .expect("amount TLV");
+        vm.set_register(10, from);
+        vm.set_register(11, to);
+        vm.set_register(12, asset_ptr);
+        vm.set_register(13, amount);
+        vm.set_register(14, 0);
+        host.syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
+            .expect("a global transfer needs no dataspace");
     }
 }

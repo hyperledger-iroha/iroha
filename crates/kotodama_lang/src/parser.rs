@@ -7,8 +7,8 @@
 use super::{
     ast::*,
     diagnostic::{
-        Diagnostic, DiagnosticBundle, DiagnosticFix, DiagnosticPhase, MAX_DIAGNOSTICS,
-        SourcePosition, SourceSpan,
+        Diagnostic, DiagnosticBundle, DiagnosticFix, DiagnosticLabel, DiagnosticPhase,
+        MAX_DIAGNOSTICS, SourcePosition, SourceSpan,
     },
     lexer::{Token, TokenKind},
     source::{FrontendBudget, SourceFile, SourceId, SourceRange, TextRange},
@@ -24,23 +24,192 @@ use super::{
 use iroha_primitives::{bigint::BigInt, numeric_abi::IntValueV1};
 
 mod expressions;
+/// One syntax error produced by the grammar parser.
+///
+/// The parser reports structured data only. Messages never embed internal
+/// token names; source text is echoed exactly as the user wrote it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParseError {
     /// Stable machine-readable diagnostic code, independent of message text.
     pub code: &'static str,
+    /// Canonical English message.
     pub message: String,
+    /// One-based line of the unexpected token.
     pub line: usize,
+    /// One-based column of the unexpected token.
     pub column: usize,
-    pub snippet: String,
-    /// Exact half-open UTF-8 range of the unexpected token.
+    /// Exact half-open UTF-8 range of the unexpected token. Recovery and the
+    /// lossless CST anchor at this range.
     pub range: TextRange,
-    /// Optional machine-applicable replacement for the diagnosed source range.
-    pub fix: Option<String>,
+    /// Range reported to the user when it differs from `range`, such as the
+    /// insertion point just after the previous token for a missing `;`.
+    pub report_range: Option<TextRange>,
+    /// Site-specific remediation. The registry help for `code` is used only
+    /// when this is absent.
+    pub help: Option<String>,
+    /// Machine-applicable replacements, preferred first. Later entries are
+    /// equally valid alternatives, such as the other branded spelling.
+    pub fixes: Vec<ParseFix>,
+    /// Secondary source labels.
+    pub labels: Vec<ParseLabel>,
     /// Exact zero-width CST token expected at this failure, when recovery can
     /// insert one without guessing from diagnostic prose.
     pub expected: Option<SyntaxKind>,
     /// Syntax-outline node that owned `expected` at the failure boundary.
     pub(crate) expected_owner: Option<usize>,
+}
+/// Machine-applicable source replacement attached to a [`ParseError`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParseFix {
+    /// Exact UTF-8 range to replace; empty for an insertion.
+    pub range: TextRange,
+    /// Replacement text.
+    pub replacement: String,
+}
+/// Secondary labelled range attached to a [`ParseError`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParseLabel {
+    /// Labelled UTF-8 range.
+    pub range: TextRange,
+    /// What the range contributes to the error.
+    pub message: String,
+}
+impl ParseError {
+    /// Construct an error anchored at `token` with no help, fixes or labels.
+    fn at(token: &Token, code: &'static str, message: impl Into<String>) -> Box<Self> {
+        Self::at_range(token.range, token.line, token.column, code, message)
+    }
+    /// Construct an error anchored at an explicit range.
+    fn at_range(
+        range: TextRange,
+        line: usize,
+        column: usize,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Box<Self> {
+        Box::new(Self {
+            code,
+            message: message.into(),
+            line,
+            column,
+            range,
+            report_range: None,
+            help: None,
+            fixes: Vec::new(),
+            labels: Vec::new(),
+            expected: None,
+            expected_owner: None,
+        })
+    }
+    /// Attach site-specific help.
+    fn with_help(mut self: Box<Self>, help: impl Into<String>) -> Box<Self> {
+        self.help = Some(help.into());
+        self
+    }
+    /// Append a machine-applicable fix; the first fix is the preferred one.
+    fn with_fix(
+        mut self: Box<Self>,
+        range: TextRange,
+        replacement: impl Into<String>,
+    ) -> Box<Self> {
+        self.fixes.push(ParseFix {
+            range,
+            replacement: replacement.into(),
+        });
+        self
+    }
+    /// Append a secondary label.
+    fn with_label(mut self: Box<Self>, range: TextRange, message: impl Into<String>) -> Box<Self> {
+        self.labels.push(ParseLabel {
+            range,
+            message: message.into(),
+        });
+        self
+    }
+    /// Report the error at `range` instead of the recovery anchor.
+    fn reported_at(mut self: Box<Self>, range: TextRange) -> Box<Self> {
+        self.report_range = Some(range);
+        self
+    }
+}
+/// Exact source text of `token`, so diagnostics echo the user's spelling.
+fn token_text<'source>(source: &'source str, token: &Token) -> &'source str {
+    source
+        .get(token.range.start as usize..token.range.end as usize)
+        .unwrap_or("")
+}
+/// Prose description of a found token for "expected X, found Y" messages.
+///
+/// Punctuation and keywords appear exactly as written (`言挙げ` stays kanji);
+/// names and literals are prefixed with their category.
+fn describe_found(source: &str, token: &Token) -> String {
+    let text = token_text(source, token);
+    let quoted = |text: &str| {
+        const MAX: usize = 32;
+        if text.chars().count() > MAX {
+            format!("`{}...`", text.chars().take(MAX).collect::<String>())
+        } else {
+            format!("`{text}`")
+        }
+    };
+    match &token.kind {
+        TokenKind::EOF => "end of file".to_owned(),
+        TokenKind::Ident(_) => format!("identifier {}", quoted(text)),
+        TokenKind::Number(_) => format!("integer literal {}", quoted(text)),
+        TokenKind::DecimalLiteral(_) => format!("decimal literal {}", quoted(text)),
+        TokenKind::String(_) => format!("string literal {}", quoted(text)),
+        TokenKind::Bytes(_) => format!("byte-string literal {}", quoted(text)),
+        kind if crate::lexer::v1_keyword_spelling(kind).is_some() => {
+            format!("keyword {}", quoted(text))
+        }
+        _ => quoted(text),
+    }
+}
+/// Canonical spelling of an expected token for diagnostics. Branded keywords
+/// list both accepted spellings, for example "`kotoage`/`言挙げ`".
+fn expected_token_spelling(kind: &TokenKind) -> String {
+    match kind {
+        TokenKind::EOF => return "end of file".to_owned(),
+        TokenKind::Ident(_) => return "identifier".to_owned(),
+        TokenKind::Number(_) => return "integer literal".to_owned(),
+        TokenKind::DecimalLiteral(_) => return "decimal literal".to_owned(),
+        TokenKind::String(_) => return "string literal".to_owned(),
+        TokenKind::Bytes(_) => return "byte-string literal".to_owned(),
+        _ => {}
+    }
+    if let Some(spelling) = crate::lexer::v1_keyword_spelling(kind) {
+        return crate::glossary::by_spelling(spelling).map_or_else(
+            || format!("`{spelling}`"),
+            |keyword| format!("`{}`/`{}`", keyword.romaji, keyword.kanji),
+        );
+    }
+    expected_syntax_kind(kind)
+        .and_then(|syntax| {
+            crate::lexer::V1_PUNCTUATION_KINDS
+                .iter()
+                .find_map(|(spelling, candidate)| (*candidate == syntax).then_some(*spelling))
+        })
+        .map_or_else(|| "token".to_owned(), |spelling| format!("`{spelling}`"))
+}
+/// `snake_case` name as `UpperCamelCase`, used to suggest a permission name.
+fn upper_camel(name: &str) -> String {
+    name.split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut characters = part.chars();
+            characters.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(characters).collect()
+            })
+        })
+        .collect()
+}
+/// `text` with its first character lowercased, for embedding a glossary
+/// sentence after a colon.
+fn lowercase_first(text: &str) -> String {
+    let mut characters = text.chars();
+    characters.next().map_or_else(String::new, |first| {
+        first.to_lowercase().chain(characters).collect()
+    })
 }
 type ParseResult<T> = Result<T, Box<ParseError>>;
 type ForEachMapBinding = (NodeId, Pattern, Expr);
@@ -427,6 +596,104 @@ fn block_element_syntax_kind(element: &ParsedBlockElement) -> SyntaxKind {
         },
     }
 }
+/// Site help for a missing token, describing the construct it belongs to.
+fn expected_token_help(kind: &TokenKind) -> Option<&'static str> {
+    Some(match kind {
+        TokenKind::RParen => "every `(` needs a matching `)`; check the argument or parameter list",
+        TokenKind::RBracket => "every `[` needs a matching `]`; list elements are separated by `,`",
+        TokenKind::RBrace => "every `{` needs a matching `}`",
+        TokenKind::LBrace => {
+            "blocks, declaration bodies and struct or JSON literals start with `{`"
+        }
+        TokenKind::LParen => {
+            "parameter and argument lists are written in parentheses, even when empty: `name()`"
+        }
+        TokenKind::Equal => {
+            "`let`, `var` and `const` bindings are always initialized: `let int total = 0;`"
+        }
+        TokenKind::FatArrow => "match arms are written `Pattern => value`",
+        TokenKind::Colon => "fields and JSON entries are written `name: value`",
+        TokenKind::ColonColon => "namespaced paths use `::`, for example `Option::some(value)`",
+        TokenKind::Greater => "type arguments are closed with `>`, for example `Option<int>`",
+        TokenKind::Comma => "separate list items, arguments and fields with `,`",
+        TokenKind::In => "loops are written `for item in collection` or `for i in range(N)`",
+        TokenKind::As => "an import names its alias: `import \"math.ko\" as math;`",
+        TokenKind::Arrow => {
+            "a trigger names the function it calls: `trigger name -> function { ... }`"
+        }
+        TokenKind::EOF => "nothing may follow the closing `}` of the source unit",
+        TokenKind::Ident(_) => "a name goes here; keywords cannot be used as names",
+        _ => return None,
+    })
+}
+/// Canonical spelling of an `Option`/`Result` constructor or pattern path
+/// written with any letter case, such as `option::Some` or `Result::Ok`.
+fn canonical_sum_path(namespace: &str, variant: &str) -> Option<&'static str> {
+    Some(
+        match (
+            namespace.to_ascii_lowercase().as_str(),
+            variant.to_ascii_lowercase().as_str(),
+        ) {
+            ("option", "some") => "Option::some",
+            ("option", "none") => "Option::none",
+            ("result", "ok") => "Result::ok",
+            ("result", "err") => "Result::err",
+            _ => return None,
+        },
+    )
+}
+/// Canonical path for a bare `Some`/`None`/`Ok`/`Err` constructor name.
+fn foreign_sum_constructor(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "Some" => "Option::some",
+        "None" => "Option::none",
+        "Ok" => "Result::ok",
+        "Err" => "Result::err",
+        _ => return None,
+    })
+}
+/// Help shared by every `Option`/`Result` spelling diagnostic.
+fn sum_constructor_help() -> &'static str {
+    "optional and fallible values are built and matched as `Option::some(value)`, `Option::none`, `Result::ok(value)` and `Result::err(error)`"
+}
+/// Declaration sites that share the type-first `Type name` order.
+#[derive(Clone, Copy)]
+enum DeclarationSite {
+    Parameter,
+    StructField,
+    State,
+    Const,
+    Local,
+}
+/// Help shared by every type-first declaration diagnostic.
+fn declaration_order_help() -> &'static str {
+    "Kotodama declarations name the type first: `fn add(int lhs)`, `state int total;`, `const int limit = 1;`, `let int count = 0;`, struct field `quantity balance;`"
+}
+/// How the source-item loop continues after a recognisable stand-in for a
+/// declaration keyword (an English word or a typo) has been reported.
+enum ItemRecovery {
+    /// Parse the rest as a function with this role.
+    Function(FunctionKind),
+    /// Parse the rest as the lifecycle hook with this keyword token kind.
+    Hook(TokenKind),
+}
+/// Help text stating the shape of a lifecycle hook declaration.
+fn lifecycle_hook_help(kind: &TokenKind) -> String {
+    let romaji = if matches!(kind, TokenKind::Kaizen) {
+        "kaizen"
+    } else {
+        "hajimari"
+    };
+    crate::glossary::by_spelling(romaji).map_or_else(String::new, |keyword| {
+        format!(
+            "`{}`/`{}` {}; it is written `{}() {{ ... }}` with no `fn`, no name and no `authorize(...)`",
+            keyword.romaji,
+            keyword.kanji,
+            lowercase_first(keyword.role),
+            keyword.romaji
+        )
+    })
+}
 #[derive(Default)]
 struct FunctionAttributes {
     is_test: bool,
@@ -538,26 +805,16 @@ pub(crate) fn parse_with_syntax_mode(
         )
     {
         let location = source.line_column(range.start);
-        let line_text = source
-            .text()
-            .lines()
-            .nth(location.line.saturating_sub(1))
-            .unwrap_or("");
-        let caret = " ".repeat(location.column.saturating_sub(1)) + "^";
-        errors.push(ParseError {
-            code: "K0003",
-            message: format!(
+        errors.push(*ParseError::at_range(
+            range,
+            location.line,
+            location.column,
+            "K0003",
+            format!(
                 "source exceeds the {}-level syntactic nesting limit",
                 budget.max_nesting()
             ),
-            line: location.line,
-            column: location.column,
-            snippet: format!("{line_text}\n{caret}"),
-            range,
-            fix: None,
-            expected: None,
-            expected_owner: None,
-        });
+        ));
     }
     append_forbidden_source_identifier_errors(&parser, tokens, &mut errors);
     errors.sort_by(|left, right| {
@@ -759,38 +1016,7 @@ fn parse_diagnostic_bundle(source: &SourceFile, mut errors: Vec<ParseError>) -> 
     }
     let mut diagnostics = errors
         .into_iter()
-        .map(|error| {
-            let start = source.line_column(error.range.start);
-            let end = source.line_column(error.range.end);
-            let mut diagnostic = Diagnostic::error(
-                error.code,
-                DiagnosticPhase::Parse,
-                error.message,
-                Some(SourceSpan {
-                    package_identity: source.package_identity().map(str::to_owned),
-                    source: Some(source.name().to_owned()),
-                    start: SourcePosition {
-                        line: start.line,
-                        column: start.column,
-                    },
-                    end: SourcePosition {
-                        line: end.line,
-                        column: end.column,
-                    },
-                    byte_range: Some(error.range),
-                }),
-            );
-            if !error.snippet.is_empty() {
-                diagnostic.notes.push(error.snippet);
-            }
-            if let Some(replacement) = error.fix {
-                diagnostic.fix = diagnostic
-                    .primary_span
-                    .clone()
-                    .map(|span| DiagnosticFix { span, replacement });
-            }
-            diagnostic
-        })
+        .map(|error| parse_error_diagnostic(source, error))
         .collect::<Vec<_>>();
     if omitted != 0 {
         diagnostics.push(Diagnostic::error(
@@ -803,6 +1029,48 @@ fn parse_diagnostic_bundle(source: &SourceFile, mut errors: Vec<ParseError>) -> 
     let mut bundle = DiagnosticBundle::new(diagnostics);
     bundle.capture_source(source);
     bundle
+}
+/// Project one structured parse error onto the shared diagnostic model.
+///
+/// Site-specific help replaces the registry fallback; every fix keeps its own
+/// exact range, and the first fix is the preferred one.
+fn parse_error_diagnostic(source: &SourceFile, error: ParseError) -> Diagnostic {
+    let ParseError {
+        code,
+        message,
+        range,
+        report_range,
+        help,
+        fixes,
+        labels,
+        ..
+    } = error;
+    let mut diagnostic = Diagnostic::error(
+        code,
+        DiagnosticPhase::Parse,
+        message,
+        Some(SourceSpan::from_range(
+            source,
+            report_range.unwrap_or(range),
+        )),
+    );
+    if let Some(help) = help {
+        diagnostic.help = Some(help);
+    }
+    let mut fixes = fixes.into_iter().map(|fix| DiagnosticFix {
+        span: SourceSpan::from_range(source, fix.range),
+        replacement: fix.replacement,
+    });
+    diagnostic.fix = fixes.next();
+    diagnostic.alternative_fixes = fixes.collect();
+    diagnostic.labels = labels
+        .into_iter()
+        .map(|label| DiagnosticLabel {
+            span: SourceSpan::from_range(source, label.range),
+            message: label.message,
+        })
+        .collect();
+    diagnostic
 }
 /// Wrap a unit-test fragment in a canonical `seiyaku`/`誓約` container before parsing.
 #[cfg(test)]
@@ -835,6 +1103,9 @@ struct CstAstLowerer<'a> {
     statement_if_condition_depths: Vec<usize>,
     declared_function_parameters: std::collections::BTreeMap<String, Option<Vec<String>>>,
     syntax: SyntaxOutlineBuilder,
+    /// Start of the declaration token already reported as following a body
+    /// whose `}` is missing, so enclosing blocks do not report it again.
+    missing_close_reported: Option<u32>,
 }
 impl<'a> CstAstLowerer<'a> {
     fn new(
@@ -872,6 +1143,7 @@ impl<'a> CstAstLowerer<'a> {
             statement_if_condition_depths: Vec::new(),
             declared_function_parameters: std::collections::BTreeMap::new(),
             syntax,
+            missing_close_reported: None,
         }
     }
     fn current_start(&self) -> u32 {
@@ -1310,19 +1582,31 @@ impl<'a> CstAstLowerer<'a> {
         } else if self.peek(TokenKind::Module) {
             SourceUnitKind::Module
         } else {
-            let token = self.bump();
-            return Err(self.error(
-                token,
-                "exactly one `seiyaku Name { ... }`/`誓約 Name { ... }` or `module Name { ... }` source unit",
-            ));
+            let token = self.current_token();
+            let (error, recovered) = self.source_unit_error(&token);
+            // A recognisable misspelling of the unit keyword is reported once
+            // and parsing continues as that unit, so the body is still checked
+            // without cascading errors.
+            match recovered {
+                Some(kind) if self.recover => {
+                    self.errors.push(*error);
+                    kind
+                }
+                _ => {
+                    self.bump();
+                    return Err(error);
+                }
+            }
         };
+        let errors_before_unit = self.errors.len();
         let (unit, parts) = self.parse_source_unit(kind)?;
-        if !self.peek(TokenKind::EOF) {
+        // After an earlier error inside the unit, leftover tokens are the
+        // consequence of that error's recovery, not a second problem.
+        if !self.peek(TokenKind::EOF) && self.errors.len() == errors_before_unit {
             let token = self.bump();
-            return Err(self.error(
-                token,
-                "exactly one seiyaku or module is allowed per source file",
-            ));
+            let unit_name = unit.name.clone();
+            drop(parts);
+            return Err(self.trailing_source_error(token, &unit_name));
         }
         let (items, fixtures, directives, exports) = parts.into_inner();
         Ok(Program {
@@ -1333,6 +1617,756 @@ impl<'a> CstAstLowerer<'a> {
             test_target: self.test_target.take(),
             fixtures,
         })
+    }
+    /// Diagnose a file that does not start with `seiyaku`/`誓約` or `module`.
+    ///
+    /// Returns the error and, when the token is a recognisable stand-in for
+    /// the unit keyword (an English word or a typo), the unit kind recovery
+    /// should continue with.
+    fn source_unit_error(&self, token: &Token) -> (Box<ParseError>, Option<SourceUnitKind>) {
+        let help = "a source file contains exactly one `seiyaku Name { ... }` (deployable; also spelled `誓約`) or one `module Name { ... }` (reusable library)";
+        if let TokenKind::Ident(word) = &token.kind
+            && self.peek_n_ident(1)
+            && self.peek_n(2, TokenKind::LBrace)
+        {
+            if let Some(keyword) = crate::glossary::suggestion_for(word)
+                && keyword.romaji == "seiyaku"
+            {
+                let error = self
+                    .english_word_error(token, keyword, "a deployable unit")
+                    .with_help(help);
+                return (error, Some(SourceUnitKind::Seiyaku));
+            }
+            if let Some(suggestion) =
+                crate::diagnostic::suggest::closest(word, ["seiyaku", "module"])
+            {
+                let kind = if suggestion == "module" {
+                    SourceUnitKind::Module
+                } else {
+                    SourceUnitKind::Seiyaku
+                };
+                return (self.keyword_typo_error(token, suggestion), Some(kind));
+            }
+        }
+        let error = self
+            .expected_error(token.clone(), "a `seiyaku`/`誓約` or `module` source unit")
+            .with_help(help);
+        (error, None)
+    }
+    /// Diagnose tokens after the closing brace of the source unit.
+    fn trailing_source_error(&self, token: Token, unit_name: &str) -> Box<ParseError> {
+        match token.kind {
+            TokenKind::Seiyaku | TokenKind::Module => {
+                let spelling = self.spelling(&token).to_owned();
+                self.coded_error(
+                    token,
+                    "K1001",
+                    format!(
+                        "a source file contains exactly one seiyaku or module, but `{spelling}` starts a second one after `{unit_name}`"
+                    ),
+                )
+                .with_help(
+                    "move the second unit into its own `.ko` file and connect them with `import`",
+                )
+            }
+            TokenKind::RBrace => self
+                .coded_error(
+                    token,
+                    "K1001",
+                    format!("unmatched `}}` after the end of `{unit_name}`"),
+                )
+                .with_help(
+                    "remove the extra `}`, or check that every `{` inside the unit is closed exactly once",
+                ),
+            _ => {
+                let found = describe_found(self.source, &token);
+                self.coded_error(
+                    token,
+                    "K1001",
+                    format!("{found} appears after the end of `{unit_name}`"),
+                )
+                .with_help(format!(
+                    "declarations belong inside the braces of `{unit_name}`; move this text before its closing `}}`"
+                ))
+            }
+        }
+    }
+    /// Whether the token at `offset` is an identifier.
+    fn peek_n_ident(&self, offset: usize) -> bool {
+        matches!(
+            self.tokens.get(self.pos + offset).map(|token| &token.kind),
+            Some(TokenKind::Ident(_))
+        )
+    }
+    /// Whether the function head starting at the cursor declares
+    /// `authorize(...)` before its body `{`.
+    fn function_head_authorizes(&self) -> bool {
+        self.tokens[self.pos.min(self.tokens.len())..]
+            .iter()
+            .take_while(|token| {
+                !matches!(
+                    token.kind,
+                    TokenKind::LBrace | TokenKind::RBrace | TokenKind::Semicolon | TokenKind::EOF
+                )
+            })
+            .any(|token| token.kind == TokenKind::Authorize)
+    }
+    /// `E_ENGLISH_DECLARATION_WORD`: an English concept word written where a
+    /// branded keyword declares the concept. Offers both spellings.
+    fn english_word_error(
+        &self,
+        token: &Token,
+        keyword: &'static crate::glossary::BrandedKeyword,
+        concept: &str,
+    ) -> Box<ParseError> {
+        let word = self.spelling(token);
+        ParseError::at(
+            token,
+            "E_ENGLISH_DECLARATION_WORD",
+            format!(
+                "`{word}` is not a Kotodama keyword; {concept} is declared with `{}` or `{}`",
+                keyword.romaji, keyword.kanji
+            ),
+        )
+        .with_help(format!(
+            "`{}`/`{}` ({}, \u{201c}{}\u{201d}) {}; both spellings are the same keyword",
+            keyword.romaji,
+            keyword.kanji,
+            keyword.reading,
+            keyword.literal,
+            lowercase_first(keyword.role)
+        ))
+        .with_fix(token.range, keyword.romaji)
+        .with_fix(token.range, keyword.kanji)
+    }
+    /// `E_KEYWORD_TYPO`: a near-miss spelling of a keyword. Branded keywords
+    /// offer both spellings.
+    fn keyword_typo_error(&self, token: &Token, suggestion: &str) -> Box<ParseError> {
+        let word = self.spelling(token);
+        let branded = crate::glossary::by_spelling(suggestion);
+        let message = match branded {
+            Some(keyword) => format!(
+                "unknown keyword `{word}`; did you mean `{}`/`{}`?",
+                keyword.romaji, keyword.kanji
+            ),
+            None => format!("unknown keyword `{word}`; did you mean `{suggestion}`?"),
+        };
+        let mut error = ParseError::at(token, "E_KEYWORD_TYPO", message)
+            .with_help("keywords are case-sensitive and spelled exactly as in the V1 keyword table")
+            .with_fix(token.range, suggestion);
+        if let Some(keyword) = branded {
+            error = error.with_fix(token.range, keyword.kanji);
+        }
+        error
+    }
+    /// Diagnose a token that cannot start a declaration inside a source unit.
+    ///
+    /// English concept words and keyword typos get targeted errors with
+    /// fixes; when their shape is unambiguous the item loop continues as the
+    /// intended declaration.
+    fn source_item_error(
+        &self,
+        token: &Token,
+        unit: SourceUnitKind,
+    ) -> (Box<ParseError>, Option<ItemRecovery>) {
+        const ITEMS: &str = "`fn`, `kotoage fn`/`言挙げ fn`, `view fn`, `hajimari`/`始まり`, `kaizen`/`改善`, `trigger`, `struct`, `error enum`, `const` or `state`";
+        let next = self.tokens.get(self.pos + 1).map(|token| &token.kind);
+        let in_module = unit == SourceUnitKind::Module;
+        if let TokenKind::Ident(word) = &token.kind {
+            if let Some(keyword) = crate::glossary::suggestion_for(word) {
+                match keyword.romaji {
+                    "kotoage" if next == Some(&TokenKind::Fn) && in_module => {
+                        // Modules have no kotoage or view functions; their
+                        // public surface is `export`.
+                        let error = ParseError::at(
+                            token,
+                            "E_ENGLISH_DECLARATION_WORD",
+                            format!(
+                                "`{}` is not a Kotodama keyword; a module makes a function public with `export`",
+                                self.spelling(token)
+                            ),
+                        )
+                        .with_help("a module shares functions, structs, error enums and constants with `export`; public `kotoage fn` (also `言挙げ fn`) and `view fn` functions belong to a seiyaku")
+                        .with_fix(token.range, "export");
+                        return (error, Some(ItemRecovery::Function(FunctionKind::Private)));
+                    }
+                    "kotoage" if next == Some(&TokenKind::Fn) => {
+                        let mut error = self
+                            .english_word_error(token, keyword, "a public state-changing function")
+                            .with_help(
+                                "public functions are `kotoage fn` (also `言挙げ fn`; submitted in a transaction, may write state, requires `authorize(\"Permission\")`) or `view fn` (read-only); plain `fn` is private to the unit",
+                            );
+                        let view = ParseFix {
+                            range: token.range,
+                            replacement: "view".to_owned(),
+                        };
+                        // Without a permission clause `kotoage` would fail to
+                        // compile, so the read-only `view` is preferred.
+                        if self.function_head_authorizes() {
+                            error.fixes.push(view);
+                        } else {
+                            error.fixes.insert(0, view);
+                        }
+                        return (error, Some(ItemRecovery::Function(FunctionKind::Kotoage)));
+                    }
+                    "hajimari" | "kaizen" if next == Some(&TokenKind::LParen) && in_module => {
+                        let mut error = self
+                            .english_word_error(token, keyword, "a lifecycle hook of a seiyaku")
+                            .with_help("modules have no lifecycle hooks; a seiyaku declares them, and a module function needs `fn`: `fn name(...) { ... }`");
+                        error.fixes.clear();
+                        return (error, None);
+                    }
+                    "hajimari" | "kaizen" if next == Some(&TokenKind::LParen) => {
+                        let (concept, kind) = if keyword.romaji == "hajimari" {
+                            ("the activation hook", TokenKind::Hajimari)
+                        } else {
+                            ("the in-place code replacement hook", TokenKind::Kaizen)
+                        };
+                        let error = self.english_word_error(token, keyword, concept);
+                        return (error, Some(ItemRecovery::Hook(kind)));
+                    }
+                    "seiyaku" => {
+                        // Renaming the word would still declare a unit inside
+                        // another, so no fix is offered.
+                        let mut error = self
+                            .english_word_error(token, keyword, "a deployable unit")
+                            .with_help("a source file contains exactly one seiyaku or module, so a unit cannot be declared inside another; put it in its own `.ko` file and connect the files with `import`");
+                        error.fixes.clear();
+                        return (error, None);
+                    }
+                    _ => {}
+                }
+            }
+            let candidates = [
+                "fn", "kotoage", "view", "hajimari", "kaizen", "trigger", "struct", "error",
+                "const", "state", "include", "import", "export",
+            ];
+            if let Some(suggestion) = crate::diagnostic::suggest::closest(word, candidates) {
+                let recovery = match suggestion {
+                    "kotoage" if next == Some(&TokenKind::Fn) => {
+                        Some(ItemRecovery::Function(FunctionKind::Kotoage))
+                    }
+                    "view" if next == Some(&TokenKind::Fn) => {
+                        Some(ItemRecovery::Function(FunctionKind::View))
+                    }
+                    "hajimari" if next == Some(&TokenKind::LParen) => {
+                        Some(ItemRecovery::Hook(TokenKind::Hajimari))
+                    }
+                    "kaizen" if next == Some(&TokenKind::LParen) => {
+                        Some(ItemRecovery::Hook(TokenKind::Kaizen))
+                    }
+                    _ => None,
+                };
+                return (self.keyword_typo_error(token, suggestion), recovery);
+            }
+        }
+        let error = self
+            .expected_error(token.clone(), &format!("a declaration ({ITEMS})"))
+            .with_help("a seiyaku contains state, functions, lifecycle hooks, triggers, structs, error enums and constants; statements belong inside a function body");
+        (error, None)
+    }
+    /// `E_DECLARATION_SHAPE` for `kotoage view fn` / `view kotoage fn`.
+    fn mixed_role_error(&self, first: &Token, second: &Token) -> Box<ParseError> {
+        let first_text = self.spelling(first);
+        let second_text = self.spelling(second);
+        self.coded_error(
+            second.clone(),
+            "E_DECLARATION_SHAPE",
+            format!(
+                "a function is either `{}` or `{}`, not both: `{first_text}` and `{second_text}` cannot be combined",
+                if first.kind == TokenKind::Kotoage { format!("{first_text} fn") } else { format!("{second_text} fn") },
+                if first.kind == TokenKind::View { format!("{first_text} fn") } else { format!("{second_text} fn") },
+            ),
+        )
+        .with_help("`kotoage fn` (also `言挙げ fn`) is submitted in a transaction and may change state; `view fn` only reads state")
+        .with_fix(TextRange::new(first.range.end, second.range.end), "")
+        .with_fix(TextRange::new(first.range.start, second.range.start), "")
+    }
+    /// Parse a `hajimari`/`kaizen` hook whose keyword token was consumed.
+    fn parse_lifecycle_hook(
+        &mut self,
+        hook: &Token,
+        attrs: &FunctionAttributes,
+        declaration_start: u32,
+    ) -> ParseResult<Item> {
+        let (name, kind) = if matches!(hook.kind, TokenKind::Kaizen) {
+            ("kaizen", FunctionKind::Kaizen)
+        } else {
+            ("hajimari", FunctionKind::Hajimari)
+        };
+        self.parse_fn_loose(
+            Some(name.to_owned()),
+            FunctionModifiers {
+                kind,
+                permission: None,
+                is_test: attrs.is_test,
+                test_fixture: attrs.test_fixture.clone(),
+            },
+            declaration_start,
+            Some(hook.clone()),
+        )
+    }
+    /// Consume a `keyword(...)` clause whose keyword was just consumed and
+    /// return its full range. Stops before `{` or the end of the file when the
+    /// parentheses are unbalanced.
+    fn skip_balanced_clause(&mut self, keyword: &Token) -> TextRange {
+        let mut end = keyword.range.end;
+        if !self.peek(TokenKind::LParen) {
+            return keyword.range;
+        }
+        let mut depth = 0_usize;
+        while let Some(token) = self.tokens.get(self.pos) {
+            match token.kind {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => depth = depth.saturating_sub(1),
+                TokenKind::LBrace | TokenKind::EOF => break,
+                _ => {}
+            }
+            end = token.range.end;
+            self.pos += 1;
+            if depth == 0 {
+                break;
+            }
+        }
+        TextRange::new(keyword.range.start, end)
+    }
+    /// Leading spaces and tabs of the line containing `offset`.
+    fn line_indentation(&self, offset: u32) -> &'a str {
+        let source: &'a str = self.source;
+        let before = source.get(..offset as usize).unwrap_or("");
+        let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
+        let line = &source[line_start..];
+        let width = line
+            .bytes()
+            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .count();
+        &line[..width]
+    }
+    /// Extend `range` backwards over spaces and tabs on the same line, so a
+    /// deletion fix also removes the separating whitespace.
+    fn leading_space_range(&self, range: TextRange) -> TextRange {
+        let prefix = &self.source.as_bytes()[..range.start as usize];
+        let spaces = prefix
+            .iter()
+            .rev()
+            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .count();
+        TextRange::new(range.start - spaces as u32, range.end)
+    }
+    /// Parse `name: Type` at a declaration site, report it once as
+    /// `E_RETIRED_DECLARATION_ORDER` and continue as the type-first
+    /// declaration `Type name`.
+    ///
+    /// The cursor is at `name`, followed by `:`. The fix rewrites the text with
+    /// the user's own names, and parsing continues so later declarations in
+    /// the same list are still checked. Returns the parsed type and the name
+    /// token.
+    fn colon_declaration(&mut self, site: DeclarationSite) -> ParseResult<(TypeExpr, Token)> {
+        let name_token = self.current_token();
+        let (error, ty) = self.colon_declaration_error(site)?;
+        let mut ty = PendingType::new(ty);
+        self.report(error)?;
+        Ok((ty.take(), name_token))
+    }
+    /// Build the `E_RETIRED_DECLARATION_ORDER` error for `name: Type`,
+    /// consuming the name, the colon and the type.
+    fn colon_declaration_error(
+        &mut self,
+        site: DeclarationSite,
+    ) -> ParseResult<(Box<ParseError>, TypeExpr)> {
+        let name_token = self.bump();
+        let colon = self.bump();
+        let type_start = self.current_start();
+        let parsed_type = self.parse_type_expr()?;
+        let type_end = self.previous_end(type_start);
+        let name = self.spelling(&name_token).to_owned();
+        let ty = self
+            .source
+            .get(type_start as usize..type_end as usize)
+            .unwrap_or("")
+            .to_owned();
+        let (what, example) = match site {
+            DeclarationSite::Parameter => ("parameters", format!("`{ty} {name}`")),
+            DeclarationSite::StructField => ("struct fields", format!("`{ty} {name};`")),
+            DeclarationSite::State => ("state declarations", format!("`state {ty} {name};`")),
+            DeclarationSite::Const => ("constants", format!("`const {ty} {name} = ...;`")),
+            DeclarationSite::Local => ("typed locals", format!("`let {ty} {name} = ...;`")),
+        };
+        let written = TextRange::new(name_token.range.start, type_end);
+        let error = ParseError::at(
+            &colon,
+            "E_RETIRED_DECLARATION_ORDER",
+            format!("{what} are type-first: write {example}, not `{name}: {ty}`"),
+        )
+        .reported_at(written)
+        .with_help(declaration_order_help())
+        .with_fix(written, format!("{ty} {name}"));
+        Ok((error, parsed_type))
+    }
+    /// `E_RETIRED_DECLARATION_ORDER` when a complex type is followed by `:`,
+    /// a shape the `name: Type` lookahead cannot rewrite exactly.
+    fn type_then_colon_error(&mut self, message: &str) -> Box<ParseError> {
+        let colon = self.bump();
+        self.coded_error(colon, "E_RETIRED_DECLARATION_ORDER", message)
+            .with_help(declaration_order_help())
+    }
+    /// Whether the current identifier reads as a type (a scalar type name or
+    /// a capitalized nominal type) rather than a declared name, so `fn f(int)`
+    /// is a missing name while `fn f(value)` is a missing type.
+    fn current_names_a_type(&self) -> bool {
+        matches!(
+            self.tokens.get(self.pos).map(|token| &token.kind),
+            Some(TokenKind::Ident(name))
+                if matches!(name.as_str(), "int" | "decimal" | "quantity" | "bool" | "string" | "bytes")
+                    || name.starts_with(|character: char| character.is_ascii_uppercase())
+        )
+    }
+    /// `E_MISSING_DECLARATION_TYPE` for a declaration that names no type.
+    fn missing_type_error(&mut self, site: DeclarationSite) -> Box<ParseError> {
+        let name_token = self.bump();
+        let name = self.spelling(&name_token).to_owned();
+        let (what, example) = match site {
+            DeclarationSite::Parameter => ("parameter", format!("`int {name}`")),
+            DeclarationSite::StructField => ("struct field", format!("`int {name};`")),
+            DeclarationSite::State => ("state declaration", format!("`state int {name};`")),
+            DeclarationSite::Const => ("constant", format!("`const int {name} = ...;`")),
+            DeclarationSite::Local => ("local", format!("`let int {name} = ...;`")),
+        };
+        ParseError::at(
+            &name_token,
+            "E_MISSING_DECLARATION_TYPE",
+            format!("{what} `{name}` needs a type before its name, for example {example}"),
+        )
+        .with_help("declarations name the type first; the type is never inferred for parameters, fields, state or constants")
+    }
+    /// `for (item in xs)`: Kotodama loop headers are not parenthesized.
+    fn report_parenthesized_for_header(&mut self) -> ParseResult<()> {
+        let opening = self.current_token();
+        let mut depth = 0_usize;
+        let mut closing = None;
+        for token in &self.tokens[self.pos..] {
+            match token.kind {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        closing = Some(token.clone());
+                        break;
+                    }
+                }
+                TokenKind::LBrace | TokenKind::EOF => break,
+                _ => {}
+            }
+        }
+        let mut error = self
+            .coded_error(
+                opening.clone(),
+                "K1001",
+                "`for` loop headers are not parenthesized",
+            )
+            .with_help("write `for item in collection { ... }` or `for i in range(N) { ... }`");
+        if let Some(closing) = closing {
+            let inner = self
+                .source
+                .get(opening.range.end as usize..closing.range.start as usize)
+                .unwrap_or("")
+                .trim()
+                .to_owned();
+            let header = TextRange::new(opening.range.start, closing.range.end);
+            error = error.reported_at(header).with_fix(header, inner);
+        }
+        Err(error)
+    }
+    /// `E_UNSUPPORTED_LOOP` for a three-clause `for (init; condition; step)`
+    /// header at the cursor, or `None` when the parentheses hold no `;`.
+    ///
+    /// The canonical counting shape `(i = 0; i < N; i += 1)` (optionally
+    /// declaring `i` with `var`, `let` or `int`, and with `<=` or
+    /// `i = i + 1`) gets an exact `i in range(N)` fix.
+    fn three_clause_for_error(&self) -> Option<Box<ParseError>> {
+        let opening = self.tokens.get(self.pos)?;
+        let mut depth = 0_usize;
+        let mut separators = Vec::new();
+        let mut closing = None;
+        for (index, token) in self.tokens.iter().enumerate().skip(self.pos) {
+            match token.kind {
+                TokenKind::LParen | TokenKind::LBracket => depth += 1,
+                TokenKind::RParen | TokenKind::RBracket => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        closing = Some(index);
+                        break;
+                    }
+                }
+                TokenKind::Semicolon if depth == 1 => separators.push(index),
+                TokenKind::LBrace | TokenKind::RBrace | TokenKind::EOF => break,
+                _ => {}
+            }
+        }
+        if separators.is_empty() {
+            return None;
+        }
+        let closing_index = closing?;
+        let header = TextRange::new(opening.range.start, self.tokens[closing_index].range.end);
+        let mut error = self
+            .coded_error(
+                opening.clone(),
+                "E_UNSUPPORTED_LOOP",
+                "`for (init; condition; step)` loops are not part of Kotodama; every loop is a `for` loop with a compiler-proven bound",
+            )
+            .reported_at(header)
+            .with_help("count with `for i in range(N) { ... }`, which runs i = 0 up to N - 1; `N` must be a compile-time integer expression");
+        if let [first, second] = separators[..]
+            && let Some(replacement) =
+                self.counted_range_header(self.pos + 1, first, second, closing_index)
+        {
+            error = error.with_fix(header, replacement);
+        }
+        Some(error)
+    }
+    /// `i in range(N)` for the token ranges `i = 0`, `i < N` and `i += 1`
+    /// between the given separator indices, when they have exactly that shape.
+    fn counted_range_header(
+        &self,
+        start: usize,
+        first: usize,
+        second: usize,
+        closing: usize,
+    ) -> Option<String> {
+        let kinds = |range: std::ops::Range<usize>| self.tokens.get(range);
+        let mut init = kinds(start..first)?;
+        if let [
+            Token {
+                kind: TokenKind::Var | TokenKind::Let,
+                ..
+            },
+            rest @ ..,
+        ] = init
+        {
+            init = rest;
+        }
+        if let [
+            Token {
+                kind: TokenKind::Ident(ty),
+                ..
+            },
+            rest @ ..,
+        ] = init
+            && ty == "int"
+            && rest.len() == 3
+        {
+            init = rest;
+        }
+        let name = match init {
+            [
+                Token {
+                    kind: TokenKind::Ident(name),
+                    ..
+                },
+                Token {
+                    kind: TokenKind::Equal,
+                    ..
+                },
+                zero,
+            ] if self.spelling(zero) == "0" => name,
+            _ => return None,
+        };
+        let condition = kinds(first + 1..second)?;
+        let (inclusive, bound) = match condition {
+            [
+                Token {
+                    kind: TokenKind::Ident(left),
+                    ..
+                },
+                operator,
+                bound @ ..,
+            ] if left == name
+                && matches!(operator.kind, TokenKind::Less | TokenKind::LessEqual)
+                && !bound.is_empty()
+                // Only an arithmetic bound moves into `range(...)` unchanged.
+                && !bound.iter().any(|token| {
+                    matches!(
+                        token.kind,
+                        TokenKind::AndAnd
+                            | TokenKind::OrOr
+                            | TokenKind::Question
+                            | TokenKind::EqualEqual
+                            | TokenKind::BangEqual
+                            | TokenKind::Less
+                            | TokenKind::LessEqual
+                            | TokenKind::Greater
+                            | TokenKind::GreaterEqual
+                    )
+                }) =>
+            {
+                (operator.kind == TokenKind::LessEqual, bound)
+            }
+            _ => return None,
+        };
+        let step = kinds(second + 1..closing)?;
+        let steps_by_one = match step {
+            [
+                Token {
+                    kind: TokenKind::Ident(target),
+                    ..
+                },
+                Token {
+                    kind: TokenKind::PlusEqual,
+                    ..
+                },
+                one,
+            ] => target == name && self.spelling(one) == "1",
+            [
+                Token {
+                    kind: TokenKind::Ident(target),
+                    ..
+                },
+                Token {
+                    kind: TokenKind::Equal,
+                    ..
+                },
+                Token {
+                    kind: TokenKind::Ident(left),
+                    ..
+                },
+                Token {
+                    kind: TokenKind::Plus,
+                    ..
+                },
+                one,
+            ] => target == name && left == name && self.spelling(one) == "1",
+            _ => false,
+        };
+        if !steps_by_one {
+            return None;
+        }
+        let first_bound = bound.first()?;
+        let last_bound = bound.last()?;
+        let bound_text = self
+            .source
+            .get(first_bound.range.start as usize..last_bound.range.end as usize)?;
+        Some(if inclusive {
+            format!("{name} in range({bound_text} + 1)")
+        } else {
+            format!("{name} in range({bound_text})")
+        })
+    }
+    /// `for i in a..b`: ranges are written `range(N)`.
+    ///
+    /// The cursor is at `..`; the start bound has been parsed as `start`.
+    /// The end bound is consumed so the loop body still parses.
+    fn report_range_operator(&mut self, start: &Expr) -> ParseResult<()> {
+        let dots = self.bump();
+        let inclusive = self.peek(TokenKind::Equal);
+        if inclusive {
+            self.bump();
+        }
+        let start_range = start.source().map_or(dots.range, |source| source.range);
+        let start_text = self
+            .source
+            .get(start_range.start as usize..dots.range.start as usize)
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        let end_start = self.current_start();
+        let end = self.parse_expr_before_block()?;
+        crate::ast::drop_expression_iterative(end);
+        let end_end = self.previous_end(end_start);
+        let end_text = self
+            .source
+            .get(end_start as usize..end_end as usize)
+            .unwrap_or("")
+            .to_owned();
+        let written = TextRange::new(start_range.start, end_end);
+        let bound = if inclusive {
+            format!("{end_text} + 1")
+        } else {
+            end_text.clone()
+        };
+        let mut error = self
+            .coded_error(
+                dots,
+                "E_RANGE_SYNTAX",
+                format!(
+                    "Kotodama has no `{}` range operator; counted loops use `range(N)`, which counts from 0 up to N - 1",
+                    if inclusive { "..=" } else { ".." }
+                ),
+            )
+            .reported_at(written);
+        if start_text == "0" {
+            error = error
+                .with_help("the loop bound must be a compile-time integer expression")
+                .with_fix(written, format!("range({bound})"));
+        } else {
+            error = error.with_help(format!(
+                "count from 0 and offset the index: `for k in range({bound} - {start_text}) {{ let i = {start_text} + k; ... }}`; the bound must be a compile-time integer expression"
+            ));
+        }
+        self.report(error)
+    }
+    /// A match pattern without a `Namespace::` prefix: `_`, `Some(x)`,
+    /// `None`, or another bare name.
+    fn bare_pattern_error(&self, token: &Token, name: &str) -> Box<ParseError> {
+        if name == "_" {
+            return self
+                .coded_error(
+                    token.clone(),
+                    "E_MATCH_WILDCARD",
+                    "`match` has no wildcard arm; name every variant",
+                )
+                .with_help("a match over `Option` lists `Option::some(value)` and `Option::none`; over `Result`, `Result::ok(value)` and `Result::err(error)`; payloads you do not use bind `_`");
+        }
+        if let Some(canonical) = foreign_sum_constructor(name) {
+            return self
+                .coded_error(
+                    token.clone(),
+                    "E_LEGACY_SUM_CONSTRUCTOR",
+                    format!("`{name}` is spelled `{canonical}` in Kotodama patterns"),
+                )
+                .with_help(sum_constructor_help())
+                .with_fix(token.range, canonical);
+        }
+        self.expected_error(self.current_token(), "`::` and a variant name")
+            .with_help("`match` arms name the variants of an `Option`, `Result` or `error enum`, for example `Option::some(value)` or `MyError::Unauthorized`")
+    }
+    /// Skip to the end of the current match arm: the next `,` or the match's
+    /// closing `}` at the arm's own nesting level.
+    fn synchronize_match_arm(&mut self, arm_start: usize) {
+        let mut stack = Vec::new();
+        let mut index = arm_start;
+        while let Some(token) = self.tokens.get(index) {
+            let closer = DelimiterKind::closing(&token.kind);
+            let closes_outer = closer.is_some() && stack.last() != closer.as_ref();
+            if matches!(token.kind, TokenKind::EOF)
+                || closes_outer
+                || (stack.is_empty() && index >= self.pos && token.kind == TokenKind::Comma)
+            {
+                break;
+            }
+            update_delimiter_stack(&mut stack, &token.kind);
+            index += 1;
+        }
+        // Always make progress past the failing token.
+        self.pos = index.max(self.pos);
+    }
+    /// A trigger field written twice.
+    fn duplicate_trigger_field(&self, field: Token) -> Box<ParseError> {
+        let name = self.spelling(&field).to_owned();
+        self.coded_error(
+            field,
+            "K1001",
+            format!("trigger field `{name}` is declared more than once"),
+        )
+        .with_help("each trigger field appears at most once")
+    }
+    /// Record a recoverable error and continue, or fail when recovery is off.
+    fn report(&mut self, error: Box<ParseError>) -> ParseResult<()> {
+        if self.recover {
+            self.errors.push(*error);
+            Ok(())
+        } else {
+            Err(error)
+        }
     }
     fn parse_fragment_program(&mut self) -> ParseResult<Program> {
         let (unit, parts) = self.parse_source_unit(SourceUnitKind::Fragment)?;
@@ -1383,10 +2417,15 @@ impl<'a> CstAstLowerer<'a> {
                 let attrs = self.parse_function_attributes()?;
                 if self.peek(TokenKind::Include) || self.peek(TokenKind::Import) {
                     if !attrs.is_empty() {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "source directives cannot have function attributes",
-                        ));
+                        let token = self.current_token();
+                        let spelling = self.spelling(&token).to_owned();
+                        return Err(self
+                            .coded_error(
+                                token,
+                                "K1001",
+                                format!("`#[test]` cannot be attached to an `{spelling}` directive"),
+                            )
+                            .with_help("attributes apply only to the function declared directly after them; remove the attribute"));
                     }
                     let directive = self.parse_source_directive(parts.items.len())?;
                     parts.directives.push(directive);
@@ -1395,9 +2434,15 @@ impl<'a> CstAstLowerer<'a> {
                 let export = if self.peek(TokenKind::Export) {
                     let token = self.bump();
                     if kind == SourceUnitKind::Seiyaku {
-                        return Err(
-                            self.error(token, "`export` is only permitted in module declarations")
-                        );
+                        let next_start = self.current_start();
+                        return Err(self
+                            .coded_error(
+                                token.clone(),
+                                "K1001",
+                                "`export` is only permitted in module declarations",
+                            )
+                            .with_help("a seiyaku is called through its kotoage and view functions; remove `export`, or move the declaration into a `module`")
+                            .with_fix(TextRange::new(token.range.start, next_start), ""));
                     }
                     if !matches!(
                         self.tokens.get(self.pos).map(|token| &token.kind),
@@ -1405,188 +2450,284 @@ impl<'a> CstAstLowerer<'a> {
                             TokenKind::Fn | TokenKind::Struct | TokenKind::Error | TokenKind::Const
                         )
                     ) {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "`export` must precede fn, struct, error enum, or const",
-                        ));
+                        return Err(self
+                            .expected_error(
+                                self.current_token(),
+                                "`fn`, `struct`, `error enum` or `const` after `export`",
+                            )
+                            .with_help(
+                                "modules export functions, structs, error enums and constants",
+                            ));
                     }
                     Some(token.range)
                 } else {
                     None
                 };
+                let attributes_error = |this: &Self| {
+                    let token = this.current_token();
+                    let found = describe_found(this.source, &token);
+                    this.coded_error(
+                        token,
+                        "K1001",
+                        format!(
+                            "`#[test]` must be followed by a function declaration, found {found}"
+                        ),
+                    )
+                    .with_help("place the attribute directly above the `fn` it marks")
+                };
+                let module_error = |this: &Self, what: &str, help: &str| {
+                    let token = this.current_token();
+                    let spelling = this.spelling(&token).to_owned();
+                    this.coded_error(
+                        token,
+                        "K1001",
+                        format!(
+                            "module units cannot declare {}",
+                            what.replace("{}", &spelling)
+                        ),
+                    )
+                    .with_help(help.to_owned())
+                };
                 if self.peek(TokenKind::Struct) {
                     if !attrs.is_empty() {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "function attributes must precede a function",
-                        ));
+                        return Err(attributes_error(self));
                     }
                     parts.push_item(self.parse_struct_def()?);
                 } else if self.peek(TokenKind::Error) {
                     if !attrs.is_empty() {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "function attributes must precede a function",
-                        ));
+                        return Err(attributes_error(self));
                     }
                     parts.push_item(self.parse_error_enum_def()?);
                 } else if self.peek(TokenKind::Const) {
                     if !attrs.is_empty() {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "function attributes must precede a function",
-                        ));
+                        return Err(attributes_error(self));
                     }
                     parts.push_item(self.parse_const_decl()?);
                 } else if self.peek(TokenKind::State) {
                     if !attrs.is_empty() {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "function attributes must precede a function",
-                        ));
+                        return Err(attributes_error(self));
                     }
                     if kind == SourceUnitKind::Module {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "module units cannot declare durable state",
+                        return Err(module_error(
+                            self,
+                            "durable state",
+                            "durable state belongs to the seiyaku that owns it; declare it there and pass values to module functions as parameters",
                         ));
                     }
                     parts.push_item(self.parse_state_decl()?);
                 } else if self.peek(TokenKind::Trigger) {
                     if !attrs.is_empty() {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "function attributes must precede a function",
-                        ));
+                        return Err(attributes_error(self));
                     }
                     if kind == SourceUnitKind::Module {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "module units cannot declare triggers",
+                        return Err(module_error(
+                            self,
+                            "triggers",
+                            "triggers invoke kotoage functions of a seiyaku; declare the trigger in that seiyaku",
                         ));
                     }
                     parts.push_item(self.parse_trigger_decl()?);
                 } else if self.peek(TokenKind::Fn) {
+                    let fn_token = self.bump();
+                    if self.peek(TokenKind::Hajimari) || self.peek(TokenKind::Kaizen) {
+                        // `fn hajimari()`: the hook keyword is the whole head.
+                        let hook = self.current_token();
+                        let spelling = self.spelling(&hook).to_owned();
+                        self.report(
+                            self.coded_error(
+                                fn_token.clone(),
+                                "E_DECLARATION_SHAPE",
+                                format!(
+                                    "`{spelling}` is a lifecycle hook, not a function name: write `{spelling}() {{ ... }}` without `fn`"
+                                ),
+                            )
+                            .with_help(lifecycle_hook_help(&hook.kind))
+                            .with_fix(TextRange::new(fn_token.range.start, hook.range.start), ""),
+                        )?;
+                        if kind == SourceUnitKind::Module {
+                            return Err(module_error(
+                                self,
+                                "a `{}` hook",
+                                "lifecycle hooks run when a seiyaku is activated or its code is replaced in place; declare the hook in the seiyaku",
+                            ));
+                        }
+                        self.bump();
+                        parts.push_item(self.parse_lifecycle_hook(
+                            &hook,
+                            &attrs,
+                            declaration_start,
+                        )?);
+                    } else {
+                        parts.push_item(self.parse_fn_loose(
+                            None,
+                            FunctionModifiers {
+                                kind: FunctionKind::Private,
+                                permission: None,
+                                is_test: attrs.is_test,
+                                test_fixture: attrs.test_fixture,
+                            },
+                            declaration_start,
+                            None,
+                        )?);
+                    }
+                } else if self.peek(TokenKind::Kotoage) || self.peek(TokenKind::View) {
+                    let role = self.current_token();
+                    let is_kotoage = role.kind == TokenKind::Kotoage;
+                    if kind == SourceUnitKind::Module {
+                        return Err(if is_kotoage {
+                            module_error(
+                                self,
+                                "`{}` functions",
+                                "only a seiyaku declares public functions; make this an ordinary `fn` and call it from a kotoage function of the seiyaku",
+                            )
+                        } else {
+                            module_error(
+                                self,
+                                "`{} fn` functions",
+                                "only a seiyaku declares public functions; make this an ordinary `fn` and call it from a view function of the seiyaku",
+                            )
+                        });
+                    }
                     self.bump();
+                    if self.peek(TokenKind::Kotoage) || self.peek(TokenKind::View) {
+                        let second = self.current_token();
+                        return Err(self.mixed_role_error(&role, &second));
+                    }
+                    if self.peek(TokenKind::Fn) {
+                        self.bump();
+                    } else if self.peek_n_ident(0) && self.peek_n(1, TokenKind::LParen) {
+                        // `kotoage bump()`: the role keyword modifies a `fn`.
+                        let spelling = self.spelling(&role).to_owned();
+                        let name = self.current_token();
+                        let name_text = self.spelling(&name).to_owned();
+                        self.report(
+                            self.coded_error(
+                                role.clone(),
+                                "E_DECLARATION_SHAPE",
+                                format!(
+                                    "`{spelling}` modifies a function declaration: write `{spelling} fn {name_text}(...)`"
+                                ),
+                            )
+                            .with_help("public functions are declared `kotoage fn name(...)` (also `言挙げ fn`) or `view fn name(...)`; only the lifecycle hooks `hajimari` and `kaizen` omit `fn`")
+                            .with_fix(TextRange::empty(role.range.end), " fn"),
+                        )?;
+                    } else {
+                        return Err(self.expected_error(self.current_token(), "`fn` after the function role").with_help("public functions are declared `kotoage fn name(...)` (also `言挙げ fn`) or `view fn name(...)`"));
+                    }
                     parts.push_item(self.parse_fn_loose(
                         None,
                         FunctionModifiers {
-                            kind: FunctionKind::Private,
+                            kind: if is_kotoage {
+                                FunctionKind::Kotoage
+                            } else {
+                                FunctionKind::View
+                            },
                             permission: None,
                             is_test: attrs.is_test,
                             test_fixture: attrs.test_fixture,
                         },
                         declaration_start,
+                        Some(role),
                     )?);
-                } else if self.peek(TokenKind::Kotoage) && self.peek_n(1, TokenKind::Fn) {
+                } else if self.peek(TokenKind::Hajimari) || self.peek(TokenKind::Kaizen) {
+                    let hook = self.current_token();
                     if kind == SourceUnitKind::Module {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "module units cannot declare `kotoage`/`言挙げ` functions",
-                        ));
-                    }
-                    self.bump(); // kotoage / 言挙げ
-                    self.bump(); // fn
-                    parts.push_item(self.parse_fn_loose(
-                        None,
-                        FunctionModifiers {
-                            kind: FunctionKind::Kotoage,
-                            permission: None,
-                            is_test: attrs.is_test,
-                            test_fixture: attrs.test_fixture,
-                        },
-                        declaration_start,
-                    )?);
-                } else if self.peek(TokenKind::View) && self.peek_n(1, TokenKind::Fn) {
-                    if kind == SourceUnitKind::Module {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "module units cannot declare `view fn` functions",
-                        ));
-                    }
-                    self.bump(); // view
-                    self.bump(); // fn
-                    parts.push_item(self.parse_fn_loose(
-                        None,
-                        FunctionModifiers {
-                            kind: FunctionKind::View,
-                            permission: None,
-                            is_test: attrs.is_test,
-                            test_fixture: attrs.test_fixture,
-                        },
-                        declaration_start,
-                    )?);
-                } else if self.peek(TokenKind::Hajimari) {
-                    if kind == SourceUnitKind::Module {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "module units cannot declare `hajimari`/`始まり`",
+                        return Err(module_error(
+                            self,
+                            "a `{}` hook",
+                            "lifecycle hooks run when a seiyaku is activated or its code is replaced in place; declare the hook in the seiyaku",
                         ));
                     }
                     self.bump();
-                    parts.push_item(self.parse_fn_loose(
-                        Some(String::from("hajimari")),
-                        FunctionModifiers {
-                            kind: FunctionKind::Hajimari,
-                            permission: None,
-                            is_test: attrs.is_test,
-                            test_fixture: attrs.test_fixture,
-                        },
-                        declaration_start,
-                    )?);
-                } else if self.peek(TokenKind::Kaizen) {
-                    if kind == SourceUnitKind::Module {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "module units cannot declare a `kaizen`/`改善` hook",
-                        ));
+                    if self.peek(TokenKind::Fn) {
+                        // `hajimari fn()` / `hajimari fn init()`.
+                        let fn_token = self.bump();
+                        let mut end = fn_token.range.end;
+                        if self.peek_n_ident(0) && self.peek_n(1, TokenKind::LParen) {
+                            end = self.bump().range.end;
+                        }
+                        let spelling = self.spelling(&hook).to_owned();
+                        self.report(
+                            self.coded_error(
+                                fn_token,
+                                "E_DECLARATION_SHAPE",
+                                format!(
+                                    "`{spelling}` is itself the declaration: write `{spelling}() {{ ... }}` without `fn` or a name"
+                                ),
+                            )
+                            .with_help(lifecycle_hook_help(&hook.kind))
+                            .with_fix(TextRange::new(hook.range.end, end), ""),
+                        )?;
                     }
-                    self.bump();
-                    parts.push_item(self.parse_fn_loose(
-                        Some(String::from("kaizen")),
-                        FunctionModifiers {
-                            kind: FunctionKind::Kaizen,
-                            permission: None,
-                            is_test: attrs.is_test,
-                            test_fixture: attrs.test_fixture,
-                        },
-                        declaration_start,
-                    )?);
+                    parts.push_item(self.parse_lifecycle_hook(&hook, &attrs, declaration_start)?);
                 } else if self.peek_ident_n(0, "meta") {
                     let token = self.bump();
-                    return Err(self.error(
-                        token,
-                        "source-level `meta { ... }` is not supported; select execution capabilities and the cycle ceiling in compiler build configuration",
-                    ));
+                    return Err(self
+                        .coded_error(
+                            token,
+                            "K1001",
+                            "source-level `meta { ... }` is not supported",
+                        )
+                        .with_help("select execution capabilities and the cycle ceiling in the compiler build configuration"));
                 } else if self.peek_ident_n(0, "fixture") {
                     if !attrs.is_empty() {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "function attributes must precede a function",
-                        ));
+                        return Err(attributes_error(self));
                     }
                     let fixture = self.parse_fixture_decl()?;
                     parts.push_fixture(fixture);
                 } else if self.peek_ident_n(0, "koto_test") {
                     if !attrs.is_empty() {
-                        return Err(self.error(
-                            self.tokens[self.pos].clone(),
-                            "function attributes must precede a function",
-                        ));
+                        return Err(attributes_error(self));
                     }
                     self.parse_test_target_decl()?;
                 } else if self.peek(TokenKind::Seiyaku) || self.peek(TokenKind::Module) {
                     let token = self.bump();
-                    return Err(self.error(
-                        token,
-                        "nested or additional seiyaku/module units are not allowed",
-                    ));
+                    let spelling = self.spelling(&token).to_owned();
+                    return Err(self
+                        .coded_error(
+                            token,
+                            "K1001",
+                            format!("`{spelling}` cannot appear inside another source unit"),
+                        )
+                        .with_help("a source file contains exactly one seiyaku or module; put each unit in its own `.ko` file and connect them with `import`"));
                 } else {
-                    let tok = self.bump();
-                    return Err(self.error(
-                        tok,
-                        "source-unit item (fn, kotoage fn, view fn, hajimari, kaizen, trigger, struct, error enum, const, state)",
-                    ));
+                    let token = self.current_token();
+                    let (error, recovery) = self.source_item_error(&token, kind);
+                    let Some(recovery) = recovery.filter(|_| self.recover) else {
+                        self.bump();
+                        return Err(error);
+                    };
+                    self.errors.push(*error);
+                    self.bump();
+                    match recovery {
+                        ItemRecovery::Function(function_kind) => {
+                            if self.peek(TokenKind::Fn) {
+                                self.bump();
+                            }
+                            parts.push_item(self.parse_fn_loose(
+                                None,
+                                FunctionModifiers {
+                                    kind: function_kind,
+                                    permission: None,
+                                    is_test: attrs.is_test,
+                                    test_fixture: attrs.test_fixture,
+                                },
+                                declaration_start,
+                                Some(token),
+                            )?);
+                        }
+                        ItemRecovery::Hook(hook_kind) => {
+                            let hook = Token {
+                                kind: hook_kind,
+                                ..token
+                            };
+                            parts.push_item(self.parse_lifecycle_hook(
+                                &hook,
+                                &attrs,
+                                declaration_start,
+                            )?);
+                        }
+                    }
                 }
                 if let Some(range) = export {
                     let name = match parts
@@ -1637,13 +2778,18 @@ impl<'a> CstAstLowerer<'a> {
         let keyword = self.bump();
         let path_token = self.bump();
         let TokenKind::String(path) = path_token.kind.clone() else {
-            return Err(self.error(path_token, "literal relative .ko source path"));
+            return Err(self
+                .expected_error(path_token, "a string literal naming a relative `.ko` path")
+                .with_help("directives name their source with a literal, for example `import \"math.ko\" as math;`"));
         };
         if path.trim().is_empty() || path.chars().any(char::is_control) {
-            return Err(self.error(
-                path_token,
-                "nonblank source path without control characters",
-            ));
+            return Err(self
+                .coded_error(
+                    path_token,
+                    "K1001",
+                    "a source path must be nonblank and contain no control characters",
+                )
+                .with_help("write the relative path of a `.ko` file in the same project"));
         }
         let kind = if keyword.kind == TokenKind::Include {
             SourceDirectiveKind::Include { path }
@@ -1685,7 +2831,14 @@ impl<'a> CstAstLowerer<'a> {
             let variant_token = self.tokens[self.pos].clone();
             let variant_name = self.expect_ident()?;
             if !names.insert(variant_name.clone()) {
-                return Err(self.error(variant_token, "unique error variant name"));
+                let duplicate = self.spelling(&variant_token).to_owned();
+                return Err(self
+                    .coded_error(
+                        variant_token,
+                        "K1001",
+                        format!("error variant `{duplicate}` is declared more than once"),
+                    )
+                    .with_help("give every variant of an error enum a distinct name"));
             }
             self.expect(TokenKind::Equal)?;
             let code_token = self.bump();
@@ -1695,20 +2848,27 @@ impl<'a> CstAstLowerer<'a> {
                     .and_then(|value| u32::try_from(value).ok())
                     .filter(|value| *value != 0)
                     .ok_or_else(|| {
-                        self.error(
+                        self.coded_error(
                             code_token.clone(),
-                            "explicit error code in the range 1..=4294967295",
+                            "K1001",
+                            "error codes are integers in the range 1..=4294967295",
                         )
+                        .with_help("each variant needs a nonzero code that fits in 32 bits, for example `Unauthorized = 1`")
                     })?,
                 _ => {
-                    return Err(self.error(
-                        code_token,
-                        "explicit error code in the range 1..=4294967295",
-                    ));
+                    return Err(self
+                        .expected_error(code_token, "an integer error code in the range 1..=4294967295")
+                        .with_help("each variant needs an explicit code, for example `Unauthorized = 1`"));
                 }
             };
             if !codes.insert(code) {
-                return Err(self.error(variant_token, "unique error code"));
+                return Err(self
+                    .coded_error(
+                        variant_token,
+                        "K1001",
+                        format!("error code {code} is already used by another variant"),
+                    )
+                    .with_help("error codes identify failures on the ledger, so every variant needs a distinct code"));
             }
             variants.push(ErrorVariant {
                 name: variant_name,
@@ -1719,13 +2879,26 @@ impl<'a> CstAstLowerer<'a> {
                 self.bump();
             } else if !self.peek(TokenKind::RBrace) {
                 let token = self.tokens[self.pos].clone();
-                return Err(self.error(token, "`,` or `}` after error variant"));
+                let mut error =
+                    self.expected_error(token.clone(), "`,` or `}` after the error variant");
+                if let Some(previous) = self
+                    .pos
+                    .checked_sub(1)
+                    .and_then(|index| self.tokens.get(index))
+                    && token.line > previous.line
+                {
+                    let insertion = TextRange::empty(previous.range.end);
+                    error = error.reported_at(insertion).with_fix(insertion, ",");
+                }
+                return Err(error);
             }
         }
         self.expect(TokenKind::RBrace)?;
         if variants.is_empty() {
             let token = self.tokens[self.pos.saturating_sub(1)].clone();
-            return Err(self.error(token, "at least one explicitly numbered error variant"));
+            return Err(self
+                .coded_error(token, "K1001", format!("error enum `{name}` declares no variants"))
+                .with_help("declare at least one variant with an explicit nonzero code, for example `Unauthorized = 1`"));
         }
         self.finish_node(node);
         Ok(Item::ErrorEnum(ErrorEnumDef { name, variants }))
@@ -1740,21 +2913,34 @@ impl<'a> CstAstLowerer<'a> {
                 self.expect(TokenKind::LBracket)?;
                 let attribute = self.bump();
                 if !matches!(&attribute.kind, TokenKind::Ident(name) if name == "message") {
-                    return Err(self.error(attribute, "error-variant attribute `message`"));
+                    return Err(self
+                        .expected_error(attribute, "the error-variant attribute `message`")
+                        .with_help("error variants accept only `#[message(\"...\")]`"));
                 }
                 if message.is_some() {
-                    return Err(self.error(attribute, "one `message` attribute per error variant"));
+                    return Err(self
+                        .coded_error(
+                            attribute,
+                            "K1001",
+                            "error variant has more than one `#[message(...)]` attribute",
+                        )
+                        .with_help("keep exactly one message per variant"));
                 }
                 self.expect(TokenKind::LParen)?;
                 let literal = self.bump();
                 let TokenKind::String(value) = literal.kind.clone() else {
-                    return Err(self.error(literal, "static string literal for error message"));
+                    return Err(self
+                        .expected_error(literal, "a string literal message")
+                        .with_help("error messages are static text, for example `#[message(\"caller is not the owner\")]`"));
                 };
                 if value.trim().is_empty() || value.len() > 4096 {
-                    return Err(self.error(
-                        literal,
-                        "nonblank error message containing 1..=4096 UTF-8 bytes",
-                    ));
+                    return Err(self
+                        .coded_error(
+                            literal,
+                            "K1001",
+                            "error messages must be nonblank and at most 4096 UTF-8 bytes",
+                        )
+                        .with_help("shorten the message; detailed context belongs in events or documentation"));
                 }
                 self.expect(TokenKind::RParen)?;
                 self.expect(TokenKind::RBracket)?;
@@ -1791,13 +2977,16 @@ impl<'a> CstAstLowerer<'a> {
             let field_name = match field_tok.kind.clone() {
                 TokenKind::Ident(name) => name,
                 _ => {
-                    return Err(self.error(field_tok, "trigger field"));
+                    return Err(self.expected_error(
+                        field_tok,
+                        "a trigger field (`on`, `repeats`, `authority` or `metadata`)",
+                    ));
                 }
             };
             match field_name.as_str() {
                 "on" => {
                     if filter.is_some() {
-                        return Err(self.error(field_tok, "duplicate `on` field"));
+                        return Err(self.duplicate_trigger_field(field_tok));
                     }
                     filter = Some(self.parse_trigger_filter()?);
                     if self.peek(TokenKind::Semicolon) {
@@ -1806,14 +2995,14 @@ impl<'a> CstAstLowerer<'a> {
                 }
                 "repeats" => {
                     if repeats.is_some() {
-                        return Err(self.error(field_tok, "duplicate `repeats` field"));
+                        return Err(self.duplicate_trigger_field(field_tok));
                     }
                     repeats = Some(self.parse_trigger_repeats()?);
                     self.expect(TokenKind::Semicolon)?;
                 }
                 "authority" => {
                     if authority.is_some() {
-                        return Err(self.error(field_tok, "duplicate `authority` field"));
+                        return Err(self.duplicate_trigger_field(field_tok));
                     }
                     authority = Some(self.expect_ident_or_string()?);
                     self.expect(TokenKind::Semicolon)?;
@@ -1825,15 +3014,23 @@ impl<'a> CstAstLowerer<'a> {
                     }
                 }
                 _ => {
-                    return Err(self.error(
+                    return Err(self.expected_error(
                         field_tok,
-                        "trigger field (`on`, `repeats`, `authority`, `metadata`)",
+                        "a trigger field (`on`, `repeats`, `authority` or `metadata`)",
                     ));
                 }
             }
         }
         self.expect(TokenKind::RBrace)?;
-        let filter = filter.ok_or_else(|| self.error(tok, "trigger `on` field"))?;
+        let filter = filter.ok_or_else(|| {
+            self.coded_error(
+                name_token.clone(),
+                "K1001",
+                format!("trigger `{name}` has no `on` field"),
+            )
+            .with_help("say when the trigger fires, for example `on time pre_commit;` or `on data account any { ... }`")
+        })?;
+        let _ = tok;
         self.finish_node(node);
         Ok(Item::Trigger(TriggerDecl {
             name,
@@ -1871,10 +3068,12 @@ impl<'a> CstAstLowerer<'a> {
             "execute" => {
                 let next = self.expect_trigger_context_ident()?;
                 if next != "trigger" {
-                    return Err(self.error(
-                        self.tokens[self.pos.saturating_sub(1)].clone(),
-                        "execute trigger <name>",
-                    ));
+                    return Err(self
+                        .expected_error(
+                            self.tokens[self.pos.saturating_sub(1)].clone(),
+                            "`trigger` after `execute`",
+                        )
+                        .with_help("write `on execute trigger <name>;`"));
                 }
                 let trigger_id = self.expect_ident_or_string()?;
                 Ok(TriggerFilter::Execute { trigger_id })
@@ -1883,9 +3082,9 @@ impl<'a> CstAstLowerer<'a> {
             "pipeline" => Ok(TriggerFilter::Pipeline(
                 self.parse_trigger_pipeline_filter()?,
             )),
-            _ => Err(self.error(
+            _ => Err(self.expected_error(
                 self.tokens[self.pos.saturating_sub(1)].clone(),
-                "trigger filter (`time`, `execute`, `data`, or `pipeline`)",
+                "a trigger filter (`time`, `execute`, `data` or `pipeline`)",
             )),
         }
     }
@@ -1921,9 +3120,9 @@ impl<'a> CstAstLowerer<'a> {
             "role" => Ok(TriggerDataFamily::Role),
             "configuration" => Ok(TriggerDataFamily::Configuration),
             "executor" => Ok(TriggerDataFamily::Executor),
-            _ => Err(self.error(
+            _ => Err(self.expected_error(
                 self.tokens[self.pos.saturating_sub(1)].clone(),
-                "data family (`any`, `peer`, `domain`, `account`, `asset`, `asset_definition`, `nft`, `rwa`, `trigger`, `role`, `configuration`, or `executor`)",
+                "a data family (`any`, `peer`, `domain`, `account`, `asset`, `asset_definition`, `nft`, `rwa`, `trigger`, `role`, `configuration` or `executor`)",
             )),
         }
     }
@@ -1954,9 +3153,9 @@ impl<'a> CstAstLowerer<'a> {
                 }
                 Ok(TriggerPipelineFilter::BlockApproved)
             }
-            _ => Err(self.error(
+            _ => Err(self.expected_error(
                 self.tokens[self.pos.saturating_sub(1)].clone(),
-                "pipeline filter (`transaction [approved]` or `block [approved]`)",
+                "a pipeline filter (`transaction [approved]` or `block [approved]`)",
             )),
         }
     }
@@ -1979,9 +3178,9 @@ impl<'a> CstAstLowerer<'a> {
                     period_ms,
                 })
             }
-            _ => Err(self.error(
+            _ => Err(self.expected_error(
                 self.tokens[self.pos.saturating_sub(1)].clone(),
-                "time filter (`pre_commit` or `schedule`)",
+                "a time filter (`pre_commit` or `schedule(...)`)",
             )),
         }
     }
@@ -2010,7 +3209,8 @@ impl<'a> CstAstLowerer<'a> {
                 TokenKind::Ident(ref s) => s.clone(),
                 TokenKind::String(ref s) => s.clone(),
                 _ => {
-                    return Err(self.error(key_tok, "metadata key (identifier or string literal)"));
+                    return Err(self
+                        .expected_error(key_tok, "a metadata key (identifier or string literal)"));
                 }
             };
             self.expect(TokenKind::Colon)?;
@@ -2030,14 +3230,12 @@ impl<'a> CstAstLowerer<'a> {
             TokenKind::Number(n) => parse_bounded_unsigned(&n, u64::MAX).map_err(|_| {
                 self.range_error(&tok, format!("{context} integer literal out of range"))
             }),
-            TokenKind::Minus => Err(self.error(
-                tok,
-                &format!("{context} expects a non-negative integer literal"),
-            )),
-            _ => Err(self.error(
-                tok,
-                &format!("{context} expects a non-negative integer literal"),
-            )),
+            _ => Err(self
+                .expected_error(
+                    tok,
+                    &format!("a non-negative integer literal for `{context}`"),
+                )
+                .with_help("trigger schedules and repeat counts are written as integer literals")),
         }
     }
     fn expect_ident_or_string(&mut self) -> ParseResult<String> {
@@ -2045,7 +3243,7 @@ impl<'a> CstAstLowerer<'a> {
         match tok.kind.clone() {
             TokenKind::Ident(s) => Ok(s),
             TokenKind::String(s) => Ok(s),
-            _ => Err(self.error(tok, "identifier or string literal")),
+            _ => Err(self.expected_error(tok, "an identifier or string literal")),
         }
     }
     fn parse_function_attributes(&mut self) -> ParseResult<FunctionAttributes> {
@@ -2060,18 +3258,35 @@ impl<'a> CstAstLowerer<'a> {
                 let attr_name = if let TokenKind::Ident(name) = attr_tok.kind.clone() {
                     name
                 } else {
-                    return Err(self.error(attr_tok, "expected attribute identifier"));
+                    return Err(self
+                        .expected_error(attr_tok, "an attribute name")
+                        .with_help("the only function attribute is `#[test]`"));
                 };
                 match attr_name.as_str() {
                     "access" => {
-                        return Err(self.error(
-                            attr_tok,
-                            "manual `#[access(...)]` hints are not supported in first-release Kotodama; access metadata is generated by the compiler",
-                        ));
+                        return Err(self
+                            .coded_error(
+                                attr_tok,
+                                "K1001",
+                                "manual `#[access(...)]` hints are not supported",
+                            )
+                            .with_help("access metadata is generated by the compiler from each function's operations; remove the attribute"));
                     }
                     "test" => self.parse_test_attribute_body(&mut attrs)?,
                     _ => {
-                        return Err(self.error(attr_tok, "expected attribute `test`"));
+                        let text = self.spelling(&attr_tok).to_owned();
+                        let help = if text == "message" {
+                            "`#[message(\"...\")]` belongs on a variant of an `error enum`; the only function attribute is `#[test]`"
+                        } else {
+                            "the only function attribute is `#[test]`"
+                        };
+                        return Err(self
+                            .coded_error(
+                                attr_tok,
+                                "K1001",
+                                format!("unknown function attribute `#[{text}]`"),
+                            )
+                            .with_help(help));
                     }
                 }
                 let next_item = self
@@ -2098,32 +3313,22 @@ impl<'a> CstAstLowerer<'a> {
             match key.as_str() {
                 "fixture" => {
                     if attrs.test_fixture.is_some() {
-                        return Err(Box::new(ParseError {
-                            code: "K1001",
-                            message: "duplicate fixture binding in test attribute".into(),
-                            line: self.tokens[self.pos.saturating_sub(1)].line,
-                            column: self.tokens[self.pos.saturating_sub(1)].column,
-                            snippet: String::new(),
-                            range: self.tokens[self.pos.saturating_sub(1)].range,
-                            fix: None,
-                            expected: None,
-                            expected_owner: None,
-                        }));
+                        return Err(ParseError::at(
+                            &self.tokens[self.pos.saturating_sub(1)],
+                            "K1001",
+                            "`#[test(...)]` names `fixture` more than once",
+                        )
+                        .with_help("a test runs against exactly one fixture"));
                     }
                     attrs.test_fixture = Some(self.expect_ident_or_string()?);
                 }
                 _ => {
-                    return Err(Box::new(ParseError {
-                        code: "K1001",
-                        message: format!("unknown test attribute option `{key}`"),
-                        line: self.tokens[self.pos.saturating_sub(1)].line,
-                        column: self.tokens[self.pos.saturating_sub(1)].column,
-                        snippet: String::new(),
-                        range: self.tokens[self.pos.saturating_sub(1)].range,
-                        fix: None,
-                        expected: None,
-                        expected_owner: None,
-                    }));
+                    return Err(ParseError::at(
+                        &self.tokens[self.pos.saturating_sub(1)],
+                        "K1001",
+                        format!("unknown `#[test(...)]` option `{key}`"),
+                    )
+                    .with_help("the only test option is `fixture = name`"));
                 }
             }
             if self.peek(TokenKind::Comma) {
@@ -2138,7 +3343,7 @@ impl<'a> CstAstLowerer<'a> {
     fn parse_test_target_decl(&mut self) -> ParseResult<()> {
         let tok = self.bump();
         if !matches!(tok.kind, TokenKind::Ident(ref s) if s == "koto_test") {
-            return Err(self.error(tok, "koto_test"));
+            return Err(self.expected_error(tok, "`koto_test`"));
         }
         self.expect(TokenKind::LBrace)?;
         let mut target = None;
@@ -2148,9 +3353,13 @@ impl<'a> CstAstLowerer<'a> {
             match key.as_str() {
                 "target" => target = Some(self.expect_ident_or_string()?),
                 _ => {
-                    return Err(
-                        self.error(self.tokens[self.pos.saturating_sub(1)].clone(), "target")
-                    );
+                    return Err(self
+                        .coded_error(
+                            self.tokens[self.pos.saturating_sub(1)].clone(),
+                            "K1001",
+                            format!("unknown `koto_test` field `{key}`"),
+                        )
+                        .with_help("the only `koto_test` field is `target: \"...\"`"));
                 }
             }
             if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
@@ -2158,16 +3367,15 @@ impl<'a> CstAstLowerer<'a> {
             }
         }
         self.expect(TokenKind::RBrace)?;
-        let target = target.ok_or_else(|| ParseError {
-            code: "K1001",
-            message: "koto_test block requires `target: \"...\"`".into(),
-            line: tok.line,
-            column: tok.column,
-            snippet: String::new(),
-            range: tok.range,
-            fix: None,
-            expected: None,
-            expected_owner: None,
+        let target = target.ok_or_else(|| {
+            *ParseError::at(
+                &tok,
+                "K1001",
+                "`koto_test` block requires `target: \"...\"`",
+            )
+            .with_help(
+                "name the seiyaku under test, for example `koto_test { target: \"counter.ko\"; }`",
+            )
         })?;
         self.test_target = Some(TestTargetDecl { target });
         Ok(())
@@ -2175,7 +3383,7 @@ impl<'a> CstAstLowerer<'a> {
     fn parse_fixture_decl(&mut self) -> ParseResult<FixtureDecl> {
         let tok = self.bump();
         if !matches!(tok.kind, TokenKind::Ident(ref s) if s == "fixture") {
-            return Err(self.error(tok, "fixture"));
+            return Err(self.expected_error(tok, "`fixture`"));
         }
         let name = self.expect_ident()?;
         self.expect(TokenKind::LBrace)?;
@@ -2238,17 +3446,21 @@ impl<'a> CstAstLowerer<'a> {
                 self.bump();
                 continue;
             }
+            if self.peek_n_ident(0) && self.peek_n(1, TokenKind::Colon) {
+                let (ty, name_token) = self.colon_declaration(DeclarationSite::StructField)?;
+                fields.push((self.spelling(&name_token).to_owned(), ty));
+                if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
+                    self.bump();
+                }
+                continue;
+            }
             let mut ty = PendingType::new(self.parse_type_expr()?);
-            let field_name = if self.peek(TokenKind::Colon) {
-                let token = self.bump();
-                return Err(self.coded_error(
-                    token,
-                    "E_RETIRED_DECLARATION_ORDER",
-                    "Kotodama V1 struct fields are type-first: write `int field;`, not `field: int;`",
-                ));
-            } else {
-                self.expect_ident()?
-            };
+            if self.peek(TokenKind::Colon) {
+                return Err(
+                    self.type_then_colon_error("struct fields are type-first: write `Type name;`")
+                );
+            }
+            let field_name = self.expect_ident()?;
             fields.push((field_name, ty.take()));
             if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
                 self.bump();
@@ -2265,16 +3477,27 @@ impl<'a> CstAstLowerer<'a> {
         // Canonical V1 form: `state Type name;`.
         let node = self.begin_node(AstNodeKind::State, self.current_start());
         self.expect(TokenKind::State)?;
-        let mut ty = PendingType::new(self.parse_type_expr()?);
-        if self.peek(TokenKind::Colon) {
-            let token = self.bump();
-            return Err(self.coded_error(
-                token,
-                "E_RETIRED_DECLARATION_ORDER",
-                "Kotodama V1 state declarations are type-first: write `state int value;`, not `state value: int;`",
-            ));
-        }
-        let (name, name_token) = self.expect_ident_token()?;
+        let (mut ty, name, name_token) = if self.peek_n_ident(0) && self.peek_n(1, TokenKind::Colon)
+        {
+            let (ty, name_token) = self.colon_declaration(DeclarationSite::State)?;
+            let name = self.spelling(&name_token).to_owned();
+            (PendingType::new(ty), name, name_token)
+        } else {
+            if self.peek_n_ident(0)
+                && self.peek_n(1, TokenKind::Semicolon)
+                && !self.current_names_a_type()
+            {
+                return Err(self.missing_type_error(DeclarationSite::State));
+            }
+            let ty = PendingType::new(self.parse_type_expr()?);
+            if self.peek(TokenKind::Colon) {
+                return Err(self.type_then_colon_error(
+                    "state declarations are type-first: write `state Type name;`",
+                ));
+            }
+            let (name, name_token) = self.expect_ident_token()?;
+            (ty, name, name_token)
+        };
         self.record_declaration(
             node,
             name.clone(),
@@ -2292,16 +3515,27 @@ impl<'a> CstAstLowerer<'a> {
     fn parse_const_decl(&mut self) -> ParseResult<Item> {
         let node = self.begin_node(AstNodeKind::Const, self.current_start());
         self.expect(TokenKind::Const)?;
-        let mut ty = PendingType::new(self.parse_type_expr()?);
-        if self.peek(TokenKind::Colon) {
-            let token = self.bump();
-            return Err(self.coded_error(
-                token,
-                "E_RETIRED_DECLARATION_ORDER",
-                "Kotodama V1 constants are type-first: write `const int limit = 1;`, not `const limit: int = 1;`",
-            ));
-        }
-        let (name, name_token) = self.expect_ident_token()?;
+        let (mut ty, name, name_token) = if self.peek_n_ident(0) && self.peek_n(1, TokenKind::Colon)
+        {
+            let (ty, name_token) = self.colon_declaration(DeclarationSite::Const)?;
+            let name = self.spelling(&name_token).to_owned();
+            (PendingType::new(ty), name, name_token)
+        } else {
+            if self.peek_n_ident(0)
+                && self.peek_n(1, TokenKind::Equal)
+                && !self.current_names_a_type()
+            {
+                return Err(self.missing_type_error(DeclarationSite::Const));
+            }
+            let ty = PendingType::new(self.parse_type_expr()?);
+            if self.peek(TokenKind::Colon) {
+                return Err(self.type_then_colon_error(
+                    "constants are type-first: write `const Type name = ...;`",
+                ));
+            }
+            let (name, name_token) = self.expect_ident_token()?;
+            (ty, name, name_token)
+        };
         self.record_declaration(
             node,
             name.clone(),
@@ -2319,14 +3553,28 @@ impl<'a> CstAstLowerer<'a> {
             value: value.take(),
         }))
     }
+    /// Parse a function after its head keywords.
+    ///
+    /// `role` is the token that declared the function's role (`kotoage`,
+    /// `view`, `hajimari`, `kaizen`, or a recovered stand-in) so diagnostics
+    /// echo the user's spelling. Lifecycle hooks pass their canonical name in
+    /// `name_override` and are located at `role`.
     fn parse_fn_loose(
         &mut self,
         name_override: Option<String>,
         mut modifiers: FunctionModifiers,
         declaration_start: u32,
+        role: Option<Token>,
     ) -> ParseResult<Item> {
+        let role_spelling = role.as_ref().map(|token| self.spelling(token).to_owned());
+        // A role recovered from an English word or typo was already reported.
+        let role_recovered = role
+            .as_ref()
+            .is_some_and(|token| matches!(token.kind, TokenKind::Ident(_)));
         let (location, name, name_range) = if let Some(name) = name_override {
-            let token = self.tokens[self.pos.saturating_sub(1)].clone();
+            let token = role
+                .clone()
+                .unwrap_or_else(|| self.tokens[self.pos.saturating_sub(1)].clone());
             (
                 SourceLocation {
                     line: token.line,
@@ -2412,19 +3660,30 @@ impl<'a> CstAstLowerer<'a> {
             }
             // Caller authorization is mandatory for mutating public kotoage
             // and optional for read-only views.
+            let mut authorize_clause: Option<TextRange> = None;
             while !self.peek(TokenKind::LBrace) && !self.peek(TokenKind::EOF) {
                 if self.peek(TokenKind::Authorize) {
+                    let authorize = self.bump();
                     if matches!(
                         modifiers.kind,
                         FunctionKind::Hajimari | FunctionKind::Kaizen
                     ) {
-                        let token = self.bump();
-                        return Err(self.error(
-                            token,
-                            "lifecycle authorization is runtime-defined; `hajimari`/`始まり` and `kaizen`/`改善` cannot declare `authorize(...)`",
-                        ));
+                        let clause = self.skip_balanced_clause(&authorize);
+                        let hook = role_spelling.clone().unwrap_or_else(|| name.clone());
+                        self.report(
+                            self.coded_error(
+                                authorize,
+                                "E_LIFECYCLE_AUTHORIZATION",
+                                format!(
+                                    "`{hook}` cannot declare `authorize(...)`: lifecycle hooks are authorized by the runtime"
+                                ),
+                            )
+                            .reported_at(clause)
+                            .with_help("activation and in-place replacement are authorized by the runtime's `CanInvokeContractEntrypoint` check on the deploying transaction; remove the clause")
+                            .with_fix(self.leading_space_range(clause), ""),
+                        )?;
+                        continue;
                     }
-                    self.bump();
                     self.expect(TokenKind::LParen)?;
                     let permission_token = self.bump();
                     let perm = match permission_token.kind.clone() {
@@ -2432,53 +3691,123 @@ impl<'a> CstAstLowerer<'a> {
                             permission
                         }
                         TokenKind::String(_) => {
-                            return Err(
-                                self.error(permission_token, "non-empty permission string literal")
-                            );
+                            return Err(self
+                                .coded_error(
+                                    permission_token,
+                                    "K1001",
+                                    "the permission name in `authorize(...)` must not be blank",
+                                )
+                                .with_help("name the permission a caller must hold, for example `authorize(\"CanIncrement\")`"));
                         }
-                        _ => return Err(self.error(permission_token, "permission string literal")),
+                        _ => {
+                            return Err(self
+                                .expected_error(
+                                    permission_token,
+                                    "a permission string literal such as `\"CanIncrement\"`",
+                                )
+                                .with_help("the permission is a string literal naming what a caller must hold"));
+                        }
                     };
                     self.expect(TokenKind::RParen)?;
+                    let clause = TextRange::new(
+                        authorize.range.start,
+                        self.previous_end(authorize.range.start),
+                    );
                     if !matches!(modifiers.kind, FunctionKind::Kotoage | FunctionKind::View) {
-                        return Err(Box::new(ParseError {
-                            code: "K1001",
-                            message: "`authorize(...)` is only valid on `kotoage`/`言挙げ` and `view fn` declarations".into(),
-                            line: self.tokens[self.pos.saturating_sub(1)].line,
-                            column: self.tokens[self.pos.saturating_sub(1)].column,
-                            snippet: String::new(),
-                            range: self.tokens[self.pos.saturating_sub(1)].range,
-                            fix: None,
-                            expected: None,
-                            expected_owner: None,
-                        }));
+                        let previous = &self.tokens[self.pos.saturating_sub(1)];
+                        return Err(ParseError::at_range(
+                            clause,
+                            previous.line,
+                            previous.column,
+                            "K1001",
+                            format!("`authorize(...)` is only valid on public functions; `{name}` is a private `fn`"),
+                        )
+                        .with_help(format!(
+                            "only public functions check their caller: write `kotoage fn {name}` (also `言挙げ fn`) for a state-changing public function or `view fn {name}` for a read-only one; private `fn` helpers run with the authority of the function that calls them"
+                        )));
                     }
-                    if modifiers.permission.is_some() {
-                        return Err(Box::new(ParseError {
-                            code: "K1001",
-                            message: "duplicate authorize modifier".into(),
-                            line: self.tokens[self.pos.saturating_sub(1)].line,
-                            column: self.tokens[self.pos.saturating_sub(1)].column,
-                            snippet: String::new(),
-                            range: self.tokens[self.pos.saturating_sub(1)].range,
-                            fix: None,
-                            expected: None,
-                            expected_owner: None,
-                        }));
+                    if let Some(first) = authorize_clause {
+                        let previous = &self.tokens[self.pos.saturating_sub(1)];
+                        return Err(ParseError::at_range(
+                            clause,
+                            previous.line,
+                            previous.column,
+                            "K1001",
+                            format!("function `{name}` declares `authorize(...)` twice"),
+                        )
+                        .with_label(first, "first `authorize(...)` clause")
+                        .with_help("a function names exactly one permission")
+                        .with_fix(self.leading_space_range(clause), ""));
                     }
+                    authorize_clause = Some(clause);
                     modifiers.permission = Some(perm);
+                } else if let Some(clause) = authorize_clause
+                    && self.peek(TokenKind::Arrow)
+                    && ret_ty.is_none()
+                {
+                    // `authorize("P") -> int`: the return type comes first.
+                    let arrow = self.bump();
+                    let ty = self.parse_type_expr()?;
+                    let type_end = self.previous_end(arrow.range.end);
+                    let return_text = self
+                        .source
+                        .get(arrow.range.start as usize..type_end as usize)
+                        .unwrap_or("")
+                        .to_owned();
+                    let clause_text = self
+                        .source
+                        .get(clause.start as usize..clause.end as usize)
+                        .unwrap_or("")
+                        .to_owned();
+                    ret_ty = Some(PendingType::new(ty));
+                    self.report(
+                        ParseError::at(&arrow, "E_AUTHORIZE_POSITION", format!(
+                            "the return type comes before `authorize(...)`: write `{return_text} {clause_text}`"
+                        ))
+                        .reported_at(TextRange::new(clause.start, type_end))
+                        .with_help("a function head reads `kotoage fn name(params) -> Type authorize(\"Permission\") { ... }`")
+                        .with_fix(TextRange::new(clause.start, type_end), format!("{return_text} {clause_text}")),
+                    )?;
                 } else {
-                    let tok = self.bump();
-                    return Err(self.error(tok, "`authorize(\"Permission\")` or `{`"));
+                    let tok = self.current_token();
+                    if let TokenKind::Ident(word) = &tok.kind
+                        && crate::diagnostic::suggest::closest(word, ["authorize"]).is_some()
+                    {
+                        return Err(self.keyword_typo_error(&tok, "authorize"));
+                    }
+                    let mut error = self.expected_error(
+                        tok,
+                        "`authorize(\"Permission\")` or the function body `{`",
+                    );
+                    if matches!(modifiers.kind, FunctionKind::Kotoage) {
+                        error = error.with_help("a kotoage head ends with its permission: `kotoage fn name(params) -> Type authorize(\"Permission\") {`");
+                    }
+                    self.bump();
+                    return Err(error);
                 }
             }
-            if modifiers.kind == FunctionKind::Kotoage && modifiers.permission.is_none() {
-                return Err(self.coded_error(
-                    self.tokens[self.pos].clone(),
-                    "K1001",
-                    format!(
-                        "kotoage function `{name}` requires `authorize(\"Permission\")` before its body"
-                    ),
-                ));
+            if modifiers.kind == FunctionKind::Kotoage
+                && modifiers.permission.is_none()
+                && !role_recovered
+            {
+                let spelling = role_spelling
+                    .clone()
+                    .unwrap_or_else(|| "kotoage".to_owned());
+                let insertion = TextRange::empty(self.previous_end(declaration_start));
+                self.report(
+                    self.coded_error(
+                        self.current_token(),
+                        "E_KOTOAGE_AUTHORIZATION_MISSING",
+                        format!(
+                            "{spelling} function `{name}` requires `authorize(\"Permission\")` before its body"
+                        ),
+                    )
+                    .reported_at(insertion)
+                    .with_help(format!(
+                        "name the permission a caller must hold, for example `authorize(\"Can{}\")`; if `{name}` only reads state, declare it `view fn` instead",
+                        upper_camel(&name)
+                    )),
+                )?;
             }
             let body = self.parse_block()?;
             Ok(Item::Function(Function {
@@ -2499,11 +3828,38 @@ impl<'a> CstAstLowerer<'a> {
     fn parse_block(&mut self) -> ParseResult<Block> {
         let block_start = self.current_start();
         let syntax_block = self.syntax_start(SyntaxKind::Block, block_start);
+        let open_brace = self.current_token();
         self.expect(TokenKind::LBrace)?;
         let syntax_statements =
             self.syntax_start(SyntaxKind::StatementList, self.previous_end(block_start));
         let mut block = PendingBlock::new();
+        let mut closed_early = false;
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            if self.recover && self.declaration_starts_here() {
+                // A declaration keyword inside a body means the body's `}` is
+                // missing. Close the block here so the declaration parses as
+                // the next item instead of cascading statement errors.
+                let token = self.current_token();
+                if self.missing_close_reported != Some(token.range.start) {
+                    self.missing_close_reported = Some(token.range.start);
+                    let previous = self.tokens[self.pos.saturating_sub(1)].clone();
+                    let insertion = TextRange::empty(previous.range.end);
+                    // The `}` goes on its own line, indented like the line
+                    // that opened the block.
+                    let closing = format!("\n{}}}", self.line_indentation(open_brace.range.start));
+                    let mut error = self
+                        .expected_error(token, "`}` to close the block")
+                        .reported_at(insertion)
+                        .with_label(open_brace.range, "this `{` is not closed")
+                        .with_help("declarations cannot appear inside a function body; close the body with `}` before the next declaration")
+                        .with_fix(insertion, closing);
+                    error.expected = Some(SyntaxKind::RBrace);
+                    error.expected_owner = self.syntax.current();
+                    self.errors.push(*error);
+                }
+                closed_early = true;
+                break;
+            }
             let statement_start = self.pos;
             let start = self.tokens[statement_start].range.start;
             let initial_kind = self.syntax_statement_kind(statement_start);
@@ -2547,23 +3903,88 @@ impl<'a> CstAstLowerer<'a> {
             }
         }
         self.syntax_finish_at(syntax_statements, self.current_start());
-        self.expect(TokenKind::RBrace)?;
+        if !closed_early {
+            self.expect(TokenKind::RBrace)?;
+        }
         self.syntax_finish(syntax_block, block_start);
         Ok(block.into_inner())
+    }
+    /// Whether the current token can only start a source-unit declaration,
+    /// never a statement.
+    fn declaration_starts_here(&self) -> bool {
+        match self.tokens.get(self.pos).map(|token| &token.kind) {
+            Some(
+                TokenKind::Fn
+                | TokenKind::Kotoage
+                | TokenKind::View
+                | TokenKind::Hajimari
+                | TokenKind::Kaizen
+                | TokenKind::Struct
+                | TokenKind::Trigger
+                | TokenKind::Seiyaku
+                | TokenKind::Module
+                | TokenKind::Import
+                | TokenKind::Include
+                | TokenKind::Export
+                | TokenKind::Const
+                | TokenKind::Hash,
+            ) => true,
+            Some(TokenKind::Error) => self.peek_n(1, TokenKind::Enum),
+            Some(TokenKind::State) => !self.peek_n(1, TokenKind::ColonColon),
+            _ => false,
+        }
     }
     fn parse_block_element(&mut self) -> ParseResult<ParsedBlockElement> {
         if self.peek(TokenKind::Let) || self.peek(TokenKind::Var) {
             let statement_start = self.current_start();
             let owner = self.begin_node(AstNodeKind::Statement, statement_start);
-            let mutable = self.peek(TokenKind::Var);
-            self.bump();
-            let mut ty = if self.typed_local_starts_here() {
+            let mut mutable = self.peek(TokenKind::Var);
+            let keyword = self.bump();
+            if self.peek_ident_n(0, "mut")
+                && (self.peek_n_ident(1) || self.peek_n(1, TokenKind::LParen))
+            {
+                // `let mut x`: mutability is spelled `var`.
+                let mut_token = self.bump();
+                let replaced = TextRange::new(keyword.range.start, mut_token.range.end);
+                let next_start = self.current_start();
+                let error = if mutable {
+                    self.coded_error(
+                        mut_token.clone(),
+                        "E_LET_MUT",
+                        "`var` bindings are already mutable; remove `mut`",
+                    )
+                    .with_fix(TextRange::new(mut_token.range.start, next_start), "")
+                } else {
+                    self.coded_error(
+                        mut_token.clone(),
+                        "E_LET_MUT",
+                        "a mutable local is declared with `var`, not `let mut`",
+                    )
+                    .reported_at(replaced)
+                    .with_fix(replaced, "var")
+                };
+                self.report(error.with_help(
+                    "`let` binds an immutable local and `var` a mutable one: `var total = 0;` or `var int total = 0;`",
+                ))?;
+                mutable = true;
+            }
+            // `let y: int = ...` is reported once and continues as `let int y`.
+            let mut colon_binding = None;
+            let mut ty = if self.peek_n_ident(0) && self.peek_n(1, TokenKind::Colon) {
+                let (ty, token) = self.colon_declaration(DeclarationSite::Local)?;
+                colon_binding = Some(token);
+                Some(PendingType::new(ty))
+            } else if self.typed_local_starts_here() {
                 Some(PendingType::new(self.parse_type_expr()?))
             } else {
                 None
             };
             // pattern
-            let pat = if self.struct_pattern_starts_here() {
+            let pat = if let Some(token) = colon_binding {
+                let name = self.spelling(&token).to_owned();
+                self.record_binding(owner, 0, name.clone(), token.range, BindingFactKind::Local);
+                Pattern::Name(name)
+            } else if self.struct_pattern_starts_here() {
                 self.parse_struct_pattern(owner, BindingFactKind::Local)?
             } else if self.peek(TokenKind::LParen) {
                 self.bump();
@@ -2593,11 +4014,13 @@ impl<'a> CstAstLowerer<'a> {
             };
             if self.peek(TokenKind::Colon) {
                 let token = self.bump();
-                return Err(self.coded_error(
-                    token,
-                    "E_RETIRED_DECLARATION_ORDER",
-                    "Kotodama V1 typed locals are type-first: write `let int value = ...;`; omit the type entirely to use inference",
-                ));
+                return Err(self
+                    .coded_error(
+                        token,
+                        "E_RETIRED_DECLARATION_ORDER",
+                        "typed locals are type-first: write `let int value = ...;`",
+                    )
+                    .with_help(declaration_order_help()));
             }
             self.expect(TokenKind::Equal)?;
             let mut expr = PendingExpr::new(self.parse_expr()?);
@@ -2650,6 +4073,16 @@ impl<'a> CstAstLowerer<'a> {
             let for_line = self.tokens.get(self.pos).map(|t| t.line).unwrap_or(0);
             let for_start = self.current_start();
             self.expect(TokenKind::For)?;
+            if self.peek(TokenKind::LParen) && self.peek_n_ident(1) && self.peek_n(2, TokenKind::In)
+            {
+                // `for (i in xs)`: the loop header is not parenthesized.
+                self.report_parenthesized_for_header()?;
+            }
+            if self.peek(TokenKind::LParen)
+                && let Some(error) = self.three_clause_for_error()
+            {
+                return Err(error);
+            }
             if let Some((init, cond, step)) = self.parse_for_range()? {
                 let mut init = PendingStatement::new(init);
                 let mut cond = PendingExpr::new(cond);
@@ -2664,6 +4097,9 @@ impl<'a> CstAstLowerer<'a> {
                 }))
             } else if let Some((owner, pat, map)) = self.parse_for_each_map(for_start)? {
                 let mut map = PendingExpr::new(map);
+                if self.peek(TokenKind::DotDot) {
+                    self.report_range_operator(map.as_ref())?;
+                }
                 let body = self.parse_block()?;
                 let range = TextRange::new(for_start, self.previous_end(for_start));
                 Ok(ParsedBlockElement::Statement(self.finish_owned_statement(
@@ -2676,18 +4112,27 @@ impl<'a> CstAstLowerer<'a> {
                     },
                 )))
             } else {
-                let token = self.tokens[self.pos.saturating_sub(1)].clone();
-                Err(self.error(
-                    token,
-                    "expected `for pattern in collection` or `for item in range(end)`",
-                ))
+                Err(self
+                    .expected_error(
+                        self.current_token(),
+                        "a bounded loop header (`for i in range(N)` or `for pattern in collection`)",
+                    )
+                    .with_help("loops are bounded: `for i in range(10) { ... }` or `for item in list { ... }`"))
             }
-        } else if self.peek_ident_n(0, "while") {
+        } else if (self.peek_ident_n(0, "while") && !self.peek_n(1, TokenKind::Equal))
+            || (self.peek_ident_n(0, "loop") && self.peek_n(1, TokenKind::LBrace))
+        {
             let token = self.bump();
-            Err(self.error(
-                token,
-                "`while` is not supported in Kotodama V1; use a compiler-proven bounded `for` loop",
-            ))
+            let spelling = self.spelling(&token).to_owned();
+            Err(self
+                .coded_error(
+                    token,
+                    "E_UNSUPPORTED_LOOP",
+                    format!(
+                        "`{spelling}` loops are not part of Kotodama; every loop is a `for` loop with a compiler-proven bound"
+                    ),
+                )
+                .with_help("execution is metered and must be bounded: iterate `for i in range(N)` with a compile-time `N`, or a collection with a proven capacity, and exit early with `break`"))
         } else {
             // Try assignments including compound ops and field/indexed lvalues
             let save = self.pos;
@@ -2712,7 +4157,10 @@ impl<'a> CstAstLowerer<'a> {
                     TokenKind::SlashEqual => AssignOp::Div,
                     TokenKind::PercentEqual => AssignOp::Mod,
                     _ => {
-                        return Err(self.error(op_tok, "expected one of: =, +=, -=, *=, /=, %="));
+                        return Err(self.expected_error(
+                            op_tok,
+                            "an assignment operator (`=`, `+=`, `-=`, `*=`, `/=` or `%=`)",
+                        ));
                     }
                 };
                 let target = target.take();
@@ -2778,12 +4226,25 @@ impl<'a> CstAstLowerer<'a> {
                 expression.take(),
             )));
         }
-        let token = self
-            .tokens
-            .get(self.pos)
-            .cloned()
-            .unwrap_or_else(|| self.bump());
-        Err(self.error(token, "`;` or the end of the enclosing block"))
+        let token = self.current_token();
+        // `retrun total;`: a misspelled statement keyword parses as a name
+        // followed by an unexpected operand.
+        if let Expr::Ident(name) = expression.as_ref().kind()
+            && Self::token_starts_expression(&token.kind)
+            && let Some(keyword) = crate::diagnostic::suggest::closest(
+                name,
+                [
+                    "return", "let", "var", "for", "if", "match", "break", "continue",
+                ],
+            )
+            && let Some(word) = self
+                .pos
+                .checked_sub(1)
+                .and_then(|index| self.tokens.get(index))
+        {
+            return Err(self.keyword_typo_error(&word.clone(), keyword));
+        }
+        Err(self.expected_token_error(token, &TokenKind::Semicolon))
     }
     fn if_expression_statement(&mut self, expression: Expr) -> Statement {
         let mut expression = expression;
@@ -3004,6 +4465,7 @@ impl<'a> CstAstLowerer<'a> {
         let mut binding_ordinal = 0_usize;
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let arm_start = self.current_start();
+            let arm_index = self.pos;
             let syntax_arm = self.syntax_start(SyntaxKind::MatchArm, arm_start);
             let arm = (|| -> ParseResult<(SumPattern, Block)> {
                 let pattern = self.parse_sum_pattern(owner, binding_ordinal)?;
@@ -3022,16 +4484,42 @@ impl<'a> CstAstLowerer<'a> {
                 Ok((pattern, body))
             })();
             self.syntax_finish(syntax_arm, arm_start);
-            let (pattern, body) = arm?;
+            let (pattern, body) = match arm {
+                Ok(arm) => arm,
+                Err(error) if self.recover => {
+                    // Recover at the next arm so one bad arm does not unbalance
+                    // the enclosing blocks.
+                    self.errors.push(*error);
+                    self.synchronize_match_arm(arm_index);
+                    if self.peek(TokenKind::Comma) {
+                        self.bump();
+                    }
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             arms.push(MatchArm { pattern, body });
             if !self.peek(TokenKind::Comma) {
                 if !self.peek(TokenKind::RBrace) {
-                    let token = self
-                        .tokens
-                        .get(self.pos)
-                        .cloned()
-                        .unwrap_or_else(|| self.bump());
-                    return Err(self.error(token, "`,` or `}` after match arm"));
+                    let token = self.current_token();
+                    let previous = self.tokens[self.pos.saturating_sub(1)].clone();
+                    let mut error = self
+                        .expected_error(token.clone(), "`,` or `}` after the match arm")
+                        .with_help(
+                            "separate match arms with `,`, including arms whose body is a block",
+                        );
+                    // A namespaced pattern (`Option::none =>`) cannot
+                    // continue an arm body, so it starts the next arm.
+                    let next_arm = self.peek_n_ident(0) && self.peek_n(1, TokenKind::ColonColon);
+                    if token.line > previous.line || previous.kind == TokenKind::RBrace || next_arm
+                    {
+                        // A comma-less arm followed by another arm.
+                        let insertion = TextRange::empty(previous.range.end);
+                        error = error.reported_at(insertion).with_fix(insertion, ",");
+                        self.report(error)?;
+                        continue;
+                    }
+                    return Err(error);
                 }
                 break;
             }
@@ -3129,13 +4617,21 @@ impl<'a> CstAstLowerer<'a> {
     ) -> ParseResult<SumPattern> {
         let namespace_token = self.bump();
         let TokenKind::Ident(mut namespace) = namespace_token.kind.clone() else {
-            return Err(self.error(namespace_token, "`Option` or `Result` pattern namespace"));
+            return Err(self
+                .expected_error(
+                    namespace_token,
+                    "an `Option::`, `Result::` or error-variant pattern",
+                )
+                .with_help("`match` arms name the variants of an `Option`, `Result` or `error enum`; branch on a `bool` or number with `if`/`else`"));
         };
+        if !self.peek(TokenKind::ColonColon) {
+            return Err(self.bare_pattern_error(&namespace_token, &namespace));
+        }
         let mut namespace_end = namespace_token.range.end;
         self.expect(TokenKind::ColonColon)?;
         let mut variant_token = self.bump();
         let TokenKind::Ident(mut variant_name) = variant_token.kind.clone() else {
-            return Err(self.error(variant_token, "namespaced sum variant"));
+            return Err(self.expected_error(variant_token, "a variant name after `::`"));
         };
         if self.peek(TokenKind::ColonColon) {
             self.bump();
@@ -3144,36 +4640,41 @@ impl<'a> CstAstLowerer<'a> {
             namespace_end = variant_token.range.end;
             variant_token = self.bump();
             let TokenKind::Ident(name) = variant_token.kind.clone() else {
-                return Err(self.error(variant_token, "imported error variant"));
+                return Err(self.expected_error(variant_token, "an error variant name after `::`"));
             };
             variant_name = name;
         }
-        if namespace == "option" || namespace == "result" {
-            let replacement = if namespace == "option" {
-                "Option"
-            } else {
-                "Result"
-            };
-            let mut error = self.coded_error(
-                namespace_token,
-                "E_LEGACY_SUM_CONSTRUCTOR",
-                format!(
-                    "lowercase `{namespace}` pattern namespace is retired; use `{replacement}`"
-                ),
-            );
-            error.fix = Some(replacement.to_owned());
-            return Err(error);
+        if let Some(canonical) = canonical_sum_path(&namespace, &variant_name)
+            && canonical != format!("{namespace}::{variant_name}")
+        {
+            let written = TextRange::new(namespace_token.range.start, variant_token.range.end);
+            return Err(self
+                .coded_error(
+                    namespace_token,
+                    "E_LEGACY_SUM_CONSTRUCTOR",
+                    format!("`{namespace}::{variant_name}` is spelled `{canonical}`"),
+                )
+                .reported_at(written)
+                .with_help(sum_constructor_help())
+                .with_fix(written, canonical));
         }
+        let variant_label = format!("{namespace}::{variant_name}");
         let variant = match (namespace.as_str(), variant_name.as_str()) {
             ("Option", "some") => SumVariant::OptionSome,
             ("Option", "none") => SumVariant::OptionNone,
             ("Result", "ok") => SumVariant::ResultOk,
             ("Result", "err") => SumVariant::ResultErr,
             ("Option" | "Result", _) => {
-                return Err(self.error(
-                    variant_token,
-                    "one of `Option::some`, `Option::none`, `Result::ok`, or `Result::err`",
-                ));
+                return Err(self
+                    .expected_error(
+                        variant_token,
+                        if namespace == "Option" {
+                            "`some` or `none` after `Option::`"
+                        } else {
+                            "`ok` or `err` after `Result::`"
+                        },
+                    )
+                    .with_help(sum_constructor_help()));
             }
             _ => {
                 self.record_type_use(
@@ -3189,15 +4690,37 @@ impl<'a> CstAstLowerer<'a> {
         let binding = if matches!(variant, SumVariant::OptionNone | SumVariant::Error { .. }) {
             if self.peek(TokenKind::LParen) {
                 let token = self.bump();
-                return Err(self.error(token, "payloadless variant without a payload pattern"));
+                let clause = self.skip_balanced_clause(&token);
+                return Err(self
+                    .coded_error(
+                        token,
+                        "K1001",
+                        format!("`{variant_label}` has no payload to bind"),
+                    )
+                    .reported_at(clause)
+                    .with_help("payloadless variants are matched by name alone, for example `Option::none => ...`")
+                    .with_fix(clause, ""));
             }
             None
         } else {
             self.expect(TokenKind::LParen)?;
             let token = self.bump();
             let TokenKind::Ident(name) = token.kind.clone() else {
-                return Err(self.error(token, "payload binding or `_`"));
+                return Err(self
+                    .expected_error(token, "a payload binding name or `_`")
+                    .with_help(format!(
+                        "a `{variant_label}` arm binds its payload to a name, or to `_` when the arm does not use it: `{variant_label}(value) => ...`"
+                    )));
             };
+            if self.peek(TokenKind::ColonColon) || self.peek(TokenKind::LParen) {
+                return Err(self
+                    .coded_error(
+                        token,
+                        "K1001",
+                        format!("match patterns do not nest; bind the `{variant_label}` payload to a name"),
+                    )
+                    .with_help("bind the payload, then match it in the arm body: `Option::some(inner) => match inner { ... }`"));
+            }
             let binding = if name == "_" {
                 PatternBinding::Wildcard
             } else {
@@ -3309,7 +4832,14 @@ impl<'a> CstAstLowerer<'a> {
         match &tok.kind {
             TokenKind::Ident(name) => Ok((name.clone(), tok.clone())),
             _ => {
-                let mut error = self.error(tok, "identifier");
+                let is_keyword = crate::lexer::v1_keyword_spelling(&tok.kind).is_some();
+                let mut error = self
+                    .expected_error(tok, "identifier")
+                    .with_help(if is_keyword {
+                        "keywords cannot be used as names; choose a different identifier"
+                    } else {
+                        "a name goes here: ASCII letters, digits and `_`, not starting with a digit"
+                    });
                 error.expected = Some(SyntaxKind::Ident);
                 Err(error)
             }
@@ -3322,7 +4852,7 @@ impl<'a> CstAstLowerer<'a> {
         match &tok.kind {
             TokenKind::Ident(name) => Ok(name.clone()),
             TokenKind::Trigger => Ok("trigger".to_owned()),
-            _ => Err(self.error(tok, "trigger-filter identifier")),
+            _ => Err(self.expected_error(tok, "a trigger-filter name")),
         }
     }
     fn expect_namespace_segment(&mut self) -> ParseResult<String> {
@@ -3333,7 +4863,7 @@ impl<'a> CstAstLowerer<'a> {
             TokenKind::Seiyaku if self.peek(TokenKind::ColonColon) => Ok("seiyaku".to_owned()),
             TokenKind::Kotoage => Ok("kotoage".to_owned()),
             _ => {
-                let mut error = self.error(tok, "namespace segment");
+                let mut error = self.expected_error(tok, "a path segment after `::`");
                 error.expected = Some(SyntaxKind::Ident);
                 Err(error)
             }
@@ -3417,14 +4947,18 @@ impl<'a> CstAstLowerer<'a> {
                         },
                         |replacement| format!("use `{replacement}`"),
                     );
-                    let mut error = self.coded_error(
-                        base_token.clone(),
-                        "E_RETIRED_NUMERIC_TYPE",
-                        format!(
-                            "numeric type `{base}` is not part of Kotodama V1; {replacement_message}"
-                        ),
-                    );
-                    error.fix = replacement.map(str::to_owned);
+                    let mut error = self
+                        .coded_error(
+                            base_token.clone(),
+                            "E_RETIRED_NUMERIC_TYPE",
+                            format!(
+                                "numeric type `{base}` is not part of Kotodama V1; {replacement_message}"
+                            ),
+                        )
+                        .with_help("Kotodama has three numeric types: `int` (signed integer), `decimal` (exact fixed-point) and `quantity` (non-negative asset amount)");
+                    if let Some(replacement) = replacement {
+                        error = error.with_fix(base_token.range, replacement);
+                    }
                     if self.recover {
                         self.errors.push(*error);
                     } else {
@@ -3514,23 +5048,14 @@ impl<'a> CstAstLowerer<'a> {
         }
     }
     fn tuple_type_arity_error(&self, opening: &Token, closing: &Token) -> Box<ParseError> {
-        let line_text = self
-            .source
-            .lines()
-            .nth(opening.line.saturating_sub(1))
-            .unwrap_or("");
-        let caret = " ".repeat(opening.column.saturating_sub(1)) + "^";
-        Box::new(ParseError {
-            code: "K1001",
-            message: "tuple types require at least two elements; use `()` for Unit".into(),
-            line: opening.line,
-            column: opening.column,
-            snippet: format!("{line_text}\n{caret}"),
-            range: TextRange::new(opening.range.start, closing.range.end),
-            fix: None,
-            expected: None,
-            expected_owner: None,
-        })
+        ParseError::at_range(
+            TextRange::new(opening.range.start, closing.range.end),
+            opening.line,
+            opening.column,
+            "K1001",
+            "tuple types require at least two elements; use `()` for Unit",
+        )
+        .with_help("write the element type itself for one value, or `()` for the Unit type")
     }
     fn try_parse_lvalue_expr(&mut self) -> ParseResult<Expr> {
         // Parse an identifier then tail of member/index chains
@@ -3565,7 +5090,7 @@ impl<'a> CstAstLowerer<'a> {
                     index.to_string()
                 } else {
                     let tok = self.bump();
-                    return Err(self.error(tok, "identifier or tuple index"));
+                    return Err(self.expected_error(tok, "a field name or tuple index after `.`"));
                 };
                 let range = TextRange::new(expression_start, self.previous_end(expression_start));
                 let node = self.facts.source_map.allocate_owned(
@@ -3661,33 +5186,50 @@ impl<'a> CstAstLowerer<'a> {
     fn parse_param_type_annotation(&mut self) -> ParseResult<(bool, TypeExpr)> {
         if self.peek(TokenKind::State) {
             let token = self.bump();
-            return Err(self.error(
-                token,
-                "state handles are not first-class parameters; access declared state directly",
-            ));
+            return Err(self
+                .coded_error(token, "K1001", "state cannot be passed as a parameter")
+                .with_help("functions read and write declared `state` directly by name; remove the parameter"));
         }
         let ty = self.parse_type_expr()?;
         Ok((false, ty))
     }
     fn parse_param(&mut self) -> ParseResult<Param> {
-        // Canonical V1 form: `Type name`.
-        let (is_state, ty) = self.parse_param_type_annotation()?;
-        let mut ty = PendingType::new(ty);
-        if self.peek(TokenKind::Colon) {
-            let token = self.bump();
-            return Err(self.coded_error(
-                token,
-                "E_RETIRED_DECLARATION_ORDER",
-                "Kotodama V1 parameters are type-first: write `int value`, not `value: int`",
-            ));
-        }
-        let call_mode = if self.peek_ident_n(0, "_") {
-            self.bump();
-            ParameterCallMode::Positional
-        } else {
-            ParameterCallMode::Named
-        };
-        let (name, name_token) = self.expect_ident_token()?;
+        // Canonical V1 form: `Type name`. `name: Type` is reported once and
+        // continues as `Type name`, so later parameters are still checked.
+        let (is_state, mut ty, call_mode, name, name_token) =
+            if self.peek_n_ident(0) && self.peek_n(1, TokenKind::Colon) {
+                let (ty, name_token) = self.colon_declaration(DeclarationSite::Parameter)?;
+                let name = self.spelling(&name_token).to_owned();
+                (
+                    false,
+                    PendingType::new(ty),
+                    ParameterCallMode::Named,
+                    name,
+                    name_token,
+                )
+            } else {
+                if self.peek_n_ident(0)
+                    && (self.peek_n(1, TokenKind::Comma) || self.peek_n(1, TokenKind::RParen))
+                    && !self.current_names_a_type()
+                {
+                    return Err(self.missing_type_error(DeclarationSite::Parameter));
+                }
+                let (is_state, ty) = self.parse_param_type_annotation()?;
+                let ty = PendingType::new(ty);
+                if self.peek(TokenKind::Colon) {
+                    return Err(
+                        self.type_then_colon_error("parameters are type-first: write `Type name`")
+                    );
+                }
+                let call_mode = if self.peek_ident_n(0, "_") {
+                    self.bump();
+                    ParameterCallMode::Positional
+                } else {
+                    ParameterCallMode::Named
+                };
+                let (name, name_token) = self.expect_ident_token()?;
+                (is_state, ty, call_mode, name, name_token)
+            };
         let node = self.begin_node(AstNodeKind::Parameter, name_token.range.start);
         self.record_declaration(
             node,
@@ -3704,22 +5246,25 @@ impl<'a> CstAstLowerer<'a> {
             is_state,
         })
     }
-    fn expect(&mut self, kind: TokenKind) -> ParseResult<()> {
-        let expected = expected_syntax_kind(&kind);
-        let tok = self.tokens.get(self.pos).cloned().unwrap_or_else(|| Token {
+    /// The current token, or a zero-width end-of-file token after the input.
+    fn current_token(&self) -> Token {
+        self.tokens.get(self.pos).cloned().unwrap_or_else(|| Token {
             kind: TokenKind::EOF,
             line: self.tokens.last().map_or(1, |token| token.line),
             column: self.tokens.last().map_or(1, |token| token.column),
             range: self.tokens.last().map_or(TextRange::empty(0), |token| {
                 TextRange::empty(token.range.end)
             }),
-        });
+        })
+    }
+    fn expect(&mut self, kind: TokenKind) -> ParseResult<()> {
+        let tok = self.current_token();
         if tok.kind == kind {
             self.bump();
             Ok(())
         } else {
-            let mut error = self.error(tok, &format!("{kind:?}"));
-            error.expected = expected;
+            let mut error = self.expected_token_error(tok, &kind);
+            error.expected = expected_syntax_kind(&kind);
             error.expected_owner = self.syntax.current();
             Err(error)
         }
@@ -3734,21 +5279,140 @@ impl<'a> CstAstLowerer<'a> {
             return Ok(());
         }
         if self.recover && insertion_is_unambiguous {
-            let token = self.tokens.get(self.pos).cloned().unwrap_or_else(|| Token {
-                kind: TokenKind::EOF,
-                line: self.tokens.last().map_or(1, |token| token.line),
-                column: self.tokens.last().map_or(1, |token| token.column),
-                range: self.tokens.last().map_or(TextRange::empty(0), |token| {
-                    TextRange::empty(token.range.end)
-                }),
-            });
-            let mut error = self.error(token, &format!("{kind:?}"));
+            let token = self.current_token();
+            let mut error = self.expected_token_error(token, &kind);
             error.expected = expected_syntax_kind(&kind);
             error.expected_owner = self.syntax.current();
             self.errors.push(*error);
             return Ok(());
         }
         self.expect(kind)
+    }
+    /// "expected `X`, found Y" for one missing token.
+    ///
+    /// A missing terminator (`;`, `)`, `]`, `}`) is reported at the insertion
+    /// point right after the previous token, with a fix that inserts it, so
+    /// the caret does not land on the next line. A missing closing delimiter
+    /// also labels the unclosed opener.
+    fn expected_token_error(&self, tok: Token, kind: &TokenKind) -> Box<ParseError> {
+        let spelling = expected_token_spelling(kind);
+        let mut error = self.expected_error(tok.clone(), &spelling);
+        if let Some(help) = expected_token_help(kind) {
+            error = error.with_help(help);
+        }
+        if tok.kind == TokenKind::As {
+            // `value as T`: `as` only names import aliases.
+            return error.with_help(
+                "Kotodama has no `as` casts; convert with the named conversion for the target type, for example `decimal::from_int(value)`",
+            );
+        }
+        if tok.kind == TokenKind::DotDot {
+            // `let r = 0..10;` or `xs[1..3]`: ranges exist only as the
+            // `range(N)` bound of a counted loop.
+            let inclusive = self
+                .source
+                .get(tok.range.end as usize..)
+                .is_some_and(|rest| rest.starts_with('='));
+            return self
+                .coded_error(
+                    tok,
+                    "E_RANGE_SYNTAX",
+                    format!(
+                        "Kotodama has no `{}` range operator",
+                        if inclusive { "..=" } else { ".." }
+                    ),
+                )
+                .with_help("counted loops iterate `for i in range(N)`, which counts from 0 up to N - 1 with a compile-time `N`; there are no range values or list slices");
+        }
+        let previous = self
+            .pos
+            .checked_sub(1)
+            .and_then(|index| self.tokens.get(index));
+        let (opener, closing) = match kind {
+            TokenKind::RParen => (Some(TokenKind::LParen), ")"),
+            TokenKind::RBracket => (Some(TokenKind::LBracket), "]"),
+            TokenKind::RBrace => (Some(TokenKind::LBrace), "}"),
+            TokenKind::Semicolon => (None, ";"),
+            _ => return error,
+        };
+        let Some(previous) = previous else {
+            return error;
+        };
+        // The terminator was omitted (rather than something else written in
+        // its place) when the next token starts a later line, closes the
+        // enclosing block, is the end of the file, or, for `;`, is a keyword
+        // that can only start the next statement.
+        let omitted = tok.line > previous.line
+            || matches!(tok.kind, TokenKind::EOF)
+            // `;` cannot appear inside parentheses or brackets.
+            || (matches!(kind, TokenKind::RParen | TokenKind::RBracket)
+                && matches!(tok.kind, TokenKind::Semicolon))
+            || (matches!(kind, TokenKind::Semicolon)
+                && matches!(
+                    tok.kind,
+                    TokenKind::RBrace
+                        | TokenKind::Let
+                        | TokenKind::Var
+                        | TokenKind::Return
+                        | TokenKind::Break
+                        | TokenKind::Continue
+                        | TokenKind::For
+                ));
+        if omitted {
+            let insertion = TextRange::empty(previous.range.end);
+            error = error.reported_at(insertion).with_fix(insertion, closing);
+        }
+        if let Some(opener) = opener
+            && let Some(open) = self.unclosed_opener(&opener, kind)
+            && self.never_closed(&open, kind)
+        {
+            let text = token_text(self.source, &open).to_owned();
+            error = error.with_label(open.range, format!("this `{text}` is not closed"));
+        }
+        if matches!(kind, TokenKind::Semicolon) {
+            error = error.with_help(
+                "every statement and `state`/`const` declaration ends with `;`; block-valued `if`, `match` and `for` statements do not",
+            );
+        }
+        error
+    }
+    /// Whether `open` has no matching `closing` anywhere in the file.
+    fn never_closed(&self, open: &Token, closing: &TokenKind) -> bool {
+        let Some(start) = self
+            .tokens
+            .iter()
+            .position(|token| token.range == open.range)
+        else {
+            return false;
+        };
+        let mut depth = 0_usize;
+        for token in &self.tokens[start..] {
+            if token.kind == open.kind {
+                depth += 1;
+            } else if &token.kind == closing {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    /// The innermost opening delimiter before the cursor without a matching
+    /// closer, scanning backwards over balanced pairs.
+    fn unclosed_opener(&self, opening: &TokenKind, closing: &TokenKind) -> Option<Token> {
+        let mut depth = 0_usize;
+        for token in self.tokens[..self.pos.min(self.tokens.len())].iter().rev() {
+            if &token.kind == closing {
+                depth = depth.saturating_add(1);
+            } else if &token.kind == opening {
+                if depth == 0 {
+                    return Some(token.clone());
+                }
+                depth -= 1;
+            }
+        }
+        None
     }
     fn number_to_usize(&self, token: &Token, value: &str, context: &str) -> ParseResult<usize> {
         parse_bounded_unsigned(value, usize::MAX as u64)
@@ -3758,23 +5422,8 @@ impl<'a> CstAstLowerer<'a> {
             })
     }
     fn range_error(&self, token: &Token, message: String) -> Box<ParseError> {
-        let line_text = self
-            .source
-            .lines()
-            .nth(token.line.saturating_sub(1))
-            .unwrap_or("");
-        let caret = " ".repeat(token.column.saturating_sub(1)) + "^";
-        Box::new(ParseError {
-            code: "K1001",
-            message,
-            line: token.line,
-            column: token.column,
-            snippet: format!("{line_text}\n{caret}"),
-            range: token.range,
-            fix: None,
-            expected: None,
-            expected_owner: None,
-        })
+        ParseError::at(token, "K1001", message)
+            .with_help("use a smaller non-negative integer literal")
     }
     fn peek(&self, kind: TokenKind) -> bool {
         self.tokens.get(self.pos).map(|t| t.kind.clone()) == Some(kind)
@@ -3964,11 +5613,38 @@ impl<'a> CstAstLowerer<'a> {
                 {
                     return;
                 }
+                // After a completed item, a line that starts at the item
+                // column with `name(`, `name name` or `name {` is the next
+                // declaration head, even when its keyword is misspelled
+                // (`kaizan() { }`), so it is diagnosed instead of skipped.
+                TokenKind::Ident(_)
+                    if brace_depth == 0
+                        && reached_item_boundary
+                        && token.column <= start_column
+                        && self
+                            .tokens
+                            .get(self.pos.saturating_sub(1))
+                            .is_some_and(|previous| previous.line < token.line)
+                        && matches!(
+                            self.tokens.get(self.pos + 1).map(|next| &next.kind),
+                            Some(TokenKind::LParen | TokenKind::Ident(_) | TokenKind::LBrace)
+                        ) =>
+                {
+                    return;
+                }
                 _ => {}
             }
             self.pos = self.pos.saturating_add(1);
         }
     }
+    /// Skip the rest of a failed statement.
+    ///
+    /// Nesting opened between the statement start and the failure point is
+    /// replayed first, so a failure inside a nested `{ ... }` (a match arm or
+    /// an `if` body) skips to the end of that construct instead of mistaking
+    /// its closing brace for the end of the enclosing block. Parentheses and
+    /// brackets are weak: a line that starts a new statement or a `}` ends the
+    /// skip even while they are unbalanced.
     fn synchronize_statement(&mut self, statement_start: usize) {
         if self.pos > statement_start
             && self
@@ -3982,28 +5658,58 @@ impl<'a> CstAstLowerer<'a> {
             .tokens
             .get(statement_start)
             .map_or(usize::MAX, |token| token.column);
-        let mut delimiter_stack = Vec::new();
+        let mut open_braces = 0_usize;
+        let mut weak_stack = Vec::new();
+        let replay =
+            |kind: &TokenKind, open_braces: &mut usize, weak_stack: &mut Vec<DelimiterKind>| {
+                match kind {
+                    TokenKind::LBrace => *open_braces += 1,
+                    TokenKind::RBrace => {
+                        *open_braces = open_braces.saturating_sub(1);
+                        weak_stack.clear();
+                    }
+                    _ => update_delimiter_stack(weak_stack, kind),
+                }
+            };
+        for token in &self.tokens[statement_start..self.pos.min(self.tokens.len())] {
+            replay(&token.kind, &mut open_braces, &mut weak_stack);
+        }
         while let Some(token) = self.tokens.get(self.pos) {
-            if delimiter_stack.is_empty() {
-                if matches!(&token.kind, TokenKind::RBrace | TokenKind::EOF) {
+            if matches!(token.kind, TokenKind::EOF) {
+                return;
+            }
+            if open_braces == 0 {
+                if matches!(token.kind, TokenKind::RBrace) {
                     return;
                 }
                 if self.pos != statement_start
                     && token.column <= start_column
                     && Self::token_starts_statement(token)
+                    && self
+                        .tokens
+                        .get(self.pos.saturating_sub(1))
+                        .is_some_and(|previous| previous.line < token.line)
                 {
                     return;
                 }
-            }
-            update_delimiter_stack(&mut delimiter_stack, &token.kind);
-            match &token.kind {
-                TokenKind::Semicolon if delimiter_stack.is_empty() => {
+                if matches!(token.kind, TokenKind::Semicolon) && weak_stack.is_empty() {
                     self.pos = self.pos.saturating_add(1);
                     return;
                 }
-                _ => {}
             }
+            replay(&token.kind, &mut open_braces, &mut weak_stack);
             self.pos = self.pos.saturating_add(1);
+            // A completed nested block followed by the end of the line ends
+            // block-valued statements such as `if` and `match`.
+            if open_braces == 0
+                && matches!(token.kind, TokenKind::RBrace)
+                && self
+                    .tokens
+                    .get(self.pos)
+                    .is_some_and(|next| next.line > token.line && next.column <= start_column)
+            {
+                return;
+            }
         }
     }
     fn token_starts_statement(token: &Token) -> bool {
@@ -4059,32 +5765,30 @@ impl<'a> CstAstLowerer<'a> {
         }
         tok
     }
-    fn error(&self, token: Token, expected: &str) -> Box<ParseError> {
-        let line_text = self.source.lines().nth(token.line - 1).unwrap_or("");
-        let caret = " ".repeat(token.column.saturating_sub(1)) + "^";
-        let message = format!("expected {expected} but found {kind:?}", kind = token.kind);
-        Box::new(ParseError {
-            code: "K1001",
-            message,
-            line: token.line,
-            column: token.column,
-            snippet: format!("{line_text}\n{caret}"),
-            range: token.range,
-            fix: None,
-            expected: None,
-            expected_owner: None,
-        })
+    /// `expected {expected}, found {token}` under the generic grammar code.
+    ///
+    /// `expected` is a noun phrase naming what the grammar allows here, with
+    /// source spellings in backticks; never pass a sentence.
+    fn expected_error(&self, token: Token, expected: &str) -> Box<ParseError> {
+        let found = describe_found(self.source, &token);
+        ParseError::at(
+            &token,
+            "K1001",
+            format!("expected {expected}, found {found}"),
+        )
     }
+    /// A rule violation stated as a complete sentence under its own code.
     fn coded_error(
         &self,
         token: Token,
         code: &'static str,
         message: impl Into<String>,
     ) -> Box<ParseError> {
-        let mut error = self.error(token, "valid source");
-        error.code = code;
-        error.message = message.into();
-        error
+        ParseError::at(&token, code, message)
+    }
+    /// Exact source spelling of `token`.
+    fn spelling(&self, token: &Token) -> &'a str {
+        token_text(self.source, token)
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4323,7 +6027,7 @@ fn removed_method_helper_message(name: &str) -> Option<&'static str> {
         ),
         "has" => Some("`map.has(key)` was removed; use `map.contains(key)`"),
         "get_or_insert_default" => Some(
-            "`map.get_or_insert_default(key, default)` was removed; use `map.ensure(key, default)`",
+            "`map.get_or_insert_default(key, default)` was removed; use `map.get_or_insert(key, default)`",
         ),
         "path_map_key" | "path_map_key_norito" => {
             Some("`base.path_map_key(segment)` was removed; use `base.path(segment)`")
@@ -4343,8 +6047,8 @@ fn removed_method_helper_message(name: &str) -> Option<&'static str> {
         "json_get_nft_id" => {
             Some("`json.json_get_nft_id(key)` was removed; use `json.get_nft_id(key)`")
         }
-        "json_get_blob_hex" => {
-            Some("`json.json_get_blob_hex(key)` was removed; use `json.get_blob_hex(key)`")
+        "json_get_blob_hex" | "get_blob_hex" => {
+            Some("`json.get_blob_hex(key)` is not a Json method; use `json.get_bytes_hex(key)`")
         }
         _ => None,
     }
@@ -4378,15 +6082,17 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
         "contains" | "std::map::contains" | "has" | "std::map::has" => {
             Some("`contains(...)` was removed; use `map.contains(key)`")
         }
-        "get_or" | "std::map::get_or" => {
-            Some("`get_or(...)` was removed; use `map.get_or(key, default)`")
-        }
+        "get_or" | "std::map::get_or" | "get_or_default" | "std::map::get_or_default" => Some(
+            "`get_or(...)` is not a StateMap helper; read with `map.get(key)` and handle absence with `.unwrap_or(default)`, `.expect(Error)`, or `match`",
+        ),
         "get_or_insert_default"
         | "std::map::get_or_insert_default"
+        | "get_or_insert"
+        | "std::map::get_or_insert"
         | "ensure"
-        | "std::map::ensure" => {
-            Some("`ensure(...)` was removed as a free helper; use `map.ensure(key, default)`")
-        }
+        | "std::map::ensure" => Some(
+            "`get_or_insert(...)` is not a free helper; use `map.get_or_insert(key, default)`, which writes the default when the key is absent",
+        ),
         "remove" | "std::map::remove" => {
             Some("`remove(...)` is not a free helper; use `map.remove(key)`")
         }
@@ -4422,8 +6128,12 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
         "get_nft_id" | "json_get_nft_id" | "json::get_nft_id" => {
             Some("`get_nft_id(...)` was removed as a free helper; use `json.get_nft_id(key)`")
         }
-        "get_blob_hex" | "json_get_blob_hex" | "json::get_blob_hex" => {
-            Some("`get_blob_hex(...)` was removed as a free helper; use `json.get_blob_hex(key)`")
+        "get_blob_hex"
+        | "json_get_blob_hex"
+        | "json::get_blob_hex"
+        | "get_bytes_hex"
+        | "json::get_bytes_hex" => {
+            Some("`get_bytes_hex(...)` is not a free helper; use `json.get_bytes_hex(key)`")
         }
         "state_map_get" => Some("`state_map_get(...)` is compiler-internal; use `map.get(key)`"),
         "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or" | "expect" => {
@@ -4713,7 +6423,8 @@ mod tests {
     fn malformed_list_expression_reports_the_closing_delimiter() {
         let error = parse_module("fn invalid() { let values = [1, 2; }")
             .expect_err("unterminated List must fail");
-        assert!(error.contains("RBracket"), "{error}");
+        assert!(error.contains("expected `]`, found `;`"), "{error}");
+        assert!(error.contains("this `[` is not closed"), "{error}");
     }
     #[test]
     fn accepts_unit_values_and_types_but_rejects_singleton_tuple_types() {
@@ -4946,7 +6657,10 @@ mod tests {
     fn mutable_bindings_still_require_initializers() {
         let error = parse_module("fn invalid() { var int value; }")
             .expect_err("uninitialized locals are not part of V1");
-        assert!(error.contains("Equal"), "unexpected error: {error}");
+        assert!(
+            error.contains("expected `=`, found `;`"),
+            "unexpected error: {error}"
+        );
     }
     #[test]
     fn error_enum_requires_explicit_unique_nonzero_u32_codes() {
@@ -5043,7 +6757,8 @@ mod tests {
         ] {
             let error = parse(source).expect_err("lifecycle authorization is runtime-owned");
             assert!(
-                error.contains("lifecycle authorization is runtime-defined"),
+                error.contains("E_LIFECYCLE_AUTHORIZATION")
+                    && error.contains("lifecycle hooks are authorized by the runtime"),
                 "unexpected error: {error}"
             );
         }
@@ -5104,7 +6819,7 @@ mod tests {
             seiyaku Controls {
                 kotoage fn update(Name path, Name trigger_id) authorize("Control") {
                     state::set(path, 1);
-                    ledger::trigger::set_enabled(trigger_id, 1);
+                    ledger::trigger::set_enabled(trigger_id, true);
                 }
             }
             "#,
@@ -5204,10 +6919,10 @@ mod tests {
             ("module M { fn f(value: int) {} }", "`int value`"),
             (
                 "module M { const limit: int = 1; }",
-                "`const int limit = 1;`",
+                "`const int limit = ...;`",
             ),
             ("seiyaku C { state value: int; }", "`state int value;`"),
-            ("module M { struct Pair { value: int; } }", "`int field;`"),
+            ("module M { struct Pair { value: int; } }", "`int value;`"),
             (
                 "module M { fn f() { let value: int = 1; } }",
                 "`let int value = ...;`",
@@ -5439,7 +7154,7 @@ mod tests {
         }
         "#;
         let err = parse(src).unwrap_err();
-        assert!(err.contains("source-unit item"));
+        assert!(err.contains("expected a declaration ("), "{err}");
     }
     #[test]
     fn parse_function_modifiers_are_preserved() {
@@ -5469,7 +7184,7 @@ mod tests {
             "seiyaku Demo { kotoage fn run() -> int { return 1; } }",
         ] {
             let error = parse(source).expect_err("kotoage without authorization must not parse");
-            assert!(error.contains("K1001"), "{error}");
+            assert!(error.contains("E_KOTOAGE_AUTHORIZATION_MISSING"), "{error}");
             assert!(
                 error.contains("requires `authorize(\"Permission\")` before its body"),
                 "{error}"
@@ -5814,7 +7529,7 @@ mod tests {
         ] {
             let err = parse_module(src).expect_err("V1 source macro must be rejected");
             assert!(
-                err.contains("macros are not part of Kotodama V1"),
+                err.contains("Kotodama has no macros"),
                 "unexpected error: {err}"
             );
         }
@@ -5888,6 +7603,7 @@ mod tests {
         fn main() {}
         "#;
         let err = parse_module(src).expect_err("manual access attributes should be rejected");
+        assert!(err.contains("manual `#[access(...)]` hints are not supported"));
         assert!(err.contains("access metadata is generated by the compiler"));
     }
     #[test]
@@ -5896,14 +7612,14 @@ mod tests {
         fn helper(state StateMap<Name, int> balances, Name key) {}
         "#;
         let err = parse_module(src).expect_err("state parameters must be rejected");
-        assert!(err.contains("state handles are not first-class parameters"));
+        assert!(err.contains("state cannot be passed as a parameter"));
     }
     #[test]
     fn parse_rejects_removed_free_map_helpers() {
         let err = parse_module("fn f(StateMap<int, int> m) { let _x = get_or(m, 1, 7); }")
             .expect_err("free get_or should be rejected");
         assert!(
-            err.contains("map.get_or(key, default)"),
+            err.contains("map.get(key)") && err.contains(".unwrap_or(default)"),
             "unexpected error: {err}"
         );
     }
@@ -5977,7 +7693,7 @@ mod tests {
             parse_module("fn f(StateMap<int, int> m) { let _x = m.get_or_insert_default(1, 7); }")
                 .expect_err("method get_or_insert_default should be rejected");
         assert!(
-            err.contains("map.ensure(key, default)"),
+            err.contains("map.get_or_insert(key, default)"),
             "unexpected error: {err}"
         );
     }
@@ -6015,7 +7731,7 @@ mod tests {
                 format!(r#"module Localization {{ {spelling} {{ key: {{ en: "value" }} }} }}"#);
             let error = parse(&source).expect_err("source localization tables must be rejected");
             assert!(
-                error.contains("source-unit item"),
+                error.contains("expected a declaration ("),
                 "unexpected diagnostic for {spelling}: {error}"
             );
         }
@@ -6068,12 +7784,20 @@ mod tests {
     #[test]
     fn parse_trigger_decl_rejects_duplicate_control_fields() {
         for (field, duplicate_line, expected) in [
-            ("on", "on time pre_commit;", "duplicate `on` field"),
-            ("repeats", "repeats 2;", "duplicate `repeats` field"),
+            (
+                "on",
+                "on time pre_commit;",
+                "trigger field `on` is declared more than once",
+            ),
+            (
+                "repeats",
+                "repeats 2;",
+                "trigger field `repeats` is declared more than once",
+            ),
             (
                 "authority",
                 r#"authority "alice";"#,
-                "duplicate `authority` field",
+                "trigger field `authority` is declared more than once",
             ),
         ] {
             let src = format!(
@@ -6096,7 +7820,10 @@ mod tests {
     #[test]
     fn parse_trigger_decl_rejects_negative_and_overflow_repeats() {
         for (repeats, expected) in [
-            ("-1", "repeats expects a non-negative integer literal"),
+            (
+                "-1",
+                "expected a non-negative integer literal for `repeats`, found `-`",
+            ),
             ("4294967296", "repeats integer literal out of range"),
         ] {
             let src = format!(
@@ -6193,4 +7920,11 @@ mod tests {
         assert!(err.contains("transaction [approved]"));
     }
     include!("parser/tests/tail_fixtures.rs");
+    mod diagnostics {
+        use crate::{
+            diagnostic::{Diagnostic, DiagnosticFix, DiagnosticPhase},
+            source::{FrontendBudget, SourceFile, SourceId},
+        };
+        include!("parser/tests/diagnostics.rs");
+    }
 }

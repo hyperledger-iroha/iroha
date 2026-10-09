@@ -13204,9 +13204,11 @@ fn encode_contract_argument_record(
         (None, None) => Ok(None),
         (None, Some(_)) => Err("zero-parameter entrypoint must not receive a payload".to_owned()),
         (Some(_), None) => Err("parameterized entrypoint requires a payload".to_owned()),
-        (Some(schema), Some(payload)) => ivm_abi::arguments::encode_argument_record_from_json(schema, payload)
-            .map(Some)
-            .map_err(|error| format!("payload does not match entrypoint schema: {error}")),
+        (Some(schema), Some(payload)) => {
+            ivm_abi::arguments::encode_argument_record_from_json_detailed(schema, payload)
+                .map(Some)
+                .map_err(|error| format!("payload does not match entrypoint schema: {error}"))
+        }
     }
 }
 fn prepare_contract_argument_record(

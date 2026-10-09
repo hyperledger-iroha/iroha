@@ -264,15 +264,11 @@ seiyaku JsonArgumentRecordRuntime {
     vm.set_program_counter(entry_pc)
         .expect("select run wrapper");
     vm.set_host(host);
-    vm.run().expect("execute numeric-token Json argument");
+    // A present JSON number token is malformed input for the exact int getter:
+    // the call aborts instead of reading the field as absent.
     assert_eq!(
-        ivm::sum::read_words(
-            &vm,
-            vm.public_call_result_word(0)
-                .expect("completed return word"),
-            layout
-        ),
-        Ok((false, vec![])),
+        vm.run(),
+        Err(ivm::VMError::DecodeError),
         "typed int getter must reject a JSON number token",
     );
 }
