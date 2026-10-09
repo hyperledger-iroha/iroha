@@ -911,10 +911,10 @@ mod native_execution_read_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl Kura {
     /// Corrupt the stored native frame without changing its hash/index or cached original.
-    pub(crate) fn corrupt_native_frame_for_test(&self, height: NonZeroUsize) {
+    pub fn corrupt_native_frame_for_test(&self, height: NonZeroUsize) {
         let mut store = self.block_store.lock();
         let slot = store
             .read_block_index(u64::try_from(height.get() - 1).unwrap())

@@ -91,17 +91,18 @@ disposition. Deleted code remains in Git history; later goals rebuild from the
 
 - **Source:** the PIPA-v1 stack (`crates/iroha_pasta`, `iroha_plonk`,
   `iroha_plonk_gadgets`; [PIPA-v1](plonk_ipa_v1.md)) is Iroha-owned.
-  `crates/iroha_kagemusha_proof` implements the split-lineage step relations
-  `sigma_send` and `sigma_recv` over the G1 layout. No protocol path uses them
-  yet. The lineage relation, its transport wrap and the frozen artifact set
-  remain G3 work.
+  `crates/iroha_kagemusha_proof` implements the split-lineage step, operation,
+  accumulation and transport relations over the G1 layout. The shared native
+  wallet consumes these relations through its authenticated producer inventory.
+  The complete current catalog, genuine funded exchange and final envelope
+  qualification remain open; component implementation is not release evidence.
 - **Deleted:** the old halo2 recursion family (`kagemusha_v1_recursion/`, including its mint-finality authority), with its
   authenticated verifier and artifact set, production prover, P-256 and Guard
-  equations and the node runtime verifier. Rebuild needed equations on PIPA-v1
-  from the design. Vendored halo2 remains
-  the prover of other `iroha_core_zk` consumers until the
-  [native prover migration](native_prover_migration_inventory.md) finishes,
-  and the test oracle in `iroha_plonk_oracle`.
+  equations and the node runtime verifier. Retained consumers are migrated and
+  re-keyed on the native stack. The three superseded vendor trees and temporary
+  `iroha_plonk_oracle` are deleted; independent vectors and mutation tests remain.
+  See the [native prover migration](native_prover_migration_inventory.md) for
+  each consumer's validation scope and remaining rebuilt-delivery gates.
 - **Recorded:** the in-circuit P-256 and IPA scaling measurements are in the
   [checklist](kagemusha_evidence_gate.md#8-recorded-results). Earlier records
   of 8,584 advice columns for ordinary credential generation and a 192 MiB
@@ -186,7 +187,7 @@ design and keeps none of the deleted wire formats or production profiles.
 | Testnet experiment value path: bridge `kagemusha_testnet_*` modules, Swift/Kotlin `KagemushaTestnetValue*`, `KagemushaReleasePurposeV1::TestnetExperiment` | **Deleted.** A testnet runs the same protocol; a testnet reset is its cutover. | No second value ledger, release purpose or validation path. |
 | Device probes and testnet observation tools | **Deleted** with the retired protocol (KeyMint single-use probes, the App Attest probe app, physical-evidence and observation-bundle tooling). | New device results go into the [checklist](kagemusha_evidence_gate.md) with raw artifacts; diagnostic tokens/keys remain outside the repository. |
 | Model wire and authority objects: `crates/iroha_data_model/src/kagemusha/` (`kagemusha_v1/`, `hardware*.rs`, `kagemusha_release_v1.rs`, `verifier_registry_v1.rs`, `kagemusha_ordinary_*`, retail/mobile-bootstrap modules), `iroha_core_zk/src/kagemusha_sender_wire.rs`, bridge hardware-evidence, mobile-bootstrap, sender-release, contract-vector and `platform_jni/kagemusha_*` modules | **Replaced by the G1 objects** (`kagemusha_wallet_v1`, [wire record](kagemusha_wallet_wire_v1.md)); the old types are deleted. The device public-key and signature types moved into G1. | Final codec fixtures; retired layouts rejected. |
-| Ledger/model: `crates/iroha_data_model/src/isi/kagemusha_v1.rs`, node `isi/kagemusha*` and `state/kagemusha_*`, bridge `kagemusha_reserve_finality_v1.rs` | **Deleted**; the consensus mint-finality authority is also deleted (§2.3). | G5 ordinary `IssueLoad` and the original `KagemushaWalletLoadReceiptV1` query are implemented (§2.3), with exact asset/ordinal checks, activation and native finality. Recovery reads the original receipt; a different transaction cannot repeat its successful issuance. The ordinary-consensus source and Load consumer require complete original-key proof and catalog qualification. Fees are earned at Send commit, with one payout per credit ID independent of delivery. Check whole-node execution and proof qualification on the final candidate. |
+| Ledger/model: `crates/iroha_data_model/src/isi/kagemusha_v1.rs`, node `isi/kagemusha*` and `state/kagemusha_*`, bridge `kagemusha_reserve_finality_v1.rs` | **Deleted**; the consensus mint-finality authority is also deleted (§2.3). | G5 ordinary `IssueLoad` and the original `KagemushaWalletLoadReceiptV1` query are implemented (§2.3), with exact asset/ordinal checks, activation and native finality. Recovery reads the original receipt; a different transaction cannot repeat its successful issuance. Native BLS admission and the complete monetary Load catalog require current-candidate integration qualification. Fees are earned at Send commit, with one payout per credit ID independent of delivery. Check whole-node execution and proof qualification on the final candidate. |
 | Torii/client service: `crates/iroha_torii/src/kagemusha_commands.rs`, `kagemusha_state.rs`, shared API schemas, the issuer service in `python/iroha_app_attestation` (`/v1/kagemusha/ordinary-app-*`) and the participant enrollment HTTP contract (`kagemusha_ordinary_enrollment_http_v1.rs`, its fixture and clients) | **Deleted.** The generic ledger resource-name reads moved to the core route catalog. | G5 now exposes the authenticated original Load receipt query in `crates/iroha_torii/src/kagemusha_wallet.rs`; funding itself is an ordinary signed `IssueLoad` transaction, with no publisher or second transaction. The complete route/client set for §2.2 credentials and renewal, unload, status, §7 policy, time anchors and quota shares still needs qualification. Generated clients and route tests match one schema; receipt data alone is not finality evidence. |
 | Swift and Kotlin wallets, platform keys and UI | **Old monetary implementations deleted.** Kept: Swift `KagemushaWalletWireV1` and `KagemushaWalletApple*V1`, Kotlin `KagemushaWalletWireV1`, `KagemushaP256Codec` and `kagemusha-wallet-android` `sdk.offline.wallet`. | Adapters to the shared Rust core: native artifact and device tests, restore/retry behavior, canonical fixtures and Java-source consumer coverage. |
 | JavaScript, Python and C# SDK surfaces | **Monetary engines and retired-profile APIs deleted.** | A wallet-facing API delegates to the shared native owner once it exists. Published exports, installed-package tests, fixtures and examples migrate together. |

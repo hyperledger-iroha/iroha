@@ -242,8 +242,10 @@ a first version of the audit; it found no soundness issue in the
 
 The original independent Codex review accepted all four modulus bounds for
 source digest `fb786437051f425862895196d64e59610fe2aade700a6c7abfdd9b1f00cae1b4`
-of `ff/mod.rs`, before the M3b range layout. Its four wording corrections are
-included above. That acceptance covers the interval/CRT argument, not the
+of `ff/mod.rs`, before the M3b range layout. The original four-item wording
+checklist has not been recovered, so an item-by-item match is not established.
+The fresh numbered review below records the current clarifications explicitly.
+That earlier acceptance covers the interval/CRT argument, not the
 whole P-256 gadget, prover, or a changed range-check implementation.
 
 The M3b implementation must additionally establish the running-sum and shared-table
@@ -269,6 +271,56 @@ rederivation matched the bounds above. The reviewed implementation hashes are:
 This closes the scoped carry/range implementation review. It is not an external
 cryptographic audit, proof-engine qualification, performance/device result or
 deployment authorization; those gates remain separate.
+
+### Current fused-leaf review (2026-10-09)
+
+Two source reviews found no carry/range-binding defect in the actual M3
+`G3.6/q_leaf_chips` path, descriptor
+`0ffa6d0a7a3a2449e092b21dcb9201c75f2c6fdf3305717b955b67a72e724070`.
+Its Q-leaf source still matches `ac22585f…ab2d5`; the current FF source is
+`d9fac96aab07d5af33921651c720530e26a7ddbed9d75d8bdac2eef5ea520a5b`.
+Eighteen arithmetic, range, configuration and copy functions match the earlier
+reviewed FF source. Inspection of the changed wrappers confirms that this leaf
+selects `serialized=None`, retaining the fused bounds and gates.
+
+These are fresh clarity findings, not a reconstruction of the missing four:
+
+1. Proper integers below `2^256` need not be canonical modulo `m`. Canonical
+   comparison supplies that stronger property. CRT proves `b c = a (mod m)`;
+   interpreting `c` as `a / b` requires invertible `b`, which means nonzero `b`
+   modulo each of the four shipped prime moduli.
+2. Plain top membership precedes the no-wrap argument for scaled membership.
+   Range-checked witnesses, pinned constants and constrained operations establish
+   operand bounds; host witness values or unchecked labels cannot establish them.
+3. CRT soundness covers every satisfying assignment. Honest quotient and carry
+   completeness additionally depends on the structural admission checks. In
+   particular, division uses `q <= b + k`, allowing equality when `a = b = 0`.
+4. Operand copies/constants are bound to their source values. The arithmetic
+   gate reads operands at row 0, C/Q result/quotient roots at row 1, and U roots
+   at row 0. Canonical comparison also binds its input and range-checked
+   difference to the boolean-borrow equations.
+5. The scaled top check is active six rows before the top, including the final
+   usable row. Fixed seven-row placement supplies this premise; an overrun must
+   be refused rather than leave a terminal digit unchecked.
+6. Shared-table acceptance depends on disjoint activation and tag namespaces,
+   bounded usable V entries, and `q_dyn = 0` on fixed rows. Ten lookup arguments
+   alone establish none of these properties.
+7. The M3 circuit's `chips`/`load_tables` construction supplies those fixed-layout
+   premises. It does not call `audit` on every proof. The independent audit and
+   malformed-layout tests check the construction; the audit is not a new circuit
+   constraint or authority for arbitrary shared-table callers.
+8. The retained raw output establishes 22 FF and four Q-layout passes for the
+   reviewed sources, with three expensive FF cases ignored. The whole historical
+   gadget run failed (284 passed, one failed, eight ignored). Positive M3 proofs
+   do not replace adversarial coverage or qualify other FF backends, recursive Q,
+   complete P-256, privacy, devices or the whole candidate.
+
+The retained source correspondence packet is
+`target/qualification/m3b-current-source-review-20261009-1/manifest.json`, SHA-256
+`5a274a766a7db262cd62464af65e68a9bc7f4c3115d8f5af497ce7d6c400630c`.
+Its independent second review is `integration-independent-review.json`, SHA-256
+`d64cf598ca775e96ccf818c2583f8385fd48add9a5a8a59bccfa85b0355294c6`.
+Both bind the pre-edit memo and exact reviewed sources; neither ran new tests.
 
 ## 12. Recursive scalar adapter and canonical S6 certificates
 

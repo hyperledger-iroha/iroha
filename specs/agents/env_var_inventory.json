@@ -2,8 +2,8 @@
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
   "generated_at": "2026-10-08T09:50:02Z",
   "root": "iroha",
-  "total_refs": 975,
-  "unique_vars": 235,
+  "total_refs": 979,
+  "unique_vars": 240,
   "variables": {
     "ADVICE_SCHEDULE": {
       "counts": {
@@ -541,7 +541,7 @@
         "debug": 1,
         "example": 1,
         "prod": 44,
-        "test": 462,
+        "test": 461,
         "tool": 6
       },
       "paths": [
@@ -1417,7 +1417,7 @@
         },
         {
           "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 249,
+          "line": 251,
           "path": "crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/tests/native_exchange.rs",
           "scope": "test"
         },
@@ -2217,12 +2217,6 @@
           "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\")",
           "line": 355,
           "path": "crates/iroha_kagemusha_proof/tests/common/mod.rs",
-          "scope": "test"
-        },
-        {
-          "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 31,
-          "path": "crates/iroha_kagemusha_proof/tests/ordinary_load_finality.rs",
           "scope": "test"
         },
         {
@@ -6038,6 +6032,58 @@
         }
       ]
     },
+    "KAGEMUSHA_HARD_PREDECESSOR_DESCRIPTOR_SHA256": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "&std::env::var(\"KAGEMUSHA_HARD_PREDECESSOR_DESCRIPTOR_SHA256\")",
+          "line": 444,
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "KAGEMUSHA_HARD_PREDECESSOR_FIXTURE": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"KAGEMUSHA_HARD_PREDECESSOR_FIXTURE\")",
+          "line": 438,
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "KAGEMUSHA_HARD_PREDECESSOR_KEY_SHA256": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "pin(&std::env::var(\"KAGEMUSHA_HARD_PREDECESSOR_KEY_SHA256\")",
+          "line": 447,
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "KAGEMUSHA_HARD_PREDECESSOR_MANIFEST_SHA256": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "pin(&std::env::var(\"KAGEMUSHA_HARD_PREDECESSOR_MANIFEST_SHA256\")",
+          "line": 441,
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs",
+          "scope": "test"
+        }
+      ]
+    },
     "KAGEMUSHA_KOTLIN_ACTIVATE_FIXTURE": {
       "counts": {
         "test": 1
@@ -6071,7 +6117,7 @@
       "paths": [
         {
           "context": "std::env::var_os(\"KAGEMUSHA_LOAD_OUTPUT\")",
-          "line": 110,
+          "line": 44,
           "path": "crates/iroha_kagemusha_proof/tests/ordinary_load_finality.rs",
           "scope": "test"
         }
@@ -6178,6 +6224,19 @@
           "line": 81,
           "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/compiler/full_catalog.rs",
           "scope": "prod"
+        }
+      ]
+    },
+    "KAGEMUSHA_SOFT_LOCAL_OUTPUT": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var(\"KAGEMUSHA_SOFT_LOCAL_OUTPUT\")",
+          "line": 510,
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs",
+          "scope": "test"
         }
       ]
     },

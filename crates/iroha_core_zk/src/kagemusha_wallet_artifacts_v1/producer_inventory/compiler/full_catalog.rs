@@ -333,22 +333,56 @@ fn output_preserves_exact_content_and_refuses_changed_address_or_replacement() {
 
 #[test]
 fn native_finality_binds_each_supplied_signed_genesis_without_repository_substitution() {
-    use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
-    let mut anchors = Vec::new();
-    for chain in ["catalog-pinned-alpha", "catalog-pinned-beta"] {
-        let original = NativeFinalityFixture::start_with_explicit_parameters(chain);
+    use iroha_data_model::{
+        block::consensus::SumeragiGenesisContextParameters, isi::Log, level::Level,
+        sumeragi_finality::test_fixtures::NativeFinalityFixture,
+    };
+
+    let select = |original: &NativeFinalityFixture| {
         let input = norito::json::to_vec(&norito::json!({
-            "chain_id": (chain),
+            "chain_id": (original.chain_id()),
             "signed_genesis_wire_hex": (hex::encode(original.genesis().encode_wire().unwrap())),
         }))
         .unwrap();
         let selected = native_finality(&input);
-        let anchor = selected.initial_epoch().clone();
-        assert_eq!(anchor, *original.verifier().initial_epoch());
-        assert_eq!(selected.chain_id(), chain);
-        anchors.push(anchor);
-    }
-    assert_ne!(anchors[0], anchors[1]);
+        assert_eq!(
+            selected.initial_epoch(),
+            original.verifier().initial_epoch()
+        );
+        assert_eq!(selected.initial_epoch().network_id, original.network_id());
+        assert_eq!(selected.chain_id(), original.chain_id());
+        assert_eq!(selected.instance(), original.verifier().instance());
+        selected
+    };
+    let alpha = NativeFinalityFixture::start_with_explicit_parameters("catalog-pinned-alpha");
+    let beta = NativeFinalityFixture::start_with_explicit_parameters("catalog-pinned-beta");
+    let selected_alpha = select(&alpha);
+    let selected_beta = select(&beta);
+    // The chain label is bound by the consensus instance, not by the fixture's
+    // deterministic signed genesis. Distinct labels must not be mistaken for
+    // distinct genesis-derived epoch contexts.
+    assert_eq!(alpha.genesis().hash(), beta.genesis().hash());
+    assert_eq!(
+        selected_alpha.initial_epoch(),
+        selected_beta.initial_epoch()
+    );
+    assert_ne!(selected_alpha.instance(), selected_beta.instance());
+
+    // A different signed instruction changes the actual genesis root while the
+    // selected chain label stays fixed. Both roots pass through the same parser
+    // and must retain their own exact epoch, network and consensus instance.
+    let distinct = NativeFinalityFixture::start_with_genesis_extension(
+        alpha.chain_id(),
+        SumeragiGenesisContextParameters::recommended().nexus_amx_context_hash,
+        vec![Log::new(Level::INFO, "catalog distinct signed genesis".into()).into()],
+    );
+    let selected_distinct = select(&distinct);
+    assert_ne!(alpha.genesis().hash(), distinct.genesis().hash());
+    assert_ne!(
+        selected_alpha.initial_epoch(),
+        selected_distinct.initial_epoch()
+    );
+    assert_ne!(selected_alpha.instance(), selected_distinct.instance());
 }
 
 #[path = "full_catalog/diagnostic.rs"]

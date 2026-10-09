@@ -1,4 +1,4 @@
-//! Canonical direct Register semantic DATA shared by native and recursive finality owners.
+//! Canonical direct Register semantic DATA for native finality admission.
 //! Projection validates originals and terms; it never proves execution or grants registration.
 use super::{KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1};
 use crate::{
@@ -87,8 +87,8 @@ impl KagemushaWalletRegistrationDataV1 {
 /// Project exact direct Register terms from canonical signed transaction DATA.
 ///
 /// This performs no finality or membership verification. A reported successful output is
-/// only DATA until a native or recursive finality owner authenticates that exact output.
-/// Both authorities use this one projection for scheme, asset, reserve and Global scope.
+/// only DATA until the native finality owner authenticates that exact output.
+/// The native finality owner uses this projection for scheme, asset, reserve and Global scope.
 /// # Errors
 /// Wrong signed network/result, non-Register input, malformed/foreign scheme or asset,
 /// restricted scope, or reserve different from transaction authority.

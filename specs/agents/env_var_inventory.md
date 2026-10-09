@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **975** · Unique variables: **235**
+Total references: **979** · Unique variables: **240**
 
 ## ADVICE_SCHEDULE (test: 1)
 
@@ -130,7 +130,7 @@ Total references: **975** · Unique variables: **235**
 
 - test: integration_tests/tests/nexus/atomic_private_settlement_real_process_harness.rs:1128 — `&& std::env::var("CARGO_INCREMENTAL").ok().as_deref() == Some("0")`
 
-## CARGO_MANIFEST_DIR (bench: 2, build: 4, debug: 1, example: 1, prod: 44, test: 462, tool: 6)
+## CARGO_MANIFEST_DIR (bench: 2, build: 4, debug: 1, example: 1, prod: 44, test: 461, tool: 6)
 
 - prod: crates/build-support/src/lib.rs:138 — `let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").ok()?);`
 - prod: crates/connect_norito_bridge/src/bin/swift_parity_regen.rs:275 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
@@ -277,7 +277,7 @@ Total references: **975** · Unique variables: **235**
 - test: crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/issuer_worker_protocol_tests.rs:447 — `let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/issuer_worker_protocol_tests.rs:495 — `let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/tests.rs:957 — `let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- test: crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/tests/native_exchange.rs:249 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
+- test: crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/tests/native_exchange.rs:251 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/request_fee.rs:128 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/review/tests.rs:26 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_core_zk/src/stark/bfv_full_bootstrap_tests.rs:19 — `env!("CARGO_MANIFEST_DIR"),`
@@ -411,7 +411,6 @@ Total references: **975** · Unique variables: **235**
 - test: crates/iroha_kagemusha_proof/src/a_relation/archive/tests/real_sources.rs:246 — `let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_kagemusha_proof/tests/a_consuming_recursive.rs:1676 — `let export = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_kagemusha_proof/tests/common/mod.rs:355 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")`
-- test: crates/iroha_kagemusha_proof/tests/ordinary_load_finality.rs:31 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_measurement/src/report.rs:1796 — `let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");`
 - test: crates/iroha_measurement/src/schema.rs:2072 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_measurement/tests/layering.rs:25 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
@@ -1276,6 +1275,22 @@ Total references: **975** · Unique variables: **235**
 
 - prod: crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup.rs:476 — `std::env::var_os("KAGEMUSHA_EXECUTED_LEDGER_SETUP_OUTPUT").expect("exclusive output path");`
 
+## KAGEMUSHA_HARD_PREDECESSOR_DESCRIPTOR_SHA256 (test: 1)
+
+- test: crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs:444 — `&std::env::var("KAGEMUSHA_HARD_PREDECESSOR_DESCRIPTOR_SHA256")`
+
+## KAGEMUSHA_HARD_PREDECESSOR_FIXTURE (test: 1)
+
+- test: crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs:438 — `std::env::var("KAGEMUSHA_HARD_PREDECESSOR_FIXTURE")`
+
+## KAGEMUSHA_HARD_PREDECESSOR_KEY_SHA256 (test: 1)
+
+- test: crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs:447 — `pin(&std::env::var("KAGEMUSHA_HARD_PREDECESSOR_KEY_SHA256")`
+
+## KAGEMUSHA_HARD_PREDECESSOR_MANIFEST_SHA256 (test: 1)
+
+- test: crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs:441 — `pin(&std::env::var("KAGEMUSHA_HARD_PREDECESSOR_MANIFEST_SHA256")`
+
 ## KAGEMUSHA_KOTLIN_ACTIVATE_FIXTURE (test: 1)
 
 - test: crates/iroha_data_model/tests/kagemusha_activate_sdk.rs:19 — `std::env::var_os("KAGEMUSHA_KOTLIN_ACTIVATE_FIXTURE")`
@@ -1286,7 +1301,7 @@ Total references: **975** · Unique variables: **235**
 
 ## KAGEMUSHA_LOAD_OUTPUT (test: 1)
 
-- test: crates/iroha_kagemusha_proof/tests/ordinary_load_finality.rs:110 — `std::env::var_os("KAGEMUSHA_LOAD_OUTPUT")`
+- test: crates/iroha_kagemusha_proof/tests/ordinary_load_finality.rs:44 — `std::env::var_os("KAGEMUSHA_LOAD_OUTPUT")`
 
 ## KAGEMUSHA_MSM_BATCH_CURVE (prod: 1)
 
@@ -1319,6 +1334,10 @@ Total references: **975** · Unique variables: **235**
 ## KAGEMUSHA_SIGNED_GENESIS_FIXTURE (prod: 1)
 
 - prod: crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/compiler/full_catalog.rs:81 — `std::env::var_os("KAGEMUSHA_SIGNED_GENESIS_FIXTURE").expect("selected genesis fixture"),`
+
+## KAGEMUSHA_SOFT_LOCAL_OUTPUT (test: 1)
+
+- test: crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs:510 — `std::env::var("KAGEMUSHA_SOFT_LOCAL_OUTPUT")`
 
 ## KAGEMUSHA_WALLET_ACCEPTANCE_OUTPUT (prod: 1)
 

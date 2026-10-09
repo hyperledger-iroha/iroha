@@ -486,8 +486,7 @@ impl NativeFoldWorkerV1 {
                 self.budget,
             ))?),
             Variant::Load => {
-                let QualifiedOperationOwnerV1::Load(_) =
-                    proof(self.sources.route(route))?.owner()
+                let QualifiedOperationOwnerV1::Load(_) = proof(self.sources.route(route))?.owner()
                 else {
                     return Err(Error::Proof("Load owner"));
                 };

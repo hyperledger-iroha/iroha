@@ -288,7 +288,21 @@ fn graph_original_source_exit_wins_mutation_errors_and_parser_callbacks_keep_fre
         head: &history.bodies.last().unwrap().snapshots,
     };
     EnrollmentReadPass::run(&snapshot, |pass| {
+        // A fresh pass must reject skipping the oldest genuine predecessor. Remembering
+        // the complete chain in parser order makes the same three-body fixture valid.
+        assert!(matches!(
+            pass.test_remember_immediate_predecessor(native),
+            Err(Error::Invalid(message))
+                if message == "parser predecessor closure changed its exact chain"
+        ));
         pass.test_retain_predecessor(native)?;
+        // Replaying the oldest closure after its descendant must still refuse; neither
+        // failed ordering check may replace the correctly retained predecessor chain.
+        assert!(matches!(
+            pass.test_retain_predecessor(native),
+            Err(Error::Invalid(message))
+                if message == "parser predecessor closure changed its exact chain"
+        ));
         pass.test_validate(native)?;
         let restore = RestoreOriginal::new(&history.bodies.last().unwrap().directory);
         restore.directory.write_atomic(

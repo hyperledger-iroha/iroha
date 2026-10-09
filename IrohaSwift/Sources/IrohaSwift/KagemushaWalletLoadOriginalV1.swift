@@ -73,14 +73,14 @@ struct KagemushaWalletLoadOriginalInputV1: Sendable {
   let receipt: Data
   let finality: Data
   init(selection: ToriiKagemushaWalletLoadSelectionV1, payer: String, receipt: Data, finality: Data) throws {
-    let account = Data(payer.utf8)
-    guard !account.isEmpty, account.count <= 1024, account.allSatisfy({ (33...126).contains($0) }),
+    guard !payer.isEmpty, payer.utf8.count <= 1024,
       !receipt.isEmpty, receipt.count <= 512, !finality.isEmpty, finality.count <= 256 * 1024
     else { throw KagemushaWalletErrorV1.invalidInput }
     self.schemeID = Data(selection.schemeID)
     self.walletID = Data(selection.walletID)
     self.requestID = Data(selection.requestID)
-    self.payer = account
+    // Preserve I105 kana and exact DATA bytes; native code owns canonical account parsing.
+    self.payer = Data(payer.utf8)
     self.receipt = Data(receipt)
     self.finality = Data(finality)
   }

@@ -23,11 +23,27 @@ final class KagemushaWalletLoadOriginalV1Tests: XCTestCase {
       XCTAssertThrowsError(try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: "x", receipt: Data([1]), finality: bad))
     }
   }
-  func testAccountHeaderTextHasFiniteAsciiByteBound() throws {
-    for bad in ["", String(repeating: "x", count: 1025), " x", "x\n", "\0", "é"] {
-      XCTAssertThrowsError(try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: bad, receipt: Data([1]), finality: Data([1])))
+  func testPayerCeilingCountsExactUtf8Bytes() throws {
+    XCTAssertThrowsError(try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: "", receipt: Data([1]), finality: Data([1])))
+    let atLimit = [String(repeating: "x", count: 1024), String(repeating: "é", count: 512),
+      String(repeating: "ﾛ", count: 341) + "x", String(repeating: "\u{10000}", count: 256)]
+    for payer in atLimit {
+      let input = try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: payer, receipt: Data([1]), finality: Data([1]))
+      XCTAssertEqual(input.payer.count, 1024)
+      XCTAssertEqual(input.payer, Data(payer.utf8))
+      XCTAssertThrowsError(try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: payer + "x", receipt: Data([1]), finality: Data([1])))
     }
-    XCTAssertEqual(try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: String(repeating: "x", count: 1024), receipt: Data([1]), finality: Data([1])).payer.count, 1024)
+  }
+  func testPayerRetainsI105KanaAndDoesNotNormalizeOrGrantIdentity() throws {
+    // Maintained CanonicalRequestSigner fixture. Other strings remain unvalidated DATA.
+    let canonical = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+    for payer in [canonical, "é", "e\u{301}", " payer ", "x\n", "\0"] {
+      let input = try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: payer, receipt: Data([1]), finality: Data([1]))
+      XCTAssertEqual(input.payer, Data(payer.utf8))
+      var returned = input.payer
+      returned[0] ^= 1
+      XCTAssertEqual(input.payer, Data(payer.utf8))
+    }
   }
   func testIndependentRouteSelectorsAndMaximumFramesRemainExactData() throws {
     let input = try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: "x", receipt: Data(repeating: 7, count: 512), finality: Data(repeating: 8, count: 256 * 1024))

@@ -182,6 +182,34 @@ impl EnrollmentReadPass<'_> {
             .scope
             .predecessor()
             .ok_or_else(|| invalid("test parser predecessor absent"))?;
+        // Reproduce the parser's oldest-to-newest order even when the genuine fixture
+        // contains more than one predecessor. Keep the same finite body bound and each
+        // original retained validation before lending its closure to the parser pass.
+        let mut chain = [None; MAX_ATTEMPTS];
+        let mut count = 0;
+        let mut next = Some(prior);
+        while let Some(prior) = next {
+            let slot = chain
+                .get_mut(count)
+                .ok_or_else(|| invalid("test parser history exceeds its body bound"))?;
+            *slot = Some(prior);
+            count += 1;
+            next = prior.retained_history().scope.predecessor();
+        }
+        for prior in chain[..count].iter().rev().flatten() {
+            prior.require_retained_with_pass(None)?;
+            self.remember(prior)?;
+        }
+        Ok(())
+    }
+    pub(in crate::managed) fn test_remember_immediate_predecessor(
+        &self,
+        history: &History,
+    ) -> Result<()> {
+        let prior = history
+            .scope
+            .predecessor()
+            .ok_or_else(|| invalid("test parser predecessor absent"))?;
         prior.require_retained_with_pass(None)?;
         self.remember(prior)
     }

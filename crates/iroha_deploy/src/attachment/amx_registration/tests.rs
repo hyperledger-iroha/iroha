@@ -296,7 +296,9 @@ fn administrative_amx_requires_fresh_original_parent_before_signing_and_cancella
 
 #[test]
 fn administrative_amx_replay_evidence_refuses_missing_journal_before_parent_observation() {
-    let fixture = Fixture::new();
+    let mut fixture = Fixture::new();
+    fixture.parent_receipt();
+    assert_eq!(fixture.parent.checkpoint().height(), 2);
     let root = tempfile::tempdir().unwrap();
     let config = configuration(&fixture);
     let options = options();
@@ -305,7 +307,7 @@ fn administrative_amx_replay_evidence_refuses_missing_journal_before_parent_obse
     let mut parent = ParentFinalityStore::open(&root.path().join("parent"), &bootstrap).unwrap();
     let original =
         encode_bounded(&origin(&fixture, &config, utc, &options), MAX_RECORD_BYTES).unwrap();
-    // The genuine initial checkpoint is only retained material here, never a claimed carrier.
+    // This authenticated parent checkpoint is retained material, never a claimed AMX carrier.
     let checkpoint = fixture.parent.checkpoint().encode_canonical().unwrap();
     for proof_name in ["replay.nrt", "carrier.nrt"] {
         let mut store =

@@ -12,13 +12,14 @@ use crate::{
         },
         service_authority::{NetworkPurpose, ProviderPurpose, ServiceAuthority},
     },
+    verify::finality::FinalityVerifier,
 };
 use iroha_core::state::WorldReadOnly;
 use iroha_data_model::{
     ValidationFail,
     asset::{AssetDefinitionId, AssetId},
     block::consensus::SumeragiRootScope,
-    isi::{Grant, InstructionBox, error::InstructionExecutionError},
+    isi::{Grant, InstructionBox, Log, error::InstructionExecutionError},
     permission::Permission,
     private_dataspace::PrivateDataspaceRegistration,
     sumeragi_finality::{genesis_epoch, test_fixtures::NativeFinalityFixture},
@@ -96,6 +97,25 @@ fn fixture() -> (
     (root, prepared, authority, native)
 }
 
+// The observed-carrier handoff joins two non-genesis Global receipts. Commit real paid
+// work before preparing registration, matching the production handoff's eligible parent.
+fn certified_parent(native: &mut NativeFixture, authority: &ServiceAuthority) -> FinalityVerifier {
+    assert_eq!(native.chain.height(), 1);
+    let signed = quote_instructions(
+        native,
+        &authority.config,
+        [InstructionBox::from(Log::new(
+            iroha_data_model::Level::INFO,
+            "authenticate AMX registration parent".into(),
+        ))],
+    );
+    assert_eq!(native.chain.commit(vec![signed.clone()]), vec![true]);
+    let parent = native.observe(authority);
+    assert_eq!(parent.checkpoint().height(), 2);
+    assert_eq!(verify_carrier(&parent, &signed).unwrap().height, 2);
+    parent
+}
+
 /// Lend genuine wallet-produced bytes to attachment custody controls without inventing a proof.
 pub(crate) fn with_signed_amx_preparation(
     inspect: impl FnOnce(&iroha::config::Config, &AmxDataspaceRegistrationRequest, &std::path::Path),
@@ -124,6 +144,7 @@ fn administrative_amx_native_paid_original_wire_is_registered_and_carrier_reopen
  {
     let _resources = crate::managed::native_test_guard();
     let (root, _prepared, authority, mut native) = fixture();
+    let original = certified_parent(&mut native, &authority);
     let request = request(&authority.config);
     let payer = AssetId::new(
         request
@@ -136,7 +157,6 @@ fn administrative_amx_native_paid_original_wire_is_registered_and_carrier_reopen
         authority.config.account.clone(),
     );
     let before = balance(native.chain.state(), &payer);
-    let original = native.observe(&authority);
     let journal = root.path().join("original-admin");
     let wallet = AccountService::new(authority.config.clone()).unwrap();
     let mut http =
@@ -167,6 +187,16 @@ fn administrative_amx_native_paid_original_wire_is_registered_and_carrier_reopen
     assert_eq!(tracker.tracker.instance, request.registration.instance);
     drop(view);
     let observed = native.observe(&authority);
+    assert_eq!(observed.checkpoint().height(), 3);
+    observed
+        .verified_tip_ref()
+        .unwrap()
+        .verify_immediate_global_successor_of(
+            original.verified_tip_ref().unwrap(),
+            original.checkpoint().network_id(),
+            original.checkpoint().chain_id(),
+        )
+        .unwrap();
     let expected = verify_carrier(&observed, &signed).unwrap();
     let immediate = PrivateDirectory::open_or_create(root.path().join("observed-receipt")).unwrap();
     let mut observed_start = original.clone();
@@ -244,6 +274,7 @@ fn administrative_amx_native_paid_original_wire_is_registered_and_carrier_reopen
 fn administrative_amx_native_missing_permission_is_authenticated_failure_after_later_grant() {
     let _resources = crate::managed::native_test_guard();
     let (root, prepared, authority, mut native) = fixture();
+    let before_commit = certified_parent(&mut native, &authority);
     let owner = ServiceAuthority::open_provider(
         &prepared,
         super::provider_id(&prepared, 0),
@@ -264,9 +295,18 @@ fn administrative_amx_native_missing_permission_is_authenticated_failure_after_l
         .unwrap();
     let wire = signed.encode_wire_v1().unwrap();
     http.finish();
-    let before_commit = native.observe(&authority);
     assert_eq!(native.chain.commit(vec![signed.clone()]), vec![false]);
     let failed = native.observe(&authority);
+    assert_eq!(failed.checkpoint().height(), 3);
+    failed
+        .verified_tip_ref()
+        .unwrap()
+        .verify_immediate_global_successor_of(
+            before_commit.verified_tip_ref().unwrap(),
+            before_commit.checkpoint().network_id(),
+            before_commit.checkpoint().chain_id(),
+        )
+        .unwrap();
     assert!(verify_carrier(&failed, &signed).is_err());
     let tip = failed.verified_tip().unwrap();
     let error = tip
@@ -300,15 +340,17 @@ fn administrative_amx_native_missing_permission_is_authenticated_failure_after_l
     let immediate =
         PrivateDirectory::open_or_create(root.path().join("rejected-observed-receipt")).unwrap();
     let mut observed_start = before_commit.clone();
+    let observed_rejection = super::super::retain_observed_carrier(
+        &immediate,
+        &signed,
+        &mut observed_start,
+        &failed,
+        request.options.deadline,
+    );
+    assert!(observed_rejection.is_err());
     assert!(
-        super::super::retain_observed_carrier(
-            &immediate,
-            &signed,
-            &mut observed_start,
-            &failed,
-            request.options.deadline,
-        )
-        .is_err()
+        matches!(observed_rejection, Err(crate::managed::Error::Invalid(message))
+        if message == "native operation carrier lacks exact successful original execution")
     );
     assert!(
         immediate

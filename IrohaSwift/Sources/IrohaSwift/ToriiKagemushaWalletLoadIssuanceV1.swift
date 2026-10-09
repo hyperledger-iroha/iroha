@@ -27,10 +27,11 @@ public struct ToriiKagemushaWalletLoadSelectionV1: Equatable, Sendable {
 /// Bounded, unverified HTTP original of an unsigned `KagemushaWalletLoadReceiptV1`.
 ///
 /// The consumer must decode the canonical receipt and bind its request, payer, scheme and
-/// wallet to the expected owner. Before wallet admission it must independently authenticate
-/// the original successful transaction, ordinary chain finality and the complete recursive
-/// Load proof. This transport implements none of those checks and exposes no balance or
-/// admission verdict. The receipt and HTTP success alone never authorize offline value.
+/// wallet to the expected owner. Before a fresh Advance, the native wallet verifies the exact
+/// receipt's BLS certificate and event inclusion against genesis-rooted, locally selected
+/// epoch authority. Selected and completed retries use the exact authenticated retained custody.
+/// This transport implements none of those checks and exposes no balance or admission verdict.
+/// The receipt and HTTP success alone never authorize offline value.
 public struct ToriiKagemushaWalletLoadIssuanceOriginalV1: Sendable {
     /// Local online response limit for the unsigned receipt and canonical payer frame.
     /// The response bound is independent of the canonical account request-header text limit.

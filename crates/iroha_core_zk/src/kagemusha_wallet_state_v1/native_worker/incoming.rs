@@ -714,3 +714,7 @@ mod tests {
         assert!(!public(&[], 4800, Fp::from(7)).1);
     }
 }
+
+#[cfg(test)]
+#[path = "incoming/soft_omega_differential.rs"]
+mod soft_omega_differential;
