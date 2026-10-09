@@ -185,7 +185,7 @@ def consensus_digest(preimage: bytes) -> Optional[bytes]:
     """`ConsensusDigest::from_preimage` (`specs/sumeragi.md` §1 item 6): `SHA-256(P)` iff `P` is allowlisted.
 
     Rows: Proposal `TAG_SIG ‖ 0x01` (165 bytes); Prepare/Commit `TAG_SIG ‖ 0x02/0x03`
-    (166); Timeout `TAG_SIG ‖ 0x04` (102 with byte 101 = 0x00, or 110 with byte
+    (165); Timeout `TAG_SIG ‖ 0x04` (102 with byte 101 = 0x00, or 110 with byte
     101 = 0x01); Echo `TAG_SIG ‖ 0x05` (101); RS16 manifest/row
     `"sumeragi/availability/sign" ‖ 0x00/0x01` (179/219).
     """
@@ -195,7 +195,7 @@ def consensus_digest(preimage: bytes) -> Optional[bytes]:
         kind = preimage[len(TAG_SIG)]
         allowed = (
             (kind == 0x01 and n == 165)
-            or (kind in (0x02, 0x03) and n == 166)
+            or (kind in (0x02, 0x03) and n == 165)
             or (kind == 0x04 and ((n == 102 and preimage[101] == 0x00) or (n == 110 and preimage[101] == 0x01)))
             or (kind == 0x05 and n == 101)
         )

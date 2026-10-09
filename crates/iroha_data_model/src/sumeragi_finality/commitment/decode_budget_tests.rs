@@ -32,8 +32,6 @@ pub(super) fn boundary_result(seats: usize) -> ExecutionResultCommitment {
             parent_state_root: Hash::new(b"ten-seat result prestate"),
             post_state_root: root,
             ordinary_writes_root: root,
-            kagemusha_top_up_root: None,
-            kagemusha_top_up_count: 0,
             parent_world_state_root: Hash::new(b"fixture parent world"),
             world_state_root: Hash::new(b"fixture world"),
             event_commitment: None,
@@ -80,7 +78,6 @@ fn protocol_limits(allocation: usize) -> norito::DecodeLimits {
 
 fn assert_ten_seats(epoch: &ValidatorEpochContextV1) {
     assert_eq!(epoch.committee.len(), 10);
-    assert_eq!(epoch.authority.validators.len(), 10);
     epoch.validate().unwrap();
 }
 

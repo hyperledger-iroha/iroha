@@ -175,8 +175,8 @@ docker compose -f defaults/docker-compose.yml up
 
 The checked-in `defaults/genesis.template.json` is a non-signable source and is
 not consumed by this path. `kagami localnet` creates a complete disposable
-manifest whose mint-finality authority is bound to its generated validator
-topology; it retains the matching development-only authority material in the
+manifest whose ordered validator BLS keys and proofs of possession define
+generation zero; it retains the matching development-only keys in the
 owner-controlled output directory. It contains no production signing key or
 runtime signer and fails closed when any read-only trust-root input is missing.
 For a normal generated network, use `kagami localnet` followed by `kagami docker`

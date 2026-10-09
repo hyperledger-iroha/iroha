@@ -16,6 +16,11 @@ mod public_lane_rewards;
 #[cfg(feature = "app_api")]
 use public_lane_rewards::collect_pending_public_lane_rewards;
 
+/// Funded bounded signing support shared by Torii's nonshipping contract fixtures.
+#[cfg(test)]
+#[path = "manifest_signing_test_support.rs"]
+pub(crate) mod manifest_signing_test_support;
+
 #[cfg(test)]
 #[allow(unused_macro_rules)]
 macro_rules! routing_test {
@@ -4312,7 +4317,7 @@ app_api_items! {
 )]
 /// Filters for proofs listing
 pub struct ProofListQuery {
-    /// Exact backend match (e.g., "halo2/ipa"). If None, include all backends.
+    /// Exact backend match (e.g., "pipa-r/pasta"). If None, include all backends.
     pub backend: Option<String>,
     /// Status filter: "Submitted" | "Verified" | "Rejected" (case-sensitive)
     pub status: Option<String>,
@@ -4945,7 +4950,7 @@ async fn handle_count_proofs_with_admission(
 )]
 /// Optional filters for verifying key listing
 pub struct VkListQuery {
-    /// Exact backend match (e.g., "halo2/ipa"). If None, include all backends.
+    /// Exact backend match (e.g., "pipa-r/pasta"). If None, include all backends.
     pub backend: Option<String>,
     /// Status filter: "Active", "Proposed", or "Withdrawn" (case-sensitive).
     pub status: Option<String>,
@@ -7552,10 +7557,8 @@ mod evidence_list_query_contract_tests {
                 view: 0,
                 block_hash: Hash32([hash; 32]),
                 result: Hash32([3; 32]),
-                attest: false,
                 signer: 0,
                 sig: Signature([0; iroha_sumeragi::types::SIGNATURE_LEN]),
-                attestation: None,
             };
             vote.sig = Signature(
                 iroha_crypto::Signature::new(key.private_key(), &vote.preimage())
@@ -16268,7 +16271,7 @@ fn execute_contract_view(
     // FastPQ entry, or completed AXT artifact. Reject before those containers grow.
     host.restrict_output_limits(iroha_core::smartcontracts::ivm::host::HostOutputLimits::new(0, 0));
     host.set_crypto_config(Arc::clone(&query_view.crypto));
-    host.set_halo2_config(&query_view.zk.halo2);
+    host.set_zk_config(&query_view.zk);
     host.set_chain_id(&query_view.chain_id);
     host.hydrate_axt_state(&query_view)
         .map_err(|error| ContractViewExecutionError {
@@ -16479,7 +16482,7 @@ fn execute_contract_call_simulation(
         ),
     );
     host.set_crypto_config(Arc::clone(&query_view.crypto));
-    host.set_halo2_config(&query_view.zk.halo2);
+    host.set_zk_config(&query_view.zk);
     host.set_chain_id(&query_view.chain_id);
     host.hydrate_axt_state(&query_view)
         .map_err(|error| ContractCallSimulationError {
@@ -20658,15 +20661,11 @@ mod multisig_selector_tests {
             verified.code_hash, code_hash,
             "verified code hash must match stored bytes"
         );
-        let signing_owner = crate::history_producer::HistoryProducerOwner::for_test();
-        let max_frame_bytes = usize::try_from(
-            stx.world.parameters().transaction.ivm_bytecode_size.get(),
-        )
-        .expect("committed fixture manifest frame bound fits usize");
+        let signing = manifest_signing_test_support::ManifestSigningFixture::new(1);
         let manifest = verified
             .manifest
-            .try_signed(signing_owner.allocation_context(), max_frame_bytes, authority_keypair)
-            .expect("sign fixture manifest under original funded owner");
+            .try_signed(signing.context(), signing.max_frame_bytes(), authority_keypair)
+            .expect("funded canonical contract fixture manifest");
         register_manifest(authority,contract_address.dataspace_id().expect("test contract dataspace"), manifest, &mut stx).expect("register manifest");
         stx.world.bind_inactive_contract_subject_for_testing(
             contract_address.clone(),
@@ -26433,14 +26432,14 @@ mod vk_record_input_tests {
     routing_test! { sync mk_record_from_inputs_sets_optional_fields
         let vk_bytes = vec![1, 2, 3, 4];
         let inputs = VkRecordInputs {
-            backend: "halo2/ipa".to_string(),
+            backend: "pipa-r/pasta".to_string(),
             version: 1,
             status: Some(ConfidentialStatus::Active),
             vk_bytes: Some(vk_bytes.clone()),
             commitment_hex: None,
             circuit_id: "circuit_alpha".to_string(),
             public_inputs_schema_hash_hex: sample_hex32(0xAA),
-            curve: Some("pallas".to_string()),
+            curve: Some("vesta".to_string()),
             gas_schedule_id: Some("sched_default".to_string()),
             vk_len: Some(vk_bytes.len() as u32),
             max_proof_bytes: Some(8192),
@@ -26461,15 +26460,15 @@ mod vk_record_input_tests {
     }
     routing_test! { sync vk_record_detail_json_preserves_identity_and_exact_norito_archive
         let mut record = mk_record_from_inputs(VkRecordInputs {
-            backend: "halo2/ipa".to_string(),
+            backend: "pipa-r/pasta".to_string(),
             version: 7,
             status: Some(ConfidentialStatus::Active),
             vk_bytes: Some(vec![1, 2, 3, 4]),
             commitment_hex: None,
-            circuit_id: "confidential-unshield-v3".to_string(),
+            circuit_id: "pipa-r/pasta/confidential-unshield-change-v1".to_string(),
             public_inputs_schema_hash_hex: sample_hex32(0xA5),
-            curve: Some("pallas".to_string()),
-            gas_schedule_id: Some("halo2_default".to_string()),
+            curve: Some("vesta".to_string()),
+            gas_schedule_id: Some("native_pipa_r_default".to_string()),
             vk_len: Some(4),
             max_proof_bytes: Some(16_384),
             metadata_uri_cid: Some("ipfs://metadata".to_string()),
@@ -26479,10 +26478,10 @@ mod vk_record_input_tests {
         })
         .expect("record created");
         record.namespace = "confidential_assets".to_owned();
-        record.owner_manifest_id = Some("builtin:confidential-unshield-v3".to_owned());
+        record.owner_manifest_id = Some("builtin:pipa-r/pasta/confidential-unshield-change-v1".to_owned());
         let id = iroha_data_model::proof::VerifyingKeyId::new(
-            "halo2/ipa",
-            "confidential-unshield-v3",
+            "pipa-r/pasta",
+            "pipa-r/pasta/confidential-unshield-change-v1",
         );
         let detail = vk_detail_to_json(&id, &record).expect("build verifier record detail");
         let detail_object = detail.as_object().expect("verifier detail JSON object");
@@ -26564,14 +26563,14 @@ mod vk_record_input_tests {
     }
     routing_test! { sync mk_record_requires_vk_len_without_bytes
         let res = mk_record_from_inputs(VkRecordInputs {
-            backend: "halo2/ipa".to_string(),
+            backend: "pipa-r/pasta".to_string(),
             version: 1,
             status: Some(ConfidentialStatus::Active),
             vk_bytes: None,
             commitment_hex: Some(sample_hex32(0x11)),
             circuit_id: "circuit_alpha".to_string(),
             public_inputs_schema_hash_hex: sample_hex32(0x22),
-            curve: Some("pallas".to_string()),
+            curve: Some("vesta".to_string()),
             gas_schedule_id: Some("sched_default".to_string()),
             vk_len: None,
             max_proof_bytes: None,
@@ -26584,14 +26583,14 @@ mod vk_record_input_tests {
     }
     routing_test! { sync mk_record_allows_missing_gas_schedule
         let record = mk_record_from_inputs(VkRecordInputs {
-            backend: "halo2/ipa".to_string(),
+            backend: "pipa-r/pasta".to_string(),
             version: 1,
             status: Some(ConfidentialStatus::Active),
             vk_bytes: Some(vec![1, 2, 3]),
             commitment_hex: None,
             circuit_id: "circuit_alpha".to_string(),
             public_inputs_schema_hash_hex: sample_hex32(0x33),
-            curve: Some("pallas".to_string()),
+            curve: Some("vesta".to_string()),
             gas_schedule_id: None,
             vk_len: Some(3),
             max_proof_bytes: None,
@@ -26605,14 +26604,14 @@ mod vk_record_input_tests {
     }
     routing_test! { sync mk_record_allows_withdrawn_status
         let record = mk_record_from_inputs(VkRecordInputs {
-            backend: "halo2/ipa".to_string(),
+            backend: "pipa-r/pasta".to_string(),
             version: 1,
             status: Some(ConfidentialStatus::Withdrawn),
             vk_bytes: Some(vec![1, 2, 3]),
             commitment_hex: None,
             circuit_id: "circuit_alpha".to_string(),
             public_inputs_schema_hash_hex: sample_hex32(0x44),
-            curve: Some("pallas".to_string()),
+            curve: Some("vesta".to_string()),
             gas_schedule_id: Some("sched_default".to_string()),
             vk_len: Some(3),
             max_proof_bytes: None,
@@ -26627,14 +26626,14 @@ mod vk_record_input_tests {
     routing_test! { sync mk_record_rejects_inconsistent_heights
         for withdraw_height in [100, 200] {
             let res = mk_record_from_inputs(VkRecordInputs {
-                backend: "halo2/ipa".to_string(),
+                backend: "pipa-r/pasta".to_string(),
                 version: 1,
                 status: Some(ConfidentialStatus::Active),
                 vk_bytes: Some(vec![1, 2, 3]),
                 commitment_hex: None,
                 circuit_id: "circuit_alpha".to_string(),
                 public_inputs_schema_hash_hex: sample_hex32(0x55),
-                curve: Some("pallas".to_string()),
+                curve: Some("vesta".to_string()),
                 gas_schedule_id: Some("sched_default".to_string()),
                 vk_len: Some(3),
                 max_proof_bytes: None,
@@ -38300,7 +38299,7 @@ mod query_endpoint_tests {
         );
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/proofs/halo2/ipa:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .uri("/v1/proofs/pipa-r/pasta:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -38330,19 +38329,15 @@ mod query_endpoint_tests {
         let (mut block, recording) = iroha_core::block::ValidBlock::start_component_execution(&source, &state)
             .expect("original proof component execution");
         let mut stx = block.transaction();
-        use iroha_core_zk::test_utils::halo2_fixture_envelope;
+        use iroha_core_zk::test_utils::native_framing_fixture_envelope;
         use iroha_data_model::proof;
-        // Avoid importing iroha_schema here to keep dev-deps minimal in this crate's tests.
-        type Ident = String;
-        let backend: Ident = "halo2/ipa".into();
-        let circuit_id = "tiny-add-public";
-        let envelope_circuit_id = "halo2/ipa:tiny-add-public";
-        let seed_fixture = halo2_fixture_envelope(envelope_circuit_id, [0; 32]);
-        let vk_box = seed_fixture
-            .vk_box(backend.clone())
-            .unwrap_or_else(|| proof::VerifyingKeyBox::new(backend.clone(), vec![0xAA, 0xBB]));
+        let backend = "pipa-r/pasta".to_owned();
+        let circuit_id = iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+        let vk_box = iroha_core_zk::confidential_v2::confidential_transfer_v2_vk_box()
+            .expect("compiled native transfer key");
         let vk_commitment = iroha_core_zk::hash_vk(&vk_box);
-        let fixture = halo2_fixture_envelope(envelope_circuit_id, vk_commitment);
+        // Framing-only transcript is rejected by the real verifier and recorded.
+        let fixture = native_framing_fixture_envelope(circuit_id, vk_commitment);
         let proof = fixture.proof_box(backend.clone());
         let vk_id = proof::VerifyingKeyId::new(backend.clone(), "torii_proof_smoke_vk");
         let mut vk_record = proof::VerifyingKeyRecord::new_with_owner(
@@ -38350,14 +38345,14 @@ mod query_endpoint_tests {
             circuit_id,
             None,
             "test",
-            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            "pallas",
+            iroha_data_model::zk::BackendTag::NativePipaRPasta,
+            "vesta",
             fixture.schema_hash,
             vk_commitment,
         );
         vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture vk length fits");
         vk_record.max_proof_bytes = 1024 * 1024;
-        vk_record.gas_schedule_id = Some("halo2_default".into());
+        vk_record.gas_schedule_id = Some("native_pipa_r_default".into());
         vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
         vk_record.key = Some(vk_box);
         stx.world
@@ -38400,7 +38395,7 @@ mod query_endpoint_tests {
         let rec = resp.0;
         assert!(matches!(
             rec.status,
-            proof::ProofStatus::Verified | proof::ProofStatus::Rejected
+            proof::ProofStatus::Rejected
         ));
         assert_eq!(rec.id.proof_hash, arr);
     }
@@ -41451,11 +41446,11 @@ mod sse_filter_validation_tests {
     routing_test! { sync sse_filter_accepts_proof_only_filter
         let expr = FilterExpr::Eq(
             FieldPath("proof_backend".into()),
-            norito::json::Value::String("halo2/ipa".into()),
+            norito::json::Value::String("pipa-r/pasta".into()),
         );
         let spec = parse_sse_filters(&expr).expect("proof-only filter should parse");
         assert!(spec.filters.is_none());
-        assert_eq!(spec.proof_backend.unwrap(), vec!["halo2/ipa".to_string()]);
+        assert_eq!(spec.proof_backend.unwrap(), vec!["pipa-r/pasta".to_string()]);
     }
     routing_test! { sync sse_filter_params_reject_malformed_text_with_position
         let err = parse_sse_filter_params(Some("tx_hash ==")).expect_err("incomplete filter rejected");
@@ -42378,11 +42373,7 @@ mod validation_fee_torii_ingress_tests {
         let mut config = TestChainConfig::new(test_world(&user, &recipient, &fee_asset), 1_000);
         config.genesis_key = key.clone();
         let artifacts = [payout_contract_artifact(), pool_contract_artifact()];
-        let signing_owner = crate::history_producer::HistoryProducerOwner::for_test();
-        let max_frame_bytes = usize::try_from(
-            iroha_config::parameters::defaults::transaction::ivm_bytecode_size().get(),
-        )
-        .expect("configured genesis manifest frame bound fits usize");
+        let signing = manifest_signing_test_support::ManifestSigningFixture::new(artifacts.len());
         for (code, manifest) in &artifacts {
             let artifact_id =
                 ContractArtifactId::new(DataSpaceId::UNIVERSAL, manifest.code_hash.unwrap());
@@ -42398,8 +42389,8 @@ mod validation_fee_torii_ingress_tests {
                     artifact_id,
                     manifest: manifest
                         .clone()
-                        .try_signed(signing_owner.allocation_context(), max_frame_bytes, &key)
-                        .expect("sign genesis manifest under original funded owner"),
+                        .try_signed(signing.context(), signing.max_frame_bytes(), &key)
+                        .expect("funded canonical validation-fee genesis manifest"),
                 }
                 .into(),
             );

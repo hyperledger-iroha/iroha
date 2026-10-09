@@ -269,7 +269,6 @@ pub(crate) fn validate_persisted_records(state: &State) -> Result<(), EvidenceAd
 
 fn validate_persisted_records_inner(
     view: &StateView<'_>,
-    budget: &AllocationBudget,
     restored: &restoration::RestorationRead,
 ) -> Result<(), EvidenceAdmissionError> {
     let capacity = committed_evidence_capacity(view.world());
@@ -292,7 +291,10 @@ fn validate_persisted_records_inner(
         let root;
         let verified = match record.attribution.scope {
             iroha_data_model::block::consensus::EvidenceScope::Root => {
-                let native = witness_custody::decode(&record.evidence, budget)?;
+                let native = record
+                    .evidence
+                    .decode_native()
+                    .map_err(EvidenceAdmissionError::from)?;
                 root = super::evidence_history::verify_from_state(view, &native, |_, _| Ok(()))?;
                 &root
             }
@@ -887,5 +889,3 @@ mod codec_tests;
 
 #[cfg(test)]
 mod lifecycle_tests;
-
-mod witness_custody;

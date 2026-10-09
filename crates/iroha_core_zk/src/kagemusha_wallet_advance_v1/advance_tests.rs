@@ -6,8 +6,9 @@ use std::sync::Mutex;
 
 use iroha_data_model::kagemusha::{
     KagemushaDeviceSignatureV1, KagemushaWalletCompletionRecordV1, KagemushaWalletEffectV1,
-    KagemushaWalletLifecycleV1, KagemushaWalletRecoveryCapsuleV1, KagemushaWalletStatementV1,
-    KagemushaWalletTerminalReasonV1,
+    KagemushaWalletLifecycleV1, KagemushaWalletReceiptSignerV1, KagemushaWalletRecoveryCapsuleV1,
+    KagemushaWalletStatementV1, KagemushaWalletTerminalReasonV1,
+    kagemusha_wallet_provider_contract_v1,
 };
 
 use super::*;
@@ -22,7 +23,7 @@ use crate::kagemusha_wallet_advance_v1::{
         BOOT_A, DeviceV1, SimProviderV1, TEST_BALLAST_BYTES, TestOwnerV1, WalletFixtureV1,
         advance_request, bootstrap_capsule, bootstrap_capsule_variant, bootstrapped_device,
         capsule_for, commitment, enrolled_device, field_value, next_capsule, next_capsule_variant,
-        released, wallet_fixture,
+        released, stand_in_map_openings, wallet_fixture,
     },
 };
 
@@ -221,6 +222,29 @@ fn wallet_advance_v1_advance_releases_a_chain_with_identical_retries() {
         retained.frame,
         retained.record.to_canonical_bytes().expect("frame")
     );
+    // The released receipt must verify through the independent model consumer, which
+    // recomputes its canonical 338-byte body and 32-byte Poseidon signing message.
+    let signer = KagemushaWalletReceiptSignerV1 {
+        scheme_id: f.scheme_id(),
+        wallet_id: f.wallet_id(),
+        provider_contract: kagemusha_wallet_provider_contract_v1(),
+        payment_key: f.payment_key,
+    };
+    retained
+        .record
+        .receipt
+        .verify(&signer, &bootstrap.statement, &request.proof_digest)
+        .expect("receipt verifies from the frozen capsule");
+    let mut changed_proof = request.proof_digest;
+    changed_proof[0] ^= 1;
+    assert!(
+        retained
+            .record
+            .receipt
+            .verify(&signer, &bootstrap.statement, &changed_proof)
+            .is_err(),
+        "the receipt binds the exact frozen proof"
+    );
     // Every retry, in this process and after a restart, returns the same bytes.
     let retry = provider
         .advance(&slot, &TestOwnerV1, &request)
@@ -406,7 +430,7 @@ fn wallet_advance_v1_advance_operation_identity_rules() {
     ));
     // Changed inputs under a used identity conflict; the retained operation is untouched.
     let mut changed = request.clone();
-    changed.capsule.map_openings = vec![vec![9]];
+    changed.capsule.map_openings = stand_in_map_openings(9);
     let retained = released(first.clone());
     assert_eq!(
         provider.advance(&slot, &TestOwnerV1, &changed),
@@ -521,7 +545,7 @@ fn wallet_advance_v1_advance_pending_signing_resumes_the_same_operation() {
         ))
     );
     let mut changed = request.clone();
-    changed.capsule.map_openings = vec![vec![8]];
+    changed.capsule.map_openings = stand_in_map_openings(8);
     assert_eq!(
         provider.advance(&slot, &TestOwnerV1, &changed),
         Err(KagemushaWalletProviderErrorV1::OperationIdConflict {

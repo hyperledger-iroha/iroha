@@ -79,7 +79,8 @@ use iroha_executor_data_model::permission::{
     },
     asset_definition::{
         AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
-        CanManageAssetDefinitionConfidentialPolicy, CanModifyAssetDefinitionMetadata,
+        CanManageAssetDefinitionConfidentialPolicy, CanManageKagemushaWallet,
+        CanModifyAssetDefinitionMetadata, CanPublishKagemushaLoadVoucher,
         CanUnregisterAssetDefinition,
     },
     nexus::{
@@ -3664,11 +3665,32 @@ fn native_amx_participant_dataspace_target(instruction: &dyn Instruction) -> Opt
         })
 }
 
+fn kagemusha_dataspace_with_world(
+    world: &impl WorldReadOnly,
+    instruction: &iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
+) -> Result<DataSpaceId, RoutingResolveError> {
+    crate::kagemusha_wallet_v1::routing::dataspace(world, instruction).map_err(|error| {
+        RoutingResolveError::OrdinaryRouteUnavailable {
+            reason: format!("KAGEMUSHA permanent scope unavailable: {error}"),
+        }
+    })
+}
+
 fn instruction_transaction_dataspace_target(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(operation) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(
+    ) {
+        let view = state_view.ok_or_else(|| RoutingResolveError::OrdinaryRouteUnavailable {
+            reason: "KAGEMUSHA routing requires original World state".into(),
+        })?;
+        let target = kagemusha_dataspace_with_world(view.world(), operation)?;
+        return Ok(Some(target));
+    }
     if let Some(dataspace) = native_amx_participant_dataspace_target(instruction) {
         return Ok(Some(dataspace));
     }
@@ -4081,6 +4103,13 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
     ledger_time_ms: Option<u64>,
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
+    if let Some(operation) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(
+    ) {
+        let target = kagemusha_dataspace_with_world(world, operation)?;
+        return Ok(Some(target));
+    }
     if let Some(dataspace) = native_amx_participant_dataspace_target(instruction) {
         return Ok(Some(dataspace));
     }
@@ -5970,6 +5999,16 @@ fn instruction_transaction_target_requires_universal_coordinator(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<bool, RoutingResolveError> {
+    if let Some(operation) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(
+    ) {
+        let view = state_view.ok_or_else(|| RoutingResolveError::OrdinaryRouteUnavailable {
+            reason: "KAGEMUSHA routing requires original World state".into(),
+        })?;
+        let target = kagemusha_dataspace_with_world(view.world(), operation)?;
+        return Ok(target == DataSpaceId::UNIVERSAL);
+    }
     let any = instruction.as_any();
     if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
         let targets = transfer_batch_targets_with_view(batch, dataspace_catalog, state_view)?;
@@ -6410,6 +6449,13 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world_and_
     ledger_time_ms: Option<u64>,
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<bool, RoutingResolveError> {
+    if let Some(operation) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1>(
+    ) {
+        let target = kagemusha_dataspace_with_world(world, operation)?;
+        return Ok(target == DataSpaceId::UNIVERSAL);
+    }
     let any = instruction.as_any();
     if instruction_routes_to_universal_dataspace(instruction) {
         return Ok(true);
@@ -7366,6 +7412,16 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
             .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
             .ok()
             .is_some(),
+        "CanManageKagemushaWallet" => permission
+            .payload()
+            .try_into_any_norito::<CanManageKagemushaWallet>()
+            .ok()
+            .is_some(),
+        "CanPublishKagemushaLoadVoucher" => permission
+            .payload()
+            .try_into_any_norito::<CanPublishKagemushaLoadVoucher>()
+            .ok()
+            .is_some(),
         "CanManageAssetDefinitionConfidentialPolicy" => permission
             .payload()
             .try_into_any_norito::<CanManageAssetDefinitionConfidentialPolicy>()
@@ -7519,6 +7575,36 @@ fn dataspace_scoped_permission_target(
                 permission
                     .payload()
                     .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
+                    .ok(),
+                |token| {
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                },
+            ),
+            "CanManageKagemushaWallet" => resolve_optional_dataspace_target(
+                permission
+                    .payload()
+                    .try_into_any_norito::<CanManageKagemushaWallet>()
+                    .ok(),
+                |token| {
+                    asset_definition_dataspace_target(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                },
+            ),
+            "CanPublishKagemushaLoadVoucher" => resolve_optional_dataspace_target(
+                permission
+                    .payload()
+                    .try_into_any_norito::<CanPublishKagemushaLoadVoucher>()
                     .ok(),
                 |token| {
                     asset_definition_dataspace_target(
@@ -7756,6 +7842,38 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 permission
                     .payload()
                     .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
+                    .ok(),
+                |token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                },
+            ),
+            "CanManageKagemushaWallet" => resolve_optional_dataspace_target(
+                permission
+                    .payload()
+                    .try_into_any_norito::<CanManageKagemushaWallet>()
+                    .ok(),
+                |token| {
+                    asset_definition_dataspace_target_with_world(
+                        &token.asset_definition,
+                        None,
+                        None,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                },
+            ),
+            "CanPublishKagemushaLoadVoucher" => resolve_optional_dataspace_target(
+                permission
+                    .payload()
+                    .try_into_any_norito::<CanPublishKagemushaLoadVoucher>()
                     .ok(),
                 |token| {
                     asset_definition_dataspace_target_with_world(

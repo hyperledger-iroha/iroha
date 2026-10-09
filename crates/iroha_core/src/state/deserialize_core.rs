@@ -100,52 +100,6 @@ enum SnapshotJsonField<'a> {
     Owned(json::Value),
 }
 impl<'a> SnapshotJsonField<'a> {
-    fn into_operation_index(
-        self,
-        budget: iroha_allocation::AllocationBudget,
-        refusal: &std::cell::RefCell<Option<mv::storage::AdmittedStorageError>>,
-    ) -> Result<OperationIndex, json::Error> {
-        let result = match self {
-            Self::Borrowed { raw } => super::kagemusha_operation_indexes::restore_json(raw, budget),
-            #[cfg(test)]
-            Self::Owned(json::Value::Object(mut fields)) => {
-                let revert = fields
-                    .remove("revert")
-                    .ok_or_else(|| json::MapVisitor::missing_field("revert"))?;
-                let blocks = fields
-                    .remove("blocks")
-                    .ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
-                if !fields.is_empty() {
-                    return Err(json::Error::Message(
-                        "unexpected fixed-index snapshot field".into(),
-                    ));
-                }
-                let source = format!(
-                    "{{\"revert\":{},\"blocks\":{}}}",
-                    json::to_json(&revert)?,
-                    json::to_json(&blocks)?
-                );
-                super::kagemusha_operation_indexes::restore_json(&source, budget)
-            }
-            #[cfg(test)]
-            Self::Owned(_) => {
-                return Err(json::Error::Message(
-                    "fixed-index snapshot must be an object".into(),
-                ));
-            }
-        };
-        result.map_err(|error| match error {
-            super::kagemusha_operation_indexes::OperationIndexRestoreError::Encoding(error) => {
-                error
-            }
-            super::kagemusha_operation_indexes::OperationIndexRestoreError::Admission(error) => {
-                refusal.borrow_mut().get_or_insert(error);
-                // Control flow only: the outer decoder returns the retained typed
-                // refusal, so this sentinel cannot authorize empty-state fallback.
-                json::Error::Message("original fixed-index restore allocation refused".into())
-            }
-        })
-    }
     fn decode_canonical<T>(self, field: &str) -> Result<T, json::Error>
     where
         T: JsonDeserialize + JsonSerialize,
@@ -354,16 +308,12 @@ fn canonical_world_field_order() -> &'static [&'static str] {
 #[derive(Clone, Copy)]
 pub struct IvmSeed<'e, T> {
     pub ivm: &'e IVM,
-    pub operation_index_budget: &'e iroha_allocation::AllocationBudget,
-    pub operation_index_refusal: &'e std::cell::RefCell<Option<mv::storage::AdmittedStorageError>>,
     _marker: PhantomData<T>,
 }
 impl<'e, T> IvmSeed<'e, T> {
     pub fn cast<U>(&self) -> IvmSeed<'e, U> {
         IvmSeed {
             ivm: self.ivm,
-            operation_index_budget: self.operation_index_budget,
-            operation_index_refusal: self.operation_index_refusal,
             _marker: PhantomData,
         }
     }
@@ -375,7 +325,6 @@ impl IvmSeed<'_, TriggerSet> {
     }
 }
 pub struct KuraSeed {
-    pub operation_index_budget: iroha_allocation::AllocationBudget,
     /// Original caller-owned execution pool retained by the restored State.
     pub execution_budget: iroha_allocation::AllocationBudget,
     pub kura: Arc<Kura>,
@@ -415,7 +364,6 @@ mod state_snapshot_decode_error_tests {
             let kura = crate::kura::Kura::blank_kura_for_testing();
             let seed = KuraSeed {
                 execution_budget: iroha_allocation::AllocationBudget::new(0),
-                operation_index_budget: iroha_allocation::AllocationBudget::new(0),
                 kura: Arc::clone(&kura),
                 lane_manifests: Arc::new(
                     crate::governance::manifest::LaneManifestRegistry::default(),
@@ -539,8 +487,7 @@ impl KuraSeed {
             BuildStateInputs {
                 execution_budget: self.execution_budget.clone(),
                 lane_manifests: self.lane_manifests,
-                world: World(Box::new(WorldData::try_new_with_budgets(
-                    self.operation_index_budget.clone(),
+                world: World(Box::new(WorldData::try_new_with_execution_budget(
                     &self.execution_budget,
                 )?)),
                 block_hashes,
@@ -631,28 +578,9 @@ impl KuraSeed {
     }
     fn into_state_from_snapshot_map(
         self,
-        map: SnapshotJsonMap<'_>,
-        allow_durable_recovery: bool,
-        replay_nexus: Option<iroha_config::parameters::actual::Nexus>,
-    ) -> Result<Box<State>, StateRestoreError> {
-        let refusal = std::cell::RefCell::new(None);
-        let result = self.into_state_from_snapshot_map_inner(
-            map,
-            allow_durable_recovery,
-            replay_nexus,
-            &refusal,
-        );
-        match refusal.into_inner() {
-            Some(error) => Err(error.into()),
-            None => result,
-        }
-    }
-    fn into_state_from_snapshot_map_inner(
-        self,
         mut map: SnapshotJsonMap<'_>,
         allow_durable_recovery: bool,
         replay_nexus: Option<iroha_config::parameters::actual::Nexus>,
-        operation_index_refusal: &std::cell::RefCell<Option<mv::storage::AdmittedStorageError>>,
     ) -> Result<Box<State>, StateRestoreError> {
         const CANONICAL_FIELDS: &[&str] = &[
             "chain_id",
@@ -699,8 +627,6 @@ impl KuraSeed {
         }
         let ivm_runtime = IVM::try_new(0).map_err(StateRestoreError::VmInitialization)?;
         let ivm_seed = IvmSeed {
-            operation_index_budget: &self.operation_index_budget,
-            operation_index_refusal,
             ivm: &ivm_runtime,
             _marker: PhantomData,
         };
@@ -1465,12 +1391,10 @@ pub(in crate::state) fn decode_world_snapshot_projection_for_testing(
     value: json::Value,
     reference_block_hashes: &[HashOf<BlockHeader>],
 ) -> Result<World, StateRestoreError> {
-    let operation_index_budget = crate::state::kagemusha_operation_indexes::default_budget();
-    let operation_index_refusal = std::cell::RefCell::new(None);
     let execution_budget = &iroha_allocation::AllocationBudget::new(
         iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
     );
-    let result = (|| {
+    (|| {
         let json::Value::Object(fields) = value else {
             return Err(json::Error::Message(
                 "World projection requires its exact State envelope".into(),
@@ -1484,8 +1408,6 @@ pub(in crate::state) fn decode_world_snapshot_projection_for_testing(
             .into_object("world")?;
         let ivm = IVM::try_new(0).map_err(StateRestoreError::VmInitialization)?;
         let seed = IvmSeed {
-            operation_index_budget: &operation_index_budget,
-            operation_index_refusal: &operation_index_refusal,
             ivm: &ivm,
             _marker: PhantomData,
         };
@@ -1584,11 +1506,7 @@ pub(in crate::state) fn decode_world_snapshot_projection_for_testing(
         validate_replication_order_completion_anchors(&world, reference_block_hashes)?;
         validate_musubi_resolver_checkpoint_anchors(&world, reference_block_hashes)?;
         Ok(world)
-    })();
-    match operation_index_refusal.into_inner() {
-        Some(error) => Err(error.into()),
-        None => result,
-    }
+    })()
 }
 
 /// Decode and validate both Nexus runtime component cuts without constructing

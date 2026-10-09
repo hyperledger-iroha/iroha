@@ -180,7 +180,6 @@ fn native_finality_schema_matches_executed_norito_json_and_rejects_retired_field
     let qc: iroha_sumeragi::message::Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
     assert_eq!(qc.kind, iroha_sumeragi::message::VoteKind::Commit); assert_eq!(qc.signers.count_ones(), 3);
     assert_eq!(qc.agg_sig.0.len(), 96); assert_eq!(qc.result, verified.result()); assert_eq!(qc.block_hash, verified.core_hash());
-    assert_eq!(verified.execution().kagemusha_top_up_count, 0); assert_eq!(verified.execution().kagemusha_top_up_root, None);
     let wire = verified.canonical_executed_wire().unwrap();
     assert_eq!(verified.execution().executed_block_wire_len, wire.len() as u64);
     assert_eq!(verified.execution().executed_block_wire_hash, iroha_crypto::Hash::new(&wire));

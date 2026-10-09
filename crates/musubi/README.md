@@ -37,8 +37,16 @@ during issuance, expiry, cancellation, and adversarial DNS rebinding. Component 
 whole-service readiness. Existing archive commitments, strict token signatures, bounded CAR
 verification, pinned public DNS and immutable cache checks remain authoritative.
 
-`ContractInput::from_path` checks input names and existing regular files before a frontend
-provisions a network. The build then validates the source graph, bytecode or package contents.
+`ContractInput::from_path` captures the original native regular `.ko`, `.to`, or explicitly
+selected package manifest before a frontend provisions a network. Parent paths resolve at
+selection; the selected leaf is never followed through a link. The original native file and its
+ancestors stay retained through build, and changed/replaced roots are refused. Descriptor reads
+use explicit offsets so repeat builds do not depend on a shared cursor. Declared companions and
+package members/dependencies still use their existing fresh, bounded selection owners; this
+capture does not claim custody of an entire project before it is read. Selecting a member
+manifest or member directory deploys that member by default and refuses `--package` for
+another member. Selecting the actual workspace-root manifest or directory keeps the declared
+workspace defaults and explicit package selection, including roots which also declare a package.
 
 Generated publication profiles initialize their empty client journal directory before the generation
 is published. Begin, Resume and Recover require that original custody before namespace or registry
@@ -57,8 +65,12 @@ Focused validation: `cargo test -p musubi --lib deployment_runtime`.
 
 `generated_publication::publish_generated` accepts the source-bound generated publication context,
 an explicit package manifest, private publication state/cache roots, and the retained generated
-archive transport. Begin performs the owner-paid namespace binding through the existing wallet
-parent before resolving a fresh publication graph. Exact current binding permits a read-only skip
+archive transport. Generated Begin uses the shared local selection preflight: a member input
+binds that member, while a workspace-root input keeps defaults and explicit selection; exactly
+one member is required. Kagami and Mochi preflight before managed startup, and the canonical
+publication entry validates selection again before namespace or publication effects. Begin
+performs the owner-paid namespace binding through the existing wallet parent before resolving
+a fresh publication graph. Exact current binding permits a read-only skip
 only after the complete original parent census; missing custody is never recreated. Resume and
 sidecar recovery retain the original request and do not authorize a new namespace transaction.
 Generated TLS selection and fresh native provider discovery remain in the sole archive transport;

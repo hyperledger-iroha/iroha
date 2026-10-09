@@ -80,10 +80,9 @@ use iroha_telemetry::privacy::{
     PrivacyBucketConfig, PrivacyEventError, PrivacyShareError, SoranetSecureAggregator,
 };
 use iroha_torii_shared::status::{
-    GovernanceManifestActivation, Halo2Status, NexusDataspaceTeuStatus, NexusLaneTeuBuckets,
-    NexusLaneTeuStatus, TxGossipCaps, TxGossipStatus,
+    GovernanceManifestActivation, NexusDataspaceTeuStatus, NexusLaneTeuBuckets, NexusLaneTeuStatus,
+    TxGossipCaps, TxGossipStatus,
 };
-use ivm::host::{ZkCurve, ZkHalo2Backend, ZkHalo2Config};
 use mv::storage::StorageReadOnly;
 #[cfg(feature = "telemetry")]
 use norito::streaming::{
@@ -1994,52 +1993,6 @@ impl StateTelemetry {
     /// Record the OpenSSL SM preview toggle state (0/1 gauge).
     pub fn set_sm_openssl_preview(&self, enabled: bool) {
         self.metrics.sm_openssl_preview.set(u64::from(enabled));
-    }
-    /// Publish the active Halo2 verifier configuration (gauges + status snapshot).
-    pub fn set_halo2_runtime_config(&self, cfg: ZkHalo2Config) {
-        let curve_id = match cfg.curve {
-            ZkCurve::Pallas => 0,
-            ZkCurve::Pasta => 1,
-            ZkCurve::Goldilocks => 2,
-            ZkCurve::Bn254 => 3,
-        };
-        let backend_id = match cfg.backend {
-            ZkHalo2Backend::Ipa => 0,
-            ZkHalo2Backend::Unsupported => 1,
-        };
-        self.metrics.zk_halo2_enabled.set(u64::from(cfg.enabled));
-        self.metrics.zk_halo2_curve_id.set(curve_id);
-        self.metrics.zk_halo2_backend_id.set(backend_id);
-        self.metrics.zk_halo2_max_k.set(u64::from(cfg.max_k));
-        self.metrics
-            .zk_halo2_verifier_budget_ms
-            .set(cfg.verifier_budget_ms);
-        self.metrics
-            .zk_halo2_verifier_max_batch
-            .set(u64::from(cfg.verifier_max_batch));
-        let curve_label = match cfg.curve {
-            ZkCurve::Pallas => "pallas",
-            ZkCurve::Pasta => "pasta",
-            ZkCurve::Goldilocks => "goldilocks",
-            ZkCurve::Bn254 => "bn254",
-        };
-        let backend_label = match cfg.backend {
-            ZkHalo2Backend::Ipa => "ipa",
-            ZkHalo2Backend::Unsupported => "unsupported",
-        };
-        let mut guard = self
-            .metrics
-            .halo2_status
-            .write()
-            .expect("halo2 status lock poisoned");
-        *guard = Halo2Status {
-            enabled: cfg.enabled,
-            curve: curve_label.to_string(),
-            backend: backend_label.to_string(),
-            max_k: cfg.max_k,
-            verifier_budget_ms: cfg.verifier_budget_ms,
-            verifier_max_batch: cfg.verifier_max_batch,
-        };
     }
     #[cfg(feature = "telemetry")]
     fn on_governance_event(&self, event: &GovernanceEvent) {
@@ -6320,14 +6273,14 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(Arc::clone(&metrics), true);
         telemetry.observe_torii_http_request(
-            "kagemusha.operation",
-            "/v1/kagemusha/operations/{operation_id}",
+            "ledger.executed_block_wire",
+            "/v1/ledger/block/{height}",
             "public",
             "GET",
             StatusCode::NOT_FOUND,
             "application/json",
             "json",
-            "kagemusha_operation_not_found",
+            "block_not_found",
             Duration::from_millis(3),
             Some(0),
             Some(96),
@@ -6336,11 +6289,11 @@ mod tests {
             metrics
                 .torii_http_requests_total
                 .with_label_values(&[
-                    "kagemusha.operation",
-                    "/v1/kagemusha/operations/{operation_id}",
+                    "ledger.executed_block_wire",
+                    "/v1/ledger/block/{height}",
                     "public",
                     "json",
-                    "kagemusha_operation_not_found",
+                    "block_not_found",
                     "application/json",
                     "GET",
                     "404",
@@ -6352,8 +6305,8 @@ mod tests {
             metrics
                 .torii_http_request_bytes_total
                 .with_label_values(&[
-                    "kagemusha.operation",
-                    "/v1/kagemusha/operations/{operation_id}",
+                    "ledger.executed_block_wire",
+                    "/v1/ledger/block/{height}",
                     "public",
                     "json",
                     "application/json",
@@ -6366,11 +6319,11 @@ mod tests {
             metrics
                 .torii_http_response_bytes_total
                 .with_label_values(&[
-                    "kagemusha.operation",
-                    "/v1/kagemusha/operations/{operation_id}",
+                    "ledger.executed_block_wire",
+                    "/v1/ledger/block/{height}",
                     "public",
                     "json",
-                    "kagemusha_operation_not_found",
+                    "block_not_found",
                     "application/json",
                     "GET",
                     "404",
@@ -6379,8 +6332,8 @@ mod tests {
             96
         );
         let exposition = metrics.try_to_string().expect("encode metrics");
-        assert!(exposition.contains("route_id=\"kagemusha.operation\""));
-        assert!(exposition.contains("route_template=\"/v1/kagemusha/operations/{operation_id}\""));
+        assert!(exposition.contains("route_id=\"ledger.executed_block_wire\""));
+        assert!(exposition.contains("route_template=\"/v1/ledger/block/{height}\""));
         assert!(!exposition.contains("op_8f61d9a9"));
         assert!(!exposition.contains("cursor=eyJzbmFwc2hvdCI6"));
     }

@@ -89,7 +89,7 @@ Facts it records about the current tree:
   ceiling-sized proof is rejected as too large; two maximum actions per block
   do not fit any payload limit.
 - A 16 MiB payload passes the chain parameter rule but has no feasible
-  `sync_max_bytes`; the largest payload with one is 16,185,312 bytes.
+  `sync_max_bytes`; the largest payload with one is 16,512,992 bytes.
 - Transaction gossip frames are 256 KiB: a larger transaction stays with the
   node that admitted it.
 - 74 limits and gas charges that decide validity are read from node
@@ -219,10 +219,10 @@ compiler/native replay and the remaining lifecycle/relation work are required.
 Two genuine native captures execute all 107 owner/wire printers each, with
 identical output. The applied fixture correction preserves all 105 prior owners
 and all 395 prior wire assignments and adds the reserve-policy owner. The
-KAGEMUSHA verifier-governance owners and instructions are removed, so the current
-paired captures have 105 typed owners and 1,551 nominal identities; these
-component passes do not establish integrated, physical-device or release
-qualification.
+KAGEMUSHA verifier-governance owners and instructions and the old KAGEMUSHA data-model
+owners are removed; the current fixture is pruned to 102 typed owners and 1,472 nominal
+identities without a new capture. These component passes do not establish integrated,
+physical-device or release qualification.
 
 The earlier seventeen-target Core/Kagami compilation passes with stock Rust 1.93.1 on
 its recorded inputs. The rebuilt aggregate Core library and group04 artifact now
@@ -250,7 +250,7 @@ not rewrite those outcomes. All four lane time-floor/build-count regressions pas
 The fresh lifetime compile-fail doctest passes; the separate Primitives 333 and
 Norito derive 59 unit, 17 strict-JSON and 32 compiler cases in four UI tests pass.
 Full Mint/Guard/receiver, genuine proof/export and full-State authority remain
-incomplete. The separate current fixture captures 105 typed codec owners and 1,551 nominal
+incomplete. The separate current fixture retains 102 typed codec owners and 1,472 nominal
 identities, preserving every still-active historical hash. Its new ordinary,
 publication and reduced-feature controls remain pending; the preceding capture
 and native component runs do not qualify the merged candidate.

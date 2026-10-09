@@ -244,8 +244,6 @@ def test_stable_inventory_read_rejects_hardlinks_and_shared_writes(
     (
         "crates/iroha_core/src/executor.rs",
         "crates/iroha_core_zk/src/lib.rs",
-        "crates/iroha_core_zk/src/kagemusha_v1_recursion/accumulation.rs",
-        "crates/iroha_core_zk/src/kagemusha_v1_recursion/native_backend.rs",
         "crates/iroha_panic_hook/src/lib.rs",
     ),
 )
@@ -272,7 +270,7 @@ def test_core_recovery_files_reject_alias_and_macro_boundary_bypasses(
     assert relative in failures[0]
 
 
-def test_core_raw_catch_inventory_allows_only_one_reviewed_test_call() -> None:
+def test_core_raw_catch_inventory_distinguishes_suppressed_calls() -> None:
     module = load_guard_module()
     assert module._direct_raw_catch_unwind_lines(
         "fn test_only() { std::panic::catch_unwind(|| work()); }\n"
@@ -1912,23 +1910,23 @@ def test_nested_amx_support_refuses_missing_original_even_with_guessed_sibling(t
     assert failures == ["crates/iroha_core/src/executor/root_scope/tests.rs:1: mod must name one static local source file"]
 
 
-def test_ordinary_mint_permission_include_seals_full_original_caller(tmp_path: Path) -> None:
+def test_support_include_seals_full_original_caller(tmp_path: Path) -> None:
     module = load_guard_module()
     parent = tmp_path / "crates/iroha_core/src"
     parent.mkdir(parents=True)
     executor = parent / "executor.rs"
-    included = parent / "executor_ordinary_mint_permission_tests.rs"
+    included = parent / "executor_sns_attempt_tests.rs"
     executor.write_text(
-        '#[cfg(test)] mod tests { include!("executor_ordinary_mint_permission_tests.rs"); }\n',
+        '#[cfg(test)] mod tests { include!("executor_sns_attempt_tests.rs"); }\n',
         encoding="utf-8",
     )
-    included.write_text("fn mint_permission() { original_root_and_scope(); }\n", encoding="utf-8")
+    included.write_text("fn sns_attempt() { original_root_and_scope(); }\n", encoding="utf-8")
     sources, failures = module.torii_rust_source_closure(tmp_path)
     assert failures == []
     assert included.resolve() in sources
-    assert Path("crates/iroha_core/src/executor_ordinary_mint_permission_tests.rs") in module.CORE_RECOVERY_SUPPORT_PATHS
+    assert Path("crates/iroha_core/src/executor_sns_attempt_tests.rs") in module.CORE_RECOVERY_SUPPORT_PATHS
     records, _, counts = module.torii_boundary_inventory(tmp_path, sources)
-    included.write_text("fn mint_permission() { substituted_root_and_scope(); }\n", encoding="utf-8")
+    included.write_text("fn sns_attempt() { substituted_root_and_scope(); }\n", encoding="utf-8")
     observed = module.torii_boundary_inventory(tmp_path)
     assert observed[2] == counts
     failures = module.closed_torii_boundary_inventory_failures(
@@ -1937,87 +1935,41 @@ def test_ordinary_mint_permission_include_seals_full_original_caller(tmp_path: P
     assert any("source inventory drifted" in error for error in failures), failures
 
 
-def test_ordinary_mint_permission_include_refuses_absence_and_guessed_sibling(tmp_path: Path) -> None:
+def test_support_include_refuses_absence_and_guessed_sibling(tmp_path: Path) -> None:
     module = load_guard_module()
     parent = tmp_path / "crates/iroha_core/src"
     parent.mkdir(parents=True)
     executor = parent / "executor.rs"
-    original = parent / "executor_ordinary_mint_permission_tests.rs"
-    guessed = parent / "executor_ordinary_mint_permissions_tests.rs"
+    original = parent / "executor_sns_attempt_tests.rs"
+    guessed = parent / "executor_sns_attempts_tests.rs"
     executor.write_text(
-        '#[cfg(test)] mod tests { include!("executor_ordinary_mint_permission_tests.rs"); }\n',
+        '#[cfg(test)] mod tests { include!("executor_sns_attempt_tests.rs"); }\n',
         encoding="utf-8",
     )
-    guessed.write_text("fn guessed_permission() {}\n", encoding="utf-8")
+    guessed.write_text("fn guessed_attempt() {}\n", encoding="utf-8")
     sources, failures = module.torii_rust_source_closure(tmp_path)
     assert original.resolve() not in sources
     assert guessed.resolve() not in sources
-    assert Path("crates/iroha_core/src/executor_ordinary_mint_permissions_tests.rs") not in module.CORE_RECOVERY_SUPPORT_PATHS
+    assert Path("crates/iroha_core/src/executor_sns_attempts_tests.rs") not in module.CORE_RECOVERY_SUPPORT_PATHS
     assert failures == [
         "crates/iroha_core/src/executor.rs:1: include! source path is missing "
-        "or not a regular file: executor_ordinary_mint_permission_tests.rs"
+        "or not a regular file: executor_sns_attempt_tests.rs"
     ]
 
 
-@pytest.mark.parametrize("spacing", ("", " // retained test-only ownership\n"))
-def test_halo2_parameter_source_boundary_requires_actual_test_only_containment(spacing: str) -> None:
-    module = load_guard_module()
-    source = (
-        "#[cfg(test)]" + spacing + "mod halo2_ipa_parameter_source_tests {\n"
-        " fn rejects_unbounded_k() { std::panic::catch_unwind(|| work()); }\n"
-        "}\n"
-    )
-    assert module._halo2_parameter_source_test_boundary_failures(source) == []
-
-
-@pytest.mark.parametrize("mutation", (
-    "no_test_gate", "production_alternative", "conditional_test_gate", "outside_call",
-    "nested_call", "duplicate_module", "second_raw_call", "comment_only_module",
+@pytest.mark.parametrize("wrapper", (
+    "fn test_only() { CALL }",
+    "#[cfg(test)] mod parameter_tests { fn test_only() { CALL } }",
+    "#[cfg(any(test, feature = \"production\"))] mod parameters { fn run() { CALL } }",
+    "fn outer() { { CALL } }",
+    "unreviewed_macro! { fn run() { CALL } }",
 ))
-def test_halo2_parameter_source_boundary_rejects_gate_and_call_substitution(mutation: str) -> None:
+def test_raw_parameter_catches_have_no_test_or_production_exception(wrapper: str) -> None:
     module = load_guard_module()
-    source = (
-        "#[cfg(test)] mod halo2_ipa_parameter_source_tests {\n"
-        " fn rejects_unbounded_k() { std::panic::catch_unwind(|| work()); }\n"
-        "}\n"
-    )
-    if mutation == "no_test_gate":
-        source = source.replace("#[cfg(test)]", "")
-    elif mutation == "production_alternative":
-        source = source.replace("cfg(test)", 'cfg(any(test, feature = "production"))')
-    elif mutation == "conditional_test_gate":
-        source = source.replace("cfg(test)", 'cfg_attr(feature = "optional", cfg(test))')
-    elif mutation == "outside_call":
-        source = source.replace("std::panic::catch_unwind(|| work());", "work();")
-        source += "fn shipping() { std::panic::catch_unwind(|| work()); }\n"
-    elif mutation == "nested_call":
-        source = source.replace(" fn rejects_unbounded_k()", " mod unreviewed { fn rejects_unbounded_k()")
-        source += "}\n"
-    elif mutation == "duplicate_module":
-        source += "#[cfg(test)] mod halo2_ipa_parameter_source_tests {}\n"
-    elif mutation == "second_raw_call":
-        source += "fn unreviewed() { std::panic::catch_unwind(|| work()); }\n"
-    elif mutation == "comment_only_module":
-        source = "/* #[cfg(test)] mod halo2_ipa_parameter_source_tests {} */\n"
-        source += "fn shipping() { std::panic::catch_unwind(|| work()); }\n"
-    assert module._halo2_parameter_source_test_boundary_failures(source)
-
-
-@pytest.mark.parametrize("wrapper", ("function", "block", "macro"))
-def test_halo2_parameter_source_boundary_rejects_nonmodule_brace_owners(wrapper: str) -> None:
-    module = load_guard_module()
-    source = (
-        "#[cfg(test)] mod halo2_ipa_parameter_source_tests {\n"
-        " fn rejects_unbounded_k() { std::panic::catch_unwind(|| work()); }\n"
-        "}\n"
-    )
-    if wrapper == "function":
-        source = "fn outer() { " + source + " }\n"
-    elif wrapper == "block":
-        source = "fn outer() { { " + source + " } }\n"
-    elif wrapper == "macro":
-        source = "unreviewed_macro! { " + source + " }\n"
-    assert module._halo2_parameter_source_test_boundary_failures(source)
+    source = wrapper.replace("CALL", "std::panic::catch_unwind(|| work());")
+    assert module._direct_raw_catch_unwind_lines(source) == [1]
+    safe = wrapper.replace("CALL", "iroha_panic_hook::catch_unwind_suppressed(work);")
+    assert module._direct_raw_catch_unwind_lines(safe) == []
 
 
 @pytest.mark.parametrize("name", (

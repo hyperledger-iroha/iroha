@@ -1,7 +1,8 @@
 //! Source-bound original commitment-array, UTF-8/signature leaf and immutable control preparation.
 
 use super::{CanonicalParts, DaCommitmentBundle, DaCommitmentRecord, Storage};
-use crate::da::commitment::DaProofScheme;
+use crate::da::commitment::{DaProofScheme, PreparationPhase};
+use crate::inline_fields::{DecodedField, InlineLeaf};
 use crate::{
     da::types::{BlobDigest, GovernanceTag, RetentionPolicy, StorageTicketId},
     sorafs::pin_registry::{ManifestDigest, StorageClass},
@@ -125,7 +126,7 @@ struct Row {
     manifest: Option<ManifestDigest>,
     scheme: Option<DaProofScheme>,
     chunk_root: Option<Hash>,
-    proof_digest: Option<Option<Hash>>,
+    proof_digest: DecodedField<Option<Hash>>,
     hot: Option<u64>,
     cold: Option<u64>,
     replicas: Option<u16>,
@@ -141,20 +142,14 @@ struct Inline<T>(Option<T>);
 impl<T> FieldDestination for Inline<T> {
     type Error = std::convert::Infallible;
 }
-impl<T: for<'a> DecodeFromSlice<'a>> DecodeField<0, T> for Inline<T> {
+impl<T: InlineLeaf> DecodeField<0, T> for Inline<T> {
     type Value = ();
     fn decode_field(
         &mut self,
         field: CanonicalField<'_, T>,
     ) -> Result<(), DecodeIntoError<Self::Error>> {
-        field.with_payload(|bytes| {
-            let (value, used) = T::decode_from_slice(bytes)?;
-            if used != bytes.len() {
-                return Err(norito::Error::LengthMismatch.into());
-            }
-            self.0 = Some(value);
-            Ok(())
-        })
+        self.0 = Some(T::read_field(field)?);
+        Ok(())
     }
 }
 fn inline_lane(bytes: &[u8]) -> Result<LaneId, norito::Error> {
@@ -311,7 +306,7 @@ impl DecodeField<7, Option<Hash>> for RecordFields<'_> {
                 Ok(value)
             })
         })?;
-        self.row.proof_digest = Some(value);
+        self.row.proof_digest = DecodedField::Decoded(value);
         Ok(())
     }
 }
@@ -492,10 +487,7 @@ pub struct PreparedDaCommitmentBundle {
     ledger: Slot<AllocationCharge>,
     shell_charge: Option<AllocationCharge>,
     shell: Option<ReservedChargedShared<RetainedPayload<CanonicalParts>>>,
-    metadata_admitted: bool,
-    planned: bool,
-    payload_admitted: bool,
-    ready: bool,
+    phase: PreparationPhase,
     budget: AllocationBudget,
 }
 impl PreparedDaCommitmentBundle {
@@ -547,10 +539,7 @@ impl PreparedDaCommitmentBundle {
             ledger: Slot::default(),
             shell_charge: None,
             shell: None,
-            metadata_admitted: false,
-            planned: false,
-            payload_admitted: false,
-            ready: false,
+            phase: PreparationPhase::Unadmitted,
             budget: budget.clone(),
         })
     }
@@ -693,7 +682,10 @@ impl PreparedDaCommitmentBundle {
                     }
                 },
             )?;
-            if sequence.used() != bytes.len() || sequence.len() != rows.len() {
+            if sequence.used() != bytes.len() {
+                return Err(norito::Error::LengthMismatch);
+            }
+            if sequence.len() != rows.len() {
                 return Err(norito::Error::LengthMismatch);
             }
             let result = sequence.decode_elements::<DaCommitmentRecord, DaCommitmentCustodyError>(
@@ -733,10 +725,10 @@ impl PreparedDaCommitmentBundle {
     /// Retains every allocated sibling and original pending charge through exact refusal/retry.
     pub fn prepare(&mut self, input: &ChargedBuffer<u8>) -> Result<(), DaCommitmentCustodyError> {
         self.check(input)?;
-        if self.ready {
+        if self.phase == PreparationPhase::Ready {
             return Ok(());
         }
-        if !self.metadata_admitted {
+        if self.phase < PreparationPhase::MetadataAdmitted {
             let layouts = self.planning_layouts()?;
             let mut reservation = self.budget.try_reserve_layouts(layouts)?;
             self.rows.charge = Some(
@@ -749,7 +741,7 @@ impl PreparedDaCommitmentBundle {
                     .try_split(layouts[1])
                     .expect("exact admitted span layout"),
             );
-            self.metadata_admitted = true;
+            self.phase = PreparationPhase::MetadataAdmitted;
         }
         self.rows.allocate(self.count)?;
         self.spans.allocate(self.count)?;
@@ -761,11 +753,11 @@ impl PreparedDaCommitmentBundle {
         while spans.as_slice().len() < self.count {
             spans.push_reserved(SequenceSpan { start: 0, end: 0 });
         }
-        if !self.planned {
+        if self.phase < PreparationPhase::Planned {
             self.walk_rows(input, false)?;
-            self.planned = true;
+            self.phase = PreparationPhase::Planned;
         }
-        if !self.payload_admitted {
+        if self.phase < PreparationPhase::PayloadAdmitted {
             let layouts = self.payload_layouts()?;
             let rows = self
                 .rows
@@ -831,7 +823,7 @@ impl PreparedDaCommitmentBundle {
                         .expect("exact original signature charge"),
                 );
             }
-            self.payload_admitted = true;
+            self.phase = PreparationPhase::PayloadAdmitted;
         }
         self.values.allocate(self.count)?;
         self.ledger.allocate(
@@ -890,7 +882,7 @@ impl PreparedDaCommitmentBundle {
             }
         }
         self.walk_rows(input, true)?;
-        self.ready = true;
+        self.phase = PreparationPhase::Ready;
         Ok(())
     }
     /// Move the identical complete original array, UTF-8/signature allocations and ledger into its shell.
@@ -910,7 +902,7 @@ impl PreparedDaCommitmentBundle {
         if let Err(error) = self.check(input) {
             return Err((self, error));
         }
-        if !self.ready || self.shell.is_none() {
+        if self.phase != PreparationPhase::Ready || self.shell.is_none() {
             return Err((self, DaCommitmentCustodyError::Incomplete));
         }
         // All required fields are checked before moving an allocation or its charge.
@@ -930,7 +922,7 @@ impl PreparedDaCommitmentBundle {
                     || row.manifest.is_none()
                     || row.scheme.is_none()
                     || row.chunk_root.is_none()
-                    || row.proof_digest.is_none()
+                    || row.proof_digest.is_missing()
                     || row.hot.is_none()
                     || row.cold.is_none()
                     || row.replicas.is_none()
@@ -1015,7 +1007,10 @@ impl PreparedDaCommitmentBundle {
                 manifest_hash: row.manifest.expect("checked manifest"),
                 proof_scheme: row.scheme.expect("checked scheme"),
                 chunk_root: row.chunk_root.expect("checked root"),
-                proof_digest: row.proof_digest.expect("checked optional digest"),
+                proof_digest: row
+                    .proof_digest
+                    .into_value()
+                    .expect("checked optional digest"),
                 retention_class: RetentionPolicy {
                     hot_retention_secs: row.hot.expect("checked hot"),
                     cold_retention_secs: row.cold.expect("checked cold"),

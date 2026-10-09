@@ -96,6 +96,7 @@ impl PeerProcesses {
         directory: &PrivateDirectory,
         retained: &RetainedLocalnet,
         ownership: &File,
+        daemon: &super::super::program::NativeProgram,
         launch: Option<Arc<GeneratedLaunch>>,
     ) -> Result<()> {
         if !self.children.is_empty() || self.launch.is_some() {
@@ -111,7 +112,12 @@ impl PeerProcesses {
             }
             launch.validate()?;
         }
-        store::verify_binary(&retained.daemon)?;
+        if daemon.path() != retained.daemon.path.as_path() {
+            return Err(invalid("daemon differs from the retained runtime path"));
+        }
+        if daemon.pin()?.blake3 != retained.daemon.blake3 {
+            return Err(invalid("daemon differs from the retained runtime contents"));
+        }
         self.launch = launch;
         for (index, peer) in retained.prepared.peers.iter().enumerate() {
             let log = directory.open_append(&peer.log_name)?;
@@ -127,11 +133,13 @@ impl PeerProcesses {
                 .stdin(Stdio::from(ownership.try_clone()?))
                 .stdout(log.try_clone()?)
                 .stderr(log);
+            daemon.validate()?;
             self.children
                 .push(Arc::new(Mutex::new(spawn_with_launch_fence(
                     directory,
                     index,
                     &mut command,
+                    daemon,
                 )?)));
         }
         if let Some(launch) = &self.launch {

@@ -49,7 +49,6 @@ pub fn time(
         completions: vec![],
     })
 }
-#[cfg(feature = "transparent_api")]
 pub fn install_network(
     block: &mut SignedBlock,
     results: Vec<TransactionResultInner>,
@@ -70,7 +69,6 @@ pub fn install_network(
     )
 }
 
-#[cfg(feature = "transparent_api")]
 pub fn proposal(count: usize) -> SignedBlock {
     use crate::{
         Level,
@@ -108,7 +106,6 @@ pub fn proposal(count: usize) -> SignedBlock {
     builder.build_with_signature(0, key.private_key())
 }
 
-#[cfg(feature = "transparent_api")]
 pub fn install(
     block: &mut SignedBlock,
     outputs: Vec<ExecutionOutputV1>,
@@ -134,7 +131,6 @@ pub fn simple_time(block: &SignedBlock, schedule_index: u32) -> ExecutionOutputV
     )
 }
 
-#[cfg(feature = "transparent_api")]
 pub fn committed(block: &SignedBlock, input_index: u32) -> crate::query::CommittedTransaction {
     use iroha_crypto::HashOf;
     let entrypoint = block

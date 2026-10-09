@@ -2,7 +2,7 @@
 //!
 //! The caller captures all World reads before dropping its view. Native lane reads subsequently
 //! retain their source and pool here. The canonical capacity is unchanged; no live replay fence
-//! is evicted. TODO(S8): initial proof decoding, non-witness graphs, BLS caches and nested
+//! is evicted. TODO(S8): initial proof decoding, decoded graphs, BLS caches and nested
 //! attribution still need complete original-pool owners; descriptors and frames do not fund them.
 use super::*;
 use crate::sumeragi::{
@@ -247,7 +247,9 @@ impl AdmissionRead {
             frame
                 .append(proof.native_frame())
                 .map_err(|_| EvidencePreparationError::Invariant)?;
-            let native = super::witness_custody::decode(proof, budget)?;
+            let native = proof
+                .decode_native()
+                .map_err(EvidenceAdmissionError::from)?;
             let (instance, height, _) = super::super::evidence_history::subject(&native);
             let mut matching = view
                 .world()
@@ -528,4 +530,4 @@ pub(in crate::sumeragi) fn prepare_admissions(
 mod tests;
 
 #[cfg(test)]
-mod witness_tests;
+mod frame_tests;

@@ -34,7 +34,8 @@ pub(super) struct RandomPoly<F> {
 
 /// The committed quotient pieces.
 pub(super) struct QuotientPieces<F> {
-    pieces: Vec<Vec<F>>,
+    coefficients: Vec<F>,
+    piece_len: usize,
     blinds: Vec<F>,
 }
 
@@ -85,7 +86,7 @@ pub(super) fn commit_quotient<C, T, R>(
     params: &PinnedParams<C>,
     pk: &ProvingKey<C>,
     shape: &Shape,
-    h: &[C::ScalarExt],
+    h: Vec<C::ScalarExt>,
     rng: &mut R,
     transcript: &mut T,
     budget: MemoryBudget,
@@ -108,31 +109,41 @@ where
             actual: h.len(),
         }));
     }
-    let pieces: Vec<Vec<C::ScalarExt>> = h.chunks_exact(shape.n).map(<[_]>::to_vec).collect();
     let blinds: Vec<C::ScalarExt> = random_values(rng, shape.quotient_pieces);
     let tables = pk.commitment_tables();
-    for (piece, blind) in pieces.iter().zip(&blinds) {
+    for (piece, blind) in h.chunks_exact(shape.n).zip(&blinds) {
         let commitment = tables
             .commit(params.params(), piece, blind, Secrecy::Secret, budget)?
             .to_affine();
         write_point(transcript, &commitment)?;
     }
-    Ok(QuotientPieces { pieces, blinds })
+    Ok(QuotientPieces {
+        coefficients: h,
+        piece_len: shape.n,
+        blinds,
+    })
 }
 
 impl<F: Field> QuotientPieces<F> {
-    /// `h_0 + xn h_1 + ...` and the matching blind (Horner from the last
-    /// piece).
-    pub(super) fn combine(&self, xn: F) -> CombinedQuotient<F> {
-        let n = self.pieces.first().map_or(0, Vec::len);
-        let mut coeffs = vec![F::ZERO; n];
-        for piece in self.pieces.iter().rev() {
-            for (acc, value) in coeffs.iter_mut().zip(piece) {
-                *acc = *acc * xn + value;
+    /// `h_0 + xn h_1 + ...` and the matching blind. Reuses the first
+    /// coefficient piece and releases the other pieces before the IPA.
+    pub(super) fn combine(self, xn: F) -> CombinedQuotient<F> {
+        let Self {
+            coefficients: mut coeffs,
+            piece_len: n,
+            blinds,
+        } = self;
+        let (first, rest) = coeffs.split_at_mut(n);
+        let mut power = xn;
+        for piece in rest.chunks_exact(n) {
+            for (acc, value) in first.iter_mut().zip(piece) {
+                *acc += power * value;
             }
+            power *= xn;
         }
-        let blind = self
-            .blinds
+        coeffs.truncate(n);
+        coeffs.shrink_to_fit();
+        let blind = blinds
             .iter()
             .rev()
             .fold(F::ZERO, |acc, blind| acc * xn + blind);
@@ -152,12 +163,15 @@ mod tests {
         let n = 4;
         let h: Vec<Fq> = (1..=12_u64).map(Fq::from).collect();
         let pieces = QuotientPieces {
-            pieces: h.chunks_exact(n).map(<[_]>::to_vec).collect(),
+            coefficients: h.clone(),
+            piece_len: n,
             blinds: vec![Fq::from(2), Fq::from(3), Fq::from(5)],
         };
         let x = Fq::from(7);
         let xn = x.pow_vartime([n as u64]);
         let combined = pieces.combine(xn);
+        assert_eq!(combined.coeffs.len(), n);
+        assert_eq!(combined.coeffs.capacity(), n);
         assert_eq!(
             evaluate_polynomial(&combined.coeffs, x),
             evaluate_polynomial(&h, x)

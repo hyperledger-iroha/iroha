@@ -112,14 +112,7 @@ pub(super) fn fixture(
         },
         peers,
     };
-    directory
-        .write_atomic(
-            "fixture-executable",
-            b"retained binary",
-            PublishMode::CreateNew,
-        )
-        .unwrap();
-    let pin = store::pin_binary(&directory.path().join("fixture-executable")).unwrap();
+    let pin = store::pin_binary(&std::env::current_exe().unwrap()).unwrap();
     let retained = RetainedLocalnet {
         root_kind: RootKind::Global,
         prepared: prepared.clone(),
@@ -170,7 +163,7 @@ fn retained_root_kind_is_mandatory_and_private_identity_cannot_replace_global() 
     value.as_object_mut().unwrap().remove("root_kind");
     assert!(decode::<RetainedLocalnet>(&norito::json::to_vec(&value).unwrap()).is_err());
     let spec = private_spec();
-    let binary = directory.path().join("fixture-executable");
+    let binary = std::env::current_exe().unwrap();
     let request = LocalnetRequest::private_root(binary.clone(), binary);
     let error = store.up_private_root(&request, &spec).unwrap_err();
     assert!(
@@ -216,14 +209,7 @@ fn incomplete_managed_preparation_never_creates_a_replacement_generation() {
             PublishMode::CreateNew,
         )
         .unwrap();
-    directory
-        .write_atomic(
-            "not-executable",
-            b"not a native worker",
-            PublishMode::CreateNew,
-        )
-        .unwrap();
-    let binary = directory.path().join("not-executable");
+    let binary = std::env::current_exe().unwrap();
     let mut request = LocalnetRequest::private_root(binary.clone(), binary);
     request.name = "private".into();
     assert!(store.up_private_root(&request, &private_spec()).is_err());
@@ -251,14 +237,7 @@ fn managed_private_preparation_retains_owner_scope_and_listener_token_after_spaw
     let _resources = super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
     let directory = PrivateDirectory::open_or_create(&temporary.path().join("managed")).unwrap();
-    directory
-        .write_atomic(
-            "not-executable",
-            b"not a native worker",
-            PublishMode::CreateNew,
-        )
-        .unwrap();
-    let binary = directory.path().join("not-executable");
+    let binary = std::env::current_exe().unwrap();
     let store = ManagedStore::open(directory.path()).unwrap();
     let mut request = LocalnetRequest::private_root(binary.clone(), binary);
     request.name = "private".into();
@@ -266,8 +245,8 @@ fn managed_private_preparation_retains_owner_scope_and_listener_token_after_spaw
     let spec = private_spec();
     let error = store.up_private_root(&request, &spec).unwrap_err();
     assert!(
-        matches!(error, Error::Io(_)),
-        "expected native spawn failure after genuine preparation: {error}"
+        matches!(error, Error::Timeout(timeout) if timeout == request.startup_timeout),
+        "expected original-budget worker-start failure after genuine preparation: {error}"
     );
     let prepared = store
         .prepared("private")
@@ -418,7 +397,7 @@ fn create_only_rejects_retained_global_and_private_names_under_the_operation_loc
     for private_root in [false, true] {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("managed");
-        let (store, selected_directory, selected) = fixture(&root, "selected");
+        let (store, _, selected) = fixture(&root, "selected");
         store.select("selected").unwrap();
         let owner = PrivateDirectory::open(store.root()).unwrap();
         let active = owner.read("active.json", MAX_METADATA).unwrap();
@@ -427,7 +406,7 @@ fn create_only_rejects_retained_global_and_private_names_under_the_operation_loc
         let directory = if private_root {
             let networks = PrivateDirectory::open(root.join("networks")).unwrap();
             let directory = networks.create_child("concurrent").unwrap();
-            let binary = selected_directory.path().join("fixture-executable");
+            let binary = std::env::current_exe().unwrap();
             let mut request = LocalnetRequest::private_root(binary.clone(), binary);
             request.name = "concurrent".into();
             let _operation = store::acquire(&directory, "operation.lock", &request.name).unwrap();
@@ -742,10 +721,16 @@ fn changed_binary_is_rejected_before_launch() {
     let _resources = super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
     let binary = temporary.path().join("daemon");
-    std::fs::write(&binary, b"candidate-one").unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), &binary).unwrap();
     let pin = store::pin_binary(&binary).unwrap();
     store::verify_binary(&pin).unwrap();
-    std::fs::write(binary, b"candidate-two").unwrap();
+    use std::io::Write as _;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(binary)
+        .unwrap()
+        .write_all(b"changed native contents")
+        .unwrap();
     assert!(store::verify_binary(&pin).is_err());
 }
 
@@ -792,7 +777,7 @@ fn retained_service_profile_mismatch_and_private_selection_refuse_before_generat
         .unwrap()
         .read(MANIFEST, MAX_METADATA)
         .unwrap();
-    let binary = directory.path().join("fixture-executable");
+    let binary = std::env::current_exe().unwrap();
     let mut request = LocalnetRequest::new(binary.clone(), binary);
     request.service_profile = crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities;
     assert!(

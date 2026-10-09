@@ -90,9 +90,9 @@ SPEC_X_HEX = {
     "00000002" + "22" * 32 + "0000000000000005" + "33" * 32 + "0000000000000003" + "44" * 32
     + "0000000000000000" + "00" * 32,
 }
-SPEC_QC_FIXED_HEX = "0000000000000002" + "88" * 32 + "0000000000000001" + "99" * 32 + "01" + "66" * 32 + "40000201"
-SPEC_M = "2eca89b5065dd7b34b35d7273345c03257c2668c221499bac4afbdf0f2413e30"
-SPEC_FORGERY_ID = "c7970cdfc9d3bdb5098d0a7e8e06763b7a2f451b09c9ef9fa5168d20db3c0ca9"
+SPEC_QC_FIXED_HEX = "0000000000000002" + "88" * 32 + "0000000000000001" + "99" * 32 + "66" * 32 + "40000201"
+SPEC_M = "85c684fac5aab78b197a5e2d40329ec518bc038abd99974a37064ea26e4943e0"
+SPEC_FORGERY_ID = "5fe24c413eba8a5e1d7727f630f9bf0c005286c75662061a8216b0292a454f35"
 SPEC_ANCHOR_7199 = "a22346dda5d3ec12cd1308908cbbcb509f68f3b860377153ca4bae4a5f13df65"
 SPEC_ANCHOR_7200 = "0422761979d4e89d78edd5dcfbd719b1f6e10f339603a53da14e4b1587202ed7"
 SPEC_ANCHOR_NODE = "1d1e5d3ee82efa64b0c2703e18202b34c29bed398a688bb1626f873c2d36d1a3"
@@ -180,10 +180,10 @@ def worked_examples() -> dict:
         if name in SPEC_X_HEX:
             _check(x, SPEC_X_HEX[name], f"X({name})")
         cases[name] = entry
-    qc = QcFixed(2, rep(0x88), 1, rep(0x99), 1, rep(0x66), signers_from_indices([0, 9, 30]))
+    qc = QcFixed(2, rep(0x88), 1, rep(0x99), rep(0x66), signers_from_indices([0, 9, 30]))
     _check(qc.encode(), SPEC_QC_FIXED_HEX, "QC_FIXED")
     r_rot = result_r(rotation.encode(), d_body)
-    preimage = commit_preimage(INSTANCE, 2, rep(0x88), 7200, 1, rep(0x99), r_rot, 1)
+    preimage = commit_preimage(INSTANCE, 2, rep(0x88), 7200, 1, rep(0x99), r_rot)
     m = commit_message(preimage)
     _check(m, SPEC_M, "m")
     fid = forgery_evidence_id(3, m, 0x40000201)
@@ -217,7 +217,6 @@ def worked_examples() -> dict:
             "view": 1,
             "block_hash": hx(rep(0x99)),
             "r": hx(r_rot),
-            "attest": 1,
             "preimage": hx(preimage),
             "m": hx(m),
         },
@@ -406,7 +405,7 @@ def signer_ys_exactly_q(cert, keys: list[bytes]):
     is padded with the `y` of the lowest keys outside the encoded set, a long one truncated.
     """
     q = quorum(len(keys))
-    signers = int.from_bytes(cert.qc[113:117], "big")
+    signers = int.from_bytes(cert.qc[112:116], "big")
     ys = cert.signer_ys
     for i in range(len(keys)):
         if len(ys) >= 48 * q:
@@ -489,7 +488,7 @@ def _certificate_json(label, description, committee_name, cert, pin, now_ms, *, 
         entry["pairing_input"] = hx(pairing_input(meta["apk"], meta["hash_point"], meta["sigma"]))
     if len(cert.header) == X_LEN and len(cert.qc) == QC_FIXED_LEN:
         x_gen = int.from_bytes(cert.header[141:149], "big")
-        entry["forgery_evidence_id"] = hx(forgery_evidence_id(x_gen, meta["m"], int.from_bytes(cert.qc[113:117], "big")))
+        entry["forgery_evidence_id"] = hx(forgery_evidence_id(x_gen, meta["m"], int.from_bytes(cert.qc[112:116], "big")))
     if pin.get("custom_keys"):
         entry["pin"]["keys"] = [hx(k) for k in pin["keys"]]
     return entry
@@ -545,15 +544,13 @@ def build() -> dict:
     n4 = committees["n4"]
     pin4 = _pin(n4)
     kinds = (
-        ("key_change_rotation", header(n4, 7200, flags=3, validity_ms=VALIDITY, next_committee_root=other4.root), 1),
-        ("heartbeat_rotation", header(n4, 7201, flags=3, validity_ms=VALIDITY, next_committee_root=n4.root), 1),
-        ("rotation_attest_0", header(n4, 7202, flags=3, validity_ms=VALIDITY, next_committee_root=other4.root), 0),
-        ("non_rotation_attest_0", header(n4, 7203), 0),
-        ("non_rotation_attest_1", header(n4, 7204), 1),
-        ("empty_block_non_rotation", header(n4, 7205, message_count=0, sccp_root=bytes(32)), 1),
+        ("key_change_rotation", header(n4, 7200, flags=3, validity_ms=VALIDITY, next_committee_root=other4.root)),
+        ("heartbeat_rotation", header(n4, 7201, flags=3, validity_ms=VALIDITY, next_committee_root=n4.root)),
+        ("non_rotation", header(n4, 7203)),
+        ("empty_block_non_rotation", header(n4, 7205, message_count=0, sccp_root=bytes(32))),
     )
-    for label, x, attest in kinds:
-        cert = sim.certify(x, n4, attest=attest)
+    for label, x in kinds:
+        cert = sim.certify(x, n4)
         positives.append(_certificate_json(label, f"{label.replace('_', ' ')} (n = 4)", "n4", cert, pin4, now))
     for entry in positives:
         assert entry["expected"] == {"evm": "ok", "ton": "ok"}, entry["label"]
@@ -628,7 +625,8 @@ def _negatives(sim: TairaSim, committees: dict, other4: Committee, header, now: 
     spare = sim.certify(header(n4, 7304), n4, signer_indices=[0, 1, 2], signers_field=0b10011)
     add("spare_bits", "a signer bit at index n (spare bit) with popcount q (signerYs of 48q bytes)",
         signer_ys_exactly_q(spare, n4.keys), expect={"evm": "BadCertificate", "ton": "BadCertificate"})
-    add("attest_2", "attest = 2", sim.certify(header(n4, 7305), n4, attest=2),
+    add("retired_qc_extension", "retired attestation field in QC_FIXED",
+        dataclasses.replace(good, qc=good.qc[:80] + b"\x01" + good.qc[80:]),
         expect={"evm": "BadCertificate", "ton": "BadCertificate"})
     add("wrong_instance", "signed over a Commit preimage with another instance I",
         sim.certify(header(n4, 7306), n4, signed_instance=rep(0x78)), expect={"evm": "BadSignature", "ton": "BadSignature"})
@@ -761,7 +759,7 @@ def _negatives(sim: TairaSim, committees: dict, other4: Committee, header, now: 
         pin=_pin(n7), committee="n7", expect={"evm": "BadCertificate", "ton": "BadCertificate"})
 
     # Exact lengths.
-    add("qc_length_116", "QC_FIXED of 116 bytes", dataclasses.replace(good, qc=good.qc[:-1]),
+    add("qc_length_115", "QC_FIXED of 115 bytes", dataclasses.replace(good, qc=good.qc[:-1]),
         expect={"evm": "BadCertificate", "ton": "BadCertificate"})
     add("header_length_220", "X of 220 bytes", dataclasses.replace(good, header=good.header[:-1]),
         expect={"evm": "BadHeader", "ton": "BadHeader"})

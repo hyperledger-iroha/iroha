@@ -119,6 +119,7 @@ pub mod isi {
                 )
                     .into());
             }
+            ensure_not_kagemusha_reserve_source(self, &resolved_id)?;
             let quantity = self
                 .assets
                 .get(&resolved_id)
@@ -1724,6 +1725,7 @@ pub mod isi {
         FxEscrowDeposit,
         NativeEscrowCustody,
         SorafsReserveCustody,
+        KagemushaReserveCustody,
         FxEscrowRelease,
         FeeSponsorCustody,
         OracleReward,
@@ -1963,6 +1965,25 @@ pub mod isi {
                     .into(),
             )
             .into());
+        }
+        Ok(())
+    }
+    pub(crate) fn kagemusha_custody_error(error: crate::kagemusha_wallet_v1::Error) -> Error {
+        InstructionExecutionError::InvariantViolation(
+            format!("KAGEMUSHA reserve custody: {error}").into(),
+        )
+    }
+    fn ensure_not_kagemusha_reserve_source(
+        world: &impl WorldReadOnly,
+        source: &AssetId,
+    ) -> Result<(), Error> {
+        if crate::kagemusha_wallet_v1::custody::reserve_registration(world, source)
+            .map_err(kagemusha_custody_error)?
+            .is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA reserve requires a verified native payout capability".into(),
+            ));
         }
         Ok(())
     }
@@ -2582,6 +2603,9 @@ pub mod isi {
                 NumericAssetTransferSourcePolicy::SorafsReserveCustody => {
                     ("SorafsReserveCustody", SourceDetail::Empty)
                 }
+                NumericAssetTransferSourcePolicy::KagemushaReserveCustody => {
+                    ("KagemushaReserveCustody", SourceDetail::Empty)
+                }
                 NumericAssetTransferSourcePolicy::FxEscrowRelease => {
                     ("FxEscrowRelease", SourceDetail::Empty)
                 }
@@ -2730,6 +2754,9 @@ pub mod isi {
                 }
                 NumericAssetTransferSourcePolicy::SorafsReserveCustody => {
                     ("SorafsReserveCustody", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::KagemushaReserveCustody => {
+                    ("KagemushaReserveCustody", Vec::new())
                 }
                 NumericAssetTransferSourcePolicy::FxEscrowRelease => {
                     ("FxEscrowRelease", Vec::new())
@@ -3039,6 +3066,104 @@ pub mod isi {
             Ok(())
         }
     }
+    /// Reject overlap with every custody owner that ordinary balance debits already protect.
+    pub(crate) fn ensure_kagemusha_reserve_available(
+        state: &StateTransaction<'_, '_>,
+        id: &AssetId,
+    ) -> Result<(), Error> {
+        ensure_not_native_escrow_source(state, id)?;
+        ensure_not_sorafs_reserve_custody_source(state, id)?;
+        ensure_not_sccp_escrow_source(state, id)?;
+        ensure_not_fx_corridor_escrow_source(state, id)?;
+        ensure_privacy_public_reserve_source_policy(
+            state,
+            id,
+            NumericAssetTransferSourcePolicy::User,
+        )?;
+        if state
+            .world
+            .game_custody_by_account
+            .get(id.account())
+            .is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA reserve overlaps game custody".into(),
+            ));
+        }
+        ensure_not_kagemusha_reserve_source(state.world(), id)
+    }
+    /// Consume one source-verified KAGEMUSHA deposit or payout and its complete transfer batch.
+    pub(crate) fn execute_verified_kagemusha_movements(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        capability: crate::kagemusha_wallet_v1::wsv::VerifiedMovements,
+    ) -> Result<(), Error> {
+        let (authority, reserve, release, binding, entries) = capability.into_parts();
+        if entries.is_empty()
+            || entries.len() > 2
+            || entries.iter().any(|(source, destination, _)| {
+                source.definition() != reserve.definition()
+                    || destination.definition() != reserve.definition()
+                    || (release && source != &reserve)
+                    || (!release && source.account() != &authority)
+            })
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA movement binding differs".into(),
+            ));
+        }
+        let authorization = NumericAssetMovementAuthorization {
+            debit: if release {
+                NumericMovementDebitAuthorization::Protocol
+            } else {
+                NumericMovementDebitAuthorization::ExactUser(authority.clone())
+            },
+            transcript_authority: authority,
+            transcript: NumericMovementTranscriptRequirement::TransactionOrTypedPurpose {
+                tag: if release {
+                    "kagemusha-reserve-payout"
+                } else {
+                    "kagemusha-load-issuance"
+                },
+                binding,
+            },
+            source_policy: if release {
+                NumericAssetTransferSourcePolicy::KagemushaReserveCustody
+            } else {
+                NumericAssetTransferSourcePolicy::User
+            },
+            control_policy: NumericAssetTransferControlPolicy::Enforce,
+            destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+        };
+        let prepared = PreparedNumericAssetMovementBatch::prepare_with_authorization(
+            state_transaction,
+            &entries,
+            authorization,
+        )?;
+        if prepared
+            .plans
+            .iter()
+            .zip(&entries)
+            .any(|(plan, (source, destination, _))| {
+                &plan.source_id != source || &plan.destination_id != destination
+            })
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "KAGEMUSHA movement must preserve both registered balance buckets".into(),
+            ));
+        }
+        // §6 preserves the claim's face value. Ordinary asset controls still apply; the
+        // offline blacklist is deliberately absent from this redemption boundary.
+        let applied = prepared.apply(state_transaction)?;
+        for movement in applied {
+            emit_numeric_asset_transfer_events(
+                state_transaction,
+                movement.source_id,
+                movement.destination_id,
+                movement.amount,
+            );
+        }
+        Ok(())
+    }
     /// Prepare and atomically apply one typed numeric asset movement.
     fn execute_numeric_asset_movement(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -3272,6 +3397,7 @@ pub mod isi {
                 )?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
+                ensure_not_kagemusha_reserve_source(state_transaction.world(), &source_id)?;
                 ensure_not_sccp_escrow_source(state_transaction, &source_id)?;
             }
             NumericAssetBurnSourcePolicy::FeeSponsorCustody => {
@@ -3287,6 +3413,7 @@ pub mod isi {
                 }
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
+                ensure_not_kagemusha_reserve_source(state_transaction.world(), &source_id)?;
                 ensure_not_sccp_escrow_source(state_transaction, &source_id)?;
             }
         }
@@ -7099,6 +7226,9 @@ pub mod isi {
             ));
         }
         assert_numeric_spec_with(amount.as_numeric(), spec)?;
+        if source_policy != NumericAssetTransferSourcePolicy::KagemushaReserveCustody {
+            ensure_not_kagemusha_reserve_source(state_transaction.world(), &source_id)?;
+        }
         // Exact retained staking-slash and moderation-settlement capabilities
         // are finality-owned protocol custody. User transfer availability,
         // holding, issuer-usage, privacy-mode, and unrelated custody controls
@@ -7169,6 +7299,20 @@ pub mod isi {
                         "native escrow settlement source is not a recorded custody asset".into(),
                     ));
                 }
+            }
+            NumericAssetTransferSourcePolicy::KagemushaReserveCustody => {
+                if crate::kagemusha_wallet_v1::custody::reserve_registration(
+                    state_transaction.world(),
+                    &source_id,
+                )
+                .map_err(kagemusha_custody_error)?
+                .is_none()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "KAGEMUSHA payout source is not registered custody".into(),
+                    ));
+                }
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
             }
             NumericAssetTransferSourcePolicy::SorafsReserveCustody => {
                 if !crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_asset(
@@ -7832,6 +7976,7 @@ pub mod isi {
             ensure_not_native_escrow_source(state_transaction, &resolved_asset_id)?;
             ensure_not_fx_corridor_escrow_source(state_transaction, &resolved_asset_id)?;
             ensure_not_sorafs_reserve_custody_source(state_transaction, &resolved_asset_id)?;
+            ensure_not_kagemusha_reserve_source(state_transaction.world(), &resolved_asset_id)?;
             ensure_not_sccp_escrow_source(state_transaction, &resolved_asset_id)?;
             let captured_quantity = quantity.clone();
             apply_with_supply_quantity_candidate(
@@ -8042,6 +8187,7 @@ pub mod isi {
         ensure_not_native_escrow_source(state_transaction, &asset_id)?;
         ensure_not_fx_corridor_escrow_source(state_transaction, &asset_id)?;
         ensure_not_sorafs_reserve_custody_source(state_transaction, &asset_id)?;
+        ensure_not_kagemusha_reserve_source(state_transaction.world(), &asset_id)?;
         ensure_not_sccp_escrow_source(state_transaction, &asset_id)?;
         let captured_quantity = quantity.clone();
         let captured_id = asset_id.clone();

@@ -268,10 +268,10 @@ def test_aggregates():
 
 
 def test_consensus_digest_allowlist():
-    commit = b"sumeragi/sig" + b"\x03" + bytes(153)
+    commit = b"sumeragi/sig" + b"\x03" + bytes(152)
     assert consensus_digest(commit) == hashlib.sha256(commit).digest()
     assert consensus_digest(commit[:-1]) is None
-    assert consensus_digest(b"sumeragi/sig" + b"\x06" + bytes(153)) is None
+    assert consensus_digest(b"sumeragi/sig" + b"\x06" + bytes(152)) is None
     assert consensus_digest(b"sumeragi/sig" + b"\x04" + bytes(88) + b"\x00") is not None
     assert consensus_digest(b"sumeragi/sig" + b"\x04" + bytes(88) + b"\x01") is None
     assert consensus_digest(b"sumeragi/availability/sign" + b"\x01" + bytes(192)) is not None
@@ -422,7 +422,7 @@ def test_spec_worked_examples():
     from sccp_reference.vectors_finality import worked_examples
 
     examples = worked_examples()
-    assert examples["commit"]["m"] == "0x2eca89b5065dd7b34b35d7273345c03257c2668c221499bac4afbdf0f2413e30"
+    assert examples["commit"]["m"] == "0x85c684fac5aab78b197a5e2d40329ec518bc038abd99974a37064ea26e4943e0"
 
 
 def test_header_parse_invariants():
@@ -447,10 +447,17 @@ def test_qc_fixed_signers_and_quorum():
     assert bitmap_from_indices([0, 9, 30], 31).hex() == "01020040"
     assert [quorum(n) for n in (4, 7, 31)] == [3, 5, 21]
     assert not committee_n_valid(5) and committee_n_valid(31) and not committee_n_valid(34)
-    p = commit_preimage(rep(0x77), 1, rep(0x88), 2, 3, rep(0x99), rep(0x66), 1)
-    assert len(p) == 166 and p[12] == 3
-    qc = parse_qc_fixed(bytes(113) + (0x40000201).to_bytes(4, "big"))
+    p = commit_preimage(rep(0x77), 1, rep(0x88), 2, 3, rep(0x99), rep(0x66))
+    assert len(p) == 165 and p[12] == 3
+    qc = parse_qc_fixed(bytes(112) + (0x40000201).to_bytes(4, "big"))
     assert qc.signers == 0x40000201
+    assert len(qc.encode()) == 116
+    assert parse_qc_fixed(qc.encode()) == qc
+    assert consensus_digest(p) == hashlib.sha256(p).digest()
+    assert consensus_digest(p + b"\x01") is None
+    for invalid in (qc.encode()[:-1], qc.encode()[:80] + b"\x01" + qc.encode()[80:]):
+        with pytest.raises(SccpError, match="QC_FIXED must be 116 bytes"):
+            parse_qc_fixed(invalid)
 
 
 def test_anchor_chunk_paths_verify():
@@ -479,7 +486,6 @@ def test_certificate_aggregate_equals_sum_of_signatures():
         epoch_context=rep(0x88),
         view=0,
         block_hash=rep(0x99),
-        attest=1,
         result_body=rep(0x66),
     )
     m = cert.meta["m"]
@@ -686,12 +692,12 @@ def test_signer_set_negatives_reach_the_bitmap_check():
 def test_ton_length_negatives_are_malformed_cells():
     doc = json.loads((FIXTURES / "finality_v1.json").read_text())
     rows = {entry["label"]: entry for entry in doc["negative_certificates"]}
-    assert len(unhex(rows["qc_length_116"]["ton"]["qc_fixed_cell"])) == 112
+    assert len(unhex(rows["qc_length_115"]["ton"]["qc_fixed_cell"])) == 111
     assert len(unhex(rows["header_length_220"]["ton"]["x_tail"])) == 111
     assert len(unhex(rows["ton_signature_length_95"]["ton"]["signature"])) == 95
     for entry in doc["certificates"]:
         ton = entry["ton"]
-        assert len(unhex(ton["qc_fixed_cell"])) == 113 and len(unhex(ton["x_head"])) + len(unhex(ton["x_tail"])) == 221
+        assert len(unhex(ton["qc_fixed_cell"])) == 112 and len(unhex(ton["x_head"])) + len(unhex(ton["x_tail"])) == 221
         assert unhex(ton["qc_fixed_cell"]) + ton["signers"].to_bytes(4, "big") == unhex(entry["evm"]["qc"])
 
 

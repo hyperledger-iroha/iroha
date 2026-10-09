@@ -62,18 +62,35 @@ HOST_TRIPLE="$("${RUSTC_BIN}" -vV | sed -n 's/^host: //p')"
   || fail "rustc returned a non-canonical host triple"
 export NORITO_SKIP_BINDINGS_SYNC=1
 
+SOURCE_MANIFEST_BEFORE="$("${PYTHON_BIN}" -I -S "${ROOT_DIR}/scripts/compute_workspace_source_manifest.py" \
+  --root "${ROOT_DIR}" --native-artifact-manifest)"
+[[ "${SOURCE_MANIFEST_BEFORE}" =~ ^[0-9a-f]{64}$ ]] \
+  || fail "native JVM source manifest is not canonical"
+
 if [[ -n "${IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR:-}" ]]; then
   BUILD_TARGET_DIR="${IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR}"
   "${CARGO_BIN}" build --locked -p connect_norito_bridge --lib \
+    --features privacy-production-enabled \
+    --target-dir "${BUILD_TARGET_DIR}"
+  "${CARGO_BIN}" build --locked -p kotlin-fixture-gen \
+    --features dev-tools --bin kotlin-fixture-gen \
     --target-dir "${BUILD_TARGET_DIR}"
   TARGET_ARTIFACT_DIR="${BUILD_TARGET_DIR}/debug"
 else
   BUILD_TARGET_DIR="${NATIVE_BUILD_ROOT}/target"
   "${CARGO_BIN}" build --locked -p connect_norito_bridge --lib \
+    --features privacy-production-enabled \
+    --target "${HOST_TRIPLE}" \
+    --target-dir "${BUILD_TARGET_DIR}"
+  "${CARGO_BIN}" build --locked -p kotlin-fixture-gen \
+    --features dev-tools --bin kotlin-fixture-gen \
     --target "${HOST_TRIPLE}" \
     --target-dir "${BUILD_TARGET_DIR}"
   TARGET_ARTIFACT_DIR="${BUILD_TARGET_DIR}/${HOST_TRIPLE}/debug"
 fi
+[[ "$("${PYTHON_BIN}" -I -S "${ROOT_DIR}/scripts/compute_workspace_source_manifest.py" \
+  --root "${ROOT_DIR}" --native-artifact-manifest)" == "${SOURCE_MANIFEST_BEFORE}" ]] \
+  || fail "native JVM source changed while bridge and fixture generator were built"
 
 case "${HOST_TRIPLE}" in
   *-apple-*) NATIVE_LIBRARY="${TARGET_ARTIFACT_DIR}/libconnect_norito_bridge.dylib" ;;
@@ -82,6 +99,16 @@ case "${HOST_TRIPLE}" in
 esac
 [[ -f "${NATIVE_LIBRARY}" && ! -L "${NATIVE_LIBRARY}" ]] \
   || fail "fresh ABI25 privacy JVM bridge is unavailable: ${NATIVE_LIBRARY}"
+# This is the exact same-target dev-tools output just built above, never an
+# inherited path or a Cargo command launched by a JVM test.
+case "${HOST_TRIPLE}" in
+  *-windows-*) FIXTURE_GENERATOR="${TARGET_ARTIFACT_DIR}/kotlin-fixture-gen.exe" ;;
+  *) FIXTURE_GENERATOR="${TARGET_ARTIFACT_DIR}/kotlin-fixture-gen" ;;
+esac
+[[ -f "${FIXTURE_GENERATOR}" && ! -L "${FIXTURE_GENERATOR}" && -x "${FIXTURE_GENERATOR}" ]] \
+  || fail "fresh dev-tools kotlin-fixture-gen is unavailable: ${FIXTURE_GENERATOR}"
+FIXTURE_GENERATOR_SHA256="$(sha256_file "${FIXTURE_GENERATOR}")"
+
 NATIVE_LIBRARY_DIR="$(cd "$(dirname "${NATIVE_LIBRARY}")" && pwd -P)"
 NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi25.json"
 CSHARP_NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi25-csharp.json"
@@ -112,6 +139,7 @@ CSHARP_NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi25-csharp.json"
   --source-root "${ROOT_DIR}"
 
 export IROHA_NATIVE_LIBRARY_PATH="${NATIVE_LIBRARY_DIR}"
+export IROHA_KOTLIN_FIXTURE_GEN_BIN="${FIXTURE_GENERATOR}"
 export IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE=1
 case "${HOST_TRIPLE}" in
   *-apple-*) export DYLD_LIBRARY_PATH="${NATIVE_LIBRARY_DIR}" ;;
@@ -176,7 +204,7 @@ export JAVA_HOME
 "${JAVA_HOME}/bin/java" -version
 
 cd "${ROOT_DIR}/kotlin"
-./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test \
+./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test --no-build-cache --rerun-tasks \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureCodecV1Test \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureJavaConsumerTest \
@@ -194,7 +222,11 @@ cd "${ROOT_DIR}/kotlin"
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeJavaConsumerTest \
   --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteJavaConsumerTest \
   --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathJavaConsumerTest \
-  --tests org.hyperledger.iroha.sdk.privacy.PrivacyRetiredWitnessBoundaryJavaConsumerTest
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyRetiredWitnessBoundaryJavaConsumerTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoderParityTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.RegisterAccountWirePayloadEncoderParityTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.ContractLifecycleWirePayloadEncoderParityTest
 
 "${PYTHON_BIN}" -I -S "${ROOT_DIR}/scripts/check_privacy_jvm_class_contract.py" \
   --classes "${ROOT_DIR}/kotlin/core-jvm/build/classes/kotlin/main"
@@ -234,6 +266,11 @@ NORITO_RUNTIME_CLASSPATH="$(<"${NORITO_RUNTIME_CLASSPATH_FILE}")"
 "${JAVA_HOME}/bin/java" -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" \
   -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}:${NORITO_RUNTIME_CLASSPATH}" \
   org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests
+
+[[ -f "${FIXTURE_GENERATOR}" && ! -L "${FIXTURE_GENERATOR}" && -x "${FIXTURE_GENERATOR}" ]] \
+  || fail "fixture generator was withdrawn during privacy JVM execution"
+[[ "$(sha256_file "${FIXTURE_GENERATOR}")" == "${FIXTURE_GENERATOR_SHA256}" ]] \
+  || fail "fixture generator changed during privacy JVM execution"
 
 "${PYTHON_BIN}" -I -S "${ABI25_CHECKER}" verify \
   --artifact "${NATIVE_LIBRARY}" \

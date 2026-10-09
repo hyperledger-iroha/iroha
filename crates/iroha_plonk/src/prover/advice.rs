@@ -14,7 +14,7 @@ use iroha_pasta::{PastaCurve, msm::MemoryBudget};
 use rand_core_06::RngCore;
 use rayon::prelude::*;
 
-use super::{ProverError, Witness, random_values, write_point};
+use super::{ProverError, random_values, write_point};
 use crate::{
     keys::ProvingKey,
     pcs::ipa::{PinnedParams, commit::Secrecy},
@@ -126,17 +126,33 @@ impl<F: iroha_pasta::PastaField> Drop for Advice<F> {
     }
 }
 
+impl<F: iroha_pasta::PastaField> Advice<F> {
+    /// Reuses the evaluation buffers for coefficients once all products
+    /// have consumed the evaluations. The zeroizing owner retains every
+    /// column even if a transform fails partway through.
+    pub(super) fn interpolate_in_place<C: PastaCurve<ScalarExt = F>>(
+        &mut self,
+        pk: &ProvingKey<C>,
+    ) -> Result<(), ProverError> {
+        self.polys = core::mem::take(&mut self.values);
+        self.polys
+            .par_iter_mut()
+            .try_for_each(|column| pk.domain().ifft(column))?;
+        Ok(())
+    }
+}
+
 /// Blinds, commits and writes the advice columns (`BlindingScheduleV1` item
 /// 1).
 ///
 /// # Errors
 ///
-/// [`ProverError::Msm`], [`ProverError::Fft`] or [`ProverError::Transcript`].
+/// [`ProverError::Msm`] or [`ProverError::Transcript`].
 pub(super) fn commit<C, T, R>(
     params: &PinnedParams<C>,
     pk: &ProvingKey<C>,
     shape: &Shape,
-    witness: &Witness<C::ScalarExt>,
+    values: Vec<Vec<C::ScalarExt>>,
     rng: &mut R,
     transcript: &mut T,
     budget: MemoryBudget,
@@ -147,7 +163,7 @@ where
     R: RngCore,
 {
     let mut advice = Advice {
-        values: witness.advice().to_vec(),
+        values,
         polys: Vec::new(),
         blinds: Vec::new(),
     };
@@ -171,13 +187,5 @@ where
     for commitment in &commitments {
         write_point(transcript, commitment)?;
     }
-    advice.polys = advice
-        .values
-        .par_iter()
-        .map(|values| {
-            let mut coeffs = values.clone();
-            pk.domain().ifft(&mut coeffs).map(|()| coeffs)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     Ok(advice)
 }

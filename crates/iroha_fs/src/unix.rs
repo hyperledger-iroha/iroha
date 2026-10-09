@@ -1,5 +1,8 @@
 //! Descriptor-relative Unix custody and atomic publication.
 
+#[path = "unix/custody_io.rs"]
+mod custody_io;
+
 use super::*;
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use std::{
@@ -37,7 +40,7 @@ fn open_directory(path: &Path) -> io::Result<File> {
     )?))
 }
 
-fn validate_directory(file: &File, private: bool) -> io::Result<()> {
+fn validate_directory(file: &File, private: bool) -> io::Result<FileIdentity> {
     let metadata = file.metadata()?;
     let uid = rustix::process::geteuid().as_raw();
     if !metadata.is_dir() {
@@ -58,7 +61,15 @@ fn validate_directory(file: &File, private: bool) -> io::Result<()> {
     }
     #[cfg(target_vendor = "apple")]
     apple_acl::validate(file, private)?;
-    Ok(())
+    // This fresh metadata identifies the live, privately held descriptor. Its
+    // device/inode pair cannot change during this borrow; custody is still
+    // checked independently for the held and freshly opened named handles.
+    let mut object = [0; 16];
+    object[..8].copy_from_slice(&metadata.ino().to_le_bytes());
+    Ok(FileIdentity {
+        volume: metadata.dev(),
+        object,
+    })
 }
 
 fn validate_file(file: &File, private: bool) -> io::Result<fs::Metadata> {
@@ -260,7 +271,7 @@ impl Directory {
 
     pub(super) fn revalidate(&self) -> io::Result<()> {
         for (index, link) in self.links.iter().enumerate() {
-            validate_directory(&link.file, link.private)?;
+            let held_identity = validate_directory(&link.file, link.private)?;
             let named = if index == 0 {
                 open_directory(&link.path)?
             } else {
@@ -271,12 +282,35 @@ impl Directory {
                     Mode::empty(),
                 )?)
             };
-            validate_directory(&named, link.private)?;
-            if identity(&named)? != identity(&link.file)? {
+            let named_identity = validate_directory(&named, link.private)?;
+            if named_identity != held_identity {
                 return Err(changed());
             }
         }
         Ok(())
+    }
+
+    pub(super) fn child_reader(&self, name: &OsStr) -> io::Result<Self> {
+        self.revalidate()?;
+        let file = File::from(rustix::fs::openat(
+            &self.current().file,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?);
+        validate_directory(&file, false)?;
+        let mut links = self.links.clone();
+        if links.len() >= 128 {
+            return Err(invalid("private directory depth bound exceeded"));
+        }
+        links.push(Arc::new(Link {
+            path: self.path().join(name),
+            file,
+            private: false,
+        }));
+        let result = Self { links };
+        result.revalidate()?;
+        Ok(result)
     }
 
     pub(super) fn child(&self, name: &OsStr, create: bool, exclusive: bool) -> io::Result<Self> {

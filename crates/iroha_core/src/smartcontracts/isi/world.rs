@@ -308,8 +308,6 @@ pub mod isi {
         status::PeerKeyPolicyRejectReason,
         zk::hash_vk,
     };
-    #[cfg(test)]
-    use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{
         json::Json,
         numeric::{Numeric, Quantity},
@@ -1317,9 +1315,6 @@ pub mod isi {
         columns: Vec<Vec<[u8; 32]>>,
         envelope: ZkOpenVerifyEnvelope,
     }
-    fn normalize_halo2_circuit_id(raw: &str) -> Option<String> {
-        crate::zk::canonical_halo2_ipa_circuit_id(raw)
-    }
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
         let is_admissible = |circuit_id: &str| {
             circuit_id.len() <= iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
@@ -1331,20 +1326,11 @@ pub mod isi {
         if !is_admissible(record_id) || !is_admissible(env_id) {
             return false;
         }
-        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta) {
-            if !crate::zk::halo2_open_verify_circuit_id_matches_backend(backend, record_id)
-                || !crate::zk::halo2_open_verify_circuit_id_matches_backend(backend, env_id)
-            {
-                return false;
-            }
-            match (
-                normalize_halo2_circuit_id(record_id),
-                normalize_halo2_circuit_id(env_id),
-            ) {
-                (Some(rec), Some(env)) => rec == env,
-                _ => record_id == env_id,
-            }
-        } else if crate::zk::is_stark_fri_v1_backend(backend) {
+        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::NativePipaRPasta) {
+            return record_id == env_id
+                && crate::zk::pipa_r_open_verify_circuit_id_matches_backend(backend, record_id);
+        }
+        if crate::zk::is_stark_fri_v1_backend(backend) {
             match (
                 normalize_stark_fri_circuit_id(backend, record_id),
                 normalize_stark_fri_circuit_id(backend, env_id),
@@ -1353,7 +1339,7 @@ pub mod isi {
                 _ => record_id == env_id,
             }
         } else {
-            record_id == env_id
+            false
         }
     }
     const VOTING_BALLOT_CIRCUIT_ID: &str = crate::zk::GOVERNANCE_BALLOT_CIRCUIT_ID_V1;
@@ -1373,7 +1359,7 @@ pub mod isi {
         .into())
     }
     fn voting_circuit_matches(backend: &str, record_circuit_id: &str, expected_id: &str) -> bool {
-        if crate::zk::production_verify_backend_tag(backend) != Some(BackendTag::Halo2IpaPasta) {
+        if crate::zk::production_verify_backend_tag(backend) != Some(BackendTag::NativePipaRPasta) {
             // The STARK/FRI Binding AIR proves only generic public-data
             // consistency. A `vote-ballot` or `vote-tally` label does not turn
             // that AIR into a semantic governance circuit.
@@ -1396,9 +1382,6 @@ pub mod isi {
             ));
         }
         Ok(())
-    }
-    fn is_no_trusted_setup_halo2_backend_id(backend: &str) -> bool {
-        crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta)
     }
     fn ensure_production_verifying_key_backend_id(backend: &str) -> Result<(), Error> {
         if crate::zk::is_production_claim_backend_label(backend) {
@@ -1609,16 +1592,17 @@ pub mod isi {
             )
             .into());
         }
-        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta)
-            && !crate::zk::halo2_open_verify_circuit_id_matches_backend(backend, circuit_id)
+        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::NativePipaRPasta)
+            && !crate::zk::pipa_r_open_verify_circuit_id_matches_backend(backend, circuit_id)
         {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
-                    "Halo2 OpenVerify circuit_id is not in the production circuit registry".into(),
+                    "native PIPA-R circuit_id is not in the compiled circuit registry".into(),
                 ),
             )
             .into());
         }
+
         Ok(())
     }
     fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
@@ -1710,7 +1694,7 @@ pub mod isi {
         envelope
             .validate_for_admission()
             .map_err(|err| open_verify_envelope_validation_error(label, err))?;
-        if envelope.backend != BackendTag::Halo2IpaPasta {
+        if envelope.backend != BackendTag::NativePipaRPasta {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} unexpected OpenVerifyEnvelope backend tag").into(),
             ));
@@ -1764,29 +1748,6 @@ pub mod isi {
         backend: &str,
         proof_bytes: &[u8],
     ) -> Result<VotePublicInputs, Error> {
-        if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
-            let env: ZkOpenVerifyEnvelope =
-                norito::decode_canonical(proof_bytes).map_err(|_| {
-                    InstructionExecutionError::InvariantViolation(
-                        "invalid OpenVerifyEnvelope payload".into(),
-                    )
-                })?;
-            if env.backend != BackendTag::Halo2IpaPasta {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "unexpected OpenVerifyEnvelope backend tag".into(),
-                ));
-            }
-            let columns = crate::zk::extract_pasta_instance_columns_bytes(&env.proof_bytes)
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "failed to extract vote public inputs".into(),
-                    )
-                })?;
-            return Ok(VotePublicInputs {
-                columns,
-                envelope: env,
-            });
-        }
         if crate::zk::is_stark_fri_v1_backend(backend) {
             let env: ZkOpenVerifyEnvelope =
                 norito::decode_canonical(proof_bytes).map_err(|_| {
@@ -2704,20 +2665,21 @@ pub mod isi {
                 ));
             }
             match record.backend {
-                BackendTag::Halo2IpaPasta => {
-                    if record.curve != "pallas" {
+                BackendTag::NativePipaRPasta => {
+                    if record.curve != "vesta" {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
-                                "verifying key curve must be \"pallas\"".into(),
+                                "native PIPA-R verifying key curve must be \"vesta\"".into(),
                             ),
                         ));
                     }
                     ensure_production_verifying_key_backend_id(id_backend)?;
-                    if !is_no_trusted_setup_halo2_backend_id(id_backend) {
+                    if crate::zk::verifier_backend_registry_tag_v1(id_backend)
+                        != Some(BackendTag::NativePipaRPasta)
+                    {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
-                                "verifying key id backend must target no-trusted-setup Halo2 IPA"
-                                    .into(),
+                                "verifying key backend must target native PIPA-R".into(),
                             ),
                         ));
                     }
@@ -11242,20 +11204,21 @@ pub mod isi {
         let id_backend = id.backend.as_str();
         ensure_open_verify_circuit_id_is_admitted_v1(id_backend, &new.circuit_id)?;
         match new.backend {
-            BackendTag::Halo2IpaPasta => {
-                if new.curve != "pallas" {
+            BackendTag::NativePipaRPasta => {
+                if new.curve != "vesta" {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
-                            "verifying key curve must be \"pallas\"".into(),
+                            "native PIPA-R verifying key curve must be \"vesta\"".into(),
                         ),
                     ));
                 }
                 ensure_production_verifying_key_backend_id(id_backend)?;
-                if !is_no_trusted_setup_halo2_backend_id(id_backend) {
+                if crate::zk::verifier_backend_registry_tag_v1(id_backend)
+                    != Some(BackendTag::NativePipaRPasta)
+                {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
-                            "verifying key id backend must target no-trusted-setup Halo2 IPA"
-                                .into(),
+                            "verifying key backend must target native PIPA-R".into(),
                         ),
                     ));
                 }
@@ -12330,7 +12293,7 @@ pub mod isi {
     fn backend_requires_open_verify_envelope(backend: &str) -> bool {
         matches!(
             crate::zk::production_verify_backend_tag(backend),
-            Some(BackendTag::Halo2IpaPasta | BackendTag::Stark)
+            Some(BackendTag::Stark | BackendTag::NativePipaRPasta)
         )
     }
     struct ProofEventArgs<'a> {
@@ -13101,7 +13064,7 @@ pub mod isi {
         use super::*;
         #[test]
         fn retention_prunes_entries_older_than_grace_window() {
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let items: Vec<_> = (1u64..=4)
                 .map(|height| {
                     let proof_height = u8::try_from(height).unwrap_or(u8::MAX);
@@ -13122,7 +13085,7 @@ pub mod isi {
         }
         #[test]
         fn retention_respects_prune_batch_limit() {
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let items: Vec<_> = (0u64..5)
                 .map(|height| {
                     let proof_height = u8::try_from(height).unwrap_or(u8::MAX);
@@ -13143,7 +13106,7 @@ pub mod isi {
         }
         #[test]
         fn retention_keeps_minimum_entries_when_all_are_stale() {
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let items: Vec<_> = (1u64..=6)
                 .map(|height| {
                     let proof_height = u8::try_from(height).unwrap_or(u8::MAX);
@@ -13792,7 +13755,7 @@ pub mod isi {
                 );
                 if !is_v2 && !is_v3 {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "vk_unshield must name a confidential-unshield-v2 or confidential-unshield-v3 circuit"
+                        "vk_unshield must name a native confidential-unshield-full-v1 or confidential-unshield-change-v1 circuit"
                             .into(),
                     ));
                 }
@@ -16942,6 +16905,12 @@ pub mod isi {
         if let Ok(permission) = CanModifyAssetDefinitionMetadata::try_from(permission) {
             return asset_definition_matches_domain(&permission.asset_definition);
         }
+        if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageKagemushaWallet::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
+        }
+        if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanPublishKagemushaLoadVoucher::try_from(permission) {
+            return asset_definition_matches_domain(&permission.asset_definition);
+        }
         if let Ok(permission) = CanManageAssetDefinitionConfidentialPolicy::try_from(permission) {
             return asset_definition_matches_domain(&permission.asset_definition);
         }
@@ -17252,6 +17221,18 @@ pub mod isi {
                         .into(),
                     )
                     .into());
+                }
+            }
+            for asset_definition_id in &remove_asset_definitions {
+                if crate::kagemusha_wallet_v1::custody::is_reserve_definition(
+                    state_transaction.world(),
+                    asset_definition_id,
+                )
+                .map_err(crate::smartcontracts::isi::asset::isi::kagemusha_custody_error)?
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!("cannot unregister domain {domain_id}: asset definition {asset_definition_id} backs permanent KAGEMUSHA reserve custody").into(),
+                    ).into());
                 }
             }
             let remove_assets = state_transaction
@@ -18599,9 +18580,9 @@ pub mod isi {
             collections::{BTreeMap, BTreeSet},
             str::FromStr,
         };
-        const TEST_HALO2_CIRCUIT_ID: &str =
+        const TEST_NATIVE_CIRCUIT_ID: &str =
             crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
-        const TEST_OTHER_HALO2_CIRCUIT_ID: &str = "kaigi-roster-v1";
+        const TEST_OTHER_NATIVE_CIRCUIT_ID: &str = "pipa-r/pasta/kaigi-authorization-v1";
 
         #[test]
         fn proposal_status_mirrors_every_parliament_attempt_outcome() {
@@ -21737,23 +21718,16 @@ pub mod isi {
                 $($record.$field = $value;)+
             };
         }
-        fn canonical_test_halo2_vk_box() -> VerifyingKeyBox {
-            #[cfg(feature = "zk-halo2-ipa")]
-            {
-                crate::zk::confidential_v2::confidential_transfer_v2_vk_box()
-                    .expect("generate canonical confidential-transfer verifying key")
-            }
-            #[cfg(not(feature = "zk-halo2-ipa"))]
-            {
-                panic!("canonical Halo2 registry tests require zk-halo2-ipa")
-            }
+        fn canonical_test_native_vk_box() -> VerifyingKeyBox {
+            crate::zk::confidential_v2::confidential_transfer_v2_vk_box()
+                .expect("generate canonical confidential-transfer verifying key")
         }
-        fn test_halo2_schema_hash() -> [u8; 32] {
+        fn test_native_schema_hash() -> [u8; 32] {
             Hash::new(crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1)
                 .into()
         }
-        fn test_halo2_vk_record(version: u32, vk_box: VerifyingKeyBox) -> VerifyingKeyRecord {
-            vk_record!(record, version, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".to_owned()));
+        fn test_native_vk_record(version: u32, vk_box: VerifyingKeyBox) -> VerifyingKeyRecord {
+            vk_record!(record, version, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".to_owned()));
             record
         }
         fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
@@ -21908,10 +21882,10 @@ pub mod isi {
             let mut stx = block.transaction_for_callback_testing();
             bootstrap_alice_account(&mut stx);
             grant_manage_verifying_keys(&mut stx);
-            let id = VerifyingKeyId::new("halo2/ipa", "unauthenticated-genesis");
+            let id = VerifyingKeyId::new("pipa-r/pasta", "unauthenticated-genesis");
             let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
-                record: test_halo2_vk_record(1, canonical_test_halo2_vk_box()),
+                record: test_native_vk_record(1, canonical_test_native_vk_box()),
             }
             .into();
             let error = Executor::Initial
@@ -21924,7 +21898,6 @@ pub mod isi {
             assert!(stx.world.verifying_keys.get(&id).is_none());
         }
 
-        #[cfg(feature = "zk-halo2-ipa")]
         #[test]
         fn verifier_registry_bootstrap_requires_original_input_and_remains_genesis_only() {
             use crate::sumeragi::{
@@ -21938,8 +21911,8 @@ pub mod isi {
                     .into_iter()
                     .collect(),
             );
-            let id = VerifyingKeyId::new("halo2/ipa", "original-bootstrap-vk");
-            let record = test_halo2_vk_record(1, canonical_test_halo2_vk_box());
+            let id = VerifyingKeyId::new("pipa-r/pasta", "original-bootstrap-vk");
+            let record = test_native_vk_record(1, canonical_test_native_vk_box());
             let register: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: record.clone(),
@@ -21982,7 +21955,7 @@ pub mod isi {
                 // A different same-family instruction cannot borrow that source capability.
                 drop(transaction);
                 let substituted: InstructionBox = verifying_keys::RegisterVerifyingKey {
-                    id: VerifyingKeyId::new("halo2/ipa", "substituted-bootstrap-vk"),
+                    id: VerifyingKeyId::new("pipa-r/pasta", "substituted-bootstrap-vk"),
                     record: record.clone(),
                 }
                 .into();
@@ -24151,7 +24124,7 @@ pub mod isi {
             );
             let before = norito::to_bytes(state_transaction.world.elections.get(&election_id).unwrap())
                 .expect("encode retained election before ballot");
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let proof = iroha_data_model::proof::ProofAttachment::new_ref(
                 backend.into(),
                 iroha_data_model::proof::ProofBox::new(backend.into(), vec![0x01]),
@@ -24532,7 +24505,7 @@ pub mod isi {
             }
             .expect_execute_err(&ALICE_ID, &mut state_transaction, "a PLAIN ballot grant for another referendum must fail closed");
             assert_err!(format!("{error:?}"), "exact CanSubmitGovernanceBallot target", "unexpected PLAIN ballot target-scope rejection: {error:?}");
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let proof = iroha_data_model::proof::ProofAttachment::new_ref(
                 backend.into(),
                 iroha_data_model::proof::ProofBox::new(backend.into(), vec![0x01]),
@@ -24576,8 +24549,8 @@ pub mod isi {
                 eligible_root: [0; 32],
                 start_ts: 0,
                 end_ts: 1,
-                vk_ballot: VerifyingKeyId::new("halo2/ipa", "ballot-v1"),
-                vk_tally: VerifyingKeyId::new("halo2/ipa", "tally-v1"),
+                vk_ballot: VerifyingKeyId::new("pipa-r/pasta", "ballot-v1"),
+                vk_tally: VerifyingKeyId::new("pipa-r/pasta", "tally-v1"),
                 domain_tag: "selector-regression".to_owned(),
             };
             let error = instruction
@@ -24616,7 +24589,7 @@ pub mod isi {
                 ALICE_ID.clone(),
                 BTreeSet::from([Permission::from(CanEnactGovernance)]),
             );
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let tally_proof = iroha_data_model::proof::ProofAttachment::new_ref(
                 backend.into(),
                 iroha_data_model::proof::ProofBox::new(backend.into(), vec![0x01]),
@@ -24638,11 +24611,11 @@ pub mod isi {
                 BTreeSet::from([Permission::from(CanEnactGovernance)]),
             );
             let election_id = "large-corpus-election".to_owned();
-            let backend = "halo2/ipa";
+            let backend = "pipa-r/pasta";
             let vk_id = VerifyingKeyId::new(backend, "tally-v1");
             let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3, 4, 5]);
             let commitment = hash_vk(&vk_box);
-            vk_record!(rec, 1, VOTING_TALLY_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0u8; 32], commitment; status = ConfidentialStatus::Active, key = Some(vk_box.clone()), vk_len = u32::try_from(vk_box.bytes.len()) .expect("verifying key length fits into u32"));
+            vk_record!(rec, 1, VOTING_TALLY_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", [0u8; 32], commitment; status = ConfidentialStatus::Active, key = Some(vk_box.clone()), vk_len = u32::try_from(vk_box.bytes.len()) .expect("verifying key length fits into u32"));
             state_transaction.world.verifying_keys.insert(vk_id.clone(), rec);
             let accepted_ballots = (0..crate::state::MAX_STANDALONE_ELECTION_BALLOTS_V1)
                 .map(|index| {
@@ -24909,15 +24882,15 @@ pub mod isi {
         world_test!(committed_asset_preserves_unshield_verifier_commitment {
             let original_commitment = [0x31; 32];
             let original = crate::state::ZkAssetVerifierBinding {
-                id: VerifyingKeyId::new("halo2/ipa", "unshield-original"),
+                id: VerifyingKeyId::new("pipa-r/pasta", "unshield-original"),
                 commitment: original_commitment,
             };
             let renamed = crate::state::ZkAssetVerifierBinding {
-                id: VerifyingKeyId::new("halo2/ipa", "unshield-renamed"),
+                id: VerifyingKeyId::new("pipa-r/pasta", "unshield-renamed"),
                 commitment: original_commitment,
             };
             let changed = crate::state::ZkAssetVerifierBinding {
-                id: VerifyingKeyId::new("halo2/ipa", "unshield-changed"),
+                id: VerifyingKeyId::new("pipa-r/pasta", "unshield-changed"),
                 commitment: [0x32; 32],
             };
             let mut state = crate::state::ZkAssetState::default();
@@ -26033,18 +26006,17 @@ seiyaku GovernanceLifecycle {
             let role_after_revoke = stx.world.roles.get(&role_id).expect("role exists");
             assert_eq!(role_after_revoke.permission_epoch(&perm), None);
         });
-        world_test!(canonical_halo2_circuit_id_rejects_aliases_and_matches_exact_registry_identity {
-            assert_eq!(
-                normalize_halo2_circuit_id("halo2/pasta/ipa/foo"),
-                Some("halo2/pasta/ipa/foo".to_string())
-            );
-            for alias in [" halo2/pasta/ipa/foo ", "halo2/pasta/foo", "halo2/ipa:foo", "foo", ""] {
-                assert_eq!(normalize_halo2_circuit_id(alias), None, "retired alias {alias:?}");
+        world_test!(native_circuit_id_rejects_aliases_and_matches_exact_registry_identity {
+            let circuit = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID;
+            assert!(circuit_id_matches("pipa-r/pasta", circuit, circuit));
+            for alias in [" pipa-r/pasta/confidential-transfer-v1", "pipa-r/pasta/confidential-transfer-v1 ", "confidential-transfer-v1", "halo2/pasta/ipa/confidential-transfer-v2", ""] {
+                assert!(!circuit_id_matches("pipa-r/pasta", alias, alias), "{alias:?}");
             }
+            assert!(!circuit_id_matches("halo2/ipa", circuit, circuit));
             assert!(circuit_id_matches(
-                "halo2/ipa",
-                "halo2/pasta/ipa/kaigi-authorization-v1",
-                "halo2/pasta/ipa/kaigi-authorization-v1"
+                "pipa-r/pasta",
+                "pipa-r/pasta/kaigi-authorization-v1",
+                "pipa-r/pasta/kaigi-authorization-v1"
             ));
             assert!(!circuit_id_matches(
                 "halo2/ipa",
@@ -26071,7 +26043,7 @@ seiyaku GovernanceLifecycle {
                 "halo2/pasta/ipa/ivm-replay-binding-v1",
                 "halo2/ipa:ivm-replay-binding-v1"
             ));
-            assert!(circuit_id_matches("groth16", "plain", "plain"));
+            assert!(!circuit_id_matches("groth16", "plain", "plain"));
             assert!(!circuit_id_matches("groth16", "plain", "plain "));
             assert!(!voting_circuit_matches(
                 "halo2/ipa",
@@ -26132,11 +26104,11 @@ seiyaku GovernanceLifecycle {
                     "unsupported backend {backend} must not match legacy vote circuits"
                 );
                 assert!(
-                    !is_no_trusted_setup_halo2_backend_id(backend),
-                    "unsupported backend {backend} must not be classified as production Halo2"
+                    crate::zk::production_verify_backend_tag(backend).is_none(),
+                    "unsupported backend {backend} must not be classified as a production engine"
                 );
             }
-            assert!(is_no_trusted_setup_halo2_backend_id("halo2/ipa"));
+            assert!(crate::zk::production_verify_backend_tag("halo2/ipa").is_none());
             assert!(!voting_circuit_matches(
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1",
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1:vote-ballot",
@@ -26147,25 +26119,26 @@ seiyaku GovernanceLifecycle {
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1:vote-tally",
                 "vote-ballot"
             ));
+
         });
-        world_test!(world_open_verify_admission_reserves_privacy_and_rejects_unregistered_halo2_circuits {
+        world_test!(world_open_verify_admission_reserves_privacy_and_rejects_unregistered_native_circuits {
             fn attachment_for(circuit_id: &str) -> (ProofAttachment, ZkOpenVerifyEnvelope) {
                 let envelope = ZkOpenVerifyEnvelope::new(
-                    BackendTag::Halo2IpaPasta,
+                    BackendTag::NativePipaRPasta,
                     circuit_id,
                     [0x55; 32],
                     vec![0x01],
                     vec![0x02],
                 );
                 let proof = ProofBox::new(
-                    "halo2/ipa".into(),
+                    "pipa-r/pasta".into(),
                     norito::encode_canonical(&envelope).expect("encode OpenVerify envelope"),
                 );
                 (
                     ProofAttachment::new_ref(
-                        "halo2/ipa".into(),
+                        "pipa-r/pasta".into(),
                         proof,
-                        VerifyingKeyId::new("halo2/ipa", "vk"),
+                        VerifyingKeyId::new("pipa-r/pasta", "vk"),
                     ),
                     envelope,
                 )
@@ -26178,12 +26151,11 @@ seiyaku GovernanceLifecycle {
                     format!("generic/namespace/{label}"),
                 ] {
                     let error =
-                        ensure_open_verify_circuit_id_is_admitted_v1("halo2/ipa", &circuit_id)
+                        ensure_open_verify_circuit_id_is_admitted_v1("pipa-r/pasta", &circuit_id)
                             .expect_err("reserved privacy circuit id must fail");
                     assert_contains!(format!("{error:?}"), "reserved privacy protocol label", "unexpected reservation error for {circuit_id:?}: {error}");
-                    assert!(normalize_halo2_circuit_id(&circuit_id).is_none());
                     assert!(normalize_stark_fri_circuit_id("stark/fri", &circuit_id).is_none());
-                    assert!(!circuit_id_matches("halo2/ipa", &circuit_id, &circuit_id));
+                    assert!(!circuit_id_matches("pipa-r/pasta", &circuit_id, &circuit_id));
                     let (attachment, envelope) = attachment_for(&circuit_id);
                     let error = validate_proof_attachment(
                         &attachment,
@@ -26200,15 +26172,14 @@ seiyaku GovernanceLifecycle {
                     label.to_ascii_uppercase(),
                 ] {
                     let error =
-                        ensure_open_verify_circuit_id_is_admitted_v1("halo2/ipa", &malformed_alias)
+                        ensure_open_verify_circuit_id_is_admitted_v1("pipa-r/pasta", &malformed_alias)
                             .expect_err("non-portable privacy alias must fail");
                     assert_contains!(format!("{error:?}"), "bounded portable identifier", "unexpected shape error for {malformed_alias:?}: {error}");
-                    assert!(normalize_halo2_circuit_id(&malformed_alias).is_none());
                     assert!(
                         normalize_stark_fri_circuit_id("stark/fri", &malformed_alias).is_none()
                     );
                     assert!(!circuit_id_matches(
-                        "halo2/ipa",
+                        "pipa-r/pasta",
                         &malformed_alias,
                         &malformed_alias
                     ));
@@ -26225,16 +26196,15 @@ seiyaku GovernanceLifecycle {
                 // Portable unregistered names still use the sole full first-release CID.
                 // Bare names are rejected before registry lookup; they are not aliases.
                 for near_miss in [
-                    format!("halo2/pasta/ipa/generic-{label}"),
-                    format!("halo2/pasta/ipa/{label}-generic"),
+                    format!("pipa-r/pasta/generic-{label}"),
+                    format!("pipa-r/pasta/{label}-generic"),
                 ] {
                     let error =
-                        ensure_open_verify_circuit_id_is_admitted_v1("halo2/ipa", &near_miss)
+                        ensure_open_verify_circuit_id_is_admitted_v1("pipa-r/pasta", &near_miss)
                             .expect_err("unregistered Halo2 circuit must fail");
-                    assert_contains!(format!("{error:?}"), "production circuit registry", "unexpected closed-registry error for {near_miss:?}: {error}");
-                    assert!(normalize_halo2_circuit_id(&near_miss).is_some());
+                    assert_contains!(format!("{error:?}"), "compiled circuit registry", "unexpected closed-registry error for {near_miss:?}: {error}");
                     assert!(normalize_stark_fri_circuit_id("stark/fri", &near_miss).is_some());
-                    assert!(!circuit_id_matches("halo2/ipa", &near_miss, &near_miss));
+                    assert!(!circuit_id_matches("pipa-r/pasta", &near_miss, &near_miss));
                     let (attachment, envelope) = attachment_for(&near_miss);
                     let error = validate_proof_attachment(
                         &attachment,
@@ -26243,7 +26213,7 @@ seiyaku GovernanceLifecycle {
                         Some(&envelope),
                     )
                     .expect_err("VerifyProof must reject unregistered Halo2 circuit ids");
-                    assert_contains!(format!("{error:?}"), "production circuit registry", "unexpected VerifyProof registry error for {near_miss:?}: {error}");
+                    assert_contains!(format!("{error:?}"), "compiled circuit registry", "unexpected VerifyProof registry error for {near_miss:?}: {error}");
                 }
             }
             for protocol in PrivacyProtocolIdV1::ALL {
@@ -26420,12 +26390,12 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(validate_open_verify_envelope_metadata_checks_circuit_and_commitment {
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
+            let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![1, 2, 3, 4]);
             let commitment = hash_vk(&vk_box);
-            vk_record!(vk_rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0u8; 32], commitment; status = ConfidentialStatus::Active);
+            vk_record!(vk_rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", [0u8; 32], commitment; status = ConfidentialStatus::Active);
             let bad_circuit = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                TEST_OTHER_HALO2_CIRCUIT_ID,
+                BackendTag::NativePipaRPasta,
+                TEST_OTHER_NATIVE_CIRCUIT_ID,
                 commitment,
                 b"schema:voting:v1".to_vec(),
                 vec![0xAA],
@@ -26433,7 +26403,7 @@ seiyaku GovernanceLifecycle {
             assert!(
                 validate_open_verify_envelope_metadata(
                     "ballot",
-                    "halo2/ipa",
+                    "pipa-r/pasta",
                     &bad_circuit,
                     &vk_rec
                 )
@@ -26442,8 +26412,8 @@ seiyaku GovernanceLifecycle {
             let mut bad_hash = commitment;
             bad_hash[0] ^= 0x01;
             let bad_commitment = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ID,
+                BackendTag::NativePipaRPasta,
+                TEST_NATIVE_CIRCUIT_ID,
                 bad_hash,
                 b"schema:voting:v1".to_vec(),
                 vec![0xAA],
@@ -26451,30 +26421,30 @@ seiyaku GovernanceLifecycle {
             assert!(
                 validate_open_verify_envelope_metadata(
                     "ballot",
-                    "halo2/ipa",
+                    "pipa-r/pasta",
                     &bad_commitment,
                     &vk_rec
                 )
                 .is_err()
             );
             let zero_commitment = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ID,
+                BackendTag::NativePipaRPasta,
+                TEST_NATIVE_CIRCUIT_ID,
                 [0u8; 32],
                 b"schema:voting:v1".to_vec(),
                 vec![0xAA],
             );
             let err = validate_open_verify_envelope_metadata(
                 "ballot",
-                "halo2/ipa",
+                "pipa-r/pasta",
                 &zero_commitment,
                 &vk_rec,
             )
             .expect_err("zero OpenVerifyEnvelope verifier hash must reject explicitly");
             assert_contains!(format!("{err:?}"), "verifier-key hash must be non-zero", "unexpected zero-hash rejection: {err}");
             let mut non_empty_aux = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ID,
+                BackendTag::NativePipaRPasta,
+                TEST_NATIVE_CIRCUIT_ID,
                 commitment,
                 b"schema:voting:v1".to_vec(),
                 vec![0xAA],
@@ -26483,28 +26453,28 @@ seiyaku GovernanceLifecycle {
             assert!(
                 validate_open_verify_envelope_metadata(
                     "ballot",
-                    "halo2/ipa",
+                    "pipa-r/pasta",
                     &non_empty_aux,
                     &vk_rec
                 )
                 .is_err()
             );
             let ok = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ID,
+                BackendTag::NativePipaRPasta,
+                TEST_NATIVE_CIRCUIT_ID,
                 commitment,
                 b"schema:voting:v1".to_vec(),
                 vec![0xAA],
             );
             assert!(
-                validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok()
+                validate_open_verify_envelope_metadata("ballot", "pipa-r/pasta", &ok, &vk_rec).is_ok()
             );
             for backend_tag in [BackendTag::Stark] {
                 let mut bad_backend_rec = vk_rec.clone();
                 bad_backend_rec.backend = backend_tag;
                 let err = validate_open_verify_envelope_metadata(
                     "ballot",
-                    "halo2/ipa",
+                    "pipa-r/pasta",
                     &ok,
                     &bad_backend_rec,
                 )
@@ -26515,7 +26485,7 @@ seiyaku GovernanceLifecycle {
                 (
                     "empty_circuit",
                     OpenVerifyEnvelope::new(
-                        BackendTag::Halo2IpaPasta,
+                        BackendTag::NativePipaRPasta,
                         "",
                         commitment,
                         b"schema:voting:v1".to_vec(),
@@ -26526,8 +26496,8 @@ seiyaku GovernanceLifecycle {
                 (
                     "empty_public_inputs",
                     OpenVerifyEnvelope::new(
-                        BackendTag::Halo2IpaPasta,
-                        TEST_HALO2_CIRCUIT_ID,
+                        BackendTag::NativePipaRPasta,
+                        TEST_NATIVE_CIRCUIT_ID,
                         commitment,
                         Vec::new(),
                         vec![0xAA],
@@ -26537,8 +26507,8 @@ seiyaku GovernanceLifecycle {
                 (
                     "empty_proof_bytes",
                     OpenVerifyEnvelope::new(
-                        BackendTag::Halo2IpaPasta,
-                        TEST_HALO2_CIRCUIT_ID,
+                        BackendTag::NativePipaRPasta,
+                        TEST_NATIVE_CIRCUIT_ID,
                         commitment,
                         b"schema:voting:v1".to_vec(),
                         Vec::new(),
@@ -26548,8 +26518,8 @@ seiyaku GovernanceLifecycle {
                 (
                     "oversized_public_inputs",
                     OpenVerifyEnvelope::new(
-                        BackendTag::Halo2IpaPasta,
-                        TEST_HALO2_CIRCUIT_ID,
+                        BackendTag::NativePipaRPasta,
+                        TEST_NATIVE_CIRCUIT_ID,
                         commitment,
                         vec![
                             0xA5;
@@ -26562,7 +26532,7 @@ seiyaku GovernanceLifecycle {
             ] {
                 let err = validate_open_verify_envelope_metadata(
                     "ballot",
-                    "halo2/ipa",
+                    "pipa-r/pasta",
                     &envelope,
                     &vk_rec,
                 )
@@ -26571,58 +26541,52 @@ seiyaku GovernanceLifecycle {
             }
         });
         world_test!(validate_open_verify_envelope_metadata_checks_schema_hash {
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![9, 8, 7, 6]);
+            let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![9, 8, 7, 6]);
             let commitment = hash_vk(&vk_box);
             let schema = b"schema:voting:v1".to_vec();
             let schema_hash: [u8; 32] = iroha_crypto::Hash::new(&schema).into();
-            vk_record!(vk_rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", schema_hash, commitment; status = ConfidentialStatus::Active);
+            vk_record!(vk_rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", schema_hash, commitment; status = ConfidentialStatus::Active);
             let ok = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ID,
+                BackendTag::NativePipaRPasta,
+                TEST_NATIVE_CIRCUIT_ID,
                 commitment,
                 schema.clone(),
                 vec![0xAA],
             );
             assert!(
-                validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok()
+                validate_open_verify_envelope_metadata("ballot", "pipa-r/pasta", &ok, &vk_rec).is_ok()
             );
             let bad = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ID,
+                BackendTag::NativePipaRPasta,
+                TEST_NATIVE_CIRCUIT_ID,
                 commitment,
                 b"schema:voting:v2".to_vec(),
                 vec![0xAA],
             );
             assert!(
-                validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &bad, &vk_rec)
+                validate_open_verify_envelope_metadata("ballot", "pipa-r/pasta", &bad, &vk_rec)
                     .is_err()
             );
         });
         world_test!(enforce_vk_max_proof_bytes_rejects_too_large {
-            vk_record!(rec, 1, "halo2/pasta/ipa/max-proof", BackendTag::Halo2IpaPasta, "pallas", [0u8; 32], [0u8; 32]; max_proof_bytes = 8);
+            vk_record!(rec, 1, "halo2/pasta/ipa/max-proof", BackendTag::NativePipaRPasta, "vesta", [0u8; 32], [0u8; 32]; max_proof_bytes = 8);
             assert!(enforce_vk_max_proof_bytes("ballot", &rec, 8).is_ok());
             assert!(enforce_vk_max_proof_bytes("ballot", &rec, 9).is_err());
             rec.max_proof_bytes = 0;
             assert!(enforce_vk_max_proof_bytes("ballot", &rec, 64).is_ok());
         });
-        world_test!(extract_vote_public_inputs_handles_strict_halo2_envelope {
-            let scalar_columns =
-                crate::zk::zk1_test_helpers::pasta_fp_single_row_columns(&[1, 2, 3, 4, 5]);
-            let proof_bytes = crate::zk::zk1_test_helpers::proof_with_pasta_fp_columns(
-                &[0xaa], &scalar_columns,
-            );
-            let columns = crate::zk::zk1_test_helpers::pasta_fp_columns_as_bytes(&scalar_columns);
-            let envelope = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                "halo2/ipa:vote-circuit",
-                [0u8; 32],
-                b"schema:voting:halo2:v1".to_vec(),
-                proof_bytes,
-            );
-            let payload = norito::encode_canonical(&envelope).expect("encode canonical envelope");
-            let parsed = extract_vote_public_inputs("halo2/ipa", &payload).expect("extract inputs");
-            assert_eq!(parsed.columns, columns);
-            assert_eq!(parsed.envelope.backend, BackendTag::Halo2IpaPasta);
+        world_test!(extract_vote_public_inputs_rejects_retired_and_unadmitted_native_engines {
+            for (backend, tag, circuit) in [
+                ("halo2/ipa", BackendTag::NativePipaRPasta, "halo2/ipa:vote-circuit"),
+                ("pipa-r/pasta", BackendTag::NativePipaRPasta, "pipa-r/pasta/vote-bool-commit-merkle8-v1"),
+            ] {
+                let envelope = OpenVerifyEnvelope::new(
+                    tag, circuit, [1; 32], b"schema:voting:v1".to_vec(), vec![1, 2, 3],
+                );
+                let payload = norito::encode_canonical(&envelope).expect("canonical envelope");
+                assert!(extract_vote_public_inputs(backend, &payload).is_err());
+                assert!(!crate::zk::is_production_verify_backend_label(circuit));
+            }
         });
         world_test!(extract_vote_public_inputs_handles_stark_envelope {
             use iroha_data_model::zk::StarkFriOpenProofV1;
@@ -26709,7 +26673,7 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(extract_vote_public_inputs_keeps_canonical_backend_errors_distinct {
             let envelope = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
+                BackendTag::NativePipaRPasta,
                 "vote-circuit",
                 [0u8; 32],
                 b"schema:voting:v1".to_vec(),
@@ -26744,7 +26708,7 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(decode_open_verify_envelope_skips_non_production_backend_labels {
             let envelope = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
+                BackendTag::NativePipaRPasta,
                 "halo2/ipa:tiny-add",
                 [0u8; 32],
                 vec![1, 2, 3],
@@ -26777,17 +26741,17 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(open_verify_backend_tag_matches_rejects_cross_family_tags {
             assert!(open_verify_backend_tag_matches(
-                "halo2/ipa",
-                BackendTag::Halo2IpaPasta
+                "pipa-r/pasta",
+                BackendTag::NativePipaRPasta
             ));
-            assert!(backend_requires_open_verify_envelope("halo2/ipa"));
+            assert!(backend_requires_open_verify_envelope("pipa-r/pasta"));
             assert!(!open_verify_backend_tag_matches(
                 "halo2/bn254",
-                BackendTag::Halo2IpaPasta
+                BackendTag::NativePipaRPasta
             ));
             assert!(!open_verify_backend_tag_matches(
                 "halo2/kzg",
-                BackendTag::Halo2IpaPasta
+                BackendTag::NativePipaRPasta
             ));
             assert!(open_verify_backend_tag_matches(
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1",
@@ -26804,15 +26768,15 @@ seiyaku GovernanceLifecycle {
             ));
             assert!(!open_verify_backend_tag_matches(
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-                BackendTag::Halo2IpaPasta
+                BackendTag::NativePipaRPasta
             ));
             assert!(!open_verify_backend_tag_matches(
                 "halo2/unknown-native-v1",
-                BackendTag::Halo2IpaPasta
+                BackendTag::NativePipaRPasta
             ));
             assert!(!open_verify_backend_tag_matches(
                 "unknown/privacy/backend",
-                BackendTag::Halo2IpaPasta
+                BackendTag::NativePipaRPasta
             ));
             for rejected_backend in [
                 "halo2/bn254",
@@ -26849,7 +26813,7 @@ seiyaku GovernanceLifecycle {
                 "sis-with-hints",
             ] {
                 assert!(
-                    !open_verify_backend_tag_matches(protocol_name, BackendTag::Halo2IpaPasta),
+                    !open_verify_backend_tag_matches(protocol_name, BackendTag::NativePipaRPasta),
                     "{protocol_name} must stay fail-closed against Halo2 envelopes"
                 );
                 assert!(
@@ -26860,20 +26824,20 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(validate_proof_attachment_rejects_mismatched_attachment_triples {
             let envelope = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ID,
+                BackendTag::NativePipaRPasta,
+                TEST_NATIVE_CIRCUIT_ID,
                 [0x41u8; 32],
                 crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
                 vec![1, 2, 3],
             );
             let proof = ProofBox::new(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 norito::to_bytes(&envelope).expect("encode envelope"),
             );
             let valid = ProofAttachment::new_ref(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 proof.clone(),
-                VerifyingKeyId::new("halo2/ipa", "vk"),
+                VerifyingKeyId::new("pipa-r/pasta", "vk"),
             );
             assert!(
                 validate_proof_attachment(&valid, &proof, true, Some(&envelope)).is_ok(),
@@ -26889,7 +26853,7 @@ seiyaku GovernanceLifecycle {
                     .expect_err("outer attachment backend must match proof backend");
             assert_contains!(smart_contract_instruction_error_message(err), "proof backend mismatch");
             let wrong_vk_backend = ProofAttachment::new_ref(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 proof.clone(),
                 VerifyingKeyId::new("stark/fri", "vk"),
             );
@@ -26956,11 +26920,11 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "unsupported proof backends", "unexpected error: {msg}");
             assert!(!open_verify_backend_tag_matches(
                 "halo2/debug",
-                BackendTag::Halo2IpaPasta
+                BackendTag::NativePipaRPasta
             ));
             assert!(!open_verify_backend_tag_matches(
                 "halo2/mock",
-                BackendTag::Halo2IpaPasta
+                BackendTag::NativePipaRPasta
             ));
             assert!(!open_verify_backend_tag_matches(
                 "stark/fri/mock",
@@ -26969,19 +26933,19 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(resolve_vk_commitment_accepts_canonical_circuit_id {
             blank_state_transaction!(state, block, state_block, stx);
-            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_test");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4]);
+            let vk_id = VerifyingKeyId::new("pipa-r/pasta", "vk_test");
+            let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![1, 2, 3, 4]);
             let commitment = hash_vk(&vk_box);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0u8; 32], commitment; status = ConfidentialStatus::Active, gas_schedule_id = Some("halo2_default".to_string()), key = Some(vk_box));
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", [0u8; 32], commitment; status = ConfidentialStatus::Active, gas_schedule_id = Some("native_pipa_r_default".to_string()), key = Some(vk_box));
             stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
             stx.world
                 .verifying_keys_by_circuit
                 .insert((rec.circuit_id.clone(), rec.version), vk_id.clone());
-            let proof = ProofBox::new("halo2/ipa".into(), Vec::new());
-            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
+            let proof = ProofBox::new("pipa-r/pasta".into(), Vec::new());
+            let attachment = ProofAttachment::new_ref("pipa-r/pasta".into(), proof, vk_id);
             let envelope = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ID,
+                BackendTag::NativePipaRPasta,
+                TEST_NATIVE_CIRCUIT_ID,
                 commitment,
                 vec![1, 2],
                 vec![3, 4],
@@ -26990,8 +26954,8 @@ seiyaku GovernanceLifecycle {
                 .expect("resolve vk commitment");
             assert_eq!(resolved, Some(commitment));
             let zero_commitment_envelope = OpenVerifyEnvelope::new(
-                BackendTag::Halo2IpaPasta,
-                TEST_HALO2_CIRCUIT_ID,
+                BackendTag::NativePipaRPasta,
+                TEST_NATIVE_CIRCUIT_ID,
                 [0u8; 32],
                 vec![1, 2],
                 vec![3, 4],
@@ -27013,40 +26977,40 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let stx = state_block.transaction();
             let st = crate::state::ElectionState::default();
-            let proof = ProofBox::new("halo2/ipa".into(), Vec::new());
+            let proof = ProofBox::new("pipa-r/pasta".into(), Vec::new());
             let wrong = ProofAttachment::new_ref(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 proof,
-                VerifyingKeyId::new("halo2/ipa", "vk_mixed"),
+                VerifyingKeyId::new("pipa-r/pasta", "vk_mixed"),
             );
             assert!(resolve_ballot_vk(&st, &wrong, &stx).is_err());
             assert!(resolve_tally_vk(&st, &wrong, &stx).is_err());
         });
         world_test!(resolve_ballot_and_tally_vk_reject_retired_halo2_vote_circuits {
             blank_state_transaction!(state, block, state_block, stx);
-            let ballot_vk_id = VerifyingKeyId::new("halo2/ipa", "vk_ballot_ok");
-            let tally_vk_id = VerifyingKeyId::new("halo2/ipa", "vk_tally_ok");
-            let ballot_vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3, 4, 5]);
-            let tally_vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 4, 3, 2, 1]);
+            let ballot_vk_id = VerifyingKeyId::new("pipa-r/pasta", "vk_ballot_ok");
+            let tally_vk_id = VerifyingKeyId::new("pipa-r/pasta", "vk_tally_ok");
+            let ballot_vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![1, 2, 3, 4, 5]);
+            let tally_vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![5, 4, 3, 2, 1]);
             let ballot_commitment = hash_vk(&ballot_vk_box);
             let tally_commitment = hash_vk(&tally_vk_box);
-            vk_record!(rec, 1, VOTING_BALLOT_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0u8; 32], ballot_commitment; status = ConfidentialStatus::Active, key = Some(ballot_vk_box.clone()), vk_len = u32::try_from(ballot_vk_box.bytes.len()) .expect("verifying key length fits into u32"));
+            vk_record!(rec, 1, VOTING_BALLOT_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", [0u8; 32], ballot_commitment; status = ConfidentialStatus::Active, key = Some(ballot_vk_box.clone()), vk_len = u32::try_from(ballot_vk_box.bytes.len()) .expect("verifying key length fits into u32"));
             stx.world.verifying_keys.insert(ballot_vk_id.clone(), rec);
-            vk_record!(rec, 1, VOTING_TALLY_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0u8; 32], tally_commitment; status = ConfidentialStatus::Active, key = Some(tally_vk_box.clone()), vk_len = u32::try_from(tally_vk_box.bytes.len()) .expect("verifying key length fits into u32"));
+            vk_record!(rec, 1, VOTING_TALLY_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", [0u8; 32], tally_commitment; status = ConfidentialStatus::Active, key = Some(tally_vk_box.clone()), vk_len = u32::try_from(tally_vk_box.bytes.len()) .expect("verifying key length fits into u32"));
             stx.world.verifying_keys.insert(tally_vk_id.clone(), rec);
             let st = crate::state::ElectionState {
                 vk_ballot: Some(ballot_vk_id.clone()),
                 vk_tally: Some(tally_vk_id.clone()),
                 ..Default::default()
             };
-            let proof = ProofBox::new("halo2/ipa".into(), vec![0xaa]);
+            let proof = ProofBox::new("pipa-r/pasta".into(), vec![0xaa]);
             let ballot_att =
-                ProofAttachment::new_ref("halo2/ipa".into(), proof.clone(), ballot_vk_id.clone());
+                ProofAttachment::new_ref("pipa-r/pasta".into(), proof.clone(), ballot_vk_id.clone());
             let ballot_error = resolve_ballot_vk(&st, &ballot_att, &stx)
                 .expect_err("retired Halo2 vote-ballot circuit must not resolve");
             assert_contains!(ballot_error .to_string(), "ballot verifying key circuit mismatch", "unexpected retired ballot circuit rejection: {ballot_error}");
             let tally_att =
-                ProofAttachment::new_ref("halo2/ipa".into(), proof, tally_vk_id.clone());
+                ProofAttachment::new_ref("pipa-r/pasta".into(), proof, tally_vk_id.clone());
             let tally_error = resolve_tally_vk(&st, &tally_att, &stx)
                 .expect_err("retired Halo2 vote-tally circuit must not resolve");
             assert_contains!(tally_error .to_string(), "tally verifying key circuit mismatch", "unexpected retired tally circuit rejection: {tally_error}");
@@ -27067,7 +27031,7 @@ seiyaku GovernanceLifecycle {
                 .expect("encode retained election before admission");
             for role in [VOTING_BALLOT_CIRCUIT_ID, VOTING_TALLY_CIRCUIT_ID] {
                 assert!(
-                    !voting_circuit_matches("halo2/ipa", role, role),
+                    !voting_circuit_matches("pipa-r/pasta", role, role),
                     "the production registry must not admit a vote role without a reviewed relation"
                 );
             }
@@ -29683,20 +29647,20 @@ seiyaku GovernanceLifecycle {
             authority: &AccountId,
             instruction: InstructionBox,
         ) -> Result<(), ValidationFail> {
-            assert!(
-                instruction
-                    .as_any()
-                    .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
-                    .is_some()
-                    || instruction
-                        .as_any()
-                        .downcast_ref::<verifying_keys::UpdateVerifyingKey>()
-                        .is_some(),
-                "the registry component fixture cannot replace another admission owner"
-            );
-            instruction
-                .execute(authority, state_transaction)
-                .map_err(ValidationFail::InstructionFailed)
+            if let Some(value) = instruction
+                .as_any()
+                .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
+            {
+                value.clone().execute(authority, state_transaction)
+            } else if let Some(value) = instruction
+                .as_any()
+                .downcast_ref::<verifying_keys::UpdateVerifyingKey>()
+            {
+                value.clone().execute(authority, state_transaction)
+            } else {
+                panic!("the registry component fixture cannot replace another admission owner")
+            }
+            .map_err(ValidationFail::InstructionFailed)
         }
         fn grant_manage_verifying_keys(stx: &mut StateTransaction<'_, '_>) {
             let perm: Permission = CanManageVerifyingKeys.into();
@@ -29862,7 +29826,11 @@ seiyaku GovernanceLifecycle {
             if backend.starts_with("stark/fri") {
                 (BackendTag::Stark, "goldilocks", "stark_default")
             } else {
-                (BackendTag::Halo2IpaPasta, "pallas", "halo2_default")
+                (
+                    BackendTag::NativePipaRPasta,
+                    "vesta",
+                    "native_pipa_r_default",
+                )
             }
         }
         #[derive(Clone, Copy)]
@@ -30009,10 +29977,12 @@ seiyaku GovernanceLifecycle {
                 );
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
-                let vk_id =
-                    VerifyingKeyId::new("halo2/ipa", format!("vk_conf_{}_{suffix}", fixture.role));
+                let vk_id = VerifyingKeyId::new(
+                    "pipa-r/pasta",
+                    format!("vk_conf_{}_{suffix}", fixture.role),
+                );
                 let vk_box =
-                    VerifyingKeyBox::new("halo2/ipa".into(), fixture.verifying_key.to_vec());
+                    VerifyingKeyBox::new("pipa-r/pasta".into(), fixture.verifying_key.to_vec());
                 let vk_commitment = hash_vk(&vk_box);
                 let schema_hash =
                     if matches!(tamper, ConfidentialEnvelopeTamper::PublicInputsSchema) {
@@ -30020,7 +29990,7 @@ seiyaku GovernanceLifecycle {
                     } else {
                         CryptoHash::new(fixture.expected_schema).into()
                     };
-                vk_record!(record, 1, fixture.circuit_id.to_owned(), BackendTag::Halo2IpaPasta, "pallas", schema_hash, vk_commitment; vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(record, 1, fixture.circuit_id.to_owned(), BackendTag::NativePipaRPasta, "vesta", schema_hash, vk_commitment; vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
                 stx.world
                     .verifying_keys
                     .insert(vk_id.clone(), record.clone());
@@ -30030,7 +30000,7 @@ seiyaku GovernanceLifecycle {
                         .insert((record.circuit_id.clone(), record.version), vk_id.clone());
                 }
                 let mut envelope = OpenVerifyEnvelope {
-                    backend: BackendTag::Halo2IpaPasta,
+                    backend: BackendTag::NativePipaRPasta,
                     circuit_id: record.circuit_id.clone(),
                     vk_hash: vk_commitment,
                     public_inputs: fixture.expected_schema.to_vec(),
@@ -30063,10 +30033,10 @@ seiyaku GovernanceLifecycle {
                     ConfidentialEnvelopeTamper::MissingCircuitIndex => {}
                 }
                 let proof_box = ProofBox::new(
-                    "halo2/ipa".into(),
+                    "pipa-r/pasta".into(),
                     norito::to_bytes(&envelope).expect("encode envelope"),
                 );
-                let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+                let attachment = ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id);
                 let err = super::validate_confidential_v2_open_verify_envelope_metadata(
                     fixture.label,
                     &attachment,
@@ -30089,12 +30059,12 @@ seiyaku GovernanceLifecycle {
             let header = first_test_block_header();
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_conf_v2_canonical");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![2, 4, 6, 8]);
+            let vk_id = VerifyingKeyId::new("pipa-r/pasta", "vk_conf_v2_canonical");
+            let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![2, 4, 6, 8]);
             let vk_commitment = hash_vk(&vk_box);
             let expected_schema =
                 crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1;
-            vk_record!(record, 1, crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(), BackendTag::Halo2IpaPasta, "pallas", CryptoHash::new(expected_schema).into(), vk_commitment; vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(record, 1, crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(), BackendTag::NativePipaRPasta, "vesta", CryptoHash::new(expected_schema).into(), vk_commitment; vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
             stx.world
                 .verifying_keys
                 .insert(vk_id.clone(), record.clone());
@@ -30102,7 +30072,7 @@ seiyaku GovernanceLifecycle {
                 .verifying_keys_by_circuit
                 .insert((record.circuit_id.clone(), record.version), vk_id.clone());
             let envelope = OpenVerifyEnvelope {
-                backend: BackendTag::Halo2IpaPasta,
+                backend: BackendTag::NativePipaRPasta,
                 circuit_id: record.circuit_id.clone(),
                 vk_hash: vk_commitment,
                 public_inputs: expected_schema.to_vec(),
@@ -30110,10 +30080,10 @@ seiyaku GovernanceLifecycle {
                 aux: Vec::new(),
             };
             let proof_box = ProofBox::new(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 norito::to_bytes(&envelope).expect("encode envelope"),
             );
-            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+            let attachment = ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id);
             super::validate_confidential_v2_open_verify_envelope_metadata(
                 "confidential transfer v2",
                 &attachment,
@@ -31014,14 +30984,13 @@ seiyaku GovernanceLifecycle {
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "below consensus floor", "unexpected msg: {msg}");
         });
-        #[cfg(feature = "zk-halo2-ipa")]
-        world_test!(register_vk_accepts_and_stores_canonical_compiled_halo2_key {
+        world_test!(register_vk_accepts_and_stores_canonical_compiled_native_key {
             original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let id = VerifyingKeyId::new("halo2/ipa", "canonical-ivm-vk");
-            let vk_box = canonical_test_halo2_vk_box();
-            let record = test_halo2_vk_record(1, vk_box.clone());
+            let id = VerifyingKeyId::new("pipa-r/pasta", "canonical-ivm-vk");
+            let vk_box = canonical_test_native_vk_box();
+            let record = test_native_vk_record(1, vk_box.clone());
             let mut stx = state_block.transaction_for_callback_testing();
             execute_vk_component_fixture(
                     &mut stx,
@@ -31032,7 +31001,7 @@ seiyaku GovernanceLifecycle {
                     }
                     .into(),
                 )
-                .expect("canonical compiled Halo2 key must register");
+                .expect("canonical compiled native key must register");
             let stored = stx
                 .world
                 .verifying_keys
@@ -31044,15 +31013,14 @@ seiyaku GovernanceLifecycle {
                 "the registry must retain only the bytes that passed typed validation"
             );
         });
-        #[cfg(feature = "zk-halo2-ipa")]
-        world_test!(register_vk_rejects_parseable_halo2_key_relabelled_as_confidential_transfer {
+        world_test!(register_vk_rejects_parseable_native_key_relabelled_as_confidential_transfer {
             original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let id = VerifyingKeyId::new("halo2/ipa", "relabelled-demo-vk");
+            let id = VerifyingKeyId::new("pipa-r/pasta", "relabelled-demo-vk");
             let vk_box = crate::zk::confidential_v2::confidential_unshield_v2_vk_box()
                 .expect("generate parseable key for another circuit");
-            let record = test_halo2_vk_record(1, vk_box);
+            let record = test_native_vk_record(1, vk_box);
             let mut stx = state_block.transaction_for_callback_testing();
             let error = execute_vk_component_fixture(
                     &mut stx,
@@ -31065,16 +31033,15 @@ seiyaku GovernanceLifecycle {
                 )
                 .expect_err("a parseable key for another constraint system must not register");
             let message = smart_contract_error_message(error);
-            assert_contains!(message, "fixed Halo2 IPA verifier-key metadata", "unexpected foreign-circuit key rejection: {message}");
+            assert_contains!(message, "compiled relation", "unexpected foreign-circuit key rejection: {message}");
             assert!(stx.world.verifying_keys.get(&id).is_none());
         });
-        #[cfg(feature = "zk-halo2-ipa")]
-        world_test!(update_vk_rejects_parseable_halo2_key_relabelled_as_same_circuit {
+        world_test!(update_vk_rejects_parseable_native_key_relabelled_as_same_circuit {
             original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let id = VerifyingKeyId::new("halo2/ipa", "updated-relabelled-demo-vk");
-            let current = test_halo2_vk_record(1, canonical_test_halo2_vk_box());
+            let id = VerifyingKeyId::new("pipa-r/pasta", "updated-relabelled-demo-vk");
+            let current = test_native_vk_record(1, canonical_test_native_vk_box());
             let mut stx = state_block.transaction_for_callback_testing();
             execute_vk_component_fixture(
                     &mut stx,
@@ -31089,7 +31056,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let relabelled = crate::zk::confidential_v2::confidential_unshield_v2_vk_box()
                 .expect("generate parseable key for another circuit");
-            let replacement = test_halo2_vk_record(2, relabelled);
+            let replacement = test_native_vk_record(2, relabelled);
             let mut stx = state_block.transaction_for_callback_testing();
             let error = execute_vk_component_fixture(
                     &mut stx,
@@ -31102,24 +31069,22 @@ seiyaku GovernanceLifecycle {
                 )
                 .expect_err("update must enforce the same compiled-circuit key identity");
             let message = smart_contract_error_message(error);
-            assert_contains!(message, "fixed Halo2 IPA verifier-key metadata", "unexpected foreign-circuit update rejection: {message}");
+            assert_contains!(message, "compiled relation", "unexpected foreign-circuit update rejection: {message}");
             assert_eq!(stx.world.verifying_keys.get(&id), Some(&current));
         });
-        #[cfg(feature = "zk-halo2-ipa")]
-        world_test!(register_vk_rejects_noncanonical_fixed_halo2_parameter_degree {
+        world_test!(register_vk_rejects_noncanonical_fixed_native_descriptor {
             original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let id = VerifyingKeyId::new("halo2/ipa", "wrong-fixed-k-vk");
-            let mut vk_box = canonical_test_halo2_vk_box();
-            let ipa_offset = vk_box
-                .bytes
-                .windows(4)
-                .position(|window| window == b"IPAK")
-                .expect("canonical key carries IPAK");
-            vk_box.bytes[ipa_offset + 8..ipa_offset + 12]
-                .copy_from_slice(&(crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K + 1).to_le_bytes());
-            let record = test_halo2_vk_record(1, vk_box);
+            let id = VerifyingKeyId::new("pipa-r/pasta", "wrong-fixed-k-vk");
+            let mut vk_box = canonical_test_native_vk_box();
+            let mut carrier: crate::zk::native_pipa_r::CompiledVerifyingKeyV1 =
+                norito::decode_canonical(&vk_box.bytes).expect("canonical native key carrier");
+            // A canonical carrier cannot substitute any part of the authenticated
+            // descriptor, including its fixed parameter identity.
+            carrier.descriptor[0] ^= 1;
+            vk_box.bytes = norito::encode_canonical(&carrier).expect("encode altered descriptor");
+            let record = test_native_vk_record(1, vk_box);
             let mut stx = state_block.transaction_for_callback_testing();
             let error = execute_vk_component_fixture(
                     &mut stx,
@@ -31130,9 +31095,9 @@ seiyaku GovernanceLifecycle {
                     }
                     .into(),
                 )
-                .expect_err("a caller-selected Halo2 domain exponent must not register");
+                .expect_err("a caller-selected native descriptor must not register");
             let message = smart_contract_error_message(error);
-            assert_contains!(message, "fixed Halo2 IPA verifier-key metadata", "unexpected fixed-k rejection: {message}");
+            assert_contains!(message, "compiled relation", "unexpected fixed-k rejection: {message}");
             assert!(stx.world.verifying_keys.get(&id).is_none());
         });
         #[cfg(feature = "zk-stark")]
@@ -31188,9 +31153,9 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let id = VerifyingKeyId::new("halo2/ipa", "vk_missing_gas");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
+            let id = VerifyingKeyId::new("pipa-r/pasta", "vk_missing_gas");
+            let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![1, 2, 3]);
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
@@ -31203,9 +31168,9 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let id = VerifyingKeyId::new("halo2/ipa", "vk_empty_window");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()), activation_height = Some(10), withdraw_height = Some(10));
+            let id = VerifyingKeyId::new("pipa-r/pasta", "vk_empty_window");
+            let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![1, 2, 3]);
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()), activation_height = Some(10), withdraw_height = Some(10));
             let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -31222,9 +31187,9 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_len");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            let id = VerifyingKeyId::new("pipa-r/pasta", "vk_bad_len");
+            let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![1, 2, 3]);
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
@@ -31237,9 +31202,9 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_backend");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Stark, "goldilocks", [0x41; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            let id = VerifyingKeyId::new("pipa-r/pasta", "vk_bad_backend");
+            let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![1, 2, 3]);
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::Stark, "goldilocks", [0x41; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
@@ -31336,9 +31301,9 @@ seiyaku GovernanceLifecycle {
             );
         });
         world_test!(register_vk_reserves_every_exact12_privacy_circuit_label {
-            fn halo2_record(circuit_id: String) -> VerifyingKeyRecord {
-                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-                vk_record!(record, 1, circuit_id, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            fn native_record(circuit_id: String) -> VerifyingKeyRecord {
+                let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![1, 2, 3]);
+                vk_record!(record, 1, circuit_id, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
                 record
             }
             original_alice_state_transaction!(state, block, state_block, stx);
@@ -31360,12 +31325,12 @@ seiyaku GovernanceLifecycle {
                 {
                     let mut stx = state_block.transaction_for_callback_testing();
                     let id = VerifyingKeyId::new(
-                        "halo2/ipa",
+                        "pipa-r/pasta",
                         format!("vk_privacy_reserved_{label_index}_{variant_index}"),
                     );
                     let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                         id: id.clone(),
-                        record: halo2_record(circuit_id.clone()),
+                        record: native_record(circuit_id.clone()),
                     }
                     .into();
                     let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
@@ -31384,12 +31349,12 @@ seiyaku GovernanceLifecycle {
                 {
                     let mut stx = state_block.transaction_for_callback_testing();
                     let id = VerifyingKeyId::new(
-                        "halo2/ipa",
+                        "pipa-r/pasta",
                         format!("vk_privacy_non_portable_{label_index}_{variant_index}"),
                     );
                     let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                         id: id.clone(),
-                        record: halo2_record(circuit_id.clone()),
+                        record: native_record(circuit_id.clone()),
                     }
                     .into();
                     let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
@@ -31405,18 +31370,18 @@ seiyaku GovernanceLifecycle {
                 {
                     let mut stx = state_block.transaction_for_callback_testing();
                     let id = VerifyingKeyId::new(
-                        "halo2/ipa",
+                        "pipa-r/pasta",
                         format!("vk_privacy_near_miss_{label_index}_{variant_index}"),
                     );
                     let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                         id: id.clone(),
-                        record: halo2_record(circuit_id.clone()),
+                        record: native_record(circuit_id.clone()),
                     }
                     .into();
                     let error = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instruction)
-                        .expect_err("unregistered Halo2 circuit near miss must not register");
+                        .expect_err("unregistered native circuit near miss must not register");
                     let message = smart_contract_error_message(error);
-                    assert_contains!(message, "production circuit registry", "unexpected rejection for {circuit_id:?}: {message}");
+                    assert_contains!(message, "compiled circuit registry", "unexpected rejection for {circuit_id:?}: {message}");
                     assert!(stx.world.verifying_keys.get(&id).is_none());
                 }
             }
@@ -31449,7 +31414,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx = state_block.transaction_for_callback_testing();
                 let id = VerifyingKeyId::new(backend, "vk_trusted_setup_label");
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-                vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
                 let err = execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), instr)
@@ -32688,9 +32653,9 @@ seiyaku GovernanceLifecycle {
             Grant::account_permission(malformed, ALICE_ID.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "store adversarial same-name permission payload");
             stx.apply();
-            let id = VerifyingKeyId::new("halo2/ipa", "vk_payload_confusion");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(record, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            let id = VerifyingKeyId::new("pipa-r/pasta", "vk_payload_confusion");
+            let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![1, 2, 3]);
+            vk_record!(record, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
             let mut stx = state_block.transaction_for_callback_testing();
             let err = execute_vk_component_fixture(
                     &mut stx,
@@ -32768,9 +32733,9 @@ seiyaku GovernanceLifecycle {
             original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            let id = VerifyingKeyId::new("halo2/ipa", "vk_identity");
-            let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(current, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            let id = VerifyingKeyId::new("pipa-r/pasta", "vk_identity");
+            let vk_box = canonical_test_native_vk_box();
+            vk_record!(current, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
             let mut stx = state_block.transaction_for_callback_testing();
             execute_vk_component_fixture(
                 &mut stx,
@@ -32785,7 +32750,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let mut replacement = current.clone();
             replacement.version = 2;
-            replacement.circuit_id = TEST_OTHER_HALO2_CIRCUIT_ID.to_owned();
+            replacement.circuit_id = TEST_OTHER_NATIVE_CIRCUIT_ID.to_owned();
             let mut stx = state_block.transaction_for_callback_testing();
             let err = execute_vk_component_fixture(
                     &mut stx,
@@ -32799,8 +32764,8 @@ seiyaku GovernanceLifecycle {
                 .expect_err("one verifying-key id must not be rebound to another circuit");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "circuit_id cannot change", "unexpected msg: {msg}");
-            let old_index = (TEST_HALO2_CIRCUIT_ID.to_owned(), 1);
-            let forged_index = (TEST_OTHER_HALO2_CIRCUIT_ID.to_owned(), 2);
+            let old_index = (TEST_NATIVE_CIRCUIT_ID.to_owned(), 1);
+            let forged_index = (TEST_OTHER_NATIVE_CIRCUIT_ID.to_owned(), 2);
             assert_eq!(stx.world.verifying_keys.get(&id), Some(&current));
             assert_eq!(
                 stx.world.verifying_keys_by_circuit.get(&old_index),
@@ -32819,9 +32784,9 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             // Seed registry with a valid record
             let mut stx = state_block.transaction_for_callback_testing();
-            let id = VerifyingKeyId::new("halo2/ipa", "vk_update");
-            let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            let id = VerifyingKeyId::new("pipa-r/pasta", "vk_update");
+            let vk_box = canonical_test_native_vk_box();
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("native_pipa_r_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -32832,7 +32797,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             // Attempt to update with a different supported engine tag.
             let mut stx = state_block.transaction_for_callback_testing();
-            vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Stark, "goldilocks", [0x52; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(VerifyingKeyBox::new("stark/fri".into(), vec![4, 5, 6])), gas_schedule_id = Some("stark_default".into()));
+            vk_record!(new_rec, 2, TEST_NATIVE_CIRCUIT_ID, BackendTag::Stark, "goldilocks", [0x52; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(VerifyingKeyBox::new("stark/fri".into(), vec![4, 5, 6])), gas_schedule_id = Some("stark_default".into()));
             let upd: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id: id.clone(),
                 record: new_rec,
@@ -32850,9 +32815,9 @@ seiyaku GovernanceLifecycle {
             for (idx, (backend, tag, curve, schedule, expected_msg)) in [
                 (
                     "halo2/ipa/orchard",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
+                    BackendTag::NativePipaRPasta,
+                    "vesta",
+                    "native_pipa_r_default",
                     "unsupported verifying key backends",
                 ),
                 (
@@ -32864,16 +32829,16 @@ seiyaku GovernanceLifecycle {
                 ),
                 (
                     "anonymous-pgc",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
+                    BackendTag::NativePipaRPasta,
+                    "vesta",
+                    "native_pipa_r_default",
                     "unsupported verifying key backends",
                 ),
                 (
                     "halo2/mock",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
+                    BackendTag::NativePipaRPasta,
+                    "vesta",
+                    "native_pipa_r_default",
                     "developer-only verifying key backends",
                 ),
                 (
@@ -32892,9 +32857,9 @@ seiyaku GovernanceLifecycle {
                 ),
                 (
                     "halo2/ipa:production-ready",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
+                    BackendTag::NativePipaRPasta,
+                    "vesta",
+                    "native_pipa_r_default",
                     "production-claim verifying key backends",
                 ),
                 (
@@ -32906,9 +32871,9 @@ seiyaku GovernanceLifecycle {
                 ),
                 (
                     "halo2/kzg",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
+                    BackendTag::NativePipaRPasta,
+                    "vesta",
+                    "native_pipa_r_default",
                     "trusted-setup verifying key backends",
                 ),
                 (
@@ -32920,9 +32885,9 @@ seiyaku GovernanceLifecycle {
                 ),
                 (
                     "halo2/unknown-native-v1",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
+                    BackendTag::NativePipaRPasta,
+                    "vesta",
+                    "native_pipa_r_default",
                     "unsupported verifying key backends",
                 ),
                 (
@@ -32963,9 +32928,9 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            let id = VerifyingKeyId::new("halo2/ipa", "vk_update_bad_len");
-            let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            let id = VerifyingKeyId::new("pipa-r/pasta", "vk_update_bad_len");
+            let vk_box = canonical_test_native_vk_box();
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("native_pipa_r_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -32975,7 +32940,7 @@ seiyaku GovernanceLifecycle {
                 .expect("register vk");
             stx.apply();
             let mut stx = state_block.transaction_for_callback_testing();
-            vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()) .expect("canonical key length fits u32") .saturating_add(1), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(new_rec, 2, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()) .expect("canonical key length fits u32") .saturating_add(1), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
             let update_instruction: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id,
                 record: new_rec,
@@ -33039,10 +33004,10 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             // Register a verifying key
             let mut stx = block.transaction_for_callback_testing();
-            let circuit = TEST_HALO2_CIRCUIT_ID;
-            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_live");
-            let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, circuit.to_string(), BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            let circuit = TEST_NATIVE_CIRCUIT_ID;
+            let vk_id = VerifyingKeyId::new("pipa-r/pasta", "vk_live");
+            let vk_box = canonical_test_native_vk_box();
+            vk_record!(rec, 1, circuit.to_string(), BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("native_pipa_r_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -33062,7 +33027,7 @@ seiyaku GovernanceLifecycle {
             }
             // Prepare an invalid proof attachment; registry invariants must be checked first.
             let envelope = OpenVerifyEnvelope {
-                backend: BackendTag::Halo2IpaPasta,
+                backend: BackendTag::NativePipaRPasta,
                 circuit_id: circuit.to_string(),
                 vk_hash: hash_vk(&vk_box),
                 public_inputs: vec![1, 2, 3],
@@ -33070,8 +33035,8 @@ seiyaku GovernanceLifecycle {
                 aux: Vec::new(),
             };
             let proof_bytes = norito::to_bytes(&envelope).expect("encode envelope");
-            let proof_box = ProofBox::new("halo2/ipa".into(), proof_bytes);
-            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box.clone(), vk_id);
+            let proof_box = ProofBox::new("pipa-r/pasta".into(), proof_bytes);
+            let attachment = ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box.clone(), vk_id);
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
@@ -33092,10 +33057,10 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = block.transaction_for_callback_testing();
-            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_env");
-            let vk_box = canonical_test_halo2_vk_box();
+            let vk_id = VerifyingKeyId::new("pipa-r/pasta", "vk_env");
+            let vk_box = canonical_test_native_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -33104,8 +33069,8 @@ seiyaku GovernanceLifecycle {
             execute_vk_component_fixture(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
                 .expect("register vk");
             stx.apply();
-            let proof_box = ProofBox::new("halo2/ipa".into(), vec![0xAA]);
-            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box.clone(), vk_id);
+            let proof_box = ProofBox::new("pipa-r/pasta".into(), vec![0xAA]);
+            let attachment = ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box.clone(), vk_id);
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
@@ -33170,19 +33135,19 @@ seiyaku GovernanceLifecycle {
         world_test!(verify_proof_rejects_cross_engine_record_tag {
             for (idx, backend_tag) in [BackendTag::Stark].into_iter().enumerate() {
                 original_proof_verification_fixture!(state, block);
-                let vk_id = VerifyingKeyId::new("halo2/ipa", format!("vk_bad_record_tag_{idx}"));
-                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
+                let vk_id = VerifyingKeyId::new("pipa-r/pasta", format!("vk_bad_record_tag_{idx}"));
+                let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![idx as u8, 2, 3]);
                 let vk_commitment = hash_vk(&vk_box);
                 let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
                 let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
-                let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
+                let circuit_id = TEST_NATIVE_CIRCUIT_ID.to_owned();
                 vk_record!(rec, 1, circuit_id.clone(), backend_tag, if backend_tag == BackendTag::Stark {
                         "goldilocks"
                     } else {
-                        "pallas"
-                    }, public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                        "vesta"
+                    }, public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
                 let envelope = OpenVerifyEnvelope {
-                    backend: BackendTag::Halo2IpaPasta,
+                    backend: BackendTag::NativePipaRPasta,
                     circuit_id: circuit_id.clone(),
                     vk_hash: vk_commitment,
                     public_inputs,
@@ -33190,11 +33155,11 @@ seiyaku GovernanceLifecycle {
                     aux: Vec::new(),
                 };
                 let proof_box = ProofBox::new(
-                    "halo2/ipa".into(),
+                    "pipa-r/pasta".into(),
                     norito::to_bytes(&envelope).expect("encode envelope"),
                 );
                 let attachment =
-                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+                    ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id.clone());
                 let mut stx = block.transaction_for_callback_testing();
                 bootstrap_alice_account(&mut stx);
                 stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
@@ -33218,23 +33183,23 @@ seiyaku GovernanceLifecycle {
             let mut stx = block.transaction_for_callback_testing();
             bootstrap_alice_account(&mut stx);
             stx.apply();
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 4, 3]);
+            let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![5, 4, 3]);
             let envelope = OpenVerifyEnvelope {
-                backend: BackendTag::Halo2IpaPasta,
-                circuit_id: TEST_HALO2_CIRCUIT_ID.to_owned(),
+                backend: BackendTag::NativePipaRPasta,
+                circuit_id: TEST_NATIVE_CIRCUIT_ID.to_owned(),
                 vk_hash: hash_vk(&vk_box),
                 public_inputs: Vec::new(),
                 proof_bytes: vec![1, 2, 3],
                 aux: Vec::new(),
             };
             let proof_box = ProofBox::new(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 norito::to_bytes(&envelope).expect("encode"),
             );
             let attachment = ProofAttachment::new_ref(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 proof_box,
-                VerifyingKeyId::new("halo2/ipa", "missing"),
+                VerifyingKeyId::new("pipa-r/pasta", "missing"),
             );
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
@@ -33252,12 +33217,12 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = block.transaction_for_callback_testing();
-            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_missing_bytes");
-            let vk_box = canonical_test_halo2_vk_box();
+            let vk_id = VerifyingKeyId::new("pipa-r/pasta", "vk_missing_bytes");
+            let vk_box = canonical_test_native_vk_box();
             let vk_commitment = hash_vk(&vk_box);
             let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -33274,16 +33239,16 @@ seiyaku GovernanceLifecycle {
                 stx_mut.apply();
             }
             let envelope = OpenVerifyEnvelope {
-                backend: BackendTag::Halo2IpaPasta,
-                circuit_id: TEST_HALO2_CIRCUIT_ID.to_owned(),
+                backend: BackendTag::NativePipaRPasta,
+                circuit_id: TEST_NATIVE_CIRCUIT_ID.to_owned(),
                 vk_hash: vk_commitment,
                 public_inputs,
                 proof_bytes: vec![4, 5, 6],
                 aux: Vec::new(),
             };
             let proof_bytes = norito::to_bytes(&envelope).expect("encode envelope");
-            let proof_box = ProofBox::new("halo2/ipa".into(), proof_bytes);
-            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+            let proof_box = ProofBox::new("pipa-r/pasta".into(), proof_bytes);
+            let attachment = ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id);
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
@@ -33300,12 +33265,12 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = block.transaction_for_callback_testing();
-            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_invalid_proof");
-            let vk_box = canonical_test_halo2_vk_box();
+            let vk_id = VerifyingKeyId::new("pipa-r/pasta", "vk_invalid_proof");
+            let vk_box = canonical_test_native_vk_box();
             let vk_commitment = hash_vk(&vk_box);
             let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("native_pipa_r_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -33315,18 +33280,18 @@ seiyaku GovernanceLifecycle {
                 .expect("register vk");
             stx.apply();
             let envelope = OpenVerifyEnvelope {
-                backend: BackendTag::Halo2IpaPasta,
-                circuit_id: TEST_HALO2_CIRCUIT_ID.to_owned(),
+                backend: BackendTag::NativePipaRPasta,
+                circuit_id: TEST_NATIVE_CIRCUIT_ID.to_owned(),
                 vk_hash: vk_commitment,
                 public_inputs,
                 proof_bytes: vec![4, 5, 6],
                 aux: Vec::new(),
             };
             let proof_box = ProofBox::new(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 norito::to_bytes(&envelope).expect("encode envelope"),
             );
-            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+            let attachment = ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id);
             let pid = iroha_data_model::proof::ProofId {
                 backend: attachment.backend.clone(),
                 proof_hash: crate::zk::hash_proof(&attachment.proof),
@@ -33355,12 +33320,12 @@ seiyaku GovernanceLifecycle {
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
             let mut stx = block.transaction_for_callback_testing();
-            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_wrong_envelope_tag");
-            let vk_box = canonical_test_halo2_vk_box();
+            let vk_id = VerifyingKeyId::new("pipa-r/pasta", "vk_wrong_envelope_tag");
+            let vk_box = canonical_test_native_vk_box();
             let vk_commitment = hash_vk(&vk_box);
             let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("native_pipa_r_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -33371,17 +33336,17 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let envelope = OpenVerifyEnvelope {
                 backend: BackendTag::Stark,
-                circuit_id: TEST_HALO2_CIRCUIT_ID.to_owned(),
+                circuit_id: TEST_NATIVE_CIRCUIT_ID.to_owned(),
                 vk_hash: vk_commitment,
                 public_inputs,
                 proof_bytes: vec![4, 5, 6],
                 aux: Vec::new(),
             };
             let proof_box = ProofBox::new(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 norito::to_bytes(&envelope).expect("encode envelope"),
             );
-            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
+            let attachment = ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id);
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
@@ -33435,17 +33400,17 @@ seiyaku GovernanceLifecycle {
                 );
                 stx.apply();
                 let mut stx = block.transaction_for_callback_testing();
-                let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
+                let circuit_id = TEST_NATIVE_CIRCUIT_ID.to_owned();
                 let vk_id = VerifyingKeyId::new(
-                    "halo2/ipa",
+                    "pipa-r/pasta",
                     format!("vk_invalid_metadata_{suffix}").as_str(),
                 );
-                let vk_box = canonical_test_halo2_vk_box();
+                let vk_box = canonical_test_native_vk_box();
                 let vk_commitment = hash_vk(&vk_box);
                 let expected_public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
                 let public_inputs_schema_hash: [u8; 32] =
                     CryptoHash::new(&expected_public_inputs).into();
-                vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = if matches!(tamper, Tamper::InactiveKey) { ConfidentialStatus::Proposed } else { ConfidentialStatus::Active }, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(rec, 1, circuit_id.clone(), BackendTag::NativePipaRPasta, "vesta", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = if matches!(tamper, Tamper::InactiveKey) { ConfidentialStatus::Proposed } else { ConfidentialStatus::Active }, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
                 let register_vk_instruction: InstructionBox =
                     verifying_keys::RegisterVerifyingKey {
                         id: vk_id.clone(),
@@ -33466,7 +33431,7 @@ seiyaku GovernanceLifecycle {
                     Tamper::InactiveKey => {}
                 }
                 let envelope = OpenVerifyEnvelope {
-                    backend: BackendTag::Halo2IpaPasta,
+                    backend: BackendTag::NativePipaRPasta,
                     circuit_id,
                     vk_hash: envelope_vk_hash,
                     public_inputs: envelope_public_inputs,
@@ -33474,11 +33439,11 @@ seiyaku GovernanceLifecycle {
                     aux: envelope_aux,
                 };
                 let proof_box = ProofBox::new(
-                    "halo2/ipa".into(),
+                    "pipa-r/pasta".into(),
                     norito::to_bytes(&envelope).expect("encode envelope"),
                 );
                 let attachment =
-                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+                    ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id.clone());
                 let mut stx_verify = block.transaction_for_callback_testing();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
@@ -33492,25 +33457,25 @@ seiyaku GovernanceLifecycle {
             let state = original_world_state(blank_state());
             let header = original_world_header(&state);
             let mut block = state.block(header);
-            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_replay_existing");
-            let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![2, 4, 6, 8]);
+            let vk_id = VerifyingKeyId::new("pipa-r/pasta", "vk_replay_existing");
+            let vk_box = VerifyingKeyBox::new("pipa-r/pasta".into(), vec![2, 4, 6, 8]);
             let vk_commitment = hash_vk(&vk_box);
             let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", public_inputs_schema_hash, vk_commitment; vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("native_pipa_r_default".into()));
             let envelope = OpenVerifyEnvelope {
-                backend: BackendTag::Halo2IpaPasta,
-                circuit_id: TEST_HALO2_CIRCUIT_ID.to_owned(),
+                backend: BackendTag::NativePipaRPasta,
+                circuit_id: TEST_NATIVE_CIRCUIT_ID.to_owned(),
                 vk_hash: vk_commitment,
                 public_inputs,
                 proof_bytes: vec![9, 8, 7],
                 aux: Vec::new(),
             };
             let proof_box = ProofBox::new(
-                "halo2/ipa".into(),
+                "pipa-r/pasta".into(),
                 norito::to_bytes(&envelope).expect("encode envelope"),
             );
-            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+            let attachment = ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id.clone());
             let pid = iroha_data_model::proof::ProofId {
                 backend: attachment.backend.clone(),
                 proof_hash: crate::zk::hash_proof(&attachment.proof),
@@ -33565,14 +33530,14 @@ seiyaku GovernanceLifecycle {
                 ),
             ] {
                 original_proof_verification_fixture!(state, block);
-                let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
+                let circuit_id = TEST_NATIVE_CIRCUIT_ID.to_owned();
                 let vk_id = VerifyingKeyId::new(
-                    "halo2/ipa",
+                    "pipa-r/pasta",
                     format!("vk_registry_invariant_{suffix}").as_str(),
                 );
                 let stored_vk = match tamper {
                     Tamper::MissingCircuitIndex => {
-                        VerifyingKeyBox::new("halo2/ipa".into(), vec![3, 5, 7])
+                        VerifyingKeyBox::new("pipa-r/pasta".into(), vec![3, 5, 7])
                     }
                     Tamper::StoredKeyBackend => {
                         VerifyingKeyBox::new("stark/fri".into(), vec![3, 5, 7])
@@ -33581,9 +33546,9 @@ seiyaku GovernanceLifecycle {
                 let vk_commitment = hash_vk(&stored_vk);
                 let public_inputs = crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
                 let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
-                vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(stored_vk.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(stored_vk), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(rec, 1, circuit_id.clone(), BackendTag::NativePipaRPasta, "vesta", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(stored_vk.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(stored_vk), gas_schedule_id = Some("native_pipa_r_default".into()));
                 let envelope = OpenVerifyEnvelope {
-                    backend: BackendTag::Halo2IpaPasta,
+                    backend: BackendTag::NativePipaRPasta,
                     circuit_id: circuit_id.clone(),
                     vk_hash: vk_commitment,
                     public_inputs,
@@ -33591,11 +33556,11 @@ seiyaku GovernanceLifecycle {
                     aux: Vec::new(),
                 };
                 let proof_box = ProofBox::new(
-                    "halo2/ipa".into(),
+                    "pipa-r/pasta".into(),
                     norito::to_bytes(&envelope).expect("encode envelope"),
                 );
                 let attachment =
-                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+                    ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box, vk_id.clone());
                 let mut stx = block.transaction_for_callback_testing();
                 bootstrap_alice_account(&mut stx);
                 stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
@@ -33623,9 +33588,9 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             // Register verifying key
             let mut stx = block.transaction_for_callback_testing();
-            let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_gas");
-            let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", test_halo2_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            let vk_id = VerifyingKeyId::new("pipa-r/pasta", "vk_gas");
+            let vk_box = canonical_test_native_vk_box();
+            vk_record!(rec, 1, TEST_NATIVE_CIRCUIT_ID, BackendTag::NativePipaRPasta, "vesta", test_native_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("native_pipa_r_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -33643,16 +33608,16 @@ seiyaku GovernanceLifecycle {
                 stx_mut.apply();
             }
             let envelope = OpenVerifyEnvelope {
-                backend: BackendTag::Halo2IpaPasta,
-                circuit_id: TEST_HALO2_CIRCUIT_ID.to_owned(),
+                backend: BackendTag::NativePipaRPasta,
+                circuit_id: TEST_NATIVE_CIRCUIT_ID.to_owned(),
                 vk_hash: hash_vk(&vk_box),
                 public_inputs: vec![1, 2, 3],
                 proof_bytes: vec![4, 5, 6],
                 aux: Vec::new(),
             };
             let proof_bytes = norito::to_bytes(&envelope).expect("encode envelope");
-            let proof_box = ProofBox::new("halo2/ipa".into(), proof_bytes);
-            let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box.clone(), vk_id);
+            let proof_box = ProofBox::new("pipa-r/pasta".into(), proof_bytes);
+            let attachment = ProofAttachment::new_ref("pipa-r/pasta".into(), proof_box.clone(), vk_id);
             let mut stx_verify = block.transaction_for_callback_testing();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();

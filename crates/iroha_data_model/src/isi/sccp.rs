@@ -460,37 +460,11 @@ pub struct ReportSccpLightClientEquivocationV1 {
 }
 impl crate::seal::Instruction for ReportSccpLightClientEquivocationV1 {}
 
-fn sccp_decode_flags() -> u8 {
-    norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
-}
-
-macro_rules! impl_sccp_decode_from_slice {
-    ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
-        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
-            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-                let flags = sccp_decode_flags();
-                let mut offset = 0usize;
-                $(
-                    let $field = super::decode_aos_canonical_field::<$field_ty>(
-                        super::read_aos_field(bytes, &mut offset, flags)?,
-                        flags,
-                    )?;
-                )+
-                if offset != bytes.len() {
-                    return Err(norito::core::Error::LengthMismatch);
-                }
-                norito::core::note_payload_access(bytes, offset);
-                Ok((Self { $($field),+ }, offset))
-            }
-        }
-    };
-}
-
-impl_sccp_decode_from_slice!(InitializeSccpV1 {
+impl_aos_decode_from_slice!(InitializeSccpV1 {
     parameters: SccpParametersV1,
     reset_nonce: [u8; 32],
 });
-impl_sccp_decode_from_slice!(SetSccpBridgeKeyV1 {
+impl_aos_decode_from_slice!(SetSccpBridgeKeyV1 {
     peer: PeerId,
     public_key: Option<[u8; 33]>,
     activation_epoch: u64,
@@ -498,39 +472,39 @@ impl_sccp_decode_from_slice!(SetSccpBridgeKeyV1 {
     peer_signature: SignatureOf<SccpBridgeKeyBindingV1>,
     key_pop: Option<[u8; 65]>,
 });
-impl_sccp_decode_from_slice!(SubmitSccpAttestationsV1 {
+impl_aos_decode_from_slice!(SubmitSccpAttestationsV1 {
     entries: Vec<SccpAttestationSignatureV1>,
 });
-impl_sccp_decode_from_slice!(SubmitSccpAttestationFaultV1 {
+impl_aos_decode_from_slice!(SubmitSccpAttestationFaultV1 {
     statement: SccpAttestationStatementV1,
     signature: [u8; 65],
 });
-impl_sccp_decode_from_slice!(RecordSccpMessage {
+impl_aos_decode_from_slice!(RecordSccpMessage {
     network: SccpNetworkV1,
     expected_revision: u32,
     amount: Numeric,
     recipient: Vec<u8>,
 });
-impl_sccp_decode_from_slice!(SubmitSccpInboundMessageV1 {
+impl_aos_decode_from_slice!(SubmitSccpInboundMessageV1 {
     network: SccpNetworkV1,
     revision: u32,
     payload: Vec<u8>,
     proof: SccpSourceProofBytesV1,
 });
-impl_sccp_decode_from_slice!(SettleSccpV1 {
+impl_aos_decode_from_slice!(SettleSccpV1 {
     target: SccpSettleTargetV1,
 });
-impl_sccp_decode_from_slice!(SubmitSccpOutboundVoidV1 {
+impl_aos_decode_from_slice!(SubmitSccpOutboundVoidV1 {
     network: SccpNetworkV1,
     revision: u32,
     proof: SccpSourceProofBytesV1,
 });
-impl_sccp_decode_from_slice!(AdvanceSccpLightClientV1 {
+impl_aos_decode_from_slice!(AdvanceSccpLightClientV1 {
     network: SccpNetworkV1,
     expected_state_hash: Option<[u8; 32]>,
     advance: SccpLcAdvanceBytesV1,
 });
-impl_sccp_decode_from_slice!(ReportSccpLightClientEquivocationV1 {
+impl_aos_decode_from_slice!(ReportSccpLightClientEquivocationV1 {
     network: SccpNetworkV1,
     a: SccpLcEvidenceBytesV1,
     b: SccpLcEvidenceBytesV1,

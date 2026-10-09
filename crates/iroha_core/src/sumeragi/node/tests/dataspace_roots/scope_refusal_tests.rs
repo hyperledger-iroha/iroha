@@ -29,9 +29,6 @@ fn certify_private_root(root: DataspaceChain) -> (DataspaceChain, CertifiedTestC
         state,
         kura,
         validator_keys: root.chain.keys.clone(),
-        pasta_seeds: (0..4)
-            .map(|index| zeroize::Zeroizing::new([0xA0 + index; 32]))
-            .collect(),
         clock: ALICE_KEYPAIR.clone(),
         lane_blocks: Arc::new(super::super::super::super::lanes::merge::NoLanes),
     })

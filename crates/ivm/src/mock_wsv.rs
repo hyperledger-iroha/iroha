@@ -1463,7 +1463,7 @@ pub struct WsvHost {
     // ZK verify gating and configuration
     zk_verified_ballot: VecDeque<[u8; 32]>,
     zk_verified_tally: Option<[u8; 32]>,
-    zk_cfg: crate::host::ZkHalo2Config,
+    zk_cfg: crate::host::ZkVerifyLimits,
     axt_state: Option<axt::HostAxtState>,
     axt_policy: Arc<dyn AxtPolicy>,
     axt_policy_overridden: bool,
@@ -1486,7 +1486,7 @@ struct WsvHostSnapshot {
     public_inputs: BTreeMap<Name, Vec<u8>>,
     zk_verified_ballot: VecDeque<[u8; 32]>,
     zk_verified_tally: Option<[u8; 32]>,
-    zk_cfg: crate::host::ZkHalo2Config,
+    zk_cfg: crate::host::ZkVerifyLimits,
     axt_state: Option<axt::HostAxtState>,
     axt_policy: Arc<dyn AxtPolicy>,
     axt_policy_overridden: bool,
@@ -1603,7 +1603,7 @@ impl WsvHost {
             public_inputs: BTreeMap::new(),
             zk_verified_ballot: VecDeque::new(),
             zk_verified_tally: None,
-            zk_cfg: crate::host::ZkHalo2Config::default(),
+            zk_cfg: crate::host::ZkVerifyLimits::default(),
             axt_state: None,
             axt_policy: policy,
             axt_policy_overridden: false,
@@ -1708,7 +1708,7 @@ impl WsvHost {
         self.wsv.sc_flush()
     }
     /// Configure Halo2 verification limits for this host.
-    pub fn with_zk_halo2_config(mut self, cfg: crate::host::ZkHalo2Config) -> Self {
+    pub fn with_zk_verify_limits(mut self, cfg: crate::host::ZkVerifyLimits) -> Self {
         self.zk_cfg = cfg;
         self
     }
@@ -3404,7 +3404,7 @@ impl IVMHost for WsvHost {
                 let _: QueryRequest = decode_canonical_norito(tlv.payload)?;
                 Err(VMError::NotImplemented { syscall: number })
             }
-            // Link ZK_VERIFY syscalls: decode Norito envelope and set per-op verified flags.
+            // Decode bounded proof envelopes; standalone hosts cannot authorize proofs.
             syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT | syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
                 // Expect NoritoBytes TLV in r10 for a `iroha_data_model::zk::OpenVerifyEnvelope`.
                 //
@@ -3422,17 +3422,6 @@ impl IVMHost for WsvHost {
                     vm.set_register(11, crate::host::ERR_ENVELOPE_SIZE);
                     return Ok(gas);
                 }
-                let env_hash: [u8; 32] = CryptoHash::new(tlv.payload).into();
-                if !self.zk_cfg.enabled {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, crate::host::ERR_DISABLED);
-                    return Ok(gas);
-                }
-                if self.zk_cfg.backend != crate::host::ZkHalo2Backend::Ipa {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, crate::host::ERR_BACKEND);
-                    return Ok(gas);
-                }
                 let env: iroha_data_model::zk::OpenVerifyEnvelope =
                     match decode_canonical_norito(tlv.payload) {
                         Ok(env) => env,
@@ -3442,28 +3431,15 @@ impl IVMHost for WsvHost {
                             return Ok(gas);
                         }
                     };
-                if env.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, crate::host::ERR_BACKEND);
-                    return Ok(gas);
-                }
                 if env.proof_bytes.len() > self.zk_cfg.max_proof_bytes {
                     vm.set_register(10, 0);
                     vm.set_register(11, crate::host::ERR_PROOF_LEN);
                     return Ok(gas);
                 }
-                // Mock host treats the envelope as verified if it passes basic gating.
-                vm.set_register(10, 1);
-                vm.set_register(11, 0);
-                match number {
-                    syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => {
-                        self.zk_verified_ballot.push_back(env_hash);
-                    }
-                    syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
-                        self.zk_verified_tally = Some(env_hash);
-                    }
-                    _ => {}
-                }
+                // This standalone mock has no authenticated verifier registry.
+                // Structural parsing must never grant ballot or tally authority.
+                vm.set_register(10, 0);
+                vm.set_register(11, crate::host::ERR_BACKEND);
                 Ok(gas)
             }
             syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
@@ -4623,15 +4599,15 @@ mod tests_governance_elections {
     use crate::Memory;
     use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
     fn vote_vk_id() -> VerifyingKeyId {
-        VerifyingKeyId::new("halo2/ipa", "governance_vote_vk")
+        VerifyingKeyId::new("mock/governance-fixture", "governance_vote_vk")
     }
     fn register_vote_vk(wsv: &mut MockWorldStateView) {
         wsv.insert_verifying_key(vote_vk_id(), vec![0x02]);
     }
     fn dummy_ballot_proof(hash: [u8; 32]) -> ProofAttachment {
         let mut attachment = ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            ProofBox::new("halo2/ipa".into(), vec![0x01]),
+            "mock/governance-fixture".into(),
+            ProofBox::new("mock/governance-fixture".into(), vec![0x01]),
             vote_vk_id(),
         );
         attachment.envelope_hash = Some(hash);
@@ -4639,8 +4615,8 @@ mod tests_governance_elections {
     }
     fn dummy_tally_proof(hash: [u8; 32]) -> ProofAttachment {
         let mut attachment = ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            ProofBox::new("halo2/ipa".into(), vec![0x11]),
+            "mock/governance-fixture".into(),
+            ProofBox::new("mock/governance-fixture".into(), vec![0x11]),
             vote_vk_id(),
         );
         attachment.envelope_hash = Some(hash);
@@ -4743,24 +4719,24 @@ mod tests_governance_elections {
         wsv.set_current_time_ms(1);
         // Missing envelope hash
         let missing_hash = ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            ProofBox::new("halo2/ipa".into(), vec![0x0a]),
+            "mock/governance-fixture".into(),
+            ProofBox::new("mock/governance-fixture".into(), vec![0x0a]),
             vote_vk_id(),
         );
         assert!(!wsv.submit_ballot("proof-test", vec![0x20], [0x04; 32], missing_hash,));
         // Empty proof bytes
         let mut empty_proof = ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            ProofBox::new("halo2/ipa".into(), Vec::new()),
+            "mock/governance-fixture".into(),
+            ProofBox::new("mock/governance-fixture".into(), Vec::new()),
             vote_vk_id(),
         );
         empty_proof.envelope_hash = Some([0x06; 32]);
         assert!(!wsv.submit_ballot("proof-test", vec![0x21], [0x05; 32], empty_proof,));
         // Missing registry reference should fail.
         let mut vk_mismatch = ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            ProofBox::new("halo2/ipa".into(), vec![0x0d]),
-            VerifyingKeyId::new("halo2/ipa", "missing_vote_vk"),
+            "mock/governance-fixture".into(),
+            ProofBox::new("mock/governance-fixture".into(), vec![0x0d]),
+            VerifyingKeyId::new("mock/governance-fixture", "missing_vote_vk"),
         );
         vk_mismatch.envelope_hash = Some([0x07; 32]);
         assert!(!wsv.submit_ballot("proof-test", vec![0x22], [0x06; 32], vk_mismatch,));
@@ -4790,8 +4766,8 @@ mod tests_governance_elections {
         assert!(wsv.create_election("e-invalid".to_string(), 2, [0u8; 32], 0, u64::MAX));
         // Missing envelope hash -> reject
         let proof_missing = ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            ProofBox::new("halo2/ipa".into(), vec![0x21]),
+            "mock/governance-fixture".into(),
+            ProofBox::new("mock/governance-fixture".into(), vec![0x21]),
             vote_vk_id(),
         );
         assert!(!wsv.finalize_election("e-invalid", vec![1, 2], proof_missing));
@@ -4950,8 +4926,11 @@ mod tests_governance_elections {
             election_id: "e-bind".to_string(),
             tally: vec![4, 6],
             tally_proof: iroha_data_model::proof::ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x31]),
+                "mock/governance-fixture".into(),
+                iroha_data_model::proof::ProofBox::new(
+                    "mock/governance-fixture".into(),
+                    vec![0x31],
+                ),
                 vote_vk_id(),
             ),
         };
@@ -4978,8 +4957,8 @@ mod tests_governance_elections {
         let mut host = WsvHost::new_with_subject(wsv, caller.clone());
         host.__test_set_verified_tally([0xFE; 32]);
         let mut tally_proof = iroha_data_model::proof::ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x41]),
+            "mock/governance-fixture".into(),
+            iroha_data_model::proof::ProofBox::new("mock/governance-fixture".into(), vec![0x41]),
             vote_vk_id(),
         );
         tally_proof.envelope_hash = Some([0xEF; 32]); // mismatch
@@ -5038,8 +5017,11 @@ mod tests_governance_elections {
             election_id: "e1".to_string(),
             ciphertext: vec![1, 2, 3],
             ballot_proof: iroha_data_model::proof::ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x01]),
+                "mock/governance-fixture".into(),
+                iroha_data_model::proof::ProofBox::new(
+                    "mock/governance-fixture".into(),
+                    vec![0x01],
+                ),
                 vote_vk_id(),
             ),
             nullifier: [7u8; 32],
@@ -5093,8 +5075,8 @@ mod tests_governance_elections {
             election_id: "gov1".to_string(),
             ciphertext: vec![0xaa, 0xbb, 0xcc],
             ballot_proof: ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![0x01]),
+                "mock/governance-fixture".into(),
+                ProofBox::new("mock/governance-fixture".into(), vec![0x01]),
                 vote_vk_id(),
             ),
             nullifier: [0x09; 32],
@@ -5118,8 +5100,8 @@ mod tests_governance_elections {
             host.__test_push_verified_ballot([0x22; 32]);
         }
         let mut mismatch_proof = ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            ProofBox::new("halo2/ipa".into(), vec![0x03]),
+            "mock/governance-fixture".into(),
+            ProofBox::new("mock/governance-fixture".into(), vec![0x03]),
             vote_vk_id(),
         );
         mismatch_proof.envelope_hash = Some([0x33; 32]);
@@ -5180,8 +5162,11 @@ mod tests_governance_elections {
             election_id: "e2".to_string(),
             tally: vec![5, 2, 1],
             tally_proof: iroha_data_model::proof::ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x03]),
+                "mock/governance-fixture".into(),
+                iroha_data_model::proof::ProofBox::new(
+                    "mock/governance-fixture".into(),
+                    vec![0x03],
+                ),
                 vote_vk_id(),
             ),
         };
@@ -5640,6 +5625,31 @@ mod tests_null_decode {
         assert_eq!(vm.register(11), crate::host::ERR_DECODE);
     }
     #[test]
+    fn canonical_proof_envelopes_never_set_mock_verification_latches() {
+        use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+        let caller = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "wonderland",
+        );
+        let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller);
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+        for backend in BackendTag::ALL {
+            for syscall in [syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT, syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY] {
+                let envelope = OpenVerifyEnvelope::new(backend, "mock-unadmitted-relation", [1;32], vec![2;32], vec![3;32]);
+                let payload = encode_canonical_norito(&envelope).expect("envelope");
+                let ptr = vm.alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload)).expect("allocate proof");
+                vm.set_register(10, ptr);
+                call_syscall(&mut vm, syscall).expect("bounded rejection");
+                assert_eq!(vm.register(10), 0);
+                assert_eq!(vm.register(11), crate::host::ERR_BACKEND);
+                let host = vm.host_mut_any().expect("host").downcast_ref::<WsvHost>().expect("mock host");
+                assert!(host.zk_verified_ballot.is_empty());
+                assert!(host.zk_verified_tally.is_none());
+            }
+        }
+    }
+    #[test]
     fn zk_read_helpers_charge_request_and_response_bytes() {
         let caller: AccountId = test_account_id(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
@@ -5804,7 +5814,7 @@ mod tests_null_decode {
             "wonderland",
         );
         let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone())
-            .with_zk_halo2_config(crate::host::ZkHalo2Config {
+            .with_zk_verify_limits(crate::host::ZkVerifyLimits {
                 max_envelope_bytes: 64,
                 ..Default::default()
             });
@@ -6089,7 +6099,7 @@ mod tests_null_decode {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
-        let vote_vk = VerifyingKeyId::new("halo2/ipa", "canonical-box-ballot");
+        let vote_vk = VerifyingKeyId::new("mock/governance-fixture", "canonical-box-ballot");
         let mut wsv = MockWorldStateView::new();
         wsv.insert_verifying_key(vote_vk.clone(), vec![0x02]);
         assert!(wsv.create_election("canonical-box".to_owned(), 2, [0x42; 32], 0, u64::MAX));
@@ -6101,8 +6111,11 @@ mod tests_null_decode {
             election_id: "canonical-box".to_owned(),
             ciphertext: vec![0xCA, 0xFE],
             ballot_proof: ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x01]),
+                "mock/governance-fixture".into(),
+                iroha_data_model::proof::ProofBox::new(
+                    "mock/governance-fixture".into(),
+                    vec![0x01],
+                ),
                 vote_vk,
             ),
             nullifier: [0x11; 32],
@@ -6205,8 +6218,8 @@ mod tests_null_decode {
             eligible_root: [0x42; 32],
             start_ts: 1,
             end_ts: 2,
-            vk_ballot: VerifyingKeyId::new("halo2/ipa", "ballot"),
-            vk_tally: VerifyingKeyId::new("halo2/ipa", "tally"),
+            vk_ballot: VerifyingKeyId::new("mock/governance-fixture", "ballot"),
+            vk_tally: VerifyingKeyId::new("mock/governance-fixture", "tally"),
             domain_tag: "unsupported".to_owned(),
         };
         let other_payload = encode_canonical_norito(&DMInstructionBox::from(other))

@@ -109,7 +109,7 @@ root and message count, the history accumulator, the committee generation that
 certifies `h` and, at a rotation, the successor's committee root and validity.
 Every voter binds it into the result it signs, `R_h = SHA-256(RESULT_TAG ‖ X_h
 ‖ D_body)` (§3.6). `CommitQC(h)`, exactly `q = n − f` BLS signatures of `C_h`
-over `SHA-256` of the 166-byte Commit preimage, therefore certifies `X_h` with
+over `SHA-256` of the 165-byte Commit preimage, therefore certifies `X_h` with
 exactly the strength of the block. A destination keeps only the current
 generation `{root, generation, start, high, untilMs}`. It verifies one
 aggregate signature with one pairing check (Ethereum and BSC through EIP-2537,
@@ -164,7 +164,7 @@ enacts, and the fast pause panel for pauses only.
 
 | Question | Decision | Why |
 |---|---|---|
-| Outbound finality | A `CommitQC` of exactly `q = n − f` signers of the destination's current generation, over a result that binds the 221-byte header `X` (§3.6–§3.8). The vote preimage, the QC and the core wire are unchanged | The proof exists when `h` commits. No second signature round, no application key family and no attestor liveness. Rejected: a new vote-preimage field (it changes every core layout and is no stronger); certifying `X_h` through the header of `h + 1` (idle chains make no `h + 1`); the commit-attestation extension (`specs/sumeragi.md` §3.7; it needs an application key family); a post-commit signing round (an attestation transport under another name) |
+| Outbound finality | A `CommitQC` of exactly `q = n − f` signers of the destination's current generation, over a result that binds the 221-byte header `X` (§3.6–§3.8). The vote preimage, the QC and the core wire are unchanged | The proof exists when `h` commits. No second signature round, no application key family and no attestor liveness. Rejected: a new vote-preimage field (it changes every core layout and is no stronger); certifying `X_h` through the header of `h + 1` (idle chains make no `h + 1`); a commit-attestation extension (it needs an application key family); a post-commit signing round (an attestation transport under another name) |
 | Consensus signature suite | Only Sumeragi kinds `0x01`–`0x05` and RS16 availability statements sign `SHA-256(P)` of an allowlisted preimage `P` under the IETF min-pk PoP ciphersuite `DST_SIG`, through a dedicated consensus API. Every other BLS signature keeps the existing w3f transcript, and the w3f proof of possession stays the rogue-key defence (§3.8) | Destinations hash to G2 under a standard DST with audited code. A 32-byte message fits TON's message slice and fixes the EVM cost. Reserving `DST_SIG` keeps every other signing context from ever producing a vote. Unifying all BLS signatures is later work |
 | Committee generations | A generation changes at a key-set change at an epoch boundary, at a heartbeat once it is `committee_heartbeat_ms` old (same keys), and at a resync after a missed boundary. Each generation has an immutable deadline anchored at its certified start (§4.2) | Deadlines that only a genuine handoff renews bound how long departed keys stay usable; heartbeats renew maintained destinations |
 | Destination state | The current generation only, an `equivocated` latch, checkpoint ids and the pause state; no record of past generations (§5.1) | Constant TON state; a retired quorum cannot touch an up-to-date deployment |
@@ -507,10 +507,10 @@ R      = SHA-256(RESULT_TAG ‖ X ‖ D_body)                          // 277-by
   `RESULT_BODY_TAG = ASCII("iroha/sumeragi/result-body/v1")` (29 bytes).
 - `R` is not an `H_iroha` value: code MUST NOT pass it through
   `Hash::prehashed`, `HashOf` or any type that checks or sets the marker bit.
-- The stored result preimage (`CommitCertificate.result_preimage` and the
-  flagged-QC `ResultWitness`) is `X ‖ body`, at most `MAX_RESULT_PREIMAGE_BYTES
-  = 65 536` bytes in total, which equals the core's unchanged
-  `MAX_RESULT_WITNESS_BYTES` (`specs/sumeragi.md` §3.6, §4.1.1).
+- The stored result preimage (`CommitCertificate.result_preimage`) is
+  `X ‖ body`, at most `MAX_RESULT_PREIMAGE_BYTES = 65 536` bytes in total
+  (`specs/sumeragi.md` §3.6, §4.1.1). It is local publication and certified-read
+  evidence, never a vote or QC sidecar.
 - `result_of_preimage(p)` is the only `R` function, for voters and readers
   alike. It returns nothing if `len(p) < 222`, if `len(p) > 65 536`, or if
   `SccpFinalityHeaderV1::parse(p[0..221])` fails; otherwise it returns
@@ -556,7 +556,7 @@ calldata, which avoids a square root per key. Example (synthetic, not points):
 keys `0x01^48, 0x02^48, 0x03^48, 0x04^48` give
 `0xfe8902a93a6592a748b8528a9f49312e9cbc5d1abcccb1ff7431b0acba92b2b9`.
 
-**`QC_FIXED` (117 bytes)** carries the fields of a `CommitQC` that a
+**`QC_FIXED` (116 bytes)** carries the fields of a `CommitQC` that a
 destination needs:
 
 | Offset | Size | Field | Source |
@@ -565,9 +565,8 @@ destination needs:
 | 8 | 32 | `epoch_context` | `qc.epoch.context` |
 | 40 | 8 | `view` | `qc.view` |
 | 48 | 32 | `block_hash` | `qc.block_hash` (the Sumeragi core block hash) |
-| 80 | 1 | `attest` | `u8(qc.attest)` |
-| 81 | 32 | `result_body` | `D_body` |
-| 113 | 4 | `signers` | `be32(Σ_j bitmap[j] << 8j)` |
+| 80 | 32 | `result_body` | `D_body` |
+| 112 | 4 | `signers` | `be32(Σ_j bitmap[j] << 8j)` |
 
 `signers` is derived from the Sumeragi bitmap, in which bit `i` is canonical
 index `i`, LSB-first within each byte. Example: `n = 31`, indices {0, 9, 30}:
@@ -579,7 +578,7 @@ negative vector).
 
 ```
 P = ASCII("sumeragi/sig") ‖ 0x03 ‖ I ‖ be64(epoch) ‖ epoch_context ‖ be64(X.height) ‖ be64(view)
-    ‖ block_hash ‖ R ‖ attest                                    // 166 bytes (specs/sumeragi.md §3.3)
+    ‖ block_hash ‖ R                                    // 165 bytes (specs/sumeragi.md §3.3)
 m = SHA-256(P)
 checkpoint_id(X) = keccak256(X)
 ```
@@ -604,8 +603,7 @@ consensus-key proof of possession, keeps the existing w3f transcript (`TODO:`
 unify every BLS signature on RFC 9380 suites in a later release). Only the
 consensus API ever hashes under `DST_SIG`, so no signature obtained in another
 context (Torii's chosen-challenge node attestation, P2P relay digests,
-lifecycle certificates) can verify as a vote or a `CommitQC` share. Kind `0x06`
-(`att_preimage`) is not signed with consensus keys and is not allowlisted.
+lifecycle certificates) can verify as a vote or a `CommitQC` share.
 
 **Signing relation** (the Rust reference equals the destination relation):
 
@@ -622,8 +620,8 @@ the current generation.
 
 1. `n ∈ {4, 7, …, 31}`, `f = (n − 1)/3`, `q = n − f`.
 2. `signers >> n = 0` and `popcount(signers) = q` exactly.
-3. `attest ∈ {0, 1}`; no other constraint applies (a boundary block need not be
-   flagged, `specs/sumeragi.md` §3.7 A1, and a heartbeat is an ordinary block).
+3. `QC_FIXED` has exactly the canonical 116-byte layout; extension fields and
+   trailing bytes are rejected.
 4. `R = SHA-256(RESULT_TAG ‖ X ‖ result_body)`.
 5. `P` per §3.7 with the pinned `I`; `epoch`, `epoch_context`, `view` and
    `block_hash` come unverified from `QC_FIXED`. Kind `0x03` is mandatory: a
@@ -668,7 +666,7 @@ not only a node release.
 | Committee, control and certificate events | §5.2.2 |
 | Leaf, node and history tags | `SCCP/LEAF/V1` (12 B), `SCCP/CONTROL/V1` (15 B), `SCCP/NODE/V1` (12 B), `SCCP/HISTORY/V1` (15 B) |
 | `X` magic, `X_LEN`, committee tag | `SCCP/FINALITY/V1` (16 B), 221 bytes, `SCCP/COMMITTEE/V1` (17 B) |
-| `QC_FIXED_LEN` / Commit `P` length / control-leaf preimage | 117 / 166 / 199 bytes |
+| `QC_FIXED_LEN` / Commit `P` length / control-leaf preimage | 116 / 165 / 199 bytes |
 | `RESULT_TAG` / `RESULT_BODY_TAG` | `iroha/sumeragi/result/v1` (24 B) / `iroha/sumeragi/result-body/v1` (29 B) |
 | `MAX_RESULT_PREIMAGE_BYTES` / `MAX_RESULT_BODY_BYTES` | 65 536 / 65 315 |
 | `DST_SIG` | `BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_` (43 B) |
@@ -1397,7 +1395,7 @@ and the inbound light clients are safe, which inbound SCCP already assumes.
 
 ```
 SubmitSccpForgeryEvidenceV1 {
-    qc: [u8; 117],                          // QC_FIXED (§3.7)
+    qc: [u8; 116],                          // QC_FIXED (§3.7)
     header: [u8; 221],                      // X
     aggregate_signature: [u8; 96],          // compressed σ
     anchor: Option<SccpAnchorWitnessV1>,    // required only when X.height lies in a completed anchor chunk
@@ -1512,7 +1510,7 @@ SCCP_LC_SLACK_MS)`; at execution they run against the parent state with
   parent state and the candidate block's canonical time before including one,
   and includes at most one per block, so honest blocks never trip R-EX, and a
   Byzantine leader cannot use failing evidence to make a free block.
-- **Bounded cost.** The payload is `117 + 221 + 96 + 64 + 384` bytes plus
+- **Bounded cost.** The payload is `116 + 221 + 96 + 64 + 384` bytes plus
   framing. Execution costs one hash-to-curve, at most 31 point additions, one
   pairing check, at most 13 `H_iroha` for the path and O(1) map reads.
 
@@ -3424,8 +3422,8 @@ per `message_id` (§4.12.4). Ingress MUST rate-limit unverifiable advances per
 peer connection. Every SCCP instruction routes to the universal dataspace.
 
 The only SCCP permission token is `CanProposeSccpRouteGovernance`, which only
-allows proposing. Its grant and revoke rule is `OnlyGenesis`, as for
-`CanManageKagemushaReserve` (`INITIAL_GENESIS_ONLY_PERMISSION_NAMES` in
+allows proposing. Its grant and revoke rule is `OnlyGenesis`
+(`INITIAL_GENESIS_ONLY_PERMISSION_NAMES` in
 `crates/iroha_core/src/executor.rs`): genesis MAY grant it (for example to the
 reset operator's proposing account), and after genesis nobody can grant or
 revoke it. No manager role grants or revokes it. A holder can only put
@@ -3562,13 +3560,13 @@ conflicting certificates is not genuine.
 
 `VerifyCertificate(cert)` runs these checks in order, cheapest first:
 
-1. Exact lengths: `QC_FIXED` 117, `X` 221, signature 192 (EVM) or 96 (TON). EVM
+1. Exact lengths: `QC_FIXED` 116, `X` 221, signature 192 (EVM) or 96 (TON). EVM
    also checks `committee = 48n` with `n ∈ {4, 7, …, 31}` and `signerYs = 48q`.
 2. Parse `X` (X1–X7, §3.6): `X.network_id = tairaNetworkId` and `ACTIVE` is
    set. There is no skew check.
 3. Classify (§5.1.2): anything other than CUR gives `CommitteeNotAccepted`.
 4. EVM: `keccak256("SCCP/COMMITTEE/V1" ‖ u8 n ‖ committee) = cur.root`.
-5. `attest ∈ {0, 1}`; `signers >> n = 0`; `popcount(signers) = q(n)`.
+5. `signers >> n = 0`; `popcount(signers) = q(n)`.
 6. EVM: every signer `y` and every `σ` limb is `< p`; `σ ≠ 0^192`; every signer
    key's byte 0 satisfies `& 0xc0 = 0x80` and `(byte0 & 0x20 ≠ 0) = (y >
    HALF_P)`.
@@ -3989,7 +3987,7 @@ true`. Every other operation throws until then.
 
 ```
 taira_cert#_ signature:bits768 signers:uint32 qc:^QcFixed x:^XHead = TairaCert;
-qc_fixed#_ epoch:uint64 epoch_context:bits256 view:uint64 block_hash:bits256 attest:uint8 result_body:bits256 = QcFixed;
+qc_fixed#_ epoch:uint64 epoch_context:bits256 view:uint64 block_hash:bits256 result_body:bits256 = QcFixed;
 x_head#_ bytes:bits872 tail:^XTail = XHead;      x_tail#_ bytes:bits896 = XTail;
 checkpoint_ref#_ x:^XHead = CheckpointRef;
 block_ref#_ height:uint64 sccp_root:bits256 message_count:uint32 history_index:uint64 path_len:uint8 path:(Maybe ^HashChunk) = BlockRef;
@@ -4087,7 +4085,7 @@ and bounces the inbound message, so no step completes without its event.
 2. **`m`:** `HASHEXTA` id 0 over byte-aligned builders into an empty builder,
    then `ENDC`, `CTOS`: a slice of exactly 256 bits and no refs.
    `BLS_FASTAGGREGATEVERIFY` hashes the whole message slice. `R` is built the
-   same way; the 166-byte `P` spans two builders.
+   same way; the 165-byte `P` spans two builders.
 3. **`id`:** `HASHEXT` id 3 (keccak) over the `XHead.bytes` and `XTail.bytes`
    slices (`2 PUSHINT 3 HASHEXT`).
 4. **Keys:** `loadBits(384)` slices of exactly 384 bits from the `KeyChunk`s,
@@ -4397,7 +4395,7 @@ the cursor of the next page (`next_from_nonce`, `next_after_nonce`,
 fixed byte layouts of §3):
 
 ```
-SccpCertificateV1 { height: u64, qc: [u8; 117], aggregate_signature: [u8; 96], header: [u8; 221], committee: Vec<[u8; 48]> }
+SccpCertificateV1 { height: u64, qc: [u8; 116], aggregate_signature: [u8; 96], header: [u8; 221], committee: Vec<[u8; 48]> }
 SccpGenerationV1  { generation, committee_root, cause, start_height, start_timestamp_ms, start_lc, validity_ms, deadline_ms,
                     grace_ms, progress_cap_ms, liable_until_lc, dest_cleared_lc, liable: bool,
                     end: Option<{ end_height, end_timestamp_ms, next_committee_root, successor_validity_ms }>,
@@ -5329,13 +5327,13 @@ Common fields: network `0x11^32`, message count 2, root `0x22^32`, history size
 - Non-rotation `X` bytes: `534343502f46494e414c4954592f5631 11…11
   0000000000001c1f 000001a0c4506818 01 00000002 22…22 0000000000000005 33…33
   0000000000000003 44…44 0000000000000000 00…00`.
-- `QC_FIXED` with epoch 2, context `0x88^32`, view 1, `bh = 0x99^32`, `attest =
-  1`, `result_body = 0x66^32`, signers {0, 9, 30}: `0000000000000002 88…88
-  0000000000000001 99…99 01 66…66 40000201`.
+- `QC_FIXED` with epoch 2, context `0x88^32`, view 1, `bh = 0x99^32`,
+  `result_body = 0x66^32`, signers {0, 9, 30}: `0000000000000002 88…88
+  0000000000000001 99…99 66…66 40000201`.
 - With `I = 0x77^32` and the rotation `R`: `m = SHA-256(P) =
-  0x2eca89b5065dd7b34b35d7273345c03257c2668c221499bac4afbdf0f2413e30`.
+  0x85c684fac5aab78b197a5e2d40329ec518bc038abd99974a37064ea26e4943e0`.
 - Forgery evidence id for `g = 3`, that `m` and signers `0x40000201`:
-  `0xc7970cdfc9d3bdb5098d0a7e8e06763b7a2f451b09c9ef9fa5168d20db3c0ca9`.
+  `0x5fe24c413eba8a5e1d7727f630f9bf0c005286c75662061a8216b0292a454f35`.
 - Anchors, with core hash `0x99^32`; heights 7199 and 7200 are positions 3102
   and 3103 of chunk 1, so they are siblings: `anchor_leaf(7199, 0x99^32,
   R_non-rotation) =
@@ -5353,10 +5351,9 @@ Keys are `sk_i = KeyGen(IKM = SHA-256("sccp-finality-test-ikm" ‖ u8 i))`,
 committees `n = 4, 7, 31`, and signer sets the lowest `q`, the highest `q` and
 scattered sets including {0, 9, 30} at `n = 31`. The file also carries a
 key-change rotation certificate, a heartbeat rotation certificate (`next =
-committee root`), non-rotation certificates with `attest = 0` and `attest = 1`,
-a rotation with `attest = 0` (a positive), and an inactive `X`. Negatives, each
-mapped to its §5.2.2 error: kind `0x02`; popcount `q ± 1`; spare bits; `attest
-= 2`; wrong `I`; wrong network; each of X1–X7 violated (including `ROTATION`
+committee root`), a non-rotation certificate, and an inactive `X`. Negatives,
+each mapped to its §5.2.2 error: kind `0x02`; popcount `q ± 1`; spare bits;
+noncanonical `QC_FIXED` lengths; wrong `I`; wrong network; each of X1–X7 violated (including `ROTATION`
 with `validity_ms = 0`, and non-`ROTATION` with a nonzero `validity_ms` or
 `next_committee_root`); root mismatch; a certificate of a past generation
 (`CommitteeNotAccepted`); flag `0xc0`; wrong sign bit; `y ≥ p`; off-curve `y`;
@@ -5548,28 +5545,29 @@ w3f-transcript signature; raw-bitmap `signers`; `X.height ≠` the signed height
 
 ### 11.6 Mutation gate
 
-The Core mutation gate (`scripts/sumeragi_mutation_gate.py --core`) carries the
-SCCP and certified-time entries HC133–HC157, and the sans-IO core and simulator
-gate carries MS51 and MS52. HC100–HC132 are other Core entries; earlier drafts of this design used
-HC100–HC124 for the rows below, and those ids are retired. `specs/sumeragi.md`
-§13.4 is authoritative for each row's mutation, named killing test and oracle.
+The Core mutation gate (`scripts/sumeragi_mutation_gate.py --core`) will gain the
+SCCP and certified-time cases SC1–SC25 when their source hooks and tests land.
+These are planning identifiers; each implemented case receives a unique HC
+mutation ID. HC1–HC146 belong to the current Core/daemon registry. The sans-IO
+core and simulator gate already carries MS51 and MS52. `specs/sumeragi.md`
+§13.4 is authoritative for each case's rule, named killing test and oracle.
 The rows map to the rules of this spec as follows:
 
 | Rule (this spec) | Gate entries | Lands with |
 |---|---|---|
-| `R` binds `X` (§3.6); G5 boundary header fields (§4.2.2) | HC133; HC134, HC135 | Team C (WP-C5) |
-| Consensus signing through the consensus API (§3.8) | HC136 | Team C (WP-C5) |
-| CT1, CT3 and CT5 (§4.3); the simulator's model of CT1 | HC137, HC138, HC144; MS52 | Team C (WP-C5) |
-| `Execute.certified`: the executor's use, and the core's emission (§4.3) | HC149; MS51 | Team C (WP-C5) |
-| L3 release gate; liability clock step cap (§4.8) | HC147; HC151 | Team C (WP-C5) |
-| Self-contained penalty record: offence height and G6 offenders (§4.9 step 9) | HC153 | Team C (WP-C5) |
-| Due predicate: heartbeat leg, governance leg, degraded run (§4.7.3) | HC139, HC140, HC154 | Team S (WP-S3; HC140's killing test also needs the fast pause of WP-S5) |
-| K1, K2 (§4.7.4) | HC141, HC148 | Team S (WP-S3) |
-| G4 missing inputs never `Invalid`; G2 `BEAT`; G7 resync (§4.2.2, §4.6) | HC142, HC143, HC155 | Team S (WP-S2) |
-| E4, E0, E3 (§4.9) | HC145, HC146, HC150 | Team S (WP-S6) |
-| L5 destination-progress gate (§4.8) | HC152 | Team S (WP-S6) |
-| Pruning skips generations named by pending records (§4.11) | HC156 | Team S (WP-S2) |
-| Per-revision forgery hold keyed on `forgery_floor` (§4.10) | HC157 | Team S (WP-S10) |
+| `R` binds `X` (§3.6); G5 boundary header fields (§4.2.2) | SC1; SC2, SC3 | Team C (WP-C5) |
+| Consensus signing through the consensus API (§3.8) | SC4 | Team C (WP-C5) |
+| CT1, CT3 and CT5 (§4.3); the simulator's model of CT1 | SC5, SC6, SC12; MS52 | Team C (WP-C5) |
+| `Execute.certified`: the executor's use, and the core's emission (§4.3) | SC17; MS51 | Team C (WP-C5) |
+| L3 release gate; liability clock step cap (§4.8) | SC15; SC19 | Team C (WP-C5) |
+| Self-contained penalty record: offence height and G6 offenders (§4.9 step 9) | SC21 | Team C (WP-C5) |
+| Due predicate: heartbeat leg, governance leg, degraded run (§4.7.3) | SC7, SC8, SC22 | Team S (WP-S3; SC8's killing test also needs the fast pause of WP-S5) |
+| K1, K2 (§4.7.4) | SC9, SC16 | Team S (WP-S3) |
+| G4 missing inputs never `Invalid`; G2 `BEAT`; G7 resync (§4.2.2, §4.6) | SC10, SC11, SC23 | Team S (WP-S2) |
+| E4, E0, E3 (§4.9) | SC13, SC14, SC18 | Team S (WP-S6) |
+| L5 destination-progress gate (§4.8) | SC20 | Team S (WP-S6) |
+| Pruning skips generations named by pending records (§4.11) | SC24 | Team S (WP-S2) |
+| Per-revision forgery hold keyed on `forgery_floor` (§4.10) | SC25 | Team S (WP-S10) |
 
 Format pins owned by `iroha_data_model` and `iroha_crypto` are enforced by the
 §11 golden tests in normal CI. Liveness tests that fail before their change and
@@ -5580,7 +5578,7 @@ pass after it: `idle_chain_certifies_heartbeat_within_interval` (fake clock),
 `missed_boundary_resyncs_generation`.
 
 **Rules without a gate entry yet** (`TODO:` Team S; the `specs/sumeragi.md`
-owner assigns the next free ids after HC157): the fast-pause lift rule
+owner assigns the next free ids after SC25): the fast-pause lift rule
 (§4.14.7), the pass order and positions of §4.7.2 (closures before openings, G2
 before G3), the panel draw's registering no pulse demand (§4.14.7), the
 certification and enactment rechecks of a fast pause (§4.14.7), and the
@@ -5672,7 +5670,8 @@ version, since no backward compatibility is required).
    cannot be configured and the ballot timings must change (§4.1).
 5. **31-seat result body.** A 31-seat boundary with a frozen preparation must
    fit 65 315 body bytes (§3.6). If the measurement fails, the fallback is an
-   explicit core change (raise `MAX_RESULT_WITNESS_BYTES` to 65 757 and re-run
+   explicit result-preimage bound change (raise `MAX_RESULT_PREIMAGE_BYTES` to
+   65 757 and re-run
    the bound tests and the gate), never a silent one. It blocks the WP-C2
    merge.
 6. **Measurements.** Gas and TON costs of §5.4, including `SccpCertificate`,

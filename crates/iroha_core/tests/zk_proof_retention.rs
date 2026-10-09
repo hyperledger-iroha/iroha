@@ -2,8 +2,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 //! Ensure proof registry retention cap is enforced per backend.
+#[path = "common/zk_components.rs"]
+mod zk_components;
 use iroha_core::{
-    executor::Executor,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
@@ -13,9 +14,10 @@ use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+use zk_components::execute_isi_component;
 #[path = "common/world_fixture.rs"]
 mod test_world;
-fn halo2_ipa_vk_record(
+fn native_pipa_r_vk_record(
     circuit_id: String,
     vk_box: iroha_data_model::proof::VerifyingKeyBox,
     public_inputs: &[u8],
@@ -23,32 +25,32 @@ fn halo2_ipa_vk_record(
     let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
         1,
         circuit_id,
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        "pallas",
+        iroha_data_model::zk::BackendTag::NativePipaRPasta,
+        "vesta",
         iroha_crypto::Hash::new(public_inputs).into(),
         iroha_core_zk::hash_vk(&vk_box),
     );
     record.vk_len = vk_box.bytes.len() as u32;
     record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     record.key = Some(vk_box);
-    record.gas_schedule_id = Some("halo2_default".into());
+    record.gas_schedule_id = Some("native_pipa_r_default".into());
     record
 }
-fn rejected_halo2_ipa_proof(
+fn rejected_native_pipa_r_proof(
     circuit_id: String,
     vk_box: &iroha_data_model::proof::VerifyingKeyBox,
     public_inputs: Vec<u8>,
     seed: u8,
 ) -> iroha_data_model::proof::ProofBox {
     let envelope = iroha_data_model::zk::OpenVerifyEnvelope::new(
-        iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+        iroha_data_model::zk::BackendTag::NativePipaRPasta,
         circuit_id,
         iroha_core_zk::hash_vk(vk_box),
         public_inputs,
-        vec![seed],
+        vec![seed.saturating_add(1)],
     );
     iroha_data_model::proof::ProofBox::new(
-        "halo2/ipa".into(),
+        "pipa-r/pasta".into(),
         norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
     )
 }
@@ -75,34 +77,34 @@ fn proof_records_pruned_to_cap_per_backend() {
         .expect("empty state accepts retention test configuration");
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let exec = Executor::default();
     let mut stx = block.transaction();
     grant_manage_verifying_keys(&mut stx);
     stx.apply();
     // Prepare 5 different rejected proof attachments for the same no-trusted-setup backend.
-    let backend = "halo2/ipa".to_string();
+    let backend = "pipa-r/pasta".to_string();
+    let fixture = iroha_core_zk::test_utils::native_confidential_fixture_envelope();
     for i in 0u8..5 {
-        let vk_box = iroha_data_model::proof::VerifyingKeyBox::new(backend.clone(), vec![i; 8]);
+        let vk_box = fixture.vk_box(&backend).expect("compiled native key");
         let vk_id =
             iroha_data_model::proof::VerifyingKeyId::new(backend.clone(), format!("vk_{i}"));
-        let circuit_id = format!("halo2/ipa:retention:{i}");
-        let public_inputs = vec![0xA5, i];
+        let circuit_id =
+            iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned();
+        let public_inputs = fixture.public_inputs.clone();
         let proof_box =
-            rejected_halo2_ipa_proof(circuit_id.clone(), &vk_box, public_inputs.clone(), i);
-        let vk_record = halo2_ipa_vk_record(circuit_id, vk_box, &public_inputs);
+            rejected_native_pipa_r_proof(circuit_id.clone(), &vk_box, public_inputs.clone(), i);
+        let mut vk_record = native_pipa_r_vk_record(circuit_id, vk_box, &public_inputs);
+        vk_record.version = u32::from(i) + 1;
         let mut stx = block.transaction();
         let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
             id: vk_id.clone(),
             record: vk_record,
         }
         .into();
-        exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
-            .expect("register vk");
+        execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
         let attachment =
             iroha_data_model::proof::ProofAttachment::new_ref(backend.clone(), proof_box, vk_id);
         let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-        exec.execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
-            .expect("verify proof");
+        execute_isi_component(&mut stx, &ALICE_ID.clone(), verify).expect("verify proof");
         stx.apply();
     }
     block
@@ -110,13 +112,16 @@ fn proof_records_pruned_to_cap_per_backend() {
         .expect("commit block");
     // After insertions, retained proof records for this backend should be <= cap
     let view = state.view();
-    let count_halo2_ipa = view
+    let count_native_pipa_r = view
         .world()
         .proofs()
         .iter()
         .filter(|(id, _)| id.backend.as_str() == backend.as_str())
         .count();
-    assert!(count_halo2_ipa <= 3, "retained {count_halo2_ipa} > cap");
+    assert!(
+        count_native_pipa_r <= 3,
+        "retained {count_native_pipa_r} > cap"
+    );
 }
 #[test]
 fn manual_prune_instruction_applies_new_cap() {
@@ -134,33 +139,33 @@ fn manual_prune_instruction_applies_new_cap() {
         .expect("empty state accepts retention test configuration");
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let exec = Executor::default();
     let mut stx = block.transaction();
     grant_manage_verifying_keys(&mut stx);
     stx.apply();
-    let backend = "halo2/ipa".to_string();
+    let backend = "pipa-r/pasta".to_string();
+    let fixture = iroha_core_zk::test_utils::native_confidential_fixture_envelope();
     for i in 0u8..4 {
-        let vk_box = iroha_data_model::proof::VerifyingKeyBox::new(backend.clone(), vec![i; 8]);
+        let vk_box = fixture.vk_box(&backend).expect("compiled native key");
         let vk_id =
             iroha_data_model::proof::VerifyingKeyId::new(backend.clone(), format!("manual_vk_{i}"));
-        let circuit_id = format!("halo2/ipa:manual-retention:{i}");
-        let public_inputs = vec![0x5A, i];
+        let circuit_id =
+            iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned();
+        let public_inputs = fixture.public_inputs.clone();
         let proof_box =
-            rejected_halo2_ipa_proof(circuit_id.clone(), &vk_box, public_inputs.clone(), i);
-        let vk_record = halo2_ipa_vk_record(circuit_id, vk_box, &public_inputs);
+            rejected_native_pipa_r_proof(circuit_id.clone(), &vk_box, public_inputs.clone(), i);
+        let mut vk_record = native_pipa_r_vk_record(circuit_id, vk_box, &public_inputs);
+        vk_record.version = u32::from(i) + 1;
         let mut stx = block.transaction();
         let reg_vk: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
             id: vk_id.clone(),
             record: vk_record,
         }
         .into();
-        exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_vk)
-            .expect("register vk");
+        execute_isi_component(&mut stx, &ALICE_ID.clone(), reg_vk).expect("register vk");
         let attachment =
             iroha_data_model::proof::ProofAttachment::new_ref(backend.clone(), proof_box, vk_id);
         let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-        exec.execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
-            .expect("verify proof");
+        execute_isi_component(&mut stx, &ALICE_ID.clone(), verify).expect("verify proof");
         stx.apply();
     }
     block
@@ -180,8 +185,7 @@ fn manual_prune_instruction_applies_new_cap() {
     let mut stx = prune_block.transaction();
     let prune: InstructionBox =
         iroha_data_model::isi::zk::PruneProofs::new(Some(backend.clone())).into();
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), prune)
-        .expect("prune proofs");
+    execute_isi_component(&mut stx, &ALICE_ID.clone(), prune).expect("prune proofs");
     stx.apply();
     prune_block
         .commit_world_overlay_for_testing()

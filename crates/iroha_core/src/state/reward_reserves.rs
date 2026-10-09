@@ -198,7 +198,6 @@ mod tests {
             execution_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
-            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: Arc::new(LaneManifestRegistry::empty()),
             kura: Kura::blank_kura_for_testing(),
             query_handle: crate::query::store::LiveQueryStore::start_test(),

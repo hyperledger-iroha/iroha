@@ -57,34 +57,32 @@ object ValidatorStakingNoritoV1 {
         protected fun variant(index: Int): Pair<Long, ByteArray> = decodeVariant(fields[index])
     }
 
-    /** One exact BLS consensus identity and paired generation-bound Pasta keys. */
-    class ValidatorKeys private constructor(payload: ByteArray) : Record(payload, 3) {
-        val validator: Bytes = raw(0)
-        val eqProofPublicKey: Bytes = fixed(1, 32)
-        val epProofPublicKey: Bytes = fixed(2, 32)
-
-        companion object {
-            fun decode(payload: ByteArray): ValidatorKeys = ValidatorKeys(payload)
-        }
-    }
-
-    /** Immutable key generation; scheduling epochs are authorized separately. */
-    class AuthorityGeneration private constructor(payload: ByteArray) : Record(payload, 4) {
-        val version: Int = u16(0)
-        val networkId: NetworkId = network(1)
-        val generation: Long = u64(2)
-        private val validatorValues: List<ValidatorKeys> = vector(3, 31, ValidatorKeys::decode)
-        val validators: List<ValidatorKeys> get() = validatorValues.toList()
+    /** Ordered BLS roster under one network-bound signing generation. */
+    class ValidatorGeneration private constructor(payload: ByteArray) : Record(payload, 3) {
+        val networkId: NetworkId = network(0)
+        val generation: Long = u64(1)
+        private val validatorValues: List<PeerId> = vector(2, 31, PeerId::decode)
+        val validators: List<PeerId> get() = validatorValues.toList()
 
         init {
-            require(version == 1) { "unsupported authority-generation version" }
-            require(validators.size >= 4 && (validators.size - 1) % 3 == 0) {
-                "authority generation requires an exact 3f + 1 roster"
+            require(fields[0].any { it != 0.toByte() } && validatorValues.size >= 4 &&
+                (validatorValues.size - 1) % 3 == 0) {
+                "validator generation requires a network and exact 3f + 1 roster"
+            }
+            require(validatorValues.all {
+                it.algorithm == SigningAlgorithm.BLS_NORMAL && it.publicKey.bytes().size == 48
+            }) { "validator generation requires BLS-normal identities" }
+            for (index in 1 until validatorValues.size) {
+                require(compareBytes(validatorValues[index - 1].publicKey.bytes(),
+                    validatorValues[index].publicKey.bytes()) < 0) {
+                    "validator generation keys must be strictly ordered and unique"
+                }
             }
         }
 
         companion object {
-            fun decode(payload: ByteArray): AuthorityGeneration = AuthorityGeneration(payload)
+            @JvmStatic
+            fun decode(payload: ByteArray): ValidatorGeneration = ValidatorGeneration(payload)
         }
     }
 
@@ -379,10 +377,9 @@ object ValidatorStakingNoritoV1 {
         }
     }
 
-    /** Exact generation and installed beacon transcript prepared for activation. */
-    class CommitteeCredentials private constructor(payload: ByteArray) : Record(payload, 2) {
-        val authority: AuthorityGeneration = AuthorityGeneration.decode(fields[0])
-        val beacon: InstalledBeacon = InstalledBeacon.decode(fields[1])
+    /** Exact installed beacon transcript prepared for activation. */
+    class CommitteeCredentials private constructor(payload: ByteArray) : Record(payload, 1) {
+        val beacon: InstalledBeacon = InstalledBeacon.decode(fields[0])
 
         companion object {
             fun decode(payload: ByteArray): CommitteeCredentials = CommitteeCredentials(payload)
@@ -390,10 +387,9 @@ object ValidatorStakingNoritoV1 {
     }
 
     /** Seat-indexed proof payloads retained until the certified boundary. */
-    class SeatReadiness private constructor(payload: ByteArray) : Record(payload, 3) {
+    class SeatReadiness private constructor(payload: ByteArray) : Record(payload, 2) {
         val validatorIndex: Long = u32(0)
-        val pastaPossession: Bytes = raw(1)
-        val beaconPossession: Bytes = raw(2)
+        val beaconPossession: Bytes = raw(1)
 
         companion object {
             fun decode(payload: ByteArray): SeatReadiness = SeatReadiness(payload)

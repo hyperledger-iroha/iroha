@@ -1,4 +1,8 @@
 //! Validate the public finalized-PoR replay-archive binding and worker bounds.
+#[path = "publisher_config_fixture.rs"]
+mod publisher_config_fixture;
+use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
+
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
@@ -9,10 +13,12 @@ use std::{
 };
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
-    ConfigReader::new()
-        .with_env(MockEnv::new())
-        .read_toml_with_extends(base_path)
-        .expect("base config should load")
+    with_fixture_refs(
+        ConfigReader::new()
+            .with_env(MockEnv::new())
+            .read_toml_with_extends(base_path)
+            .expect("base config should load"),
+    )
 }
 fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
     let table = source
@@ -22,7 +28,7 @@ fn parse_overlay(source: &str) -> Result<ActualConfig, String> {
         .with_toml_source(TomlSource::inline(table))
         .read_and_complete::<UserConfig>()
         .map_err(|error| format!("{error:?}"))?
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .map_err(|error| format!("{error:?}"))
 }
 fn ed25519_public_key_hex(seed: u8) -> String {

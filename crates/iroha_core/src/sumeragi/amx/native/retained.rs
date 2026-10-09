@@ -11,9 +11,6 @@ use iroha_allocation::{
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     account::AccountId,
-    isi::kagemusha_v1::{
-        KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityValidatorKeysV1,
-    },
     sumeragi::epoch::{ValidatorCommitteeMemberV1, ValidatorEpochContextV1},
     sumeragi_amx::{
         AmxForeignInstanceV1, AmxHeldDecisionV1, AmxParticipantStateV1, AmxPreparedEntryV1,
@@ -240,14 +237,25 @@ impl Demand {
         )
     }
     fn context(&mut self, source: &ValidatorEpochContextV1) -> Result<(), GraphError> {
-        self.array::<KagemushaMintFinalityValidatorKeysV1>(source.authority.validators.len())?;
-        for member in &source.authority.validators {
-            self.key(member.validator.public_key())?;
-        }
-        self.array::<ValidatorCommitteeMemberV1>(source.committee.len())?;
-        for member in &source.committee {
-            self.key(member.validator.public_key())?;
-            self.array::<u8>(member.proof_of_possession.len())?;
+        // Generation identity derives from this sole BLS roster and the fixed authorization.
+        // Exhaustive fields make new owned epoch/credential storage require accounting review.
+        let ValidatorEpochContextV1 {
+            da_layout: _,
+            version: _,
+            network_id: _,
+            mode: _,
+            authorization: _,
+            committee,
+            leader_seed: _,
+        } = source;
+        self.array::<ValidatorCommitteeMemberV1>(committee.len())?;
+        for ValidatorCommitteeMemberV1 {
+            validator,
+            proof_of_possession,
+        } in committee
+        {
+            self.key(validator.public_key())?;
+            self.array::<u8>(proof_of_possession.len())?;
         }
         Ok(())
     }
@@ -389,26 +397,25 @@ impl Construction {
         source: &ValidatorEpochContextV1,
         budget: &AllocationBudget,
     ) -> Result<ValidatorEpochContextV1, GraphError> {
-        let mut validators = self.buffer(source.authority.validators.len())?;
-        for member in &source.authority.validators {
-            validators.push_reserved(KagemushaMintFinalityValidatorKeysV1 {
-                validator: PeerId::new(self.key(member.validator.public_key(), budget)?),
-                eq_proof_public_key: member.eq_proof_public_key,
-                ep_proof_public_key: member.ep_proof_public_key,
-            });
-        }
-        let authority = KagemushaMintFinalityAuthorityGenerationV1 {
-            version: source.authority.version,
-            network_id: source.authority.network_id,
-            generation: source.authority.generation,
-            validators: self.vector(validators)?,
-        };
-        let mut committee = self.buffer(source.committee.len())?;
-        for member in &source.committee {
-            let validator = PeerId::new(self.key(member.validator.public_key(), budget)?);
-            let mut proof = self.buffer(member.proof_of_possession.len())?;
+        let ValidatorEpochContextV1 {
+            da_layout,
+            version,
+            network_id,
+            mode,
+            authorization,
+            committee: source_committee,
+            leader_seed,
+        } = source;
+        let mut committee = self.buffer(source_committee.len())?;
+        for ValidatorCommitteeMemberV1 {
+            validator,
+            proof_of_possession,
+        } in source_committee
+        {
+            let validator = PeerId::new(self.key(validator.public_key(), budget)?);
+            let mut proof = self.buffer(proof_of_possession.len())?;
             proof
-                .append(&member.proof_of_possession)
+                .append(proof_of_possession)
                 .map_err(|error| GraphError::Invalid(error.to_string()))?;
             committee.push_reserved(ValidatorCommitteeMemberV1 {
                 validator,
@@ -416,14 +423,13 @@ impl Construction {
             });
         }
         Ok(ValidatorEpochContextV1 {
-            da_layout: source.da_layout,
-            version: source.version,
-            network_id: source.network_id,
-            mode: source.mode,
-            authority,
-            authorization: source.authorization,
+            da_layout: *da_layout,
+            version: *version,
+            network_id: *network_id,
+            mode: *mode,
+            authorization: *authorization,
             committee: self.vector(committee)?,
-            leader_seed: source.leader_seed,
+            leader_seed: *leader_seed,
         })
     }
     fn escrow(&mut self, source: &AmxTransferEscrowV1) -> Result<AmxTransferEscrowV1, GraphError> {

@@ -3865,6 +3865,108 @@
         ],
         "type": "object"
       },
+      "AssetDefinition": {
+        "additionalProperties": false,
+        "description": "Complete original native AssetDefinition, including scale, ownership, total quantity and confidential policy; this is not an explorer/list projection.",
+        "properties": {
+          "alias": {
+            "oneOf": [
+              {
+                "description": "Canonical native AssetDefinitionAlias.",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "balance_scope_policy": {
+            "enum": [
+              "Global",
+              "DataspaceRestricted"
+            ],
+            "type": "string"
+          },
+          "confidential_policy": {
+            "$ref": "#/components/schemas/AssetConfidentialPolicy"
+          },
+          "description": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "description": "Exact canonical immutable AssetDefinitionId address; aliases are separate fields.",
+            "type": "string"
+          },
+          "logo": {
+            "oneOf": [
+              {
+                "description": "Canonical SoraFS URI.",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "Actual native Metadata map from canonical Name keys to arbitrary JSON values; this map is the sole open metadata field.",
+            "type": "object"
+          },
+          "mintable": {
+            "$ref": "#/components/schemas/AssetMintable"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owned_by": {
+            "description": "Canonical I105 AccountId of the definition owner.",
+            "type": "string"
+          },
+          "owning_domain": {
+            "oneOf": [
+              {
+                "description": "Canonical native DomainId.",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spec": {
+            "$ref": "#/components/schemas/NumericSpec"
+          },
+          "total_quantity": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "alias",
+          "spec",
+          "mintable",
+          "logo",
+          "metadata",
+          "balance_scope_policy",
+          "owning_domain",
+          "owned_by",
+          "total_quantity",
+          "confidential_policy"
+        ],
+        "type": "object"
+      },
       "AssetDefinitionPage": {
         "additionalProperties": false,
         "properties": {
@@ -21104,326 +21206,6 @@
           "null"
         ]
       },
-      "KagemushaAuthorityAssetDefinitionV1": {
-        "additionalProperties": false,
-        "description": "Complete original native AssetDefinition, including scale, ownership, total quantity and confidential policy; this is not an explorer/list projection.",
-        "properties": {
-          "alias": {
-            "oneOf": [
-              {
-                "description": "Canonical native AssetDefinitionAlias.",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "balance_scope_policy": {
-            "enum": [
-              "Global",
-              "DataspaceRestricted"
-            ],
-            "type": "string"
-          },
-          "confidential_policy": {
-            "$ref": "#/components/schemas/AssetConfidentialPolicy"
-          },
-          "description": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "id": {
-            "description": "Exact canonical immutable AssetDefinitionId address; aliases are separate fields.",
-            "type": "string"
-          },
-          "logo": {
-            "oneOf": [
-              {
-                "description": "Canonical SoraFS URI.",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "metadata": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
-            "description": "Actual native Metadata map from canonical Name keys to arbitrary JSON values; this map is the sole open metadata field.",
-            "type": "object"
-          },
-          "mintable": {
-            "$ref": "#/components/schemas/AssetMintable"
-          },
-          "name": {
-            "type": "string"
-          },
-          "owned_by": {
-            "description": "Canonical I105 AccountId of the definition owner.",
-            "type": "string"
-          },
-          "owning_domain": {
-            "oneOf": [
-              {
-                "description": "Canonical native DomainId.",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "spec": {
-            "$ref": "#/components/schemas/NumericSpec"
-          },
-          "total_quantity": {
-            "$ref": "#/components/schemas/Quantity"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "description",
-          "alias",
-          "spec",
-          "mintable",
-          "logo",
-          "metadata",
-          "balance_scope_policy",
-          "owning_domain",
-          "owned_by",
-          "total_quantity",
-          "confidential_policy"
-        ],
-        "type": "object"
-      },
-      "KagemushaMintFinalityAuthorityGenerationV1": {
-        "additionalProperties": false,
-        "properties": {
-          "generation": {
-            "description": "Monotonic key generation, changed only by an authorized activation.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/Hash",
-            "description": "Network whose certified epoch authorizations may use these keys."
-          },
-          "validators": {
-            "description": "Strictly ordered exact `3f + 1` consensus/Pasta key roster.",
-            "items": {
-              "$ref": "#/components/schemas/KagemushaMintFinalityValidatorKeysV1"
-            },
-            "maxItems": 31,
-            "minItems": 4,
-            "type": "array"
-          },
-          "version": {
-            "description": "Sole first-release layout version.",
-            "enum": [
-              1
-            ],
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "network_id",
-          "generation",
-          "validators"
-        ],
-        "type": "object"
-      },
-      "KagemushaMintFinalityPairedPossessionProofV1": {
-        "additionalProperties": false,
-        "properties": {
-          "ep_proof_signature": {
-            "$ref": "#/components/schemas/KagemushaPastaSchnorrSignatureV1",
-            "description": "Ep/Fq proof under the exact Vesta public key."
-          },
-          "eq_proof_signature": {
-            "$ref": "#/components/schemas/KagemushaPastaSchnorrSignatureV1",
-            "description": "Eq/Fp proof under the exact Pallas public key."
-          }
-        },
-        "required": [
-          "eq_proof_signature",
-          "ep_proof_signature"
-        ],
-        "type": "object"
-      },
-      "KagemushaMintFinalitySeatReadinessContextV1": {
-        "additionalProperties": false,
-        "properties": {
-          "authority_generation": {
-            "description": "Immutable generation whose keys this seat proves it possesses.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "authority_id": {
-            "description": "Exact ordered target committee and paired-public-key commitment.",
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 32,
-            "minItems": 32,
-            "type": "array"
-          },
-          "beacon": {
-            "$ref": "#/components/schemas/BeaconEpochBindingV1",
-            "description": "Exact installed target beacon session and complete transcript."
-          },
-          "first_height": {
-            "description": "First target height, inclusive.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "last_height": {
-            "description": "Last target height, inclusive.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/Hash",
-            "description": "Exact genesis-derived network identity."
-          },
-          "target_epoch": {
-            "description": "Scheduling epoch in which the prepared authority may first activate.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "transition_id": {
-            "description": "Unique frozen preparation attempt, including its finalized election context.",
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 32,
-            "minItems": 32,
-            "type": "array"
-          },
-          "validator_index": {
-            "description": "Exact zero-based position in the target generation.",
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "version": {
-            "description": "Sole first-release layout version.",
-            "enum": [
-              1
-            ],
-            "format": "uint16",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "network_id",
-          "transition_id",
-          "target_epoch",
-          "authority_generation",
-          "authority_id",
-          "first_height",
-          "last_height",
-          "validator_index",
-          "beacon"
-        ],
-        "type": "object"
-      },
-      "KagemushaMintFinalityValidatorKeysV1": {
-        "additionalProperties": false,
-        "properties": {
-          "ep_proof_public_key": {
-            "description": "Canonical compressed Vesta key verified by the Ep/Fq helper.",
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 32,
-            "minItems": 32,
-            "type": "array"
-          },
-          "eq_proof_public_key": {
-            "description": "Canonical compressed Pallas key verified by the Eq/Fp helper.",
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 32,
-            "minItems": 32,
-            "type": "array"
-          },
-          "validator": {
-            "$ref": "#/components/schemas/BlsValidatorId",
-            "description": "Exact consensus identity occupying this roster position."
-          }
-        },
-        "required": [
-          "validator",
-          "eq_proof_public_key",
-          "ep_proof_public_key"
-        ],
-        "type": "object"
-      },
-      "KagemushaPastaSchnorrSignatureV1": {
-        "additionalProperties": false,
-        "properties": {
-          "nonce_commitment": {
-            "description": "Canonical compressed non-identity nonce point.",
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 32,
-            "minItems": 32,
-            "type": "array"
-          },
-          "response": {
-            "description": "Canonical non-zero response scalar.",
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 32,
-            "minItems": 32,
-            "type": "array"
-          }
-        },
-        "required": [
-          "nonce_commitment",
-          "response"
-        ],
-        "type": "object"
-      },
       "KaigiId": {
         "additionalProperties": false,
         "properties": {
@@ -28804,7 +28586,7 @@
             "$ref": "#/components/schemas/RetailFeeCanonicalAssetDefinitionIdV1"
           },
           "fee_asset_definition": {
-            "$ref": "#/components/schemas/KagemushaAuthorityAssetDefinitionV1"
+            "$ref": "#/components/schemas/AssetDefinition"
           },
           "program": {
             "oneOf": [
@@ -52544,59 +52326,15 @@
         ],
         "type": "string"
       },
-      "ValidatorCandidateKeysV1": {
-        "additionalProperties": false,
-        "properties": {
-          "generation": {
-            "description": "Generation to which both public keys belong.",
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "keys": {
-            "$ref": "#/components/schemas/KagemushaMintFinalityValidatorKeysV1",
-            "description": "Consensus peer and both generation-derived Pasta public keys."
-          },
-          "network_id": {
-            "$ref": "#/components/schemas/Hash",
-            "description": "Exact genesis-derived network identity."
-          },
-          "peer_signature": {
-            "description": "Consent signed by the exact consensus peer over the complete publication challenge.",
-            "maxLength": 192,
-            "minLength": 192,
-            "pattern": "^[0-9A-F]{192}$",
-            "type": "string"
-          },
-          "possession": {
-            "$ref": "#/components/schemas/KagemushaMintFinalityPairedPossessionProofV1",
-            "description": "Proof of actual possession under the candidate-publication challenge."
-          }
-        },
-        "required": [
-          "network_id",
-          "generation",
-          "keys",
-          "possession",
-          "peer_signature"
-        ],
-        "type": "object"
-      },
       "ValidatorCommitteeCredentialsV1": {
         "additionalProperties": false,
         "properties": {
-          "authority": {
-            "$ref": "#/components/schemas/KagemushaMintFinalityAuthorityGenerationV1",
-            "description": "Complete generation, built only from authenticated candidate key publications."
-          },
           "beacon": {
             "$ref": "#/components/schemas/InstalledBeaconEpochBindingV1",
             "description": "Exact finalized target DKG transcript, retained separately from the incumbent session."
           }
         },
         "required": [
-          "authority",
           "beacon"
         ],
         "type": "object"
@@ -52741,10 +52479,6 @@
             "$ref": "#/components/schemas/GlobalThresholdBeaconPartialSignatureV1",
             "description": "Adaptive threshold proof of the exact beacon share under a separate readiness domain."
           },
-          "pasta": {
-            "$ref": "#/components/schemas/KagemushaMintFinalityPairedPossessionProofV1",
-            "description": "Possession of both Pasta generation keys under the exact attempt context."
-          },
           "validator_index": {
             "description": "Zero-based index in the immutable ordered target roster.",
             "format": "uint32",
@@ -52755,7 +52489,6 @@
         },
         "required": [
           "validator_index",
-          "pasta",
           "beacon"
         ],
         "type": "object"
@@ -52781,14 +52514,6 @@
       "ValidatorCommitteeStatusV1": {
         "additionalProperties": false,
         "properties": {
-          "candidate_keys": {
-            "description": "Published keys for the selected target peers in strict peer order; empty without a selection. Missing publications remain absent.",
-            "items": {
-              "$ref": "#/components/schemas/ValidatorCandidateKeysV1"
-            },
-            "maxItems": 31,
-            "type": "array"
-          },
           "latest_finality": {
             "$ref": "#/components/schemas/NativeFinalityArtifact",
             "description": "Original canonical native H2-or-later block authenticated by the server against its committed source; clients must verify the full native journal independently."
@@ -52832,7 +52557,6 @@
           "target_epoch",
           "latest_finality",
           "selected",
-          "candidate_keys",
           "pending_beacon_session"
         ],
         "type": "object"
@@ -52963,14 +52687,14 @@
         "additionalProperties": false,
         "properties": {
           "authority_generation": {
-            "description": "Generation whose paired-Pasta keys are authorized.",
+            "description": "Exact ordered validator generation authorized for this scheduling epoch.",
             "format": "uint64",
             "maximum": 18446744073709551615,
             "minimum": 0,
             "type": "integer"
           },
           "authority_id": {
-            "description": "Exact immutable ordered authority commitment.",
+            "description": "Exact immutable ordered ValidatorGenerationV1 commitment.",
             "items": {
               "maximum": 255,
               "minimum": 0,
@@ -53078,6 +52802,132 @@
         "required": [
           "kind",
           "value"
+        ],
+        "type": "object"
+      },
+      "ValidatorGenerationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "generation": {
+            "description": "Monotonic signing generation; genesis uses zero and each activation adds one.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact genesis-derived network identity."
+          },
+          "validators": {
+            "description": "Exact `3f + 1` BLS-normal roster in strictly ascending public-key order.",
+            "items": {
+              "description": "Canonical bare multihash string for a 48-byte BLS12-381 G1 (BLS-normal) validator public key.",
+              "maxLength": 102,
+              "minLength": 102,
+              "pattern": "^ea0130[0-9A-F]{96}$",
+              "type": "string"
+            },
+            "maxItems": 31,
+            "minItems": 4,
+            "type": "array"
+          }
+        },
+        "required": [
+          "network_id",
+          "generation",
+          "validators"
+        ],
+        "type": "object"
+      },
+      "ValidatorSeatReadinessContextV1": {
+        "additionalProperties": false,
+        "properties": {
+          "authority_generation": {
+            "description": "Successor validator generation whose seat this readiness acknowledges.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "authority_id": {
+            "description": "Exact ValidatorGenerationV1 identity of the ordered target roster.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "beacon": {
+            "$ref": "#/components/schemas/InstalledBeaconEpochBindingV1",
+            "description": "Exact installed target beacon session and complete transcript."
+          },
+          "first_height": {
+            "description": "First target height, inclusive.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "last_height": {
+            "description": "Last target height, inclusive.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "Exact genesis-derived network identity."
+          },
+          "target_epoch": {
+            "description": "Scheduling epoch in which the prepared generation may first activate.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "transition_id": {
+            "description": "Unique frozen preparation attempt, including its finalized election context.",
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "validator_index": {
+            "description": "Exact zero-based position in the target generation.",
+            "format": "uint32",
+            "maximum": 30,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "description": "Sole first-release layout version.",
+            "enum": [
+              1
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "network_id",
+          "transition_id",
+          "target_epoch",
+          "authority_generation",
+          "authority_id",
+          "first_height",
+          "last_height",
+          "validator_index",
+          "beacon"
         ],
         "type": "object"
       },
@@ -77330,6 +77180,7 @@
             "description": "Complete canonical native data at the selected certified cut. Independent authentication and proof admission remain mandatory.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -77370,6 +77221,7 @@
             "description": "Exact target, query absence, canonical Content-Type, native framing, network or selected coordinates were rejected.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -77410,6 +77262,7 @@
             "description": "Current canonical account authentication or the selected current signer/account scope was rejected.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -77450,6 +77303,7 @@
             "description": "Deployment-configured Torii API authentication or required native read authority was rejected.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -77483,6 +77337,7 @@
             "description": "Accept does not permit application/json or application/x-norito.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -77523,6 +77378,7 @@
             "description": "Heavy-query rate, memory/admission capacity or exact response-egress budget was exhausted.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -77563,6 +77419,7 @@
             "description": "The admitted native worker or current error/response representation failed.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -77603,6 +77460,7 @@
             "description": "The exact qualified current cut, bounded native source or installed publication is unavailable. No authority is granted.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -78108,6 +77966,7 @@
             "description": "Complete canonical native data at the selected certified cut. Independent authentication and proof admission remain mandatory.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -78148,6 +78007,7 @@
             "description": "Exact target, query absence, canonical Content-Type, native framing, network or selected coordinates were rejected.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -78188,6 +78048,7 @@
             "description": "Current canonical account authentication or the selected current signer/account scope was rejected.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -78228,6 +78089,7 @@
             "description": "Deployment-configured Torii API authentication or required native read authority was rejected.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -78261,6 +78123,7 @@
             "description": "Accept does not permit application/json or application/x-norito.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -78301,6 +78164,7 @@
             "description": "Heavy-query rate, memory/admission capacity or exact response-egress budget was exhausted.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -78341,6 +78205,7 @@
             "description": "The admitted native worker or current error/response representation failed.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -78381,6 +78246,7 @@
             "description": "The exact qualified current cut, bounded native source or installed publication is unavailable. No authority is granted.",
             "headers": {
               "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
                 "required": true,
                 "schema": {
                   "const": "private, no-store",
@@ -86514,7 +86380,6 @@
                     "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
                     "PRTRY:TX_SIGNATURE_INSUFFICIENT",
                     "ED07",
-                    "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
                     "PRTRY:ROUTE_UNRESOLVED"
                   ],
                   "example": "invalid_transaction_payload",
@@ -86581,15 +86446,14 @@
                 }
               }
             },
-            "description": "The exact transaction is already committed or already present in the queue, or the same authority and KAGEMUSHA V1 operation id already belong to another pending carrier.",
+            "description": "The exact transaction is already committed or already present in the queue.",
             "headers": {
               "x-iroha-reject-code": {
                 "description": "Exact duplicate-transaction state. This response does not prove non-admission; clients must reconcile the existing transaction.",
                 "schema": {
                   "enum": [
                     "PRTRY:ALREADY_COMMITTED",
-                    "PRTRY:ALREADY_ENQUEUED",
-                    "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT"
+                    "PRTRY:ALREADY_ENQUEUED"
                   ],
                   "example": "PRTRY:ALREADY_COMMITTED",
                   "type": "string"
@@ -86706,7 +86570,7 @@
                 }
               }
             },
-            "description": "The admission worker or authoritative Torii route is unavailable, or transaction dispatch ended without a conclusive admission response. transaction_dispatch_outcome_unknown means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that response carries a singleton x-iroha-entrypoint-hash matching ErrorEnvelope.details.entrypoint_hash. It also carries a singleton x-iroha-signed-transaction-hash matching ErrorEnvelope.details.tx_hash. PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT means the pending-operation ownership index requires recovery before another KAGEMUSHA V1 carrier can be admitted. It does not fabricate queue-pressure details or headers.",
+            "description": "The admission worker or authoritative Torii route is unavailable, or transaction dispatch ended without a conclusive admission response. transaction_dispatch_outcome_unknown means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. Only that response carries a singleton x-iroha-entrypoint-hash matching ErrorEnvelope.details.entrypoint_hash. It also carries a singleton x-iroha-signed-transaction-hash matching ErrorEnvelope.details.tx_hash.",
             "headers": {
               "Retry-After": {
                 "description": "Whole-second retry delay when authoritative backpressure supplies one; dispatch outcome-unknown responses omit it.",
@@ -86728,8 +86592,7 @@
                   "enum": [
                     "transaction_admission_worker_failed",
                     "route_unavailable",
-                    "transaction_dispatch_outcome_unknown",
-                    "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT"
+                    "transaction_dispatch_outcome_unknown"
                   ],
                   "example": "transaction_admission_worker_failed",
                   "type": "string"

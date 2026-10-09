@@ -138,11 +138,30 @@ pub const NATIVE_TESTS: &[NativeTest] = &[
         file: "crates/iroha_plonk_oracle/src/export/tests.rs",
         test: "multi_phase_circuits_and_challenges_are_rejected",
     },
+    NativeTest {
+        id: "DEV-12",
+        file: "crates/iroha_plonk/src/pipa_r_tests.rs",
+        test: "pipa_r_transcript_kats_pallas",
+    },
+    NativeTest {
+        id: "DEV-12",
+        file: "crates/iroha_plonk/src/pipa_r_tests.rs",
+        test: "pipa_r_transcript_kats_vesta",
+    },
+    NativeTest {
+        id: "DEV-13",
+        file: "crates/iroha_plonk/src/pipa_r_tests.rs",
+        test: "pipa_r_instance_type_out_of_range_rejected",
+    },
 ];
 
 /// The registry inputs: the spec and every file [`NATIVE_TESTS`] names,
 /// included at compile time so an edit to any of them rebuilds this test.
 const SOURCES: &[(&str, &str)] = &[
+    (
+        "crates/iroha_plonk/src/pipa_r_tests.rs",
+        include_str!("../../../iroha_plonk/src/pipa_r_tests.rs"),
+    ),
     (
         "specs/plonk_ipa_v1.md",
         include_str!("../../../../specs/plonk_ipa_v1.md"),
@@ -250,7 +269,7 @@ pub fn test_text<'a>(text: &'a str, name: &str) -> Option<&'a str> {
 #[test]
 fn registry_matches_spec_section_14() {
     let rows = spec_rows();
-    assert_eq!(rows.len(), 11, "spec section 14 rows: {rows:?}");
+    assert_eq!(rows.len(), 13, "spec section 14 rows: {rows:?}");
     for row in &rows {
         assert!(
             ["both", "production"].contains(&row.modes.as_str()),

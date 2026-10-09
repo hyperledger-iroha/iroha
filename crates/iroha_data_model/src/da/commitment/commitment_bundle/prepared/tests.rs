@@ -188,7 +188,7 @@ fn da_commitment_generated_children_reject_truncated_wire_bad_utf8_and_original_
             panic!("bad UTF-8 must preserve the original decode error");
         };
         assert!(matches!(original.into_error(), norito::Error::InvalidUtf8));
-        assert!(!pending.payload_admitted);
+        assert!(pending.phase < PreparationPhase::PayloadAdmitted);
         assert!(pending.values.value.is_none());
         drop(pending);
         drop(source);
@@ -207,7 +207,7 @@ fn da_commitment_generated_children_reject_truncated_wire_bad_utf8_and_original_
             assert!(
                 matches!(error,DaCommitmentCustodyError::Signature(PreparedCryptoDecodeError::Signature(actual)) if actual==expected)
             );
-            assert!(!pending.payload_admitted);
+            assert!(pending.phase < PreparationPhase::PayloadAdmitted);
             assert!(pending.values.value.is_none());
             drop(pending);
             drop(source);
@@ -266,5 +266,176 @@ fn da_commitment_actual_finish_interruption_destroys_original_tag_signature_arra
         assert_eq!(pool.reserved_bytes(), floor);
         drop(source);
         assert_eq!(pool.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn da_commitment_payload_refusal_keeps_planned_phase_and_original_backings_until_retry() {
+    let _flags = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
+    let original = fixture();
+    let pool = AllocationBudget::new(1 << 20);
+    let (source, span) = source(&original, &pool);
+    let source_floor = pool.reserved_bytes();
+    let mut pending = PreparedDaCommitmentBundle::from_source(&source, span, &pool).unwrap();
+    assert_eq!(pending.phase, PreparationPhase::Unadmitted);
+    let metadata_bytes = pending
+        .planning_layouts()
+        .unwrap()
+        .iter()
+        .map(std::alloc::Layout::size)
+        .sum::<usize>();
+    let blocker = pool
+        .try_reserve_bytes(pool.limit_bytes() - pool.reserved_bytes() - metadata_bytes)
+        .unwrap();
+    assert!(matches!(
+        pending.prepare(&source),
+        Err(DaCommitmentCustodyError::Admission(_))
+    ));
+    assert_eq!(pending.phase, PreparationPhase::Planned);
+    let rows = pending.rows.value.as_ref().unwrap().as_slice().as_ptr();
+    let spans = pending.spans.value.as_ref().unwrap().as_slice().as_ptr();
+    let refused_reservation = pool.reserved_bytes();
+    assert!(pending.prepare(&source).is_err());
+    assert_eq!(pending.phase, PreparationPhase::Planned);
+    assert_eq!(
+        pending.rows.value.as_ref().unwrap().as_slice().as_ptr(),
+        rows
+    );
+    assert_eq!(
+        pending.spans.value.as_ref().unwrap().as_slice().as_ptr(),
+        spans
+    );
+    assert_eq!(pool.reserved_bytes(), refused_reservation);
+    drop(blocker);
+    pending.prepare(&source).unwrap();
+    assert_eq!(pending.phase, PreparationPhase::Ready);
+    let admitted = pending
+        .finish(&source)
+        .unwrap_or_else(|_| panic!("complete original owner after exact retry"));
+    assert_eq!(admitted, original);
+    drop(admitted);
+    assert_eq!(pool.reserved_bytes(), source_floor);
+    drop(source);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn da_commitment_inline_digest_fields_keep_exact_raw_wire_and_zero_decode_charges() {
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        type DigestDecoder = fn(&[u8]) -> Result<[u8; 32], norito::Error>;
+        let cases: [(DigestDecoder, Vec<u8>, [u8; 32]); 3] = [
+            (
+                fixed_tuple::<BlobDigest>,
+                bytes(&BlobDigest::new([0x53; 32])),
+                [0x53; 32],
+            ),
+            (
+                fixed_tuple::<ManifestDigest>,
+                bytes(&ManifestDigest::new([0x55; 32])),
+                [0x55; 32],
+            ),
+            (
+                fixed_tuple::<StorageTicketId>,
+                bytes(&StorageTicketId::new([0x57; 32])),
+                [0x57; 32],
+            ),
+        ];
+        for (decode, wire, expected) in cases {
+            let mut literal = if flags == header_flags::COMPACT_LEN {
+                vec![32]
+            } else {
+                32_u64.to_le_bytes().to_vec()
+            };
+            literal.extend_from_slice(&expected);
+            assert_eq!(wire, literal);
+            let limits = norito::DecodeLimits::new(0, 32, 0, 0, 0);
+            let (decoded, usage) =
+                norito::core::with_decode_limits_measured(limits, || decode(&wire));
+            assert_eq!(decoded.unwrap(), expected);
+            assert_eq!(usage.total_elements(), 0);
+            assert_eq!(usage.total_allocated_bytes(), 0);
+        }
+        // The same destination keeps the existing scalar field depth and stack decoder.
+        let lane = LaneId::new(0x0102_0304);
+        let wire = bytes(&lane);
+        let limits = norito::DecodeLimits::new(0, 4, 0, 0, 1);
+        let (decoded, usage) =
+            norito::core::with_decode_limits_measured(limits, || inline_lane(&wire));
+        assert_eq!(decoded.unwrap(), lane);
+        assert_eq!(usage.total_elements(), 0);
+        assert_eq!(usage.total_allocated_bytes(), 0);
+    }
+}
+
+#[test]
+fn da_commitment_inline_digest_fields_reject_wrong_width_framed_arrays_and_original_limits() {
+    type DigestDecoder = fn(&[u8]) -> Result<[u8; 32], norito::Error>;
+    let decoders: [DigestDecoder; 3] = [
+        fixed_tuple::<BlobDigest>,
+        fixed_tuple::<ManifestDigest>,
+        fixed_tuple::<StorageTicketId>,
+    ];
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let canonical = bytes(&BlobDigest::new([0x53; 32]));
+        let generic_array = bytes(&[0x53_u8; 32]);
+        assert_ne!(generic_array.len(), 32);
+        let mut framed_array = Vec::new();
+        norito::core::write_len_to_vec_with_flags(
+            &mut framed_array,
+            generic_array.len() as u64,
+            flags,
+        );
+        framed_array.extend_from_slice(&generic_array);
+        let mut trailing = canonical.clone();
+        trailing.push(0x99);
+        let mut missing_body = Vec::new();
+        norito::core::write_len_to_vec_with_flags(&mut missing_body, 33, flags);
+        for decode in decoders {
+            let zero = norito::DecodeLimits::new(0, usize::MAX, 0, 0, 0);
+            for width in [31_u64, 33] {
+                let mut wrong_width = Vec::new();
+                norito::core::write_len_to_vec_with_flags(&mut wrong_width, width, flags);
+                wrong_width.extend(std::iter::repeat_n(0x53, width as usize));
+                let (rejected, usage) =
+                    norito::core::with_decode_limits_measured(zero, || decode(&wrong_width));
+                assert!(matches!(rejected, Err(norito::Error::LengthMismatch)));
+                assert_eq!(usage.total_elements(), 0);
+                assert_eq!(usage.total_allocated_bytes(), 0);
+            }
+            for malformed in [&framed_array, &trailing] {
+                let (rejected, usage) =
+                    norito::core::with_decode_limits_measured(zero, || decode(malformed));
+                assert!(matches!(rejected, Err(norito::Error::LengthMismatch)));
+                assert_eq!(usage.total_elements(), 0);
+                assert_eq!(usage.total_allocated_bytes(), 0);
+            }
+            for end in 0..canonical.len() {
+                let (truncated, usage) =
+                    norito::core::with_decode_limits_measured(zero, || decode(&canonical[..end]));
+                assert!(truncated.is_err());
+                assert_eq!(usage.total_elements(), 0);
+                assert_eq!(usage.total_allocated_bytes(), 0);
+            }
+            // Its declared field ceiling wins before the absent body or any local allocation.
+            let narrow = norito::DecodeLimits::new(0, 32, 0, 0, 0);
+            let (refused, usage) =
+                norito::core::with_decode_limits_measured(narrow, || decode(&missing_body));
+            assert!(matches!(
+                refused,
+                Err(norito::Error::FieldLengthExceeded {
+                    length: 33,
+                    limit: 32
+                })
+            ));
+            assert_eq!(usage.total_elements(), 0);
+            assert_eq!(usage.total_allocated_bytes(), 0);
+            let (malformed, usage) =
+                norito::core::with_decode_limits_measured(zero, || decode(&missing_body));
+            assert!(matches!(malformed, Err(norito::Error::LengthMismatch)));
+            assert_eq!(usage.total_elements(), 0);
+            assert_eq!(usage.total_allocated_bytes(), 0);
+        }
     }
 }

@@ -1335,11 +1335,15 @@ JVM_NATIVE_TEST_SELECTIONS = (
     "org.hyperledger.iroha.sdk.privacy.ConfidentialNoteJavaConsumerTest",
     "org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathJavaConsumerTest",
     "org.hyperledger.iroha.sdk.privacy.PrivacyRetiredWitnessBoundaryJavaConsumerTest",
+    "org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoderParityTest",
+    "org.hyperledger.iroha.sdk.core.model.instructions.RegisterAccountWirePayloadEncoderParityTest",
+    "org.hyperledger.iroha.sdk.core.model.instructions.ClaimIdentifierWirePayloadEncoderParityTest",
+    "org.hyperledger.iroha.sdk.core.model.instructions.ContractLifecycleWirePayloadEncoderParityTest",
 )
 
 
 def _check_jvm_native_test_selection(gate: str, errors: list[str]) -> None:
-    marker = "./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test"
+    marker = "./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test --no-build-cache --rerun-tasks"
     expected = marker + " \\\n" + "\n".join(
         "  --tests " + name + (" \\" if index + 1 < len(JVM_NATIVE_TEST_SELECTIONS) else "")
         for index, name in enumerate(JVM_NATIVE_TEST_SELECTIONS)
@@ -1351,6 +1355,107 @@ def _check_jvm_native_test_selection(gate: str, errors: list[str]) -> None:
         errors,
     )
 
+
+
+def _check_jvm_native_prerequisites(gate: str, errors: list[str]) -> None:
+    """Require actual authenticated bridge and explicit generator before JVM tests."""
+
+    fragments = (
+        (
+            'SOURCE_MANIFEST_BEFORE="$("${PYTHON_BIN}" -I -S "${ROOT_DIR}/scripts/compute_workspace_source_manifest.py" \\\n'
+            '  --root "${ROOT_DIR}" --native-artifact-manifest)"\n'
+            '[[ "${SOURCE_MANIFEST_BEFORE}" =~ ^[0-9a-f]{64}$ ]] \\\n'
+            '  || fail "native JVM source manifest is not canonical"\n'
+            '\n'
+            'if [[ -n "${IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR:-}" ]]; then\n'
+            '  BUILD_TARGET_DIR="${IROHA_PRIVACY_AUTHENTICATED_CARGO_TARGET_DIR}"\n'
+            '  "${CARGO_BIN}" build --locked -p connect_norito_bridge --lib \\\n'
+            '    --features privacy-production-enabled \\\n'
+            '    --target-dir "${BUILD_TARGET_DIR}"\n'
+            '  "${CARGO_BIN}" build --locked -p kotlin-fixture-gen \\\n'
+            '    --features dev-tools --bin kotlin-fixture-gen \\\n'
+            '    --target-dir "${BUILD_TARGET_DIR}"\n'
+            '  TARGET_ARTIFACT_DIR="${BUILD_TARGET_DIR}/debug"\n'
+            'else\n'
+            '  BUILD_TARGET_DIR="${NATIVE_BUILD_ROOT}/target"\n'
+            '  "${CARGO_BIN}" build --locked -p connect_norito_bridge --lib \\\n'
+            '    --features privacy-production-enabled \\\n'
+            '    --target "${HOST_TRIPLE}" \\\n'
+            '    --target-dir "${BUILD_TARGET_DIR}"\n'
+            '  "${CARGO_BIN}" build --locked -p kotlin-fixture-gen \\\n'
+            '    --features dev-tools --bin kotlin-fixture-gen \\\n'
+            '    --target "${HOST_TRIPLE}" \\\n'
+            '    --target-dir "${BUILD_TARGET_DIR}"\n'
+            '  TARGET_ARTIFACT_DIR="${BUILD_TARGET_DIR}/${HOST_TRIPLE}/debug"\n'
+            'fi\n'
+            '[[ "$("${PYTHON_BIN}" -I -S "${ROOT_DIR}/scripts/compute_workspace_source_manifest.py" \\\n'
+            '  --root "${ROOT_DIR}" --native-artifact-manifest)" == "${SOURCE_MANIFEST_BEFORE}" ]] \\\n'
+            '  || fail "native JVM source changed while bridge and fixture generator were built"\n'
+        ),
+        (
+            'case "${HOST_TRIPLE}" in\n'
+            '  *-windows-*) FIXTURE_GENERATOR="${TARGET_ARTIFACT_DIR}/kotlin-fixture-gen.exe" ;;\n'
+            '  *) FIXTURE_GENERATOR="${TARGET_ARTIFACT_DIR}/kotlin-fixture-gen" ;;\n'
+            'esac\n'
+            '[[ -f "${FIXTURE_GENERATOR}" && ! -L "${FIXTURE_GENERATOR}" && -x "${FIXTURE_GENERATOR}" ]] \\\n'
+            '  || fail "fresh dev-tools kotlin-fixture-gen is unavailable: ${FIXTURE_GENERATOR}"\n'
+            'FIXTURE_GENERATOR_SHA256="$(sha256_file "${FIXTURE_GENERATOR}")"\n'
+            '\n'
+        ),
+        (
+            '"${PYTHON_BIN}" -I -S "${ABI25_CHECKER}" record \\\n'
+            '  --artifact "${NATIVE_LIBRARY}" \\\n'
+            '  --manifest "${NATIVE_MANIFEST}" \\\n'
+            '  --source-root "${ROOT_DIR}" \\\n'
+            '  --sdk c-jni \\\n'
+            '  --target "${HOST_TRIPLE}"\n'
+            '"${PYTHON_BIN}" -I -S "${ABI25_CHECKER}" verify \\\n'
+            '  --artifact "${NATIVE_LIBRARY}" \\\n'
+            '  --manifest "${NATIVE_MANIFEST}" \\\n'
+            '  --source-root "${ROOT_DIR}"\n'
+            '"${PYTHON_BIN}" -I -S "${ABI25_CHECKER}" record \\\n'
+            '  --artifact "${NATIVE_LIBRARY}" \\\n'
+            '  --manifest "${CSHARP_NATIVE_MANIFEST}" \\\n'
+            '  --source-root "${ROOT_DIR}" \\\n'
+            '  --sdk csharp \\\n'
+            '  --target "${HOST_TRIPLE}"\n'
+            '"${PYTHON_BIN}" -I -S "${ABI25_CHECKER}" verify \\\n'
+            '  --artifact "${NATIVE_LIBRARY}" \\\n'
+            '  --manifest "${CSHARP_NATIVE_MANIFEST}" \\\n'
+            '  --source-root "${ROOT_DIR}"\n'
+            '\n'
+        ),
+        (
+            'export IROHA_NATIVE_LIBRARY_PATH="${NATIVE_LIBRARY_DIR}"\n'
+            'export IROHA_KOTLIN_FIXTURE_GEN_BIN="${FIXTURE_GENERATOR}"\n'
+        ),
+        (
+            '[[ -f "${FIXTURE_GENERATOR}" && ! -L "${FIXTURE_GENERATOR}" && -x "${FIXTURE_GENERATOR}" ]] \\\n'
+            '  || fail "fixture generator was withdrawn during privacy JVM execution"\n'
+            '[[ "$(sha256_file "${FIXTURE_GENERATOR}")" == "${FIXTURE_GENERATOR_SHA256}" ]] \\\n'
+            '  || fail "fixture generator changed during privacy JVM execution"\n'
+            '\n'
+        ),
+    )
+    positions: list[int] = []
+    for fragment in fragments:
+        matches = list(re.finditer("^" + re.escape(fragment), gate, re.MULTILINE))
+        require(
+            len(matches) == 1,
+            "privacy JVM native prerequisites must build and authenticate the exact bridge and dev-tools generator",
+            errors,
+        )
+        if len(matches) == 1:
+            positions.append(matches[0].start())
+    selected = re.search(r"^\./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test --no-build-cache --rerun-tasks \\\n", gate, re.MULTILINE)
+    require(
+        len(positions) == len(fragments)
+        and selected is not None
+        and positions[0] < positions[1] < positions[2] < positions[3] < selected.start() < positions[4]
+        and gate.startswith("#!/usr/bin/env bash\nset -euo pipefail\n"),
+        "privacy JVM native prerequisites must refuse before runtime and recheck generator bytes after runtime",
+        errors,
+    )
 
 
 def _check_jvm_java_owner_and_toolchain(gate: str, consumer: str, errors: list[str]) -> None:
@@ -2186,6 +2291,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
     python_native_pyproject_source = read("python/iroha_native/pyproject.toml", overrides)
     workflow = _check_cargo_workflow(workflow_source, errors)
     _check_jvm_native_test_selection(read("ci/check_privacy_jvm_sdk.sh", overrides), errors)
+    _check_jvm_native_prerequisites(read("ci/check_privacy_jvm_sdk.sh", overrides), errors)
     _check_jvm_java_owner_and_toolchain(
         read("ci/check_privacy_jvm_sdk.sh", overrides),
         read("kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeJavaConsumerTest.java", overrides),
@@ -2279,6 +2385,12 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "scripts/compute_workspace_source_manifest.py",
         "scripts/tests/check_privacy_cargo_materialization_test.py",
         "scripts/tests/check_privacy_jvm_native_gate_test.py",
+        "tools/kotlin-fixture-gen/**",
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/FixtureGeneratorRunner.kt",
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/TransferWirePayloadEncoderParityTest.kt",
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterAccountWirePayloadEncoderParityTest.kt",
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt",
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ContractLifecycleWirePayloadEncoderParityTest.kt",
         "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteJavaConsumerTest.java",
         "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePathJavaConsumerTest.java",
         "scripts/check_privacy_jvm_class_contract.py",

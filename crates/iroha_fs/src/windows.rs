@@ -659,6 +659,32 @@ impl Directory {
         Ok(())
     }
 
+    pub(super) fn child_reader(&self, name: &OsStr) -> io::Result<Self> {
+        self.revalidate()?;
+        let path = self.path().join(name);
+        let file = open_file(
+            &path,
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            OPEN_EXISTING,
+            true,
+            false,
+        )?;
+        snapshot(&file, false, true)?;
+        let mut links = self.links.clone();
+        if links.len() >= 128 {
+            return Err(invalid("private directory depth bound exceeded"));
+        }
+        links.push(Arc::new(Link {
+            path,
+            file,
+            private: false,
+        }));
+        let result = Self { links };
+        result.revalidate()?;
+        Ok(result)
+    }
+
     pub(super) fn child(&self, name: &OsStr, create: bool, exclusive: bool) -> io::Result<Self> {
         self.child_policy(name, create, exclusive, true)
     }
@@ -1029,9 +1055,26 @@ impl Directory {
         let destination = parent.path.join(name);
         rename_handle(&publishing, &destination, mode)?;
         sync_directory_metadata(&publishing)?;
+        // DELETE authority is needed only for publication. Returning that handle would
+        // conflict with ordinary readers that exclude delete sharing while traversing this
+        // directory. The original read-only handle stays live through this transition, so
+        // the final namespace pin must still name the same original native object.
+        drop(publishing);
+        let published = open_file(
+            &destination,
+            FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            OPEN_EXISTING,
+            true,
+            false,
+        )?;
+        if identity(&published)? != id {
+            return Err(changed());
+        }
+        snapshot(&published, private, true)?;
         self.links.push(Arc::new(Link {
             path: destination,
-            file: publishing,
+            file: published,
             private,
         }));
         self.revalidate()?;

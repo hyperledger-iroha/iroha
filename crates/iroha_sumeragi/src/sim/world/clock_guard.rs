@@ -11,7 +11,7 @@
 //! TODO: the block time is the builder's stamp `wall + lead`, not the canonical
 //! `max(parent + cadence, …)` of the real application, so a committed post-dated block does not
 //! raise the next block's time and the CT3 builder wait is never exercised here (the Core entry
-//! HC138 covers CT3). Model the canonical floor, its deterministic validity check and the
+//! SC6 covers CT3). Model the canonical floor, its deterministic validity check and the
 //! honest builder's wait (`EMPTY`, then `PayloadReady` once its wall clock reaches the floor).
 
 use super::*;

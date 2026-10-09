@@ -112,7 +112,7 @@ class AttestationVerifier private constructor(
         require(originalChain.size in 2..8 && originalChain.all { it.size in 1..16_384 }) {
             "First-device original certificate chain is outside bounds"
         }
-        // Existing Model KAGEMUSHA_HARDWARE_BOOTSTRAP_MAX_ORIGINAL_V1 is 192 KiB.
+        // The signed challenge original is bounded at 192 KiB.
         require(signedChallengeOriginal.size in 1..(192 * 1024)) { "First-device C original is outside bounds" }
         val signedOriginal = signedChallengeOriginal.copyOf()
         val signingIdentity = expectedSigningIdentitySha256.copyOf()

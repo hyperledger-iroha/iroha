@@ -109,6 +109,13 @@ macro_rules! schema_types {
             iroha_data_model::governance::conviction::PlainVotingResultV1,
             // Never referenced, but present in type signature. Like `PhantomData<X>`
             MerkleTree<SignedTransaction>,
+            iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1,
+            iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadIssuanceV1,
+            iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1,
+            iroha_data_model::kagemusha::KagemushaWalletPayoutKeyV1,
+            iroha_data_model::kagemusha::KagemushaWalletPayoutRecordV1,
+            // Native proof payloads are opaque bytes in the generic envelope.
+            iroha_data_model::zk::NativePipaRProofV1,
             // Default permissions
             iroha_executor_data_model::permission::peer::CanManagePeers,
             iroha_executor_data_model::permission::domain::CanRegisterDomain,
@@ -120,6 +127,8 @@ macro_rules! schema_types {
             iroha_executor_data_model::permission::asset_definition::CanUnregisterAssetDefinition,
             iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata,
             iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy,
+            iroha_executor_data_model::permission::asset_definition::CanManageKagemushaWallet,
+            iroha_executor_data_model::permission::asset_definition::CanPublishKagemushaLoadVoucher,
             iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionAlias,
             iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition,
             iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition,

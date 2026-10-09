@@ -417,9 +417,10 @@ mod tests {
     }
     fn test_guardrails() -> crate::zk::ZkVerifyGuardrails {
         crate::zk::ZkVerifyGuardrails {
-            halo2_enabled: true,
-            halo2_max_envelope_bytes: usize::MAX,
-            halo2_max_proof_bytes: usize::MAX,
+            pipa_r_enabled: true,
+            pipa_r_max_envelope_bytes: usize::MAX,
+            pipa_r_max_proof_bytes: usize::MAX,
+
             stark_enabled: true,
             stark_max_envelope_bytes: usize::MAX,
             stark_max_proof_bytes: usize::MAX,
@@ -577,8 +578,8 @@ mod tests {
     }
     fn sample_proof_verifier() -> RamLfeProofVerifierMetadata {
         RamLfeProofVerifierMetadata {
-            proof_backend: crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
-            circuit_id: "halo2/pasta/ipa/tiny-add".to_owned(),
+            proof_backend: crate::zk::ZK_BACKEND_NATIVE_PIPA_R.to_owned(),
+            circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
             public_inputs_schema_hash: Hash::new(b"ram-lfe-proof-schema"),
             verifying_key_bytes: b"ram-lfe-proof-vk".to_vec(),
         }
@@ -643,7 +644,7 @@ mod tests {
             verifier.verifying_key_bytes.clone(),
         );
         let mut envelope = OpenVerifyEnvelope {
-            backend: BackendTag::Halo2IpaPasta,
+            backend: BackendTag::NativePipaRPasta,
             circuit_id: verifier.circuit_id.clone(),
             vk_hash: crate::zk::hash_vk(&vk),
             public_inputs: b"ram-lfe-proof-schema".to_vec(),
@@ -767,15 +768,15 @@ mod tests {
         let execution = sample_proof_payload();
         let proof = sample_proof_box(&verifier, |_| {});
         let mut disabled = test_guardrails();
-        disabled.halo2_enabled = false;
+        disabled.pipa_r_enabled = false;
         let err = verify_execution_proof(&proof, &execution, &verifier, disabled)
-            .expect_err("disabled Halo2 verification must reject");
+            .expect_err("disabled native PIPA-R verification must reject");
         assert!(
             err.contains(PROOF_RELATION_UNAVAILABLE),
             "unexpected error: {err}"
         );
         let mut envelope_limited = test_guardrails();
-        envelope_limited.halo2_max_envelope_bytes = proof.bytes.len().saturating_sub(1);
+        envelope_limited.pipa_r_max_envelope_bytes = proof.bytes.len().saturating_sub(1);
         let err = verify_execution_proof(&proof, &execution, &verifier, envelope_limited)
             .expect_err("oversized envelope must reject before decode");
         assert!(
@@ -783,7 +784,7 @@ mod tests {
             "unexpected error: {err}"
         );
         let mut proof_limited = test_guardrails();
-        proof_limited.halo2_max_proof_bytes = 1;
+        proof_limited.pipa_r_max_proof_bytes = 1;
         let err = verify_execution_proof(&proof, &execution, &verifier, proof_limited)
             .expect_err("oversized inner proof must reject");
         assert!(

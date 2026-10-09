@@ -1195,21 +1195,31 @@ mod tests {
     .with_authentication(AuthenticationPolicy::ManifestConditionalContent);
     const ROUTES: &[RouteDescriptor] = &[READ, WRITE, FEATURED];
     #[test]
-    fn retired_kagemusha_routes_are_absent_from_every_catalog_projection() {
+    fn only_finalized_load_read_remains_in_kagemusha_catalog_projections() {
         let catalog = RouteCatalog::new(iroha_torii_shared::route_catalog::CATALOGED_ROUTES);
+        let load_read = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_ISSUANCE_GET;
+        assert_eq!(load_read.method(), HttpMethod::Get);
+        assert_eq!(load_read.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            load_read.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
         for projection in [
             CatalogProjection::Mounted,
             CatalogProjection::OpenApi,
             CatalogProjection::Sdk,
             CatalogProjection::Mcp,
         ] {
-            assert!(
-                catalog
-                    .project(projection, EnabledFeatures::none())
-                    .iter()
-                    .all(|route| !route.path().starts_with("/v1/kagemusha/")),
-                "retired KAGEMUSHA transport remains in {projection:?}"
-            );
+            for features in [EnabledFeatures::none(), EnabledFeatures::new(&["app_api"])] {
+                assert!(
+                    catalog
+                        .project(projection, features)
+                        .iter()
+                        .all(|route| !route.path().starts_with("/v1/kagemusha/")
+                            || **route == load_read),
+                    "retired KAGEMUSHA transport remains in {projection:?}"
+                );
+            }
         }
     }
     #[tokio::test]

@@ -551,16 +551,18 @@ fn digests_are_stable_across_loads_and_formatting() {
 #[test]
 fn digests_are_pinned() {
     let profile = sora();
-    // The native Sumeragi hard cut removed block/queue geometry from both the
-    // static profile and DerivedGeometryV1 (8a99f3f5ba). Pin the resulting first-
-    // release shape; retaining the removed queue fields would change semantics.
+    // The first-release native PIPA-R selector is consensus-bound static configuration.
+    // Replacing the retired backend therefore changes this digest; node-local publisher
+    // custody paths do not participate in this canonical input.
     assert_eq!(
         profile.consensus_digest(4).unwrap().to_string(),
-        "5c692bfd005ade781836bc5bd6dccbb97e6fbaacf1c0fc5cbe82d70423b67efb"
+        "04e7033fd0484e15bd5ceae5f9cef7b5633e41c7af2c98cbce82f85e626b146d"
     );
+    // The retired Torii KAGEMUSHA command policy is absent from this canonical input.
+    // Native proof-backend selection above does not change this separate policy input.
     assert_eq!(
         profile.policy_digest().unwrap().to_string(),
-        "8c4ccda4944019c394c4439feb06516aaf16f3dfb1cffdb07c0dd2b850f9d023"
+        "cd24824ed35812f798b8c01ed965b23fdfd535795a4c402de87d0d4fd41e47a7"
     );
 }
 
@@ -871,6 +873,46 @@ fn node_key_admission_follows_the_allowlist_and_tunables() {
         "private_key_file",
     ] {
         assert!(!profile.admits_node_key(rejected), "{rejected}");
+    }
+}
+
+#[test]
+fn publisher_custody_admission_is_exact_for_every_compiled_profile() {
+    for id in ProfileId::ALL {
+        let profile = Profile::compiled(id).unwrap();
+        for admitted in [
+            "kagemusha_load_authorizer.keyring_file",
+            "kagemusha_load_authorizer.submitter_key_file",
+        ] {
+            assert!(profile.admits_node_key(admitted), "{id}: {admitted}");
+        }
+        for rejected in [
+            "kagemusha_load_authorizer",
+            "kagemusha_load_authorizer.enabled",
+            "kagemusha_load_authorizer.keyring",
+            "kagemusha_load_authorizer.submitter_key",
+            "kagemusha_load_authorizer.poll_interval_ms",
+            "kagemusha_load_authorizer.page_size",
+            "kagemusha_load_authorizer.block_bytes",
+            "kagemusha_load_authorizer.journal_bytes",
+            "kagemusha_load_authorizer.block_count",
+            "kagemusha_load_authorizer.allocated_bytes",
+            "kagemusha_load_authorizer.transaction_ttl_ms",
+            "kagemusha_load_authorizer.charge_limits",
+            "kagemusha_load_authorizer.keyring_file.inline",
+            "kagemusha_load_authorizer.submitter_key_file.inline",
+        ] {
+            assert!(!profile.admits_node_key(rejected), "{id}: {rejected}");
+        }
+        assert!(
+            !profile
+                .static_config()
+                .contains_key("kagemusha_load_authorizer")
+        );
+        assert!(!profile.policy().contains_key("kagemusha_load_authorizer"));
+        for role in ProfileRole::ALL {
+            assert!(!profile.role(role).contains_key("kagemusha_load_authorizer"));
+        }
     }
 }
 

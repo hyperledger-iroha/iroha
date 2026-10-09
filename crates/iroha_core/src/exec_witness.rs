@@ -1059,7 +1059,7 @@ mod tests {
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID};
     use nonzero_ext::nonzero;
-    use std::{collections::BTreeMap, time::Duration};
+    use std::collections::BTreeMap;
     struct AccessKeyFixture {
         state: State,
         account: AccountId,
@@ -2334,19 +2334,31 @@ mod tests {
 
     #[test]
     fn exec_witness_guard_serializes_block_access() {
-        let guard = exec_witness_guard();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let handle = std::thread::spawn(move || {
-            let _guard = exec_witness_guard();
-            tx.send(()).expect("send guard signal");
+        std::thread::scope(|scope| {
+            let guard = exec_witness_guard();
+            let (probe_tx, probe_rx) = std::sync::mpsc::sync_channel(0);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let handle = scope.spawn(move || {
+                // Probe the actual recorder mutex while its original guard is
+                // held; the rendezvous confirms that the worker reached it.
+                let blocked = matches!(
+                    exec_witness_lock().try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                );
+                probe_tx.send(blocked).expect("send exclusion probe");
+                let _guard = exec_witness_guard();
+                tx.send(()).expect("send guard signal");
+            });
+            assert!(
+                probe_rx.recv().expect("worker probes original mutex")
+                    && matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+                "guard should prevent concurrent access"
+            );
+            drop(guard);
+            // Other block captures may acquire this global mutex first. The
+            // contract is exclusion and release, without a handoff deadline.
+            rx.recv().expect("guard should release");
+            handle.join().expect("thread joins");
         });
-        assert!(
-            rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "guard should prevent concurrent access"
-        );
-        drop(guard);
-        rx.recv_timeout(Duration::from_secs(5))
-            .expect("guard should release");
-        handle.join().expect("thread joins");
     }
 }

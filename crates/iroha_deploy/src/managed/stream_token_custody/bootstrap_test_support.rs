@@ -27,24 +27,16 @@ impl ManagedStreamTokenCustody {
     pub(super) fn bootstrap_native_body(
         &self,
         native: &NativeFixture,
+        current: &VerifiedStreamTokenCustodyStateV1,
         purpose: CustodyPurpose,
         unsigned: body_history::UnsignedEnrollment,
         utc: u64,
         options: &BoundedTransactionOptions,
     ) -> BodyHistory {
-        // TODO: Remove this timing scope and static phases after native interval cost is localized.
-        let _timing = crate::custody_timing::Scope::enter();
-        eprintln!("custody-body phase: helper-enter");
         let terms = Terms::new(utc, options).unwrap();
         let turn = SigningTurn::Explicit(&terms);
-        let checkpoint = self
-            .authority
-            .decode_checkpoint(&unsigned.checkpoint)
-            .unwrap();
-        let policy = body_history::selected_policy(&unsigned.selection).unwrap();
-        eprintln!("custody-body phase: selection-decoded native-current-start");
-        let current = native.bootstrap_custody(&self.authority, &policy, &checkpoint);
-        eprintln!("custody-body phase: native-current-complete initialize-start");
+        // The public enroll/renew paths carry their selected authenticated current proof
+        // into finish_pending. The signing boundary still rereads its historical checkpoint.
         let history = BodyHistory::initialize(
             self,
             purpose,
@@ -54,21 +46,18 @@ impl ManagedStreamTokenCustody {
             options.deadline,
         )
         .unwrap();
-        eprintln!("custody-body phase: initialize-complete prefix-assertions-start");
         assert!(history.has_pending());
         assert!(history.original().unwrap().is_none());
         assert!(history.dispatch().is_err());
-        eprintln!("custody-body phase: prefix-assertions-complete finish-start");
         let history = history
             .finish_pending_with_reads(
                 self,
-                &current,
+                current,
                 &turn,
                 options.deadline,
                 &NativeEnrollmentReads(native),
             )
             .unwrap();
-        eprintln!("custody-body phase: finish-complete");
         history
     }
 
@@ -148,6 +137,7 @@ impl ManagedStreamTokenCustody {
             .unwrap();
         let body = self.bootstrap_native_body(
             native,
+            &current,
             CustodyPurpose::InitialEnroll,
             unsigned,
             interval.deadline_unix_ms,
@@ -156,7 +146,7 @@ impl ManagedStreamTokenCustody {
         self.bootstrap_native_enrollment_original(
             native,
             CustodyPurpose::InitialEnroll,
-            &body,
+            body,
             interval.deadline_unix_ms,
             options,
         );
@@ -204,7 +194,7 @@ impl ManagedStreamTokenCustody {
         &self,
         native: &mut NativeFixture,
         purpose: CustodyPurpose,
-        history: &BodyHistory,
+        history: BodyHistory,
         utc: u64,
         options: &BoundedTransactionOptions,
     ) {
@@ -212,7 +202,7 @@ impl ManagedStreamTokenCustody {
         self.validate_original(original, purpose).unwrap();
         let account = AccountService::new(self.authority.config.clone()).unwrap();
         journal::explicit(directory, original, utc, options, &account, scope).unwrap();
-        let selected = self.required_enrollment(purpose).unwrap();
+        let selected = history.into_reparsed_selected(self).unwrap();
         self.bootstrap_native_selected(native, &selected, &account, options);
     }
 
@@ -290,6 +280,7 @@ impl ManagedStreamTokenCustody {
             .unwrap();
         let body = self.bootstrap_native_body(
             native,
+            &current,
             CustodyPurpose::Renewal(sequence),
             unsigned,
             utc,
@@ -298,7 +289,7 @@ impl ManagedStreamTokenCustody {
         self.bootstrap_native_enrollment_original(
             native,
             CustodyPurpose::Renewal(sequence),
-            &body,
+            body,
             utc,
             options,
         );

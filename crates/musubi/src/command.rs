@@ -1557,13 +1557,13 @@ pub fn build_runtime_package(
     cache_root: &Path,
     registry_config: Option<&iroha::config::Config>,
     registry_resolver: Option<&crate::deployment_runtime::BuildRegistryResolver>,
-    manifest: &Path,
+    manifest: &iroha_fs::SelectedRegularFile,
     package: Option<&str>,
     contract: Option<&str>,
     locked: bool,
     archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
 ) -> eyre::Result<crate::deployment_runtime::BuiltArtifact> {
-    build::build_runtime_package(
+    let artifact = build::build_runtime_package(
         config,
         cache_root,
         registry_config,
@@ -1574,7 +1574,9 @@ pub fn build_runtime_package(
         locked,
         archive_transport,
     )
-    .map_err(|diagnostic| eyre::eyre!("{}", diagnostic.render_human()))
+    .map_err(|diagnostic| eyre::eyre!("{}", diagnostic.render_human()))?;
+    manifest.revalidate()?;
+    Ok(artifact)
 }
 #[derive(Clone)]
 struct WorkspaceResolutionOptionsV1<'a> {
@@ -2519,6 +2521,20 @@ pub(crate) fn publish_generated(
         archive_transport: &request.archive_transport,
     };
     let result = execution.validate().and_then(|()| {
+        let action = if matches!(&request.action, GeneratedPublishAction::Begin { .. }) {
+            crate::generated_publication::prepare_generated_publish_action(
+                &request.manifest_path,
+                request.action.clone(),
+            )
+            .map_err(|error| {
+                match error.downcast::<crate::workspace::WorkspaceError>() {
+                    Ok(error) => workspace_diagnostic(error),
+                    Err(error) => Diagnostic::new(ErrorCode::Usage, error.to_string()),
+                }
+            })?
+        } else {
+            request.action.clone()
+        };
         let mut args = PublishArgs {
             selection: SelectionArgs::default(),
             mode: GraphModeArgs::default(),
@@ -2527,7 +2543,7 @@ pub(crate) fn publish_generated(
             resume: None,
             recover: None,
         };
-        match &request.action {
+        match &action {
             GeneratedPublishAction::Begin { package, detach } => {
                 args.selection.packages.extend(package.iter().cloned());
                 args.detach = *detach;

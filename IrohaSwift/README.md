@@ -133,26 +133,43 @@ objects, and the Rust wallet Advance provider
 and the monotonic clock.
 
 `KagemushaWalletWireV1` consumes `fixtures/kagemusha/wallet_v1_vectors.json` and
-mirrors only what an SDK needs before it hands bytes to the typed decoder: the
-SHA-256 domain-separated digests (`digest(role:body:)`, `signedObjectDigest`), the raw
-low-S P-256 signature rule, the canonical σ-field encoding check
-(`isCanonicalFieldValue`), the envelope frame header with its per-kind bounds
-(`inspectEnvelope`, `validateEnvelope`) and the strict `kgm1:` text form
-(`encodeText`, `decodeText`). Poseidon values (`credit_id`, `proof_digest`, the
-Payment digest, commitments, chains, roots and openings) are computed only by the
-native Rust core; Swift carries them as opaque canonical σ-field values and never
-recomputes them. Structural envelope checks carry no monetary or delivery
-authority; typed decoding and verification of the message bodies remain open
-(TODO(G4)).
+mirrors only what an SDK needs before it hands bytes to the typed decoder: the SHA-256
+18 domain-separated digests (`digest(role:body:)`, `artifactManifestDigest`), the signing
+domains (`KagemushaWalletSigningDomainV1`), the raw low-S ECDSA-P256-SHA256 rule over
+32-byte signing messages (`verifySignature(publicKey:message:signature:)`), the
+canonical σ-field encoding check (`isCanonicalFieldValue`), the envelope frame header
+with its per-kind bounds (`inspectEnvelope`, `validateEnvelope`) and the strict
+`kgm1:` text form (`encodeText`, `decodeText`). Every signature signs the 32-byte
+Poseidon message `P_bytes(domain, transcript)` of its body. Poseidon values (signing
+messages, signed-object digests except the artifact manifest, certificate-set, package,
+statement, operation and nullifier digests, `credit_id`, `proof_digest`, the Payment, lineage, credit-opening,
+credit-status and Credited digests, commitments, chains, indexed-tree and quota-array roots and
+openings) are computed only by the native Rust core; Swift carries them as opaque
+canonical σ-field values and never recomputes them. Structural envelope checks carry
+no monetary or delivery authority; typed decoding and verification of the message
+bodies remain open (TODO(G4)).
 
 `KagemushaWalletApplePlatformV1` is the iPhone platform adapter of the Rust wallet
-Advance provider (Secure Enclave payment key, passcode-bound keychain rollback anchor,
-protected-data canary and custody root); `KagemushaWalletAppleSystemV1.swift` holds
-its replaceable operating-system seams. Construct it with the app's App ID prefix,
-which names its own keychain access group. Its only app-facing operation is
-`attestEnrollment(slot:paymentPublicKey:challengeDigest:)`, the App Attest evidence of
-enrollment step E5; key use and the anchor are reached only through the Rust provider.
-Registering the adapter with the native bridge remains open (TODO(G2-bridge)).
+Advance provider (Secure Enclave payment key that signs exactly the 32-byte message
+the Rust signer passes with `kSecKeyAlgorithmECDSASignatureMessageX962SHA256`,
+passcode-bound keychain rollback anchor, protected-data canary and custody root);
+`KagemushaWalletAppleSystemV1.swift` holds its replaceable operating-system seams.
+Construct it with the app's App ID prefix, which names its own keychain access group.
+`attestEnrollment(slot:paymentPublicKey:challengeDigest:)` produces the App Attest
+evidence of enrollment step E5; key use and the anchor are reached only through the
+Rust provider. `KagemushaWalletV1` registers the platform callbacks with that provider
+and exposes `commit`, `retry`, `resume`, `foldOnce`, `creditStatus` and activity updates.
+Its declaration requires the Native bridge headers in every build. Every open also
+requires the actual authenticated native artifact identity; the current foreign open
+returns `artifactsUnavailable` until the operation/Λ/Ω artifact loader is connected.
+There is no software payment-key or structural-verification substitute.
+
+The current bridge does not yet export enrollment E2–E6. The Native enrollment owner
+must retain the exact E5 request together with the App Attest key identifier and its
+consumed assertion counter before dispatch. It stores the issued credential create-new,
+then Bootstrap establishes the generation-1 head. E8 activation must retain and send
+that original Bootstrap completion. The Swift adapter alone does not complete these
+issuer, ledger or physical-device workflows (TODO(G4/G5)).
 
 The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
 `listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,

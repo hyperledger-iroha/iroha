@@ -21,7 +21,8 @@ pub use quantity_statement::{
 pub use source_capture::{FastpqSourceExecutionEntryV1, FastpqSourceStatementBuildLimits};
 #[cfg(test)]
 pub(crate) use source_capture::{
-    TransferArchiveDiagnostic, TransferEntryDiagnostic, prepare_transfer_archive_diagnostic,
+    TransferArchiveDiagnostic, TransferEntryDiagnostic, measure_fastpq_source_statement_usage,
+    preflight_fastpq_source_transcripts, prepare_transfer_archive_diagnostic,
 };
 pub(crate) use source_context::{FastpqBlockStartSourceContext, FastpqSourceCaptureAccumulator};
 pub use source_context::{

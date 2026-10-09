@@ -935,7 +935,6 @@ def _replace_propagated_refusal(commit: str, call: str, anchor: str) -> str:
     "duplicate_publisher", "early_telemetry", "missing_cfg",
     "hash_prepare_refusal", "commit_lock_early_drop", "commit_lock_after_prepare",
     "state_commit_unlock_before_publication", "effect_owner_declared_after_commit_lock",
-    "kagemusha_runtime_refusal", "kagemusha_registry_change_check", "kagemusha_unowned_refusal",
 ))
 def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(
     mutation: str, monkeypatch: pytest.MonkeyPatch,
@@ -998,18 +997,6 @@ def test_prepared_commit_rejects_refusal_publication_or_replay_regressions(
         owner = "effect_cleanup: effect_publication::StateEffectLocks::new(state),"
         fence = "commit_fence: state.state_commit_lock.defer_notifications(),"
         changed = commit.replace(owner, "", 1).replace(fence, fence + "\n            " + owner, 1)
-    elif mutation == "kagemusha_runtime_refusal":
-        anchor = "return Err(TransactionsBlockError::KagemushaVerifierAuthority);"
-        assert commit.count(anchor) == 1
-        changed = commit.replace(anchor, "", 1)
-    elif mutation == "kagemusha_registry_change_check":
-        anchor = "if world.kagemusha_verifier_registry.get() != predecessor.get() {"
-        assert commit.count(anchor) == 1
-        changed = commit.replace(anchor, "if false {", 1)
-    elif mutation == "kagemusha_unowned_refusal":
-        anchor = "return Err(TransactionsBlockError::KagemushaGovernanceUnavailable);"
-        assert commit.count(anchor) == 1
-        changed = commit.replace(anchor, "", 1)
     elif mutation == "world_drop":
         changed = commit.replace("world.publish_prepared();", "drop(world);", 1)
     elif mutation == "hash_drop":
@@ -1716,29 +1703,6 @@ def test_block_start_due_execution_keeps_original_local_deferral(replacement: st
     with pytest.raises(RuntimeError, match="start phases"):
         guard.require_block_start_enactment_phases(changed)
 
-
-
-@pytest.mark.parametrize("original,replacement", (
-    ("            .validate()\n            .map_err(str::to_owned)",
-     "            .unchecked_registry()\n            .map_err(str::to_owned)"),
-    ("validate_runtime_cache_for_publication(", "unchecked_runtime_cache("),
-    ("validate_runtime_cache_for_publication(\n                    verifier,\n                    state_ref.network_id,",
-     "validate_runtime_cache_for_publication(\n                    verifier,\n                    foreign_network,"),
-))
-def test_prepared_commit_independent_registry_and_cache_checks_are_owned(
-    original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Canonical registry and structural local cache must both precede owned transition checks."""
-    state = guard.read(STATE_PATH)
-    guard.require_parliament_commit_publication(state)
-    publication = guard.read(PUBLICATION_PATH)
-    assert publication.count(original) == 1
-    changed = publication.replace(original, replacement, 1)
-    original_read = guard.read
-    monkeypatch.setattr(guard, "read", lambda path:
-                        changed if path == PUBLICATION_PATH else original_read(path))
-    with pytest.raises(RuntimeError, match=PUBLICATION_PATH):
-        guard.require_parliament_commit_publication(state)
 
 
 @pytest.mark.parametrize("path,declaration,original,replacement", (

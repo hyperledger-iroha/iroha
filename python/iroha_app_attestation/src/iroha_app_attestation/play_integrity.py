@@ -34,14 +34,13 @@ class PlayIntegrityUnavailable(VerificationUnavailable):
 
 
 @dataclass(frozen=True)
-class PlayIntegrityPolicy:
-    """Exact app and freshness selections obtained from admitted Native policy."""
+class PlayIntegrityEnrollmentPolicy:
+    """Current E1 app/verdict/freshness policy with no periodic refresh or lease field."""
     policy_digest: bytes
     package_name: str
     package_version: int
     app_signing_certificate_sha256: bytes
     maximum_evidence_age_ms: int
-    maximum_refresh_interval_ms: int
     require_play_recognized: bool
     require_licensed: bool
     minimum_device_integrity: str
@@ -57,13 +56,38 @@ class PlayIntegrityPolicy:
                 "empty Play app-signing certificate")
         require(type(self.maximum_evidence_age_ms) is int
                 and 0 < self.maximum_evidence_age_ms < (1 << 64)
-                and type(self.maximum_refresh_interval_ms) is int
-                and 0 < self.maximum_refresh_interval_ms < (1 << 64)
                 and type(self.require_play_recognized) is bool
                 and type(self.require_licensed) is bool
                 and type(self.minimum_device_integrity) is str
                 and self.minimum_device_integrity in ("MEETS_DEVICE_INTEGRITY", "MEETS_STRONG_INTEGRITY"),
                 "invalid Play Integrity trust policy")
+
+
+@dataclass(frozen=True)
+class PlayIntegrityPolicy:
+    """Retained primitive input for historical consumers; current E1 uses EnrollmentPolicy.
+
+    This data type creates no lease. Removed ordinary issuer/refresh owners are not restored.
+    """
+    policy_digest: bytes
+    package_name: str
+    package_version: int
+    app_signing_certificate_sha256: bytes
+    maximum_evidence_age_ms: int
+    maximum_refresh_interval_ms: int
+    require_play_recognized: bool
+    require_licensed: bool
+    minimum_device_integrity: str
+
+    def validate(self) -> None:
+        PlayIntegrityEnrollmentPolicy(
+            self.policy_digest, self.package_name, self.package_version,
+            self.app_signing_certificate_sha256, self.maximum_evidence_age_ms,
+            self.require_play_recognized, self.require_licensed,
+            self.minimum_device_integrity).validate()
+        require(type(self.maximum_refresh_interval_ms) is int
+                and 0 < self.maximum_refresh_interval_ms < (1 << 64),
+                "invalid historical Play Integrity refresh interval")
 
 
 @dataclass(frozen=True)
@@ -111,7 +135,7 @@ def _number(value: object, label: str) -> int:
     return number
 
 
-def _verify_google_payload(body: bytes, policy: PlayIntegrityPolicy,
+def _verify_google_payload(body: bytes, policy: PlayIntegrityEnrollmentPolicy | PlayIntegrityPolicy,
                            expected_request_hash: bytes, trusted_time_ms: int,
                            token_sha256: bytes) -> PlayIntegrityProof:
     """Internal parser; its caller must obtain bytes directly from Google TLS."""
@@ -189,11 +213,11 @@ class GooglePlayIntegrityVerifier:
         require(callable(access_token), "Play Integrity service-account custody absent")
         self._access_token = access_token
 
-    def verify(self, opaque_token: str, policy: PlayIntegrityPolicy,
+    def verify(self, opaque_token: str, policy: PlayIntegrityEnrollmentPolicy | PlayIntegrityPolicy,
                expected_request_hash: bytes, trusted_time_ms: int) -> PlayIntegrityProof:
         return self.decode(opaque_token, policy, expected_request_hash, trusted_time_ms).proof
 
-    def decode(self, opaque_token: str, policy: PlayIntegrityPolicy,
+    def decode(self, opaque_token: str, policy: PlayIntegrityEnrollmentPolicy | PlayIntegrityPolicy,
                expected_request_hash: bytes, trusted_time_ms: int) -> DecodedPlayIntegrityEvidence:
         policy.validate()
         request_hash_text(expected_request_hash)

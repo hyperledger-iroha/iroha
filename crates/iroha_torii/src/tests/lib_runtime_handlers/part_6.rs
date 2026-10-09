@@ -85,13 +85,13 @@ async fn zk_tree_queries_require_heavy_admission_before_state_integrity_work() {
 }
 #[cfg(feature = "zk-verify-batch")]
 #[tokio::test]
-async fn zk_verify_batch_honors_halo2_gate_before_compute_admission() {
+async fn diagnostic_openings_require_compute_admission_when_native_operations_disabled() {
     let mut app = mk_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     Arc::get_mut(&mut app_mut.state)
         .expect("unique core state fixture")
         .zk
-        .halo2
+        .pipa_r
         .enabled = false;
     app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     app_mut.query_queue_timeout = Duration::ZERO;
@@ -108,24 +108,25 @@ async fn zk_verify_batch_honors_halo2_gate_before_compute_admission() {
     )
     .await
     {
-        Ok(_) => panic!("disabled Halo2 verifier must fail closed"),
+        Ok(_) => panic!("diagnostic opening verification must acquire heavy admission"),
         Err(error) => error,
     };
     assert!(matches!(
         error,
-        Error::Query(ValidationFail::NotPermitted(message))
-            if message == "halo2 verification is disabled in node configuration"
+        Error::Query(ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+        ))
     ));
 }
 #[cfg(feature = "zk-verify-batch")]
 #[tokio::test]
-async fn enabled_zk_verify_batch_requires_heavy_compute_admission() {
+async fn diagnostic_openings_require_compute_admission_when_native_operations_enabled() {
     let mut app = mk_app_state_for_tests();
     let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
     Arc::get_mut(&mut app_mut.state)
         .expect("unique core state fixture")
         .zk
-        .halo2
+        .pipa_r
         .enabled = true;
     app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
     app_mut.query_queue_timeout = Duration::ZERO;
@@ -3029,7 +3030,7 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
 
 pub(super) fn app_with_root_scope_for_handler_test(world: World, private: bool) -> SharedAppState {
     use iroha_data_model::{
-        block::consensus::{SumeragiRootScope, ValidatorPower},
+        block::consensus::SumeragiRootScope,
         parameter::{
             custom::CustomParameter,
             system::{
@@ -3038,14 +3039,8 @@ pub(super) fn app_with_root_scope_for_handler_test(world: World, private: bool) 
             },
         },
     };
-    let validators = iroha_core::sumeragi::test_chain::fixture_validators()
-        .into_iter()
-        .map(|(validator, _)| ValidatorPower {
-            validator,
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let mut context = iroha_core_zk::kagemusha_v1_test_fixtures::genesis_context_parameters();
+    let mut context =
+        iroha_data_model::block::consensus::SumeragiGenesisContextParameters::recommended();
     if private {
         context.root_scope = SumeragiRootScope::Dataspace {
             parent_network_id: NetworkId::from_genesis_hash(
@@ -3059,8 +3054,6 @@ pub(super) fn app_with_root_scope_for_handler_test(world: World, private: bool) 
         block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
         wire_protocol_version: u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION),
         consensus_fingerprint: ConsensusFingerprint::new([0xB7; 32]),
-        kagemusha_mint_finality:
-            iroha_core_zk::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&validators),
         sumeragi_context: context,
     };
     metadata.validate().unwrap();

@@ -18,6 +18,9 @@ mod data_availability_http_tests;
 mod data_availability_query_tests;
 mod dispatch;
 mod gateway_compliance;
+pub mod kagemusha;
+#[cfg(test)]
+mod kagemusha_http_tests;
 mod moderation;
 mod multisig_validation;
 pub mod musubi;
@@ -4392,7 +4395,7 @@ pub struct ZkVkTransactionDraft {
 /// Filters for `/v1/zk/proofs` list/count endpoints.
 #[derive(Debug, Default, Clone)]
 pub struct ZkProofsFilter<'a> {
-    /// Exact backend (e.g., `halo2/ipa`).
+    /// Exact backend (e.g., `pipa-r/pasta`).
     pub backend: Option<&'a str>,
     /// Status filter (`Submitted`, `Verified`, `Rejected`).
     pub status: Option<&'a str>,
@@ -8018,7 +8021,7 @@ fn lifecycle_status() -> LaneLifecycleStatusV1 {
 mod status_tests {
     use super::*;
     use iroha_torii_shared::status::{
-        BuildStatus, CryptoStatus, GovernanceStatus, Halo2Status, StackStatus,
+        BuildStatus, CryptoStatus, DiagnosticTraceStatus, GovernanceStatus, StackStatus,
         SumeragiConsensusStatus,
     };
     use norito::json::Value as JsonValue;
@@ -8048,7 +8051,7 @@ mod status_tests {
             crypto: CryptoStatus {
                 sm_helpers_available: true,
                 sm_openssl_preview_enabled: true,
-                halo2: Halo2Status::default(),
+                trace: DiagnosticTraceStatus::default(),
             },
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
@@ -10425,7 +10428,7 @@ mod evidence_http_tests {
         overrides: &[(&str, norito::json::Value)],
     ) -> norito::json::Value {
         use base64::Engine as _;
-        let backend = "halo2/ipa";
+        let backend = "pipa-r/pasta";
         let vk_bytes = vec![1, 2, 3];
         let mut object = norito::json::Map::new();
         object.insert("backend".into(), norito::json::Value::from(backend));
@@ -10442,7 +10445,7 @@ mod evidence_http_tests {
         );
         object.insert(
             "gas_schedule_id".into(),
-            norito::json::Value::from("halo2_default"),
+            norito::json::Value::from("native_pipa_r_default"),
         );
         object.insert(
             "commitment_hex".into(),
@@ -10472,7 +10475,7 @@ mod evidence_http_tests {
             proof::VerifyingKeyId,
             transaction::FeePaymentIntent,
         };
-        let id = VerifyingKeyId::new("halo2/ipa", "vk_main");
+        let id = VerifyingKeyId::new("pipa-r/pasta", "vk_main");
         let record =
             expected_zk_vk_record_from_request(request).expect("build expected VK draft record");
         let instruction = match operation {
@@ -11466,10 +11469,8 @@ mod evidence_http_tests {
                 view: 3,
                 block_hash: Hash32([seed; 32]),
                 result: Hash32([0x57; 32]),
-                attest: false,
                 signer: 0,
                 sig: NativeSignature([0; SIGNATURE_LEN]),
-                attestation: None,
             };
             vote.sig = NativeSignature(
                 Signature::new(key.private_key(), &vote.preimage())
@@ -23646,7 +23647,7 @@ mod tests {
                 "authority": (authority.as_str()),
                 "network_id": (client.network_id.clone()),
                 "election_id": "election-1",
-                "backend": "halo2/ipa",
+                "backend": "pipa-r/pasta",
                 "envelope_b64": "cHJvb2Y="
             });
             payload
@@ -23693,7 +23694,7 @@ mod tests {
                             "authority": (authority.as_str()),
                             "network_id": (client.network_id.clone()),
                             "election_id": "election-1",
-                            "backend": "halo2/ipa",
+                            "backend": "pipa-r/pasta",
                             "envelope_b64": "cHJvb2Y="
                         }))
                         .expect("exact-network ZK ballot draft");
@@ -27817,7 +27818,7 @@ mod tests {
         let artifact = include_bytes!("../tests/fixtures/contract_code_readback/code_readback.to");
         assert_eq!(
             hex::encode(iroha_data_model::smart_contract::contract_code_hash(artifact).as_ref()),
-            "8ea032a639a92b0c46b366b93a8207699e3253bf4c14fd159c6f1f5261b928a9",
+            "743cd07d52c0c890ab84117f6ae1430d79f322320d5eaa6bed2c496617cabe73",
             "checked-in fixture must retain its native artifact identity"
         );
         artifact

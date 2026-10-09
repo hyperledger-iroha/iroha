@@ -65,6 +65,21 @@ checked constructors directly. Their private field carriers serve strict JSON
 decoding only; binary decoding retains the public owners' declared identities
 and does not cast archived values to a second wire type.
 
+## KAGEMUSHA ledger verifier installation
+
+The first-release `KagemushaWalletLedgerActionV1` includes the closed
+`InstallVerifierPack { asset: [u8; 32], manifest_digest: [u8; 32], pack: Vec<u8> }`
+action. The enclosing instruction retains its original exact scheme identity.
+These fields carry an installation request, not a native proof verdict. Core
+requires the real registered reserve account and asset permission, independently
+pins the signed manifest identity, authenticates every native original, and
+stores one immutable canonical World row. The row's fixed key tag is 14; its
+value schema and bounds are specified in
+[`kagemusha_wallet_wire_v1.md`](specs/kagemusha_wallet_wire_v1.md#310-ledger-native-verifier-installation).
+Existing proof-consuming actions use that same-overlay installed owner and
+retain native proof quotas and complete accumulator decisions. No alternative
+or compatibility action accepts retired artifact layouts.
+
 ## Contract error presentation metadata
 
 The V1 `EmbeddedContractInterfaceV1` payload appends `error_messages` after
@@ -401,6 +416,22 @@ Fixed byte-array fields retain their raw-field framing;
 other fields use the canonical child decoder relationship. Generic, skipped,
 flattened and whole-value validation-hook records are rejected by this initial
 opt-in rather than silently changing their contracts. No schema or V1 bytes change.
+The shared positional and Option prefix kernels bound and borrow each declared
+payload without charging its byte length as an allocation. Element-framed
+`[u8; N]` decoding likewise checks borrowed element prefixes while filling fixed
+stack storage without a heap charge. Generic fixed arrays always use their
+encoder's element-framed layout; explicit raw fields and nominal raw-byte types
+retain their fixed-width decoders. Input length never selects an array layout.
+Manual record walks use `framed_byte_array_field` for direct byte-array fields,
+and prepared destinations honor the decoder selected by that field constructor.
+Optional and sequence-element arrays keep the generic element-framed value
+format; raw record-field bytes cannot be passed to that value decoder.
+Archived generic arrays charge each actual element copy once. Their owning
+element decoder also requires `SerializePayload`: partial or unreported child
+access uses the same allocation-free canonical byte comparison as other fields,
+without imposing an additional deserialization lifetime bound. Actual archived
+realignment buffers and owned child storage retain their own allocation charges;
+field, flags, bounds, depth and complete-consumption checks remain active.
 
 `PreparedDecodeWorkspace` preadmits its two reusable physical counter controls
 from an explicit original `iroha_allocation` reservation. Active scopes borrow
@@ -1303,19 +1334,6 @@ time. The signed payload's schema identity is
 `iroha_data_model::identifier::PhoneRetailCanonicalityPayloadV1`; the
 attestation's is
 `iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1`.
-
-### KAGEMUSHA release network binding
-
-`KagemushaReleaseManifestV1` encodes its exact genesis-derived `NetworkId`
-immediately after `version`, before `release_id`. Its private
-`KagemushaReleaseSubjectV1` uses the same placement. The domain-separated
-release ID therefore commits to the network, and threshold release approvals
-sign both that ID and the complete manifest digest. A node rejects a release
-whose signed network differs from its configured genesis identity before Kura
-replay; mobile enrollment, concrete mint/state/payment/terminal and Guard
-verification, hardware transaction admission, and testnet proof observation
-enforce the same release-to-operation network match. There is one first-release
-layout and no decoder for the networkless pre-release shape.
 
 ### Sumeragi execution-result schedule projection
 

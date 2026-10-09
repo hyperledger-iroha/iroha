@@ -4489,7 +4489,7 @@
      "keygen_bounded_noise_from_seed",
      "keygen_bounded_noise_with_relinearization_from_seed"
     ],
-    "bfv.inline_unit_tests": ["mod first_release_hard_cut_tests", "mod shared_arithmetic_adapter_tests"],
+    "bfv.inline_unit_tests": ["mod bfv_goldilocks_digest_raw_wire_tests", "mod first_release_hard_cut_tests", "mod shared_arithmetic_adapter_tests"],
     "bfv.test_gated_helpers": [
      "bfv_full_bootstrap_goldilocks_add_v1",
      "bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_output_bound_v1",
@@ -9632,11 +9632,9 @@
     {"path": "IrohaSwift/Sources/IrohaSwift/Confidential.swift", "purpose": "Confidential key hierarchy and note or memo key derivation."},
     {"path": "IrohaSwift/Sources/IrohaSwift/ConfidentialNote.swift", "purpose": "Confidential key hierarchy and note or memo key derivation."},
     {"path": "IrohaSwift/Sources/IrohaSwift/IrohaPeerNearbyV1.swift", "purpose": "Peer-nearby session transcript keys."},
-    {"path": "IrohaSwift/Sources/IrohaSwift/KagemushaModelsV1.swift", "purpose": "KAGEMUSHA encrypted-credit envelope and recovery stream keys."},
     {"path": "crates/iroha_cli/bins/tests/taikai_policy.rs", "purpose": "Taikai content-encryption-key rotation salt."},
     {"path": "crates/iroha_cli/src/commands/taikai.rs", "purpose": "Taikai content-encryption-key rotation salt."},
     {"path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/wire.rs", "purpose": "PQ-MASP labeled key derivation."},
-    {"path": "crates/iroha_core_zk/src/kagemusha_v1_crypto.rs", "purpose": "KAGEMUSHA encrypted-credit envelope and recovery stream keys."},
     {
      "path": "crates/iroha_crypto/Cargo.toml",
      "purpose": "Declaration of the hkdf dependency, shared by the RAM-LFE backend and the preserved users."
@@ -9645,7 +9643,6 @@
     {"path": "crates/iroha_crypto/src/confidential_memo.rs", "purpose": "Confidential key hierarchy and note or memo key derivation."},
     {"path": "crates/iroha_crypto/src/hybrid.rs", "purpose": "Hybrid KEM shared-secret combination."},
     {"path": "crates/iroha_crypto/src/hybrid/fixed_owner_tests.rs", "purpose": "Hybrid KEM shared-secret combination."},
-    {"path": "crates/iroha_crypto/src/kagemusha.rs", "purpose": "KAGEMUSHA encrypted-credit envelope and recovery stream keys."},
     {"path": "crates/iroha_crypto/src/kex/x25519.rs", "purpose": "X25519 session key derivation."},
     {
      "path": "crates/iroha_crypto/src/lib.rs",
@@ -9663,7 +9660,6 @@
     {"path": "crates/iroha_crypto/src/threshold_bls/checkpoint.rs", "purpose": "Threshold BLS beacon seed and checkpoint keys."},
     {"path": "crates/iroha_crypto/src/threshold_bls/tests/message_borrow.rs", "purpose": "Threshold BLS beacon seed and checkpoint keys."},
     {"path": "crates/iroha_crypto/src/tle.rs", "purpose": "Timelock encryption data-encapsulation key."},
-    {"path": "crates/iroha_data_model/src/kagemusha/kagemusha_v1.rs", "purpose": "KAGEMUSHA encrypted-credit envelope and recovery stream keys."},
     {"path": "crates/iroha_data_model/src/taikai.rs", "purpose": "Taikai content-encryption-key rotation salt."},
     {"path": "crates/iroha_torii_shared/Cargo.toml", "purpose": "Connect session direction keys and their dependency."},
     {"path": "crates/iroha_torii_shared/src/connect_sdk.rs", "purpose": "Connect session direction keys and their dependency."},
@@ -9706,18 +9702,6 @@
     {
      "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/IrohaPeerNearbyV1.kt",
      "purpose": "Peer-nearby session transcript keys."
-    },
-    {
-     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaModelsV1.kt",
-     "purpose": "KAGEMUSHA encrypted-credit envelope and recovery stream keys."
-    },
-    {
-     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaNoritoV1.kt",
-     "purpose": "KAGEMUSHA encrypted-credit envelope and recovery stream keys."
-    },
-    {
-     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaWalletV1.kt",
-     "purpose": "KAGEMUSHA encrypted-credit envelope and recovery stream keys."
     },
     {
      "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt",
@@ -9999,21 +9983,18 @@
    "component": "workspace",
    "role": "unrelated_hkdf",
    "tasks": [],
-   "summary": "HKDF key derivation that is not the RAM-LFE backend: confidential key hierarchy and memo wrapping, X25519 and hybrid KEM session keys, SoraNet handshake/record/blinding, threshold BLS, timelock encryption, ML-DSA and BLS seed expansion, Taikai CEK rotation, KAGEMUSHA envelopes, Connect direction keys, Norito streaming, key export and peer-nearby transcripts. Preserve.",
+   "summary": "HKDF key derivation that is not the RAM-LFE backend: confidential key hierarchy and memo wrapping, X25519 and hybrid KEM session keys, SoraNet handshake/record/blinding, threshold BLS, timelock encryption, ML-DSA and BLS seed expansion, Taikai CEK rotation, Connect direction keys, Norito streaming, key export and peer-nearby transcripts. Preserve.",
    "files": [
     {"path": "IrohaSwift/Sources/IrohaSwift/Confidential.swift", "patterns": ["hkdf"]},
     {"path": "IrohaSwift/Sources/IrohaSwift/ConfidentialNote.swift", "patterns": ["hkdf"]},
     {"path": "IrohaSwift/Sources/IrohaSwift/IrohaPeerNearbyV1.swift", "patterns": ["hkdf"]},
-    {"path": "IrohaSwift/Sources/IrohaSwift/KagemushaModelsV1.swift", "patterns": ["hkdf"]},
     {"path": "crates/iroha_cli/bins/tests/taikai_policy.rs", "patterns": ["hkdf"], "test_only": true},
     {"path": "crates/iroha_cli/src/commands/taikai.rs", "patterns": ["hkdf"]},
     {"path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/wire.rs", "patterns": ["hkdf"]},
-    {"path": "crates/iroha_core_zk/src/kagemusha_v1_crypto.rs", "patterns": ["hkdf"], "cfg": ["any(test, unix)"]},
     {"path": "crates/iroha_crypto/src/confidential.rs", "patterns": ["hkdf"]},
     {"path": "crates/iroha_crypto/src/confidential_memo.rs", "patterns": ["hkdf"], "cfg": ["feature = \"pqc\""]},
     {"path": "crates/iroha_crypto/src/hybrid.rs", "patterns": ["hkdf"], "cfg": ["feature = \"pqc\""]},
     {"path": "crates/iroha_crypto/src/hybrid/fixed_owner_tests.rs", "patterns": ["hkdf"], "cfg": ["feature = \"pqc\"", "test"], "test_only": true},
-    {"path": "crates/iroha_crypto/src/kagemusha.rs", "patterns": ["hkdf"]},
     {"path": "crates/iroha_crypto/src/kex/x25519.rs", "patterns": ["hkdf"]},
     {"path": "crates/iroha_crypto/src/mldsa_seed.rs", "patterns": ["hkdf"], "cfg": ["feature = \"pqc\""]},
     {"path": "crates/iroha_crypto/src/signature/bls/implementation.rs", "patterns": ["hkdf"], "cfg": ["feature = \"bls\""]},
@@ -10036,7 +10017,6 @@
      "test_only": true
     },
     {"path": "crates/iroha_crypto/src/tle.rs", "patterns": ["hkdf"], "cfg": ["feature = \"bls\""]},
-    {"path": "crates/iroha_data_model/src/kagemusha/kagemusha_v1.rs", "patterns": ["hkdf"]},
     {"path": "crates/iroha_data_model/src/taikai.rs", "patterns": ["hkdf"]},
     {"path": "crates/iroha_torii_shared/Cargo.toml", "patterns": ["hkdf"]},
     {"path": "crates/iroha_torii_shared/src/connect_sdk.rs", "patterns": ["hkdf"]},
@@ -10059,9 +10039,6 @@
     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectCrypto.kt", "patterns": ["hkdf"]},
     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/export/DeterministicKeyExporter.kt", "patterns": ["hkdf"]},
     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/IrohaPeerNearbyV1.kt", "patterns": ["hkdf"]},
-    {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaModelsV1.kt", "patterns": ["hkdf"]},
-    {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaNoritoV1.kt", "patterns": ["hkdf"]},
-    {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaWalletV1.kt", "patterns": ["hkdf"]},
     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt", "patterns": ["hkdf"]},
     {
      "path": "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/IrohaPeerNearbySessionV1Test.kt",
@@ -12680,22 +12657,8 @@
    "component": "workspace",
    "role": "incidental",
    "tasks": [],
-   "summary": "Files that match a detection pattern without consuming ring arithmetic or RAM-LFE: Lagrange and coefficient basis conversions of the KAGEMUSHA polynomial store and of vendored halo2.",
+   "summary": "Files that match a detection pattern without consuming ring arithmetic or RAM-LFE: Lagrange and coefficient basis conversions of vendored halo2.",
    "files": [
-    {
-     "path": "crates/iroha_core_zk/src/kagemusha_polynomial_store_v1/quotient_roles.rs",
-     "patterns": ["basis_conversion"],
-     "cfg": ["all(test, unix)"],
-     "test_only": true,
-     "evidence": "quotient_roles_reject_invalid_basis_extension_part_piece_and_domain_before_backend_effects"
-    },
-    {
-     "path": "crates/iroha_core_zk/src/kagemusha_polynomial_store_v1/tests.rs",
-     "patterns": ["basis_conversion"],
-     "cfg": ["all(test, unix)"],
-     "test_only": true,
-     "evidence": "encrypted_basis_conversion_roundtrip"
-    },
     {
      "path": "vendor/halo2-axiom/src/poly/stored_advice/transform/tests.rs",
      "patterns": ["basis_conversion"],

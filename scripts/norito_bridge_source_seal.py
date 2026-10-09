@@ -37,6 +37,7 @@ APPLE_TARGETS = (
 )
 ANDROID_TARGETS = (
     "aarch64-linux-android",
+    "armv7-linux-androideabi",
     "x86_64-linux-android",
 )
 # Development-only closure; it never widens the admitted Android inventory.
@@ -127,7 +128,7 @@ PLATFORM_ROOT_INPUTS = {
     "apple": APPLE_ROOT_INPUTS,
     "android": ANDROID_ROOT_INPUTS,
     "android-armv7-diagnostic": ANDROID_ROOT_INPUTS
-    + ("scripts/inspect_android_armv7_diagnostic.py",),
+    + ("scripts/inspect_android_armv7_diagnostic.py", "scripts/norito_bridge_local_integration.py"),
 }
 # Kept as a public union for callers/tests which construct their own input set.
 ROOT_INPUTS = tuple(
@@ -313,10 +314,6 @@ _REVIEWED_PUBLIC_IVM_ARTIFACT_INPUTS = frozenset({
 # excepted for these exact files; every other operational/material gate remains.
 _REVIEWED_PUBLIC_SOURCE_FOLDER_INPUTS = frozenset({
     "crates/iroha_core/src/sumeragi/certified_chain/artifacts/tests.rs",
-    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_capture.rs",
-    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_capture_tests.rs",
-    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_key.rs",
-    "crates/iroha_core_zk/src/kagemusha_v1_recursion/artifacts/stored_key_tests.rs",
     "crates/iroha_p2p/src/peer/run/admission_class_tests.rs",
     "crates/iroha_p2p/src/peer/run/granted.rs",
     "crates/iroha_p2p/src/peer/run/payload_codec_tests.rs",
@@ -405,6 +402,9 @@ _PUBLIC_BASENAMES = frozenset({
 # any other .orig/.dat filename or override material/provider/alias refusal.
 _REVIEWED_PUBLIC_VENDOR_INPUTS = frozenset({
     "vendor/concread/.codespell_ignore",
+    "vendor/axum-core/Cargo.toml.orig",
+    "vendor/bytes/Cargo.toml.orig",
+    "vendor/http-body-util/Cargo.toml.orig",
     "vendor/concread/Cargo.toml.orig",
     "vendor/halo2-axiom/Cargo.toml.orig",
     "vendor/halo2curves-axiom/Cargo.toml.orig",
@@ -927,6 +927,7 @@ def metadata(
     root: pathlib.Path,
     target: str,
     lockfile_path: pathlib.Path | None = None,
+    *, android_armv7_diagnostic: bool = False,
 ) -> dict[str, object]:
     lockfile = selected_lockfile_path(root, lockfile_path)
     lock_identity_before = lockfile_identity(lockfile)
@@ -942,6 +943,11 @@ def metadata(
     configuration = None
     invocation_directory = root
     invocation_observation = None
+    diagnostic_configuration = None
+    if android_armv7_diagnostic:
+        if target not in ANDROID_ARMV7_DIAGNOSTIC_TARGETS:
+            raise RuntimeError("Android diagnostic metadata requires the exact armv7 target")
+        diagnostic_configuration = android_armv7_diagnostic_configuration(root)
     if target in APPLE_TARGETS + ANDROID_TARGETS:
         helper = pathlib.Path(__file__).with_name("run_mobile_hermetic_command.py")
         specification = importlib.util.spec_from_file_location(
@@ -953,8 +959,8 @@ def metadata(
         specification.loader.exec_module(configuration_owner)
         configured_invocation = os.environ.get("NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR", str(root))
         if configured_invocation != str(root):
-            if target not in APPLE_TARGETS:
-                raise RuntimeError("an explicit Cargo invocation directory requires an Apple target")
+            if target not in APPLE_TARGETS and not android_armv7_diagnostic:
+                raise RuntimeError("an explicit Cargo invocation directory requires an Apple or armv7 diagnostic profile")
             invocation_observation = configuration_owner.authenticate_cargo_invocation_directory(
                 root, pathlib.Path(configured_invocation)
             )
@@ -988,6 +994,9 @@ def metadata(
             configuration_owner.recheck_build_cargo_configuration(configuration)
             if invocation_observation is not None:
                 configuration_owner.recheck_cargo_invocation_directory(root, invocation_observation)
+        if (diagnostic_configuration is not None
+                and android_armv7_diagnostic_configuration(root) != diagnostic_configuration):
+            raise RuntimeError("Android diagnostic configuration changed during metadata authentication")
         if lockfile_identity(lockfile) != lock_identity_before:
             raise RuntimeError("selected Cargo lock changed during metadata authentication")
         if lockfile_identity(root_lock) != root_lock_identity_before:
@@ -999,10 +1008,14 @@ def local_dependency_roots(
     root: pathlib.Path,
     targets: Iterable[str] = APPLE_TARGETS,
     lockfile_path: pathlib.Path | None = None,
+    *, android_armv7_diagnostic: bool = False,
 ) -> set[str]:
     package_roots: set[pathlib.Path] = set()
     for target in targets:
-        document = metadata(root, target, lockfile_path)
+        document = (
+            metadata(root, target, lockfile_path, android_armv7_diagnostic=True)
+            if android_armv7_diagnostic else metadata(root, target, lockfile_path)
+        )
         packages = {
             package["id"]: package
             for package in document["packages"]
@@ -1080,7 +1093,11 @@ def seal_inputs(
                 )
     candidates = set(COMMON_ROOT_INPUTS)
     candidates.update(platform_inputs)
-    candidates.update(local_dependency_roots(root, targets, lockfile))
+    candidates.update(
+        local_dependency_roots(root, targets, lockfile, android_armv7_diagnostic=True)
+        if platform == "android-armv7-diagnostic"
+        else local_dependency_roots(root, targets, lockfile)
+    )
     existing = [
         value
         for value in candidates
@@ -1295,6 +1312,25 @@ def source_commit(root: pathlib.Path) -> str:
     return value
 
 
+
+def android_armv7_diagnostic_configuration(root: pathlib.Path) -> dict[str, object]:
+    """Bind explicit private cache/cwd/config originals to the diagnostic seal."""
+    cache = os.environ.get("NORITO_BRIDGE_SEAL_CARGO_HOME")
+    invocation = os.environ.get("NORITO_BRIDGE_SEAL_CARGO_INVOCATION_DIR")
+    if (not cache or not invocation or cache != str(pathlib.Path(cache))
+            or invocation != str(pathlib.Path(invocation))):
+        raise RuntimeError("Android armv7 diagnostic seal requires explicit canonical Cargo cache and invocation directory")
+    helper = pathlib.Path(__file__).with_name("norito_bridge_local_integration.py")
+    specification = importlib.util.spec_from_file_location("android_armv7_configuration_policy", helper)
+    if specification is None or specification.loader is None:
+        raise RuntimeError("Android diagnostic configuration policy is unavailable")
+    owner = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(owner)
+    return owner.android_armv7_diagnostic_configuration(
+        root, pathlib.Path(cache), pathlib.Path(invocation), local_integration=True,
+    )
+
+
 def snapshot(
     root: pathlib.Path,
     platform: str,
@@ -1306,6 +1342,10 @@ def snapshot(
     lock_identity_before = lockfile_identity(lockfile)
     root_lock = root / "Cargo.lock"
     root_lock_identity_before = lockfile_identity(root_lock)
+    diagnostic_configuration = (
+        android_armv7_diagnostic_configuration(root)
+        if platform == "android-armv7-diagnostic" else None
+    )
     inputs = seal_inputs(root, platform, lockfile)
     source_commit_before = source_commit(root)
     source_status_before = status(root, inputs, lockfile)
@@ -1330,7 +1370,10 @@ def snapshot(
             f"{platform} NoritoBridge selected source changed while authenticating "
             "the build snapshot"
         )
-    return {
+    if (diagnostic_configuration is not None
+            and android_armv7_diagnostic_configuration(root) != diagnostic_configuration):
+        raise RuntimeError("Android diagnostic configuration changed while authenticating the source snapshot")
+    document = {
         "schema": SNAPSHOT_SCHEMA,
         "platform": platform,
         "targets": list(PLATFORM_TARGETS[platform]),
@@ -1339,6 +1382,9 @@ def snapshot(
         "source_status": source_status_before,
         "source_fingerprint_sha256": source_fingerprint_before,
     }
+    if diagnostic_configuration is not None:
+        document["diagnostic_configuration"] = diagnostic_configuration
+    return document
 
 
 def snapshot_bytes(

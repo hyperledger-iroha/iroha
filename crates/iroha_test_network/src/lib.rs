@@ -3,8 +3,6 @@
 mod config;
 mod dedicated_read;
 #[cfg(unix)]
-mod disposable_mint_finality_seed;
-#[cfg(unix)]
 mod disposable_runtime_provider_broker;
 mod private_settlement_route_control;
 #[cfg(unix)]
@@ -3449,41 +3447,10 @@ async fn shutdown_peers_for_drop(peers: Vec<NetworkPeer>) {
 #[derive(Debug, Clone)]
 struct ConsensusBootstrapProfile {
     params: ConsensusGenesisParams,
-    kagemusha_mint_finality:
-        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     mode_tag: &'static str,
     bls_domain: &'static str,
     chain_id: ChainId,
     wire_protocol_version: u32,
-}
-#[cfg(unix)]
-fn disposable_genesis_mint_finality_authority(
-    peers: &[NetworkPeer],
-) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
-    use iroha_data_model::isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
-        KagemushaMintFinalityGenesisParametersV1,
-    };
-    let mut ordered = peers.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|peer| peer.id());
-    let validators = ordered
-        .into_iter()
-        .map(|peer| {
-            peer.disposable_mint_finality_keys(0)
-                .expect("each genesis voter must hold its exact private Pasta seed")
-        })
-        .collect();
-    let authority = KagemushaMintFinalityGenesisParametersV1 {
-        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            generation: 0,
-            validators,
-        },
-    };
-    authority
-        .validate()
-        .expect("held peer seeds must form a canonical genesis Pasta authority");
-    authority
 }
 impl ConsensusBootstrapProfile {
     fn fingerprint(&self) -> [u8; 32] {
@@ -4413,7 +4380,6 @@ impl Network {
                 Some(consensus_handshake_meta),
                 None,
                 confidential_policy_hash,
-                None,
             );
         let validated = ValidatedNetworkGenesis::new(
             genesis,
@@ -5880,8 +5846,6 @@ pub struct NetworkBuilder {
     npos_genesis_bootstrap_stake: Option<Quantity>,
     private_settlement_route_control: bool,
     parliament_test_signers: Option<ParliamentTestSignerSelection>,
-    #[cfg(unix)]
-    disposable_mint_finality_custody: bool,
     topology_genesis_isi: Vec<Arc<TopologyGenesisIsi>>,
 }
 /// Post-topology genesis instructions derived from the signed voting topology (peer ids and
@@ -6668,7 +6632,6 @@ fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) 
         wire_protocol_version: consensus_profile.wire_protocol_version,
         consensus_fingerprint: ConsensusFingerprint::new(consensus_profile.fingerprint()),
         sumeragi_context: consensus_profile.params.sumeragi_context.clone(),
-        kagemusha_mint_finality: consensus_profile.kagemusha_mint_finality.clone(),
     };
     metadata
         .validate()
@@ -6773,8 +6736,6 @@ impl NetworkBuilder {
             ),
             private_settlement_route_control: false,
             parliament_test_signers: None,
-            #[cfg(unix)]
-            disposable_mint_finality_custody: false,
             topology_genesis_isi: Vec::new(),
         };
         let mut default_layer = Table::new();
@@ -7199,16 +7160,6 @@ impl NetworkBuilder {
     pub fn with_npos_consensus(self) -> Self {
         self.with_consensus_mode(ConsensusMode::Npos)
     }
-    /// Provision independent owner-private Pasta seeds for supplementary candidate validators.
-    ///
-    /// Every signed-genesis voter receives a held seed automatically. This also
-    /// provisions unseated candidate processes so they can later publish keys
-    /// and be activated from the same seed supplied to daemon FD 199.
-    #[cfg(unix)]
-    pub fn with_disposable_mint_finality_custody(mut self) -> Self {
-        self.disposable_mint_finality_custody = true;
-        self
-    }
     /// Register live Committee-role keys for the global peers in generated genesis.
     ///
     /// Autoscale participant lanes require Committee authority even when their
@@ -7466,18 +7417,8 @@ impl NetworkBuilder {
             npos_genesis_bootstrap_stake,
             private_settlement_route_control,
             parliament_test_signers,
-            #[cfg(unix)]
-            disposable_mint_finality_custody,
             topology_genesis_isi,
         } = self;
-        #[cfg(unix)]
-        if disposable_mint_finality_custody {
-            assert_eq!(
-                consensus_mode,
-                ConsensusMode::Npos,
-                "supplementary Pasta custody requires signed NPoS consensus"
-            );
-        }
         let chain_discriminant = materialize_profile_account_defaults(&mut config_layers)
             .unwrap_or_else(|error| panic!("invalid test-network profile defaults: {error:#}"));
         // Builder-owned instruction generation and custom genesis callbacks use the
@@ -7618,23 +7559,6 @@ impl NetworkBuilder {
                     )
             })
             .collect();
-        #[cfg(unix)]
-        for peer in &peers {
-            peer.provision_disposable_mint_finality_seed()
-                .expect("generate independent owner-private Pasta seed for each genesis voter");
-        }
-        #[cfg(unix)]
-        if disposable_mint_finality_custody {
-            for peer in &committee_validators {
-                peer.provision_disposable_mint_finality_seed()
-                    .expect("generate independent owner-private Pasta seed for each candidate");
-            }
-        }
-        #[cfg(unix)]
-        let disposable_mint_finality_genesis =
-            Some(disposable_genesis_mint_finality_authority(&peers));
-        #[cfg(not(unix))]
-        let disposable_mint_finality_genesis = None;
         let observer_slow_reader_relays = observer_slow_reader_relays
             .map(|config| ObserverSlowReaderRelays::new(&observers, config));
         let observer_advertised_p2p_addresses = observer_slow_reader_relays
@@ -8162,7 +8086,6 @@ impl NetworkBuilder {
                             ConsensusMode::Npos => SumeragiConsensusMode::Npos,
                         }),
                         confidential_policy_hash,
-                        disposable_mint_finality_genesis.clone(),
                     );
                     assert_genesis_voting_roster_matches_network(&preview_genesis, &peer_topology);
                     (
@@ -8192,8 +8115,6 @@ impl NetworkBuilder {
                 "test-network genesis must carry explicitly provisioned signed Sumeragi context parameters",
             );
         let provisional_sumeragi_context = provisional_metadata.sumeragi_context;
-        let provisional_kagemusha_mint_finality = disposable_mint_finality_genesis
-            .unwrap_or(provisional_metadata.kagemusha_mint_finality);
         let provisional_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
@@ -8203,7 +8124,6 @@ impl NetworkBuilder {
             .expect("test-network genesis parameters must form a canonical carrier");
         let provisional_profile = ConsensusBootstrapProfile {
             params: provisional_params,
-            kagemusha_mint_finality: provisional_kagemusha_mint_finality.clone(),
             mode_tag: consensus_mode_tag,
             bls_domain: consensus_bls_domain,
             chain_id: consensus_chain_id.clone(),
@@ -8248,7 +8168,6 @@ impl NetworkBuilder {
             .expect("bound test-network genesis parameters must form a canonical carrier");
         let consensus_profile = ConsensusBootstrapProfile {
             params: consensus_params,
-            kagemusha_mint_finality: provisional_kagemusha_mint_finality,
             mode_tag: consensus_mode_tag,
             bls_domain: consensus_bls_domain,
             chain_id: consensus_chain_id.clone(),
@@ -8462,8 +8381,6 @@ struct PeerRun {
     pid: Option<u32>,
     #[cfg(unix)]
     broker_child: Option<Child>,
-    #[cfg(unix)]
-    mint_seed_lease: Option<disposable_mint_finality_seed::DisposableMintFinalitySeedLease>,
 }
 /// Lifecycle events of a peer
 #[derive(Copy, Clone, Debug)]
@@ -8599,9 +8516,6 @@ pub struct NetworkPeer {
     program: Program,
     parliament_beacon_signer_mode: Option<ParliamentBeaconSignerMode>,
     private_settlement_route_control: Option<Arc<PrivateSettlementRouteControl>>,
-    #[cfg(unix)]
-    disposable_mint_finality_seed:
-        Arc<StdMutex<Option<Arc<disposable_mint_finality_seed::DisposableMintFinalitySeed>>>>,
     #[cfg(unix)]
     disposable_runtime_provider_broker:
         Arc<StdMutex<Option<Arc<disposable_runtime_provider_broker::DisposableBrokerConfig>>>>,
@@ -8773,8 +8687,6 @@ impl NetworkPeer {
         let broker_child = self
             .spawn_disposable_runtime_provider_broker(run_num)
             .await?;
-        #[cfg(unix)]
-        let mint_seed_descriptor = self.disposable_mint_finality_seed_descriptor(run_num)?;
         // Only this peer owner's original launch may assert that its fixture-generated key
         // never signed. Missing records on a restart are recovery evidence, not fresh custody.
         let first_consensus_boot = if run_num == 1 {
@@ -8822,13 +8734,6 @@ impl NetworkPeer {
                 cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
             }
             cmd.current_dir(&self.dir);
-            #[cfg(unix)]
-            if let Some(source) = mint_seed_descriptor.as_ref() {
-                let source = source.descriptor().try_clone()?;
-                disposable_mint_finality_seed::inherit_disposable_mint_finality_seed(
-                    &mut cmd, source,
-                );
-            }
             Ok::<_, Report>(cmd)
         };
         let mut child = match make_irohad_command(&irohad)?.spawn() {
@@ -9302,8 +9207,6 @@ impl NetworkPeer {
             pid,
             #[cfg(unix)]
             broker_child,
-            #[cfg(unix)]
-            mint_seed_lease: mint_seed_descriptor,
         });
         Ok(())
     }
@@ -9369,8 +9272,6 @@ impl NetworkPeer {
         if let Some(mut broker_child) = run.broker_child.take() {
             disposable_runtime_provider_broker::stop_disposable_broker(&mut broker_child).await;
         }
-        #[cfg(unix)]
-        drop(run.mint_seed_lease.take());
         true
     }
     /// Forcefully kills the running peer
@@ -10005,20 +9906,6 @@ impl NetworkPeer {
                 toml::Value::Integer(16 * 1024 * 1024),
             );
         #[cfg(unix)]
-        let config = if self
-            .disposable_mint_finality_seed
-            .lock()
-            .expect("disposable Pasta seed lock is not poisoned")
-            .is_some()
-        {
-            config.write(
-                ["sumeragi", "mint_finality_seed_fd"],
-                i64::from(disposable_mint_finality_seed::MINT_FINALITY_SEED_FD),
-            )
-        } else {
-            config
-        };
-        #[cfg(unix)]
         if let (Some(endpoint), Some(binding)) = (
             self.disposable_runtime_provider_broker_endpoint(),
             self.disposable_beacon_provider_binding(),
@@ -10325,8 +10212,6 @@ impl NetworkPeerBuilder {
             program,
             parliament_beacon_signer_mode,
             private_settlement_route_control,
-            #[cfg(unix)]
-            disposable_mint_finality_seed: Arc::new(StdMutex::new(None)),
             #[cfg(unix)]
             disposable_runtime_provider_broker: Arc::new(StdMutex::new(None)),
             port_p2p: Arc::new(port_p2p),
@@ -11204,8 +11089,6 @@ mod tests {
             parliament_beacon_signer_mode: None,
             private_settlement_route_control: None,
             #[cfg(unix)]
-            disposable_mint_finality_seed: Arc::new(StdMutex::new(None)),
-            #[cfg(unix)]
             disposable_runtime_provider_broker: Arc::new(StdMutex::new(None)),
             port_p2p: Arc::new(AllocatedPort::new()),
             port_api: Arc::new(AllocatedPort::new()),
@@ -11281,8 +11164,6 @@ mod tests {
             program: Program::Irohad,
             parliament_beacon_signer_mode: None,
             private_settlement_route_control: None,
-            #[cfg(unix)]
-            disposable_mint_finality_seed: Arc::new(StdMutex::new(None)),
             #[cfg(unix)]
             disposable_runtime_provider_broker: Arc::new(StdMutex::new(None)),
             port_p2p: Arc::new(AllocatedPort::new()),
@@ -11740,8 +11621,6 @@ mod tests {
                 pid: None,
                 #[cfg(unix)]
                 broker_child: None,
-                #[cfg(unix)]
-                mint_seed_lease: None,
             });
         }
         peer.is_running.store(true, Ordering::Relaxed);
@@ -11775,8 +11654,6 @@ mod tests {
                 pid: Some(42_424),
                 #[cfg(unix)]
                 broker_child: None,
-                #[cfg(unix)]
-                mint_seed_lease: None,
             });
         }
         assert_eq!(peer.process_id().await, Some(42_424));
@@ -11815,8 +11692,6 @@ mod tests {
                 pid: None,
                 #[cfg(unix)]
                 broker_child: None,
-                #[cfg(unix)]
-                mint_seed_lease: None,
             });
         }
         running_peer.is_running.store(true, Ordering::Relaxed);
@@ -11851,8 +11726,6 @@ mod tests {
                 pid: None,
                 #[cfg(unix)]
                 broker_child: None,
-                #[cfg(unix)]
-                mint_seed_lease: None,
             });
         }
         peer.is_running.store(false, Ordering::Relaxed);
@@ -12789,7 +12662,7 @@ mod tests {
         let network =
             build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_config_layer(
                 |layer| {
-                    layer.write(["zk", "halo2", "enabled"], true);
+                    layer.write(["zk", "pipa_r", "enabled"], true);
                 },
             ));
         let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();

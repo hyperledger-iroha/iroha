@@ -172,6 +172,8 @@ impl ManagedStreamTokenCustody {
             .map(|authority| authority.map(|authority| Self { authority }))
     }
     fn wallet(&self) -> Result<AccountService> {
+        #[cfg(test)]
+        tests::record_wallet_construction();
         AccountService::new(self.authority.config.clone())
             .map_err(|_| invalid("cannot open custody wallet"))
     }

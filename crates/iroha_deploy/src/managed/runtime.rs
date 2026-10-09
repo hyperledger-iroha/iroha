@@ -48,14 +48,15 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         &retained.prepared,
         &retained.root_kind,
     )?;
-    store::verify_binary(&retained.launcher)?;
-    store::verify_binary(&retained.daemon)?;
+    let launcher_program = super::program::NativeProgram::matching(&retained.launcher)?;
+    let daemon_program = super::program::NativeProgram::matching(&retained.daemon)?;
     let current = store::pin_binary(&std::env::current_exe()?)?;
     if current.blake3 != retained.launcher.blake3 {
         return Err(Error::Invalid(
             "worker executable does not match the retained launcher".into(),
         ));
     }
+    launcher_program.validate()?;
     startup_remaining(started, startup_timeout)?;
     let listener = transport::Listener::bind(&directory)?;
     let worker = WorkerRecord {
@@ -91,7 +92,7 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         }
     };
     if processes
-        .start(&directory, &retained, &ownership, launch)
+        .start(&directory, &retained, &ownership, &daemon_program, launch)
         .is_err()
     {
         return fail_worker(
@@ -202,26 +203,21 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                         // authenticated expiry must retain the last safe phase rather than
                         // converting an unproved attempt into an ordinary user-requested stop.
                         let failure = progress.deadline();
-                        cancelled.store(true, Ordering::Release);
-                        processes.stop()?;
-                        expire_startup_status(&mut status, failure);
-                        publish(&directory, &status)?;
+                        let result = fail_worker(
+                            &directory,
+                            &mut status,
+                            &mut processes,
+                            &cancelled,
+                            failure,
+                        );
                         let _ = connection.reply(&status);
-                        return Err(Error::Invalid(status.failure.unwrap_or_default()));
+                        return result;
                     }
                     _ => {}
                 }
             }
         }
-        if processes.any_exited()? {
-            cancelled.store(true, Ordering::Release);
-            processes.stop()?;
-            status.phase = ManagedPhase::Failed;
-            status.running_peers = 0;
-            status.failure = Some("a supervised validator exited; inspect its retained log".into());
-            publish(&directory, &status)?;
-            return Err(Error::Invalid(status.failure.unwrap_or_default()));
-        }
+        check_owned_validator_exit(&directory, &mut status, &mut processes, &cancelled)?;
         if status.phase == ManagedPhase::Starting {
             // Deadline wins over a proof queued just before the worker observed it. Never
             // publish a transient Ready after the original startup budget was exhausted.
@@ -248,7 +244,13 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                         processes.stop().map_err(|_| progress.unconfirmed())?;
                         budget.check()?;
                         processes
-                            .start(&directory, &retained, &ownership, Some(launch))
+                            .start(
+                                &directory,
+                                &retained,
+                                &ownership,
+                                &daemon_program,
+                                Some(launch),
+                            )
                             .map_err(|_| progress.unconfirmed())?;
                         budget.check()?;
                         let live = processes.gateways().map_err(|_| progress.unconfirmed())?;
@@ -483,7 +485,13 @@ fn spawn_with_launch_fence(
     directory: &PrivateDirectory,
     index: usize,
     command: &mut Command,
+    daemon: &super::program::NativeProgram,
 ) -> Result<Child> {
+    if command.get_program() != daemon.path().as_os_str() {
+        return Err(Error::Invalid(
+            "launch command differs from its selected native executable".into(),
+        ));
+    }
     let marker = format!("peer{index}.launch");
     let fresh = match directory.read(&marker, 1) {
         Ok(bytes) if bytes.as_slice() == b"1" => false,
@@ -503,13 +511,18 @@ fn spawn_with_launch_fence(
     if fresh {
         command.arg("--sumeragi-assert-fresh-key");
     }
-    match command.spawn() {
+    // Keep the selected object alive and revalidate after all native launch-marker I/O.
+    // Pathname execution still has an unavoidable race; this is not an atomic exec guarantee.
+    let spawned = daemon
+        .validate()
+        .and_then(|()| command.spawn().map_err(Error::from));
+    match spawned {
         Ok(child) => Ok(child),
         Err(error) => {
             if fresh {
                 directory.write_atomic(&marker, b"0", PublishMode::Replace)?;
             }
-            Err(error.into())
+            Err(error)
         }
     }
 }
@@ -522,6 +535,24 @@ impl Drop for CancelOnExit {
     }
 }
 
+fn check_owned_validator_exit(
+    directory: &PrivateDirectory,
+    status: &mut ManagedStatus,
+    processes: &mut PeerProcesses,
+    cancelled: &AtomicBool,
+) -> Result<()> {
+    if processes.any_exited()? {
+        return fail_worker(
+            directory,
+            status,
+            processes,
+            cancelled,
+            progress::Failure::ValidatorExited,
+        );
+    }
+    Ok(())
+}
+
 fn fail_worker(
     directory: &PrivateDirectory,
     status: &mut ManagedStatus,
@@ -530,9 +561,25 @@ fn fail_worker(
     failure: progress::Failure,
 ) -> Result<()> {
     cancelled.store(true, Ordering::Release);
-    processes.stop()?;
+    // A cleanup error must not erase the original safe stage, and a publication error must
+    // not skip cleanup. Retain both results; only successful cleanup proves a zero count.
+    let cleanup = processes.stop().err();
     expire_startup_status(status, failure);
-    publish(directory, status)?;
+    if cleanup.is_some() {
+        status.running_peers = processes.children.len();
+        status.failure = Some(format!(
+            "{}; owned validator cleanup is unconfirmed; running_peers is an upper bound from retained handles",
+            failure.message()
+        ));
+    }
+    let publication = publish(directory, status).err();
+    if cleanup.is_some() || publication.is_some() {
+        return Err(Error::WorkerFailure {
+            failure: failure.message(),
+            cleanup: cleanup.map(Box::new),
+            publication: publication.map(Box::new),
+        });
+    }
     Err(Error::Invalid(failure.message()))
 }
 
@@ -542,6 +589,19 @@ pub(super) fn startup_remaining(started: Instant, timeout: Duration) -> Result<D
         .checked_sub(started.elapsed())
         .filter(|remaining| !remaining.is_zero())
         .ok_or(Error::Timeout(timeout))
+}
+
+/// The worker protocol admits only positive whole milliseconds. Floor the remaining budget;
+/// refusing a sub-millisecond handoff keeps the original timeout instead of spawning argv `0`
+/// or rounding up into time that the caller never authorized.
+pub(super) fn worker_startup_millis(
+    remaining: Duration,
+    original_timeout: Duration,
+) -> Result<std::num::NonZeroU64> {
+    u64::try_from(remaining.as_millis())
+        .ok()
+        .and_then(std::num::NonZeroU64::new)
+        .ok_or(Error::Timeout(original_timeout))
 }
 
 #[cfg(test)]
@@ -601,6 +661,42 @@ mod tests {
     }
 
     #[test]
+    fn worker_argument_refuses_submillisecond_budget_without_rounding_up_or_new_timeout() {
+        let original = Duration::from_secs(30);
+        for remaining in [
+            Duration::ZERO,
+            Duration::from_nanos(1),
+            Duration::from_micros(999),
+        ] {
+            assert!(matches!(
+                worker_startup_millis(remaining, original),
+                Err(Error::Timeout(timeout)) if timeout == original
+            ));
+        }
+        for (remaining, expected) in [
+            (Duration::from_millis(1), 1),
+            (Duration::from_micros(1_999), 1),
+            (Duration::from_micros(12_345), 12),
+            (Duration::from_secs(600), 600_000),
+        ] {
+            let milliseconds = worker_startup_millis(remaining, Duration::from_secs(600)).unwrap();
+            assert_eq!(milliseconds.get(), expected);
+            assert!(Duration::from_millis(milliseconds.get()) <= remaining);
+            let mut command = Command::new("unused-worker");
+            command
+                .arg("--startup-timeout-ms")
+                .arg(milliseconds.to_string());
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [
+                    std::ffi::OsStr::new("--startup-timeout-ms"),
+                    std::ffi::OsStr::new(&expected.to_string())
+                ]
+            );
+        }
+    }
+
+    #[test]
     fn queued_success_after_original_deadline_is_a_retained_failure() {
         let progress = progress::Progress::default();
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -635,6 +731,430 @@ mod tests {
             assert_eq!(retained.running_peers, 0);
             assert_eq!(retained.failure, Some(progress.deadline().message()));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_startup_retains_original_stage_on_owned_cleanup_refusal_and_recovers() {
+        // The fixture provides a real signed context; these directly owned sleepers test only
+        // process cleanup and status custody, not native validator readiness or signing.
+        struct RestorePoison(Arc<std::sync::Mutex<Child>>);
+        impl Drop for RestorePoison {
+            fn drop(&mut self) {
+                self.0.clear_poison();
+            }
+        }
+        let _resources = super::super::native_test_guard();
+        for phase in [ManagedPhase::Starting, ManagedPhase::Ready] {
+            for block_publication in [false, true] {
+                let temporary = tempfile::tempdir().unwrap();
+                let (_, directory, prepared) =
+                    super::super::tests::fixture(&temporary.path().join("managed"), "local");
+                let ownership = store::acquire(&directory, "runtime.lock", "local").unwrap();
+                let mut reaped_child = Command::new("/bin/sleep")
+                    .arg("0")
+                    .stdin(Stdio::from(ownership.try_clone().unwrap()))
+                    .spawn()
+                    .unwrap();
+                reaped_child.wait().unwrap();
+                let child = Command::new("/bin/sleep")
+                    .arg("30")
+                    .stdin(Stdio::from(ownership.try_clone().unwrap()))
+                    .spawn()
+                    .unwrap();
+                let mut processes = PeerProcesses::from_children(vec![reaped_child, child]);
+                drop(ownership);
+                let sentinel_child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+                let mut sentinel = PeerProcesses::from_children(vec![sentinel_child]);
+                let poisoned = Arc::clone(&processes.children[1]);
+                // Even an assertion failure restores this test's mutex before PeerProcesses
+                // drops, so its original owned child is still eligible for ordinary cleanup.
+                let _restore_poison = RestorePoison(Arc::clone(&poisoned));
+                let poisoner = Arc::clone(&poisoned);
+                assert!(
+                    thread::spawn(move || {
+                        let _held = poisoner.lock().unwrap();
+                        panic!("controlled owned-child lock poison");
+                    })
+                    .join()
+                    .is_err()
+                );
+                let blocker = block_publication.then(|| directory.create_child(STATUS).unwrap());
+                let mut status = ManagedStatus {
+                    context: prepared.context.clone(),
+                    phase,
+                    running_peers: 2,
+                    failure: None,
+                };
+                let progress = progress::Progress::default();
+                progress.enter(progress::Phase::Discovery);
+                let failure = progress.deadline();
+                let cancelled = AtomicBool::new(false);
+                let error =
+                    fail_worker(&directory, &mut status, &mut processes, &cancelled, failure)
+                        .unwrap_err();
+                let display = error.to_string();
+                match error {
+                    Error::WorkerFailure {
+                        failure: original,
+                        cleanup,
+                        publication,
+                    } => {
+                        assert_eq!(original, failure.message());
+                        assert!(matches!(cleanup.as_deref(), Some(Error::Invalid(message))
+                            if message == "owned child lock failed"));
+                        assert_eq!(publication.is_some(), block_publication);
+                        if block_publication {
+                            assert!(matches!(publication.as_deref(), Some(Error::Io(_))));
+                            assert!(display.contains("Failed to retain startup failure status:"));
+                        }
+                    }
+                    other => panic!("original startup and typed cleanup errors lost: {other:?}"),
+                }
+                assert!(display.starts_with(&failure.message()));
+                assert!(
+                    display.contains("Owned validator cleanup failed: owned child lock failed")
+                );
+                assert!(cancelled.load(Ordering::Acquire));
+                assert_eq!(status.phase, ManagedPhase::Failed);
+                assert_eq!(status.running_peers, 2);
+                assert!(
+                    processes.children[0]
+                        .lock()
+                        .unwrap()
+                        .try_wait()
+                        .unwrap()
+                        .is_some()
+                );
+                assert!(
+                    status
+                        .failure
+                        .as_deref()
+                        .unwrap()
+                        .starts_with(&failure.message())
+                );
+                assert!(
+                    status
+                        .failure
+                        .as_deref()
+                        .unwrap()
+                        .contains("upper bound from retained handles")
+                );
+                assert!(matches!(
+                    store::acquire(&directory, "runtime.lock", "local"),
+                    Err(Error::Busy(_))
+                ));
+                assert!(
+                    poisoned
+                        .lock()
+                        .unwrap_err()
+                        .into_inner()
+                        .try_wait()
+                        .unwrap()
+                        .is_none()
+                );
+                assert!(!sentinel.any_exited().unwrap());
+                if !block_publication {
+                    let retained: ManagedStatus =
+                        decode(&directory.read(STATUS, MAX_METADATA).unwrap()).unwrap();
+                    assert_eq!(retained, status);
+                    assert!(
+                        !retained
+                            .failure
+                            .unwrap()
+                            .contains("owned child lock failed")
+                    );
+                }
+                drop(blocker);
+                if block_publication {
+                    assert!(directory.path().join(STATUS).is_dir());
+                    std::fs::remove_dir(directory.path().join(STATUS)).unwrap();
+                }
+                // Only this controlled fixture clears its poison. Production retains the
+                // original refusal and its owners; it never adopts or recovers unrelated PIDs.
+                poisoned.clear_poison();
+                let retried =
+                    fail_worker(&directory, &mut status, &mut processes, &cancelled, failure)
+                        .unwrap_err();
+                assert!(matches!(retried, Error::Invalid(message) if message == failure.message()));
+                assert!(processes.children.is_empty());
+                assert_eq!(status.running_peers, 0);
+                assert_eq!(status.failure, Some(failure.message()));
+                let retained: ManagedStatus =
+                    decode(&directory.read(STATUS, MAX_METADATA).unwrap()).unwrap();
+                assert_eq!(retained, status);
+                store::acquire(&directory, "runtime.lock", "local").unwrap();
+                assert!(!sentinel.any_exited().unwrap());
+                sentinel.stop().unwrap();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_status_publication_still_stops_only_the_original_owned_children() {
+        let _resources = super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let (_, directory, prepared) =
+            super::super::tests::fixture(&temporary.path().join("managed"), "local");
+        let ownership = store::acquire(&directory, "runtime.lock", "local").unwrap();
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::from(ownership.try_clone().unwrap()))
+            .spawn()
+            .unwrap();
+        let mut processes = PeerProcesses::from_children(vec![child]);
+        drop(ownership);
+        let sentinel_child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let mut sentinel = PeerProcesses::from_children(vec![sentinel_child]);
+        let blocker = directory.create_child(STATUS).unwrap();
+        let mut status = ManagedStatus {
+            context: prepared.context.clone(),
+            phase: ManagedPhase::Ready,
+            running_peers: 1,
+            failure: None,
+        };
+        let failure = progress::Failure::ObservationExpired;
+        let cancelled = AtomicBool::new(false);
+        let error =
+            fail_worker(&directory, &mut status, &mut processes, &cancelled, failure).unwrap_err();
+        let display = error.to_string();
+        assert!(matches!(error, Error::WorkerFailure {
+            failure: original,
+            cleanup: None,
+            publication: Some(source),
+        } if original == failure.message() && matches!(*source, Error::Io(_))));
+        assert!(display.starts_with(&failure.message()));
+        assert!(display.contains("Failed to retain startup failure status:"));
+        assert!(!display.contains("Owned validator cleanup failed:"));
+        assert!(cancelled.load(Ordering::Acquire));
+        assert!(processes.children.is_empty());
+        assert_eq!(status.phase, ManagedPhase::Failed);
+        assert_eq!(status.running_peers, 0);
+        assert_eq!(status.failure, Some(failure.message()));
+        assert!(directory.path().join(STATUS).is_dir());
+        store::acquire(&directory, "runtime.lock", "local").unwrap();
+        assert!(!sentinel.any_exited().unwrap());
+        drop(blocker);
+        std::fs::remove_dir(directory.path().join(STATUS)).unwrap();
+        let retried =
+            fail_worker(&directory, &mut status, &mut processes, &cancelled, failure).unwrap_err();
+        assert!(matches!(retried, Error::Invalid(message) if message == failure.message()));
+        let retained: ManagedStatus =
+            decode(&directory.read(STATUS, MAX_METADATA).unwrap()).unwrap();
+        assert_eq!(retained, status);
+        assert!(!sentinel.any_exited().unwrap());
+        sentinel.stop().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validator_exit_keeps_original_cause_through_owned_cleanup_and_publication_refusal() {
+        // Sleepers witness actual process exit/ownership only. No consensus fault, validator
+        // readiness or signature is fabricated by this component control.
+        struct RestorePoison(Arc<std::sync::Mutex<Child>>);
+        impl Drop for RestorePoison {
+            fn drop(&mut self) {
+                self.0.clear_poison();
+            }
+        }
+        let _resources = super::super::native_test_guard();
+        for phase in [ManagedPhase::Starting, ManagedPhase::Ready] {
+            for poison_cleanup in [false, true] {
+                for block_publication in [false, true] {
+                    let temporary = tempfile::tempdir().unwrap();
+                    let (_, directory, prepared) =
+                        super::super::tests::fixture(&temporary.path().join("managed"), "local");
+                    let ownership = store::acquire(&directory, "runtime.lock", "local").unwrap();
+                    let mut exited = Command::new("/bin/sleep")
+                        .arg("0")
+                        .stdin(Stdio::from(ownership.try_clone().unwrap()))
+                        .spawn()
+                        .unwrap();
+                    exited.wait().unwrap();
+                    let live = Command::new("/bin/sleep")
+                        .arg("30")
+                        .stdin(Stdio::from(ownership.try_clone().unwrap()))
+                        .spawn()
+                        .unwrap();
+                    let mut processes = PeerProcesses::from_children(vec![exited, live]);
+                    drop(ownership);
+                    let sentinel_child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+                    let mut sentinel = PeerProcesses::from_children(vec![sentinel_child]);
+                    let original_live = Arc::clone(&processes.children[1]);
+                    // This test's poison must clear before its actual process owner unwinds.
+                    let _restore_poison = RestorePoison(Arc::clone(&original_live));
+                    if poison_cleanup {
+                        let poisoner = Arc::clone(&original_live);
+                        assert!(
+                            thread::spawn(move || {
+                                let _held = poisoner.lock().unwrap();
+                                panic!("controlled owned-child lock poison after genuine exit");
+                            })
+                            .join()
+                            .is_err()
+                        );
+                    }
+                    let blocker =
+                        block_publication.then(|| directory.create_child(STATUS).unwrap());
+                    let mut status = ManagedStatus {
+                        context: prepared.context.clone(),
+                        phase,
+                        running_peers: 2,
+                        failure: None,
+                    };
+                    let original = "a supervised validator exited; inspect its retained log";
+                    let cancelled = AtomicBool::new(false);
+                    // This is the same exit observation+failure helper called by run_worker.
+                    let error = check_owned_validator_exit(
+                        &directory,
+                        &mut status,
+                        &mut processes,
+                        &cancelled,
+                    )
+                    .unwrap_err();
+                    assert!(error.to_string().starts_with(original));
+                    match error {
+                        Error::Invalid(message) => {
+                            assert!(!poison_cleanup && !block_publication);
+                            assert_eq!(message, original);
+                        }
+                        Error::WorkerFailure {
+                            failure,
+                            cleanup,
+                            publication,
+                        } => {
+                            assert_eq!(failure, original);
+                            assert_eq!(cleanup.is_some(), poison_cleanup);
+                            assert_eq!(publication.is_some(), block_publication);
+                            if poison_cleanup {
+                                assert!(matches!(cleanup.as_deref(), Some(Error::Invalid(message))
+                                    if message == "owned child lock failed"));
+                            }
+                            if block_publication {
+                                assert!(matches!(publication.as_deref(), Some(Error::Io(_))));
+                            }
+                        }
+                        other => panic!("original supervised-exit failure lost: {other:?}"),
+                    }
+                    assert!(cancelled.load(Ordering::Acquire));
+                    assert_eq!(status.phase, ManagedPhase::Failed);
+                    assert_eq!(status.context, prepared.context);
+                    assert!(status.failure.as_deref().unwrap().starts_with(original));
+                    if poison_cleanup {
+                        assert_eq!(status.running_peers, 2);
+                        assert_eq!(processes.children.len(), 2);
+                        assert!(
+                            status
+                                .failure
+                                .as_deref()
+                                .unwrap()
+                                .contains("upper bound from retained handles")
+                        );
+                        assert!(matches!(
+                            store::acquire(&directory, "runtime.lock", "local"),
+                            Err(Error::Busy(_))
+                        ));
+                        assert!(
+                            original_live
+                                .lock()
+                                .unwrap_err()
+                                .into_inner()
+                                .try_wait()
+                                .unwrap()
+                                .is_none()
+                        );
+                    } else {
+                        assert_eq!(status.running_peers, 0);
+                        assert!(processes.children.is_empty());
+                        assert_eq!(status.failure.as_deref(), Some(original));
+                        store::acquire(&directory, "runtime.lock", "local").unwrap();
+                        assert!(original_live.lock().unwrap().try_wait().unwrap().is_some());
+                    }
+                    assert!(!sentinel.any_exited().unwrap());
+                    if block_publication {
+                        assert!(directory.path().join(STATUS).is_dir());
+                    } else {
+                        let retained: ManagedStatus =
+                            decode(&directory.read(STATUS, MAX_METADATA).unwrap()).unwrap();
+                        assert_eq!(retained, status);
+                        assert!(
+                            !retained
+                                .failure
+                                .unwrap()
+                                .contains("owned child lock failed")
+                        );
+                    }
+                    drop(blocker);
+                    if block_publication {
+                        std::fs::remove_dir(directory.path().join(STATUS)).unwrap();
+                    }
+                    if poison_cleanup {
+                        // Only the controlled test restores the poisoned mutex. The same real
+                        // exited child still triggers the production helper and original cause.
+                        original_live.clear_poison();
+                        let recovered = check_owned_validator_exit(
+                            &directory,
+                            &mut status,
+                            &mut processes,
+                            &cancelled,
+                        )
+                        .unwrap_err();
+                        assert!(
+                            matches!(recovered, Error::Invalid(message) if message == original)
+                        );
+                        assert_eq!(status.running_peers, 0);
+                        assert!(processes.children.is_empty());
+                        assert_eq!(status.failure.as_deref(), Some(original));
+                        let retained: ManagedStatus =
+                            decode(&directory.read(STATUS, MAX_METADATA).unwrap()).unwrap();
+                        assert_eq!(retained, status);
+                        store::acquire(&directory, "runtime.lock", "local").unwrap();
+                    }
+                    assert!(!sentinel.any_exited().unwrap());
+                    sentinel.stop().unwrap();
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn running_owned_validator_observation_does_not_cancel_stop_or_publish_failure() {
+        let _resources = super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let (_, directory, prepared) =
+            super::super::tests::fixture(&temporary.path().join("managed"), "local");
+        let ownership = store::acquire(&directory, "runtime.lock", "local").unwrap();
+        let live = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::from(ownership.try_clone().unwrap()))
+            .spawn()
+            .unwrap();
+        let mut processes = PeerProcesses::from_children(vec![live]);
+        drop(ownership);
+        let mut status = ManagedStatus {
+            context: prepared.context,
+            phase: ManagedPhase::Starting,
+            running_peers: 1,
+            failure: None,
+        };
+        let original = status.clone();
+        publish(&directory, &status).unwrap();
+        let bytes = directory.read(STATUS, MAX_METADATA).unwrap();
+        let cancelled = AtomicBool::new(false);
+        check_owned_validator_exit(&directory, &mut status, &mut processes, &cancelled).unwrap();
+        assert_eq!(status, original);
+        assert_eq!(directory.read(STATUS, MAX_METADATA).unwrap(), bytes);
+        assert!(!cancelled.load(Ordering::Acquire));
+        assert_eq!(processes.children.len(), 1);
+        assert!(!processes.any_exited().unwrap());
+        assert!(matches!(
+            store::acquire(&directory, "runtime.lock", "local"),
+            Err(Error::Busy(_))
+        ));
+        processes.stop().unwrap();
+        store::acquire(&directory, "runtime.lock", "local").unwrap();
     }
 
     #[test]
@@ -687,11 +1207,16 @@ mod tests {
 
     #[test]
     fn definite_spawn_failure_retains_a_retryable_fresh_key_fence() {
+        let _resources = super::super::native_test_guard();
         let temporary = tempfile::tempdir().unwrap();
         let directory = PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
+        let daemon =
+            super::super::program::NativeProgram::capture(&std::env::current_exe().unwrap())
+                .unwrap();
         for _ in 0..2 {
-            let mut command = Command::new(temporary.path().join("absent-daemon"));
-            assert!(spawn_with_launch_fence(&directory, 0, &mut command).is_err());
+            let mut command = Command::new(daemon.path());
+            command.current_dir(temporary.path().join("absent-cwd"));
+            assert!(spawn_with_launch_fence(&directory, 0, &mut command, &daemon).is_err());
             assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"0");
             assert_eq!(
                 command.get_args().collect::<Vec<_>>(),
@@ -701,8 +1226,9 @@ mod tests {
         directory
             .write_atomic("peer0.launch", b"1", PublishMode::Replace)
             .unwrap();
-        let mut command = Command::new(temporary.path().join("absent-daemon"));
-        assert!(spawn_with_launch_fence(&directory, 0, &mut command).is_err());
+        let mut command = Command::new(daemon.path());
+        command.current_dir(temporary.path().join("absent-cwd"));
+        assert!(spawn_with_launch_fence(&directory, 0, &mut command, &daemon).is_err());
         assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"1");
         assert_eq!(command.get_args().len(), 0);
     }
@@ -761,6 +1287,51 @@ mod tests {
                 Duration::from_secs(120)
             ),
             Some(Err(progress.deadline()))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_launch_refusal_restores_fresh_key_retry_before_dispatch() {
+        use std::io::Write;
+        let _resources = super::super::native_test_guard();
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
+        let path = temporary.path().join("daemon");
+        std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+        let daemon = super::super::program::NativeProgram::capture(&path).unwrap();
+        let pin = daemon.pin().unwrap();
+        let mut wrong = Command::new(std::env::current_exe().unwrap());
+        assert!(matches!(
+            spawn_with_launch_fence(&directory, 0, &mut wrong, &daemon),
+            Err(Error::Invalid(message)) if message == "launch command differs from its selected native executable"
+        ));
+        assert!(!directory.path().join("peer0.launch").exists());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"changed before native execution")
+            .unwrap();
+        let mut command = Command::new(daemon.path());
+        assert!(spawn_with_launch_fence(&directory, 0, &mut command, &daemon).is_err());
+        assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"0");
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["--sumeragi-assert-fresh-key"]
+        );
+        std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+        let restored = super::super::program::NativeProgram::matching(&pin).unwrap();
+        let mut retry = Command::new(restored.path());
+        retry.current_dir(temporary.path().join("absent-cwd"));
+        assert!(matches!(
+            spawn_with_launch_fence(&directory, 0, &mut retry, &restored),
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
+        ));
+        assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"0");
+        assert_eq!(
+            retry.get_args().collect::<Vec<_>>(),
+            ["--sumeragi-assert-fresh-key"]
         );
     }
 }

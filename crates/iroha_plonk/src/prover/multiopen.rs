@@ -28,7 +28,7 @@ use crate::{
         ipa::{PinnedParams, evaluate_polynomial},
         multiopen::{
             Slot, SlotKind,
-            prover::{SlotPolynomial, create_proof},
+            prover::{SlotPolynomial, create_proof_with_claim},
         },
     },
     protocol::{Protocol, rotate},
@@ -192,7 +192,7 @@ impl<F: PastaField> Opened<'_, F> {
         rng: &mut R,
         transcript: &mut T,
         budget: MemoryBudget,
-    ) -> Result<C::AffineExt, ProverError>
+    ) -> Result<crate::pcs::ipa::GeneratorClaim<C>, ProverError>
     where
         C: PastaCurve<ScalarExt = F>,
         T: TranscriptWrite<C>,
@@ -205,7 +205,7 @@ impl<F: PastaField> Opened<'_, F> {
             .iter()
             .map(|slot| self.slot_polynomial(pk, slot.slot))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(create_proof(
+        Ok(create_proof_with_claim(
             params.params(),
             plan,
             &points,

@@ -258,13 +258,13 @@ pub(super) fn build_runtime_package(
     cache_root: &Path,
     registry_config: Option<&iroha::config::Config>,
     registry_resolver: Option<&crate::deployment_runtime::BuildRegistryResolver>,
-    manifest: &Path,
+    manifest: &iroha_fs::SelectedRegularFile,
     package: Option<&str>,
     contract: Option<&str>,
     locked: bool,
     mut archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
 ) -> Result<crate::deployment_runtime::BuiltArtifact, Diagnostic> {
-    let selection = SelectionArgs {
+    let mut selection = SelectionArgs {
         packages: package
             .map(str::parse)
             .transpose()
@@ -273,7 +273,44 @@ pub(super) fn build_runtime_package(
             .collect(),
         ..SelectionArgs::default()
     };
-    let (workspace, selected) = load_selected_workspace(Some(manifest), &selection)?;
+    let manifest_path = project_manifest_path(Some(manifest.path()))?;
+    if manifest_path != manifest.path() {
+        return Err(Diagnostic::new(
+            ErrorCode::Usage,
+            "selected manifest path changed during workspace admission",
+        ));
+    }
+    let workspace =
+        crate::workspace::load_workspace_from_selected(manifest).map_err(workspace_diagnostic)?;
+    if manifest.path() != workspace.root_manifest_path() {
+        let member = workspace
+            .members()
+            .values()
+            .find(|member| member.manifest_path == manifest.path())
+            .ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::Usage,
+                    "selected manifest has no owning workspace member",
+                )
+            })?;
+        if selection
+            .packages
+            .iter()
+            .any(|package| package != &member.package.selector)
+        {
+            return Err(Diagnostic::new(
+                ErrorCode::Usage,
+                "selected member manifest cannot select another package",
+            ));
+        }
+        if selection.packages.is_empty() {
+            selection.packages.push(member.package.selector.clone());
+        }
+    }
+    let selected = select_members(&workspace, &selection)?
+        .into_iter()
+        .map(|member| member.package.selector.clone())
+        .collect::<Vec<_>>();
     let previous = read_optional_workspace_lock(&workspace)?;
     let mode = GraphModeArgs {
         locked,

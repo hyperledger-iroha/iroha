@@ -8,6 +8,7 @@ import android.content.pm.ApplicationInfo
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
@@ -27,7 +28,7 @@ class KagemushaWalletAndroidPlatformV1Test {
 
     @Test fun `creation is refused unless custody can be kept`() {
         val environment = TestEnvironmentV1(directory)
-        environment.apiLevel = 30
+        environment.apiLevel = 25
         assertFailsWith<IllegalStateException> { adapter(environment) }
         environment.apiLevel = 31
         environment.flags = ApplicationInfo.FLAG_ALLOW_BACKUP or ApplicationInfo.FLAG_HAS_CODE
@@ -51,6 +52,29 @@ class KagemushaWalletAndroidPlatformV1Test {
         assertFailsWith<IllegalStateException> { adapter(environment) }
         environment.deviceProtected = false
         adapter(environment)
+    }
+
+    @Test fun `API 26 through 30 require fresh provenance and API 31 keeps definitive generation`() {
+        for (api in listOf(26, 27, 28, 29, 30, 31, 33)) {
+            val environment = TestEnvironmentV1(directory).apply { apiLevel = api }
+            val platform = adapter(environment)
+            assertEquals(if (api < 31) 1 else 0, platform.keyGenerationMode(), "API $api")
+        }
+    }
+
+    @Test fun `fresh JNI generation refuses locked storage and unknown profiles without touching Keystore`() {
+        val environment = TestEnvironmentV1(directory).apply { apiLevel = 26; unlocked = false }
+        val keyStore = TestKeyStoreV1().apply { apiLevel = 26 }
+        val platform = adapter(environment, keyStore)
+        val slot = ByteArray(32) { 7 }
+        val challenge = ByteArray(32) { 8 }
+        assertEquals(
+            KagemushaWalletAndroidUnavailableV1.BEFORE_FIRST_UNLOCK,
+            assertIs<KagemushaWalletAndroidKeyGenerationV1.Unavailable>(platform.keyGenerateFreshFromNative(slot, challenge, 2)).reason,
+        )
+        assertEquals(0, keyStore.getKeyCalls)
+        assertTrue(keyStore.generated.isEmpty())
+        assertFailsWith<IllegalArgumentException> { platform.keyGenerateFreshFromNative(slot, challenge, 0) }
     }
 
     @Test fun `storage is available only after the first unlock`() {
@@ -138,7 +162,9 @@ class KagemushaWalletAndroidPlatformV1Test {
             generated.publicKeySec1().toList(),
             assertIs<KagemushaWalletAndroidKeyProbeV1.Present>(platform.keyProbe(slot)).publicKeySec1().toList(),
         )
-        assertIs<KagemushaWalletAndroidSignatureV1.Der>(platform.keySign(slot, byteArrayOf(1, 2, 3)))
+        assertIs<KagemushaWalletAndroidSignatureV1.Der>(platform.keySign(slot, ByteArray(32) { (it + 1).toByte() }))
+        assertContentEquals(ByteArray(32) { (it + 1).toByte() }, keyStore.signedMessages.single())
+        assertFailsWith<IllegalArgumentException> { platform.keySign(slot, byteArrayOf(1, 2, 3)) }
         assertIs<KagemushaWalletAndroidAttestationChainV1.Present>(platform.attestationChain(slot))
         assertEquals(0, platform.anchorPolicyTag())
         assertNull(platform.storageState())
@@ -159,6 +185,7 @@ class KagemushaWalletAndroidPlatformV1Test {
             "keySign" to "([B[B)L$JVM_OWNER/KagemushaWalletAndroidSignatureV1;",
             "keyDelete" to "([B)L$JVM_OWNER/KagemushaWalletAndroidRemoveV1;",
             "attestationChain" to "([B)L$JVM_OWNER/KagemushaWalletAndroidAttestationChainV1;",
+            "nativeCall" to "(I[B[BI)L$JVM_OWNER/KagemushaWalletNativeReplyV1;",
             "anchorPolicyTag" to "()I",
             "storageState" to "()L$JVM_OWNER/KagemushaWalletAndroidUnavailableV1;",
             "custodyRoot" to "()L$JVM_OWNER/KagemushaWalletAndroidCustodyRootV1;",

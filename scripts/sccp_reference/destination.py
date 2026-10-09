@@ -341,12 +341,9 @@ class Destination:
         # 4. committee root (EVM)
         if evm and committee_root(keys) != st.root:
             raise SccpError("BadCommittee", "committee root mismatch")
-        # 5. attest and signers
+        # 5. signers
         qc = cert.qc
-        attest = qc[80]
-        signers = int.from_bytes(qc[113:117], "big")
-        if attest > 1:
-            raise SccpError("BadCertificate", "attest")
+        signers = int.from_bytes(qc[112:116], "big")
         if signers >> n:
             raise SccpError("BadCertificate", "spare signer bits")
         indices = [i for i in range(n) if signers >> i & 1]
@@ -370,7 +367,7 @@ class Destination:
                     raise SccpError("BadCommittee", "key sign bit")
         # 7. id and R
         cid = checkpoint_id(cert.header)
-        result = result_r(cert.header, qc[81:113])
+        result = result_r(cert.header, qc[80:112])
         # 8. cheap path
         if self.d.cheap_path and st.checkpoints.get(x.height) == cid:
             return x, cid
@@ -384,7 +381,6 @@ class Destination:
                 int.from_bytes(qc[40:48], "big"),
                 qc[48:80],
                 result,
-                attest,
             )
         )
         # 10. aggregate

@@ -316,10 +316,9 @@ Its current finality reader validates the independently constructed genesis bund
 and every contiguous embedded certificate, preserving exact four-validator,
 three-vote roster authority and per-peer enacted execution comparisons. The
 publication target does not collect unrelated mandatory-beacon scenarios.
-Those broader Parliament scenarios retain their existing epoch/KAGEMUSHA
-assertions and still require migration from retired V2 finality APIs before that
-entire separate target can be qualified; the current proof does not expose an
-equivalent epoch-authorization projection.
+The broader Parliament scenarios exercise epoch authorization and mandatory
+beacon custody separately; the complete target requires its own current-source
+qualification.
 Use the same-source Parliament daemon and ordinary CLI artifacts described above,
 `IROHA_TEST_REQUIRE_NETWORK=1`, and exact test filters. Native stream-token quota,
 sequencer and reputation deployment adapters remain separate qualification.

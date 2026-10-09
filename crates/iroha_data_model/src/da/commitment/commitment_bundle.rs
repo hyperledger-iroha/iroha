@@ -24,6 +24,10 @@ use std::{alloc::Layout, cmp::Ordering, fmt};
 pub struct DaCommitmentBundle {
     storage: Storage,
 }
+#[allow(
+    variant_size_differences,
+    reason = "untrusted transport is bounded inline; admitted custody retains its original prepaid shared owner without a second heap allocation"
+)]
 enum Storage {
     Untrusted(CanonicalParts),
     Admitted(ChargedShared<RetainedPayload<CanonicalParts>>),

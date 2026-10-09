@@ -31,12 +31,13 @@
 use core::fmt;
 
 use ff::PrimeField;
-use iroha_pasta::PastaCurve;
+use iroha_pasta::{PastaAffine, PastaCurve, poseidon::hash_with_domain};
 
 use super::DescriptorBinding;
 use crate::{
-    cs::{CurveV1, transcript_repr},
+    cs::{CurveV1, TranscriptV2},
     pcs::curve_v1,
+    transcript::TranscriptRepr,
     transcript::{MESSAGE_BYTES, TranscriptError, decode_point, encode_point},
 };
 
@@ -100,6 +101,8 @@ pub enum VkError {
     },
     /// The bitmaps do not reproduce the descriptor's selector map.
     SelectorPlan,
+    /// The key is not bound to this V2 PIPA-R descriptor.
+    Binding,
     /// Key parts do not match the descriptor's shape (construction only).
     Shape,
 }
@@ -133,6 +136,7 @@ impl fmt::Display for VkError {
                 f.write_str("selector bitmaps do not reproduce the descriptor's selector map")
             }
             Self::Shape => f.write_str("key parts do not match the descriptor"),
+            Self::Binding => f.write_str("key does not match the PIPA-R descriptor binding"),
         }
     }
 }
@@ -149,7 +153,7 @@ pub struct VerifyingKey<C: PastaCurve> {
     selectors: Vec<Vec<bool>>,
     bytes: Vec<u8>,
     descriptor_digest: [u8; 32],
-    transcript_repr: C::ScalarExt,
+    transcript_repr: TranscriptRepr<C>,
 }
 
 /// The bytes of one bitmap of `n` rows.
@@ -158,7 +162,7 @@ fn bitmap_bytes(n: usize) -> usize {
 }
 
 /// The exact encoding length a descriptor implies.
-fn expected_len(binding: &DescriptorBinding) -> Option<usize> {
+pub(super) fn expected_len(binding: &DescriptorBinding) -> Option<usize> {
     let descriptor = binding.descriptor();
     let points =
         (descriptor.num_fixed_columns as usize).checked_add(descriptor.permutation.len())?;
@@ -188,6 +192,63 @@ fn check_curve<C: PastaCurve>(binding: &DescriptorBinding) -> Result<(), VkError
 }
 
 impl<C: PastaCurve> VerifyingKey<C> {
+    /// The KAGEMUSHA verifying-key digest in the proof curve's base field.
+    ///
+    /// This is `P_B(kgwvkey1; 1, curve, k, fixed_count, permutation_count,
+    /// transcript_repr, descriptor_digest_lo128, descriptor_digest_hi128,
+    /// fixed_x, fixed_y, ..., permutation_x, permutation_y, ...)`. The domain
+    /// uses little-endian ASCII and the usual domain/arity framing. Curve
+    /// codes are Pallas = 0 and Vesta = 1. Commitments retain wire order.
+    ///
+    /// # Errors
+    /// [`VkError::Binding`] unless the key belongs to the supplied V2 PIPA-R
+    /// descriptor, or [`VkError::Point`] for an identity commitment.
+    pub fn kagemusha_digest(&self, binding: &DescriptorBinding) -> Result<C::Base, VkError> {
+        let descriptor = binding.descriptor();
+        if !binding.is_v2()
+            || descriptor.transcript != TranscriptV2::KagemushaPoseidonRp57Base
+            || binding.digest() != &self.descriptor_digest
+        {
+            return Err(VkError::Binding);
+        }
+        let TranscriptRepr::Base(repr) = self.transcript_repr else {
+            return Err(VkError::Binding);
+        };
+        let curve = match descriptor.curve {
+            CurveV1::Pallas => 0,
+            CurveV1::Vesta => 1,
+        };
+        let mut low = [0; 16];
+        let mut high = [0; 16];
+        low.copy_from_slice(&self.descriptor_digest[..16]);
+        high.copy_from_slice(&self.descriptor_digest[16..]);
+        let mut fields = vec![
+            C::Base::from(1),
+            C::Base::from(curve),
+            C::Base::from(u64::from(self.k)),
+            C::Base::from(u64::from(descriptor.num_fixed_columns)),
+            C::Base::from(
+                u64::try_from(self.permutation_commitments.len()).map_err(|_| VkError::Shape)?,
+            ),
+            repr,
+            C::Base::from_u128(u128::from_le_bytes(low)),
+            C::Base::from_u128(u128::from_le_bytes(high)),
+        ];
+        for (index, point) in self
+            .fixed_commitments
+            .iter()
+            .chain(&self.permutation_commitments)
+            .enumerate()
+        {
+            let (x, y) = Option::from(point.coordinates()).ok_or(VkError::Point {
+                index,
+                error: TranscriptError::IdentityPoint,
+            })?;
+            fields.extend([x, y]);
+        }
+        Ok(hash_with_domain(u64::from_le_bytes(*b"kgwvkey1"), &fields))
+    }
+
     /// Assembles a key from its parts (key generation).
     ///
     /// # Errors
@@ -275,7 +336,12 @@ impl<C: PastaCurve> VerifyingKey<C> {
             fixed_commitments,
             permutation_commitments,
             selectors,
-            transcript_repr: transcript_repr::<C::ScalarExt>(binding.digest(), &bytes),
+            transcript_repr: TranscriptRepr::derive(
+                binding.is_v2(),
+                descriptor.transcript,
+                binding.digest(),
+                &bytes,
+            ),
             bytes,
             descriptor_digest: *binding.digest(),
         }
@@ -381,7 +447,7 @@ impl<C: PastaCurve> VerifyingKey<C> {
     #[doc(hidden)]
     #[must_use]
     pub fn with_transcript_repr_for_oracle(mut self, transcript_repr: C::ScalarExt) -> Self {
-        self.transcript_repr = transcript_repr;
+        self.transcript_repr = TranscriptRepr::Scalar(transcript_repr);
         self
     }
 
@@ -429,7 +495,7 @@ impl<C: PastaCurve> VerifyingKey<C> {
 
     /// `transcript_repr`, absorbed first by every proof (spec 6.3).
     #[must_use]
-    pub fn transcript_repr(&self) -> &C::ScalarExt {
+    pub fn transcript_repr(&self) -> &TranscriptRepr<C> {
         &self.transcript_repr
     }
 

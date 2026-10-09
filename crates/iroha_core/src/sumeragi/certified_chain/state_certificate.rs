@@ -61,7 +61,8 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
     ///
     /// The exact parent and target are authenticated by the reverse native hash/result
     /// chain. The parent's executed schedule then supplies the target's authority and
-    /// parameters. BLS quorum, paired-Pasta and signed availability checks still run.
+    /// parameters. Exact BLS quorum and signed availability checks still run; the default
+    /// verifier requires the exact native BLS quorum.
     /// A recent read therefore does not repeatedly decode every block since genesis.
     /// The caller admits each source frame before I/O and retains its allocation scope
     /// across the entire operation. No fresh per-frame decode budget is installed.

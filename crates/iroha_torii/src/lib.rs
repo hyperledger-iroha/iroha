@@ -67,6 +67,8 @@ mod history_producer;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 mod iso_profile;
+#[cfg(feature = "app_api")]
+mod kagemusha_wallet;
 mod ledger_state_finality;
 mod multisig_execution_evidence;
 mod native_projection_response;
@@ -13025,20 +13027,17 @@ async fn handler_zk_verify_batch(
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
-    let halo2 = app.state.zk_snapshot().halo2;
-    if !halo2.enabled {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted(
-                "halo2 verification is disabled in node configuration".to_owned(),
-            ),
-        ));
-    }
+    let zk = app.state.zk_snapshot();
+    let diagnostic = zk.ipa_commitment;
     let limits = routing::ZkVerifyBatchLimits {
-        open: iroha_zkp_halo2::OpenVerifyLimits::new(halo2.max_k, halo2.max_transcript_label_len),
+        open: iroha_zkp_halo2::OpenVerifyLimits::new(
+            diagnostic.max_k,
+            diagnostic.max_transcript_label_len,
+        ),
         max_body_bytes: app.proof_limits.max_body_bytes,
-        max_batch: halo2.verifier_max_batch.max(1) as usize,
-        max_envelope_bytes: halo2.max_envelope_bytes,
-        enforce_transcript_label_ascii: halo2.enforce_transcript_label_ascii,
+        max_batch: zk.max_verify_batch.max(1) as usize,
+        max_envelope_bytes: diagnostic.max_envelope_bytes,
+        enforce_transcript_label_ascii: diagnostic.enforce_transcript_label_ascii,
     };
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     routing::handle_v1_zk_verify_batch_admitted(format, body, limits, admission).await
@@ -13048,8 +13047,8 @@ mod exact_proof_circuit_id_tests {
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
         record_id == env_id
             && match iroha_core_zk::production_verify_backend_tag(backend) {
-                Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta) => {
-                    iroha_core_zk::halo2_open_verify_circuit_id_matches_backend(backend, record_id)
+                Some(iroha_data_model::zk::BackendTag::NativePipaRPasta) => {
+                    iroha_core_zk::pipa_r_open_verify_circuit_id_matches_backend(backend, record_id)
                 }
                 Some(iroha_data_model::zk::BackendTag::Stark) => {
                     iroha_core_zk::stark_open_verify_circuit_id_matches_backend(backend, record_id)
@@ -13060,19 +13059,21 @@ mod exact_proof_circuit_id_tests {
 
     #[test]
     fn proof_metadata_uses_core_canonical_identity_without_aliases() {
-        let backend = iroha_core_zk::ZK_BACKEND_HALO2_IPA;
-        let canonical = "halo2/pasta/ipa/kaigi-usage-v1";
-        for halo2_backend in [backend, "halo2/pasta/kaigi-usage-v1"] {
-            assert!(circuit_id_matches(halo2_backend, canonical, canonical));
+        let canonical = "pipa-r/pasta/kaigi-usage-v1";
+        for native_backend in ["pipa-r/pasta", canonical] {
+            assert!(circuit_id_matches(native_backend, canonical, canonical));
             for alias in [
+                "halo2/pasta/kaigi-usage-v1",
+                "halo2/pasta/ipa/kaigi-usage-v1",
+                "pipa-r/ipa/pasta/kaigi-usage-v1",
                 "ivm-replay-binding-v1",
                 "halo2/pasta/ivm-replay-binding-v1",
                 "halo2/ipa:ivm-replay-binding-v1",
                 "halo2/pasta/ipa-v1/ivm-replay-binding-v1",
                 "halo2/pasta/ipa/ivm-execution-v1",
             ] {
-                assert!(!circuit_id_matches(halo2_backend, alias, alias));
-                assert!(!circuit_id_matches(halo2_backend, alias, canonical));
+                assert!(!circuit_id_matches(native_backend, alias, alias));
+                assert!(!circuit_id_matches(native_backend, alias, canonical));
             }
         }
         let stark = iroha_core_zk::ZK_BACKEND_STARK_FRI_V1;
@@ -37213,6 +37214,7 @@ impl Torii {
             SORAFS_RESERVE_POLICY_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_policy);
             SORAFS_RESERVE_POLICY_PROOF_GET => canonical_signature_get(reserve_policy_proof::handler);
             SORAFS_RESERVE_ACCOUNT_PROOF_GET => canonical_signature_get(reserve_account_proof::handler);
+            KAGEMUSHA_LOAD_ISSUANCE_GET => canonical_signature_get(kagemusha_wallet::handler);
             SORAFS_RESERVE_PROVIDERS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers);
             SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider);
             SORAFS_RESERVE_TOP_UP_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up, contracts_body_limit);

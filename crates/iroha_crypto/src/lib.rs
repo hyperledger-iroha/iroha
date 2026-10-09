@@ -24,8 +24,6 @@ mod hash;
 #[cfg(feature = "pqc")]
 /// Hybrid KEM/DEM helpers used by SoraFS payload envelopes.
 pub mod hybrid;
-/// Qualified-provider cryptography for KAGEMUSHA V1 credit envelopes.
-pub mod kagemusha;
 /// Key exchange protocols.
 pub mod kex;
 mod merkle;
@@ -1618,7 +1616,7 @@ impl BlsNormalPopVerifiedKey {
     ///
     /// This comparison allocates no backing and performs no new verification.
     /// Callers may reuse only their own already verified credential for the same
-    /// public key. A different proof still requires ordinary PoP verification.
+    /// public key. A different proof still requires ordinary `PoP` verification.
     #[must_use]
     pub fn proof_of_possession_matches(&self, pop: &[u8]) -> bool {
         self.proof_of_possession.as_slice() == pop

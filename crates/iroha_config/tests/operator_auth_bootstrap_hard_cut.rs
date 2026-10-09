@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use crate::publisher_config_fixture;
 use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
 
@@ -9,9 +10,10 @@ const VALID_BOOTSTRAP_TOKEN: &str = "first-credential-bootstrap-token-01";
 
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
-    ConfigReader::new()
+    let reader = ConfigReader::new()
         .read_toml_with_extends(base_path)
-        .expect("base config should load")
+        .expect("base config should load");
+    publisher_config_fixture::with_fixture_refs(reader)
 }
 
 #[test]
@@ -50,7 +52,7 @@ fn dedicated_operator_bootstrap_tokens_remain_configurable() {
         .with_toml_source(TomlSource::inline(table))
         .read_and_complete::<UserConfig>()
         .expect("operator bootstrap token should remain configurable")
-        .parse()
+        .parse_with_file_source(&publisher_config_fixture::ParserOnlyPublisherFiles)
         .expect("operator bootstrap config should be valid");
     assert_eq!(actual.torii.operator_auth.tokens, [VALID_BOOTSTRAP_TOKEN]);
     assert_eq!(
@@ -90,7 +92,7 @@ fn operator_bootstrap_tokens_are_exact_bounded_visible_values() {
             .read_and_complete::<UserConfig>()
             .expect("bootstrap token syntax should reach semantic validation");
         let error = user
-            .parse()
+            .parse_with_file_source(&publisher_config_fixture::ParserOnlyPublisherFiles)
             .expect_err("malformed bootstrap tokens must be rejected");
         assert!(
             format!("{error:?}").contains("torii.operator_auth.tokens"),
@@ -142,7 +144,7 @@ fn operator_auth_capacities_have_sane_upper_bounds() {
             .read_and_complete::<UserConfig>()
             .expect("operator-auth capacity syntax should reach semantic validation");
         let _error = user
-            .parse()
+            .parse_with_file_source(&publisher_config_fixture::ParserOnlyPublisherFiles)
             .expect_err("oversized operator-auth capacity must be rejected");
     }
 }
@@ -158,7 +160,7 @@ fn operator_auth_lockout_durations_must_be_nonzero() {
             .read_and_complete::<UserConfig>()
             .expect("lockout duration syntax should reach semantic validation");
         let error = user
-            .parse()
+            .parse_with_file_source(&publisher_config_fixture::ParserOnlyPublisherFiles)
             .expect_err("zero lockout duration must be rejected");
         assert!(format!("{error:?}").contains(field));
     }

@@ -596,6 +596,39 @@ def verify_apple_raw(
     The caller must verify Apple's receipt and independently select governed
     app distribution policy. This raw result does not measure an exact build.
     """
+    require(selection.attested_key_id == key_id, "App Attest prepared key ID mismatch")
+    return _verify_apple_raw_with_hash(
+        attestation_object, key_id, app_id, environment,
+        hashlib.sha256(selection.transcript()).digest(), root_der, root_sha256,
+        trusted_time_ms, openssl_path,
+        expected_validation_category=expected_validation_category,
+        expected_bundle_version=expected_bundle_version)
+
+
+def verify_apple_wallet_attestation_raw(
+    attestation_object: bytes, key_id: bytes, app_id: str, environment: str,
+    challenge_digest: bytes,
+    root_der: bytes, root_sha256: bytes, trusted_time_ms: int, openssl_path: Path,
+) -> RawPlatformProof:
+    """Current E1 attestation; Apple receives challenge_digest unchanged as clientDataHash.
+
+    The native owner supplies the E1 digest, configured App ID/environment/root and trusted
+    time. No retired release/profile/lane Selection or app-version lease is reconstructed.
+    This authenticates the App Attest key, not the separate Secure Enclave payment key.
+    """
+    return _verify_apple_raw_with_hash(
+        attestation_object, key_id, app_id, environment, challenge_digest,
+        root_der, root_sha256, trusted_time_ms, openssl_path,
+        expected_validation_category=None, expected_bundle_version=None)
+
+
+def _verify_apple_raw_with_hash(
+    attestation_object: bytes, key_id: bytes, app_id: str, environment: str,
+    client_data_hash: bytes,
+    root_der: bytes, root_sha256: bytes, trusted_time_ms: int, openssl_path: Path,
+    *, expected_validation_category: int | None, expected_bundle_version: str | None,
+) -> RawPlatformProof:
+    require(any(fixed32(client_data_hash, "App Attest clientDataHash")), "empty App Attest clientDataHash")
     require(len(attestation_object) <= MAX_OBJECT and len(key_id) == 32, "invalid App Attest object or key ID")
     require(app_id and len(app_id.encode("utf-8")) <= 255, "invalid pinned App ID")
     require(environment in ("production", "development"), "invalid pinned App Attest environment")
@@ -651,15 +684,13 @@ def verify_apple_raw(
             and isinstance(cose.get(-2), bytes) and isinstance(cose.get(-3), bytes), "invalid App Attest COSE key")
     require(point == b"\x04" + cose[-2] + cose[-3] and hashlib.sha256(point).digest() == key_id,
             "App Attest key mismatch")
-    require(selection.attested_key_id == key_id,
-            "App Attest prepared key ID mismatch")
     extension = extensions.get(APPLE_NONCE_OID)
     require(extension is not None, "missing App Attest nonce extension")
     nonce_sequence = children(der_one(extension))
     require(len(nonce_sequence) == 1, "invalid App Attest nonce extension")
     tagged_nonce = children(nonce_sequence[0], number=1, tag_class=2)
     require(len(tagged_nonce) == 1, "invalid App Attest tagged nonce")
-    expected_nonce = hashlib.sha256(auth + hashlib.sha256(selection.transcript()).digest()).digest()
+    expected_nonce = hashlib.sha256(auth + client_data_hash).digest()
     require(primitive(tagged_nonce[0], 4) == expected_nonce, "App Attest challenge mismatch")
     return RawPlatformProof(hashlib.sha256(attestation_object).digest(), point,
                             device_key_reference(point), "apple_app_attest",
@@ -699,6 +730,39 @@ def verify_apple_assertion(
             and 0 < len(client_data) <= MAX_APPLE_CLIENT_DATA
             and client_data == expected_client_data,
             "App Attest client data differs from server challenge")
+    return _verify_apple_assertion_with_hash(
+        assertion_object, hashlib.sha256(client_data).digest(),
+        attested_public_key_sec1, attested_key_id, app_id, previous_counter, openssl_path,
+        expected_validation_category=expected_validation_category,
+        expected_bundle_version=expected_bundle_version)
+
+
+def verify_apple_wallet_enrollment_assertion(
+    assertion_object: bytes, enrollment_key_binding: bytes,
+    attested_public_key_sec1: bytes, attested_key_id: bytes, app_id: str,
+    previous_counter: int, openssl_path: Path,
+) -> AppleAssertion:
+    """Current E1 assertion over the unchanged Native-computed enrollment-key-binding H value.
+
+    This checks the real signature and a strictly increasing counter. The issuer must pair
+    it with atomic challenge consumption/counter advancement before publishing a result.
+    """
+    return _verify_apple_assertion_with_hash(
+        assertion_object, enrollment_key_binding,
+        attested_public_key_sec1, attested_key_id, app_id, previous_counter, openssl_path,
+        expected_validation_category=None, expected_bundle_version=None)
+
+
+def _verify_apple_assertion_with_hash(
+    assertion_object: bytes, client_data_hash: bytes,
+    attested_public_key_sec1: bytes, attested_key_id: bytes, app_id: str,
+    previous_counter: int, openssl_path: Path,
+    *, expected_validation_category: int | None, expected_bundle_version: str | None,
+) -> AppleAssertion:
+    require(type(assertion_object) is bytes and 0 < len(assertion_object) <= MAX_APPLE_ASSERTION,
+            "App Attest assertion outside bound")
+    require(any(fixed32(client_data_hash, "App Attest assertion clientDataHash")),
+            "empty App Attest assertion clientDataHash")
     require(type(attested_public_key_sec1) is bytes and len(attested_public_key_sec1) == 65
             and attested_public_key_sec1[0] == 4 and type(attested_key_id) is bytes
             and hashlib.sha256(attested_public_key_sec1).digest() == attested_key_id,
@@ -764,7 +828,7 @@ def verify_apple_assertion(
         # authenticatorData || clientDataHash. ECDSA-SHA256 hashes that nonce
         # once more as its message; verifying the concatenation is a different
         # signature equation and rejects physical App Attest assertions.
-        nonce = hashlib.sha256(auth + hashlib.sha256(client_data).digest()).digest()
+        nonce = hashlib.sha256(auth + client_data_hash).digest()
         (directory / "signed.bin").write_bytes(nonce)
         (directory / "signature.bin").write_bytes(signature)
         result = subprocess.run(
@@ -774,7 +838,7 @@ def verify_apple_assertion(
         )
         require(result.returncode == 0, "App Attest assertion signature rejected")
     return AppleAssertion(counter, hashlib.sha256(assertion_object).digest(),
-                          hashlib.sha256(client_data).digest(),
+                          client_data_hash,
                           validation_category, bundle_version)
 
 
@@ -873,6 +937,38 @@ class DurableAppleAssertionCounterStore:
         expected_bundle_version: str | None,
     ) -> AppleAssertion:
         """Verify, consume client data once, and durably advance one key counter."""
+        require(type(client_data) is bytes and type(expected_client_data) is bytes
+                and 0 < len(client_data) <= MAX_APPLE_CLIENT_DATA
+                and client_data == expected_client_data,
+                "App Attest client data differs from server challenge")
+        return self._verify_and_advance_hash(
+            assertion_object, hashlib.sha256(client_data).digest(), key_id,
+            app_id, environment, openssl_path,
+            expected_validation_category=expected_validation_category,
+            expected_bundle_version=expected_bundle_version)
+
+    def verify_wallet_enrollment_and_advance(
+        self, assertion_object: bytes, enrollment_key_binding: bytes,
+        key_id: bytes, app_id: str, environment: str, openssl_path: Path,
+    ) -> AppleAssertion:
+        """Current E1 prehashed assertion, one-use challenge and durable increasing counter.
+
+        The Native issuer supplies enrollment_key_binding and retains its exact result in
+        its issuance journal before HTTP exposure. This register does not create credentials
+        or authorize retrying an external operation when an original result is missing.
+        """
+        return self._verify_and_advance_hash(
+            assertion_object, enrollment_key_binding, key_id, app_id, environment,
+            openssl_path, expected_validation_category=None, expected_bundle_version=None)
+
+    def _verify_and_advance_hash(
+        self, assertion_object: bytes, client_data_hash: bytes, key_id: bytes,
+        app_id: str, environment: str, openssl_path: Path,
+        *, expected_validation_category: int | None,
+        expected_bundle_version: str | None,
+    ) -> AppleAssertion:
+        require(any(fixed32(client_data_hash, "registered Apple clientDataHash")),
+                "empty registered Apple clientDataHash")
         require(type(key_id) is bytes and len(key_id) == 32,
                 "invalid registered Apple key ID")
         with closing(self._connect()) as connection:
@@ -885,8 +981,8 @@ class DurableAppleAssertionCounterStore:
                 require(row is not None and row[1] == app_id
                         and row[2] == environment,
                         "unregistered Apple assertion key or scope")
-                checked = verify_apple_assertion(
-                    assertion_object, client_data, expected_client_data,
+                checked = _verify_apple_assertion_with_hash(
+                    assertion_object, client_data_hash,
                     row[0], key_id, app_id, row[3], openssl_path,
                     expected_validation_category=expected_validation_category,
                     expected_bundle_version=expected_bundle_version,
@@ -962,8 +1058,11 @@ def verify_android_raw(
     key authenticates app approval; it supplies no monotonic monetary journal,
     rollback-resistant wallet state, trusted clock or hardware one-use grant.
     """
-    return _verify_android_raw(chain_der, selection, package_name, package_version,
-        signing_certificate_sha256, root_der, root_sha256, trusted_time_ms, openssl_path,
+    require(selection.attested_key_id == b"\0" * 32,
+            "KeyMint generation challenge must use the empty-key sentinel")
+    return _verify_android_raw(chain_der, hashlib.sha256(selection.transcript()).digest(),
+        package_name, package_version, signing_certificate_sha256,
+        root_der, root_sha256, trusted_time_ms, openssl_path,
         allowed_security_levels=allowed_security_levels, ordinary_persistent=False)
 
 
@@ -980,17 +1079,40 @@ def verify_android_persistent_app_key_raw(
     RootOfTrust has no verifiedBootHash; no value is fabricated for it. This proof
     supplies no finite-use, rollback-protected money state or monetary authority.
     """
-    return _verify_android_raw(chain_der, selection, package_name, package_version,
+    require(selection.attested_key_id == b"\0" * 32,
+            "KeyMint generation challenge must use the empty-key sentinel")
+    return _verify_android_raw(chain_der, hashlib.sha256(selection.transcript()).digest(),
+        package_name, package_version, signing_certificate_sha256,
+        root_der, root_sha256, trusted_time_ms, openssl_path,
+        allowed_security_levels=allowed_security_levels, ordinary_persistent=True)
+
+
+def verify_android_wallet_payment_key_raw(
+    chain_der: list[bytes], challenge_digest: bytes,
+    package_name: str, package_version: int, signing_certificate_sha256: bytes,
+    root_der: bytes, root_sha256: bytes, trusted_time_ms: int, openssl_path: Path,
+    *, allowed_security_levels: frozenset[int],
+) -> RawPlatformProof:
+    """Current E1 hardware-generated persistent P-256 key; challenge_digest is not rehashed.
+
+    Accepts configured TEE/StrongBox levels and genuine older Keymaster evidence, including
+    Pixel6's stock API. Chain revocation and separate Play Integrity remain issuer checks.
+    This supplies no hardware monotonic wallet counter, journal or trusted clock.
+    """
+    return _verify_android_raw(
+        chain_der, challenge_digest, package_name, package_version,
         signing_certificate_sha256, root_der, root_sha256, trusted_time_ms, openssl_path,
         allowed_security_levels=allowed_security_levels, ordinary_persistent=True)
 
 
 def _verify_android_raw(
-    chain_der: list[bytes], selection: Selection,
+    chain_der: list[bytes], attestation_challenge: bytes,
     package_name: str, package_version: int, signing_certificate_sha256: bytes,
     root_der: bytes, root_sha256: bytes, trusted_time_ms: int, openssl_path: Path,
     *, allowed_security_levels: frozenset[int], ordinary_persistent: bool,
 ) -> RawPlatformProof:
+    require(any(fixed32(attestation_challenge, "KeyMint E1 attestation challenge")),
+            "empty KeyMint attestation challenge")
     require(type(allowed_security_levels) is frozenset and allowed_security_levels
             and all(type(item) is int for item in allowed_security_levels)
             and allowed_security_levels <= {1, 2},
@@ -1019,8 +1141,6 @@ def _verify_android_raw(
     leaf_point, _ = certificate_key_extensions(chain_der[0])
     require(leaf_point == point,
             "KeyMint-attested point differs from app-controlled leaf key")
-    require(selection.attested_key_id == b"\0" * 32,
-            "KeyMint generation challenge must use the empty-key sentinel")
     extension = extensions.get(ANDROID_KEY_DESCRIPTION_OID)
     require(extension is not None, "missing KeyMint extension")
     description = children(der_one(extension))
@@ -1034,7 +1154,7 @@ def _verify_android_raw(
     require(supported_version and (version != 2 or level == 1)
             and level in allowed_security_levels and keymint_level == level,
             "approval key security level differs from authenticated hardware policy")
-    require(primitive(description[4], 4) == hashlib.sha256(selection.transcript()).digest(), "KeyMint challenge mismatch")
+    require(primitive(description[4], 4) == attestation_challenge, "KeyMint challenge mismatch")
     ordinary_version = version if ordinary_persistent else None
     software = explicit_tags(description[6], ordinary_version=ordinary_version)
     hardware = explicit_tags(description[7], ordinary_version=ordinary_version)

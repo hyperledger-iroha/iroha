@@ -124,7 +124,11 @@ Fresh managed global localnets use the `StreamTokenAuthorities` profile to prepa
 three distinct providers on peers zero through two, with four unchanged validators. Each provider
 has ten separate service-role credentials; the network has one reserve-operations account and one
 reputation recorder, with the existing manager retained for decisions. Registered transaction
-accounts are funded and receive exact initial capabilities in signed genesis. Proof-outcome,
+accounts are funded and receive exact initial capabilities in signed genesis. Each issuer
+allocation covers the original reserve quote, pricing collateral and admitted stake, plus
+the existing setup fee allowance; ordinary service roles receive the fee allowance.
+Retained validation requires each exact allocation once and rejects direct reserve-account
+minting. Proof-outcome,
 repair and ingest completion grants are provider-scoped; the orderbook matcher receives no broad
 grant. Native runtime bindings stay absent until a validated service revision selects them.
 Generated keys alone do not authorize work or establish current matcher policy.

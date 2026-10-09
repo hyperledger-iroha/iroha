@@ -1047,7 +1047,7 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
   }
 
   const signedWithProofFields = JSON.parse(JSON.stringify(receipt));
-  signedWithProofFields.attestation.proof_backend = "halo2/ipa";
+  signedWithProofFields.attestation.proof_backend = "pipa-r/pasta";
   signedWithProofFields.attestation.proof_b64 = "AQID";
   assert.throws(
     () => verifyIdentifierResolutionReceipt(signedWithProofFields, policy),
@@ -1058,7 +1058,7 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
     payload: signedReceipt.payload,
     attestation: {
       kind: "proof",
-      proof_backend: "halo2/ipa",
+      proof_backend: "pipa-r/pasta",
       proof_b64: "AQID",
     },
   };
@@ -1127,7 +1127,7 @@ test("encodeIdentifierResolutionReceiptAttestation rejects padded proof backend"
       () =>
         encodeIdentifierResolutionReceiptAttestation({
           kind: "proof",
-          proof_backend: "halo2/ipa",
+          proof_backend: "pipa-r/pasta",
           proof_b64: proofB64,
         }),
       /identifier receipt attestation\.proof_b64 must be exact standard-base64/,
@@ -1138,7 +1138,7 @@ test("encodeIdentifierResolutionReceiptAttestation rejects padded proof backend"
     () =>
       encodeIdentifierResolutionReceiptAttestation({
         kind: "proof",
-        proof_backend: "halo2/ipa",
+        proof_backend: "pipa-r/pasta",
         proof_b64: "@@@",
       }),
     /attestation\.proof_b64 must be exact standard-base64/,

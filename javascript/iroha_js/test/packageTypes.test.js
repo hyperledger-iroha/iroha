@@ -814,7 +814,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         'const confusablePrivacyEngine: PrivacyEngineIdV1 = "native-jindо";',
         "declare const repoAgreement: ToriiRepoAgreement;",
         "const repoLifecycle: [string, string, number | null, 'active' | 'settled'] = [repoAgreement.cashSource, repoAgreement.collateralCustodyAsset, repoAgreement.settlementTimestampMs, repoAgreement.status];",
-        'const verifierBackend: ToriiVerifierBackendLabelV1 = "halo2/ipa";',
+        'const verifierBackend: ToriiVerifierBackendLabelV1 = "pipa-r/pasta";',
         "// @ts-expect-error retired privacy backend aliases fail closed.",
         'const retiredVerifierBackend: ToriiVerifierBackendLabelV1 = "halo2/ipa-pasta-cycle-v1";',
         "// @ts-expect-error backend labels are case-sensitive.",

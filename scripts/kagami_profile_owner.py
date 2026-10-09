@@ -2,7 +2,10 @@
 """Stage and compare complete operator-owned Kagami Iroha 3 profile bundles.
 
 This proposed owner wrapper is intentionally narrower than ``cargo xtask
-kagami-profiles``.  It admits only the complete ``iroha3-dev`` bundle, builds
+kagami-profiles``. Required external publisher originals are supplied through
+``--publisher-custody-dir`` and are never copied into a generated bundle. The exact
+genesis creation time is required through ``--genesis-creation-time-ms``. It admits
+only the complete ``iroha3-dev`` bundle, builds
 the exact current tools into a caller-owned
 external Cargo target, always supplies the resulting Kagami binary explicitly,
 and publishes only by an atomic no-replace rename to an absent external root.
@@ -363,15 +366,21 @@ def _profile_command(
     tools: BuiltTools,
     profile: str,
     temporary_root: Path,
-    authority_parameters: Path,
+    xor_allocations: Path,
+    publisher_custody: Path,
+    genesis_creation_time_ms: int,
 ) -> list[str]:
     return [
         os.fspath(tools.xtask),
         "kagami-profiles",
         "--profile",
         profile,
-        "--kagemusha-mint-finality-parameters-dir",
-        os.fspath(authority_parameters),
+        "--xor-allocations-dir",
+        os.fspath(xor_allocations),
+        "--publisher-custody-dir",
+        os.fspath(publisher_custody),
+        "--genesis-creation-time-ms",
+        str(genesis_creation_time_ms),
         "--out",
         os.fspath(temporary_root / "defaults" / "kagami"),
         "--kagami",
@@ -501,7 +510,9 @@ def _generate_stage(
     tools: BuiltTools,
     environment: Mapping[str, str],
     expectation: LockExpectation,
-    authority_parameters: Path,
+    xor_allocations: Path,
+    publisher_custody: Path,
+    genesis_creation_time_ms: int,
 ) -> dict[str, ManagedFile]:
     temporary = Path(
         tempfile.mkdtemp(prefix=f".{destination.name}.kagami-owner-", dir=destination.parent)
@@ -509,7 +520,7 @@ def _generate_stage(
     published = False
     try:
         _sealed_child(
-            _profile_command(tools, profile, temporary, authority_parameters),
+            _profile_command(tools, profile, temporary, xor_allocations, publisher_custody, genesis_creation_time_ms),
             environment,
             expectation,
         )
@@ -528,6 +539,15 @@ def _generate_stage(
             shutil.rmtree(temporary, ignore_errors=True)
 
 
+def _genesis_creation_time(record: str) -> int:
+    if not record.isascii() or not record.isdecimal():
+        raise argparse.ArgumentTypeError("genesis creation time must be one canonical nonzero u64")
+    value = int(record)
+    if value == 0 or value > (1 << 64) - 1 or str(value) != record:
+        raise argparse.ArgumentTypeError("genesis creation time must be one canonical nonzero u64")
+    return value
+
+
 def _parse_args(arguments: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -540,7 +560,9 @@ def _parse_args(arguments: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--stage-b")
     parser.add_argument("--cargo", required=True)
     parser.add_argument("--cargo-target-dir", required=True)
-    parser.add_argument("--kagemusha-mint-finality-parameters-dir", required=True)
+    parser.add_argument("--xor-allocations-dir", required=True)
+    parser.add_argument("--publisher-custody-dir", required=True)
+    parser.add_argument("--genesis-creation-time-ms", required=True, type=_genesis_creation_time)
     parser.add_argument("--cargo-lock-size", required=True, type=int)
     parser.add_argument("--cargo-lock-sha256", required=True)
     parsed = parser.parse_args(arguments)
@@ -574,16 +596,24 @@ def run(parsed: argparse.Namespace) -> None:
         external=True,
         private=True,
     )
-    authority_parameters = _existing_directory(
-        parsed.kagemusha_mint_finality_parameters_dir,
-        "KAGEMUSHA mint-finality public-parameter directory",
+    xor_allocations = _existing_directory(
+        parsed.xor_allocations_dir,
+        "XOR genesis allocation directory",
         external=True,
         private=False,
+    )
+    publisher_custody = _existing_directory(
+        parsed.publisher_custody_dir,
+        "mandatory publisher custody directory",
+        external=True,
+        private=True,
     )
     if parsed.write:
         output = _absent_external_root(parsed.output_root, "output root")
         if _overlap(output, target):
             _fail("output root and Cargo target directory must not overlap")
+        if _overlap(output, publisher_custody):
+            _fail("output root and mandatory publisher custody must not overlap")
         tools, environment = _build_tools(cargo, target, expectation)
         _generate_stage(
             output,
@@ -591,7 +621,9 @@ def run(parsed: argparse.Namespace) -> None:
             tools,
             environment,
             expectation,
-            authority_parameters,
+            xor_allocations,
+            publisher_custody,
+            parsed.genesis_creation_time_ms,
         )
         return
 
@@ -604,6 +636,8 @@ def run(parsed: argparse.Namespace) -> None:
         ("stage B", stage_b, "Cargo target", target),
         ("stage A", stage_a, "candidate root", candidate),
         ("stage B", stage_b, "candidate root", candidate),
+        ("stage A", stage_a, "mandatory publisher custody", publisher_custody),
+        ("stage B", stage_b, "mandatory publisher custody", publisher_custody),
     ):
         if _overlap(left, right):
             _fail(f"{left_label} and {right_label} must not overlap")
@@ -614,7 +648,9 @@ def run(parsed: argparse.Namespace) -> None:
         tools,
         environment,
         expectation,
-        authority_parameters,
+        xor_allocations,
+        publisher_custody,
+        parsed.genesis_creation_time_ms,
     )
     second = _generate_stage(
         stage_b,
@@ -622,7 +658,9 @@ def run(parsed: argparse.Namespace) -> None:
         tools,
         environment,
         expectation,
-        authority_parameters,
+        xor_allocations,
+        publisher_custody,
+        parsed.genesis_creation_time_ms,
     )
     checked = _snapshot(candidate, parsed.profile, closed_stage=False)
     _compare_snapshots(first, second, "two fresh profile generations")

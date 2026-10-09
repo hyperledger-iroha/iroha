@@ -3091,8 +3091,8 @@ evidence.
   ciphertext, and low-order-free X25519 ephemeral keys before envelope use;
   this structural validation is not value authorization. The proofless generic
   `zk::Shield` instruction and CLI/native/SDK transaction encoders are removed,
-  public-to-confidential ingress requires the proof-bound KAGEMUSHA V1 top-up,
-  and the standalone envelope utility retains the same payload preflight;
+  no generic public-to-confidential ingress instruction remains (the KAGEMUSHA
+  V1 top-up was deleted on 2026-10-05), and the standalone envelope utility retains the same payload preflight;
   standalone ML-KEM public-key validation, secret-key validation,
   encapsulation, and decapsulation now reject all-zero public keys, all-zero
   secret keys, all-zero embedded secret-key public keys, all-zero secret-key
@@ -3852,15 +3852,12 @@ evidence.
 
 ## Torii Offline API follow-ups
 
-- Completed 2026-07-11: Torii now mounts only the first-release Offline API:
-  `GET /v1/kagemusha/readiness`, payer-signed `POST /v1/kagemusha/top-up`,
-  `POST /v1/kagemusha/redeem`, and
-  `GET /v1/kagemusha/operations/{operation_id}`. Top-up accepts one canonical
-  versioned Norito `SignedTransaction` whose sole instruction is
-  `TopUpKagemushaV1` and whose authority equals the payer; redemption accepts
-  its typed canonical Norito request directly. Both return an asynchronous
-  typed operation reference; there is no version-nested route, JSON fallback,
-  or whole-payload wrapper.
+- Completed 2026-10-05: the KAGEMUSHA V1 Offline API (`/v1/kagemusha/*`
+  readiness, top-up, redeem and operation status) was deleted with the old
+  KAGEMUSHA implementation. The current wallet exposes only the canonically
+  authenticated private finalized-load issuance read at
+  `/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}`. Other ledger-family
+  routes from `specs/kagemusha_single_design_proposal.md` §6 remain open.
 - Completed 2026-07-30 and finalized 2026-08-30: removed the unshipped
   governance council `derive-vrf` prototype, its `gov_vrf` feature, HTTP/MCP
   surfaces, and independently authorized persist/replace/manual epoch-roster

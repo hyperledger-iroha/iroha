@@ -120,10 +120,8 @@ fn vote_pair(reader: &LaneProofRead, height: u64) -> Evidence {
             view: 5,
             block_hash: Hash32([byte; 32]),
             result: Hash32([73; 32]),
-            attest: false,
             signer: 2,
             sig: Signature([0; SIGNATURE_LEN]),
-            attestation: None,
         };
         vote.sig = signer.sign(&vote.preimage());
         vote
@@ -194,7 +192,6 @@ fn anchored_chain_with_config(
                 proposer: 0,
                 skipped_leaders: Vec::new(),
                 control_witness: ControlWitness::empty(),
-                attest: false,
             };
             let authored = PayloadAuthoring::new(header, payload)
                 .complete(
@@ -214,11 +211,8 @@ fn anchored_chain_with_config(
                 view: 0,
                 block_hash: hash,
                 result: Hash32([height as u8; 32]),
-                attest: false,
                 signers: Bitmap::from_indices(4, [0, 1, 2]).unwrap(),
                 agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
-                attestations: Vec::new(),
-                attestation_witness: None,
             };
             qc.agg_sig = crypto.aggregate(
                 &signers[..3]
@@ -233,11 +227,7 @@ fn anchored_chain_with_config(
                     &qc.epoch,
                     &context.authority.config().committee
                 )
-                .verify_commit_qc(
-                    &NoAttestation,
-                    &qc,
-                    Some(authored.body.header())
-                )
+                .verify_commit_qc(&qc, Some(authored.body.header()))
             );
             parent = iroha_data_model::sumeragi_lanes::SumeragiLaneFrontier {
                 height,
@@ -432,7 +422,6 @@ fn proposal_pair(reader: &LaneProofRead) -> Evidence {
             proposer,
             skipped_leaders: topology.skipped_leader_keys(&config.committee, 0),
             control_witness: ControlWitness::empty(),
-            attest: false,
         };
         let mut proposal = iroha_sumeragi::message::Proposal {
             instance: reader.instance,
@@ -542,7 +531,7 @@ fn lane_proof_rejects_valid_same_height_certificate_on_an_unmerged_branch() {
             &qc.epoch,
             &reader.cursor.config().committee
         )
-        .verify_commit_qc(&NoAttestation, &qc, Some(authored.body.header()))
+        .verify_commit_qc(&qc, Some(authored.body.header()))
     );
     let mut replacement = PreparedLaneWrite::new(authored.body, qc);
     std::fs::write(path, replacement.prepare(&reader.budget).unwrap()).unwrap();
@@ -969,7 +958,6 @@ fn reported_original_lane_equivocation(context: &LaneEvidenceContext) -> Evidenc
     };
     use iroha_sumeragi::{
         api::{Init, LocalParams},
-        crypto::Attestation,
         message::WireMessage,
         types::{ConfigSlot, PublicKey},
     };
@@ -1015,7 +1003,6 @@ fn reported_original_lane_equivocation(context: &LaneEvidenceContext) -> Evidenc
         signers: Vec::new(),
         crypto: Box::new(crypto),
         hasher: Box::new(BlsCrypto::new()),
-        attestation: Attestation::none(),
         now: 0,
         ingress: Arc::new(parking_lot::Mutex::new(Ingress::new(
             IngressLimits::default(),
@@ -1065,10 +1052,8 @@ fn reported_original_lane_equivocation(context: &LaneEvidenceContext) -> Evidenc
             view: 0,
             block_hash: Hash32([block; 32]),
             result: Hash32([73; 32]),
-            attest: false,
             signer: 2,
             sig: Signature([0; SIGNATURE_LEN]),
-            attestation: None,
         };
         vote.sig = signer.sign(&vote.preimage());
         vote
@@ -1832,18 +1817,11 @@ fn terminal_lane_source_failure_cannot_pin_competing_original_admission_forever(
         .join("00000000000000000007.frame");
     drop(reader);
     let root = Evidence::ConflictingCertificates(
-        chain.commit_qc(
-            3,
-            Hash32([0x31; 32]),
-            Hash32([0x32; 32]),
-            false,
-            Signers::Quorum,
-        ),
+        chain.commit_qc(3, Hash32([0x31; 32]), Hash32([0x32; 32]), Signers::Quorum),
         chain.commit_qc(
             3,
             Hash32([0x33; 32]),
             Hash32([0x34; 32]),
-            false,
             Signers::LastThree,
         ),
     );
@@ -1891,20 +1869,8 @@ fn local_proposer_skips_terminal_lane_source_without_deleting_observation() {
     let (root_native, root) = (1..=255_u8)
         .find_map(|marker| {
             let proof = Evidence::ConflictingCertificates(
-                chain.commit_qc(
-                    3,
-                    Hash32([marker; 32]),
-                    Hash32([0x32; 32]),
-                    false,
-                    Signers::Quorum,
-                ),
-                chain.commit_qc(
-                    3,
-                    Hash32([0; 32]),
-                    Hash32([0x34; 32]),
-                    false,
-                    Signers::LastThree,
-                ),
+                chain.commit_qc(3, Hash32([marker; 32]), Hash32([0x32; 32]), Signers::Quorum),
+                chain.commit_qc(3, Hash32([0; 32]), Hash32([0x34; 32]), Signers::LastThree),
             );
             let wire = iroha_data_model::block::consensus::Evidence::from_native(&proof).unwrap();
             (evidence::evidence_key(&wire) > evidence::evidence_key(&lane)).then_some((proof, wire))

@@ -1113,7 +1113,11 @@ pub fn render_interface_json(manifest: &ContractManifest) -> Result<String, Buil
 }
 /// Read one bounded UTF-8 Kotodama source and map I/O failures for build tools.
 pub fn read_source_file(path: &Path) -> Result<String, BuildError> {
-    crate::source::read_source_file(path).map_err(|error| match error {
+    crate::source::read_source_file(path).map_err(|error| source_read_error(path, error))
+}
+
+fn source_read_error(path: &Path, error: crate::source::SourceReadError) -> BuildError {
+    match error {
         crate::source::SourceReadError::Io(error) => BuildError::Io {
             operation: "read Kotodama source",
             path: path.to_path_buf(),
@@ -1131,7 +1135,7 @@ pub fn read_source_file(path: &Path) -> Result<String, BuildError> {
             valid_up_to,
             error_len,
         },
-    })
+    }
 }
 /// Map one physical source path to its portable project-relative graph name.
 ///
@@ -1266,19 +1270,62 @@ pub fn discover_source_link_request(
     imports: Vec<ImportBinding>,
     packages: Vec<SourcePackageUnit>,
 ) -> Result<SourceLinkRequest, BuildError> {
-    let canonical_root = project_root
-        .canonicalize()
-        .map_err(|error| BuildError::Io {
-            operation: "canonicalize Kotodama project root",
-            path: project_root.to_path_buf(),
+    let canonical_root = canonical_project_root(project_root)?;
+    let selected =
+        iroha_fs::SelectedRegularFile::capture(source_path).map_err(|error| BuildError::Io {
+            operation: "canonicalize Kotodama source",
+            path: source_path.to_path_buf(),
             message: error.to_string(),
         })?;
-    let canonical_source = source_path.canonicalize().map_err(|error| BuildError::Io {
-        operation: "canonicalize Kotodama source",
-        path: source_path.to_path_buf(),
+    source_link_request(
+        &selected,
+        source_path,
+        project_root,
+        &canonical_root,
+        imports,
+        packages,
+    )
+}
+
+/// Discover the declared graph from an original native selection retained through intervening work.
+/// This uses the same graph construction as [`discover_source_link_request`], without reopening
+/// or following a replacement root. Companion and package selection remain independently scoped.
+/// # Errors
+/// Returns the original source-root, source, graph and fixed-budget diagnostics, or native custody refusal.
+pub fn discover_selected_source_link_request(
+    source: &iroha_fs::SelectedRegularFile,
+    project_root: &Path,
+    imports: Vec<ImportBinding>,
+    packages: Vec<SourcePackageUnit>,
+) -> Result<SourceLinkRequest, BuildError> {
+    let canonical_root = canonical_project_root(project_root)?;
+    source_link_request(
+        source,
+        source.path(),
+        project_root,
+        &canonical_root,
+        imports,
+        packages,
+    )
+}
+
+fn canonical_project_root(project_root: &Path) -> Result<PathBuf, BuildError> {
+    project_root.canonicalize().map_err(|error| BuildError::Io {
+        operation: "canonicalize Kotodama project root",
+        path: project_root.to_path_buf(),
         message: error.to_string(),
-    })?;
-    if !canonical_source.starts_with(&canonical_root) {
+    })
+}
+
+fn source_link_request(
+    source: &iroha_fs::SelectedRegularFile,
+    source_path: &Path,
+    project_root: &Path,
+    canonical_root: &Path,
+    imports: Vec<ImportBinding>,
+    packages: Vec<SourcePackageUnit>,
+) -> Result<SourceLinkRequest, BuildError> {
+    if !source.path().starts_with(canonical_root) {
         return Err(BuildError::InvalidPath {
             path: source_path.to_path_buf(),
             message: format!(
@@ -1287,16 +1334,20 @@ pub fn discover_source_link_request(
             ),
         });
     }
-    let source = read_source_file(source_path)?;
+    let text = crate::source::read_selected_source(source)
+        .map_err(|error| source_read_error(source_path, error))?;
     let root = SourceModuleUnit {
-        source_name: logical_source_name(&canonical_source, &canonical_root)?,
-        source,
+        source_name: logical_source_name(source.path(), canonical_root)?,
+        source: text,
     };
     let sources = load_source_companions(
         std::slice::from_ref(&root),
-        &canonical_root,
+        canonical_root,
         &BTreeMap::new(),
     )?;
+    source.revalidate().map_err(|error| {
+        source_read_error(source_path, crate::source::SourceReadError::Io(error))
+    })?;
     Ok(SourceLinkRequest {
         sources,
         root,

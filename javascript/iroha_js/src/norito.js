@@ -3685,10 +3685,10 @@ function encodeEnumTagValue(index, encodePayload) {
 function encodeBackendTagValue(value, context) {
   const backend = assertExactNonEmptyString(value, context);
   switch (backend) {
-    case "halo2-ipa-pasta":
-      return encodeEnumTagValue(0);
     case "stark":
       return encodeEnumTagValue(1);
+    case "native-pipa-r-pasta":
+      return encodeEnumTagValue(0);
     default:
       rejectError(`${context} uses unknown or non-canonical backend label ${backend}`);
   }
@@ -3700,7 +3700,7 @@ function decodeBackendTagValue(payload, context) {
   reader.assertEof();
   switch (tag) {
     case 0:
-      return "halo2-ipa-pasta";
+      return "native-pipa-r-pasta";
     case 1:
       return "stark";
     default:
@@ -3988,11 +3988,11 @@ const stakingCodecsV1 = /* @__PURE__ */ createNoritoStakingCodecs({
   encodeU16Value, decodeU16Value, encodeU64Value, decodeU64Value,
   encodeFixedBytesValue, decodeFixedBytesValue, encodeEscrowIdValue, decodeEscrowIdValue,
   encodeAccountIdValue, decodeAccountIdValue, encodeAssetDefinitionIdValue, decodeAssetDefinitionIdValue,
-  encodePublicKeyValue, decodePublicKeyValue, parsePublicKeyLiteral, publicKeyLiteralFromParts,
+  encodePublicKeyValue, decodePublicKeyValue, parsePublicKeyLiteral, publicKeyLiteralFromParts, curveIdFromAlgorithm,
   decodeConstVecU8Value, encodeQuantityValue, decodeQuantityValue,
 });
-const STAKING_VALUE_NAMES = new Set(["MonetaryPlan", "RewardClaimPlan", "AuthorityGeneration", "EpochAuthorization", "PreparationRequest", "Preparation"]);
-/** Encode a canonical staking plan or authority record. This does not authenticate state. */
+const STAKING_VALUE_NAMES = new Set(["MonetaryPlan", "RewardClaimPlan", "ValidatorGeneration", "EpochAuthorization", "PreparationRequest", "Preparation"]);
+/** Encode a canonical staking plan, validator generation or epoch authorization. This does not authenticate state. */
 export function encodeValidatorStakingValueV1(name, value) {
   if (!STAKING_VALUE_NAMES.has(name)) throw new TypeError("unknown staking value type");
   return withNoritoCompactLengths(() => stakingCodecsV1.encode(name, value));

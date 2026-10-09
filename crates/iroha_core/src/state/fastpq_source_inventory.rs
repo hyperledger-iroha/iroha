@@ -1,5 +1,7 @@
 //! Validator-owned FASTPQ inventory reconciled against applied execution sources.
 
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::{collections::BTreeSet, sync::Arc};
 
 use iroha_data_model::fastpq::FastpqSourceStatementContextV1;

@@ -2,7 +2,7 @@
 //!
 //! This leaf is not a frame authenticator or an admission decision. The enclosing
 //! prepared record walker must preserve the advertised flags, decode scope and
-//! exact canonical frame check. Planning never constructs a BigInt or normalizes
+//! exact canonical frame check. Planning never constructs a `BigInt` or normalizes
 //! a mantissa; the final concrete owner has no Clone or safe extraction API.
 
 use core::convert::Infallible;
@@ -109,8 +109,9 @@ impl QuantityDecodePlan {
     /// Plan one complete canonical Quantity payload without constructing its graph.
     ///
     /// The caller supplies the original field context, flags and bounded decoder
-    /// scope. Canonical field framing still debits that inherited logical scope;
-    /// planning neither constructs nor admits native-digit backing.
+    /// scope. Borrowed framing checks the inherited field-length and depth limits
+    /// without charging storage. Planning neither constructs nor admits
+    /// native-digit backing; filling admits its actual layout in that same scope.
     /// This rejects, rather than normalizes, negative quantities, excess
     /// scale/width, fractional trailing zeroes and malformed field framing.
     ///

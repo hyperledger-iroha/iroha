@@ -950,10 +950,10 @@ fn validator_eligibility_height(
     if lane_id != LaneId::SINGLE {
         return next_unfrozen_election_height(key_ready_height, length).map_err(Attempt::Rejected);
     }
-    let (authority, current) = crate::state::validator_committee::current_authority(state)
+    let (generation, current) = crate::state::validator_committee::current_authority(state)
         .map_err(|error| error.map_rejection(fail))?;
     current
-        .validate_against_authority(&authority)
+        .validate_against_generation(&generation)
         .map_err(|error| fail(error.to_string()))?;
     if execution_height < current.first_height
         || execution_height > current.last_height

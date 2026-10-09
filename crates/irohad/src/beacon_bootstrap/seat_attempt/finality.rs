@@ -136,7 +136,7 @@ impl FinalityInput {
     }
     /// Rebuild actual native ancestry from the unchanged durable proof source.
     /// Raw recorded hashes never initialize the clock. Full canonical verification
-    /// and the original chain/network/Pasta verifier run before its tip advances.
+    /// and the original chain/network certificate verifier run before its tip advances.
     /// TODO: decoded nested native block/result graphs still need retained funding.
     pub(super) fn restore_target_from_original_frame(
         &mut self,

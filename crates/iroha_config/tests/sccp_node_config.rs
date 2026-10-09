@@ -2,6 +2,10 @@
 //! working `[sccp.attestor]` and `[sccp.light_client_keeper]`, and operator overrides are
 //! validated syntactically.
 
+#[path = "publisher_config_fixture.rs"]
+mod publisher_config_fixture;
+use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -20,10 +24,12 @@ fn base_toml() -> PathBuf {
 }
 
 fn base_reader() -> ConfigReader {
-    ConfigReader::new()
-        .without_env()
-        .read_toml_with_extends(base_toml())
-        .expect("base config should load")
+    with_fixture_refs(
+        ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(base_toml())
+            .expect("base config should load"),
+    )
 }
 
 fn load(extra: &str) -> Result<ActualConfig, String> {
@@ -32,7 +38,7 @@ fn load(extra: &str) -> Result<ActualConfig, String> {
         .with_toml_source(TomlSource::inline(table))
         .read_and_complete::<UserConfig>()
         .map_err(|error| format!("{error:?}"))?
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .map_err(|error| format!("{error:?}"))
 }
 
@@ -340,14 +346,16 @@ fn relative_paths_resolve_against_the_config_file() {
         ),
     )
     .expect("write config");
-    let config = ConfigReader::new()
-        .without_env()
-        .read_toml_with_extends(&config_path)
-        .expect("config loads")
-        .read_and_complete::<UserConfig>()
-        .expect("config reads")
-        .parse()
-        .expect("config parses");
+    let config = with_fixture_refs(
+        ConfigReader::new()
+            .without_env()
+            .read_toml_with_extends(&config_path)
+            .expect("config loads"),
+    )
+    .read_and_complete::<UserConfig>()
+    .expect("config reads")
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .expect("config parses");
     let canonical = |path: &Path| fs::canonicalize(path).expect("canonical path");
     assert_eq!(
         canonical(&config.sccp.attestor.key_dir_path()),
@@ -366,14 +374,16 @@ fn sccp_tables_have_no_environment_aliases() {
         .set("SCCP_ATTESTOR_ENABLED", "false")
         .set("SCCP_ATTESTOR_KEY_DIR", "/tmp/elsewhere")
         .set("SCCP_LIGHT_CLIENT_KEEPER_ENABLED", "false");
-    let config = ConfigReader::new()
-        .with_env(env.clone())
-        .read_toml_with_extends(base_toml())
-        .expect("base config should load")
-        .read_and_complete::<UserConfig>()
-        .expect("config reads")
-        .parse()
-        .expect("config parses");
+    let config = with_fixture_refs(
+        ConfigReader::new()
+            .with_env(env.clone())
+            .read_toml_with_extends(base_toml())
+            .expect("base config should load"),
+    )
+    .read_and_complete::<UserConfig>()
+    .expect("config reads")
+    .parse_with_file_source(&ParserOnlyPublisherFiles)
+    .expect("config parses");
     assert!(config.sccp.attestor.enabled);
     assert!(config.sccp.light_client_keeper.enabled);
     for name in [

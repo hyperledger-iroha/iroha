@@ -132,14 +132,12 @@ fn signed_unadmitted_foreign_record_and_forged_carrier_metadata_never_restore() 
             2,
             iroha_sumeragi::types::Hash32([0x81; 32]),
             iroha_sumeragi::types::Hash32([0x82; 32]),
-            false,
             crate::sumeragi::test_chain::Signers::Quorum,
         ),
         chain.commit_qc(
             2,
             iroha_sumeragi::types::Hash32([0x83; 32]),
             iroha_sumeragi::types::Hash32([0x84; 32]),
-            false,
             crate::sumeragi::test_chain::Signers::LastThree,
         ),
     );

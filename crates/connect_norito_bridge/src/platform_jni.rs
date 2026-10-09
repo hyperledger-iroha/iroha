@@ -19,6 +19,8 @@ mod account_address;
 mod committed_transaction_inclusion;
 mod confidential_prover;
 mod gpu;
+#[cfg(unix)]
+mod kagemusha_wallet_advance;
 
 include!("platform_jni/part_1.rs");
 include!("platform_jni/part_2.rs");

@@ -200,6 +200,20 @@ fn provider_handle(peer: &PeerId) -> String {
     handle
 }
 
+// The verified generation contains canonical PeerIds. Keep every seat and its order bound
+// to that authenticated generation before starting the target DKG processes.
+fn verify_incumbent_seats(seats: &[&NetworkPeer], incumbent: &[PeerId]) -> Result<()> {
+    ensure!(
+        seats.len() == incumbent.len()
+            && seats
+                .iter()
+                .zip(incumbent)
+                .all(|(seat, peer)| seat.id() == *peer),
+        "rotation signers must match the complete exact incumbent roster in order"
+    );
+    Ok(())
+}
+
 fn verify_input(
     seats: &[&NetworkPeer],
     authorizing_seats: &[&NetworkPeer],
@@ -221,25 +235,14 @@ fn verify_input(
         input.target_epoch,
         input.transition_id.into(),
         input.finality_limits,
-        verifier.attestations(),
         verifier.allocation_budget(),
     )
     .wrap_err("rotation selection evidence verification failed")?;
     let preparation = selected.preparation();
-    let incumbent = selected
-        .incumbent_authority()
-        .validators
-        .iter()
-        .map(|keys| keys.validator.clone())
-        .collect::<Vec<_>>();
-    ensure!(
-        authorizing_seats.len() == incumbent.len()
-            && authorizing_seats
-                .iter()
-                .zip(&incumbent)
-                .all(|(seat, peer)| seat.id() == *peer),
-        "rotation signers must match the complete exact incumbent roster in order"
-    );
+    verify_incumbent_seats(
+        authorizing_seats,
+        &selected.incumbent_authority().validators,
+    )?;
     let roster = preparation
         .committee
         .iter()
@@ -1619,14 +1622,6 @@ pub async fn prepare_disposable_pending_custody(
         .map_err(|error| eyre!("invalid chain identifier: {error}"))?;
     let credential_budget =
         iroha_allocation::AllocationBudget::new(input.credential_max_memory_bytes.get());
-    let cursor = NativeJournalCursor::new(
-        chain_id.clone(),
-        input.network_id,
-        iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        input.finality_limits,
-        &credential_budget,
-    )
-    .map_err(|error| eyre!(error))?;
     let verified = verify_validator_committee_provisioning_evidence_v1(
         evidence,
         &chain_id,
@@ -1634,7 +1629,6 @@ pub async fn prepare_disposable_pending_custody(
         input.target_epoch,
         input.transition_id.into(),
         input.finality_limits,
-        cursor.attestations(),
         &credential_budget,
     )
     .wrap_err("pending custody evidence is invalid")?;
@@ -2419,6 +2413,39 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn rotation_incumbent_seats_require_the_complete_exact_verified_peer_order() {
+        let network = NetworkBuilder::new()
+            .with_peers(4)
+            .with_base_seed("verified-incumbent-peer-order")
+            .build();
+        let peers = network.validators().iter().collect::<Vec<_>>();
+        let incumbent = peers.iter().map(|peer| peer.id()).collect::<Vec<_>>();
+        assert_eq!(incumbent.len(), 4);
+        verify_incumbent_seats(&peers, &incumbent).unwrap();
+        let refused = |seats: &[&NetworkPeer]| {
+            assert_eq!(
+                verify_incumbent_seats(seats, &incumbent)
+                    .expect_err("only the exact incumbent roster may authorize a rotation")
+                    .to_string(),
+                "rotation signers must match the complete exact incumbent roster in order"
+            );
+        };
+        refused(&peers[..3]);
+        refused(&[]);
+        let mut changed = peers.clone();
+        changed.swap(0, 1);
+        refused(&changed);
+        changed.swap(0, 1);
+        verify_incumbent_seats(&changed, &incumbent).unwrap();
+        changed[1] = changed[0];
+        refused(&changed);
+        let mut extra = peers.clone();
+        extra.push(peers[0]);
+        refused(&extra);
+        verify_incumbent_seats(&peers, &incumbent).unwrap();
+    }
 
     #[tokio::test]
     async fn ceremony_finality_callback_preserves_original_deadline_before_late_refusal() {

@@ -12311,21 +12311,39 @@ seiyaku Privacy {
     }
     #[test]
     fn smart_contract_code_instruction_json_roundtrip() {
-        const FRAME_LIMIT: usize = 64 * 1024;
-        const SCRATCH_BYTES: usize = 8 * FRAME_LIMIT;
-        let signing_pool = iroha_allocation::AllocationBudget::new(
-            SCRATCH_BYTES + norito::core::DecodeBudgetContext::allocation_layout().size(),
-        );
-        let _signing_scratch = signing_pool
-            .try_reserve_bytes(SCRATCH_BYTES)
-            .expect("fund fixture manifest signing scratch");
-        let signing_context = norito::core::DecodeBudgetContext::try_new_owned(
-            norito::DecodeLimits::new(FRAME_LIMIT, FRAME_LIMIT, FRAME_LIMIT, SCRATCH_BYTES, 256),
-            &signing_pool,
-        )
-        .expect("fund original fixture signing counter");
         let signing_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
             .expect("fixture seed keypair");
+        let max_frame_bytes = usize::try_from(
+            iroha_data_model::parameter::system::TransactionParameters::default()
+                .max_tx_bytes
+                .get(),
+        )
+        .expect("canonical transaction byte ceiling");
+        let signer_bytes = signing_key.public_key().retained_allocation_layout().size();
+        let cumulative_bytes = max_frame_bytes
+            .checked_add(signer_bytes)
+            .expect("finite manifest allocation allowance");
+        let physical_bytes = cumulative_bytes
+            .checked_add(norito::core::DecodeBudgetContext::allocation_layout().size())
+            .expect("finite manifest physical allowance");
+        let pool = iroha_allocation::AllocationBudget::new(physical_bytes);
+        let mut grant = pool
+            .try_reserve_bytes(physical_bytes)
+            .expect("fund original manifest codec allowance");
+        let context = norito::core::DecodeBudgetContext::from_reservation(
+            norito::DecodeLimits::new(
+                max_frame_bytes,
+                max_frame_bytes,
+                max_frame_bytes,
+                cumulative_bytes,
+                norito::core::MAX_VALUE_NESTING_DEPTH,
+            ),
+            &mut grant,
+        )
+        .expect("retain original manifest accounting");
+        let _signer_backing = grant
+            .try_partition_bytes(signer_bytes)
+            .expect("retain original compact signer backing");
         let manifest = ContractManifest {
             seiyaku_name: None,
             code_hash: Some(Hash::prehashed(sample_hash(0xAA))),
@@ -12383,15 +12401,30 @@ seiyaku Privacy {
             error_messages: None,
             error_types: None,
             provenance: None,
-        }
-        .try_signed(&signing_context, FRAME_LIMIT, &signing_key)
-        .expect("sign bounded fixture manifest");
+        };
+        let frame_bytes = context
+            .with(|| {
+                let _canonical =
+                    norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+                norito::core::encoded_frame_len_bounded(
+                    &manifest.signature_payload(),
+                    max_frame_bytes,
+                )
+            })
+            .expect("count canonical manifest payload");
+        let frame = grant
+            .try_partition_bytes(frame_bytes)
+            .expect("admit exact canonical manifest payload");
+        let manifest = manifest
+            .try_signed(&context, frame_bytes, &signing_key)
+            .expect("sign fixture manifest");
+        drop(frame);
         let instruction: InstructionBox = Box::new(RegisterSmartContractCode {
             artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
                 DataSpaceId::new(u64::MAX),
                 manifest.code_hash.expect("fixture manifest hash"),
             ),
-            manifest: manifest.clone(),
+            manifest,
         })
         .into_instruction_box();
         let json_value = instruction_to_json_value(&instruction)
@@ -13450,12 +13483,12 @@ seiyaku Privacy {
             gas_policy_commitment: Hash::new(b"gas-policy"),
         };
         let attachment = ProofAttachment::new_ref(
-            "halo2/ipa".parse().expect("backend ident"),
+            "pipa-r/pasta".parse().expect("backend ident"),
             ProofBox::new(
-                "halo2/ipa".parse().expect("proof backend ident"),
+                "pipa-r/pasta".parse().expect("proof backend ident"),
                 vec![0xAA, 0xBB, 0xCC],
             ),
-            VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1"),
+            VerifyingKeyId::new("pipa-r/pasta", "ivm-exec-v1"),
         );
         let proved_json = json::to_json(&proved).expect("proved json");
         let attachment_json = json::to_json(&attachment).expect("attachment json");

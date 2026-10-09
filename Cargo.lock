@@ -4816,6 +4816,7 @@ dependencies = [
  "humantime",
  "image",
  "iroha",
+ "iroha_allocation",
  "iroha_config",
  "iroha_config_base",
  "iroha_core",
@@ -4965,8 +4966,6 @@ dependencies = [
  "fastpq_prover",
  "ff",
  "futures",
- "halo2-axiom",
- "halo2-base",
  "hex",
  "http",
  "incrementalmerkletree",
@@ -5015,7 +5014,6 @@ dependencies = [
  "rustix 1.1.4",
  "settlement_router",
  "sha2",
- "snark-verifier",
  "sorafs_manifest",
  "soranet_pq",
  "tempfile",
@@ -5091,23 +5089,18 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "base64 0.22.1",
  "blake3",
- "ciborium",
- "der-parser",
  "fastpq_isi",
  "fastpq_prover",
  "ff",
- "halo2-axiom",
- "halo2-base",
- "halo2-ecc",
  "hex",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_fs",
- "iroha_model_base",
- "iroha_panic_hook",
+ "iroha_pasta",
+ "iroha_plonk",
+ "iroha_plonk_gadgets",
+ "iroha_plonk_recursion",
  "iroha_primitives",
- "iroha_test_samples",
- "iroha_torii_shared",
  "iroha_zkp_halo2",
  "iroha_zkp_poseidon",
  "ivm_abi",
@@ -5118,11 +5111,9 @@ dependencies = [
  "rand_core 0.6.4",
  "rustix 1.1.4",
  "sha2",
- "snark-verifier",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
- "url",
  "zeroize",
 ]
 
@@ -5267,7 +5258,6 @@ dependencies = [
  "blake3",
  "color-eyre",
  "error-stack",
- "halo2curves",
  "hex",
  "humantime",
  "iroha",
@@ -5458,7 +5448,6 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "base64 0.22.1",
  "blake3",
- "halo2-axiom",
  "hex",
  "iroha",
  "iroha_allocation",
@@ -5510,7 +5499,6 @@ dependencies = [
  "iroha_contract_deploy",
  "iroha_core",
  "iroha_core_privacy",
- "iroha_core_zk",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_deploy",
@@ -5544,6 +5532,7 @@ dependencies = [
  "iroha_pasta",
  "iroha_plonk",
  "iroha_plonk_gadgets",
+ "iroha_plonk_recursion",
  "norito",
  "rand_chacha 0.3.1",
  "rayon",
@@ -5745,10 +5734,15 @@ name = "iroha_plonk_gadgets"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "ff",
+ "iroha_measurement",
  "iroha_pasta",
  "iroha_plonk",
  "norito",
+ "num-bigint 0.4.6",
+ "p256",
  "rand_chacha 0.3.1",
+ "rayon",
+ "sha2",
 ]
 
 [[package]]
@@ -5765,6 +5759,19 @@ dependencies = [
  "rayon",
  "sha2",
  "snark-verifier",
+]
+
+[[package]]
+name = "iroha_plonk_recursion"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "ff",
+ "group",
+ "iroha_pasta",
+ "iroha_plonk",
+ "iroha_plonk_gadgets",
+ "rayon",
+ "sha2",
 ]
 
 [[package]]
@@ -6341,6 +6348,7 @@ dependencies = [
  "ivm",
  "mv",
  "norito",
+ "p256",
  "parking_lot",
  "rand 0.9.4",
  "rcgen",
@@ -6699,10 +6707,11 @@ dependencies = [
 name = "kaigi_zk"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "halo2-axiom",
+ "ff",
  "iroha_crypto",
+ "iroha_pasta",
+ "iroha_plonk",
  "poseidon-primitives",
- "rand_core 0.6.4",
  "zeroize",
 ]
 
@@ -10646,16 +10655,18 @@ dependencies = [
  "blake3",
  "chacha20poly1305 0.11.0-rc.3",
  "ed25519-dalek",
- "halo2-axiom",
+ "ff",
  "hex",
  "iroha_crypto",
+ "iroha_pasta",
+ "iroha_plonk",
+ "iroha_plonk_gadgets",
  "iroha_primitives",
  "iroha_schema",
  "norito",
  "poseidon-primitives",
  "rand 0.9.4",
  "rand_chacha 0.9.0",
- "rand_core 0.6.4",
  "sorafs_chunker",
  "soranet_pq",
  "tempfile",
@@ -13337,7 +13348,7 @@ dependencies = [
  "ed25519-dalek",
  "eyre",
  "fastpq_isi",
- "halo2-axiom",
+ "ff",
  "hex",
  "integration_tests",
  "iroha",
@@ -13350,6 +13361,8 @@ dependencies = [
  "iroha_fs",
  "iroha_genesis",
  "iroha_model_base",
+ "iroha_pasta",
+ "iroha_plonk",
  "iroha_primitives",
  "iroha_service_model",
  "iroha_storage_client",

@@ -247,8 +247,8 @@ impl ManagedStore {
             ));
         }
         let started = Instant::now();
-        let launcher = pin_binary(&request.launcher)?;
-        let daemon = pin_binary(&request.daemon)?;
+        let programs = request.admit_programs()?;
+        let (launcher, daemon) = programs.pins()?;
         let directory = self.networks.ensure_child(&request.name)?;
         let _operation = acquire(&directory, "operation.lock", &request.name)?;
         let mut reservations = None;
@@ -300,6 +300,7 @@ impl ManagedStore {
         };
         // Binding is serialized with this exact validated generation, before spawn and before
         // any reset can acquire operation.lock. No callback may activate parent operations.
+        programs.validate()?;
         retain_context(&retained.prepared)?;
         runtime::startup_remaining(started, request.startup_timeout)?;
         if let Ok(status) = exchange(&directory, "status") {
@@ -312,6 +313,7 @@ impl ManagedStore {
                 true,
             )?;
             if status.phase == ManagedPhase::Ready {
+                programs.validate()?;
                 selection.apply(self, &request.name)?;
                 return Ok(status);
             }
@@ -323,7 +325,7 @@ impl ManagedStore {
             // processes merely because their integer PID appears in a previous record.
             let available = acquire(&directory, "runtime.lock", &request.name)?;
             drop(available);
-            verify_binary(&retained.launcher)?;
+            let launcher = super::program::NativeProgram::matching(&retained.launcher)?;
             let output = directory.open_append("supervisor.log")?;
             let errors = output.try_clone()?;
             let mut command = Command::new(&retained.launcher.path);
@@ -350,10 +352,15 @@ impl ManagedStore {
             // Binary verification and durable status publication consume the caller's same
             // startup budget; the worker must not receive the earlier, larger remainder.
             let remaining = runtime::startup_remaining(started, request.startup_timeout)?;
+            let milliseconds = runtime::worker_startup_millis(remaining, request.startup_timeout)?;
             command
                 .arg("--startup-timeout-ms")
-                .arg(remaining.as_millis().to_string());
+                .arg(milliseconds.to_string());
             drop(reservations.take());
+            programs.validate()?;
+            launcher.validate()?;
+            // These original native owners remain alive across spawn. This is a source fence,
+            // not a claim that pathname execution is atomic with the validation on every OS.
             let mut worker = command.spawn()?;
             // Reap this exact child eventually without blocking the CLI after successful startup.
             thread::spawn(move || {
@@ -379,6 +386,7 @@ impl ManagedStore {
                 )?;
                 match status.phase {
                     ManagedPhase::Ready => {
+                        programs.validate()?;
                         selection.apply(self, &request.name)?;
                         return Ok(status);
                     }
@@ -664,34 +672,12 @@ fn ownership_contended(error: &std::io::Error) -> bool {
 }
 
 pub(super) fn pin_binary(path: &Path) -> Result<BinaryPin> {
-    let path = path.canonicalize()?;
-    let mut file = File::open(&path)?;
-    if !file.metadata()?.is_file() {
-        return Err(Error::Invalid(
-            "managed executable must be a regular file".into(),
-        ));
-    }
-    let mut hasher = blake3::Hasher::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    Ok(BinaryPin {
-        path,
-        blake3: hasher.finalize().to_hex().to_string(),
-    })
+    super::program::NativeProgram::capture(path)?.pin()
 }
 
+#[cfg(test)]
 pub(super) fn verify_binary(pin: &BinaryPin) -> Result<()> {
-    if pin_binary(&pin.path)?.blake3 != pin.blake3 {
-        return Err(Error::Invalid(
-            "managed executable changed since this generation was prepared".into(),
-        ));
-    }
+    super::program::NativeProgram::matching(pin)?.validate()?;
     Ok(())
 }
 

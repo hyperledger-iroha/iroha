@@ -20,6 +20,25 @@ use std::{
     str::FromStr,
     time::Duration,
 };
+/// Required online finalized-load publication service defaults.
+pub mod kagemusha_load_authorizer {
+    /// Maximum encoded private Norito keyring bytes admitted at startup.
+    pub const KEYRING_MAX_BYTES: usize = 65_536;
+    /// Retry cadence while the chain, worker or submitter is unavailable.
+    pub const POLL_INTERVAL_MS: u64 = 1_000;
+    /// Bounded pending identities per tick.
+    pub const PAGE_SIZE: usize = 16;
+    /// Maximum original block frame bytes.
+    pub const BLOCK_BYTES: usize = 2 * 1024 * 1024;
+    /// Maximum original history bytes per tick.
+    pub const JOURNAL_BYTES: usize = 16 * 1024 * 1024;
+    /// Maximum original block frames per tick.
+    pub const BLOCK_COUNT: usize = 64;
+    /// Maximum Norito decoded allocation per tick.
+    pub const ALLOCATED_BYTES: usize = 32 * 1024 * 1024;
+    /// Normal online publication transaction expiration; vouchers themselves never expire here.
+    pub const TRANSACTION_TTL_MS: u64 = 60_000;
+}
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
     let domain_id =
         DomainId::parse_fully_qualified(domain).expect("default asset definition domain");
@@ -173,10 +192,12 @@ pub mod data_dir {
     pub const TRANSPORT_KEY: &str = "transport.key";
     /// Streaming identity Ed25519 private key (`streaming.identity_private_key_file`).
     pub const STREAMING_KEY: &str = "streaming.key";
+    /// Required online KAGEMUSHA publisher's private Norito signer keyring.
+    pub const KAGEMUSHA_LOAD_AUTHORIZER_KEYRING: &str = "kagemusha_load_authorizer.keyring.norito";
+    /// Required online KAGEMUSHA publisher's private transaction submitter key.
+    pub const KAGEMUSHA_LOAD_SUBMITTER_KEY: &str = "kagemusha_load_submitter.key";
     /// Soracloud runtime mutation-signer private key.
     pub const RUNTIME_SIGNER_KEY: &str = "runtime_signer.key";
-    /// KAGEMUSHA mint-finality seed.
-    pub const MINT_FINALITY_SEED: &str = "mint_finality.seed";
     /// Global beacon partial-signer credential.
     pub const BEACON_CREDENTIAL: &str = "beacon.cred";
     /// Faucet authority private key (`torii.faucet.private_key_file`).
@@ -2903,7 +2924,7 @@ pub mod torii {
     /// Allowlisted backend prefixes for the background prover worker.
     #[must_use]
     pub fn zk_prover_allowed_backends() -> Vec<String> {
-        vec!["halo2/".to_string()]
+        vec!["pipa-r/pasta".to_string()]
     }
     /// Allowlisted circuit identifiers for the background prover worker.
     /// Empty list means "allow all circuits".
@@ -3475,8 +3496,6 @@ pub mod nexus {
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
         pub const MAX_WSV_MEMORY_BYTES: Bytes = Bytes(8 * 1024 * 1024 * 1024);
-        /// Finite original allocation pool shared by fixed KAGEMUSHA indexes.
-        pub const KAGEMUSHA_OPERATION_INDEX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
         /// Shared retained carrier shell/effects/descriptor allowance, not total RAM.
         pub const RETAINED_CARRIER_SHELL_BYTES: usize = 256 * 1024 * 1024;
         /// Exact backing for one maximum-size committed-evidence prune-key plan.
@@ -4129,40 +4148,46 @@ pub mod zk {
         /// Whether to log Metal device enumeration details (off by default).
         pub const METAL_DEBUG_ENUM: bool = false;
     }
-    /// Halo2 verifier configuration for host-side proof checking.
-    pub mod halo2 {
-        /// Feature toggle for Halo2 verification in hosts.
+    /// Native PIPA-R verifier limits for the compiled circuit registry.
+    pub mod pipa_r {
+        /// Native PIPA-R verification is available by default.
         pub const ENABLED: bool = true;
-        /// Default curve identifier used for Halo2 verification.
-        pub const CURVE: &str = "pallas";
-        /// Backend implementation identifier (e.g., IPA).
-        pub const BACKEND: &str = "ipa";
-        /// Maximum circuit size expressed as `k` (2^k rows).
-        pub const MAX_K: u32 = 16;
-        /// Soft wall-clock budget for verification in milliseconds (DA proof bench: 8 MiB / 128 openings about 15 ms max).
-        pub const VERIFIER_BUDGET_MS: u64 = 20; // soft budget
-        /// Maximum batch size processed in a single verification call.
-        pub const VERIFIER_MAX_BATCH: u32 = 16;
-        /// Number of ZK lane verifier worker threads (0 = bounded auto).
-        pub const VERIFIER_WORKER_THREADS: usize = 0;
-        /// Capacity of the ZK lane verifier ingress queue (0 = auto-derived).
-        pub const VERIFIER_QUEUE_CAP: usize = 0;
-        /// Maximum time spent waiting for ZK lane enqueue under saturation (ms).
-        pub const VERIFIER_ENQUEUE_WAIT_MS: u64 = 25;
-        /// Capacity of the important-task retry ring used by the ZK lane.
-        pub const VERIFIER_RETRY_RING_CAP: usize = 2048;
-        /// Maximum retry rounds for an item in the ZK lane retry ring.
-        pub const VERIFIER_RETRY_MAX_ATTEMPTS: u32 = 3;
-        /// Retry scheduler tick interval for the ZK lane (ms).
-        pub const VERIFIER_RETRY_TICK_MS: u64 = 5;
-        /// Maximum accepted Norito envelope payload length in bytes.
+        /// Maximum outer envelope size, shared with stateless pre-verification.
         pub const MAX_ENVELOPE_BYTES: usize = super::preverify::MAX_BYTES;
-        /// Maximum accepted proof length in bytes after Norito encoding.
+        /// Maximum canonical proof-payload size.
         pub const MAX_PROOF_BYTES: usize = 192 * 1024;
-        /// Maximum accepted transcript label length in bytes.
+    }
+    /// Maximum proofs accepted by one host batch-verification syscall.
+    pub const MAX_VERIFY_BATCH: u32 = 16;
+    /// Bounds for the local diagnostic polynomial-opening endpoint.
+    pub mod ipa_commitment {
+        /// Maximum domain exponent for diagnostic polynomial openings.
+        pub const MAX_K: u32 = 16;
+        /// Maximum diagnostic transcript-label length in bytes.
         pub const MAX_TRANSCRIPT_LABEL_LEN: usize = 64;
-        /// Whether transcript labels must be ASCII.
+        /// Maximum encoded diagnostic polynomial-opening envelope size.
+        pub const MAX_ENVELOPE_BYTES: usize = 256 * 1024;
+        /// Require ASCII diagnostic transcript labels.
         pub const ENFORCE_TRANSCRIPT_LABEL_ASCII: bool = true;
+    }
+    /// Optional local diagnostic trace worker defaults.
+    pub mod trace {
+        /// Enable optional local diagnostic trace checking.
+        pub const ENABLED: bool = true;
+        /// Maximum diagnostic tasks dispatched in one worker batch.
+        pub const MAX_BATCH: u32 = 16;
+        /// Diagnostic worker threads (0 selects the bounded automatic count).
+        pub const WORKER_THREADS: usize = 0;
+        /// Diagnostic ingress capacity (0 derives a bounded capacity).
+        pub const QUEUE_CAP: usize = 0;
+        /// Maximum diagnostic enqueue wait in milliseconds.
+        pub const ENQUEUE_WAIT_MS: u64 = 25;
+        /// Capacity of the important diagnostic-task retry ring.
+        pub const RETRY_RING_CAP: usize = 2048;
+        /// Maximum retry rounds for an important diagnostic task.
+        pub const RETRY_MAX_ATTEMPTS: u32 = 3;
+        /// Diagnostic retry scheduler interval in milliseconds.
+        pub const RETRY_TICK_MS: u64 = 5;
     }
     /// Native STARK/FRI verifier configuration defaults.
     pub mod stark {
@@ -4576,7 +4601,7 @@ pub mod confidential {
     /// Observer-only assume-valid disabled by default.
     pub const ASSUME_VALID: bool = false;
     /// Default verifier backend identifier.
-    pub const VERIFIER_BACKEND: &str = "halo2-ipa-pallas";
+    pub const VERIFIER_BACKEND: &str = "pipa-r/pasta";
     /// Maximum confidential proof size (bytes).
     pub const MAX_PROOF_SIZE_BYTES: u32 = 1_048_576;
     /// Maximum nullifiers per transaction.

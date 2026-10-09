@@ -105,7 +105,7 @@ impl AuthenticatedGlobalBeaconDkgAttemptV1 {
             || epoch.mode != ConsensusMode::Npos
             || epoch.authorization.first_height != 1
             || epoch.authorization.epoch != 0
-            || epoch.authority.generation != 0
+            || epoch.authorization.authority_generation != 0
         {
             return Err(GlobalThresholdBeaconError::InvalidDkgSession.into());
         }
@@ -166,7 +166,7 @@ impl AuthenticatedGlobalBeaconDkgAttemptV1 {
             .ok_or(GlobalThresholdBeaconError::InvalidDkgSession)?;
         if clock.network_id() != preparation.network_id
             || tip.height() != selection.observed_height()
-            || tip.commitment().schedule.current.authority != *selection.incumbent_authority()
+            || tip.commitment().schedule.current.generation() != *selection.incumbent_authority()
         {
             return Err(GlobalThresholdBeaconError::InvalidDkgSession.into());
         }

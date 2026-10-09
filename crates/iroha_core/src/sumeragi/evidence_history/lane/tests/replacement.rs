@@ -36,16 +36,14 @@ use iroha_data_model::{
             ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
             ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1,
         },
-        kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
     },
     nexus::{
         AdmitValidatorCommitteeSeatV1, FeeDebitSource, PrepareValidatorCommitteeCredentialsV1,
         PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
         PublicLaneMonetaryRegistrationV1, PublicLaneMonetaryScopeV1,
         PublicLanePreparationOperationV1, PublicLanePreparationRequestV1,
-        PublicLanePrepareUnbondV1, PublicLanePreparedPlanV1, ValidatorCandidateKeyAuthorizationV1,
-        ValidatorCandidateKeysV1, ValidatorCommitteeCredentialsV1, ValidatorCommitteeOperationV1,
-        ValidatorCommitteeSeatReadinessV1,
+        PublicLanePrepareUnbondV1, PublicLanePreparedPlanV1, ValidatorCommitteeCredentialsV1,
+        ValidatorCommitteeOperationV1, ValidatorCommitteeSeatReadinessV1,
     },
     parameter::{
         Parameter,
@@ -544,9 +542,7 @@ pub(super) fn finish_after_real_detector_penalty(
                 .any(|old| old.public_key() == key.public_key())
         })
         .unwrap();
-    chain
-        .provision_candidate_custody(new_key, zeroize::Zeroizing::new([0xEF; 32]))
-        .unwrap();
+    chain.provision_candidate_custody(new_key).unwrap();
     let source = chain
         .state()
         .view()
@@ -725,39 +721,8 @@ pub(super) fn finish_after_real_detector_penalty(
             .iter()
             .any(|seat| seat.validator.public_key() == old_keys[2].public_key())
     );
-    let mut published = Vec::new();
-    for (index, key) in target_keys.iter().enumerate() {
-        let peer = PeerId::new(key.public_key().clone());
-        let (keys, possession) = chain
-            .pasta_custody_for_peer(&peer)
-            .unwrap()
-            .candidate_possession(1)
-            .unwrap();
-        let authorization = ValidatorCandidateKeyAuthorizationV1::new(
-            chain.network_id(),
-            1,
-            keys.clone(),
-            possession.clone(),
-        );
-        let publication = ValidatorCandidateKeysV1 {
-            network_id: chain.network_id(),
-            generation: 1,
-            keys: keys.clone(),
-            possession,
-            peer_signature: SignatureOf::new(key.private_key(), &authorization),
-        };
-        let signed = paid(
-            chain,
-            &operator(index),
-            SetParameter::new(Parameter::Custom(
-                ValidatorCommitteeOperationV1::PublishCandidate(publication)
-                    .into_custom_parameter(),
-            ))
-            .into(),
-        );
-        commit_checked(chain, signed, None, None, ControlWitness::empty());
-        published.push(keys);
-    }
+    // The frozen elected BLS committee is the target generation. No separate candidate-key
+    // publication can alter it; readiness still needs the actual finalized beacon shares.
     let start = chain.height() + 1;
     let prepared = make_beacon(
         chain,
@@ -770,12 +735,6 @@ pub(super) fn finish_after_real_detector_penalty(
     advance(chain, start + 3, &bootstrap);
     install_beacon(chain, &prepared, &old_keys);
     let credentials = ValidatorCommitteeCredentialsV1 {
-        authority: KagemushaMintFinalityAuthorityGenerationV1 {
-            version: 1,
-            network_id: chain.network_id(),
-            generation: 1,
-            validators: published,
-        },
         beacon: InstalledBeaconEpochBindingV1 {
             session_id: prepared.session.record().session_id,
             transcript_hash: prepared.session.record().transcript_hash,
@@ -805,32 +764,32 @@ pub(super) fn finish_after_real_detector_penalty(
         .get(&2)
         .unwrap()
         .clone();
+    let generation = transition.preparation.generation();
     for (index, key) in target_keys.iter().enumerate() {
         let context = transition.readiness_context(index as u32).unwrap();
-        let authority = &transition.credentials.as_ref().unwrap().authority;
         let peer = PeerId::new(key.public_key().clone());
         let mut rebound = context.clone();
         rebound.transition_id[0] ^= 1;
         assert!(
             chain
-                .prove_prepared_seat_readiness(&peer, authority, &rebound)
+                .check_prepared_seat_binding(&peer, &generation, &rebound)
                 .is_err()
         );
         let old_offender = PeerId::new(old_keys[2].public_key().clone());
         assert!(
             chain
-                .prove_prepared_seat_readiness(&old_offender, authority, &context)
+                .check_prepared_seat_binding(&old_offender, &generation, &context)
                 .is_err()
         );
+        chain
+            .check_prepared_seat_binding(&peer, &generation, &context)
+            .unwrap();
         let readiness = ValidatorCommitteeSeatReadinessV1 {
             validator_index: index as u32,
-            pasta: chain
-                .prove_prepared_seat_readiness(&peer, authority, &context)
-                .unwrap(),
             beacon: prove_global_threshold_beacon_seat_readiness_v1(
                 &prepared.signers[index],
                 &prepared.session,
-                authority,
+                &generation,
                 &context,
             )
             .unwrap(),
@@ -855,8 +814,8 @@ pub(super) fn finish_after_real_detector_penalty(
                 .commitment()
                 .schedule
                 .current
-                .authority
-                .generation,
+                .authorization
+                .authority_generation,
             0
         );
     }
@@ -889,8 +848,8 @@ pub(super) fn finish_after_real_detector_penalty(
             .commitment()
             .schedule
             .current
-            .authority
-            .generation,
+            .authorization
+            .authority_generation,
         1
     );
     assert_eq!(
@@ -899,8 +858,8 @@ pub(super) fn finish_after_real_detector_penalty(
             .commitment()
             .schedule
             .current
-            .authority
-            .generation,
+            .authorization
+            .authority_generation,
         0
     );
     let view = chain.state().view();

@@ -19,6 +19,16 @@ struct OriginalBytes {
     request: Vec<u8>,
 }
 
+struct CompletedDeepHistory {
+    history: BodyHistory,
+    originals: Vec<OriginalBytes>,
+    original_policy: SignerCustodyPolicyV1,
+    original_native:
+        iroha_data_model::sorafs::stream_token_custody::StreamTokenCustodyControlRecordV1,
+    initial_carrier_path: PathBuf,
+    initial_carrier: Vec<u8>,
+}
+
 fn require_full_census(history: &History) {
     let (result, census) = history.test_require_current(2 * 64);
     result.unwrap();
@@ -52,7 +62,22 @@ fn refresh_old_anchor(fixture: &mut Fixture) {
 #[test]
 fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_substitution() {
     let _guard = crate::managed::native_test_guard();
-    let mut fixture = Fixture::enrolled_with_renewal_validity(4_000, 4_000);
+    let fixture = Fixture::enrolled_with_renewal_validity(4_000, 4_000);
+    exercise_deep_history(fixture);
+}
+
+// Initial enrollment completes before the retained-history exercise needs its parser scratch.
+// The caller holds the native fixture guard through both phases and the fixture's drop.
+#[inline(never)]
+fn exercise_deep_history(mut fixture: Fixture) {
+    let completed = populate_deep_history(&mut fixture);
+    verify_deep_history(&fixture, completed);
+}
+
+// Each phase owns its parser scratch only while it runs. The original native handles and
+// byte buffers move directly into the verification phase without reopening or copying them.
+#[inline(never)]
+fn populate_deep_history(fixture: &mut Fixture) -> CompletedDeepHistory {
     let original_policy = fixture.policy.clone();
     let original_fees = Fees::from_options(&fixture.options).unwrap();
     let complete_before = Instant::now() + Duration::from_secs(600);
@@ -101,19 +126,26 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
                 .expires_at_unix_ms;
             wait_until(expiry, Duration::from_secs(6));
         }
+        // A fresh production startup acquires its turn before opening any body history.
+        // End the preceding invocation only after using its exact original expiry; the next
+        // invocation retains one graph throughout reserve, finish and consuming reparse.
+        drop(retained.take());
         assert!(Instant::now() < complete_before);
         assert!(now_ms().unwrap() < original_policy.active_until_unix_ms);
         // Each separate startup has its own finite I/O budget. No retained body, epoch or
         // wallet Terms are changed, and the originally configured policy remains the cap.
         fixture.options.deadline = (Instant::now() + Duration::from_secs(120)).min(complete_before);
         assert!(Fees::from_options(&fixture.options).unwrap() == original_fees);
-        refresh_old_anchor(&mut fixture);
+        refresh_old_anchor(fixture);
         let mut turn = fixture.renewal_turn();
         let (checkpoint, current) = fixture.current();
         assert_eq!(current.current().unwrap().record(), &original_native);
         assert_eq!(current.current().unwrap().control().next_sequence, 2);
 
-        let history = if let Some(previous) = retained.take() {
+        let history = if ordinal > 1 {
+            let previous = BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2))
+                .unwrap()
+                .expect("previous startup must retain its renewal body history");
             let authorization = turn
                 .authorize_retained(&fixture.owner, &previous, fixture.options.deadline)
                 .unwrap();
@@ -185,6 +217,28 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
         assert_eq!(history.bodies.len(), usize::from(ordinal));
         assert_eq!(history.anchor.active, Some(ordinal));
         assert!(!history.has_pending());
+        assert!(
+            history.anchor.completed.is_some() && history.original().unwrap().is_some(),
+            "body {ordinal} must complete its signed Original before dispatch: selected_at_unix_ms={}, body_expiry_unix_ms={}, now_unix_ms={}, completed={}, original_present={}",
+            history
+                .bodies
+                .last()
+                .unwrap()
+                .reservation
+                .unsigned
+                .selected_at_unix_ms,
+            history
+                .bodies
+                .last()
+                .unwrap()
+                .reservation
+                .unsigned
+                .statement
+                .expires_at_unix_ms,
+            now_ms().unwrap(),
+            history.anchor.completed.is_some(),
+            history.original().unwrap().is_some(),
+        );
         let selected = fixture
             .retain_generated_attempt(&mut turn, &history, &current)
             .unwrap();
@@ -241,6 +295,26 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
     }
 
     let history = retained.unwrap();
+    CompletedDeepHistory {
+        history,
+        originals,
+        original_policy,
+        original_native,
+        initial_carrier_path,
+        initial_carrier,
+    }
+}
+
+#[inline(never)]
+fn verify_deep_history(fixture: &Fixture, completed: CompletedDeepHistory) {
+    let CompletedDeepHistory {
+        history,
+        originals,
+        original_policy,
+        original_native,
+        initial_carrier_path,
+        initial_carrier,
+    } = completed;
     assert_eq!(history.bodies.len(), 64);
     assert_eq!(
         history.current_history().unwrap().reserved_attempt_count(),
@@ -282,6 +356,9 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
     // Exercise the oldest original through the held deepest native graph, not a newly parsed
     // substitute or a constructed scope. Restoration is test corruption cleanup only.
     let oldest = &history.bodies[0].directory;
+    // Use the canonical parser with the held native graph. Positive controls around each
+    // mutation keep descriptor exhaustion from masquerading as material-change refusal.
+    drop(history.read_current(&fixture.owner).unwrap());
     oldest
         .write_atomic(
             "original.nrt",
@@ -297,11 +374,12 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
             .0
             .is_err()
     );
-    assert!(BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2)).is_err());
+    assert!(history.read_current(&fixture.owner).is_err());
     oldest
         .write_atomic("original.nrt", &originals[0].original, PublishMode::Replace)
         .unwrap();
     require_full_census(history.current_history().unwrap());
+    drop(history.read_current(&fixture.owner).unwrap());
     let closure = oldest.read("closed.nrt", 64 * 1024).unwrap();
     oldest
         .write_atomic(
@@ -318,11 +396,12 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
             .0
             .is_err()
     );
-    assert!(BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2)).is_err());
+    assert!(history.read_current(&fixture.owner).is_err());
     oldest
         .write_atomic("closed.nrt", &closure, PublishMode::Replace)
         .unwrap();
     require_full_census(history.current_history().unwrap());
+    drop(history.read_current(&fixture.owner).unwrap());
 
     let account = fixture.owner.wallet().unwrap();
     for (index, original) in originals.iter().enumerate() {
@@ -372,4 +451,15 @@ fn sixty_four_genuine_bodies_bound_retained_visits_and_refuse_oldest_material_su
         1
     );
     assert_eq!(current.current().unwrap().control().next_sequence, 2);
+
+    // A separate startup can also read the complete depth64 graph under the same limits.
+    // Release both views first, matching production ownership rather than doubling handles.
+    drop(selected);
+    drop(history);
+    let reopened = BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2))
+        .unwrap()
+        .expect("the complete renewal history must survive a fresh startup");
+    assert_eq!(reopened.bodies.len(), 64);
+    assert_eq!(reopened.anchor.highest, 64);
+    require_full_census(reopened.current_history().unwrap());
 }

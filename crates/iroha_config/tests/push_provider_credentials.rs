@@ -1,5 +1,9 @@
 //! Enforce first-release Torii provider and optional-runtime schemas.
 
+#[path = "publisher_config_fixture.rs"]
+mod publisher_config_fixture;
+use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
+
 use std::path::PathBuf;
 
 use iroha_config::parameters::user::{Root as UserConfig, ToriiPush};
@@ -8,9 +12,11 @@ use toml::{Table, Value};
 
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
-    ConfigReader::new()
-        .read_toml_with_extends(base_path)
-        .expect("base config should load")
+    with_fixture_refs(
+        ConfigReader::new()
+            .read_toml_with_extends(base_path)
+            .expect("base config should load"),
+    )
 }
 
 fn ram_lfe_overlay() -> Table {
@@ -101,7 +107,7 @@ fn excessive_push_topic_limit_is_rejected_during_actual_parse() {
         .read_and_complete::<UserConfig>()
         .expect("positive topic limit should pass schema decoding");
     let error = user
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect_err("excessive push topic limit must fail actual parsing");
     assert!(
         format!("{error:?}").contains("max_topics_per_device must not exceed"),
@@ -157,7 +163,7 @@ fn retired_push_provider_json_credentials_are_rejected() {
 #[test]
 fn ram_lfe_fixture_decodes_directly_to_the_validated_private_owner() {
     let actual = decode_ram_lfe_overlay(ram_lfe_overlay())
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect("validated RAM-LFE fixture should parse");
     let configured = &actual
         .torii
@@ -220,7 +226,7 @@ fn ram_lfe_rejects_empty_duplicate_and_malformed_program_lists() {
     let mut empty = ram_lfe_overlay();
     ram_lfe_programs_mut(&mut empty).clear();
     let error = decode_ram_lfe_overlay(empty)
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect_err("configured RAM-LFE runtime must not silently disable itself");
     assert!(format!("{error:?}").contains("must contain at least one program"));
 
@@ -228,7 +234,7 @@ fn ram_lfe_rejects_empty_duplicate_and_malformed_program_lists() {
     let programs = ram_lfe_programs_mut(&mut duplicate);
     programs.push(programs[0].clone());
     let error = decode_ram_lfe_overlay(duplicate)
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect_err("duplicate program ids must not overwrite runtime material");
     assert!(format!("{error:?}").contains("program_id duplicates"));
 
@@ -286,7 +292,7 @@ fn ram_lfe_rejects_a_hidden_program_outside_the_runtime_class_at_parse() {
 
     // Rank 16 is the deepest tape the configured runtime executes.
     let admitted = overlay(16)
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect("a bounded tape configures the runtime");
     assert_eq!(
         admitted
@@ -302,7 +308,7 @@ fn ram_lfe_rejects_a_hidden_program_outside_the_runtime_class_at_parse() {
 
     // Rank 17 is refused when the configuration is parsed, not at a request.
     let error = overlay(17)
-        .parse()
+        .parse_with_file_source(&ParserOnlyPublisherFiles)
         .expect_err("a tape outside the runtime class must not configure it");
     let report = format!("{error:?}");
     assert!(

@@ -4,7 +4,7 @@
 use super::*;
 use crate::sim::{
     byz::Strategy,
-    driver::{encode_tx_with, fixture_body},
+    driver::{encode_tx_with_due, fixture_body},
     scenario::{ClockGuard, Workload},
     scenarios,
 };
@@ -49,13 +49,12 @@ fn committed_by(w: &World, m: usize, from: Millis, until: Millis) -> Vec<Certifi
 fn workload_due_flag_and_encoding() {
     let workload = Workload {
         due_every: 3,
-        mint_every: 2,
         pad: 4,
         ..Workload::default()
     };
     assert!(workload.due(3) && workload.due(6) && !workload.due(4));
     assert!(!Workload::default().due(3), "no due work by default");
-    assert_eq!(workload.tx(6, true), encode_tx_with(6, true, true, true, 4));
+    assert_eq!(workload.tx(6, true), encode_tx_with_due(6, true, true, 4));
     assert!(crate::sim::driver::payload_due(&workload.tx(3, false)));
     assert!(!crate::sim::driver::payload_due(&workload.tx(4, false)));
 }
@@ -120,10 +119,10 @@ fn wall_clock_stamp_refusal_and_o_time() {
     assert_eq!(w.wall_ms(1), base - 40);
     assert_eq!(w.min_honest_wall(), Some(base - 40));
     // Honest builders stamp their wall clock; Byzantine ones their lead; empty stays empty.
-    let mut payload = encode_tx_with(1, false, false, true, 0);
+    let mut payload = encode_tx_with_due(1, false, true, 0);
     w.stamp_block_time(0, &mut payload);
     assert_eq!(block_time(&payload), Some(u64::try_from(base).unwrap()));
-    let mut far = encode_tx_with(2, false, false, false, 0);
+    let mut far = encode_tx_with_due(2, false, false, 0);
     w.stamp_block_time(3, &mut far);
     assert_eq!(block_time(&far), Some(u64::try_from(base + FAR).unwrap()));
     let mut empty = Vec::new();
@@ -143,7 +142,6 @@ fn wall_clock_stamp_refusal_and_o_time() {
         payload_len: 0,
         proposer: 0,
         skipped_leaders: Vec::new(),
-        attest: false,
     };
     let ahead = fixture_body(header(1), &far);
     let bh = Hash32([7; 32]);
@@ -159,7 +157,7 @@ fn wall_clock_stamp_refusal_and_o_time() {
     // CT5: a due-work block older than the lag.
     let stale = encode_time(u64::try_from(base - 2_000).unwrap())
         .into_iter()
-        .chain(encode_tx_with(3, false, false, true, 0))
+        .chain(encode_tx_with_due(3, false, true, 0))
         .collect::<Vec<u8>>();
     let stale = fixture_body(header(2), &stale);
     assert_eq!(
@@ -168,7 +166,7 @@ fn wall_clock_stamp_refusal_and_o_time() {
     );
     assert_eq!(w.clock_guard_refusal(r0, &stale, &bh, true), None);
     // Unstamped payloads are never refused.
-    let plain = fixture_body(header(3), &encode_tx_with(4, false, false, true, 0));
+    let plain = fixture_body(header(3), &encode_tx_with_due(4, false, true, 0));
     assert_eq!(w.clock_guard_refusal(r0, &plain, &bh, false), None);
     let events = &guard_of(&w).events;
     let expected_events = if cfg!(sumeragi_mutation = "MS52") {
@@ -200,7 +198,7 @@ fn wall_clock_stamp_refusal_and_o_time() {
 #[test]
 fn unguarded_world_reads_no_clock() {
     let mut w = World::new(Scenario::base("clock-guard-off", 1, 4));
-    let mut payload = encode_tx_with(1, false, false, true, 0);
+    let mut payload = encode_tx_with_due(1, false, true, 0);
     let before = payload.clone();
     w.stamp_block_time(0, &mut payload);
     assert_eq!(payload, before);
@@ -225,7 +223,6 @@ fn unguarded_world_reads_no_clock() {
             payload_len: 0,
             proposer: 0,
             skipped_leaders: Vec::new(),
-            attest: false,
         },
         &encode_time(u64::MAX / 2),
     );

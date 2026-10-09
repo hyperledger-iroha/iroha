@@ -239,3 +239,162 @@ fn whole_profile_is_authenticated_before_and_after_the_absence_census() {
     );
     inventory.finish().unwrap();
 }
+
+#[test]
+fn first_reserve_name_probe_refuses_appeared_names_and_retries_fresh_without_child_opens() {
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, parent) = fixture();
+    let (missing, opens) = ServiceChildInventory::test_count_authority_opens(|| {
+        ServiceChildInventory::begin(&parent)?.initial_reserve_policy_absent()
+    });
+    assert!(missing.unwrap());
+    assert_eq!(opens, 0);
+    let inventory = ServiceChildInventory::begin(&parent).unwrap();
+    let network = inventory.branches[inventory.network]
+        .directory
+        .retain()
+        .unwrap();
+    let purpose = network
+        .ensure_child(NetworkPurpose::InitialReservePolicy.directory_name())
+        .unwrap();
+    let (refused, opens) = ServiceChildInventory::test_count_authority_opens(|| {
+        inventory.initial_reserve_policy_absent()
+    });
+    assert!(refused.is_err());
+    assert_eq!(opens, 0);
+    let (present, opens) = ServiceChildInventory::test_count_authority_opens(|| {
+        ServiceChildInventory::begin(&parent)?.initial_reserve_policy_absent()
+    });
+    assert!(!present.unwrap());
+    assert_eq!(opens, 0, "presence observation must not lock a child");
+    assert!(purpose.entries(1).unwrap().is_empty());
+    std::fs::remove_dir(purpose.path()).unwrap();
+    let inventory = ServiceChildInventory::begin(&parent).unwrap();
+    let appeared = network.ensure_child("appeared-purpose").unwrap();
+    assert!(inventory.initial_reserve_policy_absent().is_err());
+    std::fs::remove_dir(appeared.path()).unwrap();
+    assert!(
+        ServiceChildInventory::begin(&parent)
+            .unwrap()
+            .initial_reserve_policy_absent()
+            .unwrap()
+    );
+}
+
+#[test]
+fn first_reserve_name_probe_checks_original_profile_at_entry_and_exit_then_retries() {
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, parent) = fixture();
+    let peer = &parent.prepared.peers[0].config_path;
+    let generation = PrivateDirectory::open_exact(peer.parent().unwrap()).unwrap();
+    let name = peer.file_name().unwrap();
+    let original = generation.read(name, 1024 * 1024).unwrap();
+    let inventory = ServiceChildInventory::begin(&parent).unwrap();
+    generation
+        .write_atomic(name, b"invalid = [", PublishMode::Replace)
+        .unwrap();
+    let ((entry, exit), opens) = ServiceChildInventory::test_count_authority_opens(|| {
+        (
+            ServiceChildInventory::begin(&parent).is_err(),
+            inventory.initial_reserve_policy_absent().is_err(),
+        )
+    });
+    assert!(entry && exit);
+    assert_eq!(opens, 0);
+    generation
+        .write_atomic(name, &original, PublishMode::Replace)
+        .unwrap();
+    let (retried, opens) = ServiceChildInventory::test_count_authority_opens(|| {
+        ServiceChildInventory::begin(&parent)?.initial_reserve_policy_absent()
+    });
+    assert!(retried.unwrap());
+    assert_eq!(opens, 0);
+    assert_eq!(generation.read(name, 1024 * 1024).unwrap(), original);
+}
+
+#[test]
+fn first_reserve_name_probe_retains_parent_lock_and_native_ancestors_before_retry() {
+    let _guard = crate::managed::native_test_guard();
+    let (_temporary, parent) = fixture();
+    let inventory = ServiceChildInventory::begin(&parent).unwrap();
+    let lock_identity = iroha_fs::FileIdentity::of(&parent._lock).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let lock_path = parent.directory.path().join("operation.lock");
+        let original_path = parent.directory.path().join("original-operation.lock");
+        std::fs::rename(&lock_path, &original_path).unwrap();
+        parent
+            .directory
+            .write_atomic("operation.lock", b"", PublishMode::CreateNew)
+            .unwrap();
+        assert!(inventory.initial_reserve_policy_absent().is_err());
+        assert!(ServiceChildInventory::begin(&parent).is_err());
+        std::fs::remove_file(&lock_path).unwrap();
+        std::fs::rename(&original_path, &lock_path).unwrap();
+        assert_eq!(
+            iroha_fs::FileIdentity::of(&parent.directory.open_read("operation.lock").unwrap())
+                .unwrap(),
+            lock_identity
+        );
+        assert!(
+            ServiceChildInventory::begin(&parent)
+                .unwrap()
+                .initial_reserve_policy_absent()
+                .unwrap()
+        );
+
+        let inventory = ServiceChildInventory::begin(&parent).unwrap();
+        let network_path = parent.directory.path().parent().unwrap();
+        let original_mode = std::fs::metadata(network_path).unwrap().permissions();
+        std::fs::set_permissions(network_path, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(inventory.initial_reserve_policy_absent().is_err());
+        std::fs::set_permissions(network_path, original_mode).unwrap();
+        assert!(
+            ServiceChildInventory::begin(&parent)
+                .unwrap()
+                .initial_reserve_policy_absent()
+                .unwrap()
+        );
+
+        let inventory = ServiceChildInventory::begin(&parent).unwrap();
+        let operations = PrivateDirectory::open_exact(network_path.parent().unwrap()).unwrap();
+        let saved_network = operations.path().join("original-network");
+        std::fs::rename(network_path, &saved_network).unwrap();
+        let replaced = operations.ensure_child("network").unwrap();
+        assert!(inventory.initial_reserve_policy_absent().is_err());
+        std::fs::remove_dir(replaced.path()).unwrap();
+        std::fs::rename(&saved_network, network_path).unwrap();
+        assert!(
+            ServiceChildInventory::begin(&parent)
+                .unwrap()
+                .initial_reserve_policy_absent()
+                .unwrap()
+        );
+    }
+    #[cfg(windows)]
+    {
+        // Retained native lock denies replacement; no successful mutation is fabricated.
+        assert!(
+            parent
+                .directory
+                .write_atomic("operation.lock", b"", PublishMode::Replace)
+                .is_err()
+        );
+        assert_eq!(
+            iroha_fs::FileIdentity::of(&parent._lock).unwrap(),
+            lock_identity
+        );
+        assert!(inventory.initial_reserve_policy_absent().unwrap());
+    }
+    assert_eq!(
+        iroha_fs::FileIdentity::of(&parent._lock).unwrap(),
+        lock_identity
+    );
+    assert!(
+        ServiceChildInventory::begin(&parent)
+            .unwrap()
+            .initial_reserve_policy_absent()
+            .unwrap()
+    );
+}

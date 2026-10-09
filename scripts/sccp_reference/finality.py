@@ -35,8 +35,8 @@ RESULT_TAG = b"iroha/sumeragi/result/v1"
 RESULT_BODY_TAG = b"iroha/sumeragi/result-body/v1"
 MAX_RESULT_PREIMAGE_BYTES = 65_536
 MAX_RESULT_BODY_BYTES = 65_315
-QC_FIXED_LEN = 117
-COMMIT_PREIMAGE_LEN = 166
+QC_FIXED_LEN = 116
+COMMIT_PREIMAGE_LEN = 165
 TAG_SIG = b"sumeragi/sig"
 KIND_PREPARE = 0x02
 KIND_COMMIT = 0x03
@@ -240,13 +240,12 @@ def indices_from_signers(signers: int) -> list[int]:
 
 @dataclass(frozen=True)
 class QcFixed:
-    """The 117-byte `QC_FIXED` (§3.7)."""
+    """The 116-byte `QC_FIXED` (§3.7)."""
 
     epoch: int
     epoch_context: bytes
     view: int
     block_hash: bytes
-    attest: int
     result_body: bytes
     signers: int
 
@@ -256,7 +255,6 @@ class QcFixed:
             + self.epoch_context
             + be64(self.view)
             + self.block_hash
-            + bytes([self.attest])
             + self.result_body
             + be32(self.signers)
         )
@@ -269,7 +267,6 @@ class QcFixed:
             "epoch_context": "0x" + self.epoch_context.hex(),
             "view": self.view,
             "block_hash": "0x" + self.block_hash.hex(),
-            "attest": self.attest,
             "result_body": "0x" + self.result_body.hex(),
             "signers": self.signers,
         }
@@ -277,15 +274,14 @@ class QcFixed:
 
 def parse_qc_fixed(data: bytes) -> QcFixed:
     if len(data) != QC_FIXED_LEN:
-        raise SccpError("BadCertificate", "QC_FIXED must be 117 bytes")
+        raise SccpError("BadCertificate", "QC_FIXED must be 116 bytes")
     return QcFixed(
         epoch=int.from_bytes(data[0:8], "big"),
         epoch_context=data[8:40],
         view=int.from_bytes(data[40:48], "big"),
         block_hash=data[48:80],
-        attest=data[80],
-        result_body=data[81:113],
-        signers=int.from_bytes(data[113:117], "big"),
+        result_body=data[80:112],
+        signers=int.from_bytes(data[112:116], "big"),
     )
 
 
@@ -297,10 +293,9 @@ def commit_preimage(
     view: int,
     block_hash: bytes,
     result: bytes,
-    attest: int,
     kind: int = KIND_COMMIT,
 ) -> bytes:
-    """`vote_preimage(kind, h, v, bh, R, a)`; the Commit kind gives the 166-byte `P` of §3.7."""
+    """`vote_preimage(kind, h, v, bh, R)`; the Commit kind gives the 165-byte `P` of §3.7."""
     out = (
         TAG_SIG
         + bytes([kind])
@@ -311,7 +306,6 @@ def commit_preimage(
         + be64(view)
         + block_hash
         + result
-        + bytes([attest])
     )
     assert len(out) == COMMIT_PREIMAGE_LEN
     return out
@@ -435,7 +429,6 @@ def build_certificate(
     epoch_context: bytes,
     view: int,
     block_hash: bytes,
-    attest: int,
     result_body: bytes,
     kind: int = KIND_COMMIT,
     dst: bytes = DST_SIG,
@@ -455,7 +448,7 @@ def build_certificate(
     """
     n = len(keys)
     signers = signers_from_indices(signer_indices) if signers_field is None else signers_field
-    qc = QcFixed(epoch, epoch_context, view, block_hash, attest, result_body, signers)
+    qc = QcFixed(epoch, epoch_context, view, block_hash, result_body, signers)
     signed_x = header if signed_header is None else signed_header
     height = int.from_bytes(signed_x[48:56], "big") if signed_height is None else signed_height
     result = sha256(RESULT_TAG, signed_x, result_body)
@@ -467,7 +460,6 @@ def build_certificate(
         view,
         block_hash,
         result,
-        attest,
         kind,
     )
     message = commit_message(preimage)

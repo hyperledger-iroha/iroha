@@ -46,7 +46,10 @@ during preparation cannot hide the review, and only its explicit confirmation
 approves dispatch; cancellation or closing Mochi leaves approval withheld.
 Deployment results identify the original localnet or private dataspace on which
 the contract applied. Parent receipts appear separately as historical evidence;
-an unavailable parent observation does not undo a verified local deployment.
+an unavailable parent observation does not undo a verified local deployment. A failed automatic
+workspace refresh keeps the completed deployment receipt visible, clears live context, streams,
+logs and activity, and reports the observation error. Explicit selection and lifecycle actions
+retain their existing clearing behavior.
 
 The Packages view exposes explicit Publish, Resume publication and Recover package files
 actions through `DeveloperWorkspace::publish_package` and the shared Musubi engine.

@@ -10,7 +10,7 @@
 //! fixed values (public) with the variable-time inversion, advice values
 //! (secret) with the constant-time one.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use core::fmt;
 
@@ -117,6 +117,13 @@ pub enum Error {
     },
     /// A column or selector index outside the constraint system.
     BoundsFailure,
+    /// A guarded fixed value or exclusively reserved advice cell conflicts.
+    LayoutConflict {
+        /// Conflicting physical column.
+        column: Column<Any>,
+        /// Absolute row.
+        row: usize,
+    },
     /// A copy names a column that is not equality-enabled.
     ColumnNotInPermutation(Column<Any>),
     /// The circuit constrains constants but no column was enabled for them.
@@ -134,6 +141,9 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::LayoutConflict { column, row } => {
+                write!(f, "layout conflict at {column:?}, row {row}")
+            }
             Self::Synthesis => f.write_str("a required value is unknown or synthesis failed"),
             Self::NotEnoughRowsAvailable { current_k } => {
                 write!(f, "k = {current_k} does not provide enough rows")
@@ -268,6 +278,18 @@ pub trait Assignment<F: PastaField> {
         value: Assigned<F>,
     ) -> Result<(), Error>;
 
+    /// Requires this fixed cell's existing, future and final value to match.
+    /// This is a synthesis guard, not an additional polynomial constraint.
+    /// # Errors
+    /// Out-of-range cells or a conflicting fixed assignment.
+    fn expect_fixed(&mut self, column: Column<Fixed>, row: usize, value: F) -> Result<(), Error>;
+
+    /// Reserves one currently unassigned advice cell for exactly one write.
+    /// Reservations apply to unknown-witness synthesis too.
+    /// # Errors
+    /// Out-of-range, already assigned or already reserved cells.
+    fn reserve_advice(&mut self, column: Column<Advice>, row: usize) -> Result<(), Error>;
+
     /// Constrains two cells to be equal.
     ///
     /// # Errors
@@ -349,6 +371,8 @@ pub struct Assembly<F> {
     fixed: Vec<Vec<F>>,
     fixed_assigned: Vec<Vec<bool>>,
     fixed_pending: BTreeMap<(usize, usize), PendingFraction<F>>,
+    fixed_expectations: BTreeMap<(usize, usize), F>,
+    advice_reservations: BTreeSet<(usize, usize)>,
     advice: Option<Vec<Vec<F>>>,
     advice_assigned: Vec<Vec<bool>>,
     advice_pending: BTreeMap<(usize, usize), PendingFraction<F>>,
@@ -414,6 +438,8 @@ impl<F: PastaField> Assembly<F> {
             fixed: vec![vec![F::ZERO; n]; cs.num_fixed_columns()],
             fixed_assigned: vec![vec![false; n]; cs.num_fixed_columns()],
             fixed_pending: BTreeMap::new(),
+            fixed_expectations: BTreeMap::new(),
+            advice_reservations: BTreeSet::new(),
             advice,
             advice_assigned: vec![vec![false; n]; cs.num_advice_columns()],
             advice_pending: BTreeMap::new(),
@@ -477,6 +503,22 @@ impl<F: PastaField> Assembly<F> {
             return Err(Error::RegionNesting);
         }
         resolve_fractions(&mut self.fixed, &self.fixed_pending, true);
+        for (&(column, row), expected) in &self.fixed_expectations {
+            if !self.fixed_assigned[column][row] || self.fixed[column][row] != *expected {
+                return Err(Error::LayoutConflict {
+                    column: Column::new(column, Any::Fixed),
+                    row,
+                });
+            }
+        }
+        for &(column, row) in &self.advice_reservations {
+            if !self.advice_assigned[column][row] {
+                return Err(Error::LayoutConflict {
+                    column: Column::new(column, Any::Advice),
+                    row,
+                });
+            }
+        }
         if let Some(advice) = self.advice.as_mut() {
             resolve_fractions(advice, &self.advice_pending, false);
         }
@@ -620,6 +662,14 @@ impl<F: PastaField> Assignment<F> for Assembly<F> {
         value: Value<Assigned<F>>,
     ) -> Result<(), Error> {
         self.check_row(row)?;
+        if self.advice_reservations.contains(&(column.index(), row))
+            && self.advice_assigned[column.index()][row]
+        {
+            return Err(Error::LayoutConflict {
+                column: column.into(),
+                row,
+            });
+        }
         mark(&mut self.advice_assigned, column.index(), row)?;
         if let Some(advice) = self.advice.as_mut() {
             store(
@@ -641,6 +691,16 @@ impl<F: PastaField> Assignment<F> for Assembly<F> {
         value: Assigned<F>,
     ) -> Result<(), Error> {
         self.check_row(row)?;
+        if self
+            .fixed_expectations
+            .get(&(column.index(), row))
+            .is_some_and(|expected| *expected != value.evaluate())
+        {
+            return Err(Error::LayoutConflict {
+                column: column.into(),
+                row,
+            });
+        }
         mark(&mut self.fixed_assigned, column.index(), row)?;
         store(
             &mut self.fixed,
@@ -650,6 +710,46 @@ impl<F: PastaField> Assignment<F> for Assembly<F> {
             value,
         )?;
         self.touch(column.into(), row);
+        Ok(())
+    }
+
+    fn expect_fixed(&mut self, column: Column<Fixed>, row: usize, value: F) -> Result<(), Error> {
+        self.check_row(row)?;
+        let index = column.index();
+        let assigned = self.fixed_assigned.get(index).ok_or(Error::BoundsFailure)?[row];
+        let current = self
+            .fixed_pending
+            .get(&(index, row))
+            .map_or(self.fixed[index][row], |fraction| {
+                Assigned::Rational(fraction.numerator, fraction.denominator).evaluate()
+            });
+        if assigned && current != value
+            || self
+                .fixed_expectations
+                .get(&(index, row))
+                .is_some_and(|expected| *expected != value)
+        {
+            return Err(Error::LayoutConflict {
+                column: column.into(),
+                row,
+            });
+        }
+        self.fixed_expectations.insert((index, row), value);
+        Ok(())
+    }
+
+    fn reserve_advice(&mut self, column: Column<Advice>, row: usize) -> Result<(), Error> {
+        self.check_row(row)?;
+        let assigned = self
+            .advice_assigned
+            .get(column.index())
+            .ok_or(Error::BoundsFailure)?[row];
+        if assigned || !self.advice_reservations.insert((column.index(), row)) {
+            return Err(Error::LayoutConflict {
+                column: column.into(),
+                row,
+            });
+        }
         Ok(())
     }
 
@@ -767,6 +867,12 @@ impl<F> AssignedTables<F> {
     /// leaving an unzeroized copy behind.
     pub fn take_advice(&mut self) -> Option<Vec<Vec<F>>> {
         self.advice.take()
+    }
+
+    /// Moves the public key-generation inputs out and releases synthesis
+    /// bookkeeping before FFTs, commitments and proving-key caches are built.
+    pub(crate) fn into_keygen_parts(self) -> (Vec<Vec<F>>, Vec<Vec<bool>>, PermutationAssembly) {
+        (self.fixed, self.selectors, self.permutation)
     }
 
     /// Whether each advice cell was assigned.
@@ -929,6 +1035,14 @@ mod tests {
         assert!(tables.advice().is_none() && tables.instance().is_none());
         assert_eq!(tables.fixed()[0][1], Fp::from(5));
         assert!(tables.advice_assigned()[0][0]);
+        let fixed_ptr = tables.fixed()[0].as_ptr();
+        let selector_ptr = tables.selectors().as_ptr();
+        let copy_digest = tables.permutation().mapping_digest();
+        let (fixed, selectors, permutation) = tables.into_keygen_parts();
+        assert_eq!(fixed[0].as_ptr(), fixed_ptr);
+        assert_eq!(selectors.as_ptr(), selector_ptr);
+        assert_eq!(permutation.mapping_digest(), copy_digest);
+        assert_eq!(fixed[0][1], Fp::from(5));
 
         let mut witness = Assembly::new(&cs, 4, Some(&[vec![Fp::ONE, Fp::ZERO]])).expect("new");
         assert_eq!(
@@ -1015,6 +1129,83 @@ mod tests {
             "fills stop at the usable rows"
         );
         assert!(tables.permutation().is_identity());
+    }
+
+    #[test]
+    fn guarded_fixed_values_check_prior_future_final_and_bounds() {
+        let (cs, _, fixed, _) = small_cs();
+        for prior in [false, true] {
+            let mut assembly = Assembly::new(&cs, 4, None).unwrap();
+            if prior {
+                assembly.assign_fixed(fixed, 0, Fp::ONE.into()).unwrap();
+            }
+            assembly.expect_fixed(fixed, 0, Fp::ONE).unwrap();
+            assembly.expect_fixed(fixed, 0, Fp::ONE).unwrap();
+            assert!(assembly.expect_fixed(fixed, 0, Fp::ZERO).is_err());
+            assert!(assembly.assign_fixed(fixed, 0, Fp::ZERO.into()).is_err());
+            assembly
+                .assign_fixed(fixed, 0, Assigned::Rational(Fp::from(2), Fp::from(2)))
+                .unwrap();
+            assembly.finish().unwrap();
+        }
+        let mut wrong = Assembly::new(&cs, 4, None).unwrap();
+        wrong.assign_fixed(fixed, 0, Fp::ONE.into()).unwrap();
+        assert!(wrong.expect_fixed(fixed, 0, Fp::ZERO).is_err());
+        for expected in [Fp::ZERO, Fp::ONE] {
+            let mut missing = Assembly::new(&cs, 4, None).unwrap();
+            missing.expect_fixed(fixed, 0, expected).unwrap();
+            assert!(matches!(
+                missing.finish(),
+                Err(Error::LayoutConflict { .. })
+            ));
+        }
+        let mut bounds = Assembly::new(&cs, 4, None).unwrap();
+        assert!(
+            bounds
+                .expect_fixed(fixed, cs.usable_rows(4).unwrap(), Fp::ONE)
+                .is_err()
+        );
+        assert!(
+            bounds
+                .expect_fixed(Column::new(99, Fixed), 0, Fp::ONE)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn reserved_advice_rejects_collisions_and_missing_known_or_unknown_writes() {
+        let (cs, advice, _, _) = small_cs();
+        let instances = [vec![Fp::ZERO, Fp::ZERO]];
+        for known in [false, true] {
+            let input = known.then_some(instances.as_slice());
+            let value = if known {
+                Value::known(Fp::ONE.into())
+            } else {
+                Value::unknown()
+            };
+            let mut assembly = Assembly::new(&cs, 4, input).unwrap();
+            assembly.reserve_advice(advice, 0).unwrap();
+            assert!(assembly.reserve_advice(advice, 0).is_err());
+            assembly.assign_advice(advice, 0, value).unwrap();
+            assert!(assembly.assign_advice(advice, 0, value).is_err());
+            assembly.finish().unwrap();
+            let mut prior = Assembly::new(&cs, 4, input).unwrap();
+            prior.assign_advice(advice, 0, value).unwrap();
+            assert!(prior.reserve_advice(advice, 0).is_err());
+            let mut missing = Assembly::new(&cs, 4, input).unwrap();
+            missing.reserve_advice(advice, 0).unwrap();
+            assert!(matches!(
+                missing.finish(),
+                Err(Error::LayoutConflict { .. })
+            ));
+        }
+        let mut bounds = Assembly::new(&cs, 4, None).unwrap();
+        assert!(
+            bounds
+                .reserve_advice(advice, cs.usable_rows(4).unwrap())
+                .is_err()
+        );
+        assert!(bounds.reserve_advice(Column::new(99, Advice), 0).is_err());
     }
 
     #[test]

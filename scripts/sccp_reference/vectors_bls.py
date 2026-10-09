@@ -298,8 +298,8 @@ def allowlist_vectors() -> list[dict]:
     body = lambda n: bytes((i * 7 + 3) % 256 for i in range(n))  # noqa: E731
     allowed = (
         ("proposal_165", prefix(0x01) + body(80)),
-        ("prepare_166", prefix(0x02) + body(81)),
-        ("commit_166", prefix(0x03) + body(81)),
+        ("prepare_165", prefix(0x02) + body(80)),
+        ("commit_165", prefix(0x03) + body(80)),
         ("timeout_102_no_hq", prefix(0x04) + body(16) + b"\x00"),
         ("timeout_110_with_hq", prefix(0x04) + body(16) + b"\x01" + body(8)),
         ("echo_101", prefix(0x05) + body(16)),
@@ -314,12 +314,12 @@ def allowlist_vectors() -> list[dict]:
         row(f"{label}_plus_1", preimage + b"\x00", False)
     row("timeout_102_flag_1", prefix(0x04) + body(16) + b"\x01", False)
     row("timeout_110_flag_0", prefix(0x04) + body(16) + b"\x00" + body(8), False)
-    row("kind_0x06_att_166", prefix(0x06) + body(81), False)
-    row("kind_0x00_166", prefix(0x00) + body(81), False)
-    row("kind_0x07_166", prefix(0x07) + body(81), False)
+    row("kind_0x06_165", prefix(0x06) + body(80), False)
+    row("kind_0x00_165", prefix(0x00) + body(80), False)
+    row("kind_0x07_165", prefix(0x07) + body(80), False)
     row("rs16_kind_0x02_219", AVAILABILITY_TAG + b"\x02" + body(219 - len(AVAILABILITY_TAG) - 1), False)
     row("rs16_manifest_180", AVAILABILITY_TAG + b"\x00" + body(180 - len(AVAILABILITY_TAG) - 1), False)
-    row("wrong_tag_166", b"sumeragi/sih" + prefix(0x03)[12:] + body(81), False)
+    row("wrong_tag_165", b"sumeragi/sih" + prefix(0x03)[12:] + body(80), False)
     return rows
 
 

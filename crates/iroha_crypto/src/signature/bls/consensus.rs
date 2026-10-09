@@ -34,7 +34,7 @@
 //! `TODO(WP-C1):` route the production Sumeragi `Signer`/`Crypto` implementations
 //! (`KeyPairSigner`, `BlsCrypto`, `ProofCrypto`, and the signers delegating to them) through
 //! this module; until then they still sign and verify consensus messages with the w3f
-//! transcript (`specs/sumeragi.md` §1 item 6, mutation HC136). `BlsCrypto`'s request-funded
+//! transcript (`specs/sumeragi.md` §1 item 6, planned case SC4). `BlsCrypto`'s request-funded
 //! `BlsNormalAggregateScratch` becomes a [`ConsensusAggregateScratch`] admitted the same way.
 
 use core::borrow::Borrow;
@@ -68,9 +68,9 @@ const TIMEOUT_HQ_OFFSET: usize = SIG_PREFIX_LEN + 8 + 8;
 pub enum ConsensusContext {
     /// `prop_preimage`: `TAG_SIG ‖ 0x01`, 165 bytes.
     Proposal,
-    /// `vote_preimage(0x02, …)`: `TAG_SIG ‖ 0x02`, 166 bytes.
+    /// `vote_preimage(0x02, …)`: `TAG_SIG ‖ 0x02`, 165 bytes.
     Prepare,
-    /// `vote_preimage(0x03, …)`: `TAG_SIG ‖ 0x03`, 166 bytes (frozen, `specs/sumeragi.md` §3.3.1).
+    /// `vote_preimage(0x03, …)`: `TAG_SIG ‖ 0x03`, 165 bytes (frozen, `specs/sumeragi.md` §3.3.1).
     Commit,
     /// `tmo_preimage(…, None)`: `TAG_SIG ‖ 0x04`, 102 bytes with byte 101 = `0x00`.
     TimeoutWithoutHighQc,
@@ -103,8 +103,8 @@ impl ConsensusContext {
         if let Some(rest) = preimage.strip_prefix(TAG_SIG) {
             let context = match (rest.first().copied()?, preimage.len()) {
                 (0x01, 165) => Self::Proposal,
-                (0x02, 166) => Self::Prepare,
-                (0x03, 166) => Self::Commit,
+                (0x02, 165) => Self::Prepare,
+                (0x03, 165) => Self::Commit,
                 (0x04, 102) if preimage[TIMEOUT_HQ_OFFSET] == 0x00 => Self::TimeoutWithoutHighQc,
                 (0x04, 110) if preimage[TIMEOUT_HQ_OFFSET] == 0x01 => Self::TimeoutWithHighQc,
                 (0x05, 101) => Self::Echo,
@@ -125,7 +125,7 @@ impl ConsensusContext {
     pub const fn preimage_len(self) -> usize {
         match self {
             Self::Proposal => 165,
-            Self::Prepare | Self::Commit => 166,
+            Self::Prepare | Self::Commit => 165,
             Self::TimeoutWithoutHighQc => 102,
             Self::TimeoutWithHighQc => 110,
             Self::Echo => 101,

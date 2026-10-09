@@ -297,11 +297,10 @@ fn prepared_quantity_wrong_layout_returns_same_charge_without_physical_construct
 fn prepared_quantity_planning_cannot_replenish_nested_scope_and_fill_retains_refused_backing() {
     let _flags = DecodeFlagsGuard::enter(0);
     let mantissa = BigInt::from(1_u128 << 127);
-    // The canonical BigInt field has its u32 length followed by signed bytes;
-    // the separate scale field is u32. Borrowed fields debit this existing
-    // nominal decode budget even though planning allocates no native digits.
-    let mantissa_field_charge = core::mem::size_of::<u32>() + mantissa.to_twos_bytes().len();
-    let field_charge = mantissa_field_charge + core::mem::size_of::<u32>();
+    // The canonical BigInt field has its u32 length followed by signed bytes.
+    // Planning borrows both fields and allocates no storage; an owning decoder
+    // charges only actual native digits and any required alignment copies.
+    let mantissa_payload_len = core::mem::size_of::<u32>() + mantissa.to_twos_bytes().len();
     let bytes = payload(mantissa, 1);
     let budget = AllocationBudget::new(1024);
     let mut prepared = destination(&bytes, &budget);
@@ -314,20 +313,18 @@ fn prepared_quantity_planning_cannot_replenish_nested_scope_and_fill_retains_ref
     let (zero_plan, usage) = norito::core::with_decode_limits_measured(limits(0), || {
         QuantityDecodePlan::decode_payload(&bytes)
     });
-    assert!(matches!(zero_plan,
-        Err(Error::TotalAllocationExceeded { attempted, limit: 0 })
-        if attempted == mantissa_field_charge as u64));
+    assert_eq!(zero_plan.unwrap().allocation_layout().size(), required);
     assert_eq!(usage.total_allocated_bytes(), 0);
     assert_eq!(prepared.digits.as_slice().as_ptr(), pointer);
     assert_eq!(budget.reserved_bytes(), held);
-    let (plan, usage) = norito::core::with_decode_limits_measured(limits(field_charge), || {
+    let (plan, usage) = norito::core::with_decode_limits_measured(limits(0), || {
         QuantityDecodePlan::decode_payload(&bytes)
     });
     assert_eq!(plan.unwrap().allocation_layout().size(), required);
-    assert_eq!(usage.total_allocated_bytes(), field_charge);
-    // Admit exactly two planning walks and the fill's first field, leaving no
-    // logical native-digit credit. A nested unbounded caller cannot replenish it.
-    let ceiling = 2 * field_charge + mantissa_field_charge;
+    assert_eq!(usage.total_allocated_bytes(), 0);
+    // Repeated borrowed planning consumes no allocation credit. A nested
+    // unbounded caller still cannot replenish an insufficient native-digit budget.
+    let ceiling = required - 1;
     let (outcome, usage) = norito::core::with_decode_limits_measured(limits(ceiling), || {
         for _ in 0..2 {
             QuantityDecodePlan::decode_payload(&bytes)?;
@@ -340,19 +337,19 @@ fn prepared_quantity_planning_cannot_replenish_nested_scope_and_fill_retains_ref
     let error = outcome.unwrap().unwrap_err();
     assert!(matches!(error,
         QuantityDestinationError::Codec(Error::TotalAllocationExceeded { attempted, limit })
-        if attempted == (ceiling + required) as u64 && limit == ceiling as u64));
-    assert_eq!(usage.total_allocated_bytes(), ceiling);
+        if attempted == required as u64 && limit == ceiling as u64));
+    assert_eq!(usage.total_allocated_bytes(), 0);
     assert!(prepared.scale.is_none());
     assert_eq!(prepared.digits.as_slice().as_ptr(), pointer);
     assert_eq!(budget.reserved_bytes(), held);
-    // Both paths pay field and native costs. Owning archived fields also pay
-    // for actual realignment copies; the prepared borrowed walker makes none.
-    let exact_charge = field_charge + required;
+    // Both fills admit actual native digits. Owning archived fields also pay
+    // for real alignment copies; the prepared borrowed walker makes none.
+    let exact_charge = required;
     let realignment_charge = [
         (
             bytes.as_ptr().addr() + core::mem::size_of::<u64>(),
             norito::core::archived_payload_align::<BigInt>(),
-            mantissa_field_charge,
+            mantissa_payload_len,
         ),
         (
             bytes.as_ptr().addr() + bytes.len() - core::mem::size_of::<u32>(),

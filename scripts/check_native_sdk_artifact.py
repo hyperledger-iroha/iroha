@@ -79,6 +79,26 @@ APPROVED_PRIVACY_C_EXPORTS = (
     "iroha_privacy_validate_exact12_capability_manifest_v1",
     "iroha_privacy_free_buffer",
 )
+KAGEMUSHA_WALLET_C_EXPORTS = (
+    "connect_norito_kagemusha_wallet_revision_v1",
+    "connect_norito_kagemusha_wallet_open_v1",
+    "connect_norito_kagemusha_wallet_close_v1",
+    "connect_norito_kagemusha_wallet_activity_v1",
+    "connect_norito_kagemusha_wallet_commit_v1",
+    "connect_norito_kagemusha_wallet_retry_v1",
+    "connect_norito_kagemusha_wallet_resume_v1",
+    "connect_norito_kagemusha_wallet_fold_v1",
+    "connect_norito_kagemusha_wallet_credit_status_v1",
+    "connect_norito_kagemusha_wallet_snapshot_v1",
+)
+KAGEMUSHA_WALLET_JNI_EXPORTS = (
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_revision",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_open",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_close",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_activity",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot",
+)
 RETIRED_KAGEMUSHA_C_PREFIX = (
     "connect_norito_" + "_".join(reversed(("cash", "offline"))) + "_"
 )
@@ -117,7 +137,9 @@ CONFIDENTIAL_PROVER_JNI_EXPORTS = tuple(
 REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "c-jni": (
         *CONFIDENTIAL_PROVER_C_EXPORTS,
+        *KAGEMUSHA_WALLET_C_EXPORTS,
         *CONFIDENTIAL_PROVER_JNI_EXPORTS,
+        *KAGEMUSHA_WALLET_JNI_EXPORTS,
         "connect_norito_bridge_abi_version",
         "connect_norito_domain_id_validate_v1",
         "connect_norito_free",
@@ -141,6 +163,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     ),
     "csharp": (
         *CONFIDENTIAL_PROVER_C_EXPORTS,
+        *KAGEMUSHA_WALLET_C_EXPORTS,
         "connect_norito_confidential_note_derivation_revision_v3",
         "connect_norito_confidential_default_diversifier_v3",
         "connect_norito_confidential_diversifier_derive_v3",
@@ -721,6 +744,15 @@ def validate_privacy_c_exports(
     return tuple(symbol for symbol in APPROVED_PRIVACY_C_EXPORTS if symbol in observed)
 
 
+def is_retired_kagemusha_export(symbol: str) -> bool:
+    """Reject all retired or unknown KAGEMUSHA exports outside the current API."""
+    return (
+        symbol.startswith(RETIRED_KAGEMUSHA_EXPORT_PREFIXES)
+        and symbol not in KAGEMUSHA_WALLET_C_EXPORTS
+        and symbol not in KAGEMUSHA_WALLET_JNI_EXPORTS
+    )
+
+
 def validate_retired_protocol_symbols(symbols: Sequence[str], *, sdk: str) -> None:
     """Reject first-release artifacts that expose retired protocol entrypoints."""
 
@@ -731,7 +763,7 @@ def validate_retired_protocol_symbols(symbols: Sequence[str], *, sdk: str) -> No
             for symbol in symbols
             if symbol in explicitly_retired
             or (sdk == "c-jni" and symbol.startswith("Java_org_hyperledger_iroha_android_"))
-            or symbol.startswith(RETIRED_KAGEMUSHA_EXPORT_PREFIXES)
+            or is_retired_kagemusha_export(symbol)
         }
     )
     if retired:

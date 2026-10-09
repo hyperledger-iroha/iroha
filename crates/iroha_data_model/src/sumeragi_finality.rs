@@ -3,13 +3,13 @@
 //! Proofs carry the canonical block and its embedded commit certificate. A structural
 //! decode is never an authenticated execution capability: only the contiguous verifier
 //! constructs [`VerifiedSumeragiBlock`]. The receipt proves exact-quorum execution finality;
-//! it does not verify embedded application attestations or grant KAGEMUSHA mint authority. Genesis has no quorum certificate; its execution
-//! result is authenticated by a successor's parent-result binding or independent node
+//! with the signed RS16 availability binding. Genesis has no quorum certificate; its
+//! execution result is authenticated by a successor's parent-result binding or independent node
 //! attestations, not by inventing a genesis quorum certificate.
 //!
 //! This module owns the sole canonical execution-result codec and authenticated epoch/schedule
-//! graph shared with Core. Core produces execution witnesses, validates application attestations
-//! and beacon signatures, and publishes these same results; portable readers authenticate the
+//! graph shared with Core. Core produces execution witnesses, validates beacon signatures,
+//! and publishes these same results; portable readers authenticate the
 //! resulting commit-finality chain without introducing another result layout or authority source.
 
 mod schedule;
@@ -483,6 +483,15 @@ impl SumeragiFinalityProof {
     fn decode_parts(
         &self,
     ) -> Result<(DecodedSumeragiBlock, Option<Vec<u8>>, ProofCrypto), FinalityError> {
+        self.decode_parts_with_validation(None)
+    }
+
+    // Only the checkpoint importer supplies a workspace. Independent proof readers preserve
+    // the original separate epoch scopes at each gate, including their allocation charges.
+    fn decode_parts_with_validation(
+        &self,
+        mut validation: Option<&mut EpochValidationScope>,
+    ) -> Result<(DecodedSumeragiBlock, Option<Vec<u8>>, ProofCrypto), FinalityError> {
         need(
             !self.block_wire.is_empty() && self.block_wire.len() <= MAX_FINALITY_BLOCK_BYTES,
             "block frame exceeds its finite bound",
@@ -507,8 +516,14 @@ impl SumeragiFinalityProof {
         let certificate = block
             .commit_certificate()
             .ok_or_else(|| FinalityError("embedded commit certificate missing".into()))?;
-        let commitment =
-            ExecutionResultCommitment::decode(certificate.result_preimage()).map_err(malformed)?;
+        let commitment = match validation.as_deref_mut() {
+            Some(validation) => ExecutionResultCommitment::decode_with_validation(
+                certificate.result_preimage(),
+                validation,
+            ),
+            None => ExecutionResultCommitment::decode(certificate.result_preimage()),
+        }
+        .map_err(malformed)?;
         need(
             commitment.height == self.height(),
             "result height differs from its block",
@@ -531,7 +546,11 @@ impl SumeragiFinalityProof {
                     }),
             "proof roster differs from its complete epoch context",
         )?;
-        let epoch = core_epoch(&commitment.schedule.current).map_err(malformed)?;
+        let epoch = match validation.as_deref_mut() {
+            Some(validation) => validation.core_epoch(&commitment.schedule.current),
+            None => core_epoch(&commitment.schedule.current),
+        }
+        .map_err(malformed)?;
         let result = result_of_preimage(certificate.result_preimage());
         let (len, hash) = block.executed_block_wire_identity().map_err(malformed)?;
         need(
@@ -568,15 +587,13 @@ impl SumeragiFinalityProof {
                 header.height == self.height()
                     && header.epoch == epoch.id
                     && qc.epoch == epoch.id
-                    && (commitment.schedule.boundary.is_none() || header.attest)
                     && usize::try_from(header.payload_len).ok() == Some(payload.len())
                     && header.payload_hash == payload_hash(&crypto, &payload)
                     && qc.kind == VoteKind::Commit
                     && qc.height == header.height
                     && qc.instance == header.instance
                     && qc.block_hash == core_hash
-                    && qc.result == result
-                    && qc.attest == header.attest,
+                    && qc.result == result,
                 "current certificate does not bind this block and execution",
             )?;
             need(
@@ -589,18 +606,9 @@ impl SumeragiFinalityProof {
                 }),
                 "beacon pulse names another native consensus context",
             )?;
-            need(
-                if qc.needs_attestations() {
-                    qc.attestations.len() == committee.q()
-                } else {
-                    qc.attestations.is_empty()
-                },
-                "certificate attestation shape differs from its signed flag",
-            )?;
-            // Exact quorum signatures authenticate execution finality. Embedded application
-            // attestations remain separate evidence; this proof grants no attestation capability.
+            // Exact quorum signatures authenticate the execution commitment.
             iroha_sumeragi::crypto::Verifier::new(&crypto, &header.instance, &epoch.id, &committee)
-                .verify_qc_signatures(&qc)
+                .verify_qc(&qc)
                 .map_err(|error| FinalityError(format!("commit certificate: {error:?}")))?;
             (Some(header), core_hash, Some(availability), Some(payload))
         };
@@ -779,12 +787,20 @@ impl SumeragiFinalityVerifier {
         chain_id: &str,
         validators: Vec<FinalityValidator>,
     ) -> Result<Self, FinalityReadError> {
+        Self::new_with_validation(trusted_genesis, chain_id, validators, None)
+    }
+    fn new_with_validation(
+        trusted_genesis: &SignedBlock,
+        chain_id: &str,
+        validators: Vec<FinalityValidator>,
+        validation: Option<&EpochValidationScope>,
+    ) -> Result<Self, FinalityReadError> {
         need(
             trusted_genesis.header().is_genesis(),
             "trust root must be signed genesis",
         )?;
         let (crypto, committee) = ProofCrypto::new(&validators)?;
-        let genesis_epoch = genesis_epoch(trusted_genesis)?;
+        let genesis_epoch = genesis::genesis_epoch_with_validation(trusted_genesis, validation)?;
         need(
             validators.len() == genesis_epoch.committee.len()
                 && validators
@@ -882,24 +898,40 @@ impl SumeragiFinalityVerifier {
         &self,
         candidate: &SumeragiFinalityProof,
     ) -> Result<VerifiedSumeragiBlock, FinalityError> {
+        self.verify_retained_decision_with_validation(candidate, None)
+    }
+
+    // Cold checkpoint import calls this producer directly, without another owned proof
+    // return boundary. Standalone callers pass None and retain all independent scopes.
+    fn verify_retained_decision_with_validation(
+        &self,
+        candidate: &SumeragiFinalityProof,
+        mut validation: Option<&mut EpochValidationScope>,
+    ) -> Result<VerifiedSumeragiBlock, FinalityError> {
         let expected = self
             .decisions
             .get(&candidate.height())
             .ok_or_else(|| FinalityError("decision is outside authenticated prefix".into()))?;
-        let candidate = self.check(candidate)?;
-        let found = Self::decision(&candidate);
+        let (decoded, proposal, crypto) =
+            candidate.decode_parts_with_validation(validation.as_deref_mut())?;
+        self.check_trusted(candidate, &decoded, &proposal, &crypto, validation)?;
+        // check() releases these original owners before returning its decoded graph. Preserve
+        // that reverse-binding drop order before the retained comparison on this direct path.
+        drop(crypto);
+        drop(proposal);
+        // Compare the checked graph in place; only new prefix insertion owns a decision copy.
         need(
-            found.block_hash == expected.block_hash
-                && found.core_hash == expected.core_hash
-                && found.result == expected.result
-                && found.committee_digest == expected.committee_digest
-                && found.schedule == expected.schedule
-                && found.beacon == expected.beacon
-                && found.executed_hash == expected.executed_hash
-                && found.executed_len == expected.executed_len,
+            decoded.block.hash() == expected.block_hash
+                && decoded.core_hash == expected.core_hash
+                && decoded.result == expected.result
+                && decoded.committee_digest == expected.committee_digest
+                && decoded.commitment.schedule == expected.schedule
+                && decoded.commitment.beacon == expected.beacon
+                && decoded.commitment.execution.executed_block_wire_hash == expected.executed_hash
+                && decoded.commitment.execution.executed_block_wire_len == expected.executed_len,
             "proof differs from retained authenticated decision",
         )?;
-        Ok(VerifiedSumeragiBlock(candidate))
+        Ok(VerifiedSumeragiBlock(decoded))
     }
 
     fn decision(value: &DecodedSumeragiBlock) -> Decision {
@@ -914,12 +946,28 @@ impl SumeragiFinalityVerifier {
             executed_len: value.commitment.execution.executed_block_wire_len,
         }
     }
+    fn check(&self, proof: &SumeragiFinalityProof) -> Result<DecodedSumeragiBlock, FinalityError> {
+        let (decoded, proposal, crypto) = proof.decode_parts()?;
+        self.check_trusted(proof, &decoded, &proposal, &crypto, None)?;
+        Ok(decoded)
+    }
+
+    // Authenticate the original decoded graph against this verifier's selected root/prefix.
+    // Borrow the original proposal and crypto owners through the same last RS16 check; callers
+    // release them at the original check boundary before comparing retained decision fields.
+    #[inline(never)]
     #[expect(
         clippy::suspicious_operation_groupings,
         reason = "the child header intentionally binds the parent's core hash and result"
     )]
-    fn check(&self, proof: &SumeragiFinalityProof) -> Result<DecodedSumeragiBlock, FinalityError> {
-        let (decoded, proposal, crypto) = proof.decode_parts()?;
+    fn check_trusted(
+        &self,
+        proof: &SumeragiFinalityProof,
+        decoded: &DecodedSumeragiBlock,
+        proposal: &Option<Vec<u8>>,
+        crypto: &ProofCrypto,
+        mut validation: Option<&mut EpochValidationScope>,
+    ) -> Result<(), FinalityError> {
         let height = proof.height();
         if height == 1 {
             need(
@@ -940,17 +988,28 @@ impl SumeragiFinalityVerifier {
                     && decoded.commitment.schedule.current == self.genesis_epoch,
                 "genesis proof differs from independently selected signed root",
             )?;
-            ConsensusSchedule::from_genesis_outcome(&decoded.commitment.schedule)
-                .map_err(malformed)?;
+            match validation.as_deref_mut() {
+                Some(validation) => ConsensusSchedule::from_genesis_outcome_with_validation(
+                    &decoded.commitment.schedule,
+                    validation,
+                ),
+                None => ConsensusSchedule::from_genesis_outcome(&decoded.commitment.schedule),
+            }
+            .map_err(malformed)?;
         } else {
             let parent = self
                 .decisions
                 .get(&(height - 1))
                 .ok_or_else(|| FinalityError("authenticated parent is missing".into()))?;
-            parent
-                .schedule
-                .validate_successor(&decoded.commitment.schedule)
-                .map_err(malformed)?;
+            match validation.as_deref_mut() {
+                Some(validation) => parent
+                    .schedule
+                    .validate_successor_with_validation(&decoded.commitment.schedule, validation),
+                None => parent
+                    .schedule
+                    .validate_successor(&decoded.commitment.schedule),
+            }
+            .map_err(malformed)?;
             if let Some(boundary) = &decoded.commitment.schedule.boundary {
                 need(
                     boundary.selection_anchor == parent.block_hash,
@@ -1001,7 +1060,11 @@ impl SumeragiFinalityVerifier {
                 scheduled.height == height,
                 "availability configuration height differs",
             )?;
-            let config = scheduled.height_config().map_err(malformed)?;
+            let config = match validation.as_deref_mut() {
+                Some(validation) => scheduled.height_config_with_validation(validation),
+                None => scheduled.height_config(),
+            }
+            .map_err(malformed)?;
             let availability = decoded
                 .availability
                 .as_ref()
@@ -1015,10 +1078,10 @@ impl SumeragiFinalityVerifier {
                 header,
                 availability,
                 payload,
-                &crypto,
+                crypto,
             )?;
         }
-        Ok(decoded)
+        Ok(())
     }
 }
 
@@ -1246,11 +1309,14 @@ impl Crypto for ProofCrypto {
     }
 }
 
-#[cfg(all(test, feature = "transparent_api"))]
+#[cfg(test)]
 pub(crate) mod tests;
 
+#[cfg(all(test, feature = "transparent_api"))]
+mod retained_decision_tests;
+
 /// Fixed public signing material for native proof tests; never deployment trust or execution evidence.
-#[cfg(all(any(test, feature = "test-fixtures"), feature = "transparent_api"))]
+#[cfg(any(test, all(feature = "test-fixtures", feature = "transparent_api")))]
 pub mod test_fixtures;
 
 #[cfg(all(test, feature = "transparent_api"))]

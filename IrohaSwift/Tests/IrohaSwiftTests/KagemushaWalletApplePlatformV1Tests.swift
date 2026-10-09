@@ -3,6 +3,9 @@ import Darwin
 import Foundation
 import Security
 import XCTest
+#if canImport(NoritoBridge)
+import NoritoBridge
+#endif
 
 @testable import IrohaSwift
 
@@ -337,6 +340,16 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
   private static let accessGroup = "ABCDE12345.org.hyperledger.iroha.wallet-tests"
   private let slot = KagemushaWalletAppleSlotV1(Data((1...32).map { UInt8($0) }))!
   private let challenge = Data(repeating: 0xc4, count: 32)
+  /// The 32-byte Poseidon signing message `m = P_bytes(kgwrcpt1, transcript)` of the vectored
+  /// Send receipt (`fixtures/kagemusha/wallet_v1_vectors.json`): what the Rust receipt signer
+  /// hands to `key_sign`.
+  private let message = Data(
+    [
+      0xa5, 0xe8, 0xb3, 0x24, 0x21, 0xe1, 0x75, 0x95,
+      0x04, 0x0c, 0xdc, 0xde, 0xea, 0xf4, 0x6f, 0x06,
+      0xda, 0x85, 0x29, 0x1d, 0x68, 0xcf, 0xf8, 0xe0,
+      0x5d, 0xab, 0x8b, 0xfc, 0x64, 0xa9, 0x6a, 0x2d,
+    ])
 
   private func makePlatform(
     keychain: FakeWalletKeychain = FakeWalletKeychain(),
@@ -391,6 +404,22 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
   ) -> KagemushaWalletAppleUnavailableV1? {
     if case .failure(let reason) = result { return reason }
     return nil
+  }
+
+  /// The low-S form `r || min(s, n − s)` of a fixed-width signature, as Rust freezes it.
+  private func lowSForm(_ raw: Data) -> Data {
+    if KagemushaWalletWireV1.isCanonicalLowSSignature(raw) { return raw }
+    let s = [UInt8](raw.suffix(32))
+    let order = KagemushaWalletWireV1.groupOrder
+    var twin = [UInt8](repeating: 0, count: 32)
+    var borrow = 0
+    for index in stride(from: 31, through: 0, by: -1) {
+      var difference = Int(order[index]) - Int(s[index]) - borrow
+      borrow = difference < 0 ? 1 : 0
+      if difference < 0 { difference += 256 }
+      twin[index] = UInt8(difference)
+    }
+    return Data(raw.prefix(32)) + Data(twin)
   }
 
   private func generatedKey(_ platform: KagemushaWalletApplePlatformV1) throws -> Data {
@@ -606,9 +635,9 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
 
     // Signing is not bracketed; a refused keychain is told apart the same way.
     keychain.copyStatus = errSecInteractionNotAllowed
-    XCTAssertEqual(failure(platform.keySign(slot, preimage: Data([1]))), .beforeFirstUnlock)
+    XCTAssertEqual(failure(platform.keySign(slot, message: message)), .beforeFirstUnlock)
     probe.firstUnlock = 0
-    XCTAssertEqual(failure(platform.keySign(slot, preimage: Data([1]))), .locked)
+    XCTAssertEqual(failure(platform.keySign(slot, message: message)), .locked)
   }
 
   func testProtectedDataBracketsSurroundEveryAbsence() throws {
@@ -802,26 +831,78 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     }
   }
 
-  func testKeySignReturnsDERThatVerifiesOverTheSHA256Preimage() throws {
+  func testKeySignSignsTheExact32ByteMessageWithECDSAMessageX962SHA256() throws {
+    // Owner answer A1: the payment key signs the 32-byte Poseidon message with standard
+    // ECDSA-P256-SHA256 (the message variant, which hashes once); never a digest variant.
+    XCTAssertEqual(
+      Platform.signingAlgorithm.rawValue, SecKeyAlgorithm.ecdsaSignatureMessageX962SHA256.rawValue)
+    XCTAssertNotEqual(
+      Platform.signingAlgorithm.rawValue, SecKeyAlgorithm.ecdsaSignatureDigestX962SHA256.rawValue)
+    XCTAssertEqual(Platform.signingMessageBytes, 32)
     let keychain = FakeWalletKeychain()
     let platform = try makePlatform(keychain: keychain)
     let publicKey = try generatedKey(platform)
-    let preimage = Data("iroha:kagemusha:wallet:v1:receipt-body\u{0}example".utf8)
     let der: Data
-    switch platform.keySign(slot, preimage: preimage) {
+    switch platform.keySign(slot, message: message) {
     case .success(let signature): der = signature
     case .failure(let reason): return XCTFail("sign: \(reason)")
     }
     XCTAssertEqual(der.first, 0x30, "strict DER sequence; low-S normalization is Rust's")
     let signature = try P256.Signing.ECDSASignature(derRepresentation: der)
     let verifier = try P256.Signing.PublicKey(x963Representation: publicKey)
-    XCTAssertTrue(verifier.isValidSignature(signature, for: preimage))
-    XCTAssertFalse(verifier.isValidSignature(signature, for: preimage + Data([0])))
+    XCTAssertTrue(verifier.isValidSignature(signature, for: message))
+    XCTAssertTrue(verifier.isValidSignature(signature, for: SHA256.hash(data: message)))
+    XCTAssertFalse(verifier.isValidSignature(signature, for: message + Data([0])))
+    // The ECDSA hash is SHA-256(m): as a digest signature the DER verifies over SHA-256(m), not
+    // over m itself, which a digest-variant signer would have signed.
+    var error: Unmanaged<CFError>?
+    let secPublicKey = try XCTUnwrap(
+      SecKeyCreateWithData(
+        publicKey as CFData,
+        [
+          kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+          kSecAttrKeyClass as String: kSecAttrKeyClassPublic,
+        ] as CFDictionary, &error))
+    XCTAssertTrue(
+      SecKeyVerifySignature(
+        secPublicKey, .ecdsaSignatureDigestX962SHA256, Data(SHA256.hash(data: message)) as CFData,
+        der as CFData, nil))
+    XCTAssertFalse(
+      SecKeyVerifySignature(
+        secPublicKey, .ecdsaSignatureDigestX962SHA256, message as CFData, der as CFData, nil))
+    // The wallet verifier accepts the frozen low-S form over the same message.
+    XCTAssertTrue(
+      KagemushaWalletWireV1.verifySignature(
+        publicKey: publicKey, message: message, signature: lowSForm(signature.rawRepresentation)))
 
     let other = KagemushaWalletAppleSlotV1(Data(repeating: 9, count: 32))!
-    XCTAssertEqual(failure(platform.keySign(other, preimage: preimage)), .platform(errSecItemNotFound))
+    XCTAssertEqual(
+      failure(platform.keySign(other, message: message)), .platform(errSecItemNotFound))
     keychain.copyStatus = errSecInteractionNotAllowed
-    XCTAssertEqual(failure(platform.keySign(slot, preimage: preimage)), .locked)
+    XCTAssertEqual(failure(platform.keySign(slot, message: message)), .locked)
+  }
+
+  func testKeySignRefusesAnyOtherMessageLengthBeforeTheKeychain() throws {
+    let keychain = FakeWalletKeychain()
+    let platform = try makePlatform(keychain: keychain)
+    _ = try generatedKey(platform)
+    let before = keychain.operations.count
+    for length in [0, 1, 31, 33, 338, 1024] {
+      XCTAssertEqual(
+        failure(platform.keySign(slot, message: Data(repeating: 7, count: length))),
+        .platform(KagemushaWalletAppleStatusV1.invalidSigningMessage), "length \(length)")
+    }
+    XCTAssertEqual(keychain.operations.count, before, "nothing is queried for a refused message")
+  }
+
+  func testDirectSignerRefusesAnyOtherMessageLength() throws {
+    let platform = try makePlatform(keychain: FakeWalletKeychain())
+    let key = FakeWalletKeychain.softwareKey()
+    for length in [0, 1, 31, 33, 338, 1024] {
+      XCTAssertEqual(
+        failure(platform.sign(key, slot: slot, message: Data(repeating: 7, count: length))),
+        .platform(KagemushaWalletAppleStatusV1.invalidSigningMessage), "length \(length)")
+    }
   }
 
   func testKeySignReportsAKeyThatCannotSignAsUnusable() throws {
@@ -830,7 +911,7 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     let platform = try makePlatform(keychain: keychain, diagnostics: diagnostics)
     let publicOnly = try XCTUnwrap(SecKeyCopyPublicKey(FakeWalletKeychain.softwareKey()))
     keychain.storeKey(tag: slot.applicationTag, label: nil, key: publicOnly)
-    XCTAssertEqual(failure(platform.keySign(slot, preimage: Data([1]))), .keyUnusable)
+    XCTAssertEqual(failure(platform.keySign(slot, message: message)), .keyUnusable)
     XCTAssertEqual(diagnostics.all.count, 1)
     XCTAssertEqual(diagnostics.all.first?.slot, slot.keychainName)
   }
@@ -865,7 +946,8 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     XCTAssertEqual(try platform.keyEnumerate().get(), [])
 
     probe.push(0, EPERM)
-    XCTAssertEqual(failure(platform.keyEnumerate()), .locked, "an empty answer counts only if still unlocked")
+    XCTAssertEqual(
+      failure(platform.keyEnumerate()), .locked, "an empty answer counts only if still unlocked")
     probe.push(EPERM)
     let before = keychain.operations.count
     XCTAssertEqual(failure(platform.keyEnumerate()), .locked)
@@ -882,20 +964,156 @@ final class KagemushaWalletApplePlatformV1Tests: XCTestCase {
     keychain.storeKey(tag: slot.applicationTag, label: request().label)
     keychain.storeKey(tag: slot.applicationTag, label: nil)
     keychain.storeKey(tag: Data("com.example.app.signing".utf8), label: nil)
-    keychain.storeKey(tag: Data(("kgm-w1-" + String(repeating: "AB", count: 32)).utf8), label: nil)
-    keychain.storeKey(tag: Data(("kgm-w1-" + String(repeating: "00", count: 32)).utf8), label: nil)
     keychain.storeKey(tag: nil, label: nil)
     XCTAssertEqual(try platform.keyEnumerate().get(), [slot, other], "sorted, each slot once")
     XCTAssertEqual(
       diagnostics.all.map(\.event),
-      ["malformed payment-key enumeration", "malformed wallet payment-key tag",
-       "malformed wallet payment-key tag"])
+      ["malformed payment-key enumeration"])
+
+    for tag in [
+      Data(("kgm-w1-" + String(repeating: "AB", count: 32)).utf8),
+      Data(("kgm-w1-" + String(repeating: "00", count: 32)).utf8),
+    ] {
+      keychain.copyResultOverride = .some(
+        [
+          [kSecAttrApplicationTag as String: slot.applicationTag],
+          [kSecAttrApplicationTag as String: tag],
+        ] as NSArray)
+      XCTAssertEqual(
+        failure(platform.keyEnumerate()), .platform(Status.malformedKeychainResult),
+        "a malformed wallet tag must not be hidden from the complete inventory")
+    }
+    XCTAssertEqual(
+      diagnostics.all.suffix(2).map(\.event),
+      ["malformed wallet payment-key tag", "malformed wallet payment-key tag"])
 
     let query = try XCTUnwrap(keychain.queries.last)
     XCTAssertEqual(query[kSecMatchLimit as String] as? String, kSecMatchLimitAll as String)
     XCTAssertEqual(query[kSecReturnAttributes as String] as? Bool, true)
     XCTAssertNil(query[kSecReturnRef as String])
   }
+
+  func testSuccessfulKeyInventoryRequiresPostQueryProtectedStorage() throws {
+    let keychain = FakeWalletKeychain()
+    let probe = FakeProtectedData()
+    let platform = try makePlatform(keychain: keychain, probe: probe)
+    let inventories: [[[String: Any]]] = [
+      [],
+      [[kSecAttrApplicationTag as String: Data("com.example.app.signing".utf8)]],
+      [[kSecAttrApplicationTag as String: slot.applicationTag]],
+    ]
+    for rows in inventories {
+      keychain.copyResultOverride = .some(rows as NSArray)
+      probe.push(0, EPERM)
+      let before = keychain.operations.count
+      let canaryReads = probe.canaryReads
+      XCTAssertEqual(failure(platform.keyEnumerate()), .locked)
+      XCTAssertEqual(keychain.operations.count, before + 1, "the complete query ran once")
+      XCTAssertEqual(probe.canaryReads, canaryReads + 2, "both storage brackets are required")
+    }
+    keychain.copyResultOverride = .some([[String: Any]]() as NSArray)
+    XCTAssertEqual(try platform.keyEnumerate().get(), [])
+    XCTAssertFalse(keychain.operations.contains("delete"))
+    XCTAssertTrue(keychain.generationAttributes.isEmpty)
+  }
+
+  func testKeyEnumerationResourceBoundRefusesCompleteInventoryWithoutTruncation() throws {
+    let keychain = FakeWalletKeychain()
+    let platform = try makePlatform(keychain: keychain)
+    let maximum = KagemushaWalletApplePlatformV1.keyEnumerationMaxSlots
+    var expected: [KagemushaWalletAppleSlotV1] = []
+    for index in 1...maximum + 1 {
+      var bytes = Data(repeating: 0, count: 28)
+      bytes.append(contentsOf: [
+        UInt8((index >> 24) & 255), UInt8((index >> 16) & 255),
+        UInt8((index >> 8) & 255), UInt8(index & 255),
+      ])
+      expected.append(try XCTUnwrap(KagemushaWalletAppleSlotV1(bytes)))
+    }
+    let rows = expected.map { [kSecAttrApplicationTag as String: $0.applicationTag] }
+    keychain.copyResultOverride = .some(Array(rows.prefix(maximum)) as NSArray)
+    XCTAssertEqual(try platform.keyEnumerate().get(), Array(expected.prefix(maximum)))
+    keychain.copyResultOverride = .some(rows as NSArray)
+    XCTAssertEqual(failure(platform.keyEnumerate()), .platform(Status.malformedKeychainResult))
+    XCTAssertFalse(keychain.operations.contains("delete"))
+    XCTAssertTrue(keychain.generationAttributes.isEmpty)
+  }
+
+  #if canImport(NoritoBridge)
+    func testNativeKeyEnumerationCallbackReturnsExactOriginalSlotBytesAndNoWrite() throws {
+      let keychain = FakeWalletKeychain()
+      let platform = try makePlatform(keychain: keychain)
+      let other = try XCTUnwrap(KagemushaWalletAppleSlotV1(Data(repeating: 0xab, count: 32)))
+      keychain.storeKey(tag: other.applicationTag, label: nil)
+      keychain.storeKey(tag: slot.applicationTag, label: nil)
+      let table = kagemushaWalletCallbacksV1(platform)
+      let invoke = try XCTUnwrap(table.invoke)
+      var output = [UInt8](repeating: 0, count: 64)
+      var reply = connect_norito_kagemusha_platform_reply_v1()
+      output.withUnsafeMutableBufferPointer { buffer in
+        invoke(table.context, 10, nil, nil, 0, 0, buffer.baseAddress, buffer.count, &reply)
+      }
+      XCTAssertEqual(reply.tag, 0)
+      XCTAssertEqual(reply.length, 64)
+      XCTAssertEqual(Data(output), slot.bytes + other.bytes)
+      let before = keychain.operations.count
+      slot.bytes.withUnsafeBytes { bytes in
+        invoke(
+          table.context, 10, bytes.bindMemory(to: UInt8.self).baseAddress,
+          nil, 0, 0, nil, 0, &reply)
+      }
+      XCTAssertEqual(reply.tag, 2)
+      XCTAssertEqual(reply.length, 0)
+      XCTAssertEqual(keychain.operations.count, before, "offered slot selector must not query keys")
+      invoke(table.context, 10, nil, nil, 0, 1, nil, 0, &reply)
+      XCTAssertEqual(reply.tag, 2)
+      XCTAssertEqual(keychain.operations.count, before, "offered metadata must not query keys")
+      XCTAssertFalse(keychain.operations.contains("delete"))
+      XCTAssertTrue(keychain.generationAttributes.isEmpty)
+    }
+
+    func testNativeKeyEnumerationCallbackErrorOrCapacityCannotLookEmpty() throws {
+      let keychain = FakeWalletKeychain()
+      let probe = FakeProtectedData()
+      let platform = try makePlatform(keychain: keychain, probe: probe)
+      keychain.storeKey(tag: slot.applicationTag, label: nil)
+      let table = kagemushaWalletCallbacksV1(platform)
+      let invoke = try XCTUnwrap(table.invoke)
+      var reply = connect_norito_kagemusha_platform_reply_v1()
+      var output = [UInt8](repeating: 0x5a, count: 31)
+      output.withUnsafeMutableBufferPointer { buffer in
+        invoke(table.context, 10, nil, nil, 0, 0, buffer.baseAddress, buffer.count, &reply)
+      }
+      XCTAssertEqual(reply.tag, UInt32.max)
+      XCTAssertEqual(reply.length, 0)
+      XCTAssertEqual(output, [UInt8](repeating: 0x5a, count: 31), "no partial slot copy")
+      keychain.copyStatus = errSecIO
+      invoke(table.context, 10, nil, nil, 0, 0, nil, 0, &reply)
+      XCTAssertEqual(reply.tag, 2)
+      XCTAssertEqual(reply.reason, 4)
+      XCTAssertEqual(reply.code, errSecIO)
+      XCTAssertEqual(reply.length, 0)
+      keychain.copyStatus = nil
+      probe.push(0, EPERM)
+      invoke(table.context, 10, nil, nil, 0, 0, nil, 0, &reply)
+      XCTAssertEqual(reply.tag, 2)
+      XCTAssertEqual(reply.reason, 0)
+      XCTAssertEqual(reply.length, 0)
+      let inventories: [[[String: Any]]] = [
+        [],
+        [[kSecAttrApplicationTag as String: Data("com.example.app.signing".utf8)]],
+      ]
+      for rows in inventories {
+        keychain.copyResultOverride = .some(rows as NSArray)
+        probe.push(0, EPERM)
+        invoke(table.context, 10, nil, nil, 0, 0, nil, 0, &reply)
+        XCTAssertEqual(reply.tag, 2, "a successful empty class query cannot hide a lock")
+        XCTAssertEqual(reply.reason, 0)
+        XCTAssertEqual(reply.length, 0)
+      }
+      XCTAssertFalse(keychain.operations.contains("delete"))
+    }
+  #endif
 
   // MARK: Rollback anchor
 

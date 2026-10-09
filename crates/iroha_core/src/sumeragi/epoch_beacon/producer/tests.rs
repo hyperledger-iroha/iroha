@@ -127,7 +127,7 @@ fn fixture() -> Fixture {
         network_id: chain.network_id(),
         session_id: id,
         attempt_id: id,
-        authority_generation: current.authority.generation,
+        authority_generation: current.authorization.authority_generation,
         roster_hash: crate::beacon::global_threshold_beacon_roster_hash_v1(&roster),
         committee_size: 4,
         threshold: 2,
@@ -245,11 +245,7 @@ fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse() {
             producer.accept(&source, applied, key, message).unwrap();
         }
     }
-    let (witness, attest) = observer.build(&build_context(&fixture.context, 0)).unwrap();
-    assert!(
-        !attest,
-        "Permissioned Parliament pulse is not an epoch boundary"
-    );
+    let witness = observer.build(&build_context(&fixture.context, 0)).unwrap();
     assert!(!witness.is_empty());
     assert!(witness.len() < iroha_sumeragi::types::MAX_CONTROL_WITNESS_BYTES);
     let pulse = control::decode(&witness).unwrap().unwrap();
@@ -262,8 +258,7 @@ fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse() {
     assert_eq!(
         restarted
             .build(&build_context(&fixture.context, 38))
-            .unwrap()
-            .0,
+            .unwrap(),
         witness,
         "a restarted reducer and a different valid threshold subset produce the exact same pulse"
     );
@@ -312,7 +307,7 @@ fn all_seats_drive_real_shares_once_and_followers_use_only_transported_pulse() {
             producer
                 .build(&build_context(&fixture.context, 37))
                 .unwrap(),
-            (witness, false)
+            witness
         );
         assert_eq!(
             producer.drive(&source, &fixture.context, applied).unwrap(),
@@ -551,9 +546,8 @@ fn explicitly_anchored_no_demand_needs_neither_session_nor_fake_observer_key() {
             .unwrap()
             .is_none()
     );
-    let (witness, attest) = observer.build(&build_context(&context, 5)).unwrap();
+    let witness = observer.build(&build_context(&context, 5)).unwrap();
     assert!(witness.is_empty());
-    assert!(!attest);
     assert_eq!(control::decode(&witness).unwrap(), None);
     control::verify_result(&witness, None).unwrap();
     let current = &source.world().consensus_schedule().ready(9).unwrap().epoch;
@@ -746,7 +740,7 @@ fn native_transient_signer_refusal_retains_remote_progress_and_exact_retry_paylo
     let finalized = fixture.producers[0]
         .build(&build_context(&fixture.context, 0))
         .unwrap();
-    assert!(!finalized.0.is_empty());
+    assert!(!finalized.is_empty());
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
     assert_eq!(
         fixture.producers[0]
@@ -836,8 +830,8 @@ fn native_active_session_from_a_foreign_real_committee_refuses_before_signing() 
         .ready(9)
         .unwrap()
         .epoch
-        .authority
-        .generation;
+        .authorization
+        .authority_generation;
     let (session, _) = prepared_session_and_signers_fixture_for_keys_v1(
         GlobalThresholdBeaconDkgSessionV1 {
             version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
@@ -890,6 +884,172 @@ fn native_active_session_from_a_foreign_real_committee_refuses_before_signing() 
             .iter()
             .all(|count| count.load(Ordering::SeqCst) == 0)
     );
+}
+
+#[test]
+fn valid_same_roster_foreign_generation_refuses_production_readiness_and_capture() {
+    let mut fixture = fixture();
+    let mut pairs = (0xC1..=0xC4)
+        .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    pairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let peers = pairs
+        .iter()
+        .map(|pair| iroha_model_base::peer::PeerId::new(pair.public_key().clone()))
+        .collect::<Vec<_>>();
+    let (original_id, current_generation) = {
+        let view = fixture.chain.state().view();
+        let retained = view.world().consensus_schedule();
+        let current = &retained.ready(9).unwrap().epoch;
+        assert_eq!(
+            peers,
+            current
+                .committee
+                .iter()
+                .map(|seat| seat.validator.clone())
+                .collect::<Vec<_>>()
+        );
+        (
+            view.world().active_global_beacon_key_session().unwrap(),
+            current.authorization.authority_generation,
+        )
+    };
+    let id: [u8; 32] = Hash::new(b"same roster foreign native beacon generation").into();
+    let (session, signers) = prepared_session_and_signers_fixture_for_keys_v1(
+        GlobalThresholdBeaconDkgSessionV1 {
+            version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+            network_id: fixture.chain.network_id(),
+            session_id: id,
+            attempt_id: id,
+            authority_generation: current_generation.checked_add(1).unwrap(),
+            roster_hash: crate::beacon::global_threshold_beacon_roster_hash_v1(&peers),
+            committee_size: 4,
+            threshold: 2,
+            start_height: 1,
+            commitments_end_height: 2,
+            deliveries_end_height: 3,
+            acceptances_end_height: 4,
+        },
+        &pairs,
+        &fixture.chain.state().ivm_execution_budget(),
+    );
+    let anchor = GlobalThresholdBeaconChainAnchorV1 {
+        height: 8,
+        block_hash: fixture.chain.committed(8).block_hash(),
+    };
+    // This is a real threshold proof under the original network and BLS roster;
+    // only the generation lacks the incumbent epoch's authorization.
+    let mut aggregator = GlobalThresholdBeaconPulseAggregatorV1::new(
+        session.clone(),
+        9,
+        anchor,
+        pulse_context(&fixture.context),
+    )
+    .unwrap();
+    for signer in signers.iter().take(2) {
+        let partial = signer.sign_partial(&session, aggregator.payload()).unwrap();
+        aggregator.accept_partial(partial).unwrap();
+    }
+    let pulse = aggregator.finalize().unwrap();
+    crate::beacon::verify_finalized_global_threshold_beacon_pulse_v1(
+        &session,
+        &pulse,
+        anchor,
+        &pulse_context(&fixture.context),
+    )
+    .unwrap();
+    let mut record = RetainedFinalizedGlobalThresholdBeaconSessionV1 {
+        session,
+        activated_at_height: None,
+        retired_at_height: None,
+    };
+    record
+        .activate(record.session.adaptive_dkg.finalized_at_height)
+        .unwrap();
+    fixture.chain.setup_world_at(2_000, |transaction| {
+        transaction
+            .world
+            .global_beacon_key_sessions
+            .insert(id, record);
+        transaction
+            .world
+            .global_beacon_active_session
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, id);
+    });
+    let state = fixture.chain.state();
+    let generation = state.state_view_generation();
+    let report = fixture.producers[0]
+        .attach_readiness(&state.ivm_execution_budget())
+        .unwrap();
+    let applied = (8, fixture.context.parent_hash);
+    {
+        let source = state.view();
+        for producer in &mut fixture.producers {
+            let error = producer
+                .drive(&source, &fixture.context, applied)
+                .unwrap_err();
+            assert!(
+                matches!(&error, NativeBeaconError::Source(message)
+                    if message.contains("active session differs from the authenticated epoch")),
+                "{error}"
+            );
+            assert!(producer.active.is_none());
+            assert!(producer.build(&build_context(&fixture.context, 0)).is_err());
+        }
+        fixture.producers[0]
+            .refresh_readiness(&source, &fixture.context, applied, generation)
+            .unwrap();
+        let (horizon, ready) = report.read(generation, 9, 8).unwrap();
+        assert!(!ready && !horizon.session_covers_next_pulse && !horizon.local_provider_ready);
+        let retained = source.world().consensus_schedule();
+        let current = &retained.ready(9).unwrap().epoch;
+        let error = super::super::capture(
+            iroha_data_model::block::consensus::SumeragiRootScope::Global,
+            source.world(),
+            source.block_hashes(),
+            current,
+            9,
+            Some(pulse),
+            Some(pulse_context(&fixture.context)),
+        )
+        .unwrap_err();
+        assert!(error.contains("authorized generation"), "{error}");
+        assert_eq!(source.world().active_global_beacon_key_session(), Some(id));
+        assert!(
+            source
+                .world()
+                .global_beacon_pulses()
+                .get(&pulse.pulse_id)
+                .is_none()
+        );
+    }
+    assert!(
+        fixture
+            .counts
+            .iter()
+            .all(|count| count.load(Ordering::SeqCst) == 0),
+        "a valid foreign-generation proof never authorizes local signing"
+    );
+    fixture.chain.setup_world_at(2_001, |transaction| {
+        transaction
+            .world
+            .global_beacon_active_session
+            .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, original_id);
+    });
+    let state = fixture.chain.state();
+    let generation = state.state_view_generation();
+    let source = state.view();
+    fixture.producers[0]
+        .refresh_readiness(&source, &fixture.context, applied, generation)
+        .unwrap();
+    assert!(report.read(generation, 9, 8).unwrap().1);
+    assert!(
+        fixture.producers[0]
+            .drive(&source, &fixture.context, applied)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(fixture.counts[0].load(Ordering::SeqCst), 1);
 }
 
 #[test]

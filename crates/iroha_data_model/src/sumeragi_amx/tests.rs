@@ -52,12 +52,8 @@ fn rotated(previous: &ValidatorEpochContextV1, seeds: [u8; 4]) -> ValidatorEpoch
             proof_of_possession: iroha_crypto::bls_normal_pop_prove(pair.private_key()).unwrap(),
         })
         .collect();
-    next.authority.generation += 1;
-    for (keys, member) in next.authority.validators.iter_mut().zip(&next.committee) {
-        keys.validator = member.validator.clone();
-    }
-    next.authorization.authority_generation = next.authority.generation;
-    next.authorization.authority_id = next.authority.authority_id().unwrap();
+    next.authorization.authority_generation += 1;
+    next.authorization.authority_id = next.generation().generation_id().unwrap();
     next.authorization.decision = ValidatorEpochDecisionV1::Activate;
     next.authorization.transition_id = [0x61; 32];
     next.authorization.beacon = BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
@@ -172,8 +168,6 @@ fn result_commitment(
             parent_state_root: Hash::new(b"parent"),
             post_state_root: root,
             ordinary_writes_root: root,
-            kagemusha_top_up_root: None,
-            kagemusha_top_up_count: 0,
             parent_world_state_root: Hash::new(b"fixture parent world"),
             world_state_root: Hash::new(b"fixture world"),
             event_commitment: None,
@@ -221,7 +215,6 @@ fn sign(
         proposer: 0,
         skipped_leaders: vec![],
         control_witness: ControlWitness::empty(),
-        attest: false,
     };
     let mut qc = Qc {
         kind: VoteKind::Commit,
@@ -231,11 +224,8 @@ fn sign(
         view: 0,
         block_hash: header.hash(&crypto),
         result,
-        attest: false,
         signers: Bitmap::from_indices(4, 0..u32::try_from(signers).unwrap()).unwrap(),
         agg_sig: AggregateSignature([0; 96]),
-        attestations: vec![],
-        attestation_witness: None,
     };
     let everyone = key_pairs(1..=16);
     let shares: Vec<_> = context

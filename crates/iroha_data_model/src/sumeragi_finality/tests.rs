@@ -99,8 +99,6 @@ pub(super) fn result(
             parent_state_root: Hash::new(b"parent"),
             post_state_root: ordinary_root,
             ordinary_writes_root: ordinary_root,
-            kagemusha_top_up_root: None,
-            kagemusha_top_up_count: 0,
             parent_world_state_root: Hash::new(b"fixture parent world"),
             world_state_root: Hash::new(b"fixture world"),
             event_commitment: None,
@@ -209,7 +207,6 @@ pub(super) fn certify_successor(
         proposer: 0,
         skipped_leaders: vec![],
         control_witness: ControlWitness::empty(),
-        attest: false,
     };
     let budget = iroha_allocation::AllocationBudget::new(128 * 1024 * 1024);
     let authored = super::test_fixtures::author_payload(
@@ -224,11 +221,8 @@ pub(super) fn certify_successor(
         view: 0,
         block_hash: header.hash(&crypto),
         result: result.result().unwrap(),
-        attest: false,
         signers: Bitmap::new(keys.len()),
         agg_sig: AggregateSignature([0; 96]),
-        attestations: vec![],
-        attestation_witness: None,
     };
     sign_qc(&mut qc, keys, &[0, 1, 2]);
     block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
@@ -248,13 +242,7 @@ impl Fixture {
     pub(crate) fn new() -> Self {
         use crate::{
             block::consensus::SumeragiGenesisContextParameters,
-            isi::{
-                InstructionBox, RegisterPeerWithPop, SetParameter,
-                kagemusha_v1::{
-                    KagemushaMintFinalityAuthorityGenerationTemplateV1,
-                    KagemushaMintFinalityGenesisParametersV1,
-                },
-            },
+            isi::{InstructionBox, RegisterPeerWithPop, SetParameter},
             parameter::{
                 CustomParameter, Parameter,
                 system::{
@@ -277,19 +265,11 @@ impl Fixture {
         let (crypto, _) = ProofCrypto::new(&validators).unwrap();
         let authority = KeyPair::from_seed(vec![41; 32], Algorithm::Ed25519);
         let account = AccountId::new(authority.public_key().clone());
-        let epoch_fixture = crate::sumeragi::epoch::tests::fixture(4);
         let metadata = ConsensusHandshakeMetadata {
             mode: SumeragiConsensusMode::Permissioned,
             block_cadence_ms: NonZeroU64::new(1000).unwrap(),
             wire_protocol_version: u32::from(crate::sumeragi::PROTOCOL_VERSION),
             consensus_fingerprint: ConsensusFingerprint::new([0x71; 32]),
-            kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1 {
-                authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-                    version: 1,
-                    generation: 0,
-                    validators: epoch_fixture.authority.validators,
-                },
-            },
             sumeragi_context: SumeragiGenesisContextParameters::recommended(),
         };
         let mut instructions = validators
@@ -457,9 +437,67 @@ fn alternate_current_quorum_witnesses_have_one_authenticated_execution() {
 }
 
 #[test]
+fn current_certificate_rejects_retired_attestation_fields() {
+    // Negative wire fixture only: no old decoder or verifier is retained.
+    #[derive(norito::Encode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_sumeragi::Qc")]
+    struct RetiredFields {
+        kind: VoteKind,
+        instance: Hash32,
+        epoch: iroha_sumeragi::types::EpochId,
+        height: u64,
+        view: u64,
+        block_hash: Hash32,
+        result: Hash32,
+        attest: bool,
+        signers: Bitmap,
+        agg_sig: AggregateSignature,
+        attestations: Vec<()>,
+        attestation_witness: Option<()>,
+    }
+
+    let fixture = Fixture::new();
+    let mut block = decode_framed_signed_block(&fixture.second.block_wire).unwrap();
+    let certificate = block.commit_certificate().unwrap();
+    let qc: Qc = norito::decode_canonical(certificate.commit_qc()).unwrap();
+    let retired = RetiredFields {
+        kind: qc.kind,
+        instance: qc.instance,
+        epoch: qc.epoch,
+        height: qc.height,
+        view: qc.view,
+        block_hash: qc.block_hash,
+        result: qc.result,
+        attest: false,
+        signers: qc.signers,
+        agg_sig: qc.agg_sig,
+        attestations: vec![],
+        attestation_witness: None,
+    };
+    let bytes = norito::encode_canonical(&retired).unwrap();
+    assert_eq!(
+        norito::schema::identity::frame_hash::<RetiredFields>(),
+        norito::schema::identity::frame_hash::<Qc>(),
+        "exercise payload rejection after the current nominal frame identity"
+    );
+    assert!(norito::decode_canonical::<Qc>(&bytes).is_err());
+    block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
+        certificate.consensus_header().to_vec(),
+        bytes,
+        certificate.result_preimage().to_vec(),
+        certificate.availability().to_vec(),
+    )));
+    let mut proof = fixture.second.clone();
+    proof.block_wire = block.encode_wire().unwrap();
+    let mut verifier = fixture.verifier();
+    verifier.verify(&fixture.first).unwrap();
+    assert!(verifier.verify(&proof).is_err());
+}
+
+#[test]
 fn current_proof_rejects_tampered_qc_result_committee_parent_wire_and_availability() {
     let fixture = Fixture::new();
-    for mutation in 0..8 {
+    for mutation in 0..9 {
         let mut bad = fixture.second.clone();
         let mut block = decode_framed_signed_block(&bad.block_wire).unwrap();
         let certificate = block.commit_certificate().unwrap();
@@ -491,7 +529,8 @@ fn current_proof_rejects_tampered_qc_result_committee_parent_wire_and_availabili
             4 => sign_qc(&mut qc, &fixture.keys, &[0, 1]),
             5 => result_preimage.push(0),
             6 => availability.clear(),
-            _ => *availability.last_mut().unwrap() ^= 1,
+            7 => *availability.last_mut().unwrap() ^= 1,
+            _ => sign_qc(&mut qc, &fixture.keys, &[0, 1, 2, 3]),
         }
         block.set_commit_certificate(Some(CommitCertificate::from_untrusted_parts(
             consensus_header,

@@ -21,11 +21,6 @@ pub struct IrohaRuntimeDeps {
     sumeragi_assert_fresh_key: bool,
     sumeragi_global_beacon_partial_signer:
         Option<Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>>,
-    kagemusha_mint_finality_authority: Option<
-        Arc<
-            iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
-        >,
-    >,
     parliament_tle_partial_release_signer:
         Option<Arc<dyn iroha_core::tle_release::TlePartialReleaseSignerV1>>,
     bootle_lantern_issuance_provider_registry: Option<
@@ -422,7 +417,6 @@ impl IrohaRuntimeDeps {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.sumeragi_global_beacon_partial_signer.is_none()
-            && self.kagemusha_mint_finality_authority.is_none()
             && self.parliament_tle_partial_release_signer.is_none()
             && self.bootle_lantern_issuance_provider_registry.is_none()
             && self.moderation_quarantine_key_wrapper.is_none()
@@ -513,13 +507,6 @@ impl IrohaRuntimeDeps {
         with_sumeragi_global_beacon_partial_signer(
             signer: Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
         ) => sumeragi_global_beacon_partial_signer;
-        /// Attach the separately provisioned Pasta authority for KAGEMUSHA
-        /// V1 top-up finality. The seed remains inside this runtime-owned object.
-        with_kagemusha_mint_finality_authority(
-            authority: Arc<
-                iroha_core_zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
-            >,
-        ) => kagemusha_mint_finality_authority;
         /// Attach the runtime-only adaptive Parliament TLE signing-share owner.
         ///
         /// Private DKG components remain inside this provider. They are never

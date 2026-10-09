@@ -49,6 +49,7 @@ pub(crate) fn run(
     let trust: DeploymentTrustV1 =
         norito::json::from_slice(&trust_input.bytes).wrap_err("invalid public trust profile")?;
     let network_id = trusted_network(&trust)?;
+    command.verification_origins(&trust)?;
     if definition
         .dataspace
         .network_id

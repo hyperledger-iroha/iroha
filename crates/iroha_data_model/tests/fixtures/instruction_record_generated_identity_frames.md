@@ -73,13 +73,6 @@ unshield cases and printed the actual root, vector, option and map frames. The
 fixture proposal changed only those two cases; the temporary test was removed.
 The type's directional identity hashes and the other 320 rows are unchanged.
 
-`RedeemKagemushaV1` and `TopUpKagemushaV1` were recaptured on 2026-09-25
-after the terminal-body commitment and hardware credential binding changed.
-The temporary typed maintenance test identified exactly these two changed
-populated rows among the 51 missing-record producers. It supplied all four
-current frame forms for each row; the row identities, other 319 rows, and
-inventory counts are unchanged. The temporary test was removed after capture.
-
 `RegisterIdentifierPolicy`, both `ClaimIdentifier` cases, and
 `FinalizeElection` were recaptured on 2026-09-25 after first-release policy,
 receipt and exact `u128` tally changes. The two Claim cases were matched by
@@ -169,3 +162,8 @@ exactly, including their container roundtrips. The digest assertion uses these
 authenticated fixture bytes. The post-correction native run passes all 335
 ordinary generated-record controls and repeats each complete capture identically.
 Integrated consumers and release qualification remain separate checks.
+
+The KAGEMUSHA `RedeemKagemushaV1` and `TopUpKagemushaV1` instructions left the
+built-in registry and the generated-record inventory on 2026-10-05. Their two
+rows were deleted from this fixture; no other row or byte changed. The fixture
+now holds 330 rows and 373 cases, and the missing-record producers number 50.

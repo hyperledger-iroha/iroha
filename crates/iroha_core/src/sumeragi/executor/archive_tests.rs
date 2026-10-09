@@ -228,7 +228,6 @@ fn worker(context: &ExecutorContext, archives: FinalizedArchives) -> Worker<'_> 
         archives: Some(archives),
         pending_commit: None,
         completed_replay: None,
-        attestation: None,
         quarantine_context: None,
     }
 }
@@ -258,10 +257,6 @@ fn prepare_and_append(worker: &mut Worker<'_>, block: &AvailableBody, qc: &Qc) -
             )
             .unwrap(),
         ),
-        Arc::new(crate::sumeragi::attestation::NativePastaVerifier::new(
-            block.header().instance,
-            *worker.state.network_id_ref(),
-        )),
     )
     .append(block, qc)
     .unwrap();
@@ -648,7 +643,7 @@ fn partial_archive_failure_retains_exact_decision_and_retries_without_reexecutio
     );
     assert!(events.try_recv().is_err());
     assert!(worker.execute(&block, qc.block_hash).is_none());
-    assert_eq!(worker.build(3, 0, 1 << 20, 100).unwrap(), (None, false));
+    assert_eq!(worker.build(3, 0, 1 << 20, 100).unwrap(), None);
     assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(qc.result));
     assert!(
         worker.live.as_ref().unwrap().overlay.is_none(),
@@ -852,13 +847,7 @@ fn below_quorum_current_frame_cannot_finish_pending_archive_capture_case() {
     let (context, mut events) = context(&chain);
     let mut worker = worker(&context, archives.clone());
     let (block, qc) = super::publication_tests::executed(&chain, &mut worker);
-    let below = chain.commit_qc(
-        2,
-        qc.block_hash,
-        qc.result,
-        block.header().attest,
-        Signers::BelowQuorum,
-    );
+    let below = chain.commit_qc(2, qc.block_hash, qc.result, Signers::BelowQuorum);
     let committee = worker
         .scheduled(2)
         .unwrap()
@@ -872,7 +861,7 @@ fn below_quorum_current_frame_cannot_finish_pending_archive_capture_case() {
             &block.header().epoch,
             &committee
         )
-        .verify_qc(&iroha_sumeragi::crypto::NoAttestation, &below)
+        .verify_qc(&below)
         .is_err(),
         "negative durable frame has an actual insufficient signed quorum"
     );

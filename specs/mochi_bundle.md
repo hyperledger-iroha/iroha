@@ -44,12 +44,19 @@ The same xtask selection owner gates the CLI-only `kagami-bundle` release path, 
 installs the identical original preset beside Kagami and the daemon and records its
 public provenance in that bundle's manifest. Neither packager accepts a release override.
 
-`--stage` is intended for CI pipelines where each build agent uploads its
-artefacts to a shared location. The helper recreates the bundle directory and
-copies the generated archive into the staging directory so publish jobs can
-collect platform-specific outputs without shell scripting. It revalidates the retained profile
-image and generated archive digest before replacing staged output and checks the exact copies
-afterward. Archive hashing streams through a 32 GiB packaging bound.
+`--stage` copies the completed package into a fresh or already owner-private
+staging root. Existing bundle or archive names and unsafe roots are refused before
+copying. The original native artifacts, exact inventory, manifest, profiles and
+archive stay retained through private staging and exclusive publication; final
+copies are rechecked against that original authority. Archive copying and hashing
+stream through a 32 GiB packaging bound. Directory and archive publish separately:
+if archive publication fails after the directory completes, the command reports
+both complete-directory and pending-archive paths for reconciliation and returns
+an error. It never deletes an incumbent or reports a partial pair as success.
+Use a fresh staging name for the next candidate; failed private copies may remain
+for diagnosis. The shared Windows directory publication gate closes staged output
+handles immediately before rename, then rechecks exact objects and hashes against
+the retained original source package.
 
 The canonical macOS package has one native application:
 
@@ -72,7 +79,12 @@ scripts. The generated plist uses `org.hyperledger.iroha.mochi`, executable
 Assembly is not code signing or notarization; those remain separate release
 qualification work.
 
-Installed runtime discovery accepts a direct `.app/Contents/MacOS` directory
+Installed runtime discovery admits the host-native executable format and live file custody
+of both Kagami and the daemon, retaining their original descriptors. Requests produced by that
+runtime share the selection across clones. Startup revalidates the original files and bound request paths
+before generation preparation, holding program owners through launch and readiness. These source
+fences neither authenticate build provenance nor make pathname execution atomic.
+Discovery accepts a direct `.app/Contents/MacOS` directory
 and loads profiles only from that application's `Contents/Resources`. Moving or
 renaming the application before first use preserves this relationship. Existing
 managed generations retain their original pinned executable paths; package
@@ -205,6 +217,12 @@ and the complete file inventory. Pipelines can diff the manifest to detect when
 new artefacts appear, upload the JSON alongside release assets, or audit the
 hashes before promoting a bundle to operators.
 
-The helper is idempotent: re-running the command updates the manifest and
-overwrites the previous archive, keeping `target/mochi-bundle/` as the single
-source of truth for the latest bundle on the current machine.
+Each build publishes a complete bundle once from private staging. Existing bundle
+or archive names are refused before building; select a fresh `--out` directory for
+another candidate. Failed native admission or publication preserves prior outputs.
+Original Cargo artifacts stay retained throughout publication. Windows requires
+closing output handles before renaming the complete directory; final readers
+recheck each exact captured native object snapshot, executable format, and hash.
+Archive failure retains the new owner-private incomplete archive and the already
+complete bundle for diagnosis, without reporting success. A later invocation refuses
+these occupied names; select a fresh output directory.

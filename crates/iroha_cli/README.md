@@ -932,3 +932,15 @@ use `iroha explorer accounts`, `domains`, `asset-definitions`, `assets`, `nfts`,
 `instructions-latest`. All accept shared list flags (`--filter`, `--select`,
 `--limit`, `--cursor`, `--all`); history and Explorer feeds reject sorting,
 totals and aggregates.
+
+### Dataspace verification routes
+
+`iroha dataspace status dpn.toml --trust trust.json` verifies the original
+retained operation without submitting transactions. If the retained public peer
+URLs share an ingress, select four distinct direct read routes with four repeated
+`--verification-peer-url http://127.0.0.1:PORT/` arguments, in the trust profile's
+peer order. This option is accepted only by `status`. It preserves the original
+trust profile, plan, operation ID, funding cap and signed transactions. Fresh
+challenge attestations still verify the selected genesis and each exact peer,
+node/build/configuration fingerprint and native lane signer. The completion
+receipt records the routes used. Never edit the retained profile to repair routing.

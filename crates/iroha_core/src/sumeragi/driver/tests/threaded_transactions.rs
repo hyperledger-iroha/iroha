@@ -322,7 +322,6 @@ fn start_leader_kernel() -> (
     };
     use iroha_sumeragi::{
         api::{CommittedTip, Init, LocalParams},
-        crypto::Attestation,
         safety::{RecordState, SafetyRecord},
         testing::{FakeValidators, TEST_EPOCH},
         types::{ChainParams, ConfigSlot, Hash32, HeightConfig},
@@ -375,7 +374,6 @@ fn start_leader_kernel() -> (
         signers: vec![Arc::new(validators.signer(leader).clone())],
         crypto: Box::new(validators.crypto.clone()),
         hasher: Box::new(validators.crypto.clone()),
-        attestation: Attestation::none(),
         now: 0,
         ingress: Arc::new(Mutex::new(Ingress::new(IngressLimits::default()))),
         config: DriverConfig::default(),
@@ -537,9 +535,7 @@ fn actual_run_loop_reopens_transactions_before_build_and_preserves_empty_arrival
         fixture
             .handle
             .inputs
-            .send(Input::Done(Completion::Exec(ExecDone::Built(Ok((
-                None, false,
-            ))))))
+            .send(Input::Done(Completion::Exec(ExecDone::Built(Ok(None)))))
             .unwrap();
         second = fixture.executed.recv_timeout(Duration::from_secs(5));
         if matches!(second, Ok(ExecOp::DriveApplicationControl(_))) {
@@ -803,9 +799,7 @@ fn actual_run_loop_retains_build_arrival_before_dispatch_turn_finishes() {
         }
         handle
             .inputs
-            .send(Input::Done(Completion::Exec(ExecDone::Built(Ok((
-                None, false,
-            ))))))
+            .send(Input::Done(Completion::Exec(ExecDone::Built(Ok(None)))))
             .unwrap();
     }
     let released = release.send(());

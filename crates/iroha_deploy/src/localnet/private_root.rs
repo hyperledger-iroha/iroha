@@ -422,7 +422,7 @@ fn prepare_fresh(
         &runtime.join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
         Zeroizing::new(format!("{}\n", owner.private_key.as_str())).as_bytes(),
     )?;
-    write_managed_mint_finality_seeds(&root, &peers)?;
+    prepare_managed_node_directories(&root, peers.len())?;
     // This owner creates the private domain and its restricted assets in original genesis.
     // Retain one identity for genesis, later private transactions and parent registration;
     // assigning the domain to another signer would violate ordinary asset ownership checks.
@@ -740,10 +740,7 @@ fn private_genesis(
     let mut context = SumeragiGenesisContextParameters::recommended();
     context.root_scope = spec.scope();
     let mut builder = GenesisBuilder::new_without_executor(chain.parse()?, PathBuf::from("."))
-        .with_sumeragi_context_parameters(context)
-        .with_kagemusha_mint_finality_genesis_parameters(
-            localnet_kagemusha_mint_finality_genesis_parameters(peers)?,
-        );
+        .with_sumeragi_context_parameters(context);
     let mut parameters = Parameters::default();
     parameters.set_parameter(Parameter::Custom(
         private_fee_policy(spec)?.into_custom_parameter()?,
@@ -985,6 +982,7 @@ mod tests {
             "parent address rendering cannot change the independently generated child profile"
         );
         let owner = client.account;
+        let mut expected_roster = Vec::new();
         for peer in &prepared.peers {
             let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024).unwrap();
             let table: toml::Table = std::str::from_utf8(&bytes).unwrap().parse().unwrap();
@@ -995,6 +993,25 @@ mod tests {
                 Some(&peer.config_path),
             )
             .unwrap();
+            assert_eq!(table["zk"]["pipa_r"]["enabled"].as_bool(), Some(true));
+            assert!(table["zk"].get("halo2").is_none());
+            assert!(config.zk.pipa_r.enabled);
+            let retired = Zeroizing::new(format!(
+                "{}\n[zk.halo2]\nenabled = true\n",
+                std::str::from_utf8(&bytes).unwrap()
+            ));
+            assert!(parse_private_peer_config(&retired, Some(&peer.config_path)).is_err());
+            assert_eq!(
+                parse_private_peer_config(
+                    std::str::from_utf8(&bytes).unwrap(),
+                    Some(&peer.config_path),
+                )
+                .map(|retry| retry.genesis.expected_hash)
+                .unwrap(),
+                config.genesis.expected_hash,
+                "the same original generated config remains admissible after retired-field refusal"
+            );
+            expected_roster.push(config.common.peer.id().clone());
             assert_eq!(&config.genesis.public_key, client.key_pair.public_key());
             assert_eq!(
                 config.network.connect_startup_delay,
@@ -1037,6 +1054,23 @@ mod tests {
             assert_eq!(
                 config.nexus.lane_catalog.lanes()[0].dataspace_id,
                 spec.dataspace_id
+            );
+        }
+        let signed = read_signed_genesis(&directory.join("genesis.signed.nrt")).unwrap();
+        let epoch = iroha_data_model::sumeragi_finality::genesis_epoch(&signed).unwrap();
+        assert_eq!(epoch.authorization.authority_generation, 0);
+        assert_eq!(epoch.committee.len(), 4);
+        epoch
+            .authorization
+            .validate_against_generation(&epoch.generation())
+            .unwrap();
+        expected_roster.sort();
+        assert_eq!(epoch.generation().validators, expected_roster);
+        for index in 0..prepared.peers.len() {
+            assert!(
+                !managed_node_dir(&directory, index)
+                    .join("secrets/mint_finality.seed")
+                    .exists()
             );
         }
         let manifest = RawGenesisTransaction::from_path(&directory.join("genesis.json")).unwrap();

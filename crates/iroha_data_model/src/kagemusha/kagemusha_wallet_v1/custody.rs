@@ -31,8 +31,10 @@ use super::{
     invalid_v1, is_zero_v1,
     keys::KagemushaDevicePublicKeyV1,
     messages::KagemushaWalletPaymentV1,
-    overflow_v1, require_canonical_field_v1, require_nonzero_field_v1, require_nonzero_v1,
-    require_scheme_v1, require_version_v1,
+    overflow_v1,
+    poseidon::KagemushaWalletIndexedOpeningV1,
+    require_canonical_field_v1, require_nonzero_field_v1, require_nonzero_v1, require_scheme_v1,
+    require_version_v1,
     state::{
         KagemushaWalletEffectV1, KagemushaWalletLineageSlotV1, KagemushaWalletLineageV1,
         KagemushaWalletOperationKindV1, KagemushaWalletPackageDigestsV1, KagemushaWalletPackageV1,
@@ -101,6 +103,7 @@ impl KagemushaWalletTerminalReasonV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletMarkerStateV1"
 )]
+#[repr(align(16))]
 pub enum KagemushaWalletMarkerStateV1 {
     /// Generation-0 enrollment marker, written before the credential request.
     #[codec(index = 1)]
@@ -152,6 +155,7 @@ impl KagemushaWalletMarkerStateV1 {
 /// generation-0 enrollment marker (design C3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletMarkerV1")]
+#[repr(align(16))]
 pub struct KagemushaWalletMarkerV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`].
     pub version: u16,
@@ -508,7 +512,7 @@ impl KagemushaWalletOutputDescriptorV1 {
             kind,
             digest: kagemusha_wallet_output_digest_v1(
                 kind,
-                &statement.statement_digest(),
+                &statement.statement_digest()?,
                 proof_digest,
                 payment_digest,
             ),
@@ -663,8 +667,11 @@ const fn required_retained_roles_v1(
 /// step proof σ, the Payment digest a Receive receipt binds, the required map nodes, the
 /// retained input bytes (the fold witnesses, §4.1) and the receipt-free output descriptor;
 /// the receipt signs its digest `H("capsule", frame)`.
-// TODO(G3): the map-opening layout is fixed by the iroha_core_zk map owner with the artifact
-// set; G1 bounds each opening only through the capsule frame cap.
+///
+/// Each map opening is one depth-32 indexed-tree opening transcript of §3.2 (owner answer A2):
+/// a leaf opening or an empty-slot opening, each with exactly 32 siblings.
+// TODO(G3): which openings each operation kind retains is fixed with the artifact set; G1
+// checks only each opening's layout.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletRecoveryCapsuleV1"
@@ -692,7 +699,8 @@ pub struct KagemushaWalletRecoveryCapsuleV1 {
     pub step_proof: KagemushaWalletStepProofV1,
     /// Full canonical Payment digest of a Receive; zero otherwise.
     pub payment_digest: [u8; 32],
-    /// Required authenticated map nodes and openings.
+    /// Required map openings: each one §3.2 leaf-opening (1,124 bytes) or empty-slot opening
+    /// (1,028 bytes) transcript with exactly 32 siblings.
     pub map_openings: Vec<Vec<u8>>,
     /// Exact input bytes needed to resume and to fold the step.
     pub retained_inputs: Vec<KagemushaWalletRetainedInputV1>,
@@ -734,8 +742,9 @@ impl KagemushaWalletRecoveryCapsuleV1 {
     /// predecessor capsule present exactly at Bootstrap, an Ω(pred) present or absent against
     /// the kind or failing the §3.2 consumer equalities or naming another wallet, a successor
     /// `burned_total` other than Ω(pred)'s, a Payment digest present or absent against the
-    /// kind, an output descriptor that does not rebuild, empty openings or retained inputs,
-    /// and a missing fold-witness role.
+    /// kind, an output descriptor that does not rebuild, a map opening that is not a §3.2
+    /// leaf-opening or empty-slot opening transcript with 32 canonical siblings, an empty
+    /// retained input, and a missing fold-witness role.
     pub fn validate(&self) -> WalletResult<()> {
         require_version_v1("capsule.version", self.version)?;
         require_nonzero_v1("capsule.scheme_id", &self.scheme_id)?;
@@ -784,7 +793,7 @@ impl KagemushaWalletRecoveryCapsuleV1 {
             ("capsule.output.kind", self.output.kind == self.kind),
             (
                 "capsule.operation_id",
-                self.operation_id == statement.operation_id(&self.wallet_id),
+                self.operation_id == statement.operation_id(&self.wallet_id)?,
             ),
             (
                 "capsule.predecessor_capsule_digest",
@@ -824,8 +833,9 @@ impl KagemushaWalletRecoveryCapsuleV1 {
         if rebuilt != self.output {
             return Err(invalid_v1("capsule.output.digest"));
         }
-        if self.map_openings.iter().any(Vec::is_empty) {
-            return Err(invalid_v1("capsule.map_openings"));
+        for opening in &self.map_openings {
+            KagemushaWalletIndexedOpeningV1::from_transcript(opening)
+                .map_err(|_| invalid_v1("capsule.map_openings"))?;
         }
         for input in &self.retained_inputs {
             input.validate()?;
@@ -1089,6 +1099,7 @@ impl KagemushaWalletCompletionRecordV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletFoldRecordV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletFoldRecordV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`].
     pub version: u16,

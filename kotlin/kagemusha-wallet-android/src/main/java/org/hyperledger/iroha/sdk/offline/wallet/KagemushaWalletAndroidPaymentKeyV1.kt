@@ -15,17 +15,17 @@ import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AttestationResult
 /**
  * Android payment key of one wallet slot (spec §§2.2, 2.3, 4.2; G2 design rev 2 E3).
  *
- * The Keystore alias is `kgm-w1-<slot hex>`. The Rust provider draws every slot fresh, makes the
- * slot's intent durable and probes for a definitive absence before it calls [generate]
- * (`continue_enrollment`), so the alias is recorded before any key exists under it. Generating
- * under an existing alias would replace its key (AOSP keystore2 `rebind_alias`), so [generate]
- * probes again itself, never generates twice for one alias in this process, and never after any
- * alias entry was seen. Every Keystore error is `Unavailable`, never absence; nothing here deletes
- * or regenerates a key in response to an error.
+ * The Keystore alias is `kgm-w1-<slot hex>`. API 31+ [generate] requires definitive absence.
+ * On API 26–30, a null lookup is unknown. Only Native's original fresh-slot enrollment may
+ * reach [generateFreshFromNative], once, after publishing its intent. Native consumes its
+ * non-reconstitutable grant before that private JNI upcall; no restored file or retry can
+ * authorize another call. This adapter records the alias used before touching the provider.
  *
- * Absence exists only on keystore2 (API 31+): keystore1 `getKey` returns null whenever its
- * `KeyStore.contains` probe fails, and that probe swallows every daemon error. Below API 31
- * every answer is therefore `Unavailable(PLATFORM_KEYSTORE_UNSUPPORTED)`.
+ * A positive lookup is usable on API 26+, but no error or API 26–30 null is absence. No path
+ * deletes or regenerates a key in response to an error. Fresh generation never retries an
+ * alias, including after a StrongBox failure. A TEE-permitted profile may use one in-memory
+ * hint for a different freshly authorized slot under the same challenge after that actual
+ * failure. Neither the hint nor the alias set is persistent freshness or rollback authority.
  */
 internal class KagemushaWalletAndroidPaymentKeyV1(
     private val keyStore: KagemushaWalletAndroidKeyStoreV1,
@@ -35,6 +35,23 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
 
     /** Aliases this process generated under, saw occupied or deleted; never generated under again. */
     private val usedAliases = HashSet<String>()
+
+    // A provider's StrongBox refusal permits one separate, freshly authorized slot to use TEE.
+    // This is a hardware-choice hint, never a generation grant, durable record or retry token.
+    private var freshTeeFallback: FreshTeeFallback? = null
+
+    private class FreshTeeFallback(
+        val failedAlias: String,
+        challengeDigest: ByteArray,
+        val profile: KagemushaWalletAndroidKeyProfileV1,
+    ) {
+        private val challenge = challengeDigest.copyOf()
+
+        fun matches(alias: String, challengeDigest: ByteArray, requestedProfile: KagemushaWalletAndroidKeyProfileV1): Boolean =
+            alias != failedAlias && profile == requestedProfile &&
+                requestedProfile == KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE &&
+                challenge.contentEquals(challengeDigest)
+    }
 
     /** Tri-state probe through `KeyStore.getKey`; the public key comes from the attested leaf. */
     fun probe(slot: ByteArray): KagemushaWalletAndroidKeyProbeV1 = synchronized(lock) {
@@ -59,6 +76,86 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
         challengeDigest: ByteArray,
         profile: KagemushaWalletAndroidKeyProfileV1,
     ): KagemushaWalletAndroidKeyGenerationV1 = synchronized(lock) { generateLocked(slot, challengeDigest, profile) }
+
+    /**
+     * Private Native enrollment upcall on API 26–30 only. Native has already consumed the
+     * one-shot grant bound to this platform owner, fresh slot, challenge and profile. Calling
+     * this internal adapter is not itself evidence of freshness; only nativeCall operation 11
+     * may reach it in production. There is no caller-supplied "fresh" flag or replayable grant.
+     */
+    fun generateFreshFromNative(
+        slot: ByteArray,
+        challengeDigest: ByteArray,
+        profile: KagemushaWalletAndroidKeyProfileV1,
+    ): KagemushaWalletAndroidKeyGenerationV1 = synchronized(lock) {
+        val alias = kagemushaWalletAndroidAliasV1(slot)
+        val challenge = challengeDigest.copyOf()
+        require(challenge.size == 32 && challenge.any { it != 0.toByte() }) {
+            "attestation challenge must be the nonzero 32-byte challenge digest"
+        }
+        if (environment.apiLevel !in (KAGEMUSHA_WALLET_ANDROID_MIN_API_V1 until KAGEMUSHA_WALLET_ANDROID_KEYSTORE2_API_V1)) {
+            return@synchronized unavailableGeneration(KagemushaWalletAndroidUnavailableV1.platform(
+                KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE_UNSUPPORTED,
+            ))
+        }
+        if (kagemushaWalletAndroidCustodyRefusalV1(environment) != null) {
+            return@synchronized unavailableGeneration(KagemushaWalletAndroidUnavailableV1.platform(
+                KagemushaWalletAndroidUnavailableV1.PLATFORM_BACKUP_ENABLED,
+            ))
+        }
+        try {
+            if (!environment.isUserUnlocked()) {
+                return@synchronized unavailableGeneration(KagemushaWalletAndroidUnavailableV1.BEFORE_FIRST_UNLOCK)
+            }
+        } catch (error: Throwable) {
+            return@synchronized unavailableGeneration(KagemushaWalletAndroidUnavailableV1.platform(
+                KagemushaWalletAndroidUnavailableV1.PLATFORM_STORAGE,
+            ))
+        }
+        // Burn the alias before even probing. Any provider exception ends this grant's attempt.
+        if (!usedAliases.add(alias)) return@synchronized KagemushaWalletAndroidKeyGenerationV1.AlreadyPresent
+        val useTeeFallback = freshTeeFallback?.matches(alias, challenge, profile) == true
+        // Spend the hint before the new slot's probe: even a probe failure cannot retry it.
+        if (useTeeFallback) freshTeeFallback = null
+        val occupied = try {
+            // Inspect the raw entry: a non-private key or malformed chain is still occupied.
+            keyStore.getKey(alias) != null
+        } catch (error: Throwable) {
+            return@synchronized unavailableGeneration(classify(error, KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE))
+        }
+        if (occupied) return@synchronized KagemushaWalletAndroidKeyGenerationV1.AlreadyPresent
+        // Null is still unknown. Only the already-consumed Native grant authorizes creation.
+        val plan = try {
+            if (useTeeFallback) KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY else
+                kagemushaWalletAndroidHardwarePlanV1(
+                    profile, environment.apiLevel, environment.apiLevel >= 28 && environment.hasStrongBox(),
+                )
+        } catch (error: Throwable) {
+            return@synchronized unavailableGeneration(classify(error, KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE))
+        }
+        val level = when (plan) {
+            KagemushaWalletAndroidHardwarePlanV1.REFUSE -> return@synchronized unavailableGeneration(
+                KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_STRONGBOX_UNAVAILABLE),
+            )
+            KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY -> KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT
+            KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_ONLY,
+            KagemushaWalletAndroidHardwarePlanV1.STRONGBOX_THEN_TEE -> KagemushaWalletAndroidSecurityLevelV1.STRONGBOX
+        }
+        when (val generated = attempt(alias, challenge, level == KagemushaWalletAndroidSecurityLevelV1.STRONGBOX)) {
+            Attempt.Generated -> readBack(alias, challenge, level)
+            Attempt.StrongBoxUnavailable -> {
+                if (level == KagemushaWalletAndroidSecurityLevelV1.STRONGBOX &&
+                    profile == KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE
+                ) {
+                    freshTeeFallback = FreshTeeFallback(alias, challenge, profile)
+                }
+                unavailableGeneration(KagemushaWalletAndroidUnavailableV1.platform(
+                    KagemushaWalletAndroidUnavailableV1.PLATFORM_STRONGBOX_UNAVAILABLE,
+                ))
+            }
+            is Attempt.Failed -> unavailableGeneration(generated.reason)
+        }
+    }
 
     private fun generateLocked(
         slot: ByteArray,
@@ -126,14 +223,24 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
         return readBack(alias, challenge, level)
     }
 
-    /** Sign the exact [preimage] with `SHA256withECDSA`; the platform's DER is returned unmodified. */
-    fun sign(slot: ByteArray, preimage: ByteArray): KagemushaWalletAndroidSignatureV1 =
-        synchronized(lock) { signLocked(slot, preimage) }
+    /**
+     * Sign the exact 32-byte signing [message] with `SHA256withECDSA` (owner answer A1): the
+     * message is the canonical encoding of the Poseidon value `P_bytes(d, transcript)` that the
+     * Rust domain-checked signer computed, and KeyMint hashes it once with SHA-256. Nothing here
+     * prefixes, hashes or truncates it. The platform's DER is returned unmodified; Rust normalizes
+     * it to low S and verifies it under the payment key.
+     *
+     * @throws IllegalArgumentException for a message that is not exactly 32 bytes.
+     */
+    fun sign(slot: ByteArray, message: ByteArray): KagemushaWalletAndroidSignatureV1 =
+        synchronized(lock) { signLocked(slot, message) }
 
-    private fun signLocked(slot: ByteArray, preimage: ByteArray): KagemushaWalletAndroidSignatureV1 {
+    private fun signLocked(slot: ByteArray, signingMessage: ByteArray): KagemushaWalletAndroidSignatureV1 {
         val alias = kagemushaWalletAndroidAliasV1(slot)
-        val message = preimage.copyOf()
-        require(message.size in 1..KAGEMUSHA_WALLET_ANDROID_PREIMAGE_MAX_BYTES_V1) { "signing preimage is empty or oversized" }
+        val message = signingMessage.copyOf()
+        require(message.size == KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1) {
+            "signing message must be exactly $KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1 bytes"
+        }
         val key = when (val loaded = loadKey(alias)) {
             is Loaded.Key -> loaded.key
             Loaded.Absent -> return KagemushaWalletAndroidSignatureV1.Unavailable(
@@ -160,7 +267,7 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
     private fun deleteLocked(slot: ByteArray): KagemushaWalletAndroidRemoveV1 {
         val alias = kagemushaWalletAndroidAliasV1(slot)
         usedAliases += alias
-        // Below API 31 no answer is definitive, so the Keystore is not touched at all.
+        // Below API 31 deletion cannot establish definitive absence, so it does not touch Keystore.
         if (!environment.keystore2()) {
             return KagemushaWalletAndroidRemoveV1.Uncertain(
                 KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE_UNSUPPORTED),
@@ -192,8 +299,8 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
     }
 
     /**
-     * One generation call. A failure leaves the alias usable only because the next generation
-     * first needs a definitive absence again; a success marks the alias used for this process.
+     * One provider generation call. The fresh-only caller already burned the alias; the API
+     * 31+ caller may retry a failure only after definitive absence. Success marks the alias used.
      */
     private fun attempt(alias: String, challenge: ByteArray, strongBox: Boolean): Attempt = try {
         keyStore.generate(KagemushaWalletAndroidKeySpecV1(alias, challenge, strongBox))
@@ -206,8 +313,8 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
     }
 
     /**
-     * Readback of a generated key: `KeyInfo` (API 31+) must match the request at the planned
-     * level, and the attestation's signed `KeyDescription` must carry the challenge, matching
+     * Readback of a generated key: every available `KeyInfo` field must match the request; the
+     * attestation's signed `KeyDescription` must carry the challenge, matching
      * TEE or StrongBox attestation and Keymaster levels equal to the planned level, hardware-
      * enforced SIGN / EC / 256 / SHA-256 / P-256 / GENERATED, and no usage limit (tag 405).
      */
@@ -228,7 +335,7 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
         } catch (error: Throwable) {
             return unavailableGeneration(classify(error, KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE))
         }
-        if (!kagemushaWalletAndroidFactsMatchV1(facts, level, exportable = present.key.encoded != null)) {
+        if (!kagemushaWalletAndroidFactsMatchV1(facts, level, exportable = present.key.encoded != null, apiLevel = environment.apiLevel)) {
             return unavailableGeneration(KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE)
         }
         val attested = try {
@@ -287,12 +394,9 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
         }
     }
 
-    /**
-     * `getKey` only, on keystore2: null is absence, any throw is unavailable, a non-private key
-     * is unusable. Below API 31 nothing is definitive.
-     */
+    /** Positive keys are usable on API 26+; only keystore2 null is definitive absence. */
     private fun loadKey(alias: String): Loaded {
-        if (!environment.keystore2()) {
+        if (environment.apiLevel < KAGEMUSHA_WALLET_ANDROID_MIN_API_V1) {
             return Loaded.Unavailable(
                 KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE_UNSUPPORTED),
             )
@@ -301,7 +405,10 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
             keyStore.getKey(alias)
         } catch (error: Throwable) {
             return Loaded.Unavailable(classify(error, KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE))
-        } ?: return Loaded.Absent
+        } ?: return if (environment.keystore2()) Loaded.Absent else Loaded.Unavailable(
+            KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_KEY_ABSENCE_UNKNOWN),
+        )
+        if (!environment.keystore2()) usedAliases += alias
         val privateKey = key as? PrivateKey ?: return Loaded.Unavailable(KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE)
         return Loaded.Key(privateKey)
     }
@@ -351,13 +458,16 @@ internal class KagemushaWalletAndroidPaymentKeyV1(
     }
 }
 
-/** Lowest API level with keystore2, whose `getKey` distinguishes "no key" from an error. */
-internal const val KAGEMUSHA_WALLET_ANDROID_MIN_API_V1: Int = 31
+/** Lowest supported Android API; initial key creation below 31 needs Native's fresh grant. */
+internal const val KAGEMUSHA_WALLET_ANDROID_MIN_API_V1: Int = 26
 
-private fun KagemushaWalletAndroidEnvironmentV1.keystore2(): Boolean = apiLevel >= KAGEMUSHA_WALLET_ANDROID_MIN_API_V1
+/** Lowest API with a definitive null result from `getKey`. */
+internal const val KAGEMUSHA_WALLET_ANDROID_KEYSTORE2_API_V1: Int = 31
 
-/** Largest preimage the payment key signs; provider preimages are role-tagged bodies of a few KiB. */
-internal const val KAGEMUSHA_WALLET_ANDROID_PREIMAGE_MAX_BYTES_V1: Int = 1 shl 20
+private fun KagemushaWalletAndroidEnvironmentV1.keystore2(): Boolean = apiLevel >= KAGEMUSHA_WALLET_ANDROID_KEYSTORE2_API_V1
+
+/** Exact length of every signing message the payment key signs: one canonical σ-field value. */
+internal const val KAGEMUSHA_WALLET_ANDROID_SIGNING_MESSAGE_BYTES_V1: Int = 32
 
 /** Attestation chain bounds, as in `AndroidKeyAttestationOriginalV1`. */
 internal const val KAGEMUSHA_WALLET_ANDROID_CHAIN_MAX_CERTIFICATES_V1: Int = 8
@@ -403,29 +513,38 @@ internal fun kagemushaWalletAndroidAttestedLevelV1(level: KagemushaWalletAndroid
     }
 
 /**
- * Whether a generated key's API 31+ `KeyInfo` matches the request: secure hardware at exactly
- * the planned level, generated on the device, `PURPOSE_SIGN` and `SHA-256` only, P-256, not
- * exportable, no user authentication, presence or confirmation, and unlimited use.
+ * Check actual `KeyInfo` fields at their API boundary. Unavailable getters must remain null;
+ * they are not inferred security levels or unlimited-use claims. The separate signed
+ * attestation check is mandatory on every API, including for level and usage-limit policy.
  */
 internal fun kagemushaWalletAndroidFactsMatchV1(
     facts: KagemushaWalletAndroidKeyFactsV1,
     level: KagemushaWalletAndroidSecurityLevelV1,
     exportable: Boolean,
+    apiLevel: Int,
 ): Boolean {
+    if (apiLevel < KAGEMUSHA_WALLET_ANDROID_MIN_API_V1) return false
     val expectedLevel = when (level) {
         KagemushaWalletAndroidSecurityLevelV1.STRONGBOX -> KeyProperties.SECURITY_LEVEL_STRONGBOX
         KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT -> KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT
     }
-    return facts.securityLevel == expectedLevel &&
-        facts.remainingUsageCount == KeyProperties.UNRESTRICTED_USAGE_COUNT &&
+    val newerFactsMatch = if (apiLevel >= KAGEMUSHA_WALLET_ANDROID_KEYSTORE2_API_V1) {
+        facts.securityLevel == expectedLevel && facts.remainingUsageCount == KeyProperties.UNRESTRICTED_USAGE_COUNT
+    } else {
+        facts.securityLevel == null && facts.remainingUsageCount == null
+    }
+    val presenceFactsMatch = if (apiLevel >= 28) {
+        facts.userPresenceRequired == false && facts.userConfirmationRequired == false
+    } else {
+        facts.userPresenceRequired == null && facts.userConfirmationRequired == null
+    }
+    return newerFactsMatch && presenceFactsMatch &&
         facts.insideSecureHardware &&
         facts.origin == KeyProperties.ORIGIN_GENERATED &&
         facts.purposes == KeyProperties.PURPOSE_SIGN &&
         facts.digests == setOf(KeyProperties.DIGEST_SHA256) &&
         facts.keySize == 256 &&
         !facts.userAuthenticationRequired &&
-        !facts.userPresenceRequired &&
-        !facts.userConfirmationRequired &&
         !exportable
 }
 

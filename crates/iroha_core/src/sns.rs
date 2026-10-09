@@ -27,7 +27,7 @@ use iroha_data_model::{
     alias_setup::{AccountAliasName, AliasAutoRenewConfigV1, AliasAutoRenewStateV1, AliasTargetV1},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     isi::{alias_setup::EnsureAlias, register::RegisterBox},
-    nexus::{DataSpaceCatalog, DataSpaceCatalogRead},
+    nexus::DataSpaceCatalogRead,
     permission::Permission,
     sns::{
         AuctionKind, ControllerType, NameAuctionStateV1, NameControllerV1, NameRecordV1,

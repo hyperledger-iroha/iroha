@@ -9,11 +9,11 @@ import re
 
 # (coverage, parent source, test source, registered module, full module path, exact test leaves)
 NATIVE_CORE_TEST_OWNERS = (
-    ('native proposal attestation policy', 'sumeragi/executor.rs', 'sumeragi/executor_attestation_policy_tests.rs', 'attestation_policy_tests', 'sumeragi::executor::attestation_policy_tests', (
-        'native_top_up_proposal_requires_attestation_before_an_epoch_boundary',
-        'ordinary_nonboundary_proposal_has_no_mint_attestation_requirement',
-        'ordinary_boundary_proposal_requires_its_authenticated_scheduled_attestation',
-        'executed_top_up_count_cannot_finalize_without_the_flag_even_if_static_work_is_ordinary',
+    ('native State preverify backend and curve admission', 'state.rs', 'state/state_preverify_backend_admission_tests.rs', 'state_preverify_backend_admission_tests', 'state::state_preverify_backend_admission_tests', ('unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy', 'stark_fri_profile_labels_require_enveloped_state_preverify_metadata', 'halo2_ipa_profile_labels_require_the_canonical_backend', 'canonical_halo2_curve_refusal_preserves_key_admission_and_original_retry')),
+    ('native original Queue payload lease custody', 'queue.rs', 'queue/payload_leases.rs', 'payload_leases', 'queue::payload_leases::tests', ('pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue', 'pending_payload_selection_cannot_adopt_clear_and_readmission_during_selection', 'pending_payload_lease_retires_on_actual_certified_state_publication', 'pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap')),
+    ('native original Queue resident custody', 'queue.rs', 'queue/resident_owner_tests.rs', 'resident_owner_tests', 'queue::tests::resident_owner_tests', ('removed_pending_owner_retains_original_resident_credit_until_last_reader', 'original_queue_shell_refusal_preserves_graph_and_exact_release_then_retries', 'first_queue_resident_ledger_refusal_keeps_original_input_and_retry_pool', 'every_queue_retirement_defers_original_refund_until_its_mutation_fence_releases', 'equal_limit_foreign_state_cannot_replace_original_queue_resident_pool', 'queue_drop_keeps_original_shell_and_ledger_charges_until_detached_last_owner', 'cold_queue_retirement_holds_original_fence_until_first_admission_can_publish')),
+    ('native borrowed paid AMX proof custody', 'sumeragi/amx/native/tests.rs', 'sumeragi/amx/native/tests/paid_borrowed_custody.rs', 'paid_borrowed_custody', 'sumeragi::amx::native::tests::paid_borrowed_custody', (
+        'native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime',
     )),
     ('native complete World root verification', 'sumeragi/test_chain.rs', 'sumeragi/test_chain/world_state_tests.rs', 'world_state_tests', 'sumeragi::test_chain::tests::world_state_tests', (
         'certified_results_bind_the_complete_world_and_the_emitted_events',
@@ -72,6 +72,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'state_view_generation_busy_retains_its_actual_writer_release',
         'complete_state_view_defers_world_and_configuration_callbacks_beyond_fences',
         'execution_pool_lookup_does_not_acquire_or_release_the_configuration_reader',
+        'generated_world_held_release_slots_keep_exact_sources_beyond_state_fences',
         'snapshot_runtime_adapters_preserve_original_decoder_refusal',
     )),
     ('native lane read failure classification', 'block.rs', 'block/lane_storage_error_tests.rs', 'lane_storage_error_tests', 'block::lane_storage_error_tests', (
@@ -125,10 +126,12 @@ NATIVE_CORE_TEST_OWNERS = (
         'quarantine_requires_the_exact_control_free_transaction_rejection_hash',
         'native_header_source_is_checked_against_the_pristine_committed_parent',
         'state_executor_serializes_real_control_requests_and_one_time_attachment',
-        'native_attestation_attachment_retains_the_first_original_pool_mailbox',
         'native_prepare_checks_real_quorum_before_changing_original_publication_owners',
-        'native_pasta_refusals_retain_original_execution_until_actual_receipt_publication',
-        'native_pasta_discard_invalidates_the_receipt_before_releasing_its_original_execution',
+        'native_certificate_refusals_retain_original_execution_until_exact_publication',
+        'native_invalid_payloads_are_rejected_at_ordinary_and_boundary_heights',
+        'boundary_certificate_read_refusal_retains_original_source_and_availability_until_publication',
+        'boundary_certificate_refusals_retain_original_preimage_authority_and_exact_quorum',
+        'boundary_discard_releases_only_the_unretained_original_execution_and_result',
         'native_context_archive_capacity_retry_retains_original_overlay_and_result',
         'native_context_archive_failure_preserves_original_bytes_until_durable_acknowledgement',
         'native_context_archive_preparation_refuses_foreign_pool_without_reexecuting',
@@ -143,6 +146,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'explicit_signature_preparation_rejection_retires_only_its_original_source',
         'later_canonical_child_allocator_refusal_keeps_the_original_prepared_signature_owner',
         'global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve',
+        'worker_fixture_invokes_and_consumes_one_move_only_callback_on_the_actual_chain',
     )),
     ('native local empty signature preparation', 'sumeragi/executor.rs', 'sumeragi/executor_local_signature_preparation_tests.rs', 'local_signature_preparation_tests', 'sumeragi::executor::local_signature_preparation_tests', (
         'original_local_payload_signature_refusal_keeps_job_and_exact_release_owner',
@@ -157,6 +161,15 @@ NATIVE_CORE_TEST_OWNERS = (
         'original_validation_return_cannot_rebind_changed_header_to_authenticated_wire',
         'explicit_completed_decoded_rejection_retires_only_original_height_view_hash',
         'same_source_same_pool_distinct_prepared_signature_owner_is_refused_at_both_boundaries',
+    )),
+    ('native validator return custody', 'sumeragi/executor.rs', 'sumeragi/executor_validation_refusal_tests.rs', 'validation_refusal_tests', 'sumeragi::executor::validation_refusal_tests', (
+        'original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_execution',
+        'prepared_certificate_uses_bounded_signed_root_without_rewalking_execution_history',
+        'successor_context_uses_original_parent_and_bounded_signed_root_without_history_rewalk',
+        'original_post_merge_validation_refusal_retains_worker_owner_and_exact_available_retry',
+        'prepared_certificate_busy_retries_same_execution_after_original_reader_release',
+        'original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_after_retry',
+        'validated_witness_guard_failure_requires_recovery_without_reexecuting_original_source',
     )),
     ('native completed replay identity', 'sumeragi/executor/replay.rs', 'sumeragi/executor/replay/tests.rs', 'tests', 'sumeragi::executor::replay::tests', (
         'completed_replay_rejects_altered_certificate_and_source_without_losing_exact_retry',
@@ -213,7 +226,6 @@ NATIVE_CORE_TEST_OWNERS = (
         'historical_committee_material_cannot_bypass_global_voting_geometry',
         'genesis_signature_is_verified_even_when_its_header_hash_matches_the_view',
         'genesis_payload_is_bound_to_its_signed_header_before_authority_is_read',
-        'installing_an_attestation_verifier_rechecks_the_previously_verified_prefix',
         'pinned_prefix_uses_the_exact_cut_without_a_world_authority',
         'pinned_prefix_rejects_empty_foreign_changed_and_unavailable_sources',
         'pinned_genesis_result_is_unsigned_until_a_real_successor_authenticates_it',
@@ -228,7 +240,8 @@ NATIVE_CORE_TEST_OWNERS = (
         'retained_generation_still_binds_new_epoch_and_fresh_leader_randomness',
         'historical_authority_missing_reordered_or_forged_proofs_fail_closed',
         'boundary_authority_and_parent_links_cannot_self_authorize',
-        'nonempty_boundary_requires_flagged_attestation_and_exact_fresh_pulse',
+        'nonempty_boundary_checks_exact_fresh_pulse',
+        'native_boundary_accepts_exact_quorum_and_rejects_changed_signature',
         'unsigned_genesis_result_cannot_substitute_the_signed_epoch_root',
         'result_pulses_require_exact_height_network_session_and_parent_bindings',
         'pinned_restoration_reuses_full_boundary_verification_and_one_authority_cursor',
@@ -237,7 +250,7 @@ NATIVE_CORE_TEST_OWNERS = (
     ('native certified prefix authority', 'sumeragi/certified_chain/tests.rs', 'sumeragi/certified_chain/prefix_tests.rs', 'prefix_tests', 'sumeragi::certified_chain::tests::prefix_tests', (
         'streamed_prefix_emits_genesis_execution_anchor_only_after_real_successor',
         'unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader',
-        'streamed_prefix_checks_genuine_pasta_at_retained_empty_epoch_boundary',
+        'streamed_prefix_checks_exact_native_quorum_at_retained_empty_epoch_boundary',
         'warmed_epoch_shape_rejects_substituted_context_and_still_checks_each_qc',
         'warmed_reader_rechecks_durable_prefix_and_fresh_view_after_body_removal',
         'standalone_and_scoped_frame_reads_agree_without_skipping_shape_checks',
@@ -302,6 +315,10 @@ NATIVE_CORE_TEST_OWNERS = (
         'sample_state_admission_refuses_unfunded_source',
         'original_sample_state_constructor_refuses_with_typed_sample_cause',
         'original_sample_world_handoff_admits_both_generations_before_replacing_either',
+        'lane_pool_refusal_adapters_preserve_exact_original_release_and_nonwaiting_demands',
+        'lane_admission_invariants_never_masquerade_as_allocator_or_semantic_failures',
+        'original_lane_state_admission_refusal_keeps_sample_and_signer_cut',
+        'original_signer_creation_refusal_preserves_exact_stake_cut_and_last_owner_charge',
     )),
     ('native lane signer restore custody', 'state/deserialize_world.rs', 'state/deserialize_world_lane_custody_tests.rs', 'native_lane_custody_tests', 'state::deserialize::native_lane_custody_tests', (
         'native_lane_signer_snapshot_retains_exact_raw_source_until_both_cuts_are_funded',
@@ -325,6 +342,7 @@ NATIVE_CORE_TEST_OWNERS = (
         'readiness_no_demand_does_not_require_a_beacon_session',
         'control_retries_use_original_tip_without_decoding_history_again',
         'control_requires_original_tip_and_matching_published_hash_journal',
+        'valid_same_roster_foreign_generation_refuses_production_readiness_and_capture',
     )),
     ('native executed beacon controls', 'sumeragi/epoch_beacon/producer/tests.rs', 'sumeragi/epoch_beacon/producer/execution_tests.rs', 'execution_tests', 'sumeragi::epoch_beacon::producer::tests::execution_tests', (
         'transported_pulse_executes_once_and_cold_replay_reproduces_the_certified_result',
@@ -404,13 +422,15 @@ NATIVE_CORE_TEST_OWNERS = (
         'f27_storage_faults_retried',
         'f29_cpu_flood',
         'f32_cluster_restart_lock_or_cqc',
-        'f37_flagged_blocks',
+        'exact_quorum_adversary_commits_through_driver',
         'o2_kill_at_each_write_completion',
         'long_write_failure_keeps_queues_bounded',
     )),
     ('native lane sample finalizer', 'sumeragi/lanes/step.rs', 'sumeragi/lanes/step/sample_owner_tests.rs', 'sample_owner_tests', 'sumeragi::lanes::step::sample_owner_tests', (
         'sample_finalizer_refusal_preserves_exact_source_and_retry_funds_only_suffix',
         'sample_finalizer_borrowed_lane_selection_preserves_boundaries_and_saturation',
+        'sample_finalizer_foreign_pool_requires_recovery_without_source_or_refund_changes',
+        'sample_finalizer_exceeds_limit_retains_exact_requested_suffix_demand',
     )),
     ('native lane sample publication', 'state.rs', 'state/lane_sample_owner_tests.rs', 'lane_sample_owner_tests', 'state::lane_sample_owner_tests', (
         'sample_world_rollback_publication_and_readers_retain_original_pool',
@@ -430,7 +450,7 @@ NATIVE_CORE_TEST_OWNERS = (
     )),
     ('native committed read custody', 'sumeragi/block_store/committed_read.rs', 'sumeragi/block_store/committed_read_tests.rs', 'tests', 'sumeragi::block_store::committed_read::tests', (
         'committed_read_returns_original_qc_backing_after_projection_refusal_and_retry',
-        'body_only_read_releases_original_qc_witness_before_returning_ready',
+        'body_only_read_discards_invalid_qc_before_untrusted_restoration',
         'committed_result_decode_refusal_keeps_original_read_slot_and_retries',
         'committed_certificate_allocator_refusal_retains_original_slot_and_retries',
     )),

@@ -23,10 +23,10 @@ use super::{
     },
     decode_frame_v1,
     digest::{
-        KagemushaWalletDigestRoleV1 as Role, KagemushaWalletSignerOutputV1, WalletTranscriptV1,
-        kagemusha_wallet_digest_v1, kagemusha_wallet_freeze_signature_v1,
-        kagemusha_wallet_preimage_v1, kagemusha_wallet_signed_object_digest_v1,
-        kagemusha_wallet_verify_signature_v1,
+        KagemushaWalletObjectDigestDomainV1 as ObjectDomain, KagemushaWalletSignerOutputV1,
+        KagemushaWalletSigningDomainV1 as Domain, WalletTranscriptV1,
+        kagemusha_wallet_freeze_signature_v1, kagemusha_wallet_signed_object_digest_v1,
+        kagemusha_wallet_signing_message_v1, kagemusha_wallet_verify_signature_v1,
     },
     encode_frame_v1,
     identity::{
@@ -46,7 +46,8 @@ use super::{
         SignerBindingV1, kagemusha_wallet_load_ledger_debit_v1,
         kagemusha_wallet_unload_account_payout_v1,
     },
-    require_nonzero_v1, require_scheme_v1, require_version_v1,
+    require_canonical_field_v1, require_nonzero_field_v1, require_nonzero_v1, require_scheme_v1,
+    require_version_v1,
     state::{
         KagemushaWalletEffectV1, KagemushaWalletLifecycleV1, KagemushaWalletPackageV1,
         KagemushaWalletStateV1,
@@ -105,6 +106,7 @@ pub const KAGEMUSHA_WALLET_LEDGER_CONTROL_BODY_TRANSCRIPT_BYTES_V1: usize =
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletLoadVoucherBodyV1"
 )]
+#[repr(align(16))]
 pub struct KagemushaWalletLoadVoucherBodyV1 {
     /// Wire version; exactly [`KAGEMUSHA_WALLET_VERSION_V1`].
     pub version: u16,
@@ -149,16 +151,11 @@ impl KagemushaWalletLoadVoucherBodyV1 {
             .finish()
     }
 
-    /// Signed body digest `e = H("voucher-body", transcript)`.
+    /// Signing message `m = P_bytes(kgwvchr1, transcript)`: the 32 bytes the `LoadAuthorization`-role signer signs with
+    /// ECDSA-P256-SHA256 (owner answer A1).
     #[must_use]
-    pub fn body_digest(&self) -> [u8; 32] {
-        kagemusha_wallet_digest_v1(Role::VoucherBody, &self.transcript())
-    }
-
-    /// Exact ECDSA message the `LoadAuthorization`-role signer signs.
-    #[must_use]
-    pub fn signing_message(&self) -> Vec<u8> {
-        kagemusha_wallet_preimage_v1(Role::VoucherBody, &self.transcript())
+    pub fn signing_message(&self) -> [u8; 32] {
+        kagemusha_wallet_signing_message_v1(Domain::Voucher, &self.transcript())
     }
 
     /// Validate the body's fields.
@@ -174,13 +171,14 @@ impl KagemushaWalletLoadVoucherBodyV1 {
             ("voucher.asset_digest", &self.asset_digest),
             ("voucher.wallet_id", &self.wallet_id),
             ("voucher.transaction_hash", &self.transaction_hash),
-            (
-                "voucher.authorizer_certificate",
-                &self.authorizer_certificate,
-            ),
         ] {
             require_nonzero_v1(field, digest)?;
         }
+        require_nonzero_field_v1(
+            "voucher.authorizer_certificate",
+            &self.authorizer_certificate,
+        )?;
+        require_canonical_field_v1("voucher.charge_quote", &self.charge_quote)?;
         if self.block_height == 0 {
             return Err(invalid_v1("voucher.block_height"));
         }
@@ -201,7 +199,7 @@ impl KagemushaWalletLoadVoucherBodyV1 {
             scheme_id: &self.scheme_id,
             certificate: &self.authorizer_certificate,
             role: KagemushaWalletSignerRoleV1::LoadAuthorization,
-            body_role: Role::VoucherBody,
+            domain: Domain::Voucher,
         }
     }
 }
@@ -237,12 +235,13 @@ impl KagemushaWalletLoadVoucherV1 {
         Ok(Self { body, signature })
     }
 
-    /// Voucher digest `H("voucher", e || signature)`.
+    /// Voucher object digest `P(kgwovch1, [m, r_lo, r_hi, s_lo, s_hi])` (owner
+    /// answer B1), one canonical σ-field value.
     #[must_use]
     pub fn voucher_digest(&self) -> [u8; 32] {
         kagemusha_wallet_signed_object_digest_v1(
-            Role::Voucher,
-            &self.body.body_digest(),
+            ObjectDomain::Voucher,
+            &self.body.signing_message(),
             &self.signature,
         )
     }
@@ -402,6 +401,7 @@ impl KagemushaWalletLoadVoucherV1 {
 
 /// Payout of one verified unload claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(16))]
 pub struct KagemushaWalletUnloadPayoutV1 {
     /// Unload nullifier; the ledger pays it exactly once.
     pub nullifier: [u8; 32],
@@ -649,6 +649,7 @@ impl KagemushaWalletUnloadClaimV1 {
 
 /// Payout of one verified fee claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(16))]
 pub struct KagemushaWalletFeePayoutV1 {
     /// Credit identity; the ledger pays one fee per credit.
     pub credit_id: [u8; 32],
@@ -808,6 +809,7 @@ impl KagemushaWalletFeeClaimV1 {
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletLedgerControlActionV1"
 )]
+#[repr(align(16))]
 pub enum KagemushaWalletLedgerControlActionV1 {
     /// Record the complete Bootstrap package and enable load issuance (§3.2).
     #[codec(index = 1)]
@@ -886,7 +888,7 @@ impl KagemushaWalletLedgerControlActionV1 {
     pub fn validate(&self) -> WalletResult<()> {
         match self {
             Self::Activate { package_digest } | Self::CloseLoads { package_digest, .. } => {
-                require_nonzero_v1("ledger_control.package_digest", package_digest)
+                require_nonzero_field_v1("ledger_control.package_digest", package_digest)
             }
             Self::Abandon {
                 enrollment_id,
@@ -941,16 +943,11 @@ impl KagemushaWalletLedgerControlBodyV1 {
         self.action.write(transcript).digest(&self.nonce).finish()
     }
 
-    /// Signed body digest `H("ledger-control-body", transcript)`.
+    /// Signing message `m = P_bytes(kgwlctl1, transcript)`: the 32 bytes the wallet payment key signs with
+    /// ECDSA-P256-SHA256 (owner answer A1).
     #[must_use]
-    pub fn body_digest(&self) -> [u8; 32] {
-        kagemusha_wallet_digest_v1(Role::LedgerControlBody, &self.transcript())
-    }
-
-    /// Exact ECDSA message the wallet payment key signs.
-    #[must_use]
-    pub fn signing_message(&self) -> Vec<u8> {
-        kagemusha_wallet_preimage_v1(Role::LedgerControlBody, &self.transcript())
+    pub fn signing_message(&self) -> [u8; 32] {
+        kagemusha_wallet_signing_message_v1(Domain::LedgerControl, &self.transcript())
     }
 
     /// Validate the body's fields.
@@ -994,8 +991,8 @@ impl KagemushaWalletLedgerControlV1 {
         body.validate()?;
         let signature = kagemusha_wallet_freeze_signature_v1(
             payment_key,
-            Role::LedgerControlBody,
-            &body.transcript(),
+            Domain::LedgerControl,
+            &body.signing_message(),
             signer_output,
         )?;
         Ok(Self { body, signature })
@@ -1021,8 +1018,8 @@ impl KagemushaWalletLedgerControlV1 {
         self.validate()?;
         kagemusha_wallet_verify_signature_v1(
             payment_key,
-            Role::LedgerControlBody,
-            &self.body.transcript(),
+            Domain::LedgerControl,
+            &self.body.signing_message(),
             &self.signature,
         )
     }

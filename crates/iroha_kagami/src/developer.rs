@@ -523,23 +523,8 @@ impl<T: Write> RunArgs<T> for PackageCommand {
         let manifest = args
             .store
             .resolve_path(args.manifest.as_deref().unwrap_or_else(|| Path::new(".")))?;
-        // Resume observes the retained journal/sidecars and does not reopen source manifests.
-        if !matches!(
-            &action,
-            musubi::generated_publication::GeneratedPublishAction::Resume { .. }
-        ) {
-            let workspace = musubi::workspace::load_workspace(&manifest)?;
-            if let musubi::generated_publication::GeneratedPublishAction::Begin {
-                package, ..
-            } = &action
-            {
-                let packages = package.iter().cloned().collect::<Vec<_>>();
-                ensure!(
-                    workspace.select_members(false, &packages, &[])?.len() == 1,
-                    "package publication requires exactly one selected member"
-                );
-            }
-        }
+        let action =
+            musubi::generated_publication::prepare_generated_publish_action(&manifest, action)?;
         let store = args.store.open()?;
         if !matches!(
             &action,
@@ -1913,5 +1898,43 @@ mod tests {
         );
         assert!(check_fee_budget(std::iter::empty(), Some(&Quantity::zero())).is_ok());
         assert!(check_fee_budget([(&xor, &first)].into_iter(), None).is_ok());
+    }
+
+    #[test]
+    fn member_publication_refuses_another_package_before_creating_managed_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path().join("project");
+        let state = temporary.path().join("state");
+        std::fs::create_dir_all(project.join("app")).unwrap();
+        std::fs::create_dir(project.join("other")).unwrap();
+        std::fs::write(project.join("Musubi.toml"), "manifest-version = 1\n[workspace]\nmembers = [\"app\", \"other\"]\ndefault-members = [\"other\"]\n").unwrap();
+        for name in ["app", "other"] {
+            std::fs::write(project.join(name).join("Musubi.toml"), format!("manifest-version = 1\n[package]\nnamespace = \"dev.universal\"\nname = \"{name}\"\nversion = \"1.0.0\"\nedition = \"1\"\nabi-version = 1\n[lib]\nexports = []\n")).unwrap();
+        }
+        for input in ["app", "app/Musubi.toml"] {
+            let cli = crate::Cli::try_parse_from([
+                "kagami",
+                "package",
+                "publish",
+                input,
+                "--workspace",
+                project.to_str().unwrap(),
+                "--package",
+                "dev.universal/other",
+                "--state",
+                state.to_str().unwrap(),
+            ])
+            .unwrap();
+            let mut writer = BufWriter::new(Vec::new());
+            let error = cli.command.run(&mut writer).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "selected member manifest cannot select another package"
+            );
+            assert!(writer.into_inner().unwrap().is_empty());
+            assert!(!state.exists());
+            assert!(!project.join("Musubi.lock").exists());
+            assert!(!project.join("target").exists());
+        }
     }
 }

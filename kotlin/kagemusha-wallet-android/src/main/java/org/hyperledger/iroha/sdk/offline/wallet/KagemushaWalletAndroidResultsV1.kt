@@ -84,12 +84,14 @@ internal class KagemushaWalletAndroidUnavailableV1 private constructor(
         /** `UserManager` or the no-backup directory could not be queried. */
         const val PLATFORM_STORAGE: Int = 8
 
-        /**
-         * Permanent: API level below 31. Keystore1 `getKey` reads every daemon error as "no key"
-         * (`KeyStore.contains` returns false on any `exist` error or `RemoteException`), so no
-         * definitive absence exists there.
-         */
+        /** The requested operation needs a platform capability this API does not expose. */
         const val PLATFORM_KEYSTORE_UNSUPPORTED: Int = 9
+
+        /**
+         * API 26–30 `getKey` returned null, which can hide a Keystore daemon error. This is
+         * unknown, never absence and never permission to generate, replace or delete a key.
+         */
+        const val PLATFORM_KEY_ABSENCE_UNKNOWN: Int = 10
 
         @JvmField val LOCKED = KagemushaWalletAndroidUnavailableV1(Kind.LOCKED, 0)
         @JvmField val BEFORE_FIRST_UNLOCK = KagemushaWalletAndroidUnavailableV1(Kind.BEFORE_FIRST_UNLOCK, 0)
@@ -112,7 +114,7 @@ internal enum class KagemushaWalletAndroidKeyProfileV1(@JvmField val tag: Int) {
     /** StrongBox only: a device without StrongBox refuses enrollment. */
     SECURE_ELEMENT(1),
 
-    /** StrongBox when present, otherwise the TEE, but only while the slot's key is still absent. */
+    /** StrongBox when present, otherwise the TEE; a fresh-only attempt never retries its alias. */
     SECURE_ELEMENT_OR_TEE(2),
     ;
 
@@ -174,7 +176,7 @@ internal sealed class KagemushaWalletAndroidKeyGenerationV1 {
         override fun toString(): String = "AlreadyPresent"
     }
 
-    /** No key was generated, or the outcome is unknown; probe again before acting. */
+    /** No key was generated, or the outcome is unknown; a fresh-only attempt must never retry. */
     class Unavailable(@JvmField val reason: KagemushaWalletAndroidUnavailableV1) : KagemushaWalletAndroidKeyGenerationV1() {
         override fun toString(): String = "Unavailable($reason)"
     }

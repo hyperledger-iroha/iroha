@@ -23,10 +23,7 @@ use iroha_sumeragi::{
     types::{EpochId, Hash32},
 };
 
-use super::{
-    attestation::NativePastaVerifier, crypto::BlsCrypto, schedule::ScheduledSlot,
-    startup::GENESIS_HEIGHT,
-};
+use super::{crypto::BlsCrypto, schedule::ScheduledSlot, startup::GENESIS_HEIGHT};
 use crate::state::{NativeExecutionTip, StateReadOnly, WorldReadOnly};
 
 /// Authentication failure keeps local source failures distinct from invalid signed reports.
@@ -309,12 +306,9 @@ pub(crate) fn verify_from_state(
         demotion_window: window,
         demotion_headers: &headers,
     };
-    let attribution = verify_evidence(
-        &crypto,
-        &NativePastaVerifier::new(instance, *state.network_id()),
-        &context,
-        evidence,
-    )?;
+    // Every native parent certificate requires an exact authenticated BLS quorum.
+    // cannot authorize a proposal; independently signed conflicting values still prove safety.
+    let attribution = verify_evidence(&crypto, &context, evidence)?;
     let offenders = attribution
         .offenders()
         .ones()

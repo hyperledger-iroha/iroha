@@ -15,14 +15,18 @@ use super::{
     KAGEMUSHA_WALLET_VERSION_V1, KagemushaWalletValidationErrorV1, WalletResult, WalletVersionsV1,
     decode_frame_v1,
     digest::{
-        KagemushaWalletDigestRoleV1 as Role, KagemushaWalletSignerOutputV1, WalletTranscriptV1,
+        KagemushaWalletDigestRoleV1 as Role, KagemushaWalletObjectDigestDomainV1 as ObjectDomain,
+        KagemushaWalletSignerOutputV1, KagemushaWalletSigningDomainV1 as Domain,
+        WalletFieldItemsV1, WalletTranscriptV1, kagemusha_wallet_artifact_manifest_digest_v1,
         kagemusha_wallet_digest_v1, kagemusha_wallet_freeze_signature_v1,
-        kagemusha_wallet_preimage_v1, kagemusha_wallet_signed_object_digest_v1,
+        kagemusha_wallet_signed_object_digest_v1, kagemusha_wallet_signing_message_v1,
         kagemusha_wallet_verify_signature_v1,
     },
     encode_frame_v1, invalid_v1,
     keys::{KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1},
-    overflow_v1, require_nonzero_v1, require_scheme_v1, require_version_v1,
+    overflow_v1,
+    poseidon::{KAGEMUSHA_WALLET_CERTIFICATE_SET_DOMAIN_V1, poseidon_items_v1},
+    require_nonzero_field_v1, require_nonzero_v1, require_scheme_v1, require_version_v1,
 };
 use crate::{account::AccountId, asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1};
 
@@ -503,16 +507,11 @@ impl KagemushaWalletSignerCertificateBodyV1 {
             .finish()
     }
 
-    /// Signed body digest `e = H("certificate-body", transcript)`.
+    /// Signing message `m = P_bytes(kgwcert1, transcript)`: the 32 bytes the scheme root signs with
+    /// ECDSA-P256-SHA256 (owner answer A1).
     #[must_use]
-    pub fn body_digest(&self) -> [u8; 32] {
-        kagemusha_wallet_digest_v1(Role::CertificateBody, &self.transcript())
-    }
-
-    /// Exact ECDSA message the scheme root signs.
-    #[must_use]
-    pub fn signing_message(&self) -> Vec<u8> {
-        kagemusha_wallet_preimage_v1(Role::CertificateBody, &self.transcript())
+    pub fn signing_message(&self) -> [u8; 32] {
+        kagemusha_wallet_signing_message_v1(Domain::Certificate, &self.transcript())
     }
 
     /// Validate the body's fields.
@@ -564,19 +563,20 @@ impl KagemushaWalletSignerCertificateV1 {
         )?;
         let signature = kagemusha_wallet_freeze_signature_v1(
             &scheme.scheme_root_key,
-            Role::CertificateBody,
-            &body.transcript(),
+            Domain::Certificate,
+            &body.signing_message(),
             signer_output,
         )?;
         Ok(Self { body, signature })
     }
 
-    /// Certificate digest `H("certificate", e || signature)`.
+    /// Certificate object digest `P(kgwocrt1, [m, r_lo, r_hi, s_lo, s_hi])` (owner answer B1),
+    /// one canonical σ-field value: what every `*_certificate` field names.
     #[must_use]
     pub fn certificate_digest(&self) -> [u8; 32] {
         kagemusha_wallet_signed_object_digest_v1(
-            Role::Certificate,
-            &self.body.body_digest(),
+            ObjectDomain::Certificate,
+            &self.body.signing_message(),
             &self.signature,
         )
     }
@@ -607,8 +607,8 @@ impl KagemushaWalletSignerCertificateV1 {
         )?;
         kagemusha_wallet_verify_signature_v1(
             &scheme.scheme_root_key,
-            Role::CertificateBody,
-            &self.body.transcript(),
+            Domain::Certificate,
+            &self.body.signing_message(),
             &self.signature,
         )
     }
@@ -661,8 +661,9 @@ impl KagemushaWalletSignerCertificateV1 {
 
 /// Signer certificates carried by a message, sorted by strictly ascending certificate digest.
 ///
-/// At most [`KAGEMUSHA_WALLET_CERTIFICATE_SET_MAX_V1`] certificates. Its digest is
-/// `H("certificate-set", LE32 count || digests in order)` (design C3).
+/// At most [`KAGEMUSHA_WALLET_CERTIFICATE_SET_MAX_V1`] certificates, in unsigned byte order of
+/// their digests. Its digest is `P(kgwcset1, [count, digests in order])` (owner answer B1), one
+/// canonical σ-field value.
 #[derive(
     Debug, Clone, PartialEq, Eq, Default, Decode, Encode, IntoSchema, norito::NoritoSchema,
 )]
@@ -711,41 +712,30 @@ impl KagemushaWalletCertificateSetV1 {
             .collect()
     }
 
-    /// Exact `certificate-set` transcript: `LE32 count || digests in order`.
-    ///
-    /// # Errors
-    ///
-    /// Rejects a count that does not fit `u32`.
-    pub fn transcript(&self) -> WalletResult<Vec<u8>> {
-        let count = u32::try_from(self.certificates.len()).map_err(|_| {
-            KagemushaWalletValidationErrorV1::ArithmeticOverflow {
-                field: "certificates",
-            }
-        })?;
-        let capacity = self
-            .certificates
-            .len()
-            .checked_mul(32)
-            .and_then(|bytes| bytes.checked_add(4))
-            .ok_or(KagemushaWalletValidationErrorV1::ArithmeticOverflow {
-                field: "certificates",
-            })?;
-        let mut transcript = WalletTranscriptV1::with_capacity(capacity).u32(count);
+    /// σ-field elements of the set: the count, then each certificate digest (one element each)
+    /// in set order.
+    #[must_use]
+    pub fn field_items(&self) -> Vec<[u8; 32]> {
+        let count = u128::try_from(self.certificates.len()).unwrap_or(u128::MAX);
+        let mut items =
+            WalletFieldItemsV1::with_capacity(self.certificates.len().saturating_add(1))
+                .integer(count);
         for digest in self.digests() {
-            transcript = transcript.digest(&digest);
+            items = items.field(&digest);
         }
-        Ok(transcript.finish())
+        items.finish()
     }
 
-    /// Set digest `H("certificate-set", transcript)`.
+    /// Set digest `P(kgwcset1, [count, digests in order])` (owner answer B1).
     ///
     /// # Errors
     ///
-    /// Rejects a count that does not fit `u32`.
+    /// Rejects an invalid set.
     pub fn digest(&self) -> WalletResult<[u8; 32]> {
-        Ok(kagemusha_wallet_digest_v1(
-            Role::CertificateSet,
-            &self.transcript()?,
+        self.validate()?;
+        Ok(poseidon_items_v1(
+            KAGEMUSHA_WALLET_CERTIFICATE_SET_DOMAIN_V1,
+            &self.field_items(),
         ))
     }
 
@@ -829,11 +819,9 @@ pub struct KagemushaWalletEnrollmentChallengeV1 {
     pub asset_digest: [u8; 32],
     /// Digest of the canonical domainless `AccountId`.
     pub account_digest: [u8; 32],
-    /// Issuer-defined app identity policy digest.
-    // TODO(G5): define the app-policy preimage with the Torii enrollment family.
+    /// NEW typed app-policy digest; issuer selection requires approved retained originals.
     pub app_policy: [u8; 32],
-    /// Issuer-defined enrollment policy digest.
-    // TODO(G5): define the enrollment-policy preimage with the Torii enrollment family.
+    /// NEW typed enrollment-policy digest; structural matching grants no admission.
     pub enrollment_policy: [u8; 32],
     /// Fresh issuer nonce.
     pub issuer_nonce: [u8; 32],
@@ -1331,16 +1319,11 @@ impl KagemushaWalletCredentialBodyV1 {
             .finish()
     }
 
-    /// Signed body digest `e = H("credential-body", transcript)`.
+    /// Signing message `m = P_bytes(kgwcred1, transcript)`: the 32 bytes the Enrollment-role signer signs with
+    /// ECDSA-P256-SHA256 (owner answer A1).
     #[must_use]
-    pub fn body_digest(&self) -> [u8; 32] {
-        kagemusha_wallet_digest_v1(Role::CredentialBody, &self.transcript())
-    }
-
-    /// Exact ECDSA message the Enrollment-role signer signs.
-    #[must_use]
-    pub fn signing_message(&self) -> Vec<u8> {
-        kagemusha_wallet_preimage_v1(Role::CredentialBody, &self.transcript())
+    pub fn signing_message(&self) -> [u8; 32] {
+        kagemusha_wallet_signing_message_v1(Domain::Credential, &self.transcript())
     }
 
     /// Validate the body's self-contained rules (§2.4, design C5).
@@ -1357,7 +1340,7 @@ impl KagemushaWalletCredentialBodyV1 {
         require_nonzero_v1("credential.account_digest", &self.account_digest)?;
         require_nonzero_v1("credential.app_policy", &self.app_policy)?;
         require_nonzero_v1("credential.enrollment_id", &self.enrollment_id)?;
-        require_nonzero_v1("credential.issuer_certificate", &self.issuer_certificate)?;
+        require_nonzero_field_v1("credential.issuer_certificate", &self.issuer_certificate)?;
         self.payment_key.validate()?;
         if self.provider_contract != kagemusha_wallet_provider_contract_v1() {
             return Err(invalid_v1("credential.provider_contract"));
@@ -1431,19 +1414,20 @@ impl KagemushaWalletCredentialV1 {
         )?;
         let signature = kagemusha_wallet_freeze_signature_v1(
             &issuer_certificate.body.key,
-            Role::CredentialBody,
-            &body.transcript(),
+            Domain::Credential,
+            &body.signing_message(),
             signer_output,
         )?;
         Ok(Self { body, signature })
     }
 
-    /// Credential digest `H("credential", e || signature)`.
+    /// Credential object digest `P(kgwocrd1, [m, r_lo, r_hi, s_lo, s_hi])` (owner answer B1),
+    /// one canonical σ-field value.
     #[must_use]
     pub fn credential_digest(&self) -> [u8; 32] {
         kagemusha_wallet_signed_object_digest_v1(
-            Role::Credential,
-            &self.body.body_digest(),
+            ObjectDomain::Credential,
+            &self.body.signing_message(),
             &self.signature,
         )
     }
@@ -1488,10 +1472,59 @@ impl KagemushaWalletCredentialV1 {
         issuer_certificate.verify_role(scheme, KagemushaWalletSignerRoleV1::Enrollment)?;
         kagemusha_wallet_verify_signature_v1(
             &issuer_certificate.body.key,
-            Role::CredentialBody,
-            &self.body.transcript(),
+            Domain::Credential,
+            &self.body.signing_message(),
             &self.signature,
         )
+    }
+
+    /// Verify an initial credential against its retained enrollment challenge and key.
+    ///
+    /// This additionally binds the authenticated issuer's credential to the exact E1
+    /// challenge which preceded payment-key generation. The recomputed enrollment identity
+    /// binds all six challenge fields, including its enrollment-policy digest and nonce.
+    /// This method does not authenticate the issuer-selected policy preimages, platform
+    /// evidence, account authorization or challenge liveness; the enrollment owner verifies
+    /// and retains those originals before admitting the credential.
+    ///
+    /// # Errors
+    ///
+    /// Rejects what [`Self::verify`] rejects, an invalid challenge or expected payment key,
+    /// a renewal credential, or another challenge, asset, account, app policy or payment key.
+    pub fn verify_enrollment(
+        &self,
+        scheme: &KagemushaWalletSchemeV1,
+        issuer_certificate: &KagemushaWalletSignerCertificateV1,
+        challenge: &KagemushaWalletEnrollmentChallengeV1,
+        payment_key: &KagemushaDevicePublicKeyV1,
+    ) -> WalletResult<()> {
+        self.verify(scheme, issuer_certificate)?;
+        challenge.validate()?;
+        payment_key.validate()?;
+        if self.body.renewal_sequence != 0 {
+            return Err(invalid_v1("credential.renewal_sequence"));
+        }
+        require_scheme_v1(
+            "enrollment_challenge.scheme_id",
+            &challenge.scheme_id,
+            &self.body.scheme_id,
+        )?;
+        if self.body.asset_digest != challenge.asset_digest {
+            return Err(invalid_v1("credential.asset_digest"));
+        }
+        if self.body.account_digest != challenge.account_digest {
+            return Err(invalid_v1("credential.account_digest"));
+        }
+        if self.body.app_policy != challenge.app_policy {
+            return Err(invalid_v1("credential.app_policy"));
+        }
+        if self.body.payment_key != *payment_key {
+            return Err(invalid_v1("credential.payment_key"));
+        }
+        if self.body.enrollment_id != challenge.enrollment_id(payment_key) {
+            return Err(invalid_v1("credential.enrollment_id"));
+        }
+        Ok(())
     }
 
     /// Validate `self` as the replacement of `previous` (`RefreshPolicy` Credential, design C5).
@@ -1561,7 +1594,8 @@ impl KagemushaWalletCredentialV1 {
 // Attestation-lease renewal (§2.2, design §2.5 and C9)
 // ---------------------------------------------------------------------------------------
 
-/// Exact `renewal-challenge` transcript signed by the payment key for possession; the same
+/// Exact renewal-challenge transcript: the payment key signs its signing message under
+/// `kgwrnch1` for possession ([`kagemusha_wallet_renewal_challenge_message_v1`]); the same
 /// layout is hashed under `renewal-assertion` for App Attest.
 #[must_use]
 pub fn kagemusha_wallet_renewal_challenge_transcript_v1(
@@ -1579,8 +1613,9 @@ pub fn kagemusha_wallet_renewal_challenge_transcript_v1(
         .finish()
 }
 
-/// Exact `renewal-key-binding` transcript signed by the payment key over a newly attested
-/// Android key.
+/// Exact renewal-key-binding transcript: the payment key signs its signing message under
+/// `kgwrnkb1` over a newly attested Android key
+/// ([`kagemusha_wallet_renewal_key_binding_message_v1`]).
 #[must_use]
 pub fn kagemusha_wallet_renewal_key_binding_transcript_v1(
     scheme_id: &[u8; 32],
@@ -1595,6 +1630,46 @@ pub fn kagemusha_wallet_renewal_key_binding_transcript_v1(
         .digest(challenge)
         .key(new_attested_key)
         .finish()
+}
+
+/// Signing message of the renewal possession signature: `P_bytes(kgwrnch1, renewal challenge
+/// transcript)` (owner answer A1).
+#[must_use]
+pub fn kagemusha_wallet_renewal_challenge_message_v1(
+    scheme_id: &[u8; 32],
+    wallet_id: &[u8; 32],
+    credential_digest: &[u8; 32],
+    challenge: &[u8; 32],
+) -> [u8; 32] {
+    kagemusha_wallet_signing_message_v1(
+        Domain::RenewalChallenge,
+        &kagemusha_wallet_renewal_challenge_transcript_v1(
+            scheme_id,
+            wallet_id,
+            credential_digest,
+            challenge,
+        ),
+    )
+}
+
+/// Signing message of the Android renewal key binding: `P_bytes(kgwrnkb1, renewal key binding
+/// transcript)` (owner answer A1).
+#[must_use]
+pub fn kagemusha_wallet_renewal_key_binding_message_v1(
+    scheme_id: &[u8; 32],
+    wallet_id: &[u8; 32],
+    challenge: &[u8; 32],
+    new_attested_key: &KagemushaDevicePublicKeyV1,
+) -> [u8; 32] {
+    kagemusha_wallet_signing_message_v1(
+        Domain::RenewalKeyBinding,
+        &kagemusha_wallet_renewal_key_binding_transcript_v1(
+            scheme_id,
+            wallet_id,
+            challenge,
+            new_attested_key,
+        ),
+    )
 }
 
 /// App Attest renewal assertion `clientDataHash`, passed unchanged to the platform:
@@ -1676,8 +1751,8 @@ impl KagemushaWalletRenewalEvidenceV1 {
         }
         let key_binding_signature = kagemusha_wallet_freeze_signature_v1(
             &credential.body.payment_key,
-            Role::RenewalKeyBinding,
-            &kagemusha_wallet_renewal_key_binding_transcript_v1(
+            Domain::RenewalKeyBinding,
+            &kagemusha_wallet_renewal_key_binding_message_v1(
                 &credential.body.scheme_id,
                 &credential.body.wallet_id,
                 challenge,
@@ -1817,8 +1892,8 @@ impl KagemushaWalletRenewalRequestV1 {
         let credential_digest = credential.credential_digest();
         let possession_signature = kagemusha_wallet_freeze_signature_v1(
             &credential.body.payment_key,
-            Role::RenewalChallenge,
-            &kagemusha_wallet_renewal_challenge_transcript_v1(
+            Domain::RenewalChallenge,
+            &kagemusha_wallet_renewal_challenge_message_v1(
                 &credential.body.scheme_id,
                 &credential.body.wallet_id,
                 &credential_digest,
@@ -1839,7 +1914,7 @@ impl KagemushaWalletRenewalRequestV1 {
         Ok(request)
     }
 
-    /// Exact `renewal-challenge` transcript of this request.
+    /// Exact renewal-challenge transcript of this request.
     #[must_use]
     pub fn possession_transcript(&self) -> Vec<u8> {
         kagemusha_wallet_renewal_challenge_transcript_v1(
@@ -1848,6 +1923,12 @@ impl KagemushaWalletRenewalRequestV1 {
             &self.credential_digest,
             &self.challenge,
         )
+    }
+
+    /// Signing message of the possession signature: `P_bytes(kgwrnch1, renewal challenge)`.
+    #[must_use]
+    pub fn possession_message(&self) -> [u8; 32] {
+        kagemusha_wallet_signing_message_v1(Domain::RenewalChallenge, &self.possession_transcript())
     }
 
     /// App Attest `clientDataHash` the Apple assertion must cover.
@@ -1870,7 +1951,7 @@ impl KagemushaWalletRenewalRequestV1 {
         require_version_v1("renewal.version", self.version)?;
         require_nonzero_v1("renewal.scheme_id", &self.scheme_id)?;
         require_nonzero_v1("renewal.wallet_id", &self.wallet_id)?;
-        require_nonzero_v1("renewal.credential_digest", &self.credential_digest)?;
+        require_nonzero_field_v1("renewal.credential_digest", &self.credential_digest)?;
         require_nonzero_v1("renewal.challenge", &self.challenge)?;
         self.possession_signature.validate()?;
         self.evidence.validate()
@@ -1899,8 +1980,8 @@ impl KagemushaWalletRenewalRequestV1 {
         let payment_key = &credential.body.payment_key;
         kagemusha_wallet_verify_signature_v1(
             payment_key,
-            Role::RenewalChallenge,
-            &self.possession_transcript(),
+            Domain::RenewalChallenge,
+            &self.possession_message(),
             &self.possession_signature,
         )?;
         match (&self.evidence, credential.body.evidence_kind.is_android()) {
@@ -1913,8 +1994,8 @@ impl KagemushaWalletRenewalRequestV1 {
                 true,
             ) => kagemusha_wallet_verify_signature_v1(
                 payment_key,
-                Role::RenewalKeyBinding,
-                &kagemusha_wallet_renewal_key_binding_transcript_v1(
+                Domain::RenewalKeyBinding,
+                &kagemusha_wallet_renewal_key_binding_message_v1(
                     &self.scheme_id,
                     &self.wallet_id,
                     &self.challenge,
@@ -2010,16 +2091,11 @@ impl KagemushaWalletArtifactManifestBodyV1 {
         .finish()
     }
 
-    /// Signed body digest `e = H("artifact-manifest-body", transcript)`.
+    /// Signing message `m = P_bytes(kgwartf1, transcript)`: the 32 bytes the Artifact-role signer signs with
+    /// ECDSA-P256-SHA256 (owner answer A1).
     #[must_use]
-    pub fn body_digest(&self) -> [u8; 32] {
-        kagemusha_wallet_digest_v1(Role::ArtifactManifestBody, &self.transcript())
-    }
-
-    /// Exact ECDSA message the Artifact-role signer signs.
-    #[must_use]
-    pub fn signing_message(&self) -> Vec<u8> {
-        kagemusha_wallet_preimage_v1(Role::ArtifactManifestBody, &self.transcript())
+    pub fn signing_message(&self) -> [u8; 32] {
+        kagemusha_wallet_signing_message_v1(Domain::ArtifactManifest, &self.transcript())
     }
 
     /// Relation identity recomputed from this body's bindings.
@@ -2064,13 +2140,13 @@ impl KagemushaWalletArtifactManifestBodyV1 {
                 "artifact_manifest.artifact_inventory_digest",
                 &self.artifact_inventory_digest,
             ),
-            (
-                "artifact_manifest.signer_certificate",
-                &self.signer_certificate,
-            ),
         ] {
             require_nonzero_v1(field, digest)?;
         }
+        require_nonzero_field_v1(
+            "artifact_manifest.signer_certificate",
+            &self.signer_certificate,
+        )?;
         if self.relation_id != self.recomputed_relation_id() {
             return Err(invalid_v1("artifact_manifest.relation_id"));
         }
@@ -2133,21 +2209,18 @@ impl KagemushaWalletArtifactManifestV1 {
         }
         let signature = kagemusha_wallet_freeze_signature_v1(
             &signer_certificate.body.key,
-            Role::ArtifactManifestBody,
-            &body.transcript(),
+            Domain::ArtifactManifest,
+            &body.signing_message(),
             signer_output,
         )?;
         Ok(Self { body, signature })
     }
 
-    /// Manifest digest `H("artifact-manifest", e || signature)`.
+    /// Manifest digest `H("artifact-manifest", m || signature)`: an artifact digest that no
+    /// relation recomputes, so it stays SHA-256 (owner answer B1).
     #[must_use]
     pub fn manifest_digest(&self) -> [u8; 32] {
-        kagemusha_wallet_signed_object_digest_v1(
-            Role::ArtifactManifest,
-            &self.body.body_digest(),
-            &self.signature,
-        )
+        kagemusha_wallet_artifact_manifest_digest_v1(&self.body.signing_message(), &self.signature)
     }
 
     /// Validate the manifest's self-contained rules.
@@ -2181,8 +2254,8 @@ impl KagemushaWalletArtifactManifestV1 {
         signer_certificate.verify_role(scheme, KagemushaWalletSignerRoleV1::Artifact)?;
         kagemusha_wallet_verify_signature_v1(
             &signer_certificate.body.key,
-            Role::ArtifactManifestBody,
-            &self.body.transcript(),
+            Domain::ArtifactManifest,
+            &self.body.signing_message(),
             &self.signature,
         )
     }

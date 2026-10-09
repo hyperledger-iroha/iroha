@@ -1,7 +1,7 @@
 //! Oracles of §13.2, checked after every event of every honest replica: O-AGR, O-VAL, O-SIGN
 //! (in the provenance log at signing time), O-PBS (at the first exposure of every own
 //! signature), O-CERT (every certificate a core holds or commits on), O-LIVE, O-PERF (P1–P6),
-//! O-MEM, O-HALT, O-EVID, O-FAULT, O-TXP, O-CQ, O-ATT (commit attestation, §3.7) and O-TIME
+//! O-MEM, O-HALT, O-EVID, O-FAULT, O-TXP, O-CQ and O-TIME
 //! (the certified-time bound of the application clock guard, §4.5, in `world::clock_guard`).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,14 +16,14 @@ use super::{
 use crate::{
     api::{Action, CoreStatus, ExecOutcome, LocalFault, LocalParams},
     availability::AvailableBody,
-    crypto::{Crypto, Signer, verify_attestations, verify_vote_attestation},
+    crypto::{Crypto, Signer},
     message::{BlockHeader, Evidence, Proposal, Qc, TimeoutCert, VoteKind, WireMessage},
     pacemaker::{
         PHI_DEN, PHI_NUM, ceil_log2, effective_t_max, level_cap, propose_allowance, view_timeout,
     },
     preimage::{self, KIND_COMMIT, KIND_ECHO, KIND_PREPARE, KIND_PROPOSAL, KIND_TIMEOUT},
     safety::SafetyRecord,
-    testing::{FakeVerifier, fake_sig},
+    testing::fake_sig,
     topology::Topology,
     types::{Bitmap, ChainParams, Hash32, Millis, PublicKey},
 };
@@ -257,7 +257,6 @@ pub fn build_chain(
             proposer: topo.leader(0),
             skipped_leaders: Vec::new(),
             // The application flags no plain payload, at an epoch boundary or elsewhere.
-            attest: false,
         };
         let author = signers
             .iter()
@@ -271,7 +270,6 @@ pub fn build_chain(
             crypto,
             author,
         );
-        let header = block.header();
         let bh = block.hash(crypto);
         let ExecOutcome::Valid(result) = reference_exec(&parent_result, &payload) else {
             break;
@@ -284,7 +282,6 @@ pub fn build_chain(
             0,
             &bh,
             &result,
-            header.attest,
         );
         let mut indices = Vec::new();
         let mut sigs = Vec::new();
@@ -305,11 +302,7 @@ pub fn build_chain(
             committee.q(),
             "prebuilt history needs a complete quorum"
         );
-        let statement = preimage::att_preimage(&inst.id, &header.epoch, h, &bh, &result);
         let qc = Qc {
-            attestation_witness: header
-                .attest
-                .then(|| crate::message::ResultWitness::from_untrusted(statement.clone()).unwrap()),
             epoch: inst.config(h).epoch.id,
             kind: VoteKind::Commit,
             instance: inst.id,
@@ -320,22 +313,6 @@ pub fn build_chain(
             signers: Bitmap::from_indices(committee.n(), indices.iter().copied())
                 .unwrap_or_else(|| Bitmap::new(committee.n())),
             agg_sig: aggregate(&sigs),
-            attest: header.attest,
-            attestations: if header.attest {
-                indices
-                    .iter()
-                    .map(|index| {
-                        crate::testing::fake_attestation(
-                            committee.get(*index).unwrap(),
-                            h,
-                            &statement,
-                        )
-                        .signature
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            },
         };
         chain.push((block, qc));
         parent_hash = bh;
@@ -1013,9 +990,6 @@ impl World {
         if let Err(e) = self.cert_qc(inst, qc) {
             return self.fail(format!("O-CERT: replica {r} CommitBlock {h} with {e}"));
         }
-        if let Err(e) = self.attested(inst, block, qc) {
-            return self.fail(format!("O-ATT: replica {r} CommitBlock {h}: {e}"));
-        }
         if let Some(known) = self.oracle.refs[inst].get(&h) {
             if (known.bh, known.result) != qc.value() {
                 return self.fail(format!(
@@ -1214,35 +1188,6 @@ impl World {
         Ok(())
     }
 
-    /// O-ATT (§3.7): the `CommitQC` of a committed block carries the block's flag and, for a
-    /// flagged block, exactly `q` signers with one ground-truth-valid attestation each (one
-    /// application bundle, A4); an unflagged block's carries none.
-    ///
-    /// # Errors
-    /// A description of the defect.
-    pub fn attested(&self, inst: usize, block: &AvailableBody, qc: &Qc) -> Result<(), String> {
-        if qc.attest != block.header().attest {
-            return Err(format!(
-                "a CommitQC with flag {} for a block with flag {}",
-                qc.attest,
-                block.header().attest
-            ));
-        }
-        let committee = self.instances[inst].committee(qc.height);
-        verify_attestations(&FakeVerifier, committee, qc)
-            .map_err(|e| format!("attestations of a flagged block: {e:?}"))?;
-        // Counted here, independently of `verify_attestations` (which MA11 mutates).
-        let signers = qc.signers.count_ones();
-        if qc.attest && (signers != committee.q() || qc.attestations.len() != signers) {
-            return Err(format!(
-                "{signers} signers and {} attestations, not exactly q = {}",
-                qc.attestations.len(),
-                committee.q()
-            ));
-        }
-        Ok(())
-    }
-
     /// O-CERT for a TC: quorum of genuine timeouts and `high_pqc` of the true maximum `hq`.
     ///
     /// # Errors
@@ -1337,20 +1282,6 @@ impl World {
         if self.machines[self.replicas[r].machine].byz {
             return;
         }
-        // O-ATT: an honest Commit vote of a flagged block leaves only with its genuine
-        // attestation (§3.7 A2).
-        if let WireMessage::Vote(vote) = msg
-            && vote.needs_attestation()
-        {
-            let inst = self.replicas[r].inst;
-            let committee = self.instances[inst].committee(vote.height);
-            if verify_vote_attestation(&FakeVerifier, committee, vote).is_err() {
-                return self.fail(format!(
-                    "O-ATT: replica {r} sent a Commit vote of a flagged block without a valid \
-                     attestation: {vote:?}"
-                ));
-            }
-        }
         let mut own = Vec::new();
         self.own_in_msg(r, msg, &mut own);
         self.check_exposed(r, own);
@@ -1381,8 +1312,8 @@ impl World {
                 self.own_in_proposal(r, proposal, &mut own);
             }
             Evidence::VoteEquivocation(a, b) => {
-                self.own_in_msg(r, &WireMessage::Vote(a.clone()), &mut own);
-                self.own_in_msg(r, &WireMessage::Vote(b.clone()), &mut own);
+                self.own_in_msg(r, &WireMessage::Vote(*a), &mut own);
+                self.own_in_msg(r, &WireMessage::Vote(*b), &mut own);
             }
             Evidence::TimeoutEquivocation(a, b) => {
                 self.own_in_msg(r, &WireMessage::Timeout(a.clone()), &mut own);

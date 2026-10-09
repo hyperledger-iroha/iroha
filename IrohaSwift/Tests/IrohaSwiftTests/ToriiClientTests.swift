@@ -10114,7 +10114,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             "version": 2,
             "circuit_id": "halo2/ipa::transfer_v2",
             "owner_manifest_id": "manifest-v2",
-            "namespace": "kagemusha_v1",
+            "namespace": "confidential",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
@@ -10148,7 +10148,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertEqual(detail.id.name, "vk main")
         XCTAssertEqual(detail.record.version, 2)
         XCTAssertEqual(detail.record.ownerManifestId, "manifest-v2")
-        XCTAssertEqual(detail.record.namespace, "kagemusha_v1")
+        XCTAssertEqual(detail.record.namespace, "confidential")
         XCTAssertEqual(detail.record.publicInputsSchemaHashHex,
                        "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3")
         XCTAssertEqual(detail.record.inlineKey?.backend, "halo2/ipa")
@@ -10165,9 +10165,9 @@ final class ToriiClientHeaderTests: XCTestCase {
           "record_norito_base64": "\(recordNorito.base64EncodedString())",
           "record": {
             "version": 3,
-            "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "circuit_id": "pipa-r/pasta/confidential-unshield-change-v1",
             "owner_manifest_id": "confidential-v3",
-            "namespace": "kagemusha_v1",
+            "namespace": "confidential",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -10215,9 +10215,9 @@ final class ToriiClientHeaderTests: XCTestCase {
           "record_norito_base64": "\(recordNorito.base64EncodedString())",
           "record": {
             "version": 3,
-            "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "circuit_id": "pipa-r/pasta/confidential-unshield-change-v1",
             "owner_manifest_id": "confidential-v3",
-            "namespace": "kagemusha_v1",
+            "namespace": "confidential",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -17129,8 +17129,8 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
             )!
             let body = """
             {
-              "code": "kagemusha_topup_finality_proof_unavailable",
-              "message": "The finalized proof is not available yet.",
+              "code": "transaction_status_unavailable",
+              "message": "The transaction status is not available yet.",
               "details": {"retry_after_ms": 250}
             }
             """.data(using: .utf8)!
@@ -17149,7 +17149,7 @@ data: {"category":"Pipeline","event":"Transaction","hash":"\(Self.pipelineHash)"
             let rejectCode = apiError.rejectCode
             XCTAssertEqual(code, 503)
             XCTAssertNil(rejectCode)
-            XCTAssertEqual(message, "The finalized proof is not available yet.")
+            XCTAssertEqual(message, "The transaction status is not available yet.")
         } catch {
             XCTFail("unexpected error: \(error)")
         }

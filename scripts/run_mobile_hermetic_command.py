@@ -69,6 +69,7 @@ GRADLE_JVM_ENVIRONMENT = frozenset(
 AUTHENTICATED_CARGO_PROFILES = frozenset(
     {
         "android-cargo",
+        "android-armv7-diagnostic-cargo",
         "apple-ios-device",
         "apple-ios-simulator",
         "apple-macos",
@@ -95,6 +96,7 @@ PROFILES = {
         "SDKROOT",
     },
     "android-cargo": ANDROID_CARGO_ENVIRONMENT,
+    "android-armv7-diagnostic-cargo": ANDROID_CARGO_ENVIRONMENT,
     "host-cargo": COMMON_CARGO_ENVIRONMENT,
     "gradle-jvm": GRADLE_JVM_ENVIRONMENT,
     "gradle-jvm-localnet": GRADLE_JVM_ENVIRONMENT
@@ -295,6 +297,41 @@ def authenticate_android_cargo_arguments(
     return root_lock, lock_identity
 
 
+def android_armv7_diagnostic_configuration(
+    root: pathlib.Path, cache: pathlib.Path, invocation: pathlib.Path,
+) -> dict[str, object]:
+    import importlib.util
+    policy = pathlib.Path(__file__).with_name("norito_bridge_local_integration.py")
+    specification = importlib.util.spec_from_file_location("android_diagnostic_configuration_policy", policy)
+    if specification is None or specification.loader is None:
+        raise RuntimeError("Android diagnostic configuration policy is unavailable")
+    owner = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(owner)
+    return owner.android_armv7_diagnostic_configuration(
+        root, cache, invocation, local_integration=True,
+    )
+
+
+def authenticate_android_armv7_diagnostic_arguments(command: list[str]) -> None:
+    """Require the entire single-ABI diagnostic recipe, not a release selector."""
+    root = pathlib.Path.cwd()
+    arguments = command[1:]
+    if len(arguments) != 17 or arguments[:3] != ["ndk", "-t", "armeabi-v7a"]:
+        raise RuntimeError("Android armv7 diagnostic requires the exact single-ABI recipe")
+    output = pathlib.Path(arguments[4])
+    if (arguments[3] != "-o" or not output.is_absolute()
+            or output != pathlib.Path(os.path.abspath(output))
+            or output.resolve(strict=True) != output
+            or not output.is_dir()
+            or output != root / "dist/norito-bridge-android-local/gradle-build/iroha_kotlin_sdk/client-android/native/cargo-ndk-staging/armv7-diagnostic/armeabi-v7a"
+            or arguments[5:] != [
+                "build", "--locked", "--offline", "--jobs", "1",
+                "--manifest-path", str(root / "Cargo.toml"), "--release",
+                "-p", "connect_norito_bridge", "--features", "privacy-production-enabled",
+            ]):
+        raise RuntimeError("Android armv7 diagnostic requires the exact single-ABI recipe")
+
+
 # Cargo reads configuration from the invocation directory, every ancestor and
 # CARGO_HOME even when the child environment is closed. Keep network/registry
 # configuration usable, while refusing a second compiler/profile authority.
@@ -450,12 +487,25 @@ def main() -> int:
     invocation_directory = source_root
     invocation_observation = None
     if args.working_directory is not None:
-        if not args.profile.startswith("apple-"):
-            raise RuntimeError("an explicit Cargo working directory requires an Apple Cargo profile")
+        if not args.profile.startswith("apple-") and args.profile != "android-armv7-diagnostic-cargo":
+            raise RuntimeError("an explicit Cargo working directory requires an Apple or armv7 diagnostic Cargo profile")
         invocation_observation = authenticate_cargo_invocation_directory(
             source_root, args.working_directory
         )
         invocation_directory = invocation_observation[0]
+
+    if args.profile == "android-armv7-diagnostic-cargo":
+        if invocation_observation is None:
+            raise RuntimeError("Android armv7 diagnostics require an authenticated external working directory")
+        expected_target = source_root / "dist/norito-bridge-android-local/gradle-build/iroha_kotlin_sdk/client-android/native/cargo-target/armv7-diagnostic"
+        if environment["CARGO_TARGET_DIR"] != str(expected_target):
+            raise RuntimeError("Android armv7 diagnostics require the fixed warm Cargo target")
+        diagnostic_configuration = android_armv7_diagnostic_configuration(
+            source_root, pathlib.Path(environment["CARGO_HOME"]), invocation_directory,
+        )
+        authenticate_android_armv7_diagnostic_arguments(args.command)
+    else:
+        diagnostic_configuration = None
 
     authenticated_tools: dict[str, tuple[pathlib.Path, tuple[int, ...]]] = {}
     authenticated_files: dict[str, tuple[pathlib.Path, tuple[int, ...]]] = {}
@@ -466,7 +516,7 @@ def main() -> int:
         )
     if args.profile in AUTHENTICATED_CARGO_PROFILES:
         authenticated_tools = authenticate_cargo_environment(environment)
-    if args.profile == "android-cargo":
+    if args.profile in {"android-cargo", "android-armv7-diagnostic-cargo"}:
         authenticated_files["Android root Cargo.lock"] = authenticate_android_cargo_arguments(
             args.command
         )
@@ -498,6 +548,11 @@ def main() -> int:
     if invocation_observation is not None:
         recheck_cargo_invocation_directory(source_root, invocation_observation)
     recheck_build_cargo_configuration(build_configuration)
+    if (diagnostic_configuration is not None
+            and android_armv7_diagnostic_configuration(
+                source_root, pathlib.Path(environment["CARGO_HOME"]), invocation_directory,
+            ) != diagnostic_configuration):
+        raise RuntimeError("Android diagnostic configuration or custody changed during invocation")
     for name, (path, expected_identity) in authenticated_tools.items():
         _, current_identity = authenticate_regular_executable(name, str(path))
         if current_identity != expected_identity:

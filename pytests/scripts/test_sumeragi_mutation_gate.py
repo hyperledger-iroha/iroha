@@ -22,6 +22,16 @@ sys.modules[SPEC.name] = gate
 SPEC.loader.exec_module(gate)
 
 
+def selected_cargo_results(monkeypatch, code, output, names=("tests::named",), seconds=1.0):
+    """Supply a completed executable inventory and a separate runtime response."""
+    def cargo_test(*args):
+        if "--list" in args[3]:
+            listing = "".join(name + ": test\n" for name in names)
+            return 0, listing + f"\n{len(names)} tests, 0 benchmarks\n", 0.0
+        return code, output, seconds
+    monkeypatch.setattr(gate, "cargo_test", cargo_test)
+
+
 def test_duplicate_mutation_id_cannot_select_a_different_kill_test():
     original = gate.MUTATIONS[0]
     duplicate = gate.m(original.id, "another rule", ["unrelated_test"])
@@ -86,15 +96,15 @@ def test_baseline_failure_cannot_pass_when_every_mutant_is_killed(
         (101, "test tests::named ... FAILED\nerror: test process crashed", "execution-error"),
         (0, "test tests::named ... ignored\n", "missing-test"),
         (101, "test tests::other ... FAILED\n", "missing-test"),
-        (0, "test tests::named ... ok\ntest result: ok. 1 passed; 0 failed;\n", "pass"),
-        (101, "test tests::named ... FAILED\ntest result: FAILED. 0 passed; 1 failed;\n", "fail"),
+        (0, "running 1 test\ntest tests::named ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", "pass"),
+        (101, "running 1 test\ntest tests::named ... FAILED\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", "fail"),
         (None, "test tests::named ... ", "timeout"),
     ],
 )
 def test_only_executed_named_test_results_establish_a_mutation_kill(
     monkeypatch, tmp_path, code, output, expected
 ):
-    monkeypatch.setattr(gate, "cargo_test", lambda *args: (code, output, 1.0))
+    selected_cargo_results(monkeypatch, code, output)
     step = gate.run_step(
         SimpleNamespace(), tmp_path, "MS1", ["named"], None, 5,
         tmp_path / "named.log",
@@ -116,15 +126,89 @@ def test_failed_test_execution_cannot_be_reported_as_a_named_kill(
 
 
 def test_missing_second_filter_is_an_error_even_if_first_named_test_fails(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        gate, "cargo_test", lambda *args: (101, "test tests::present ... FAILED\n", 1.0)
-    )
+    selected_cargo_results(monkeypatch, 101, "test tests::present ... FAILED\n",
+                           names=("tests::present", "tests::missing"))
     step = gate.run_step(
         SimpleNamespace(), tmp_path, "MS1", ["present", "missing"], None, 5,
         tmp_path / "named.log",
     )
     assert step.status == "missing-test"
     assert step.failed == ["tests::present"]
+
+
+@pytest.mark.parametrize("terminals,summary", [
+    ("test tests::named ... FAILED\n", "0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;"),
+    ("test tests::named ... FAILED\ntest tests::named ... FAILED\n", "0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out;"),
+    ("test tests::named ... FAILED\ntest tests::named_extra ... ok\n", "0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out;"),
+    ("test tests::named ... FAILED\ntest tests::named_extra ... ignored, deferred control\n", "0 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out;"),
+    ("test tests::named ... FAILED\ntest tests::unexpected ... ok\n", "1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;"),
+])
+def test_substring_selection_cannot_hide_missing_duplicate_ignored_or_wrong_results(
+    monkeypatch, tmp_path, terminals, summary
+):
+    selected_cargo_results(monkeypatch, 101, terminals + "test result: FAILED. " + summary + "\n",
+                           names=("tests::named", "tests::named_extra"))
+    step = gate.run_step(SimpleNamespace(), tmp_path, "MS1", ["named"], None, 5,
+                         tmp_path / "named.log")
+    assert step.status == "execution-error"
+    assert step.selected == ["tests::named", "tests::named_extra"]
+
+
+@pytest.mark.parametrize("code,verdict,passed,failed", [(0, "ok", 2, 0), (101, "FAILED", 1, 1)])
+def test_every_actual_substring_match_is_accounted_before_passing_or_killing(
+    monkeypatch, tmp_path, code, verdict, passed, failed
+):
+    output = (f"running 2 tests\ntest tests::named ... {verdict}\ntest tests::named_extra ... ok\n"
+              f"test result: {verdict}. {passed} passed; {failed} failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s\n")
+    selected_cargo_results(monkeypatch, code, output,
+                           names=("tests::named", "tests::named_extra"))
+    step = gate.run_step(SimpleNamespace(), tmp_path, "MS1", ["named"], None, 5,
+                         tmp_path / "named.log")
+    assert step.status == ("fail" if failed else "pass")
+    assert step.ran == step.selected
+
+
+@pytest.mark.parametrize("listing", [
+    "tests::named: test\n",  # Incomplete discovery.
+    "tests::named: test\n\n2 tests, 0 benchmarks\n",  # Missing name.
+    "tests::named: test\ntests::named: test\n\n2 tests, 0 benchmarks\n",  # Duplicate.
+])
+def test_incomplete_executable_discovery_cannot_run_or_kill_a_mutant(monkeypatch, tmp_path, listing):
+    def cargo_test(*args):
+        assert "--list" in args[3], "invalid discovery must stop before execution"
+        return 0, listing, 0.0
+    monkeypatch.setattr(gate, "cargo_test", cargo_test)
+    step = gate.run_step(SimpleNamespace(), tmp_path, "MS1", ["named"], None, 5,
+                         tmp_path / "named.log")
+    assert step.status == "execution-error"
+
+
+def test_discovery_and_execution_share_the_original_step_deadline(monkeypatch, tmp_path):
+    moments = iter((100.0, 101.0, 102.0))
+    monkeypatch.setattr(gate.time, "monotonic", lambda: next(moments))
+    calls = []
+    def cargo_test(*args):
+        calls.append((args[3], args[5]))
+        if "--list" in args[3]:
+            return 0, "tests::named: test\n\n1 test, 0 benchmarks\n", 1.0
+        return 0, ("running 1 test\ntest tests::named ... ok\ntest result: ok. 1 passed; 0 failed; "
+                   "0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n"), 1.0
+    monkeypatch.setattr(gate, "cargo_test", cargo_test)
+    step = gate.run_step(SimpleNamespace(), tmp_path, None, ["named"], None, 5,
+                         tmp_path / "named.log")
+    assert step.status == "pass"
+    assert [timeout for _, timeout in calls] == [5, 4]
+    assert "--test-threads=1" in calls[1][0]
+
+
+def test_discovery_timeout_never_replenishes_or_disables_the_execution_deadline(monkeypatch, tmp_path):
+    def cargo_test(*args):
+        assert "--list" in args[3], "the exhausted deadline cannot launch a test"
+        return 0, "tests::named: test\n\n1 test, 0 benchmarks\n", 5.0
+    monkeypatch.setattr(gate, "cargo_test", cargo_test)
+    step = gate.run_step(SimpleNamespace(), tmp_path, None, ["named"], None, 5,
+                         tmp_path / "named.log")
+    assert step.status == "timeout"
 
 
 @pytest.mark.parametrize("timeout,expected", [(0, None), (20, 20)])
@@ -416,17 +500,6 @@ def test_hc13_selects_only_the_original_query_pairing_constructor_owner():
     assert not rule.scenarios
     assert gate.has_switch("HC13", core=True)
     assert not gate.has_switch("HC13")
-
-
-def test_hc14_selects_only_the_original_result_witness_binding():
-    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC14"]
-    assert rule.tests == (
-        "sumeragi::certified_chain::artifacts::tests::"
-        "original_result_witness_rejects_foreign_canonical_bytes_before_borrowing_graph",
-    )
-    assert not rule.scenarios
-    assert gate.has_switch("HC14", core=True)
-    assert not gate.has_switch("HC14")
 
 
 def test_hc15_selects_only_the_original_committed_quorum_owner():
@@ -800,7 +873,7 @@ def test_lane_history_attempts_preserve_original_producers_and_consumer_owners()
 
 def test_incumbent_and_lifecycle_refusals_keep_original_state_attempt():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC48"]
-    assert rule.tests == ('state::validator_committee::tests::refusal::original_incumbent_history_refusal_keeps_authority_and_same_source_retry', 'state::validator_committee::tests::refusal::original_candidate_authority_refusal_keeps_command_and_same_source_retry', 'state::validator_committee::tests::refusal::original_candidate_command_decode_refusal_has_no_publication_and_retries', 'state::validator_committee::tests::refusal::original_beacon_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_tle_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_staking_authority_refusal_keeps_exit_overlay_and_same_signed_retry')
+    assert rule.tests == ('state::validator_committee::tests::refusal::original_incumbent_history_refusal_keeps_authority_and_same_source_retry', 'state::validator_committee::tests::refusal::original_credentials_authority_refusal_keeps_command_and_same_source_retry', 'state::validator_committee::tests::refusal::original_credentials_command_decode_refusal_has_no_publication_and_retries', 'state::validator_committee::tests::refusal::original_beacon_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_tle_public_state_decode_refusal_defers_before_installation', 'state::validator_committee::tests::refusal::original_staking_authority_refusal_keeps_exit_overlay_and_same_signed_retry')
     assert not rule.scenarios
     assert gate.has_switch("HC48", core=True)
     assert not gate.has_switch("HC48")
@@ -856,7 +929,7 @@ def test_deadline_waits_for_owned_cargo_without_signalling_or_counting_late_resu
     assert code is None, "neither late success nor a late failed test satisfies its deadline"
     assert output == late_output
     assert "# exit None" in log.read_text()
-    monkeypatch.setattr(gate, "cargo_test", lambda *args: (code, output, 8))
+    selected_cargo_results(monkeypatch, code, output, seconds=8)
     step = gate.run_step(args, tmp_path, None, ["named"], None, 7, log)
     assert step.status == "timeout"
     assert step.ran == ["tests::named"]
@@ -1146,7 +1219,7 @@ def test_prepared_certificate_preserves_original_state_reader_release():
     assert not rule.scenarios
     assert gate.has_switch("HC72", core=True)
     assert not gate.has_switch("HC72")
-    source = gate.REPO / "crates/iroha_core/src/sumeragi/executor_attestation.rs"
+    source = gate.REPO / "crates/iroha_core/src/sumeragi/executor.rs"
     assert 'sumeragi_core_mutation = "HC72"' in source.read_text()
 
 
@@ -1567,7 +1640,7 @@ def test_actual_baseline_keeps_original_named_and_scenario_deadlines(monkeypatch
     args=SimpleNamespace(target_dir=tmp_path,timeout_test=900,timeout_scenario=3600,seeds=200,fast=False)
     result=gate.evaluate_baseline(args,tmp_path,[SimpleNamespace(tests=('tests::named',),scenarios=scenarios)])
     assert result['verdict']=='pass'
-    assert calls==expected,'an aggregate baseline must not replenish the configured deadlines'
+    assert calls==expected,'each original invocation must retain its configured deadline'
 
 def setup_main(monkeypatch,tmp_path,extra=()):
     monkeypatch.setattr(sys,'argv',['sumeragi_mutation_gate.py','--only','MS1','--fast','--jobs','1','--target-dir',str(tmp_path),*extra])
@@ -1642,6 +1715,89 @@ def test_nightly_runs_every_actual_daemon_mutation_and_retains_its_report():
     assert "sumeragi-daemon-mutation-gate-${{ github.run_id }}" in job
 
 
+def test_nightly_core_mutations_keep_dependency_instrumentation_and_full_inventory():
+    workflow = (ROOT / ".github/workflows/nightly_sumeragi.yml").read_text()
+    match = re.search(r"(?ms)^  core_mutation_gate:\n(.*?)(?=^  [a-z_]+:|\Z)", workflow)
+    assert match is not None
+    job = match.group(1)
+    command = (
+        "python3 scripts/sumeragi_mutation_gate.py --core --core-profile test "
+        "--jobs 1 --strict --fast"
+    )
+    assert f"run: {command}\n" in job
+    assert "--only" not in job
+    assert not any(option in job for option in (
+        "--skip-baseline", "--timeout-build", "--timeout-test", "--timeout-scenario",
+    ))
+    assert "if: always()" in job
+    assert "target/sumeragi-core-mutants/report.json" in job
+    assert "target/sumeragi-core-mutants/logs" in job
+
+
+SUMERAGI_CI_JOBS = (
+    ("nightly_sumeragi.yml", "simulator"),
+    ("nightly_sumeragi.yml", "mutation_gate"),
+    ("nightly_sumeragi.yml", "core_mutation_gate"),
+    ("nightly_sumeragi.yml", "daemon_mutation_gate"),
+    ("pr.yml", "sumeragi"),
+)
+
+
+def require_pinned_sumeragi_toolchain(job):
+    """Check compiler selection before restoring or executing native artifacts."""
+    channel = re.search(
+        r'^channel\s*=\s*"([^"]+)"$',
+        (ROOT / "rust-toolchain.toml").read_text(), re.MULTILINE,
+    )
+    assert channel is not None
+    action = (
+        "      - uses: actions-rust-lang/setup-rust-toolchain@"
+        "166cdcfd11aee3cb47222f9ddb555ce30ddb9659\n"
+        "        with:\n"
+        '          cache: "false"\n'
+        f"          toolchain: {channel.group(1)}\n"
+    )
+    assert action in job, "Sumeragi must install the repository-pinned Rust toolchain"
+    setup = job.index(action)
+    assert setup < job.index("      - uses: Swatinem/rust-cache@")
+    assert setup < job.index("        run:")
+
+
+@pytest.mark.parametrize("workflow_name,job_name", SUMERAGI_CI_JOBS)
+def test_sumeragi_ci_installs_current_compiler_before_cache_and_execution(
+    workflow_name, job_name
+):
+    workflow = (ROOT / ".github/workflows" / workflow_name).read_text()
+    match = re.search(rf"(?ms)^  {job_name}:\n(.*?)(?=^  [a-z_]+:|\Z)", workflow)
+    assert match is not None
+    require_pinned_sumeragi_toolchain(match.group(1))
+
+
+@pytest.mark.parametrize("change", ("missing", "stale", "unreviewed", "late"))
+def test_sumeragi_ci_rejects_missing_stale_or_late_compiler_selection(change):
+    workflow = (ROOT / ".github/workflows/nightly_sumeragi.yml").read_text()
+    match = re.search(r"(?ms)^  simulator:\n(.*?)(?=^  [a-z_]+:|\Z)", workflow)
+    assert match is not None
+    job = match.group(1)
+    action = re.search(
+        r"(?m)^      - uses: actions-rust-lang/setup-rust-toolchain@[^\n]+\n"
+        r"        with:\n          cache: [^\n]+\n          toolchain: [^\n]+\n", job,
+    )
+    assert action is not None
+    if change == "missing":
+        job = job.replace(action.group(0), "")
+    elif change == "stale":
+        job = job.replace(action.group(0), re.sub(
+            r"toolchain: [^\n]+", "toolchain: retired-compiler", action.group(0),
+        ))
+    elif change == "unreviewed":
+        job = job.replace("166cdcfd11aee3cb47222f9ddb555ce30ddb9659", "v1")
+    else:
+        job = job.replace(action.group(0), "") + action.group(0)
+    with pytest.raises(AssertionError):
+        require_pinned_sumeragi_toolchain(job)
+
+
 def test_committee_boundary_mutations_use_their_exact_production_source_owners():
     registered = gate.index_mutations(gate.CORE_MUTATIONS)
     expected = {
@@ -1662,3 +1818,522 @@ def test_committee_boundary_mutations_use_their_exact_production_source_owners()
     assert 'cfg!(all(test, sumeragi_core_mutation = "HC102"))' in plan
     assert '#[cfg(all(test, sumeragi_core_mutation = "HC101"))]' in plan
     assert '#[cfg(all(test, sumeragi_core_mutation = "HC103"))]' in plan
+
+
+def test_native_lane_finalizer_gate_requires_original_validator_return_and_publication():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC133"]
+    assert rule.tests == (
+        "sumeragi::executor::validation_refusal_tests::original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_after_retry",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC133", core=True)
+    assert not gate.has_switch("HC133")
+
+
+def test_native_witness_handoff_gate_requires_source_guard_and_one_shot_recovery():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC134"]
+    assert rule.tests == (
+        "sumeragi::executor::validation_refusal_tests::validated_witness_guard_failure_requires_recovery_without_reexecuting_original_source",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC134", core=True)
+    assert not gate.has_switch("HC134")
+    assert not gate.has_switch("HC134", daemon=True)
+
+
+def test_borrowed_amx_clone_gate_requires_actual_paid_persisted_source():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC135"]
+    assert rule.tests == (
+        "sumeragi::amx::native::tests::paid_borrowed_custody::native_amx_persisted_paid_borrowed_prepared_proof_clone_retains_original_graph_and_lifetime",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC135", core=True)
+    assert not gate.has_switch("HC135")
+    assert not gate.has_switch("HC135", daemon=True)
+
+
+def test_native_lane_refusal_gate_requires_both_actual_original_pool_boundaries():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC136"]
+    assert rule.tests == (
+        "sumeragi::lanes::custody::tests::original_signer_pinning_refuses_then_retries_the_same_pool_and_stake_cut",
+        "sumeragi::lanes::step::sample_owner_tests::sample_finalizer_refusal_preserves_exact_source_and_retry_funds_only_suffix",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC136", core=True)
+    assert not gate.has_switch("HC136")
+    assert not gate.has_switch("HC136", daemon=True)
+
+
+def test_queue_resident_gate_requires_actual_last_owner_pressure_and_retry():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC137"]
+    assert rule.tests == (
+        "queue::tests::resident_owner_tests::removed_pending_owner_retains_original_resident_credit_until_last_reader",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC137", core=True)
+    assert not gate.has_switch("HC137")
+    assert not gate.has_switch("HC137", daemon=True)
+
+
+def test_queue_cold_fence_gate_requires_actual_thread_and_original_refund():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC138"]
+    assert rule.tests == (
+        "queue::tests::resident_owner_tests::cold_queue_retirement_holds_original_fence_until_first_admission_can_publish",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC138", core=True)
+    assert not gate.has_switch("HC138")
+    assert not gate.has_switch("HC138", daemon=True)
+
+
+def test_pending_payload_lease_mutations_bind_distinct_actual_original_boundaries():
+    expected = {
+        "HC140": "queue::payload_leases::tests::pending_payload_lease_retires_on_actual_certified_state_publication",
+        "HC141": "queue::payload_leases::tests::pending_payload_selection_cannot_adopt_clear_and_readmission_during_selection",
+        "HC142": "queue::payload_leases::tests::pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue",
+        "HC143": "queue::payload_leases::tests::pending_payload_lease_uses_original_backing_and_retires_on_expiry_withdrawal_or_foreign_queue",
+        "HC144": "queue::payload_leases::tests::pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap",
+        "HC145": "queue::payload_leases::tests::pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap",
+    }
+    registered = gate.index_mutations(gate.CORE_MUTATIONS)
+    source = gate.REPO / "crates/iroha_core/src/queue/payload_leases.rs"
+    text = source.read_text()
+    for identifier, name in expected.items():
+        rule = registered[identifier]
+        assert rule.tests == (name,)
+        assert not rule.scenarios
+        assert gate.has_switch(identifier, core=True)
+        assert not gate.has_switch(identifier)
+        assert not gate.has_switch(identifier, daemon=True)
+        assert 'fn ' + name.rsplit("::", 1)[-1] + '(' in text
+        assert 'all(test, sumeragi_core_mutation = "' + identifier + '")' in text
+        owners = {path.relative_to(gate.REPO / "crates/iroha_core/src").as_posix()
+                  for path in (gate.REPO / "crates/iroha_core/src").rglob("*.rs")
+                  if 'sumeragi_core_mutation = "' + identifier + '"' in path.read_text()}
+        assert owners == {"queue/payload_leases.rs"}
+
+
+def test_signed_root_gate_requires_actual_bounded_worker_and_original_parent_controls():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC139"]
+    assert rule.tests == (
+        "sumeragi::executor::validation_refusal_tests::prepared_certificate_uses_bounded_signed_root_without_rewalking_execution_history",
+        "sumeragi::executor::validation_refusal_tests::successor_context_uses_original_parent_and_bounded_signed_root_without_history_rewalk",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC139", core=True)
+    assert not gate.has_switch("HC139")
+    assert not gate.has_switch("HC139", daemon=True)
+
+
+@pytest.mark.parametrize("code,status,passed,failed", [(0, "ok", 1, 0), (101, "FAILED", 0, 1)])
+@pytest.mark.parametrize("shape", ["missing_running", "duplicate_running", "wrong_running", "missing_duration", "bad_duration", "trailing_summary", "duplicate_summary", "malformed_extra_summary", "summary_before_terminal", "header_after_terminal"])
+def test_incomplete_or_conflicting_full_completion_cannot_pass_or_kill(
+    monkeypatch, tmp_path, code, status, passed, failed, shape
+):
+    header = "running 1 test\n"
+    summary = (f"test result: {status}. {passed} passed; {failed} failed; 0 ignored; "
+               "0 measured; 0 filtered out; finished in 0.01s\n")
+    if shape == "missing_running":
+        header = ""
+    elif shape == "duplicate_running":
+        header *= 2
+    elif shape == "wrong_running":
+        header = "running 2 tests\n"
+    elif shape == "missing_duration":
+        summary = summary.replace(" finished in 0.01s", "")
+    elif shape == "bad_duration":
+        summary = summary.replace("0.01s", "unobserved")
+    elif shape == "trailing_summary":
+        summary = summary.rstrip() + " unexpected\n"
+    elif shape == "duplicate_summary":
+        summary *= 2
+    elif shape == "malformed_extra_summary":
+        summary += "test result: incomplete\n"
+    terminal = f"test tests::named ... {status}\n"
+    output = header + terminal + summary
+    if shape == "summary_before_terminal":
+        output = header + summary + terminal
+    elif shape == "header_after_terminal":
+        output = terminal + header + summary
+    selected_cargo_results(monkeypatch, code, output)
+    result = gate.run_step(SimpleNamespace(), tmp_path, "MS1", ["named"], None, 5,
+                           tmp_path / "named.log")
+    assert result.status == "execution-error"
+
+
+def synthetic_scheduling_args(tmp_path, *, fast=False):
+    """Use isolated Python scheduling fixtures, never positive native qualification."""
+    return SimpleNamespace(target_dir=tmp_path, timeout_build=1200, timeout_test=900,
+                           timeout_scenario=3600, seeds=200, fast=fast)
+
+
+def test_baseline_keeps_distinct_ordered_named_tuples_and_scenario_union(monkeypatch, tmp_path):
+    scenarios = list(gate.SCENARIOS)[:2]
+    mutations = [gate.m('SYNTHETIC_A', 'fixture', ['tests::b', 'tests::a'], scenarios),
+                 gate.m('SYNTHETIC_B', 'fixture', ['tests::c'], [scenarios[0]]),
+                 gate.m('SYNTHETIC_C', 'fixture', ['tests::b', 'tests::a'], [scenarios[1]])]
+    builds, calls = [], []
+    monkeypatch.setattr(gate, 'build', lambda *args: builds.append(args) or gate.Step(status='pass'))
+    def run_step(args, target, mutation, filters, seeds, timeout, log):
+        calls.append((tuple(filters), seeds, timeout, log))
+        return gate.Step(status='pass', selected=list(filters), ran=list(filters), log=str(log))
+    monkeypatch.setattr(gate, 'run_step', run_step)
+    result = gate.evaluate_baseline(synthetic_scheduling_args(tmp_path), tmp_path, mutations)
+    assert result['verdict'] == 'pass'
+    assert len(builds) == 1 and builds[0][2] is None
+    expected_tuples = sorted({mu.tests for mu in mutations})
+    expected_scenarios = sorted({gate.SCENARIOS[s] for mu in mutations for s in mu.scenarios})
+    assert [filters for filters, seeds, _, _ in calls if seeds is None] == expected_tuples
+    assert [filters for filters, seeds, _, _ in calls if seeds == 200] == [(s,) for s in expected_scenarios]
+    assert all(cap == (900 if seeds is None else 3600) for _, seeds, cap, _ in calls)
+    assert len({log for _, _, _, log in calls}) == len(calls)
+    assert result['named']['ran'] == sorted({t for mu in mutations for t in mu.tests})
+    assert result['scenario']['ran'] == expected_scenarios
+    assert result['named']['steps'][0]['filters'] == list(expected_tuples[0])
+
+
+@pytest.mark.parametrize('table', ['MUTATIONS', 'CORE_MUTATIONS', 'DAEMON_MUTATIONS'])
+def test_baseline_group_plan_preserves_every_current_registry_filter(monkeypatch, tmp_path, table):
+    """Inspect actual registered selectors; mocked terminals are not native evidence."""
+    mutations = getattr(gate, table)
+    calls = []
+    monkeypatch.setattr(gate, 'build', lambda *args: gate.Step(status='pass'))
+    def run_step(args, target, mutation, filters, seeds, timeout, log):
+        calls.append((tuple(filters), seeds, timeout))
+        return gate.Step(status='pass', selected=list(filters), ran=list(filters))
+    monkeypatch.setattr(gate, 'run_step', run_step)
+    result = gate.evaluate_baseline(synthetic_scheduling_args(tmp_path), tmp_path, mutations)
+    named = [filters for filters, seeds, _ in calls if seeds is None]
+    scenarios = [filters for filters, seeds, _ in calls if seeds is not None]
+    assert named == sorted({mu.tests for mu in mutations})
+    assert {f for filters in named for f in filters} == {t for mu in mutations for t in mu.tests}
+    assert scenarios == [(s,) for s in sorted({gate.SCENARIOS[s] for mu in mutations for s in mu.scenarios})]
+    assert result['verdict'] == 'pass'
+    assert all(cap == (900 if seeds is None else 3600) for _, seeds, cap in calls)
+
+
+@pytest.mark.parametrize('bad_status', ['timeout', 'missing-test', 'execution-error', 'build-error', 'fail'])
+def test_any_baseline_group_refusal_survives_later_pass_and_preserves_union(monkeypatch, tmp_path, bad_status):
+    mutations = [gate.m('SYNTHETIC_A', 'fixture', ['tests::a']),
+                 gate.m('SYNTHETIC_B', 'fixture', ['tests::b'])]
+    calls = []
+    monkeypatch.setattr(gate, 'build', lambda *args: gate.Step(status='pass'))
+    def run_step(args, target, mutation, filters, seeds, timeout, log):
+        calls.append(tuple(filters))
+        status = bad_status if len(calls) == 1 else 'pass'
+        return gate.Step(status=status, selected=list(filters), ran=list(filters),
+                         failed=list(filters) if status == 'fail' else [])
+    monkeypatch.setattr(gate, 'run_step', run_step)
+    result = gate.evaluate_baseline(synthetic_scheduling_args(tmp_path), tmp_path, mutations)
+    assert calls == [('tests::a',), ('tests::b',)]
+    assert result['verdict'] == 'fail'
+    assert result['named']['status'] == bad_status
+    assert [step['status'] for step in result['named']['steps']] == [bad_status, 'pass']
+    assert result['named']['selected'] == ['tests::a', 'tests::b']
+
+
+def test_grouped_discovery_timeout_never_launches_or_replenishes_that_step(monkeypatch, tmp_path):
+    monkeypatch.setattr(gate.time, 'monotonic', lambda: 100.0)
+    monkeypatch.setattr(gate, 'build', lambda *args: gate.Step(status='pass'))
+    calls = []
+    def cargo_test(args, target, mutation, filters, seeds, timeout, log, no_run=False):
+        calls.append((tuple(filters), timeout))
+        if filters[0] == 'tests::a':
+            assert '--list' in filters, 'an exhausted discovery cannot launch runtime'
+            return 0, 'tests::a: test\n\n1 test, 0 benchmarks\n', 900.0
+        if '--list' in filters:
+            return 0, 'tests::b: test\n\n1 test, 0 benchmarks\n', 1.0
+        return 0, ('running 1 test\ntest tests::b ... ok\ntest result: ok. 1 passed; 0 failed; '
+                   '0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n'), 1.0
+    monkeypatch.setattr(gate, 'cargo_test', cargo_test)
+    mutations = [gate.m('SYNTHETIC_A', 'fixture', ['tests::a']),
+                 gate.m('SYNTHETIC_B', 'fixture', ['tests::b'])]
+    result = gate.evaluate_baseline(synthetic_scheduling_args(tmp_path), tmp_path, mutations)
+    assert result['verdict'] == 'fail' and result['named']['status'] == 'timeout'
+    assert len(calls) == 3
+    assert [timeout for _, timeout in calls] == [900, 900, 899]
+    assert [step['status'] for step in result['named']['steps']] == ['timeout', 'pass']
+    assert result['named']['steps'][0]['ran'] == []
+    assert result['named']['steps'][1]['ran'] == ['tests::b']
+
+
+@pytest.mark.parametrize('output,code', [
+    ('running 1 test\ntest tests::a ... ok\n', 0),
+    ('running 1 test\ntest tests::a ... ignored\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s\n', 0),
+    ('running 1 test\ntest tests::a ... ok\ntest tests::a ... ok\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n', 0),
+    ('running 1 test\ntest tests::foreign ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n', 0),
+])
+def test_grouped_baseline_requires_exact_actual_discovered_terminals(monkeypatch, tmp_path, output, code):
+    monkeypatch.setattr(gate, 'build', lambda *args: gate.Step(status='pass'))
+    monkeypatch.setattr(gate.time, 'monotonic', lambda: 100.0)
+    def cargo_test(args, target, mutation, filters, seeds, timeout, log, no_run=False):
+        if '--list' in filters:
+            return 0, 'tests::a: test\n\n1 test, 0 benchmarks\n', 0.0
+        return code, output, 1.0
+    monkeypatch.setattr(gate, 'cargo_test', cargo_test)
+    result = gate.evaluate_baseline(synthetic_scheduling_args(tmp_path), tmp_path,
+                                    [gate.m('SYNTHETIC_A', 'fixture', ['tests::a'])])
+    assert result['verdict'] == 'fail'
+    assert result['named']['status'] not in ('pass', 'fail')
+    assert len(result['named']['steps']) == 1
+    assert result['named']['steps'][0]['selected'] == ['tests::a']
+
+
+def test_mutant_preserves_named_tuple_and_runs_each_distinct_scenario_once(monkeypatch, tmp_path):
+    scenarios = list(gate.SCENARIOS)[:2]
+    mu = gate.m('SYNTHETIC_A', 'fixture', ['tests::b', 'tests::a'],
+                [scenarios[1], scenarios[0], scenarios[1]])
+    calls, builds = [], []
+    monkeypatch.setattr(gate, 'has_switch', lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, 'build', lambda *args: builds.append(args) or gate.Step(status='pass'))
+    def run_step(args, target, mutation, filters, seeds, timeout, log):
+        calls.append((mutation, tuple(filters), seeds, timeout, log))
+        return gate.Step(status='fail' if seeds is None else 'pass',
+                         failed=['tests::a'] if seeds is None else [], selected=list(filters), ran=list(filters))
+    monkeypatch.setattr(gate, 'run_step', run_step)
+    result = gate.evaluate(synthetic_scheduling_args(tmp_path), tmp_path, mu)
+    assert result['verdict'] == 'killed_by_test'
+    assert len(builds) == 1 and builds[0][2] == mu.id
+    assert calls[0][1:4] == (mu.tests, None, 900)
+    assert [call[1:4] for call in calls[1:]] == [
+        ((gate.SCENARIOS[scenarios[1]],), 200, 3600),
+        ((gate.SCENARIOS[scenarios[0]],), 200, 3600)]
+    assert all(call[0] == mu.id for call in calls)
+    assert len({call[4] for call in calls}) == 3
+    assert result['named']['failed'] == ['tests::a']
+    assert result['scenario']['status'] == 'pass'
+    assert len(result['scenario']['steps']) == 2
+
+
+@pytest.mark.parametrize('bad_status', ['timeout', 'missing-test', 'execution-error', 'build-error'])
+def test_mutant_scenario_error_cannot_be_hidden_by_named_or_earlier_scenario_kill(monkeypatch, tmp_path, bad_status):
+    scenarios = list(gate.SCENARIOS)[:2]
+    mu = gate.m('SYNTHETIC_A', 'fixture', ['tests::named'], scenarios)
+    monkeypatch.setattr(gate, 'has_switch', lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, 'build', lambda *args: gate.Step(status='pass'))
+    steps = iter([gate.Step(status='fail', failed=['tests::named']),
+                  gate.Step(status='fail', failed=[gate.SCENARIOS[scenarios[0]]]),
+                  gate.Step(status=bad_status)])
+    monkeypatch.setattr(gate, 'run_step', lambda *args: next(steps))
+    result = gate.evaluate(synthetic_scheduling_args(tmp_path), tmp_path, mu)
+    assert result['verdict'] == 'error' and result['reason'] == f'scenarios: {bad_status}'
+    assert result['scenario']['status'] == bad_status
+    assert len(result['scenario']['steps']) == 2
+    assert result['scenario']['failed'] == [gate.SCENARIOS[scenarios[0]]]
+
+
+def test_independent_steps_may_exceed_union_budget_without_replenishing_a_step(monkeypatch, tmp_path):
+    """The prospective policy is per invocation; no historical timeout is reclassified."""
+    monkeypatch.setattr(gate, 'build', lambda *args: gate.Step(status='pass'))
+    calls = []
+    def run_step(args, target, mutation, filters, seeds, timeout, log):
+        calls.append(timeout)
+        return gate.Step(status='pass', seconds=800.0, selected=list(filters), ran=list(filters))
+    monkeypatch.setattr(gate, 'run_step', run_step)
+    mutations = [gate.m('SYNTHETIC_A', 'fixture', ['tests::a']),
+                 gate.m('SYNTHETIC_B', 'fixture', ['tests::b'])]
+    result = gate.evaluate_baseline(synthetic_scheduling_args(tmp_path), tmp_path, mutations)
+    assert calls == [900, 900]
+    assert result['verdict'] == 'pass' and result['named']['seconds'] == 1600.0
+    assert [step['deadline_seconds'] for step in result['named']['steps']] == [900, 900]
+
+
+@pytest.mark.parametrize('fast', [False, True])
+def test_baseline_and_mutant_fast_mode_preserve_named_coverage_only(monkeypatch, tmp_path, fast):
+    scenario = next(iter(gate.SCENARIOS))
+    mu = gate.m('SYNTHETIC_A', 'fixture', ['tests::b', 'tests::a'], [scenario])
+    calls = []
+    monkeypatch.setattr(gate, 'build', lambda *args: gate.Step(status='pass'))
+    monkeypatch.setattr(gate, 'has_switch', lambda *args, **kwargs: True)
+    def run_step(args, target, mutation, filters, seeds, timeout, log):
+        calls.append((mutation, tuple(filters), seeds, timeout))
+        return gate.Step(status='pass')
+    monkeypatch.setattr(gate, 'run_step', run_step)
+    args = synthetic_scheduling_args(tmp_path, fast=fast)
+    baseline = gate.evaluate_baseline(args, tmp_path, [mu])
+    mutant = gate.evaluate(args, tmp_path, mu)
+    assert len(calls) == (2 if fast else 4)
+    assert [filters for _, filters, seeds, _ in calls if seeds is None] == [mu.tests, mu.tests]
+    assert ('scenario' in baseline) == ('scenario' in mutant) == (not fast)
+
+
+@pytest.mark.parametrize('named_status,scenario_statuses,strict,expected,verdict', [
+    ('pass', ('fail', 'pass'), False, 0, 'killed_by_scenario_only'),
+    ('pass', ('fail', 'pass'), True, 1, 'killed_by_scenario_only'),
+    ('fail', ('pass', 'pass'), True, 0, 'killed_by_test'),
+    ('fail', ('fail', 'timeout'), True, 1, 'error'),
+    ('pass', ('pass', 'pass'), False, 1, 'survived'),
+])
+def test_main_report_preserves_strict_and_error_semantics_of_grouped_scenarios(
+    monkeypatch, tmp_path, named_status, scenario_statuses, strict, expected, verdict
+):
+    """Synthetic in-memory registry and mocked terminals are not native evidence."""
+    scenarios = list(gate.SCENARIOS)[:2]
+    mu = gate.m('SYNTHETIC_A', 'fixture', ['tests::named'], scenarios)
+    monkeypatch.setattr(gate, 'MUTATIONS', [mu])
+    monkeypatch.setattr(gate, 'has_switch', lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, 'build', lambda *args: gate.Step(status='pass'))
+    def run_step(args, target, mutation, filters, seeds, timeout, log):
+        if mutation is None:
+            status = 'pass'
+        elif seeds is None:
+            status = named_status
+        else:
+            status = scenario_statuses[scenarios.index(next(s for s in scenarios if gate.SCENARIOS[s] == filters[0]))]
+        return gate.Step(status=status, selected=list(filters), ran=list(filters),
+                         failed=list(filters) if status == 'fail' else [])
+    monkeypatch.setattr(gate, 'run_step', run_step)
+    monkeypatch.setattr(sys, 'argv', ['sumeragi_mutation_gate.py', '--jobs', '1',
+                                    '--target-dir', str(tmp_path), *(['--strict'] if strict else [])])
+    assert gate.main() == expected
+    report = gate.json.loads((tmp_path / 'report.json').read_text())
+    assert report['baseline']['verdict'] == 'pass'
+    assert report['mutations'][0]['verdict'] == verdict
+    assert len(report['mutations'][0]['scenario']['steps']) == 2
+    assert report['summary']['scenario_missed'] == ([mu.id] if scenario_statuses == ('pass', 'pass') else [])
+    assert report['summary']['error'] == ([mu.id] if verdict == 'error' else [])
+
+
+def test_grouped_substring_discovery_preserves_extra_and_overlapping_actual_names(monkeypatch, tmp_path):
+    monkeypatch.setattr(gate, 'build', lambda *args: gate.Step(status='pass'))
+    monkeypatch.setattr(gate.time, 'monotonic', lambda: 100.0)
+    actual_names = ['tests::named', 'tests::named_extra', 'tests::other']
+    runtime = []
+    def cargo_test(args, target, mutation, filters, seeds, timeout, log, no_run=False):
+        selected = [name for name in actual_names if any(f in name for f in filters if not f.startswith('--'))]
+        if '--list' in filters:
+            return 0, ''.join(f'{name}: test\n' for name in selected) + f'\n{len(selected)} tests, 0 benchmarks\n', 0.0
+        runtime.append(selected)
+        return 0, (f'running {len(selected)} tests\n' + ''.join(f'test {name} ... ok\n' for name in selected)
+                   + f'test result: ok. {len(selected)} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n'), 1.0
+    monkeypatch.setattr(gate, 'cargo_test', cargo_test)
+    mutations = [gate.m('SYNTHETIC_A', 'fixture', ['tests::named']),
+                 gate.m('SYNTHETIC_B', 'fixture', ['tests::named_extra']),
+                 gate.m('SYNTHETIC_C', 'fixture', ['tests::other'])]
+    result = gate.evaluate_baseline(synthetic_scheduling_args(tmp_path), tmp_path, mutations)
+    assert result['verdict'] == 'pass'
+    assert runtime == [['tests::named', 'tests::named_extra'], ['tests::named_extra'], ['tests::other']]
+    assert result['named']['selected'] == result['named']['ran'] == actual_names
+    assert [step['selected'] for step in result['named']['steps']] == runtime
+
+
+def test_mutant_scenario_runtime_cannot_reset_discovery_budget_or_hide_late_pass(monkeypatch, tmp_path):
+    scenarios = list(gate.SCENARIOS)[:2]
+    mu = gate.m('SYNTHETIC_A', 'fixture', ['tests::named'], scenarios)
+    monkeypatch.setattr(gate, 'has_switch', lambda *args, **kwargs: True)
+    monkeypatch.setattr(gate, 'build', lambda *args: gate.Step(status='pass'))
+    monkeypatch.setattr(gate.time, 'monotonic', lambda: 100.0)
+    calls = []
+    def cargo_test(args, target, mutation, filters, seeds, timeout, log, no_run=False):
+        assert len([f for f in filters if f == 'tests::named' or f in (gate.SCENARIOS[s] for s in scenarios)]) == 1
+        name = filters[0]
+        calls.append((name, '--list' in filters, timeout))
+        if '--list' in filters:
+            return 0, f'{name}: test\n\n1 test, 0 benchmarks\n', 2.0
+        late = name == gate.SCENARIOS[scenarios[1]]
+        verdict = 'ok' if late else 'FAILED'
+        output = (f'running 1 test\ntest {name} ... {verdict}\ntest result: {verdict}. '
+                  f'{1 if late else 0} passed; {0 if late else 1} failed; '
+                  '0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n')
+        return (0 if late else 101), output, (3598.5 if late else 1.0)
+    monkeypatch.setattr(gate, 'cargo_test', cargo_test)
+    result = gate.evaluate(synthetic_scheduling_args(tmp_path), tmp_path, mu)
+    assert result['named']['status'] == 'fail'
+    assert result['verdict'] == 'error' and result['reason'] == 'scenarios: timeout'
+    assert [step['status'] for step in result['scenario']['steps']] == ['fail', 'timeout']
+    assert [timeout for _, _, timeout in calls] == [900, 898, 3600, 3598, 3600, 3598]
+    assert result['scenario']['steps'][1]['ran'] == [gate.SCENARIOS[scenarios[1]]]
+
+
+@pytest.mark.parametrize('groups', [[], [()]])
+def test_empty_group_or_selector_tuple_refuses_without_unfiltered_native_run(monkeypatch, tmp_path, groups):
+    def no_step(*args):
+        raise AssertionError('an empty selector cannot spawn a broad unfiltered suite')
+    monkeypatch.setattr(gate, 'run_step', no_step)
+    result = gate.run_grouped_steps(synthetic_scheduling_args(tmp_path), tmp_path, None,
+                                   groups, None, 900, tmp_path, 'synthetic-empty')
+    assert result['status'] == 'missing-test'
+    assert result['selected'] == result['ran'] == result['failed'] == []
+    assert len(result['steps']) == len(groups)
+    if groups:
+        assert result['steps'][0]['detail'] == ['no selectors for this invocation']
+        assert result['steps'][0]['status'] == 'missing-test'
+        assert result['steps'][0]['discovery_log'] == ''
+
+
+def test_empty_mutant_named_tuple_refuses_before_source_build_or_unfiltered_run(monkeypatch, tmp_path):
+    def no_operation(*args, **kwargs):
+        raise AssertionError('a mutation without named controls cannot inspect/build/run an unfiltered suite')
+    for name in ('has_switch', 'build', 'run_step'):
+        monkeypatch.setattr(gate, name, no_operation)
+    result = gate.evaluate(synthetic_scheduling_args(tmp_path), tmp_path,
+                           gate.m('SYNTHETIC_EMPTY', 'fixture', [], [next(iter(gate.SCENARIOS))]))
+    assert result['verdict'] == 'error' and result['reason'] == 'no named test selectors'
+    assert 'build' not in result and 'named' not in result and 'scenario' not in result
+
+
+@pytest.mark.parametrize("extra,message", [
+    (["--seeds", "0"], "positive u64 count"),
+    (["--seeds", "-1"], "positive u64 count"),
+    (["--seeds", str(1 << 64)], "positive u64 count"),
+    (["--seeds", str(-(1 << 64))], "positive u64 count"),
+    (["--jobs", "0"], "must be positive"),
+    (["--jobs", "-1"], "must be positive"),
+    (["--only", ""], "at least one mutation"),
+    (["--only", " , , "], "at least one mutation"),
+    (["--only", "MS1,MS1"], "duplicate mutation"),
+    (["--only", " MS1, MS1 "], "duplicate mutation"),
+])
+@pytest.mark.parametrize("strict", [False, True])
+def test_mutation_cli_invalid_counts_refuse_before_output_or_native_child(monkeypatch, tmp_path, capsys, extra, message, strict):
+    output = tmp_path / "unused-campaign"
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid counts reached execution")
+    monkeypatch.setattr(gate, "evaluate_baseline", forbidden)
+    monkeypatch.setattr(gate, "evaluate", forbidden)
+    monkeypatch.setattr(gate.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(sys, "argv", ["gate", "--target-dir", str(output), *(["--strict"] if strict else []), *extra])
+    with pytest.raises(SystemExit) as error:
+        gate.main()
+    assert error.value.code == 2
+    assert message in capsys.readouterr().err
+    assert not output.exists()
+
+@pytest.mark.parametrize("seeds,jobs", [(1,1),(200,4),(10000,2),((1 << 64)-1,1)])
+def test_mutation_cli_valid_counts_and_unique_selection_keep_exact_report(monkeypatch, tmp_path, seeds, jobs):
+    import json
+    called=[]
+    def baseline(args, target, mutations):
+        called.append((args.seeds, args.jobs, [m.id for m in mutations]))
+        return {"id":"baseline", "verdict":"pass"}
+    monkeypatch.setattr(gate,"evaluate_baseline",baseline)
+    monkeypatch.setattr(gate,"evaluate",lambda args,target,mu:{"id":mu.id,"verdict":"killed_by_test","named":{"failed":["tests::named"]}})
+    monkeypatch.setattr(sys,"argv",["gate","--strict","--only"," MS1, MS2 ","--seeds",str(seeds),"--jobs",str(jobs),"--target-dir",str(tmp_path)])
+    assert gate.main()==0
+    assert called==[(seeds,jobs,["MS1","MS2"])]
+    report=json.loads((tmp_path/"report.json").read_text())
+    assert report["summary"]["mutations"]==2
+    assert report["summary"]["killed_by_test"]==["MS1","MS2"]
+    assert [m["id"] for m in report["mutations"]]==["MS1","MS2"]
+    assert report["seeds"]==seeds
+    assert report["fast"] is False
+
+
+def test_state_native_descriptor_mutation_binds_exact_admitted_engine_and_original_retry():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC146"]
+    assert rule.tests == (
+        "state::state_preverify_backend_admission_tests::unsupported_retired_and_claimed_backends_fail_state_admission",
+        "state::state_preverify_backend_admission_tests::native_compiled_descriptor_refusal_preserves_key_admission_and_original_retry",
+    )
+    assert not rule.scenarios
+    assert gate.has_switch("HC146", core=True)
+    assert not gate.has_switch("HC146")
+    assert not gate.has_switch("HC146", daemon=True)
+    source = (gate.REPO / "crates/iroha_core/src/state.rs").read_text()
+    assert 'all(test, sumeragi_core_mutation = "HC146")' in source
+    assert 'production_verify_backend_tag(proof.backend.as_str())' in source
+    assert 'Some(iroha_data_model::zk::BackendTag::NativePipaRPasta)' in source
+    owners = {path.relative_to(gate.REPO / "crates/iroha_core/src").as_posix()
+              for path in (gate.REPO / "crates/iroha_core/src").rglob("*.rs")
+              if 'sumeragi_core_mutation = "HC146"' in path.read_text()}
+    assert owners == {"state.rs"}

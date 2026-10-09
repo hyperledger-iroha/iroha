@@ -64,12 +64,12 @@ use super::{
         KAGEMUSHA_WALLET_ABANDONED_NAME_V1, KAGEMUSHA_WALLET_ABANDONMENT_NAME_V1,
         KAGEMUSHA_WALLET_ARCHIVE_DIR_NAME_V1, KAGEMUSHA_WALLET_CAPSULES_DIR_NAME_V1,
         KAGEMUSHA_WALLET_COMPLETION_DIR_NAME_V1, KAGEMUSHA_WALLET_ENROLLMENT_NAME_V1,
-        KAGEMUSHA_WALLET_INTENT_NAME_V1, KAGEMUSHA_WALLET_MARKERS_DIR_NAME_V1,
-        KAGEMUSHA_WALLET_OPS_DIR_NAME_V1, KagemushaWalletCopyV1, KagemushaWalletCustodyDirV1,
-        KagemushaWalletSlotIdV1, kagemusha_wallet_capsule_name_v1,
-        kagemusha_wallet_capsules_dir_v1, kagemusha_wallet_completion_dir_v1,
-        kagemusha_wallet_is_staging_name_v1, kagemusha_wallet_list_dir_v1,
-        kagemusha_wallet_markers_dir_v1, kagemusha_wallet_ops_dir_v1,
+        KAGEMUSHA_WALLET_INTENT_NAME_V1, KAGEMUSHA_WALLET_KEY_GENERATION_ATTEMPT_NAME_V1,
+        KAGEMUSHA_WALLET_MARKERS_DIR_NAME_V1, KAGEMUSHA_WALLET_OPS_DIR_NAME_V1,
+        KagemushaWalletCopyV1, KagemushaWalletCustodyDirV1, KagemushaWalletSlotIdV1,
+        kagemusha_wallet_capsule_name_v1, kagemusha_wallet_capsules_dir_v1,
+        kagemusha_wallet_completion_dir_v1, kagemusha_wallet_is_staging_name_v1,
+        kagemusha_wallet_list_dir_v1, kagemusha_wallet_markers_dir_v1, kagemusha_wallet_ops_dir_v1,
         kagemusha_wallet_parse_credential_name_v1, kagemusha_wallet_probe_dir_v1,
         kagemusha_wallet_require_removed_v1, kagemusha_wallet_slot_dir_v1,
         kagemusha_wallet_slots_dir_v1,
@@ -122,6 +122,7 @@ impl KagemushaWalletSlotAbandonReasonV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct SlotFilesV1 {
     intent: bool,
+    generation_attempt: bool,
     abandoned: bool,
     journal: bool,
 }
@@ -142,6 +143,11 @@ where
         // R0.
         self.require_storage()?;
         if let Some(status) = self.cached_status(slot)? {
+            if let Some(record) = status.marker() {
+                let result = self.require_archive_checkpoint(record);
+                self.require_storage()?;
+                self.guard(slot, result)?;
+            }
             return match (status, owner) {
                 (KagemushaWalletSlotStatusV1::Pending(record), Some(owner)) => {
                     let result = self.finish_cached_pending(slot, owner, record);
@@ -150,7 +156,12 @@ where
                 (status, _) => Ok(status),
             };
         }
-        let result = self.reconcile_full(slot, owner);
+        let result = self.reconcile_full(slot, owner).and_then(|status| {
+            if let Some(record) = status.marker() {
+                self.require_archive_checkpoint(record)?;
+            }
+            Ok(status)
+        });
         // Every answer of this reconcile counts only while storage stayed available.
         let result = self.require_storage().and(result);
         self.guard(slot, result)
@@ -556,8 +567,8 @@ where
     }
 
     /// R10: classify a slot without any marker. Nothing is deleted.
-    // TODO(G2-iOS): keychain payment-key items whose slot directory is missing are
-    // `LostCustody(KeyWithoutMarker)`; that needs a platform enumeration of key aliases.
+    // `slots()` includes surviving Keychain aliases even without a slot directory. The same
+    // read-only classification applies; no directory or replacement key is created here.
     fn reconcile_without_marker(
         &mut self,
         slot: &KagemushaWalletSlotIdV1,
@@ -572,6 +583,11 @@ where
             return Ok(KagemushaWalletSlotStatusV1::SlotAbandoned);
         }
         if !files.intent {
+            if files.generation_attempt {
+                return Err(KagemushaWalletProviderErrorV1::LostCustody(
+                    KagemushaWalletLostCustodyV1::JournalWithoutMarker,
+                ));
+            }
             return match self.probe_key(slot)? {
                 KagemushaWalletProbeV1::Present(_) => {
                     Err(KagemushaWalletProviderErrorV1::LostCustody(
@@ -584,10 +600,14 @@ where
                 }
             };
         }
-        self.read_intent(slot)?
+        let intent = self
+            .read_intent(slot)?
             .ok_or(KagemushaWalletProviderErrorV1::Unavailable(
                 KagemushaWalletUnavailableV1::Busy,
             ))?;
+        if files.generation_attempt {
+            self.validate_generation_attempt(slot, &intent)?;
+        }
         match self.probe_key(slot)? {
             KagemushaWalletProbeV1::Absent => {
                 self.remove_all_staging(slot)?;
@@ -616,6 +636,9 @@ where
             match entry.kind {
                 KagemushaWalletEntryKindV1::File => match entry.name.as_str() {
                     KAGEMUSHA_WALLET_INTENT_NAME_V1 => files.intent = true,
+                    KAGEMUSHA_WALLET_KEY_GENERATION_ATTEMPT_NAME_V1 => {
+                        files.generation_attempt = true
+                    }
                     KAGEMUSHA_WALLET_ABANDONED_NAME_V1 => files.abandoned = true,
                     KAGEMUSHA_WALLET_ENROLLMENT_NAME_V1 | KAGEMUSHA_WALLET_ABANDONMENT_NAME_V1 => {
                         files.journal = true;

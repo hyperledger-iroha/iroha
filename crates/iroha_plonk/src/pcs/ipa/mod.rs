@@ -45,6 +45,8 @@ use crate::{
 };
 
 pub mod accumulator;
+pub mod claim;
+pub use claim::GeneratorClaim;
 pub mod commit;
 pub mod prover;
 pub mod verifier;

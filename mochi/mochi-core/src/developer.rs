@@ -250,17 +250,8 @@ impl DeveloperWorkspace {
         action: GeneratedPublishAction,
     ) -> Result<GeneratedPublishOutcome> {
         let manifest = self.resolve_path(manifest);
-        // Resume observes the retained journal/sidecars and does not reopen source manifests.
-        if !matches!(&action, GeneratedPublishAction::Resume { .. }) {
-            let workspace = musubi::workspace::load_workspace(&manifest)?;
-            if let GeneratedPublishAction::Begin { package, .. } = &action {
-                let packages = package.iter().cloned().collect::<Vec<_>>();
-                ensure!(
-                    workspace.select_members(false, &packages, &[])?.len() == 1,
-                    "package publication requires exactly one selected member"
-                );
-            }
-        }
+        let action =
+            musubi::generated_publication::prepare_generated_publish_action(&manifest, action)?;
         let store = ManagedStore::open(&self.root)?;
         if !matches!(&action, GeneratedPublishAction::Begin { .. }) {
             store.context(context)?;
@@ -573,9 +564,9 @@ mod tests {
         std::fs::create_dir(&project).unwrap();
         std::fs::create_dir(&bin).unwrap();
         for program in ["kagami", "iroha3d"] {
-            std::fs::write(
+            std::fs::copy(
+                std::env::current_exe().unwrap(),
                 bin.join(format!("{program}{}", std::env::consts::EXE_SUFFIX)),
-                b"not executable",
             )
             .unwrap();
         }
@@ -670,9 +661,9 @@ mod tests {
         std::fs::create_dir(&project).unwrap();
         std::fs::create_dir(&bin).unwrap();
         for program in ["kagami", "iroha3d"] {
-            std::fs::write(
+            std::fs::copy(
+                std::env::current_exe().unwrap(),
                 bin.join(format!("{program}{}", std::env::consts::EXE_SUFFIX)),
-                b"not executable",
             )
             .unwrap();
         }
@@ -700,9 +691,9 @@ mod tests {
         assert!(
             matches!(
                 store.up_private_root(&request, &spec),
-                Err(iroha_deploy::managed::Error::Io(_))
+                Err(iroha_deploy::managed::Error::Timeout(timeout)) if timeout == request.startup_timeout
             ),
-            "genuine CLI preparation reaches the intentionally unavailable native worker"
+            "genuine CLI preparation reaches the original-budget worker-start failure"
         );
         let prepared = store.prepared("private").unwrap();
         let owner = prepared.context.load_client_config().unwrap();
@@ -712,9 +703,9 @@ mod tests {
         assert!(
             matches!(
                 failure.downcast_ref::<iroha_deploy::managed::Error>(),
-                Some(iroha_deploy::managed::Error::Io(_))
+                Some(iroha_deploy::managed::Error::Timeout(timeout)) if *timeout == Duration::from_secs(30)
             ),
-            "desktop restart must reach native spawning with the same private root: {failure}"
+            "desktop restart must reach the original-budget worker-start failure with the same private root: {failure}"
         );
         assert_eq!(store.prepared("private").unwrap(), prepared);
         let restarted = store
@@ -747,9 +738,9 @@ mod tests {
         std::fs::create_dir(&workspace).unwrap();
         std::fs::create_dir(&installation).unwrap();
         for program in ["kagami", "iroha3d"] {
-            std::fs::write(
+            std::fs::copy(
+                std::env::current_exe().unwrap(),
                 installation.join(format!("{program}{}", std::env::consts::EXE_SUFFIX)),
-                b"unused test executable",
             )
             .unwrap();
         }
@@ -810,10 +801,16 @@ mod tests {
                 .resume(Path::new("journal"), None, &mut |_| Ok(()), &mut |_| {})
                 .is_err()
         );
+        // A genuine selected source outside the project keeps this control about the missing
+        // managed context; source admission must not fail before that original owner gate.
+        let selected_source = temporary.path().join("unselected.ko");
+        std::fs::write(&selected_source, "seiyaku Unselected {}").unwrap();
+        let selected_source =
+            ContractInput::from_path(&selected_source, None, None, false).unwrap();
         assert!(
             desktop
                 .deploy(
-                    &ContractInput::Source(workspace.join("hello.ko")),
+                    &selected_source,
                     Some("missing"),
                     None,
                     &mut |_| Ok(()),
@@ -830,12 +827,12 @@ mod tests {
         let bin = temporary.path().join("bin");
         std::fs::create_dir(&project).unwrap();
         std::fs::create_dir(&bin).unwrap();
-        // Invalid executables intentionally fail before any worker starts. Canonical preparation
-        // is real; this test does not substitute a genesis/configuration renderer or daemon.
+        // The native harness does not implement Kagami's worker entry point. Canonical
+        // preparation is real; the original budget expires after that worker exits.
         for program in ["kagami", "iroha3d"] {
-            std::fs::write(
+            std::fs::copy(
+                std::env::current_exe().unwrap(),
                 bin.join(format!("{program}{}", std::env::consts::EXE_SUFFIX)),
-                b"not executable",
             )
             .unwrap();
         }
@@ -849,9 +846,9 @@ mod tests {
         assert!(
             matches!(
                 failure.downcast_ref::<iroha_deploy::managed::Error>(),
-                Some(iroha_deploy::managed::Error::Io(_))
+                Some(iroha_deploy::managed::Error::Timeout(timeout)) if *timeout == Duration::from_secs(30)
             ),
-            "genuine generation must reach the intentionally unavailable worker: {failure}"
+            "genuine generation must reach the original-budget worker-start failure: {failure}"
         );
         let context = desktop.select("fixture").unwrap();
         assert_create_refuses_retained_context(&desktop, "fixture");
@@ -872,7 +869,7 @@ mod tests {
                     "missing-registry-context",
                     network.prepared().build_cache_root(),
                 )
-                .build(&ContractInput::Source(source))
+                .build(&ContractInput::from_path(&source, None, None, false).unwrap())
                 .unwrap()
                 .name(),
             "Offline"
@@ -953,5 +950,53 @@ mod tests {
         assert!(network.ledger_reader(0).is_err());
         assert!(network.preview(&[]).is_err());
         assert_eq!(std::fs::read_dir(project).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn desktop_member_publication_refuses_another_package_without_starting_workers() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = temporary.path().join("project");
+        let bin = temporary.path().join("bin");
+        std::fs::create_dir_all(project.join("app")).unwrap();
+        std::fs::create_dir(project.join("other")).unwrap();
+        std::fs::create_dir(&bin).unwrap();
+        for program in ["kagami", "iroha3d"] {
+            std::fs::copy(
+                std::env::current_exe().unwrap(),
+                bin.join(format!("{program}{}", std::env::consts::EXE_SUFFIX)),
+            )
+            .unwrap();
+        }
+        std::fs::write(project.join("Musubi.toml"), "manifest-version = 1\n[workspace]\nmembers = [\"app\", \"other\"]\ndefault-members = [\"other\"]\n").unwrap();
+        for name in ["app", "other"] {
+            std::fs::write(project.join(name).join("Musubi.toml"), format!("manifest-version = 1\n[package]\nnamespace = \"dev.universal\"\nname = \"{name}\"\nversion = \"1.0.0\"\nedition = \"1\"\nabi-version = 1\n[lib]\nexports = []\n")).unwrap();
+        }
+        let desktop = DeveloperWorkspace::with_runtime(
+            &temporary.path().join("state"),
+            &project,
+            InstalledRuntime::from_directory(&bin).unwrap(),
+        )
+        .unwrap();
+        for input in ["app", "app/Musubi.toml"] {
+            let error = desktop
+                .publish_package(
+                    Path::new(input),
+                    None,
+                    GeneratedPublishAction::Begin {
+                        package: Some("dev.universal/other".parse().unwrap()),
+                        detach: false,
+                    },
+                )
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.to_string(),
+                "selected member manifest cannot select another package"
+            );
+            assert!(desktop.contexts().unwrap().is_empty());
+            assert_eq!(desktop.selected_name().unwrap(), None);
+            assert!(!project.join("Musubi.lock").exists());
+            assert!(!project.join("target").exists());
+        }
     }
 }

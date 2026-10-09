@@ -36,6 +36,8 @@ use iroha_crypto::sm::OpenSslProvider;
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, blake2::Blake2b512};
+#[cfg(test)]
+use iroha_data_model::events::pipeline::PipelineEventBox;
 use iroha_data_model::execution_proofs::{ExecutionProofProfileV1, ExecutionProofVerificationV1};
 use iroha_data_model::game::GameSessionRecordV1;
 #[cfg(test)]
@@ -173,10 +175,6 @@ use iroha_data_model::{
     },
     soranet::vpn::{VpnAddressSlotV1, VpnLeaseRecordV1, VpnLeaseStatusV1},
     transaction::signed::{SignedTransaction, TransactionEntrypoint},
-};
-#[cfg(test)]
-use iroha_data_model::{
-    events::pipeline::PipelineEventBox, transaction::signed::TransactionResult,
 };
 #[cfg(test)]
 use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
@@ -1234,6 +1232,7 @@ macro_rules! with_world_overlay_fields {
             privacy_consensus_policy,
             privacy_exact12_qualification,
             privacy_activations,
+            kagemusha_wallet_ledger,
             private_settlement_governance,
             private_settlement_pools,
             private_settlement_roots,
@@ -1355,10 +1354,6 @@ macro_rules! with_world_overlay_fields {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_receipts,
-            kagemusha_mint_credit_operations,
-            kagemusha_issuance_operations,
-            kagemusha_redemption_id_operations,
-            kagemusha_terminal_nullifier_operations,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -1392,7 +1387,6 @@ macro_rules! with_world_overlay_fields {
             tle_key_session_lifecycles,
             tle_active_key_session,
             timed_ovn_evidence,
-            validator_candidate_keys,
             validator_committee_transitions,
             global_beacon_dkg,
             global_beacon_key_sessions,
@@ -1496,31 +1490,54 @@ mod world_attached_publication_tests;
 
 #[macro_use]
 mod world_acquisition;
-pub(crate) mod kagemusha_operation_indexes;
 pub(crate) mod scalar_cell_custody;
-use kagemusha_operation_indexes::{OperationIndex, OperationIndexMode};
 #[cfg(test)]
 use scalar_cell_custody::ScalarCellFixtureBlock;
 
-// Four fixed operation indexes admit child checkpoints through their original pool.
+// Execution-pool cells reserve their original capacity; other fields start empty.
+macro_rules! initial_world_field {
+    (sumeragi_amx_participant, $execution:ident) => {
+        crate::sumeragi::amx::empty_participant_cell($execution)?
+    };
+    (musubi_replication_shortfall_releases, $execution:ident) => {
+        scalar_cell_custody::initialize(0, $execution)?
+    };
+    ($field:ident, $execution:ident) => {
+        Default::default()
+    };
+}
+macro_rules! initial_world {
+    ($execution:ident; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {
+        WorldData {
+            $($prefix: initial_world_field!($prefix, $execution),)*
+            $($privacy: initial_world_field!($privacy, $execution),)*
+            $($suffix: initial_world_field!($suffix, $execution),)*
+            external_event_buf: Default::default(),
+        }
+    };
+}
+impl WorldData {
+    /// Construct the empty World census from the caller's original execution pool.
+    fn try_new_with_execution_budget(
+        execution_budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Self, mv::storage::AdmittedStorageError> {
+        Ok(with_world_overlay_fields!(initial_world, execution_budget))
+    }
+}
+impl Default for WorldData {
+    fn default() -> Self {
+        Self::try_new_with_execution_budget(&scalar_cell_custody::default_budget())
+            .expect("default execution pool admits the initial World cells")
+    }
+}
+
+// Quantity storages wrap their child checkpoints; other fields open ordinary ones.
 macro_rules! world_field_transaction {
     ($field:expr, assets) => {
         fastpq_quantity_storage::QuantityStorageTransaction::new($field.transaction())
     };
     ($field:expr, asset_definitions) => {
         fastpq_quantity_storage::QuantityStorageTransaction::new($field.transaction())
-    };
-    ($field:expr, kagemusha_mint_credit_operations) => {
-        $field.try_transaction_admitted()?
-    };
-    ($field:expr, kagemusha_issuance_operations) => {
-        $field.try_transaction_admitted()?
-    };
-    ($field:expr, kagemusha_redemption_id_operations) => {
-        $field.try_transaction_admitted()?
-    };
-    ($field:expr, kagemusha_terminal_nullifier_operations) => {
-        $field.try_transaction_admitted()?
     };
     ($field:expr, $ordinary:ident) => {
         $field.transaction()
@@ -1650,25 +1667,10 @@ type BlockHashFamily = concread::bptree::BptreeMapFamily<usize, HashOf<BlockHead
 
 /// Original physical State family; never reconstructed from portable bytes.
 #[derive(Clone)]
-pub(crate) struct NativeLaneStateOwner(BlockHashFamily);
-impl NativeLaneStateOwner {
-    pub(crate) fn matches_state(&self, state: &State) -> bool {
-        state
-            .block_hashes
-            .map()
-            .is_some_and(|map| self.0.matches(map))
-    }
-    fn same_family(&self, other: &Self) -> bool {
-        self.0.same_family(&other.0)
-    }
-}
-impl State {
-    /// Retain the actual mutable State family, refusing emergency read-only mode.
-    pub(crate) fn native_lane_state_owner(&self) -> Option<NativeLaneStateOwner> {
-        self.block_hashes
-            .map()
-            .map(|map| NativeLaneStateOwner(map.family()))
-    }
+pub(crate) struct NativeLaneStateOwner {
+    // Retain the original physical generation through publication/abort retirement.
+    // No portable identity or reconstructed family can substitute for this owner.
+    _family: BlockHashFamily,
 }
 /// The original history owner frees its exact control allocation before refund.
 type ChargedBlockHashMap =
@@ -4075,6 +4077,9 @@ pub struct WorldData {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
+    /// Canonical KAGEMUSHA reserve ledger, permanent replay indexes and historical objects.
+    pub(crate) kagemusha_wallet_ledger:
+        Storage<iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1, Vec<u8>>,
     /// Public pool-governance projections keyed by opaque route and pool identity.
     /// Restricted asset identifiers and commitment salts are never persisted here.
     pub(crate) private_settlement_governance:
@@ -4382,14 +4387,6 @@ pub struct WorldData {
     pub(crate) repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: Storage<SettlementId, SettlementReceipt>,
-    /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) kagemusha_mint_credit_operations: OperationIndex,
-    /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) kagemusha_issuance_operations: OperationIndex,
-    /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) kagemusha_redemption_id_operations: OperationIndex,
-    /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) kagemusha_terminal_nullifier_operations: OperationIndex,
     /// Public-lane validators keyed by `(lane_id, validator account id)`.
     #[norito(skip)]
     pub(crate) public_lane_validators: Storage<(LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -4496,13 +4493,10 @@ pub struct WorldData {
     pub(crate) tle_active_key_session: Storage<u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
     pub(crate) timed_ovn_evidence: Storage<BallotAttemptId, TimedOvnLifecycleStateV1>,
-    /// Public-only snapshots of active adaptive beacon DKG runs, keyed by session id.
-    /// Candidate generation publications keyed by exact network, peer and generation commitment.
-    pub(crate) validator_candidate_keys:
-        Storage<[u8; 32], iroha_data_model::nexus::ValidatorCandidateKeysV1>,
     /// Immutable future elections and their preparation progress keyed by target epoch.
     pub(crate) validator_committee_transitions:
         Storage<u64, iroha_data_model::nexus::ValidatorCommitteeTransitionV1>,
+    /// Public-only snapshots of active adaptive beacon DKG runs, keyed by session id.
     pub(crate) global_beacon_dkg: Storage<[u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public keys with activation and retirement metadata.
     pub(crate) global_beacon_key_sessions:
@@ -5037,6 +5031,9 @@ pub struct WorldBlockFields<'world> {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
+    /// Canonical KAGEMUSHA ledger overlay.
+    pub(crate) kagemusha_wallet_ledger:
+        StorageField<'world, iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1, Vec<u8>>,
     /// Public private-settlement governance projections without restricted openings.
     pub(crate) private_settlement_governance: StorageField<
         'world,
@@ -5394,18 +5391,6 @@ pub struct WorldBlockFields<'world> {
         StorageField<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageField<'world, SettlementId, SettlementReceipt>,
-    /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) kagemusha_mint_credit_operations:
-        StorageField<'world, [u8; 32], [u8; 32], OperationIndexMode>,
-    /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) kagemusha_issuance_operations:
-        StorageField<'world, [u8; 32], [u8; 32], OperationIndexMode>,
-    /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) kagemusha_redemption_id_operations:
-        StorageField<'world, [u8; 32], [u8; 32], OperationIndexMode>,
-    /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) kagemusha_terminal_nullifier_operations:
-        StorageField<'world, [u8; 32], [u8; 32], OperationIndexMode>,
     /// Public lane validator registry.
     #[norito(skip)]
     pub(crate) public_lane_validators:
@@ -5522,13 +5507,10 @@ pub struct WorldBlockFields<'world> {
     pub(crate) tle_active_key_session: StorageField<'world, u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
     pub(crate) timed_ovn_evidence: StorageField<'world, BallotAttemptId, TimedOvnLifecycleStateV1>,
-    /// Public-only snapshots of active adaptive beacon DKG runs.
-    /// Candidate generation publications keyed by exact network, peer and generation commitment.
-    pub(crate) validator_candidate_keys:
-        StorageField<'world, [u8; 32], iroha_data_model::nexus::ValidatorCandidateKeysV1>,
     /// Immutable future elections and their preparation progress keyed by target epoch.
     pub(crate) validator_committee_transitions:
         StorageField<'world, u64, iroha_data_model::nexus::ValidatorCommitteeTransitionV1>,
+    /// Public-only snapshots of active adaptive beacon DKG runs.
     pub(crate) global_beacon_dkg:
         StorageField<'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public-key lifecycle records.
@@ -5696,9 +5678,6 @@ pub struct WorldBlockFields<'world> {
     /// Block-local buffer of events pending publication to external subscribers.
     #[norito(skip)]
     external_event_buf: Vec<EventBox>,
-    // Last: every World sibling releases before original pool refunds can wake.
-    #[norito(skip)]
-    operation_index_scope: iroha_allocation::OwnedAllocationScope,
 }
 impl WorldBlock<'_> {
     #[cfg(test)]
@@ -5800,6 +5779,7 @@ impl WorldBlock<'_> {
         collect_reverts!(self.verifying_keys, VerifyingKey);
         collect_reverts!(self.runtime_upgrades, RuntimeUpgrade);
         collect_reverts!(self.privacy_activations, PrivacyActivation);
+        collect_reverts!(self.kagemusha_wallet_ledger, KagemushaWalletLedger);
         collect_reverts!(
             self.private_settlement_governance,
             PrivateSettlementGovernance
@@ -5847,7 +5827,6 @@ impl WorldBlock<'_> {
         collect_reverts!(self.tle_key_session_lifecycles, TleKeySessionLifecycle);
         collect_reverts!(self.tle_active_key_session, TleActiveKeySession);
         collect_reverts!(self.timed_ovn_evidence, TimedOvnEvidence);
-        collect_reverts!(self.validator_candidate_keys, ValidatorCandidateKeys);
         collect_reverts!(
             self.validator_committee_transitions,
             ValidatorCommitteeTransition
@@ -5857,22 +5836,6 @@ impl WorldBlock<'_> {
         collect_reverts!(self.global_beacon_active_session, GlobalBeaconActiveSession);
         collect_reverts!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
         collect_reverts!(self.global_beacon_pulses, GlobalBeaconPulse);
-        collect_reverts!(
-            self.kagemusha_mint_credit_operations,
-            KagemushaMintCreditOperation
-        );
-        collect_reverts!(
-            self.kagemusha_issuance_operations,
-            KagemushaIssuanceOperation
-        );
-        collect_reverts!(
-            self.kagemusha_redemption_id_operations,
-            KagemushaRedemptionIdOperation
-        );
-        collect_reverts!(
-            self.kagemusha_terminal_nullifier_operations,
-            KagemushaTerminalNullifierOperation
-        );
         diff
     }
     fn tiered_snapshot_payload(&self) -> TieredSnapshotPayload {
@@ -5918,6 +5881,7 @@ impl WorldBlock<'_> {
         collect_payload!(self.verifying_keys, VerifyingKey);
         collect_payload!(self.runtime_upgrades, RuntimeUpgrade);
         collect_payload!(self.privacy_activations, PrivacyActivation);
+        collect_payload!(self.kagemusha_wallet_ledger, KagemushaWalletLedger);
         collect_payload!(
             self.private_settlement_governance,
             PrivateSettlementGovernance
@@ -5965,7 +5929,6 @@ impl WorldBlock<'_> {
         collect_payload!(self.tle_key_session_lifecycles, TleKeySessionLifecycle);
         collect_payload!(self.tle_active_key_session, TleActiveKeySession);
         collect_payload!(self.timed_ovn_evidence, TimedOvnEvidence);
-        collect_payload!(self.validator_candidate_keys, ValidatorCandidateKeys);
         collect_payload!(
             self.validator_committee_transitions,
             ValidatorCommitteeTransition
@@ -5975,22 +5938,6 @@ impl WorldBlock<'_> {
         collect_payload!(self.global_beacon_active_session, GlobalBeaconActiveSession);
         collect_payload!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
         collect_payload!(self.global_beacon_pulses, GlobalBeaconPulse);
-        collect_payload!(
-            self.kagemusha_mint_credit_operations,
-            KagemushaMintCreditOperation
-        );
-        collect_payload!(
-            self.kagemusha_issuance_operations,
-            KagemushaIssuanceOperation
-        );
-        collect_payload!(
-            self.kagemusha_redemption_id_operations,
-            KagemushaRedemptionIdOperation
-        );
-        collect_payload!(
-            self.kagemusha_terminal_nullifier_operations,
-            KagemushaTerminalNullifierOperation
-        );
         payload
     }
     /// Canonical encoding of every staged WSV key/value change.
@@ -6146,6 +6093,7 @@ impl WorldBlock<'_> {
             poseidon_params,
             runtime_upgrades,
             privacy_activations,
+            kagemusha_wallet_ledger,
             private_settlement_governance,
             private_settlement_pools,
             private_settlement_roots,
@@ -6250,10 +6198,6 @@ impl WorldBlock<'_> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_receipts,
-            kagemusha_mint_credit_operations,
-            kagemusha_issuance_operations,
-            kagemusha_redemption_id_operations,
-            kagemusha_terminal_nullifier_operations,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -6288,7 +6232,6 @@ impl WorldBlock<'_> {
             tle_key_session_lifecycles,
             tle_active_key_session,
             timed_ovn_evidence,
-            validator_candidate_keys,
             validator_committee_transitions,
             global_beacon_dkg,
             global_beacon_key_sessions,
@@ -6736,6 +6679,12 @@ pub struct WorldTransaction<'block, 'world> {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
+    /// Canonical KAGEMUSHA ledger transaction.
+    pub(crate) kagemusha_wallet_ledger: StorageTransaction<
+        'block,
+        iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1,
+        Vec<u8>,
+    >,
     /// Public private-settlement governance projections without restricted openings.
     pub(crate) private_settlement_governance: StorageTransaction<
         'block,
@@ -7091,18 +7040,6 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageTransaction<'block, SettlementId, SettlementReceipt>,
-    /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) kagemusha_mint_credit_operations:
-        StorageTransaction<'block, [u8; 32], [u8; 32], OperationIndexMode>,
-    /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) kagemusha_issuance_operations:
-        StorageTransaction<'block, [u8; 32], [u8; 32], OperationIndexMode>,
-    /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) kagemusha_redemption_id_operations:
-        StorageTransaction<'block, [u8; 32], [u8; 32], OperationIndexMode>,
-    /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) kagemusha_terminal_nullifier_operations:
-        StorageTransaction<'block, [u8; 32], [u8; 32], OperationIndexMode>,
     /// Public-lane validators keyed by lane and account.
     pub(crate) public_lane_validators:
         StorageTransaction<'block, (LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -7197,9 +7134,6 @@ pub struct WorldTransaction<'block, 'world> {
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
     pub(crate) timed_ovn_evidence:
         StorageTransaction<'block, BallotAttemptId, TimedOvnLifecycleStateV1>,
-    /// Candidate generation publications keyed by exact network, peer and generation commitment.
-    pub(crate) validator_candidate_keys:
-        StorageTransaction<'block, [u8; 32], iroha_data_model::nexus::ValidatorCandidateKeysV1>,
     /// Immutable future elections and their preparation progress keyed by target epoch.
     pub(crate) validator_committee_transitions:
         StorageTransaction<'block, u64, iroha_data_model::nexus::ValidatorCommitteeTransitionV1>,
@@ -8976,6 +8910,10 @@ pub struct WorldView<'world> {
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
     /// Public private-settlement governance projection view.
+    /// Canonical KAGEMUSHA ledger read view.
+    pub(crate) kagemusha_wallet_ledger:
+        StorageView<'world, iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1, Vec<u8>>,
+    /// Public private-settlement governance projections without restricted openings.
     pub(crate) private_settlement_governance: StorageView<
         'world,
         PrivateSettlementPoolKeyV1,
@@ -9394,18 +9332,6 @@ pub struct WorldView<'world> {
         StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageView<'world, SettlementId, SettlementReceipt>,
-    /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) kagemusha_mint_credit_operations:
-        StorageView<'world, [u8; 32], [u8; 32], OperationIndexMode>,
-    /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) kagemusha_issuance_operations:
-        StorageView<'world, [u8; 32], [u8; 32], OperationIndexMode>,
-    /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) kagemusha_redemption_id_operations:
-        StorageView<'world, [u8; 32], [u8; 32], OperationIndexMode>,
-    /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) kagemusha_terminal_nullifier_operations:
-        StorageView<'world, [u8; 32], [u8; 32], OperationIndexMode>,
     /// Public-lane validators keyed by lane and account.
     pub(crate) public_lane_validators:
         StorageView<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -9499,13 +9425,10 @@ pub struct WorldView<'world> {
     pub(crate) tle_active_key_session: StorageView<'world, u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
     pub(crate) timed_ovn_evidence: StorageView<'world, BallotAttemptId, TimedOvnLifecycleStateV1>,
-    /// Public-only snapshots of active adaptive beacon DKG runs.
-    /// Candidate generation publications keyed by exact network, peer and generation commitment.
-    pub(crate) validator_candidate_keys:
-        StorageView<'world, [u8; 32], iroha_data_model::nexus::ValidatorCandidateKeysV1>,
     /// Immutable future elections and their preparation progress keyed by target epoch.
     pub(crate) validator_committee_transitions:
         StorageView<'world, u64, iroha_data_model::nexus::ValidatorCommitteeTransitionV1>,
+    /// Public-only snapshots of active adaptive beacon DKG runs.
     pub(crate) global_beacon_dkg: StorageView<'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
     /// Finalized beacon public-key lifecycle records.
     pub(crate) global_beacon_key_sessions:
@@ -12084,7 +12007,7 @@ pub struct State {
     tiered_snapshot_worker: TieredSnapshotWorker,
     /// Fraud monitoring configuration snapshot.
     pub fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring,
-    /// Zero-knowledge verification configuration (Halo2 backend limits, etc.).
+    /// Native proof verification and local trace configuration.
     pub zk: iroha_config::parameters::actual::Zk,
     /// Governance configuration (voting keys, policies).
     pub gov: iroha_config::parameters::actual::Governance,
@@ -18937,13 +18860,12 @@ impl World {
             nfts,
         )
     }
-    /// Construct World with its configured original index and execution pools.
+    /// Construct World with its configured original execution pool.
     /// Local resource refusal occurs before consuming the supplied entity iterators.
-    pub fn try_with_resource_budgets<D, A, Ad>(
+    pub fn try_with_execution_budget<D, A, Ad>(
         domains: D,
         accounts: A,
         asset_definitions: Ad,
-        budget: iroha_allocation::AllocationBudget,
         execution_budget: &iroha_allocation::AllocationBudget,
     ) -> Result<Self, mv::storage::AdmittedStorageError>
     where
@@ -18951,7 +18873,7 @@ impl World {
         A: IntoIterator<Item = Account>,
         Ad: IntoIterator<Item = AssetDefinition>,
     {
-        let fields = WorldData::try_new_with_budgets(budget, execution_budget)?;
+        let fields = WorldData::try_new_with_execution_budget(execution_budget)?;
         Ok(Self::with_assets_on(
             fields,
             domains,
@@ -18960,10 +18882,6 @@ impl World {
             [],
             [],
         ))
-    }
-    /// Retain the configured original pool for same-process restore and publication.
-    pub(crate) fn operation_index_budget(&self) -> &iroha_allocation::AllocationBudget {
-        self.kagemusha_mint_credit_operations.allocation_budget()
     }
     fn with_assets_on<D, A, Ad, As, N>(
         initial: WorldData,
@@ -20717,6 +20635,8 @@ macro_rules! world_ro_accessors {
     };
     (runtime_and_proofs, $mode:ident) => {
         world_ro_accessors!(@items $mode;
+            /// Canonical KAGEMUSHA reserve ledger and permanent replay indexes.
+            storage kagemusha_wallet_ledger: iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1 => Vec<u8>;
             /// Latest committed transaction sequence per authority (read-only).
             storage tx_sequences: AccountId => u64;
             /// Trigger set (read-only).
@@ -20944,14 +20864,6 @@ macro_rules! world_ro_accessors {
             storage repo_agreements_by_custodian: AccountId => BTreeSet<RepoAgreementId>;
             /// Successful settlement receipts (read-only).
             storage settlement_receipts: SettlementId => SettlementReceipt;
-            /// Mint-credit replay index (read-only).
-            storage kagemusha_mint_credit_operations: [u8; 32] => [u8; 32];
-            /// Issuance-commitment replay index (read-only).
-            storage kagemusha_issuance_operations: [u8; 32] => [u8; 32];
-            /// Redemption-id replay index (read-only).
-            storage kagemusha_redemption_id_operations: [u8; 32] => [u8; 32];
-            /// Terminal-nullifier replay index (read-only).
-            storage kagemusha_terminal_nullifier_operations: [u8; 32] => [u8; 32];
             /// Public lane validators keyed by `(lane_id, validator)` (read-only).
             storage public_lane_validators: (LaneId, AccountId) => PublicLaneValidatorRecord;
             /// Public lane stake shares keyed by `(lane_id, validator, staker)` (read-only).
@@ -21096,8 +21008,6 @@ macro_rules! world_ro_accessors {
             /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
             storage timed_ovn_evidence:
                 BallotAttemptId => TimedOvnLifecycleStateV1;
-            /// Candidate generation publications keyed by exact network, peer and generation commitment.
-            storage validator_candidate_keys: [u8; 32] => iroha_data_model::nexus::ValidatorCandidateKeysV1;
             /// Immutable future elections and their preparation progress keyed by target epoch.
             storage validator_committee_transitions: u64 => iroha_data_model::nexus::ValidatorCommitteeTransitionV1;
             /// Active public-only adaptive beacon DKG snapshots by session id.
@@ -24543,6 +24453,7 @@ impl WorldTransaction<'_, '_> {
             privacy_consensus_policy: _,
             privacy_exact12_qualification: _,
             privacy_activations: _,
+            kagemusha_wallet_ledger: _,
             private_settlement_governance: _,
             private_settlement_pools: _,
             private_settlement_roots: _,
@@ -24651,10 +24562,6 @@ impl WorldTransaction<'_, '_> {
             soradns_last_publish_ms: _,
             soradns_history_len: _,
             settlement_receipts: _,
-            kagemusha_mint_credit_operations: _,
-            kagemusha_issuance_operations: _,
-            kagemusha_redemption_id_operations: _,
-            kagemusha_terminal_nullifier_operations: _,
             public_lane_validators: _,
             public_lane_stake_shares: _,
             public_lane_rewards: _,
@@ -24696,7 +24603,6 @@ impl WorldTransaction<'_, '_> {
             tle_key_session_lifecycles: _,
             tle_active_key_session: _,
             timed_ovn_evidence: _,
-            validator_candidate_keys: _,
             validator_committee_transitions: _,
             global_beacon_dkg: _,
             global_beacon_key_sessions: _,
@@ -24772,6 +24678,7 @@ impl WorldTransaction<'_, '_> {
         self.privacy_consensus_policy.apply();
         self.privacy_exact12_qualification.apply();
         self.privacy_activations.apply();
+        self.kagemusha_wallet_ledger.apply();
         self.private_settlement_governance.apply();
         self.private_settlement_pools.apply();
         self.private_settlement_roots.apply();
@@ -24883,10 +24790,6 @@ impl WorldTransaction<'_, '_> {
         self.soradns_last_publish_ms.apply();
         self.soradns_history_len.apply();
         self.settlement_receipts.apply();
-        self.kagemusha_mint_credit_operations.apply();
-        self.kagemusha_issuance_operations.apply();
-        self.kagemusha_redemption_id_operations.apply();
-        self.kagemusha_terminal_nullifier_operations.apply();
         self.domain_committees.apply();
         self.domain_endorsement_policies.apply();
         self.domain_endorsements.apply();
@@ -24932,7 +24835,6 @@ impl WorldTransaction<'_, '_> {
         self.tle_key_session_lifecycles.apply();
         self.tle_active_key_session.apply();
         self.timed_ovn_evidence.apply();
-        self.validator_candidate_keys.apply();
         self.validator_committee_transitions.apply();
         self.global_beacon_dkg.apply();
         self.global_beacon_key_sessions.apply();
@@ -27530,7 +27432,10 @@ impl State {
             tiered_snapshot_worker,
             fraud_monitoring: default_fraud_monitoring_cfg(),
             zk: iroha_config::parameters::actual::Zk {
-                halo2: iroha_config::parameters::actual::Halo2::default(),
+                pipa_r: iroha_config::parameters::actual::PipaR::default(),
+                trace: iroha_config::parameters::actual::DiagnosticTrace::default(),
+        ipa_commitment: iroha_config::parameters::actual::IpaCommitment::default(),
+        max_verify_batch: iroha_config::parameters::defaults::zk::MAX_VERIFY_BATCH,
                 fastpq: iroha_config::parameters::actual::Fastpq {
                     execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
                     poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
@@ -30766,7 +30671,7 @@ impl State {
                 zk: self.zk.clone(),
                 gov: self.gov.clone(),
                 content: self.content.clone(),
-                settlement: self.settlement.clone(),
+                settlement: self.settlement,
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
@@ -34101,6 +34006,14 @@ pub(crate) fn attach_synthetic_autoscale_committee_for_test(
     lane: &mut iroha_data_model::nexus::LaneConfig,
 ) {
     let members = synthetic_autoscale_committee_keypairs_for_test();
+    attach_autoscale_committee_for_test(lane, &members);
+}
+#[cfg(test)]
+/// Pin exactly the supplied original BLS holders with canonical verified proofs.
+pub(crate) fn attach_autoscale_committee_for_test(
+    lane: &mut iroha_data_model::nexus::LaneConfig,
+    members: &[KeyPair],
+) {
     let validator_set = members
         .iter()
         .map(|keypair| PeerId::new(keypair.public_key().clone()))
@@ -34109,15 +34022,15 @@ pub(crate) fn attach_synthetic_autoscale_committee_for_test(
         .iter()
         .map(|keypair| {
             iroha_crypto::bls_normal_pop_prove(keypair.private_key())
-                .expect("synthetic autoscale committee PoP")
+                .expect("original autoscale committee PoP")
         })
         .collect::<Vec<_>>();
     let committee = autoscale_lane_committee_from_validator_set(validator_set, validator_pops)
-        .expect("valid synthetic autoscale committee");
+        .expect("valid original autoscale committee");
     lane.metadata.insert(
         AUTOSCALE_META_COMMITTEE.to_owned(),
         encode_autoscale_lane_committee(&committee)
-            .expect("canonical synthetic autoscale committee"),
+            .expect("canonical original autoscale committee"),
     );
 }
 /// Legacy physical drain metadata is rejected; native lane state owns closure.
@@ -34828,10 +34741,13 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
     iroha_model_base::chain::ChainId,
     iroha_data_model::NetworkId,
 )> = LazyLock::new(|| {
-    use iroha_config::{base::read::ConfigReader, parameters::user};
+    use iroha_config::{
+        base::read::{ConfigReader, ReadConfig as _},
+        parameters::user,
+    };
     let config_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
-    let reader = ConfigReader::new()
+    let mut reader = ConfigReader::new()
         .read_toml_with_extends(&config_path)
         .unwrap_or_else(|err| {
             panic!(
@@ -34839,25 +34755,24 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
                 config_path.display()
             )
         });
-    let user_config = reader
-        .read_and_complete::<user::Root>()
-        .unwrap_or_else(|err| {
-            panic!(
-                "default testing config `{}` is incomplete: {err:?}",
-                config_path.display()
-            )
-        });
-    let config: iroha_config::parameters::actual::Root =
-        user_config.parse().unwrap_or_else(|err| {
-            panic!(
-                "failed to parse default testing config `{}`: {err}",
-                config_path.display()
-            )
-        });
-    (
-        config.common.chain,
-        iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash),
-    )
+    // Validate the fixture's complete configuration shape without admitting runtime service
+    // custody. These defaults need only chain/network identity, not publisher signing keys.
+    let _shape = user::Root::read(&mut reader);
+    let chain = reader
+        .read_parameter::<iroha_model_base::chain::ChainId>(["chain"])
+        .value_required()
+        .finish();
+    let network_id = reader
+        .read_parameter::<iroha_data_model::NetworkId>(["genesis", "expected_hash"])
+        .value_required()
+        .finish();
+    reader.into_result().unwrap_or_else(|err| {
+        panic!(
+            "default testing config `{}` is incomplete: {err:?}",
+            config_path.display()
+        )
+    });
+    (chain.unwrap(), network_id.unwrap())
 });
 static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_model_base::chain::ChainId> =
     LazyLock::new(|| DEFAULT_TEST_IDENTITIES.0.clone());
@@ -35032,7 +34947,7 @@ pub trait StateReadOnly: WorldStateSnapshot {
     fn lane_incarnation_at_height(&self, lane_id: LaneId, proposal_height: u64) -> Option<Hash>;
     /// Content lane configuration snapshot.
     fn content(&self) -> &iroha_config::parameters::actual::Content;
-    /// Zero-knowledge verification settings (Halo2 backend, curve, limits).
+    /// Native proof verification and local trace settings.
     fn zk(&self) -> &iroha_config::parameters::actual::Zk;
     /// Chain identifier bound to this state view.
     fn chain_id(&self) -> &iroha_model_base::chain::ChainId;
@@ -35640,7 +35555,10 @@ pub fn compute_vk_set_hash_at_height(world: &impl WorldReadOnly, height: u64) ->
 #[must_use]
 pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
     iroha_config::parameters::actual::Zk {
-        halo2: iroha_config::parameters::actual::Halo2::default(),
+        pipa_r: iroha_config::parameters::actual::PipaR::default(),
+        trace: iroha_config::parameters::actual::DiagnosticTrace::default(),
+        ipa_commitment: iroha_config::parameters::actual::IpaCommitment::default(),
+        max_verify_batch: iroha_config::parameters::defaults::zk::MAX_VERIFY_BATCH,
         fastpq: iroha_config::parameters::actual::Fastpq {
             execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
             poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
@@ -35768,10 +35686,6 @@ fn zk_policy_put_usize(hasher: &mut Sha256, name: &str, value: usize) {
     let value = u64::try_from(value).expect("ZK policy usize field must fit into u64");
     zk_policy_put_u64(hasher, name, value);
 }
-fn zk_policy_put_str(hasher: &mut Sha256, name: &str, value: &str) {
-    zk_policy_put_field(hasher, name);
-    zk_policy_put_bytes(hasher, value.as_bytes());
-}
 fn zk_policy_put_option_u32(hasher: &mut Sha256, name: &str, value: Option<u32>) {
     zk_policy_put_field(hasher, name);
     match value {
@@ -35849,19 +35763,6 @@ pub fn combine_zk_and_sccp_policy_hashes(
     zk_policy_put_bytes(&mut hasher, &sccp_policy_hash);
     Sha2Digest::finalize(hasher).into()
 }
-fn zk_curve_tag(curve: iroha_config::parameters::actual::ZkCurve) -> &'static str {
-    match curve {
-        iroha_config::parameters::actual::ZkCurve::Pallas => "pallas",
-        iroha_config::parameters::actual::ZkCurve::Pasta => "pasta",
-        iroha_config::parameters::actual::ZkCurve::Goldilocks => "goldilocks",
-        iroha_config::parameters::actual::ZkCurve::Bn254 => "bn254",
-    }
-}
-fn halo2_backend_tag(backend: iroha_config::parameters::actual::Halo2Backend) -> &'static str {
-    match backend {
-        iroha_config::parameters::actual::Halo2Backend::Ipa => "ipa",
-    }
-}
 /// Compute the ZK policy hash committed in confidential feature digests.
 ///
 /// The hash covers consensus-relevant ZK configuration, including the `[zk.sccp]` native verifier
@@ -35873,38 +35774,17 @@ pub fn compute_zk_consensus_policy_hash(
 ) -> [u8; 32] {
     let mut h = Sha256::new();
     zk_policy_put_bytes(&mut h, b"iroha:zk:consensus-policy:v1");
-    zk_policy_put_bool(&mut h, "halo2.enabled", zk_config.halo2.enabled);
-    zk_policy_put_str(&mut h, "halo2.curve", zk_curve_tag(zk_config.halo2.curve));
-    zk_policy_put_str(
+    zk_policy_put_u32(&mut h, "max_verify_batch", zk_config.max_verify_batch);
+    zk_policy_put_bool(&mut h, "pipa_r.enabled", zk_config.pipa_r.enabled);
+    zk_policy_put_usize(
         &mut h,
-        "halo2.backend",
-        halo2_backend_tag(zk_config.halo2.backend),
-    );
-    zk_policy_put_u32(&mut h, "halo2.max_k", zk_config.halo2.max_k);
-    zk_policy_put_u32(
-        &mut h,
-        "halo2.verifier_max_batch",
-        zk_config.halo2.verifier_max_batch,
+        "pipa_r.max_envelope_bytes",
+        zk_config.pipa_r.max_envelope_bytes,
     );
     zk_policy_put_usize(
         &mut h,
-        "halo2.max_envelope_bytes",
-        zk_config.halo2.max_envelope_bytes,
-    );
-    zk_policy_put_usize(
-        &mut h,
-        "halo2.max_proof_bytes",
-        zk_config.halo2.max_proof_bytes,
-    );
-    zk_policy_put_usize(
-        &mut h,
-        "halo2.max_transcript_label_len",
-        zk_config.halo2.max_transcript_label_len,
-    );
-    zk_policy_put_bool(
-        &mut h,
-        "halo2.enforce_transcript_label_ascii",
-        zk_config.halo2.enforce_transcript_label_ascii,
+        "pipa_r.max_proof_bytes",
+        zk_config.pipa_r.max_proof_bytes,
     );
     zk_policy_put_bool(&mut h, "stark.enabled", zk_config.stark.enabled);
     zk_policy_put_usize(
@@ -37455,7 +37335,7 @@ impl<'state> StateBlock<'state> {
             block_zk: &mut fields.zk,
             gov: fields.gov.clone(),
             content: fields.content.clone(),
-            settlement: fields.settlement.clone(),
+            settlement: fields.settlement,
             settlement_engine: fields.settlement_engine.clone(),
             chain_id: fields.chain_id.clone(),
             network_id: fields.network_id,
@@ -38167,40 +38047,6 @@ impl StateTransaction<'_, '_> {
         expected_vk_commitment: Option<[u8; 32]>,
         vk_active: bool,
     ) -> crate::zk::PreverifyResult {
-        // Backend tag acceptance against node policy (curve allow-list via config)
-        let backend = proof.backend.as_str();
-        // Only apply curve gating after verifier-registry admission; unsupported
-        // Halo2-looking labels must fail as UnsupportedBackend in the pre-verifier.
-        if matches!(
-            crate::zk::verifier_backend_registry_tag_v1(backend),
-            Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
-        ) {
-            // Extract curve segment (e.g., "pasta" or "bn254") if present
-            if let Some(curve_seg) = backend
-                .strip_prefix("halo2/")
-                .and_then(|rest| rest.split(['/', ':']).next())
-            {
-                let allowed = match (curve_seg, self.zk.halo2.curve) {
-                    ("pasta", iroha_config::parameters::actual::ZkCurve::Pasta)
-                    | ("pasta", iroha_config::parameters::actual::ZkCurve::Pallas) => true,
-                    ("pallas", iroha_config::parameters::actual::ZkCurve::Pallas)
-                    | ("pallas", iroha_config::parameters::actual::ZkCurve::Pasta) => true,
-                    ("ipa", iroha_config::parameters::actual::ZkCurve::Pallas)
-                    | ("ipa", iroha_config::parameters::actual::ZkCurve::Pasta) => true,
-                    ("goldilocks", iroha_config::parameters::actual::ZkCurve::Goldilocks) => true,
-                    // Toy curve used for transparent tests maps to any non-specific tag; allow all others here
-                    (
-                        "p61" | "toyp61" | "toy" | "additive",
-                        iroha_config::parameters::actual::ZkCurve::Pallas,
-                    ) => true,
-                    // Unknown segment (including bn254) falls back to pre-verifier decision
-                    (_, _) => false,
-                };
-                if !allowed {
-                    return crate::zk::PreverifyResult::CurveNotAllowed;
-                }
-            }
-        }
         // Stateless payload guards from configuration
         if proof.bytes.is_empty() {
             return crate::zk::PreverifyResult::MalformedProof;
@@ -38213,15 +38059,59 @@ impl StateTransaction<'_, '_> {
         {
             return crate::zk::PreverifyResult::PreverifyBudgetExceeded;
         }
-        crate::zk::preverify_with_budget(
+        // Preserve the current backend, activity, budget, commitment and
+        // canonical-envelope refusal order without publishing to the block
+        // cache until the original native key has passed compiled admission.
+        // The temporary admission cache holds one key; it never clones the
+        // growing block-local cache.
+        let mut admission = crate::zk::DedupCache::new();
+        let preflight = crate::zk::preverify_with_budget(
             proof,
             vk,
-            &mut self.zk_dedup,
+            &mut admission,
             self.zk.preverify_budget_bytes,
             vk_commitment,
             expected_vk_commitment,
             vk_active,
-        )
+        );
+        if preflight != crate::zk::PreverifyResult::Accepted {
+            return preflight;
+        }
+        if !cfg!(all(test, sumeragi_core_mutation = "HC146"))
+            && crate::zk::production_verify_backend_tag(proof.backend.as_str())
+                == Some(iroha_data_model::zk::BackendTag::NativePipaRPasta)
+            && let Some(native_key) = vk
+        {
+            // Preflight already authenticated this canonical envelope and
+            // its schema/hash bindings. Also pin the bounded descriptor and
+            // processed key to the compiled relation before dedup publication;
+            // a consistently rehashed foreign key remains foreign.
+            let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+                match norito::decode_canonical(&proof.bytes) {
+                    Ok(envelope) => envelope,
+                    Err(_) => return crate::zk::PreverifyResult::MalformedProof,
+                };
+            if crate::zk::native_pipa_r::validate_key(
+                proof.backend.as_str(),
+                &envelope.circuit_id,
+                native_key,
+            )
+            .is_err()
+            {
+                return crate::zk::PreverifyResult::VerifyingKeyMismatch;
+            }
+        }
+        // Accepted preflight establishes a nonzero matching commitment: the
+        // supplied original, or the expected original when none was supplied.
+        // Publish exactly the key preimage used by the existing CoreZK owner.
+        if self
+            .zk_dedup
+            .check_and_insert_with_commitment(proof, vk_commitment.or(expected_vk_commitment))
+        {
+            crate::zk::PreverifyResult::Accepted
+        } else {
+            crate::zk::PreverifyResult::Duplicate
+        }
     }
 }
 #[cfg(test)]
@@ -38934,7 +38824,6 @@ mod tiered_snapshot_diff_tests {
         kura: Arc<Kura>,
     ) -> Result<Box<State>, deserialize::StateRestoreError> {
         deserialize::KuraSeed {
-            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             execution_budget: iroha_allocation::AllocationBudget::new(
                 iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
             ),
@@ -40639,6 +40528,34 @@ impl StateTransaction<'_, '_> {
     /// Returns [`Error`] if any confidential proof quota would be exceeded or counters overflow.
     pub fn register_confidential_proof(&mut self, proof_bytes: usize) -> Result<(), Error> {
         self.register_confidential_usage(proof_bytes, 1)
+    }
+    /// Reserve all native proof verification work for one KAGEMUSHA package.
+    ///
+    /// The actual package selects one sigma verification plus one Omega verification
+    /// when lineage is carried. Both fixed-width accumulator originals are included
+    /// in the lineage transport byte count. One package remains one confidential
+    /// operation, and all existing transaction/block/aggregate-byte ceilings apply.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] without changing accounting when any byte/count arithmetic
+    /// overflows or a confidential quota refuses the whole reservation. The existing
+    /// output owner retains completed-work accounting after later business rollback.
+    pub(crate) fn register_kagemusha_package_proof(
+        &mut self,
+        package: &iroha_data_model::kagemusha::KagemushaWalletPackageV1,
+    ) -> Result<(), Error> {
+        let lineage = package.lineage.lineage();
+        let proof_bytes = package
+            .step_proof
+            .bytes
+            .len()
+            .checked_add(lineage.map_or(0, |value| value.proof.len()))
+            .ok_or_else(|| {
+                Error::InvariantViolation("KAGEMUSHA package proof-byte count overflow".into())
+            })?;
+        let verify_calls = if lineage.is_some() { 2 } else { 1 };
+        self.register_confidential_usage(proof_bytes, verify_calls)
     }
     /// Return the exact index required by the next privacy proof in this transaction.
     #[must_use]

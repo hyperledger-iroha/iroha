@@ -560,3 +560,344 @@ fn wallet_advance_v1_enrollment_record_reader_has_no_side_effects() {
     ));
     assert!(!provider.cache.contains_key(&slot), "poisoned");
 }
+
+fn fresh_device(seed: u8) -> DeviceV1 {
+    let device = DeviceV1::new(ANDROID, seed);
+    device.platform.with(|state| {
+        state.generation_policy = KagemushaWalletKeyGenerationPolicyV1::FreshEnrollmentOnly;
+    });
+    device
+}
+
+#[test]
+fn wallet_advance_v1_enrollment_fresh_grant_is_bound_to_owner_slot_and_request() {
+    let device = fresh_device(0xa0);
+    let slot = KagemushaWalletSlotIdV1([0xa0; 32]);
+    let request = KagemushaWalletKeyGenerationRequestV1 {
+        challenge_digest: [0xa1; 32],
+        profile: PROFILE,
+    };
+    let grant = KagemushaWalletFreshGenerationV1::new(&device.platform, slot, request);
+    assert_eq!(grant.consume(&device.platform), Ok((slot, request)));
+    // Sharing backend state does not make another owner object the same owner. A rejected
+    // grant is consumed as well; neither branch can issue a second callback with it.
+    let other_owner = device.platform.clone();
+    let grant = KagemushaWalletFreshGenerationV1::new(&device.platform, slot, request);
+    assert_eq!(
+        grant.consume(&other_owner),
+        Err(KagemushaWalletUnavailableV1::Platform(0))
+    );
+    assert_eq!(device.platform.with(|state| state.generate_calls), 0);
+}
+
+#[test]
+fn wallet_advance_v1_enrollment_fresh_publishes_bound_records_before_generation() {
+    let device = fresh_device(0xa1);
+    let mut provider = device.open();
+    let challenge = enrollment_challenge(0xa1);
+    let slot = enrolled_slot(
+        provider
+            .begin_enrollment(&challenge, PROFILE)
+            .expect("fresh begin"),
+    );
+    let intent = provider
+        .read_intent(&slot)
+        .expect("intent")
+        .expect("present");
+    assert_eq!(intent.version, KAGEMUSHA_WALLET_INTENT_FILE_VERSION_V1);
+    assert_eq!(
+        intent.key_generation_policy(),
+        Ok(KagemushaWalletKeyGenerationPolicyV1::FreshEnrollmentOnly)
+    );
+    provider
+        .validate_generation_attempt(&slot, &intent)
+        .expect("bound attempt");
+    assert_eq!(
+        device.platform.with(|state| state.last_generation),
+        Some(KagemushaWalletKeyGenerationRequestV1 {
+            challenge_digest: challenge.challenge_digest(),
+            profile: PROFILE,
+        })
+    );
+    assert_eq!(
+        device.platform.with(|state| state.fresh_generation_calls),
+        1
+    );
+    assert!(device.platform.with(|state| state.violations.is_empty()));
+    // Once a marker exists, an ordinary enrollment resume returns it without generation.
+    assert!(matches!(
+        provider.resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live),
+        Ok(KagemushaWalletEnrollmentStepV1::Enrolled { .. })
+    ));
+    assert_eq!(device.platform.with(|state| state.generate_calls), 1);
+    assert_eq!(device.platform.with(|state| state.enumerate_calls), 0);
+}
+
+#[test]
+fn wallet_advance_v1_enrollment_fresh_failure_never_retries_after_upgrade() {
+    let device = fresh_device(0xa2);
+    device
+        .platform
+        .with(|state| state.generate_unavailable = Some(false));
+    let mut provider = device.open();
+    assert!(matches!(
+        provider.begin_enrollment(&enrollment_challenge(0xa2), PROFILE),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(_))
+    ));
+    let slot = provider.slots().expect("slots")[0];
+    assert!(matches!(
+        provider.resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(_))
+    ));
+    drop(provider);
+    device.power_loss(
+        KagemushaWalletSimPowerLossV1::DropUnsynced,
+        test_support::BOOT_B,
+    );
+    device.platform.with(|state| {
+        state.generate_unavailable = None;
+        state.generation_policy = KagemushaWalletKeyGenerationPolicyV1::DefinitiveAbsence;
+    });
+    let mut provider = device.open();
+    // The upgraded OS now really reports Absent; the retained policy still forbids a grant.
+    assert_eq!(
+        provider.status(&slot),
+        Ok(KagemushaWalletSlotStatusV1::IntentOnly)
+    );
+    assert_eq!(
+        provider.resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live),
+        Ok(KagemushaWalletEnrollmentStepV1::Pending { slot })
+    );
+    assert_eq!(device.platform.with(|state| state.generate_calls), 1);
+    assert_eq!(
+        device.platform.with(|state| state.fresh_generation_calls),
+        1
+    );
+    assert_eq!(device.platform.with(|state| state.delete_calls), 0);
+    assert_eq!(device.platform.key_of(&slot), None);
+}
+
+#[test]
+fn wallet_advance_v1_enrollment_fresh_lost_readback_preserves_existing_key() {
+    let device = fresh_device(0xa3);
+    device
+        .platform
+        .with(|state| state.generate_unavailable = Some(true));
+    let mut provider = device.open();
+    assert!(matches!(
+        provider.begin_enrollment(&enrollment_challenge(0xa3), PROFILE),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(_))
+    ));
+    let slot = provider.slots().expect("slots")[0];
+    let key = device
+        .platform
+        .key_of(&slot)
+        .expect("created key survives readback loss");
+    drop(provider);
+    device.power_loss(
+        KagemushaWalletSimPowerLossV1::DropUnsynced,
+        test_support::BOOT_B,
+    );
+    device
+        .platform
+        .with(|state| state.generate_unavailable = None);
+    let mut provider = device.open();
+    assert_eq!(
+        provider.resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live),
+        Ok(KagemushaWalletEnrollmentStepV1::SlotAbandoned { slot })
+    );
+    assert_eq!(device.platform.key_of(&slot), Some(key));
+    assert_eq!(device.platform.with(|state| state.generate_calls), 1);
+    assert_eq!(device.platform.with(|state| state.delete_calls), 0);
+    assert!(device.platform.with(|state| state.violations.is_empty()));
+}
+
+#[test]
+fn wallet_advance_v1_enrollment_fresh_attempt_crashes_never_recreate_authority() {
+    let probe = fresh_device(0xa4);
+    let mut provider = probe.open();
+    let start = probe.fs.steps();
+    provider
+        .begin_enrollment(&enrollment_challenge(0xa4), PROFILE)
+        .expect("probe");
+    let steps = probe.fs.steps() - start;
+    drop(provider);
+    for step in 0..steps {
+        for fault in [
+            KagemushaWalletSimFaultV1::CrashBefore,
+            KagemushaWalletSimFaultV1::CrashAfter,
+        ] {
+            let device = fresh_device(0xa4);
+            let mut provider = device.open();
+            device.fs.inject(device.fs.steps() + step, fault);
+            let _ = provider.begin_enrollment(&enrollment_challenge(0xa4), PROFILE);
+            let calls = device.platform.with(|state| state.generate_calls);
+            assert!(calls <= 1, "step {step} {fault:?}");
+            drop(provider);
+            device.fs.clear_faults();
+            device.power_loss(
+                KagemushaWalletSimPowerLossV1::DropUnsynced,
+                test_support::BOOT_B,
+            );
+            // Also exercise the stronger probe supplied by an OS upgrade after the crash.
+            device.platform.with(|state| {
+                state.generation_policy = KagemushaWalletKeyGenerationPolicyV1::DefinitiveAbsence
+            });
+            let mut provider = device.open();
+            for slot in provider.slots().expect("slots") {
+                let _ = provider.resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live);
+            }
+            assert_eq!(
+                device.platform.with(|state| state.generate_calls),
+                calls,
+                "step {step} {fault:?}"
+            );
+            assert_eq!(device.platform.with(|state| state.delete_calls), 0);
+            assert!(
+                device.platform.with(|state| state.violations.is_empty()),
+                "step {step} {fault:?}"
+            );
+        }
+    }
+    assert!(steps > 0);
+}
+
+#[test]
+fn wallet_advance_v1_enrollment_fresh_cannot_reset_an_active_marker_or_missing_key() {
+    let (device, _fixture, slot, _capsule) = bootstrapped_device(ANDROID, 0xa5);
+    let mut provider = device.open();
+    let before = provider.status(&slot).expect("active status");
+    let key = device.platform.key_of(&slot).expect("active key");
+    let calls = device.platform.with(|state| state.generate_calls);
+    device.platform.with(|state| {
+        state.generation_policy = KagemushaWalletKeyGenerationPolicyV1::FreshEnrollmentOnly
+    });
+    assert!(matches!(
+        provider.resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live),
+        Err(KagemushaWalletProviderErrorV1::Invalid {
+            field: "enrollment.finished"
+        })
+    ));
+    assert_eq!(provider.status(&slot), Ok(before));
+    assert_eq!(device.platform.key_of(&slot), Some(key));
+    drop(provider);
+    device.platform.with(|state| {
+        state.keys.remove(&slot);
+    });
+    let mut provider = device.open();
+    assert!(matches!(
+        provider.status(&slot),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(_))
+    ));
+    assert!(matches!(
+        provider.resume_enrollment(&slot, KagemushaWalletChallengeLivenessV1::Live),
+        Err(KagemushaWalletProviderErrorV1::Unavailable(_))
+    ));
+    assert_eq!(device.platform.with(|state| state.generate_calls), calls);
+    assert_eq!(
+        device.platform.with(|state| state.fresh_generation_calls),
+        0
+    );
+    assert_eq!(device.platform.with(|state| state.delete_calls), 0);
+}
+
+#[test]
+fn wallet_advance_v1_enrollment_fresh_invalid_record_or_old_intent_refuses() {
+    let device = fresh_device(0xa6);
+    device
+        .platform
+        .with(|state| state.generate_unavailable = Some(false));
+    let mut provider = device.open();
+    let _ = provider.begin_enrollment(&enrollment_challenge(0xa6), PROFILE);
+    let slot = provider.slots().expect("slots")[0];
+    let intent = provider
+        .read_intent(&slot)
+        .expect("intent")
+        .expect("present");
+    let dir = kagemusha_wallet_slot_dir_v1(&slot);
+    let wrong = KagemushaWalletKeyGenerationAttemptV1 {
+        version: KAGEMUSHA_WALLET_ENROLLMENT_FILE_VERSION_V1,
+        slot: slot.0,
+        challenge_digest: [0xff; 32],
+        profile: PROFILE.tag(),
+    };
+    device.fs.place_unsynced(
+        &dir,
+        KAGEMUSHA_WALLET_KEY_GENERATION_ATTEMPT_NAME_V1,
+        &encode_envelope_v1(&wrong, KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1).expect("encode"),
+    );
+    assert_eq!(
+        provider.status(&slot),
+        Err(KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+            object: "key_generation_attempt"
+        })
+    );
+    // Exact former schema/layout; this fixture is never a production compatibility decoder.
+    #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::zk::kagemusha_wallet_advance_v1::IntentV1")]
+    struct OldIntent {
+        version: u16,
+        slot: [u8; 32],
+        challenge: KagemushaWalletEnrollmentChallengeV1,
+        anchor_kind: u8,
+        profile: u8,
+    }
+    let old = OldIntent {
+        version: 1,
+        slot: intent.slot,
+        challenge: intent.challenge,
+        anchor_kind: intent.anchor_kind,
+        profile: intent.profile,
+    };
+    device.fs.place_unsynced(
+        &dir,
+        KAGEMUSHA_WALLET_INTENT_NAME_V1,
+        &encode_envelope_v1(&old, KAGEMUSHA_WALLET_INTENT_MAX_BYTES_V1).expect("encode"),
+    );
+    assert_eq!(
+        provider.read_intent(&slot),
+        Err(KagemushaWalletProviderErrorV1::UnavailableCustodyData { object: "intent" })
+    );
+    assert_eq!(device.platform.with(|state| state.generate_calls), 1);
+    assert_eq!(device.platform.with(|state| state.delete_calls), 0);
+}
+
+#[test]
+fn wallet_advance_v1_enrollment_fresh_current_intent_abandonment_retains_recovery() {
+    let device = fresh_device(0xa7);
+    let mut provider = device.open();
+    let slot = enrolled_slot(
+        provider
+            .begin_enrollment(&enrollment_challenge(0xa7), PROFILE)
+            .expect("fresh begin"),
+    );
+    let key = device.platform.key_of(&slot).expect("key");
+    let intent_bytes = device
+        .fs
+        .visible_file(
+            &kagemusha_wallet_slot_dir_v1(&slot),
+            KAGEMUSHA_WALLET_INTENT_NAME_V1,
+        )
+        .expect("intent");
+    let frame = provider
+        .abandon_enrollment(&slot)
+        .expect("abandon current intent");
+    drop(provider);
+    device.power_loss(
+        KagemushaWalletSimPowerLossV1::DropUnsynced,
+        test_support::BOOT_B,
+    );
+    let mut provider = device.open();
+    assert_eq!(provider.abandon_enrollment(&slot), Ok(frame));
+    assert_eq!(device.platform.key_of(&slot), Some(key));
+    assert_eq!(
+        device.fs.visible_file(
+            &kagemusha_wallet_slot_dir_v1(&slot),
+            KAGEMUSHA_WALLET_INTENT_NAME_V1
+        ),
+        Some(intent_bytes)
+    );
+    assert_eq!(device.platform.with(|state| state.generate_calls), 1);
+    assert_eq!(device.platform.with(|state| state.delete_calls), 0);
+    assert!(device.platform.with(|state| state.violations.is_empty()));
+}

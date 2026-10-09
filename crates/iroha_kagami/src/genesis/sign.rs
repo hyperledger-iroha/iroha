@@ -711,6 +711,55 @@ fn load_peer_config_source(
     actual::Root::from_toml_source(source)
         .map_err(|_| eyre!("peer config {} is invalid", config_path.display()))
 }
+/// Load one complete signing input. Absence of both runtime identity fields selects the
+/// distinct unpublished context; a supplied identity is always parsed by the strict runtime
+/// parser. A failed runtime parse never falls back to an unpublished context.
+fn load_peer_config_for_signing(
+    config_path: &Path,
+    genesis: &RawGenesisTransaction,
+    key: &KeyPair,
+    creation_time_ms: Option<u64>,
+) -> Result<actual::Root, color_eyre::eyre::Error> {
+    let config_bytes = Zeroizing::new(
+        crate::secure_fs::read_private_file(config_path)
+            .wrap_err("read owner-only complete genesis signing config")?,
+    );
+    let text = std::str::from_utf8(&config_bytes)
+        .map_err(|_| eyre!("genesis signing config is not UTF-8"))?;
+    let table = crate::secret_toml::parse_table(text, "genesis signing config")?;
+    let source = TomlSource::new_sensitive(
+        config_path.to_path_buf(),
+        table,
+        crate::secret_toml::zeroize_table,
+    );
+    let user = iroha_config::base::read::ConfigReader::new()
+        .without_env()
+        .with_toml_source(source)
+        .read_and_complete::<iroha_config::parameters::user::Root>()
+        .map_err(|_| eyre!("complete genesis signing config is invalid"))?;
+    if user.has_genesis_identity() {
+        let config = user
+            .parse()
+            .map_err(|_| eyre!("runtime genesis signing config is invalid"))?;
+        return Ok(config);
+    }
+    let context = user
+        .parse_for_genesis_signing()
+        .map_err(|_| eyre!("unpublished genesis signing policy is invalid"))?;
+    let provisional = iroha_deploy::genesis::staging::build_signed_genesis(
+        genesis.clone(),
+        key,
+        Some(iroha_core::da::proof_policy_bundle(
+            &context.nexus().lane_config,
+        )),
+        iroha_core::state::compute_genesis_confidential_policy_hash(context.zk()),
+        creation_time_ms,
+    )
+    .wrap_err("construct original provisional signed genesis for policy binding")?;
+    context
+        .bind_signed_genesis(&provisional.0)
+        .map_err(|message| eyre!(message))
+}
 /// Execute an independently prepared genesis with its exact original node configuration and
 /// known fixture custody. No provisional block, alternate epoch, or synthetic result enters
 /// the production native worker.
@@ -720,7 +769,6 @@ pub fn prepared_native_test_chain(
     manifest: &RawGenesisTransaction,
     config: &actual::Root,
     validator_keys: Vec<KeyPair>,
-    pasta_seeds: Vec<zeroize::Zeroizing<[u8; 32]>>,
     clock: KeyPair,
     lane_blocks: Arc<dyn iroha_core::sumeragi::lanes::merge::LaneBlockSource>,
 ) -> Result<iroha_core::sumeragi::test_chain::CertifiedTestChain, color_eyre::eyre::Error> {
@@ -745,7 +793,6 @@ pub fn prepared_native_test_chain(
             state: Arc::new(state),
             kura,
             validator_keys,
-            pasta_seeds,
             clock,
             lane_blocks,
         },
@@ -790,7 +837,7 @@ pub(super) fn prepare_genesis_for_signing(
     if topology_override.is_some() {
         genesis = genesis.clear_topology();
     }
-    super::ensure_kagemusha_mint_finality_schedule_matches_consensus(&genesis)?;
+    super::ensure_genesis_schedule_matches_consensus(&genesis)?;
     let mut final_topology =
         topology_override.map_or_else(|| collect_topology_peers(&genesis), <[PeerId]>::to_vec);
     ensure_valid_genesis_committee(&final_topology)?;
@@ -803,10 +850,6 @@ pub(super) fn prepare_genesis_for_signing(
     let topology_entries = topology_override
         .map(|topology| build_topology_entries(topology, peer_pops))
         .transpose()?;
-    super::ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
-        &genesis,
-        &final_topology,
-    )?;
 
     let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
     let topology_peers = if uses_npos {
@@ -870,10 +913,8 @@ pub(super) fn prepare_genesis_for_signing(
             .with_consensus_meta()?
     };
     prepared
-        .validate_kagemusha_mint_finality_topology()
-        .wrap_err(
-            "refusing to sign a genesis whose final topology lacks its exact provisioned KAGEMUSHA authority; Kagami never derives or rewrites production Pasta keys",
-        )?;
+        .validate_genesis_topology()
+        .wrap_err("refusing to sign a genesis whose final topology is not an exact committee")?;
     Ok(prepared)
 }
 
@@ -905,7 +946,20 @@ impl<T: Write> RunArgs<T> for Args {
         // Parse the peer configuration exactly once. Every policy projection
         // below borrows this immutable snapshot, so replacing the source file
         // concurrently cannot create a mixed genesis generation.
-        let peer_config = self.config.as_deref().map(load_peer_config).transpose()?;
+        let genesis_key_pair = load_genesis_key_file(&self.private_key_file)?;
+        ensure_expected_public_key(&genesis_key_pair, self.expected_public_key.as_ref())?;
+        let peer_config = self
+            .config
+            .as_deref()
+            .map(|path| {
+                load_peer_config_for_signing(
+                    path,
+                    &genesis,
+                    &genesis_key_pair,
+                    self.creation_time_ms,
+                )
+            })
+            .transpose()?;
         let manifest_consensus_mode = genesis.consensus_mode();
         let consensus_mode = manifest_consensus_mode;
         let topology_override = if let Some(raw) = self.topology.as_deref() {
@@ -920,8 +974,6 @@ impl<T: Write> RunArgs<T> for Args {
             topology_override.as_deref(),
             &self.peer_pops,
         )?;
-        let genesis_key_pair = load_genesis_key_file(&self.private_key_file)?;
-        ensure_expected_public_key(&genesis_key_pair, self.expected_public_key.as_ref())?;
         let da_proof_policies = resolve_da_proof_policies(peer_config.as_ref());
         let confidential_policy_hash = resolve_confidential_policy_hash(peer_config.as_ref());
         if let Some(config) = peer_config.as_ref()
@@ -1366,9 +1418,6 @@ pub mod tests {
                 &fixture.manifest,
                 &fixture.config,
                 keys,
-                (0..4)
-                    .map(|seat| zeroize::Zeroizing::new([0xA0 + seat; 32]))
-                    .collect(),
                 KeyPair::from_seed(vec![0x7D; 32], Algorithm::Ed25519),
                 Arc::new(iroha_core::sumeragi::lanes::merge::NoLanes),
             )
@@ -1959,11 +2008,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             assert_eq!(
                 object.get("consensus_fingerprint"),
                 Some(&norito::json::Value::Null),
-                "{path} must not advertise a fingerprint before authority materialization"
-            );
-            assert!(
-                !object.contains_key("kagemusha_mint_finality"),
-                "{path} must leave operator authority unmaterialized"
+                "{path} must not advertise a fingerprint before materialization"
             );
             assert!(
                 RawGenesisTransaction::from_path(&full_path).is_err(),
@@ -1993,6 +2038,120 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert!(
             load_peer_config_bytes(&path, source.as_bytes()).is_err(),
             "unrendered Taira production template must not be runnable"
+        );
+    }
+    #[test]
+    fn unpublished_signing_context_requires_all_policy_and_binds_original_signature() {
+        // These parser-only publisher originals are explicitly unadmitted DATA. This control
+        // grants no Load role and never enters the production signer or PublicationWorker.
+        let manifest = RawGenesisTransaction::from_path(minimal_genesis_file()).unwrap();
+        let key = test_genesis_key_pair();
+        let table = checked_in_consensus_config_table(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../defaults/kagami/iroha3-dev/peer0.toml"),
+        );
+        let path = runtime_test_peer_config(table, &manifest, &key);
+        let mut table: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
+        let genesis = table.get_mut("genesis").unwrap().as_table_mut().unwrap();
+        genesis.remove("expected_hash");
+        genesis.remove("expected_hash_file");
+        // The complete parser requires both retained private inputs. These bytes satisfy
+        // parser custody only: the keyring is deliberately not a Role-keyring frame and
+        // this test never invokes LoadRoleKeyring, publisher preflight or publication.
+        let custody = path.parent().expect("private parser fixture directory");
+        let keyring = custody.join("UNADMITTED-parser-keyring-DATA");
+        crate::secure_fs::write_private_file_atomic(
+            &keyring,
+            b"UNADMITTED parser DATA; no Load role or signer authorization",
+        )
+        .unwrap();
+        let submitter = custody.join("UNADMITTED-parser-submitter-key");
+        let record = zeroize::Zeroizing::new(
+            format!("{}\n", ExposedPrivateKey(key.private_key().clone())).into_bytes(),
+        );
+        crate::secure_fs::write_private_file_atomic(&submitter, record.as_slice()).unwrap();
+        table.insert(
+            "kagemusha_load_authorizer".to_owned(),
+            toml::Value::Table(toml::Table::from_iter([
+                (
+                    "keyring_file".to_owned(),
+                    keyring.to_string_lossy().into_owned().into(),
+                ),
+                (
+                    "submitter_key_file".to_owned(),
+                    submitter.to_string_lossy().into_owned().into(),
+                ),
+            ])),
+        );
+        let source = || TomlSource::new(path.clone(), table.clone());
+        assert!(actual::Root::from_toml_source(source()).is_err());
+        let context = actual::GenesisSigningContext::from_toml_source(source()).unwrap();
+        let signed = build_signed_genesis(
+            manifest.clone(),
+            &key,
+            None,
+            iroha_core::state::default_genesis_confidential_policy_hash(),
+            Some(1_700_000_000_000),
+        )
+        .unwrap();
+        let bound = context.bind_signed_genesis(&signed.0).unwrap();
+        assert_eq!(bound.genesis.expected_hash, signed.0.hash());
+        assert_eq!(bound.genesis.public_key, *key.public_key());
+        let wrong_key = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
+        let wrong = build_signed_genesis(
+            manifest,
+            &wrong_key,
+            None,
+            iroha_core::state::default_genesis_confidential_policy_hash(),
+            Some(1_700_000_000_000),
+        )
+        .unwrap();
+        assert!(
+            actual::GenesisSigningContext::from_toml_source(source())
+                .unwrap()
+                .bind_signed_genesis(&wrong.0)
+                .is_err()
+        );
+        let mut runtime_claim = table.clone();
+        runtime_claim
+            .get_mut("genesis")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .insert(
+                "expected_hash".into(),
+                NetworkId::from_genesis_hash(signed.0.hash())
+                    .to_string()
+                    .into(),
+            );
+        assert!(
+            actual::GenesisSigningContext::from_toml_source(TomlSource::new(
+                path.clone(),
+                runtime_claim
+            ),)
+            .is_err()
+        );
+        let mut referenced_claim = table.clone();
+        referenced_claim
+            .get_mut("genesis")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .insert(
+                "expected_hash_file".into(),
+                "unavailable-identity-DATA-only".into(),
+            );
+        // Structural presence refuses unpublished selection before any identity file read.
+        assert!(
+            actual::GenesisSigningContext::from_toml_source(TomlSource::new(
+                path.clone(),
+                referenced_claim,
+            ))
+            .is_err()
+        );
+        table.remove("kagemusha_load_authorizer");
+        assert!(
+            actual::GenesisSigningContext::from_toml_source(TomlSource::new(path, table),).is_err()
         );
     }
     #[test]
@@ -2390,16 +2549,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let _chain_discriminant = staged_genesis_chain_discriminant(&manifest);
         let consensus_mode = manifest.consensus_mode();
         let chain_discriminant = manifest.chain_discriminant();
-        let manifest = super::super::complete_test_genesis_builder_for_peers(
-            manifest.into_builder(),
-            topology.to_vec(),
-        )
-        .build_raw()
-        .expect("complete topology-bound signing fixture")
-        .with_consensus_mode(consensus_mode)
-        .with_chain_discriminant(chain_discriminant)
-        .with_consensus_meta()
-        .expect("valid fixture consensus parameters");
+        let manifest = manifest
+            .into_builder()
+            .complete_for_test()
+            .build_raw()
+            .expect("complete topology-bound signing fixture")
+            .with_consensus_mode(consensus_mode)
+            .with_chain_discriminant(chain_discriminant)
+            .with_consensus_meta()
+            .expect("valid fixture consensus parameters");
         let manifest = with_explicit_test_xor_allocations(manifest, topology);
         fs::write(
             &path,
@@ -3447,17 +3605,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("generate BLS PoP");
         let (new_peers, peer_pops) = valid_test_topology(4);
         let genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
-        let manifest = super::super::complete_test_genesis_builder_for_peers(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("topology-override"),
-                PathBuf::from("."),
-            )
-            .append_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ))
-            .set_topology(vec![GenesisTopologyEntry::new(existing_peer, existing_pop)]),
-            new_peers.clone(),
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("topology-override"),
+            PathBuf::from("."),
         )
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .set_topology(vec![GenesisTopologyEntry::new(existing_peer, existing_pop)])
+        .complete_for_test()
         .build_raw()
         .expect("complete topology-override fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)

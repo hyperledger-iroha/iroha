@@ -105,10 +105,6 @@ pub struct StartInputs<N> {
     pub key_pair: KeyPair,
     /// Runtime-only custody for current and pending beacon sessions; never serialized.
     pub beacon_signer: Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
-    /// Runtime-only original Pasta seed owner. It retains generation-specific current and
-    /// pending derivation across restart; every use must match the authenticated full roster.
-    pub mint_finality_authority:
-        Option<Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>>,
     /// Files and operator choices.
     pub config: NodeConfig,
     /// Reports of the instance.
@@ -137,10 +133,6 @@ pub struct NodeInputs<N> {
     pub consensus_mode: ConsensusMode,
     /// Runtime-only custody for current and pending beacon sessions; never serialized.
     pub beacon_signer: Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
-    /// Runtime-only original Pasta seed owner. It retains generation-specific current and
-    /// pending derivation across restart; every use must match the authenticated full roster.
-    pub mint_finality_authority:
-        Option<Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>>,
     /// Files and operator choices.
     pub config: NodeConfig,
     /// Reports of the instance.
@@ -475,9 +467,6 @@ pub enum NodeError {
     /// The native execution worker thread could not start.
     #[error("executor thread: {0}")]
     ExecutorStart(#[source] std::io::Error),
-    /// The original attestation mailbox could not be admitted or constructed.
-    #[error("native attestation startup: {0}")]
-    Attestation(#[from] super::attestation::NativeAttestationError),
     /// The serialized worker retained an unfinished original control attachment.
     #[error("native control attachment: {0}")]
     ControlAttachment(#[from] super::driver::traits::PublicationError),
@@ -521,7 +510,6 @@ pub fn start<N: Net + 'static>(inputs: NodeInputs<N>) -> Result<RunningNode, Nod
         genesis_account,
         consensus_mode,
         beacon_signer,
-        mint_finality_authority,
         config,
         observer,
         driver,
@@ -538,7 +526,6 @@ pub fn start<N: Net + 'static>(inputs: NodeInputs<N>) -> Result<RunningNode, Nod
         queue,
         key_pair,
         beacon_signer,
-        mint_finality_authority,
         config,
         observer,
         driver,
@@ -672,10 +659,6 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             }
         })?,
     );
-    let availability_verifier = Arc::new(super::attestation::NativePastaVerifier::new(
-        instance,
-        *state.network_id_ref(),
-    ));
     let lane_authorities = Arc::new(
         super::runtime_availability::NativeLaneStoreAuthorities::new(
             Arc::clone(&state),
@@ -690,7 +673,6 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
         staging.clone(),
         state.ivm_execution_budget(),
         availability,
-        availability_verifier,
     ));
     let applied_watch = Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(
         GENESIS_HEIGHT,
@@ -819,7 +801,6 @@ impl Prepared {
             queue,
             key_pair,
             beacon_signer,
-            mint_finality_authority,
             config,
             observer,
             driver,
@@ -833,34 +814,7 @@ impl Prepared {
         // Records of the node's keys.
         let key =
             core_key(key_pair.public_key()).map_err(|error| NodeError::Key(error.to_string()))?;
-        {
-            let view = state.view();
-            for slot in view.world().consensus_schedule().entries() {
-                let schedule::ScheduledSlot::Ready(scheduled) = slot else {
-                    continue;
-                };
-                if scheduled
-                    .epoch
-                    .committee
-                    .iter()
-                    .any(|member| member.validator.public_key() == key_pair.public_key())
-                {
-                    mint_finality_authority.as_ref()
-                        .ok_or_else(|| NodeError::Key("authenticated current validator requires original Pasta seed custody".into()))?
-                        .signer_for_authority(&scheduled.epoch.authority)
-                        .map_err(|error| NodeError::Key(error.to_string()))?;
-                }
-            }
-        }
         let budget = state.ivm_execution_budget();
-        let verifier =
-            super::attestation::NativePastaVerifier::new(instance, *state.view().network_id());
-        let (attestor, publisher) =
-            super::attestation::channel(instance, &key, mint_finality_authority.is_some(), &budget)
-                .map_err(NodeError::from)?;
-        executor
-            .attach_attestation(verifier, mint_finality_authority, publisher)
-            .map_err(NodeError::from)?;
         let mut keys: Vec<(PublicKey, bool)> = vec![(key, false)];
         for retired in &config.retired_keys {
             keys.push((
@@ -1000,8 +954,6 @@ impl Prepared {
                     init,
                     signers: vec![Arc::new(signer)],
                     crypto: shared,
-                    attestor: Box::new(attestor),
-                    verifier: Box::new(verifier),
                 },
             )
             .map_err(NodeError::from)?;
@@ -1317,7 +1269,7 @@ mod tests {
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
     use iroha_data_model::{
         NetworkId,
-        block::consensus::{SumeragiGenesisContextParameters, ValidatorPower},
+        block::consensus::SumeragiGenesisContextParameters,
         parameter::{Parameter, system::SumeragiParameter},
         prelude::*,
     };
@@ -1572,13 +1524,6 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let roster = entries
-            .iter()
-            .map(|entry| ValidatorPower {
-                validator: entry.peer.clone(),
-                power: 1,
-            })
-            .collect::<Vec<_>>();
         let extra = extra(&keys);
         let mut builder = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
             .append_parameter(Parameter::Sumeragi(
@@ -1593,9 +1538,6 @@ mod tests {
             .with_block_cadence_ms(NonZeroU64::new(100).expect("non-zero"))
             .set_topology(entries)
             .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
-            .with_kagemusha_mint_finality_genesis_parameters(
-                crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
-            )
             .build_raw()
             .expect("genesis manifest")
             .with_consensus_meta()
@@ -1717,11 +1659,6 @@ mod tests {
                     }),
                     key_pair,
                     beacon_signer: None,
-                    mint_finality_authority: Some(Arc::new(crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
-                        Arc::new(super::super::epoch::genesis_epoch(&chain.genesis).unwrap().authority),
-                        zeroize::Zeroizing::new([0xA0 + index as u8; 32]),
-                        index as u32,
-                    ).unwrap())),
                     genesis: Some(chain.genesis.clone()),
                     genesis_account: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
                     consensus_mode: ConsensusMode::Permissioned,
@@ -2564,10 +2501,6 @@ mod tests {
             )
             .expect("availability authority bound to original applied genesis"),
         );
-        let verifier = Arc::new(super::super::attestation::NativePastaVerifier::new(
-            instance,
-            *state.network_id_ref(),
-        ));
         let staging = Staging::new();
         let blocks = KuraBlockStore::new(
             kura,
@@ -2576,7 +2509,6 @@ mod tests {
             staging.clone(),
             state.ivm_execution_budget(),
             availability,
-            verifier,
         );
         let mut executor = StateExecutor::spawn(ExecutorContext {
             state: Arc::clone(&state),
@@ -2616,10 +2548,6 @@ mod tests {
         // This negative must reach execution comparison, not fail earlier on a stale
         // signature. The original committee signs the wrong result over the real block.
         use iroha_sumeragi::crypto::{Crypto as _, Signer as _};
-        assert!(
-            !forged.attest,
-            "ordinary fixture height has no attestation obligation"
-        );
         let committee = schedule::scheduled_committee(state.view().world(), 2)
             .expect("authenticated original committee");
         let preimage = forged.preimage();

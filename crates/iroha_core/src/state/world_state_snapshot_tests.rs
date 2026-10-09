@@ -7,6 +7,7 @@ use crate::{
 };
 use iroha_data_model::{
     Identifiable, Registrable, asset::AssetBalancePolicy, domain::Domain, isi::Register,
+    nexus::AxtAssetIncarnationV1,
 };
 use iroha_model_base::domain::DomainId;
 use std::cell::Cell;
@@ -71,12 +72,11 @@ fn snapshot_reader_refusal_preserves_original_source_and_does_not_call_consumer(
     assert!(!called.get());
     assert_eq!(budget.reserved_bytes(), initial_bytes);
     drop(original);
-    state
-        .with_native_world_state_snapshot_v1(&tip, &asset, &budget, |_, _, _, _| {
-            called.set(true);
-            Ok(())
-        })
-        .unwrap();
+    with_asset_snapshot(state, &tip, &asset, &budget, |_, _, _| {
+        called.set(true);
+        Ok(())
+    })
+    .unwrap();
     assert!(called.get());
     assert_eq!(budget.reserved_bytes(), initial_bytes);
 }
@@ -255,10 +255,19 @@ fn complete_cold_snapshot_matches_original_accumulator_and_registry() {
             .contains(&entry.field_id.as_str())
             && (entry.kind == WorldStateElementKindV1::Table) == entry.key_hash.is_some()
     }));
-    // Untouched canonical cells must be present even when every table is empty.
-    assert!(captured.snapshot.entries.iter().any(|entry| entry.field_id
-        == "world.kagemusha_verifier_registry"
-        && entry.kind == WorldStateElementKindV1::Cell));
+    // Untouched canonical cells retain their exact original preimage even when
+    // every table is empty; parameters is a live canonical Cell<Parameters>.
+    let original_parameters_hash = hash_value(overlay.parameters.get()).unwrap();
+    assert!(
+        captured
+            .snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.field_id == "world.parameters"
+                && entry.kind == WorldStateElementKindV1::Cell
+                && entry.key_hash.is_none()
+                && entry.value_hash == original_parameters_hash)
+    );
     assert!(
         budget.reserved_bytes() > 0,
         "snapshot retains its original charges"
@@ -532,54 +541,74 @@ fn publisher_authenticates_original_native_cut_and_borrows_exact_targets() {
     let budget = AllocationBudget::new(16 * 1024 * 1024);
     let state = chain.state();
     let generation = state.state_view_generation();
-    state
-        .with_native_world_state_snapshot_v1(
-            &original_tip,
-            &asset,
-            &budget,
-            |snapshot, definition, incarnation, registry| {
-                assert_eq!(
-                    snapshot.schema_hash,
-                    State::native_world_schema_hash_v1().unwrap()
-                );
-                assert_eq!(
-                    snapshot.root().unwrap(),
-                    original_tip.commitment().execution.world_state_root
-                );
-                assert_eq!(definition.id(), &asset);
-                for (field, kind, key, value) in [
-                    (
-                        "world.asset_definitions",
-                        WorldStateElementKindV1::Table,
-                        Some(hash_value(&asset).unwrap()),
-                        hash_value(definition).unwrap(),
-                    ),
-                    (
-                        "world.axt_asset_incarnations",
-                        WorldStateElementKindV1::Table,
-                        Some(hash_value(&asset).unwrap()),
-                        hash_value(incarnation).unwrap(),
-                    ),
-                    (
-                        "world.kagemusha_verifier_registry",
-                        WorldStateElementKindV1::Cell,
-                        None,
-                        hash_value(registry).unwrap(),
-                    ),
-                ] {
-                    assert!(
-                        snapshot.entries.iter().any(|entry| entry.field_id == field
-                            && entry.kind == kind
-                            && entry.key_hash == key
-                            && entry.value_hash == value),
-                        "{field}"
-                    );
-                }
-                assert!(budget.reserved_bytes() > 0);
-                Ok(())
-            },
+    let (
+        original_definition,
+        original_incarnation_pointer,
+        original_incarnation,
+        original_parameters_hash,
+    ) = {
+        let view = state.view();
+        let world = view.world();
+        let definition = world.asset_definitions().get(&asset).unwrap();
+        let incarnation = world.axt_asset_incarnations().get(&asset).unwrap();
+        (
+            std::ptr::from_ref(definition),
+            std::ptr::from_ref(incarnation),
+            *incarnation,
+            hash_value(world.parameters()).unwrap(),
         )
-        .unwrap();
+    };
+    with_asset_snapshot(
+        state,
+        &original_tip,
+        &asset,
+        &budget,
+        |snapshot, definition, incarnation| {
+            assert_eq!(
+                snapshot.schema_hash,
+                State::native_world_schema_hash_v1().unwrap()
+            );
+            assert_eq!(
+                snapshot.root().unwrap(),
+                original_tip.commitment().execution.world_state_root
+            );
+            assert_eq!(definition.id(), &asset);
+            assert!(std::ptr::eq(definition, original_definition));
+            assert!(std::ptr::eq(incarnation, original_incarnation_pointer));
+            assert_eq!(*incarnation, original_incarnation);
+            for (field, kind, key, value) in [
+                (
+                    "world.asset_definitions",
+                    WorldStateElementKindV1::Table,
+                    Some(hash_value(&asset).unwrap()),
+                    hash_value(definition).unwrap(),
+                ),
+                (
+                    "world.axt_asset_incarnations",
+                    WorldStateElementKindV1::Table,
+                    Some(hash_value(&asset).unwrap()),
+                    hash_value(incarnation).unwrap(),
+                ),
+                (
+                    "world.parameters",
+                    WorldStateElementKindV1::Cell,
+                    None,
+                    original_parameters_hash,
+                ),
+            ] {
+                assert!(
+                    snapshot.entries.iter().any(|entry| entry.field_id == field
+                        && entry.kind == kind
+                        && entry.key_hash == key
+                        && entry.value_hash == value),
+                    "{field}"
+                );
+            }
+            assert!(budget.reserved_bytes() > 0);
+            Ok(())
+        },
+    )
+    .unwrap();
     assert_eq!(
         state.state_view_generation(),
         generation,
@@ -592,48 +621,45 @@ fn publisher_authenticates_original_native_cut_and_borrows_exact_targets() {
         "absent".parse().unwrap(),
     );
     assert!(
-        state
-            .with_native_world_state_snapshot_v1(&original_tip, &absent, &budget, |_, _, _, _| {
-                called.set(true);
-                Ok(())
-            })
-            .is_err()
+        with_asset_snapshot(state, &original_tip, &absent, &budget, |_, _, _| {
+            called.set(true);
+            Ok(())
+        })
+        .is_err()
     );
     assert!(!called.get());
     assert!(
-        state
-            .with_native_world_state_snapshot_v1(
-                &original_tip,
-                &asset,
-                &AllocationBudget::new(0),
-                |_, _, _, _| {
-                    called.set(true);
-                    Ok(())
-                }
-            )
-            .is_err()
+        with_asset_snapshot(
+            state,
+            &original_tip,
+            &asset,
+            &AllocationBudget::new(0),
+            |_, _, _| {
+                called.set(true);
+                Ok(())
+            }
+        )
+        .is_err()
     );
     assert!(!called.get());
     // Exercise callback invalidation while the original cut still owns this generation.
     let callback_entered = Cell::new(false);
-    let error = state
-        .with_native_world_state_snapshot_v1(&original_tip, &asset, &budget, |_, _, _, _| {
-            callback_entered.set(true);
-            let mut publication = state.state_view_publication();
-            let _writer = publication.begin();
-            Ok(())
-        })
-        .unwrap_err();
+    let error = with_asset_snapshot(state, &original_tip, &asset, &budget, |_, _, _| {
+        callback_entered.set(true);
+        let mut publication = state.state_view_publication();
+        let _writer = publication.begin();
+        Ok(())
+    })
+    .unwrap_err();
     assert!(callback_entered.get());
     assert!(error.to_string().contains("generation changed"), "{error}");
     assert_eq!(budget.reserved_bytes(), 0);
     // Advancing publication cannot grant the old journal authority over a new generation.
-    let error = state
-        .with_native_world_state_snapshot_v1(&original_tip, &asset, &budget, |_, _, _, _| {
-            called.set(true);
-            Ok(())
-        })
-        .unwrap_err();
+    let error = with_asset_snapshot(state, &original_tip, &asset, &budget, |_, _, _| {
+        called.set(true);
+        Ok(())
+    })
+    .unwrap_err();
     assert!(
         error.to_string().contains("another certified generation"),
         "{error}"
@@ -643,30 +669,22 @@ fn publisher_authenticates_original_native_cut_and_borrows_exact_targets() {
         let mut publication = state.state_view_publication();
         let _writer = publication.begin();
         assert!(
-            state
-                .with_native_world_state_snapshot_v1(
-                    &original_tip,
-                    &asset,
-                    &budget,
-                    |_, _, _, _| {
-                        called.set(true);
-                        Ok(())
-                    }
-                )
-                .is_err()
+            with_asset_snapshot(state, &original_tip, &asset, &budget, |_, _, _| {
+                called.set(true);
+                Ok(())
+            })
+            .is_err()
         );
         assert!(!called.get());
     }
     assert_eq!(budget.reserved_bytes(), 0);
     chain.commit_at(3_000, Vec::new());
     assert!(
-        chain
-            .state()
-            .with_native_world_state_snapshot_v1(&original_tip, &asset, &budget, |_, _, _, _| {
-                called.set(true);
-                Ok(())
-            })
-            .is_err()
+        with_asset_snapshot(chain.state(), &original_tip, &asset, &budget, |_, _, _| {
+            called.set(true);
+            Ok(())
+        })
+        .is_err()
     );
     assert!(
         !called.get(),
@@ -811,17 +829,17 @@ fn publisher_requires_original_capture_after_snapshot_restore_or_raw_commit() {
     // boundary; a matching bare stored World root is never replacement authority.
     *state.native_world_cut.lock() = None;
     let called = Cell::new(false);
-    let error = state
-        .with_native_world_state_snapshot_v1(
-            &tip,
-            &asset,
-            &AllocationBudget::new(16 * 1024 * 1024),
-            |_, _, _, _| {
-                called.set(true);
-                Ok(())
-            },
-        )
-        .unwrap_err();
+    let error = with_asset_snapshot(
+        state,
+        &tip,
+        &asset,
+        &AllocationBudget::new(16 * 1024 * 1024),
+        |_, _, _| {
+            called.set(true);
+            Ok(())
+        },
+    )
+    .unwrap_err();
     assert!(error.to_string().contains("requires native replay"));
     assert!(!called.get());
 }

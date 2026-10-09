@@ -778,7 +778,7 @@ fn configure_staged_genesis_state(
         state.set_fraud_monitoring(config.fraud_monitoring.clone());
         state.set_gov(config.gov.clone());
         state.content = config.content.clone();
-        state.set_settlement(config.settlement.clone());
+        state.set_settlement(config.settlement);
         state
             .set_zk(config.zk.clone())
             .map_err(|error| eyre!("invalid ZK config for staged genesis: {error}"))?;
@@ -833,13 +833,7 @@ fn install_staged_nexus_policies(
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
-    use iroha_data_model::{
-        block::consensus::SumeragiGenesisContextParameters,
-        isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
-            KagemushaMintFinalityGenesisParametersV1,
-        },
-    };
+    use iroha_data_model::block::consensus::SumeragiGenesisContextParameters;
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use iroha_model_base::{chain::ChainId, peer::PeerId};
 
@@ -861,31 +855,10 @@ mod tests {
         let genesis_key_pair = KeyPair::try_from_seed(vec![0x6E; 32], Algorithm::Ed25519)
             .expect("derive deterministic default staging key");
         let topology = default_test_topology();
-        let validators = topology
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                    &[0xA0_u8.wrapping_add(u8::try_from(index).expect("four-validator roster")); 32],
-                    0,
-                    entry.peer.clone(),
-                )
-                .expect("derive exact deterministic staging Pasta authority")
-            })
-            .collect();
         let raw =
             GenesisBuilder::new_without_executor(ChainId::from("default-genesis-staging"), ".")
-                .set_topology(topology)
+                .set_topology(topology.clone())
                 .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
-                .with_kagemusha_mint_finality_genesis_parameters(
-                    KagemushaMintFinalityGenesisParametersV1 {
-                        authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-                            version: KAGEMUSHA_CHAIN_VERSION_V1,
-                            generation: 0,
-                            validators,
-                        },
-                    },
-                )
                 .build_raw()
                 .expect("complete generic four-validator genesis")
                 .with_consensus_mode(SumeragiConsensusMode::Permissioned)
@@ -900,6 +873,20 @@ mod tests {
             Some(1_700_000_000_000),
         )
         .expect("no-config signing must authenticate default storage before executing genesis");
+        let epoch = iroha_data_model::sumeragi_finality::genesis_epoch(&signed.0)
+            .expect("signed topology establishes the exact BLS generation zero");
+        assert_eq!(epoch.authorization.authority_generation, 0);
+        assert_eq!(
+            epoch.generation().validators,
+            topology
+                .iter()
+                .map(|entry| entry.peer.clone())
+                .collect::<Vec<_>>()
+        );
+        epoch
+            .authorization
+            .validate_against_generation(&epoch.generation())
+            .expect("original genesis authorization");
         assert!(signed.0.network_entrypoint_count() > 0);
         assert!(signed.0.has_results());
         assert!(

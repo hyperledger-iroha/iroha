@@ -79,7 +79,9 @@ use std::{
 };
 #[path = "actual_soranet_handshake_debug.rs"]
 mod actual_soranet_handshake_debug;
+mod kagemusha_load_authorizer;
 mod sccp;
+pub use kagemusha_load_authorizer::{KagemushaLoadAuthorizer, KagemushaLoadAuthorizerCustody};
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
 use crate::{
@@ -118,7 +120,7 @@ macro_rules! impl_default {
 }
 /// Parsed configuration root used internally by Iroha services.
 #[derive(Debug, Clone)]
-pub struct Root {
+pub struct Root<G = Genesis> {
     /// Common options shared across components.
     pub common: Common,
     /// Authenticated local runtime-provider broker endpoint.
@@ -126,13 +128,15 @@ pub struct Root {
     /// Network configuration.
     pub network: Network,
     /// Genesis configuration.
-    pub genesis: Genesis,
+    pub genesis: G,
     /// Torii API configuration.
     pub torii: Torii,
     /// Embedded Soracloud runtime-manager configuration.
     pub soracloud_runtime: SoracloudRuntime,
     /// Non-secret local custody root for the injected private Musubi publisher.
     pub musubi_publication: MusubiPublication,
+    /// Required source-verified online load voucher publisher.
+    pub kagemusha_load_authorizer: KagemushaLoadAuthorizer,
     /// Block storage (Kura) configuration.
     pub kura: Kura,
     /// Consensus (Sumeragi) configuration.
@@ -312,10 +316,12 @@ pub enum NodeSecretFile {
     Transport,
     /// Streaming identity Ed25519 private key.
     Streaming,
+    /// Required online KAGEMUSHA publisher's private Norito signer keyring.
+    KagemushaLoadAuthorizerKeyring,
+    /// Required online KAGEMUSHA publisher's private transaction submitter key.
+    KagemushaLoadSubmitter,
     /// Soracloud runtime mutation-signer private key.
     RuntimeSigner,
-    /// KAGEMUSHA mint-finality seed.
-    MintFinalitySeed,
     /// Global beacon partial-signer credential.
     BeaconCredential,
     /// Faucet authority private key.
@@ -330,12 +336,13 @@ pub enum NodeSecretFile {
 }
 impl NodeSecretFile {
     /// Every fixed secret file, in a stable order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Validator,
         Self::Transport,
         Self::Streaming,
+        Self::KagemushaLoadAuthorizerKeyring,
+        Self::KagemushaLoadSubmitter,
         Self::RuntimeSigner,
-        Self::MintFinalitySeed,
         Self::BeaconCredential,
         Self::FaucetAuthority,
         Self::OnboardingAuthority,
@@ -349,8 +356,9 @@ impl NodeSecretFile {
             Self::Validator => names::VALIDATOR_KEY,
             Self::Transport => names::TRANSPORT_KEY,
             Self::Streaming => names::STREAMING_KEY,
+            Self::KagemushaLoadAuthorizerKeyring => names::KAGEMUSHA_LOAD_AUTHORIZER_KEYRING,
+            Self::KagemushaLoadSubmitter => names::KAGEMUSHA_LOAD_SUBMITTER_KEY,
             Self::RuntimeSigner => names::RUNTIME_SIGNER_KEY,
-            Self::MintFinalitySeed => names::MINT_FINALITY_SEED,
             Self::BeaconCredential => names::BEACON_CREDENTIAL,
             Self::FaucetAuthority => names::FAUCET_AUTHORITY_KEY,
             Self::OnboardingAuthority => names::ONBOARDING_AUTHORITY_KEY,
@@ -496,14 +504,27 @@ mod data_dir_tests {
                 "validator.key",
                 "transport.key",
                 "streaming.key",
+                "kagemusha_load_authorizer.keyring.norito",
+                "kagemusha_load_submitter.key",
                 "runtime_signer.key",
-                "mint_finality.seed",
                 "beacon.cred",
                 "authority/faucet.key",
                 "authority/onboarding.key",
                 "authority/sorafs_council.key",
             ]
         );
+        for (file, name) in [
+            (
+                NodeSecretFile::KagemushaLoadAuthorizerKeyring,
+                "kagemusha_load_authorizer.keyring.norito",
+            ),
+            (
+                NodeSecretFile::KagemushaLoadSubmitter,
+                "kagemusha_load_submitter.key",
+            ),
+        ] {
+            assert_eq!(data_dir.secret(file), data_dir.secrets_dir().join(name));
+        }
         assert_eq!(
             data_dir.secret(NodeSecretFile::OnboardingAuthority),
             PathBuf::from("/var/lib/iroha/taira/v1/secrets/authority/onboarding.key")
@@ -1001,6 +1022,96 @@ impl Root {
             .parse()
             .change_context(FromTomlSourceError)
     }
+}
+impl<G> Root<G> {
+    fn map_genesis<H>(self, transform: impl FnOnce(G) -> H) -> Root<H> {
+        let Self {
+            common,
+            runtime_provider_broker,
+            network,
+            genesis,
+            torii,
+            soracloud_runtime,
+            musubi_publication,
+            kagemusha_load_authorizer,
+            kura,
+            sumeragi,
+            block_sync,
+            transaction_gossiper,
+            live_query_store,
+            logger,
+            queue,
+            nexus,
+            snapshot,
+            telemetry_profile,
+            telemetry,
+            telemetry_integrity,
+            dev_telemetry,
+            pipeline,
+            tiered_state,
+            compute,
+            content,
+            oracle,
+            ivm,
+            norito,
+            fraud_monitoring,
+            zk,
+            gov,
+            nts,
+            accel,
+            concurrency,
+            confidential,
+            crypto,
+            settlement,
+            streaming,
+            sccp,
+            data_dir,
+            lifecycle,
+        } = self;
+        Root {
+            common,
+            runtime_provider_broker,
+            network,
+            genesis: transform(genesis),
+            torii,
+            soracloud_runtime,
+            musubi_publication,
+            kagemusha_load_authorizer,
+            kura,
+            sumeragi,
+            block_sync,
+            transaction_gossiper,
+            live_query_store,
+            logger,
+            queue,
+            nexus,
+            snapshot,
+            telemetry_profile,
+            telemetry,
+            telemetry_integrity,
+            dev_telemetry,
+            pipeline,
+            tiered_state,
+            compute,
+            content,
+            oracle,
+            ivm,
+            norito,
+            fraud_monitoring,
+            zk,
+            gov,
+            nts,
+            accel,
+            concurrency,
+            confidential,
+            crypto,
+            settlement,
+            streaming,
+            sccp,
+            data_dir,
+            lifecycle,
+        }
+    }
     /// Check whether the configuration already enables Sora/Nexus-only features.
     #[cfg(test)]
     #[must_use]
@@ -1182,7 +1293,7 @@ pub(crate) struct NexusStorageConfiguredComponentCaps {
     sorafs_max_capacity_bytes: Bytes,
 }
 impl NexusStorageConfiguredComponentCaps {
-    fn capture(root: &Root) -> Self {
+    fn capture<G>(root: &Root<G>) -> Self {
         Self {
             kura_max_disk_usage_bytes: root.kura.max_disk_usage_bytes,
             wsv_cold_max_bytes: root.tiered_state.max_cold_bytes,
@@ -2301,7 +2412,7 @@ pub struct Fastpq {
 pub struct VerifyingKeyRef {
     /// Backend identifier of the verifying key backend.
     ///
-    /// Examples: "halo2/ipa", "groth16/bn254". This string selects the
+    /// Examples: "pipa-r/pasta", "stark/fri/poseidon-x7-goldilocks-6x64-v1". This string selects the
     /// verification scheme and the curve/domain parameters to use when
     /// validating proofs.
     pub backend: String,
@@ -2841,6 +2952,91 @@ pub struct Genesis {
     /// Configuration normalization requires this value independently of the signed artifact.
     pub expected_hash: HashOf<BlockHeader>,
 }
+/// Complete validated node policy before a genesis identity exists.
+///
+/// This authoring context has no runtime decoder or implicit conversion to [`Root`]. Every
+/// ordinary schema, policy and required private-custody validator still runs. Binding requires
+/// an original signed genesis block; daemon startup independently authenticates its final
+/// expected hash against the prepared bundle.
+#[derive(Debug)]
+pub struct GenesisSigningContext {
+    policy: Root<GenesisForSigning>,
+}
+/// Genesis public identity in an unpublished signing context. No expected hash is fabricated.
+#[derive(Debug)]
+pub(crate) struct GenesisForSigning {
+    pub(crate) public_key: PublicKey,
+    pub(crate) file: Option<WithOrigin<PathBuf>>,
+    pub(crate) manifest_json: Option<WithOrigin<PathBuf>>,
+}
+impl GenesisSigningContext {
+    pub(crate) fn new(policy: Root<GenesisForSigning>) -> Self {
+        Self { policy }
+    }
+    /// Read complete unpublished policy with the canonical validators and native private files.
+    /// Ambient environment variables cannot replace these authoring inputs.
+    /// # Errors
+    /// Refuses a claimed runtime identity, invalid policy, or missing required private custody.
+    pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
+        ConfigReader::new()
+            .without_env()
+            .with_toml_source(src)
+            .read_and_complete::<user::Root>()
+            .change_context(FromTomlSourceError)?
+            .parse_for_genesis_signing()
+            .change_context(FromTomlSourceError)
+    }
+    /// Exact validated Nexus policy used by native genesis execution.
+    pub fn nexus(&self) -> &Nexus {
+        &self.policy.nexus
+    }
+    /// Exact validated confidential-verifier policy used by native genesis execution.
+    pub fn zk(&self) -> &Zk {
+        &self.policy.zk
+    }
+    /// Required original private publisher custody and finite service limits.
+    pub fn publisher(&self) -> &KagemushaLoadAuthorizer {
+        &self.policy.kagemusha_load_authorizer
+    }
+    /// Bind this authoring policy to a genuine signed genesis-header identity.
+    ///
+    /// A provisional block may be used only for local policy execution. The final generator
+    /// must parse every final config and authenticate its publisher against the final network
+    /// before publication; a provisional context is never a deployment admission receipt.
+    /// # Errors
+    /// Refuses a non-genesis block, missing or extra signatures, a wrong signer, or invalid
+    /// original block and transaction signatures.
+    pub fn bind_signed_genesis(
+        self,
+        block: &iroha_data_model::block::SignedBlock,
+    ) -> core::result::Result<Root, &'static str> {
+        if block.header().height().get() != 1 {
+            return Err("signing context requires an original signed genesis block");
+        }
+        let mut signatures = block.signatures();
+        let signature = signatures
+            .next()
+            .ok_or("signing context genesis has no signature")?;
+        if signature.index() != 0 || signatures.next().is_some() {
+            return Err("signing context genesis must have one signature at index zero");
+        }
+        signature
+            .signature()
+            .verify_hash(&self.policy.genesis.public_key, block.hash())
+            .map_err(|_| "signing context genesis signature does not match its public key")?;
+        for transaction in block.external_transactions() {
+            transaction
+                .verify_signature()
+                .map_err(|_| "signing context genesis has an invalid transaction signature")?;
+        }
+        Ok(self.policy.map_genesis(|genesis| Genesis {
+            public_key: genesis.public_key,
+            file: genesis.file,
+            manifest_json: genesis.manifest_json,
+            expected_hash: block.hash(),
+        }))
+    }
+}
 /// Transaction queue settings.
 #[derive(Debug, Clone, Copy)]
 pub struct Queue {
@@ -3284,9 +3480,6 @@ pub struct NexusStorage {
     pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     pub max_wsv_memory_bytes: Bytes,
-    /// Original allocation pool for the four fixed KAGEMUSHA operation indexes.
-    /// Current/undo versions and overlapping execution retain this same capacity.
-    pub kagemusha_operation_index_bytes: Bytes,
     /// Finite shared pool for retained carrier World shells, effects and service descriptors.
     /// This is not an aggregate RAM or nested execution-payload limit; zero admits none.
     pub retained_carrier_shell_bytes: usize,
@@ -3325,10 +3518,6 @@ impl fmt::Debug for NexusStorage {
             )
             .field("max_wsv_memory_bytes", &self.max_wsv_memory_bytes)
             .field(
-                "kagemusha_operation_index_bytes",
-                &self.kagemusha_operation_index_bytes,
-            )
-            .field(
                 "retained_carrier_shell_bytes",
                 &self.retained_carrier_shell_bytes,
             )
@@ -3351,8 +3540,6 @@ impl_default!(NexusStorage => {
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
-            kagemusha_operation_index_bytes:
-                defaults::nexus::storage::KAGEMUSHA_OPERATION_INDEX_BYTES,
             retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
             consensus_evidence_preparation_bytes:
                 defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
@@ -6741,8 +6928,6 @@ mod sumeragi_core_config_tests {
 pub struct Sumeragi {
     /// Node-local participation role.
     pub role: NodeRole,
-    /// Fixed inherited private descriptor for the locally consumed Pasta seed.
-    pub mint_finality_seed_fd: Option<u16>,
     /// Public deployment binding for the runtime-only global beacon share signer.
     pub global_beacon_partial_signer_provider_handle: Option<String>,
     /// Exact non-zero provider contract revision paired with the beacon signer handle.
@@ -6765,7 +6950,6 @@ impl_default!(Sumeragi => {
         let store_dir = PathBuf::from(defaults::kura::STORE_DIR);
         Self {
             role: NodeRole::Validator,
-            mint_finality_seed_fd: None,
             global_beacon_partial_signer_provider_handle: None,
             global_beacon_partial_signer_provider_revision: None,
             global_beacon_partial_signer_provider_policy_digest: None,
@@ -10482,8 +10666,14 @@ impl_default!(IsoReferenceData => {
 /// Zero-knowledge proof configuration namespace.
 #[derive(Debug, Clone)]
 pub struct Zk {
-    /// Halo2 (transparent) verification settings.
-    pub halo2: Halo2,
+    /// Optional local diagnostic trace checking; never proof authority.
+    pub trace: DiagnosticTrace,
+    /// Bounds for the diagnostic native polynomial-opening endpoint.
+    pub ipa_commitment: IpaCommitment,
+    /// Maximum proofs accepted by one host batch-verification syscall.
+    pub max_verify_batch: u32,
+    /// Native PIPA-R verification policy.
+    pub pipa_r: PipaR,
     /// FASTPQ prover settings.
     pub fastpq: Fastpq,
     /// Native STARK/FRI verification settings.
@@ -10734,7 +10924,7 @@ impl_default!(StreamingSync => {
         Self::from_defaults()
 });
 /// Settlement conversion routing configuration.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Settlement {
     /// Router configuration for XOR conversion.
     pub router: Router,
@@ -10768,85 +10958,72 @@ impl_default!(Router => {
             buffer_horizon_hours: defaults::settlement::router::BUFFER_HORIZON_HOURS,
         }
 });
-/// Supported curves for Halo2 verification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ZkCurve {
-    /// Pallas curve from the Pasta cycle.
-    Pallas,
-    /// Pasta (Pallas/Vesta) — reserved for future backends.
-    Pasta,
-    /// Goldilocks multiplicative backend.
-    Goldilocks,
-    /// BN254 — reserved for future backends.
-    Bn254,
-}
-/// Halo2 transparent backend kind.
+/// Native PIPA-R verification policy for the exact compiled circuit registry.
 #[derive(Debug, Clone, Copy)]
-pub enum Halo2Backend {
-    /// Inner-Product Argument (transparent PCS).
-    Ipa,
-}
-/// Halo2 transparent verification settings.
-#[derive(Debug, Clone, Copy)]
-pub struct Halo2 {
-    /// Enable Halo2 verification in hosts.
+pub struct PipaR {
+    /// Enable native PIPA-R verification in hosts.
     pub enabled: bool,
-    /// Selected curve backend.
-    pub curve: ZkCurve,
-    /// Transparent PCS backend.
-    pub backend: Halo2Backend,
-    /// Maximum circuit size exponent (N = 2^k) accepted for verification.
-    pub max_k: u32,
-    /// Soft time budget for a single verification (ms).
-    pub verifier_budget_ms: u64,
-    /// Maximum number of proofs allowed in a batch verification.
-    pub verifier_max_batch: u32,
-    /// Number of worker threads serving ZK lane verification (0 = auto).
-    pub verifier_worker_threads: usize,
-    /// Capacity of the ZK lane verification queue (0 = auto).
-    pub verifier_queue_cap: usize,
-    /// Maximum enqueue wait for ZK lane admission under saturation (ms).
-    pub verifier_enqueue_wait_ms: u64,
-    /// Capacity of the in-memory retry ring used for important ZK lane tasks.
-    pub verifier_retry_ring_cap: usize,
-    /// Maximum retry rounds for a queued task in the ZK lane retry ring.
-    pub verifier_retry_max_attempts: u32,
-    /// Retry scheduler tick interval for the ZK lane (ms).
-    pub verifier_retry_tick_ms: u64,
-    /// Maximum accepted Norito envelope payload length (bytes).
+    /// Maximum canonical outer envelope length in bytes.
     pub max_envelope_bytes: usize,
-    /// Maximum accepted proof payload length (bytes).
+    /// Maximum canonical proof-payload length in bytes.
     pub max_proof_bytes: usize,
-    /// Maximum allowed transcript label length (bytes).
+}
+impl_default!(PipaR => {
+    Self {
+        enabled: defaults::zk::pipa_r::ENABLED,
+        max_envelope_bytes: defaults::zk::pipa_r::MAX_ENVELOPE_BYTES,
+        max_proof_bytes: defaults::zk::pipa_r::MAX_PROOF_BYTES,
+    }
+});
+/// Local diagnostic polynomial-opening bounds; these confer no ledger authority.
+#[derive(Debug, Clone, Copy)]
+pub struct IpaCommitment {
+    /// Maximum domain exponent for diagnostic polynomial openings.
+    pub max_k: u32,
+    /// Maximum diagnostic transcript-label length in bytes.
     pub max_transcript_label_len: usize,
-    /// Require transcript labels to be ASCII.
+    /// Maximum encoded diagnostic polynomial-opening envelope size.
+    pub max_envelope_bytes: usize,
+    /// Require ASCII diagnostic transcript labels.
     pub enforce_transcript_label_ascii: bool,
 }
-impl_default!(Halo2 => {
-        Self {
-            enabled: crate::parameters::defaults::zk::halo2::ENABLED,
-            curve: ZkCurve::Pallas,
-            backend: Halo2Backend::Ipa,
-            max_k: crate::parameters::defaults::zk::halo2::MAX_K,
-            verifier_budget_ms: crate::parameters::defaults::zk::halo2::VERIFIER_BUDGET_MS,
-            verifier_max_batch: crate::parameters::defaults::zk::halo2::VERIFIER_MAX_BATCH,
-            verifier_worker_threads:
-                crate::parameters::defaults::zk::halo2::VERIFIER_WORKER_THREADS,
-            verifier_queue_cap: crate::parameters::defaults::zk::halo2::VERIFIER_QUEUE_CAP,
-            verifier_enqueue_wait_ms:
-                crate::parameters::defaults::zk::halo2::VERIFIER_ENQUEUE_WAIT_MS,
-            verifier_retry_ring_cap:
-                crate::parameters::defaults::zk::halo2::VERIFIER_RETRY_RING_CAP,
-            verifier_retry_max_attempts:
-                crate::parameters::defaults::zk::halo2::VERIFIER_RETRY_MAX_ATTEMPTS,
-            verifier_retry_tick_ms: crate::parameters::defaults::zk::halo2::VERIFIER_RETRY_TICK_MS,
-            max_envelope_bytes: crate::parameters::defaults::zk::halo2::MAX_ENVELOPE_BYTES,
-            max_proof_bytes: crate::parameters::defaults::zk::halo2::MAX_PROOF_BYTES,
-            max_transcript_label_len:
-                crate::parameters::defaults::zk::halo2::MAX_TRANSCRIPT_LABEL_LEN,
-            enforce_transcript_label_ascii:
-                crate::parameters::defaults::zk::halo2::ENFORCE_TRANSCRIPT_LABEL_ASCII,
-        }
+impl_default!(IpaCommitment => { Self {
+    max_k: defaults::zk::ipa_commitment::MAX_K,
+    max_transcript_label_len: defaults::zk::ipa_commitment::MAX_TRANSCRIPT_LABEL_LEN,
+    max_envelope_bytes: defaults::zk::ipa_commitment::MAX_ENVELOPE_BYTES,
+    enforce_transcript_label_ascii: defaults::zk::ipa_commitment::ENFORCE_TRANSCRIPT_LABEL_ASCII,
+} });
+/// Optional local trace-checking policy, independent of monetary proof verification.
+#[derive(Debug, Clone, Copy)]
+pub struct DiagnosticTrace {
+    /// Enable optional local diagnostic trace checking.
+    pub enabled: bool,
+    /// Maximum diagnostic tasks dispatched in one worker batch.
+    pub max_batch: u32,
+    /// Diagnostic worker threads (0 selects the bounded automatic count).
+    pub worker_threads: usize,
+    /// Diagnostic ingress capacity (0 derives a bounded capacity).
+    pub queue_cap: usize,
+    /// Maximum diagnostic enqueue wait in milliseconds.
+    pub enqueue_wait_ms: u64,
+    /// Capacity of the important diagnostic-task retry ring.
+    pub retry_ring_cap: usize,
+    /// Maximum retry rounds for an important diagnostic task.
+    pub retry_max_attempts: u32,
+    /// Diagnostic retry scheduler interval in milliseconds.
+    pub retry_tick_ms: u64,
+}
+impl_default!(DiagnosticTrace => {
+    Self {
+        enabled: defaults::zk::trace::ENABLED,
+        max_batch: defaults::zk::trace::MAX_BATCH,
+        worker_threads: defaults::zk::trace::WORKER_THREADS,
+        queue_cap: defaults::zk::trace::QUEUE_CAP,
+        enqueue_wait_ms: defaults::zk::trace::ENQUEUE_WAIT_MS,
+        retry_ring_cap: defaults::zk::trace::RETRY_RING_CAP,
+        retry_max_attempts: defaults::zk::trace::RETRY_MAX_ATTEMPTS,
+        retry_tick_ms: defaults::zk::trace::RETRY_TICK_MS,
+    }
 });
 /// Native STARK/FRI verification settings.
 #[derive(Debug, Clone, Copy)]

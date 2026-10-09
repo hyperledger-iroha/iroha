@@ -40,7 +40,7 @@ fn proof_network_builder() -> NetworkBuilder {
         .with_peers(4)
         .with_config_layer(|layer| {
             // Pin Halo2 verification on for this proof-event fixture; it is also the shipping default.
-            layer.write(["zk", "halo2", "enabled"], true);
+            layer.write(["zk", "pipa_r", "enabled"], true);
         })
         .with_genesis_instruction(Grant::account_permission(
             Permission::new("CanManageVerifyingKeys".into(), Json::new(())),

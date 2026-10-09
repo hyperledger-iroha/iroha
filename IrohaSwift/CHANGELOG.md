@@ -4,18 +4,21 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
-- `KagemushaWalletDigestRoleV1` follows the 2026-10-05 KAGEMUSHA wallet wire
-  revision: the `credit`, `proof`, `stepProof`, `payment`, `blacklistLeaf`,
-  `blacklistNode`, `quotaWindow` and `quotaNode` roles are removed, because those
-  values are now Poseidon σ-field values that the native Rust core computes, and
-  `verifyingKeySet` is added (55 roles). `KagemushaWalletWireV1` adds
-  `fieldModulus`, `fieldValueBytes` and `isCanonicalFieldValue(_:)`, and the
-  `paymentFixedBytes`, `paymentProofBudgetBytes`, `verifyingKeyEntriesMaximum`,
-  `verifyingKeyAllowlistMaximumBytes` and `creditOpeningSiblingsMaximum` bounds.
+- KAGEMUSHA wallet V1 follows the single-design G1 layout: 20 SHA-256 roles,
+  including the NEW unsigned app/enrollment policy identities,
+  60 Poseidon domains and 17 signing domains. Every signature signs its exact
+  32-byte Poseidon message. The artifact manifest alone has a SHA signed-object
+  digest (`artifactManifestDigest(message:signature:)`); circuit-visible object,
+  package, statement, operation and nullifier digests are opaque native Poseidon
+  values. Requests include the receiver's recorded blacklist version and root;
+  quota usage uses a depth-6 array. Only this layout is accepted.
 - Added `KagemushaWalletApplePlatformV1`, the iPhone platform adapter behind the
-  Rust KAGEMUSHA wallet Advance provider: the Secure Enclave payment key, the
-  keychain rollback anchor, the Complete-class protected-data canary, the custody
-  root under Application Support and the boot session identity. Both custody
+  Rust KAGEMUSHA wallet Advance provider: the Secure Enclave payment key, which
+  signs exactly the 32-byte message the Rust signer passes with
+  `kSecKeyAlgorithmECDSASignatureMessageX962SHA256` and refuses any other length
+  (`KagemushaWalletAppleStatusV1.invalidSigningMessage`), the keychain rollback
+  anchor, the Complete-class protected-data canary, the custody root under
+  Application Support and the boot session identity. Both custody
   keychain items are `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` in the
   app's own access group, which `init(appAttest:applicationIdentifierPrefix:)`
   derives from the App ID prefix. The adapter is constructible only for iPhone

@@ -480,7 +480,13 @@ pub(super) async fn exercise(
     {
         verify_equal_vote_context(block, voters)?;
         ensure!(
-            block.commitment().schedule.current.authority.generation == 0
+            block
+                .commitment()
+                .schedule
+                .current
+                .authorization
+                .authority_generation
+                == 0
                 && block.commitment().schedule.current.authorization.epoch == 1,
             "queued Parliament pulse cannot activate the pending generation early"
         );
@@ -632,7 +638,13 @@ pub(super) fn verify_boundary(
         .ok_or_else(|| eyre!("epoch cutoff omitted its mandatory decision"))?;
     for block in chain.iter().filter(|block| block.height() > SELECTION) {
         ensure!(
-            block.commitment().schedule.current.authority.generation == 0
+            block
+                .commitment()
+                .schedule
+                .current
+                .authorization
+                .authority_generation
+                == 0
                 && block.commitment().schedule.current.authorization.epoch == 1
                 && matches!(block.commitment().schedule.current.authorization.beacon,
                 BeaconEpochBindingV1::Installed(installed)
@@ -653,8 +665,14 @@ pub(super) fn verify_boundary(
                     governance_pulse,
                     governance_pulse.height
                 )
-            && cutoff.commitment().schedule.current.authority.generation == 0
-            && boundary.next.authority.generation == 1,
+            && cutoff
+                .commitment()
+                .schedule
+                .current
+                .authorization
+                .authority_generation
+                == 0
+            && boundary.next.authorization.authority_generation == 1,
         "only the exact fresh boundary pulse may schedule activation of the prepared generation"
     );
     Ok(())

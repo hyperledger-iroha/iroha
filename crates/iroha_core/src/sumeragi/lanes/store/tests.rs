@@ -5,7 +5,7 @@ use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use crate::sumeragi::{crypto::KeyPairSigner, lanes::record::tests::fixture, records::FsStep};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_sumeragi::{
-    crypto::{Crypto, NoAttestation, Signer},
+    crypto::{Crypto, Signer},
     types::{Bitmap, HeightConfig},
 };
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,7 +18,7 @@ struct Schedule {
 #[test]
 fn read_only_frame_inspection_authenticates_without_acquiring_store_ownership() {
     let dir = tempfile::tempdir().unwrap();
-    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let (body, qc, source, budget, crypto) = fixture(1025);
     let crypto: SharedCrypto = Arc::new(crypto);
     let store = open(
         dir.path(),
@@ -36,7 +36,6 @@ fn read_only_frame_inspection_authenticates_without_acquiring_store_ownership() 
         Arc::clone(&crypto),
         budget.clone(),
         schedule(&source),
-        Arc::new(NoAttestation),
     )
     .unwrap();
     let (restored, certificate) = read.poll().unwrap();
@@ -51,7 +50,7 @@ fn read_only_frame_inspection_authenticates_without_acquiring_store_ownership() 
 #[test]
 fn read_only_frame_inspection_retains_original_funding_across_refusal() {
     let dir = tempfile::tempdir().unwrap();
-    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let (body, qc, source, budget, crypto) = fixture(1025);
     let crypto: SharedCrypto = Arc::new(crypto);
     let store = open(
         dir.path(),
@@ -68,15 +67,8 @@ fn read_only_frame_inspection_retains_original_funding_across_refusal() {
     drop(qc);
     assert_eq!(budget.reserved_bytes(), 0);
     budget.set_limit_bytes(length);
-    let mut read = LaneFrameRead::open(
-        &path,
-        1,
-        crypto,
-        budget.clone(),
-        schedule(&source),
-        Arc::new(NoAttestation),
-    )
-    .unwrap();
+    let mut read =
+        LaneFrameRead::open(&path, 1, crypto, budget.clone(), schedule(&source)).unwrap();
     for _ in 0..2 {
         let error = read.poll().unwrap_err();
         assert_eq!(error.io_kind(), io::ErrorKind::WouldBlock);
@@ -100,7 +92,7 @@ fn read_only_frame_inspection_retains_original_funding_across_refusal() {
 #[test]
 fn read_only_frame_inspection_rejects_wrong_height_and_historical_instance() {
     let dir = tempfile::tempdir().unwrap();
-    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let (body, qc, source, budget, crypto) = fixture(1025);
     let crypto: SharedCrypto = Arc::new(crypto);
     let store = open(
         dir.path(),
@@ -116,15 +108,9 @@ fn read_only_frame_inspection_rejects_wrong_height_and_historical_instance() {
             instance,
             config: source.config().clone(),
         });
-        let mut read = LaneFrameRead::open(
-            &path,
-            height,
-            Arc::clone(&crypto),
-            budget.clone(),
-            schedule,
-            Arc::new(NoAttestation),
-        )
-        .unwrap();
+        let mut read =
+            LaneFrameRead::open(&path, height, Arc::clone(&crypto), budget.clone(), schedule)
+                .unwrap();
         assert_eq!(
             read.poll().unwrap_err().io_kind(),
             io::ErrorKind::InvalidData
@@ -158,7 +144,6 @@ pub(super) fn open(
         crypto,
         budget.clone(),
         schedule(source),
-        Arc::new(NoAttestation),
         faults,
     )
     .unwrap()
@@ -197,7 +182,7 @@ pub(super) fn alternative(qc: &Qc, crypto: &dyn Crypto) -> Qc {
 #[test]
 fn original_publication_retry_is_exact_but_durable_equivalent_quorum_preserves_original() {
     let dir = tempfile::tempdir().unwrap();
-    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let (body, qc, source, budget, crypto) = fixture(1025);
     let crypto: SharedCrypto = Arc::new(crypto);
     let faults = Arc::new(FailAfterLink {
         armed: AtomicBool::new(false),
@@ -251,7 +236,7 @@ fn original_publication_retry_is_exact_but_durable_equivalent_quorum_preserves_o
 #[test]
 fn startup_and_entry_keep_original_allocations_across_resource_refusals() {
     let dir = tempfile::tempdir().unwrap();
-    let (body, qc, source, budget, crypto) = fixture(23572, None);
+    let (body, qc, source, budget, crypto) = fixture(23572);
     let crypto: SharedCrypto = Arc::new(crypto);
     let store = open(
         dir.path(),
@@ -274,7 +259,6 @@ fn startup_and_entry_keep_original_allocations_across_resource_refusals() {
         Arc::clone(&crypto),
         budget.clone(),
         schedule(&source),
-        Arc::new(NoAttestation),
     )
     .unwrap();
     let (start, error) = start.complete().err().unwrap();
@@ -289,8 +273,7 @@ fn startup_and_entry_keep_original_allocations_across_resource_refusals() {
             &source.instance(),
             Arc::clone(&crypto),
             budget.clone(),
-            schedule(&source),
-            Arc::new(NoAttestation)
+            schedule(&source)
         )
         .is_err()
     );
@@ -321,7 +304,7 @@ fn startup_and_entry_keep_original_allocations_across_resource_refusals() {
 #[test]
 fn corrupted_or_noncanonical_frame_never_becomes_absent_or_a_recovered_tip() {
     let dir = tempfile::tempdir().unwrap();
-    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let (body, qc, source, budget, crypto) = fixture(1025);
     let crypto: SharedCrypto = Arc::new(crypto);
     let store = open(
         dir.path(),
@@ -351,7 +334,6 @@ fn corrupted_or_noncanonical_frame_never_becomes_absent_or_a_recovered_tip() {
         Arc::clone(&crypto),
         budget.clone(),
         schedule(&source),
-        Arc::new(NoAttestation),
     )
     .unwrap();
     let (start, e) = start.complete().err().unwrap();
@@ -364,7 +346,7 @@ fn corrupted_or_noncanonical_frame_never_becomes_absent_or_a_recovered_tip() {
 fn startup_refuses_invalid_full_qc_and_flagged_certificate_without_application_verifier() {
     for flagged in [false, true] {
         let dir = tempfile::tempdir().unwrap();
-        let (body, mut qc, source, budget, crypto) = fixture(1025, flagged.then_some(7));
+        let (body, mut qc, source, budget, crypto) = fixture(1025);
         let crypto: SharedCrypto = Arc::new(crypto);
         if !flagged {
             qc.agg_sig.0[0] ^= 1;
@@ -381,7 +363,6 @@ fn startup_refuses_invalid_full_qc_and_flagged_certificate_without_application_v
             crypto,
             budget.clone(),
             schedule(&source),
-            Arc::new(NoAttestation),
         )
         .unwrap();
         let (start, e) = start.complete().err().unwrap();
@@ -395,7 +376,7 @@ fn startup_refuses_invalid_full_qc_and_flagged_certificate_without_application_v
 fn body_reader_binds_independent_source_and_retains_allocation_refusal() {
     use crate::sumeragi::body_read::BodyReadPoll;
     let dir = tempfile::tempdir().unwrap();
-    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let (body, qc, source, budget, crypto) = fixture(1025);
     let crypto: SharedCrypto = Arc::new(crypto);
     let store = open(
         dir.path(),
@@ -439,7 +420,7 @@ fn body_reader_binds_independent_source_and_retains_allocation_refusal() {
 #[test]
 fn directory_and_instance_guards_remain_strict() {
     let dir = tempfile::tempdir().unwrap();
-    let (_, _, source, budget, crypto) = fixture(1, None);
+    let (_, _, source, budget, crypto) = fixture(1);
     let crypto: SharedCrypto = Arc::new(crypto);
     let store = open(
         dir.path(),
@@ -456,8 +437,7 @@ fn directory_and_instance_guards_remain_strict() {
             &source.instance(),
             Arc::clone(&crypto),
             budget.clone(),
-            schedule(&source),
-            Arc::new(NoAttestation)
+            schedule(&source)
         )
         .is_err()
     );
@@ -471,8 +451,7 @@ fn directory_and_instance_guards_remain_strict() {
             &source.instance(),
             Arc::clone(&crypto),
             budget.clone(),
-            schedule(&source),
-            Arc::new(NoAttestation)
+            schedule(&source)
         )
         .is_err()
     );
@@ -482,8 +461,7 @@ fn directory_and_instance_guards_remain_strict() {
             &Hash32([9; 32]),
             crypto,
             budget,
-            schedule(&source),
-            Arc::new(NoAttestation)
+            schedule(&source)
         )
         .is_err()
     );
@@ -535,7 +513,7 @@ fn at_height(
 #[test]
 fn contiguous_heights_context_conflicts_and_reopening_preserve_prior_semantics() {
     let dir = tempfile::tempdir().unwrap();
-    let (first, qc, source, budget, crypto) = fixture(1025, None);
+    let (first, qc, source, budget, crypto) = fixture(1025);
     let crypto: SharedCrypto = Arc::new(crypto);
     let store = open(
         dir.path(),
@@ -550,7 +528,7 @@ fn contiguous_heights_context_conflicts_and_reopening_preserve_prior_semantics()
         match index {
             0 => bad.instance = Hash32([9; 32]),
             1 => bad.epoch.context = Hash32([9; 32]),
-            _ => bad.attest = true,
+            _ => unreachable!(),
         };
         assert!(store.append(&first, &bad).is_err());
         assert_eq!(store.height(), 0);
@@ -622,7 +600,7 @@ impl Faults for FailBeforeLink {
 #[test]
 fn prepublication_failure_has_no_frame_and_noncontiguous_directory_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
-    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let (body, qc, source, budget, crypto) = fixture(1025);
     let crypto: SharedCrypto = Arc::new(crypto);
     let store = open(
         dir.path(),
@@ -661,8 +639,7 @@ fn prepublication_failure_has_no_frame_and_noncontiguous_directory_is_rejected()
             &source.instance(),
             crypto,
             budget,
-            schedule(&source),
-            Arc::new(NoAttestation)
+            schedule(&source)
         )
         .is_err()
     );
@@ -671,7 +648,7 @@ fn prepublication_failure_has_no_frame_and_noncontiguous_directory_is_rejected()
 #[test]
 fn committed_body_preserves_authentication_and_original_pool_ownership() {
     let dir = tempfile::tempdir().unwrap();
-    let (body, qc, source, budget, crypto) = fixture(4097, None);
+    let (body, qc, source, budget, crypto) = fixture(4097);
     let store = open(
         dir.path(),
         &source,
@@ -705,7 +682,7 @@ fn committed_body_preserves_authentication_and_original_pool_ownership() {
 fn append_rejects_body_from_another_committee_even_with_a_valid_store_commit_qc() {
     use iroha_sumeragi::{availability::BodyRestoration, crypto::Verifier, types::Committee};
     let dir = tempfile::tempdir().unwrap();
-    let (body, mut qc, original, budget, crypto) = fixture(1025, None);
+    let (body, mut qc, original, budget, crypto) = fixture(1025);
     let mut members: Vec<_> = (11..=14)
         .map(|seed| {
             let pair = KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal);
@@ -749,7 +726,7 @@ fn append_rejects_body_from_another_committee_even_with_a_valid_store_commit_qc(
             &source.config().epoch.id,
             &source.config().committee,
         )
-        .verify_commit_qc(&NoAttestation, &qc, Some(body.header()))
+        .verify_commit_qc(&qc, Some(body.header()))
     );
     let (_, error) = BodyRestoration::new(
         source.clone(),
@@ -782,7 +759,7 @@ fn append_rejects_body_from_another_committee_even_with_a_valid_store_commit_qc(
 #[test]
 fn committed_body_moves_the_exact_completed_read_without_metadata_clone_or_readmission() {
     let directory = tempfile::tempdir().unwrap();
-    let (body, qc, source, budget, crypto) = fixture(1025, None);
+    let (body, qc, source, budget, crypto) = fixture(1025);
     let store = open(
         directory.path(),
         &source,
@@ -820,7 +797,7 @@ fn committed_body_moves_the_exact_completed_read_without_metadata_clone_or_readm
 fn cancelled_lane_read_finishes_original_custody_before_a_different_height() {
     for invalid_certificate in [false, true] {
         let dir = tempfile::tempdir().unwrap();
-        let (first, first_qc, source, budget, crypto) = fixture(1025, None);
+        let (first, first_qc, source, budget, crypto) = fixture(1025);
         let crypto: SharedCrypto = Arc::new(crypto);
         let store = open(
             dir.path(),

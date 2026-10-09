@@ -4,7 +4,7 @@ use authorization_v1::{
     KaigiAuthorizationActionV1, KaigiAuthorizationContextV1, KaigiAuthorizationOutputsV1,
     KaigiAuthorizationPublicInputsV1, KaigiAuthorizationWitnessV1, compute_authorization_v1,
 };
-use halo2_proofs::halo2curves::ff::PrimeField;
+use ff::PrimeField;
 use usage_v1::{KaigiUsageContextV1, KaigiUsageOutputsV1, compute_usage_v1};
 
 fn context() -> KaigiAuthorizationContextV1 {

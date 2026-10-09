@@ -379,7 +379,7 @@ async fn run() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
-            layer.write(["zk", "halo2", "enabled"], true);
+            layer.write(["zk", "pipa_r", "enabled"], true);
         });
     for permission in [
         Permission::from(CanManageSmartContractCode),

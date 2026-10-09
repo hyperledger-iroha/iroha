@@ -187,6 +187,20 @@ impl<'a> ServiceChildInventory<'a> {
         Ok(owner)
     }
 
+    /// Observe only genuine first-reserve purpose absence within this fresh parent census.
+    /// Present names retain their ordinary standalone owner, including empty pre-lock prefixes.
+    /// Consume every native namespace and whole-profile exit check before returning; this
+    /// supplies neither a child lock, persistent absence nor native dispatch authority.
+    pub(in crate::managed) fn initial_reserve_policy_absent(self) -> Result<bool> {
+        self.revalidate()?;
+        let absent = !self.branches[self.network]
+            .names
+            .iter()
+            .any(|name| name == NetworkPurpose::InitialReservePolicy.directory_name());
+        self.finish()?;
+        Ok(absent)
+    }
+
     pub(in crate::managed) fn finish(self) -> Result<()> {
         self.revalidate()?;
         self.parent.validate_profile()?;

@@ -244,7 +244,10 @@ that workflow for local release verification.
    XCFramework slice; it does not generate the header from Rust. Run
    `bash ci/check_connect_norito_bridge_header.sh` to check the ABI version, the
    exact C/Rust export inventories, the shared error codes and size bounds, and
-   the rejection of retired namespaces. The bridge exports no KAGEMUSHA symbol.
+   the rejection of retired namespaces. The sole KAGEMUSHA C API requires nine
+   `connect_norito_kagemusha_wallet_*_v1` exports: `revision`, `open`, `close`,
+   `activity`, `commit`, `retry`, `resume`, `fold`, and `credit_status`. Unknown
+   names, aliases and other wallet versions are rejected.
    The gate also compiles the header as C11 and C++17.
    Ensure `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h`
    matches the source header before zipping.
@@ -379,6 +382,19 @@ stays enabled, and native ABI/symbol admission is unchanged. Selecting the relea
 corridor, targeting iOS, or compiling Release rejects this input. Canonical release,
 pin, archive, and CI handoff owners retain the five-triple/three-slice contract.
 
+`scripts/build_native_sdk_host_guarded.py` reuses the explicit stable
+`--target-dir` under an exclusive emitter lock. Omit `--jobs` for Cargo's native
+jobserver. A warm artifact retains Cargo's actual freshness observation and must
+pass all existing source, tool, dep-info, archive custody and ABI checks. Its
+external evidence directory remains create-only; the target lane is preserved.
+
+The current KAGEMUSHA wallet inventory includes the C
+`connect_norito_kagemusha_wallet_snapshot_v1` export and the JNI
+`KagemushaWalletNativeV1_snapshot` entry. Snapshot consumers retain the exact
+Native-selected head, ownership, fold progress and lifecycle. A snapshot does
+not grant operation readiness; unavailable custody or proof artifacts remain
+errors. Host symbol and snapshot unit checks do not qualify a payment or device.
+
 ## Canonical Android output and runtime inventory
 
 The Kotlin build, Android artifact checker, and package owner use the same
@@ -404,6 +420,13 @@ compares both staged files and actual ZIP payloads against the captured bytes.
 The source inventory, copied payloads and archive are rechecked immediately
 before the existing atomic no-replace package publication. Source/copy mutation
 or later restoration cannot replace the original validated payload.
+
+For each Android ELF slice, `scripts/check_mobile_sdk_artifacts.sh` requires the
+current C inventory and all five `KagemushaWalletNativeV1` JNI methods:
+`revision`, `open`, `close`, `activity`, and `call`. Retired and unknown JNI
+exports are rejected. `scripts/check_mobile_sdk_artifacts_test.sh` covers each
+missing wallet method and large forbidden-symbol inventories; Apple slices
+require only the C wallet API.
 
 The mobile workflow explicitly runs `:core-jvm:test` before publication and
 creates per-module runtime CycloneDX reports for `core-jvm`, `client-android`,

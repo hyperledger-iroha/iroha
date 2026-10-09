@@ -4,10 +4,6 @@ use super::*;
 use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     block::{SignedBlock, consensus::SumeragiGenesisContextParameters},
-    isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationTemplateV1,
-        KagemushaMintFinalityGenesisParametersV1,
-    },
     parameter::{Parameter, system::SumeragiConsensusMode},
 };
 use std::num::NonZeroU64;
@@ -74,22 +70,6 @@ impl Fixture {
         let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
         let genesis = key(101, Algorithm::Ed25519);
         let canary = key(102, Algorithm::Ed25519);
-        let mut validators: Vec<_> = (110..114)
-            .map(|seed| {
-                let peer = PeerId::new(key(seed, Algorithm::BlsNormal).public_key().clone());
-                iroha_core_zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                    &[seed; 32], 0, peer,
-                ).expect("native public mint-finality fixture keys")
-            })
-            .collect();
-        validators.sort_by(|a, b| a.validator.cmp(&b.validator));
-        let mint = KagemushaMintFinalityGenesisParametersV1 {
-            authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
-                version: KAGEMUSHA_CHAIN_VERSION_V1,
-                generation: 0,
-                validators,
-            },
-        };
         let topology = (110..114)
             .map(|seed| {
                 let validator = key(seed, Algorithm::BlsNormal);
@@ -107,7 +87,6 @@ impl Fixture {
         npos.validate().unwrap();
         let mut builder = iroha_genesis::GenesisBuilder::new_without_executor(CHAIN_ID.into(), ".")
             .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
-            .with_kagemusha_mint_finality_genesis_parameters(mint)
             .set_topology(topology)
             .append_parameter(Parameter::Sumeragi(
                 iroha_data_model::parameter::system::SumeragiParameter::EpochLengthBlocks(
@@ -306,7 +285,15 @@ fn execute_fixture_genesis(
         sumeragi::network_topology::Topology,
     };
     use iroha_data_model::{account::Account, domain::Domain};
-    let provisional = manifest.clone().build_and_sign(key).unwrap();
+    // Sign the same computed native policy as Kagami; the data-model fallback
+    // constant is not the configured Core policy used by this execution fixture.
+    let provisional = manifest
+        .clone()
+        .build_and_sign_with_confidential_policy_hash(
+            key,
+            Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+        )
+        .unwrap();
     let authority = AccountId::new(key.public_key().clone());
     let world = World::with(
         [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],

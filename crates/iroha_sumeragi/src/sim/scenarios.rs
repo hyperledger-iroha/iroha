@@ -8,9 +8,7 @@ use super::{
     net::{Partition, Spike},
     oracle::leader_turns_bound,
     rng::{Rng, seed_of},
-    scenario::{
-        Authority, Churn, ClockGuard, CrashPoint, Fault, Perf, Profile, Scenario, Workload,
-    },
+    scenario::{Churn, ClockGuard, CrashPoint, Fault, Perf, Profile, Scenario, Workload},
     world::preview,
 };
 use crate::{pacemaker::t_req_nominal, types::Millis};
@@ -56,7 +54,7 @@ pub const ALL: &[(&str, Builder)] = &[
     ("F34", f34),
     ("F35", f35),
     ("F36", f36),
-    ("F37", f37),
+    ("exact-quorum", exact_quorum_adversary),
     ("F38", f38),
     ("F39", f39),
 ];
@@ -1562,78 +1560,6 @@ pub fn f36(seed: u64) -> Scenario {
     sc
 }
 
-/// F37: commit attestation (§3.7). Every eighth transaction needs mint finality, so a share of
-/// the blocks is flagged. Every authority attests only blocks its node executed (`Pending`
-/// before, as KAGEMUSHA needs `R`'s preimage). Up to `f` Byzantine members send forged or
-/// stripped attestations — one of them, as proxy tail, also strips the attestations of the
-/// `CommitQC`s it forms and clears their flag every other time, and over-aggregates genuine
-/// attested votes into `q + 1`-signer `CommitQC`s — and one honest member may hold no
-/// authority, or a misconfigured one that its own verifier rejects, while at least `q` members
-/// still attest. On every other seed one attesting honest member executes non-empty blocks
-/// slowly, so the `PrepareQC` of a flagged block often reaches it before its execution ends.
-/// Flagged blocks commit, every committed flagged block's `CommitQC` carries exactly `q` valid
-/// attestations (O-ATT), and liveness holds.
-pub fn f37(seed: u64) -> Scenario {
-    let n = pick(seed, &[4, 7, 5, 10]);
-    let mut sc = sized("F37", seed, n);
-    let mut rng = side("F37", seed);
-    sc.workload = Some(Workload {
-        mint_every: 8,
-        ..Workload::default()
-    });
-    let f = f_of(n);
-    // `b` Byzantine members and `u` honest members without a working authority, `b + u ≤ f`
-    // (so at least `q` members attest); n = 4 and 5 alternate between the two kinds.
-    let (b, u) = match (f, (seed / 4) % 2) {
-        (1, 0) => (1, 0),
-        (1, _) => (0, 1),
-        (f, 0) => (f, 0),
-        (f, _) => (f - 1, 1),
-    };
-    let chosen = distinct(&mut rng, n, b + u);
-    let (byz, unattested) = chosen.split_at(b);
-    sc.byz = byz
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            let mut strategies = vec![Strategy::ForgeAttestations];
-            if i == 0 {
-                strategies.push(Strategy::StripAttestations);
-                strategies.push(Strategy::OverAggregate);
-            }
-            (*m, strategies)
-        })
-        .collect();
-    // A slow executor among the attesting honest members (its Commit waits for its execution).
-    if seed % 2 == 1
-        && let Some(slow) = (0..n).find(|m| !chosen.contains(m))
-    {
-        sc.set_profile(
-            slow,
-            Profile {
-                exec_nonempty: 400,
-                ..Profile::default()
-            },
-        );
-    }
-    for m in unattested {
-        let authority = if (seed / 8).is_multiple_of(2) {
-            Authority::Missing
-        } else {
-            Authority::Forging
-        };
-        sc.set_profile(
-            *m,
-            Profile {
-                authority,
-                ..Profile::default()
-            },
-        );
-    }
-    sc.checks.progress = 10;
-    sc
-}
-
 /// F38: a lane instance next to the global one (`specs/sumeragi_lanes.md` §4.1). The lane's
 /// pinned committee is four of the global validators; every other machine follows the lane as an
 /// observer. The lane stalls for a while and the global instance keeps finalizing; a lane
@@ -1674,7 +1600,7 @@ pub fn f38(seed: u64) -> Scenario {
 /// re-proposals", MS51). Oracles: O-TIME, O-LIVE, O-AGR, O-FAULT (the guard's refusals are
 /// local faults).
 pub fn f39(seed: u64) -> Scenario {
-    let n = pick(seed / 3, &[4, 7, 5]);
+    let n = pick(seed / 3, &[4, 7, 10]);
     let mut sc = sized("F39", seed, n);
     let mut rng = side("F39", seed);
     let f = f_of(n);
@@ -1747,5 +1673,19 @@ pub fn f39(seed: u64) -> Scenario {
         sc.duration = 95_000;
     }
     sc.checks.progress = 5;
+    sc
+}
+
+/// Genuine signer supersets remain invalid while an honest quorum makes progress.
+pub fn exact_quorum_adversary(seed: u64) -> Scenario {
+    let n = pick(seed, &[4, 7, 10]);
+    let mut sc = sized("exact-quorum", seed, n);
+    let mut rng = side("exact-quorum", seed);
+    sc.byz = distinct(&mut rng, n, f_of(n))
+        .into_iter()
+        .map(|machine| (machine, vec![Strategy::OverAggregate]))
+        .collect();
+    sc.workload = Some(Workload::default());
+    sc.checks.progress = 10;
     sc
 }

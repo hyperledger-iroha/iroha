@@ -30,7 +30,7 @@ use crate::{
     Core,
     api::{Action, Event, ExecOutcome, Init, LocalParams},
     availability::AvailableBody,
-    crypto::{Attestation, Crypto, Signer},
+    crypto::{Crypto, Signer},
     message::{Qc, TrafficClass, WireMessage},
     safety::SafetyRecord,
     types::{AppliedConfig, Hash32, Millis, PublicKey},
@@ -276,8 +276,6 @@ pub struct Start {
     pub crypto: Box<dyn Crypto>,
     /// Original pool shared by Core and its worker jobs.
     pub budget: iroha_allocation::AllocationBudget,
-    /// The commit-attestation extension (§3.7).
-    pub attestation: Attestation,
     /// Local time of the start.
     pub now: Millis,
     /// One FIFO for all ingress, ticks behind queued messages (the ML12 fault, F29 control).
@@ -369,7 +367,6 @@ impl Host for FakeHost {
             start.init,
             start.signers,
             start.crypto,
-            start.attestation,
             start.budget,
             start.now,
         )?;
@@ -684,7 +681,6 @@ mod tests {
                     payload_len: u32::try_from(payload.len()).unwrap(),
                     proposer: 0,
                     skipped_leaders: Vec::new(),
-                    attest: false,
                 },
                 &payload,
                 &inst.config(height),
@@ -700,7 +696,6 @@ mod tests {
         };
         let orphan = block_at(2, Hash32([9; 32]), Hash32([9; 32]));
         let qc = Qc {
-            attestation_witness: None,
             epoch: crate::testing::TEST_EPOCH.id,
             kind: VoteKind::Commit,
             instance: inst.id,
@@ -708,10 +703,8 @@ mod tests {
             view: 0,
             block_hash: bh1,
             result: r1,
-            attest: false,
             signers: Bitmap::new(4),
             agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
-            attestations: Vec::new(),
         };
         let step = |world: &mut World, ops: Vec<Op>, until: Millis| {
             state.borrow_mut().ops = ops;
@@ -917,7 +910,6 @@ mod tests {
             init,
             signers: Vec::new(),
             crypto: Box::new(world.replicas[0].crypto.clone()),
-            attestation: Attestation::none(),
             now: 0,
             budget: world.replicas[0].budget.clone(),
             fifo_ingress: false,

@@ -266,7 +266,6 @@ class TairaSim:
         committee: Committee,
         *,
         signer_indices: list[int] | None = None,
-        attest: int = 1,
         body_tag: bytes = b"",
         **overrides,
     ) -> Certificate:
@@ -282,7 +281,6 @@ class TairaSim:
             signer_indices=indices,
             header=x,
             instance=self.instance,
-            attest=attest,
             **fields,
             **overrides,
         )

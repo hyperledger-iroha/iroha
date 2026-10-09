@@ -25,23 +25,23 @@ use std::{
 use super::{
     byz::Adversary,
     crypto::{SharedLog, SimCrypto, SimSigner},
-    driver::{Clock, Executor, Io, OwnedWrite, Write, decode_txs, divergent_exec, payload_mints},
+    driver::{Clock, Executor, Io, OwnedWrite, Write, decode_txs, divergent_exec},
     host::{Done, Host, Op, Start, fake_host},
     net::{Fate, NetConfig, Nic, Packet, approx_size, class_of, lane},
     oracle::Oracle,
     records::{KeyStore, StoreId},
     rng::{Rng, seed_of},
-    scenario::{Authority, Checks, Churn, CrashPoint, Fault, IoKill, Profile, Scenario, Workload},
+    scenario::{Checks, Churn, CrashPoint, Fault, IoKill, Profile, Scenario, Workload},
 };
 use crate::{
     api::{Action, CommittedTip, Event, ExecOutcome, HaltReason, Init, LocalParams},
     availability::AvailableBody,
-    crypto::{Attestation, Signer},
+    crypto::Signer,
     message::{
         PayloadChunk, PayloadManifest, PayloadRequest, Qc, SyncEntry, SyncResponse, WireMessage,
     },
     safety::{RecordState, SafetyRecord},
-    testing::{FakeAttestor, fake_attestation_ext, sha256},
+    testing::sha256,
     types::{ChainParams, Committee, Hash32, HeightConfig, Millis, PublicKey},
 };
 
@@ -232,7 +232,6 @@ enum Ev {
         op: u64,
         bh: Hash32,
         height: u64,
-        scheduling_epoch: crate::types::EpochId,
         outcome: ExecOutcome,
     },
     NicFree {
@@ -772,16 +771,12 @@ impl World {
                 op,
                 bh,
                 height,
-                scheduling_epoch,
                 outcome,
             } => {
                 if self.alive(r, epoch) {
                     if let ExecOutcome::Valid(res) = &outcome {
-                        let instance = self.instances[self.replicas[r].inst].id;
                         let exec = &mut self.replicas[r].exec;
                         exec.cache.insert(bh, (height, *res));
-                        exec.executed
-                            .record(&instance, &scheduling_epoch, height, &bh, res);
                     }
                     let outcome = Some(outcome);
                     self.complete_host(r, Done::Executed { op, outcome });
@@ -1061,7 +1056,6 @@ impl World {
                         req,
                         context,
                         witness: crate::types::ControlWitness::empty(),
-                        attest: false,
                     }),
                 },
             ),
@@ -1692,7 +1686,6 @@ impl World {
         rep.applied = (height, bh, qc.result);
         rep.bodies.retain(|_, b| b.header().height > height);
         rep.exec.cache.retain(|_, (h, _)| *h >= height);
-        rep.exec.executed.prune_through(height);
         for (id, _) in decode_txs(block.payload().as_slice()) {
             rep.txs.remove(&id);
         }
@@ -1805,7 +1798,6 @@ impl World {
 
     fn exec_done(&mut self, r: usize, job_id: u64) {
         let epoch = self.epoch_of(r);
-        let instance = self.instances[self.replicas[r].inst].id;
         let rep = &mut self.replicas[r];
         let Some((job, _)) = rep.exec.running.take_if(|(job, _)| job.id == job_id) else {
             return;
@@ -1818,9 +1810,6 @@ impl World {
         if let ExecOutcome::Valid(res) = &outcome {
             let height = job.block.header().height;
             rep.exec.cache.insert(job.bh, (height, *res));
-            rep.exec
-                .executed
-                .record(&instance, &job.block.header().epoch, height, &job.bh, res);
         }
         rep.host.deliver(Event::Executed {
             block_hash: job.bh,
@@ -1876,8 +1865,6 @@ impl World {
         let hash = crate::preimage::payload_hash(&self.hasher, &payload);
         self.oracle.built.insert((inst, m, hash));
         self.replicas[r].pending_ready = payload.is_empty().then_some(req);
-        // The application flag of this payload (§3.7 A1).
-        let attest = payload_mints(&payload);
         let latency = self.rng.range(profile.build_min, profile.build_max);
         self.schedule(
             at + latency,
@@ -1894,7 +1881,6 @@ impl World {
                         owned.admit(&self.replicas[r].budget).unwrap();
                         Some(owned)
                     },
-                    attest,
                 }),
             },
         );
@@ -2124,7 +2110,6 @@ impl World {
                         op,
                         bh,
                         height,
-                        scheduling_epoch: block.header().epoch,
                         outcome,
                     },
                 );
@@ -2180,7 +2165,6 @@ impl World {
                 rep.applied = (height, qc.block_hash, qc.result);
                 rep.bodies.retain(|_, b| b.header().height > height);
                 rep.exec.cache.retain(|_, (h, _)| *h >= height);
-                rep.exec.executed.prune_through(height);
                 for (id, _) in decode_txs(block.payload().as_slice()) {
                     rep.txs.remove(&id);
                 }
@@ -2349,7 +2333,6 @@ impl World {
                 signers,
                 crypto: Box::new(crypto),
                 budget: rep.budget.clone(),
-                attestation: self.attestation_for(r),
                 now: local_now,
                 fifo_ingress: self.machines[m].profile.fifo_ingress
                     || cfg!(sumeragi_mutation = "ML12"),
@@ -2398,21 +2381,6 @@ impl World {
             }
         }
         self.trace(m, "RESTART".to_owned());
-    }
-
-    /// The commit-attestation extension of replica `r` (§3.7): its machine profile's authority
-    /// (every key, none, or forging) with the ground-truth verifier. Like a KAGEMUSHA authority,
-    /// which needs `R`'s preimage, it attests only blocks the replica executed (`Pending` before,
-    /// A2).
-    pub fn attestation_for(&self, r: usize) -> Attestation {
-        let rep = &self.replicas[r];
-        let m = rep.machine;
-        let attestor = match self.machines[m].profile.authority {
-            Authority::Full => FakeAttestor::new(),
-            Authority::Missing => FakeAttestor::without_authority(self.machines[m].keys.clone()),
-            Authority::Forging => FakeAttestor::forging(),
-        };
-        fake_attestation_ext(attestor.after_execution(rep.exec.executed.clone()))
     }
 
     /// The start-up check of the store id (§7.4 rule 3), then the installation event of every
@@ -2732,13 +2700,9 @@ fn describe_event(event: &Event) -> String {
     match event {
         Event::Tick => "Tick".to_owned(),
         Event::Message { msg, .. } => describe_msg(msg),
-        Event::PayloadBuilt {
-            req,
-            payload,
-            attest,
-        } => {
+        Event::PayloadBuilt { req, payload } => {
             format!(
-                "PayloadBuilt req{req} {}B attest={attest}",
+                "PayloadBuilt req{req} {}B",
                 payload.as_ref().map_or(0, |value| value.as_slice().len())
             )
         }

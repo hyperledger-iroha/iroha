@@ -1,4 +1,8 @@
 //! Validate Nexus autoscale configuration parsing and guardrails.
+#[path = "publisher_config_fixture.rs"]
+mod publisher_config_fixture;
+use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
+
 use iroha_config::parameters::{
     actual::Root as ActualConfig,
     user::{Autoscale as UserAutoscale, Root as UserConfig},
@@ -8,9 +12,11 @@ use iroha_model_base::topology::LaneId;
 use std::path::PathBuf;
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
-    ConfigReader::new()
-        .read_toml_with_extends(base_path)
-        .expect("base config should load")
+    with_fixture_refs(
+        ConfigReader::new()
+            .read_toml_with_extends(base_path)
+            .expect("base config should load"),
+    )
 }
 fn parse_actual_config(inline_toml: &str) -> Result<ActualConfig, String> {
     let table: toml::Table = inline_toml.parse().expect("inline TOML should parse");
@@ -18,7 +24,8 @@ fn parse_actual_config(inline_toml: &str) -> Result<ActualConfig, String> {
         .with_toml_source(TomlSource::inline(table))
         .read_and_complete::<UserConfig>()
         .map_err(|error| format!("{error:?}"))?;
-    user.parse().map_err(|error| format!("{error:?}"))
+    user.parse_with_file_source(&ParserOnlyPublisherFiles)
+        .map_err(|error| format!("{error:?}"))
 }
 fn autoscale_config_error(inline_toml: &str) -> String {
     parse_actual_config(inline_toml).expect_err("autoscale config should be rejected")

@@ -28,6 +28,7 @@ use std::{fs::File, time::Instant};
 
 #[path = "service_authority/checkpoint_cache.rs"]
 mod checkpoint_cache;
+pub(in crate::managed) use checkpoint_cache::CheckpointImports;
 
 #[path = "service_authority/inventory.rs"]
 mod inventory;
@@ -102,6 +103,62 @@ pub(super) struct ServiceAuthority {
     pub(super) peers: Vec<(PeerId, Client)>,
 }
 
+/// Borrowed original public intent inside one synchronous pure projection.
+///
+/// This is neither current native state nor a signing capability. The sole projection owner
+/// must consume the view with `finish` before returning its result; native reads and actions
+/// retain their ordinary independent authority checks outside this view.
+#[must_use = "finish the original-intent view before returning its projection"]
+pub(super) struct OriginalServiceIntent<'a> {
+    authority: &'a ServiceAuthority,
+}
+
+impl OriginalServiceIntent<'_> {
+    pub(super) fn provider_plans(&self) -> Result<&[RetainedProviderServicePlan; 3]> {
+        if matches!(self.authority.scope, Scope::Provider { .. }) {
+            return Err(invalid("provider service cannot select all network plans"));
+        }
+        Ok(self.authority.profile.original_plans())
+    }
+
+    pub(super) fn manifest(&self) -> &StreamTokenAuthorityManifest {
+        &self.authority.manifest
+    }
+
+    pub(super) fn network_id(&self) -> iroha_data_model::NetworkId {
+        self.authority.config.network_id
+    }
+
+    pub(super) fn chain_id(&self) -> &str {
+        self.authority.config.chain.as_str()
+    }
+
+    pub(super) fn manager_account(&self) -> &AccountId {
+        &self.authority.config.account
+    }
+
+    pub(super) fn genesis_hash(&self) -> [u8; 32] {
+        *self.authority.genesis.genesis.hash().as_ref()
+    }
+
+    pub(super) fn network_role(&self, role: NetworkServiceAuthorityRole) -> Result<&AccountId> {
+        self.authority.network_role(role)
+    }
+
+    pub(super) fn gateway_compliance_plan(
+        &self,
+        provider: ProviderId,
+    ) -> Result<RetainedGatewayCompliancePlan> {
+        self.authority.provider_inventory(provider)?;
+        // The original bounded canonical decode remains real in every enclosing resource scope.
+        self.authority.profile.original_compliance_plan(provider)
+    }
+
+    pub(super) fn finish(self) -> Result<()> {
+        self.authority.validate_profile()
+    }
+}
+
 fn operation_directory(
     runtime: &PrivateDirectory,
     scope: Scope,
@@ -140,6 +197,13 @@ fn operation_directory(
 }
 
 impl ServiceAuthority {
+    /// Enter a pure original-intent projection after fresh whole-image and operation-lock checks.
+    /// The returned view must finish with the same checks before its projection is returned.
+    pub(super) fn original_intent(&self) -> Result<OriginalServiceIntent<'_>> {
+        self.validate_profile()?;
+        Ok(OriginalServiceIntent { authority: self })
+    }
+
     pub(super) fn open_network(
         prepared: &PreparedLocalnet,
         purpose: NetworkPurpose,
@@ -309,6 +373,49 @@ impl ServiceAuthority {
         self.profile.original_publication_plan()
     }
 
+    /// Sign through the sole generated catalog owner, retaining full source and lock custody.
+    pub(super) fn sign_gateway_compliance_catalog(
+        &self,
+        previous: Option<&sorafs_manifest::gateway_compliance::GatewayComplianceCatalogV1>,
+        now_seconds: u64,
+    ) -> Result<sorafs_manifest::gateway_compliance::GatewayComplianceCatalogV1> {
+        self.validate_profile()?;
+        let catalog = self.profile.sign_gateway_compliance_catalog(
+            self.provider_id()?,
+            previous,
+            now_seconds,
+        )?;
+        self.validate_profile()?;
+        Ok(catalog)
+    }
+
+    /// Verify original catalog history; this grants no current freshness or serving authority.
+    pub(super) fn validate_generated_gateway_catalog(
+        &self,
+        catalog: &sorafs_manifest::gateway_compliance::GatewayComplianceCatalogV1,
+    ) -> Result<()> {
+        self.validate_profile()?;
+        self.profile
+            .validate_generated_gateway_catalog(self.provider_id()?, catalog)?;
+        self.validate_profile()
+    }
+
+    /// Sign only the exact observed catalog with the original gateway key and current clock.
+    pub(super) fn sign_observed_gateway_catalog(
+        &self,
+        observation: &super::gateway_compliance::ObservedGatewayCatalog,
+        catalog: &sorafs_manifest::gateway_compliance::GatewayComplianceCatalogV1,
+    ) -> Result<sorafs_manifest::gateway_compliance::GatewayComplianceAcknowledgementV1> {
+        self.validate_profile()?;
+        let acknowledgement = self.profile.sign_observed_gateway_catalog(
+            self.provider_id()?,
+            observation,
+            catalog,
+        )?;
+        self.validate_profile()?;
+        Ok(acknowledgement)
+    }
+
     pub(super) fn provider_plan(&self) -> Result<RetainedProviderServicePlan> {
         self.validate_profile()?;
         self.profile.original_plan(self.provider_id()?)
@@ -361,7 +468,7 @@ impl ServiceAuthority {
 
     pub(super) fn validate_profile(&self) -> Result<()> {
         #[cfg(test)]
-        let _timing = crate::custody_timing::Span::enter(crate::custody_timing::Category::Profile);
+        profile_validation_test_support::record();
         self.validate_operation_custody()?;
         self.profile.revalidate(&self.prepared, &self.manifest)?;
         if let Scope::Provider { provider, slot } = self.scope
@@ -420,3 +527,10 @@ impl ServiceAuthority {
 #[cfg(test)]
 #[path = "service_authority/capture_tests.rs"]
 mod capture_tests;
+
+#[cfg(test)]
+pub(super) mod profile_validation_test_support;
+
+#[cfg(test)]
+#[path = "service_authority/original_intent_tests.rs"]
+mod original_intent_tests;

@@ -1601,11 +1601,10 @@ state_test! { sync merge_write_set_encoder_mentions_every_persisted_world_block_
     let_row! { encoder_end = encoder_tail .find("pub struct WorldTransaction") .expect("merge write-set encoder terminator must remain discoverable") };
     let encoder = &encoder_tail[..encoder_end];
     let_row! { fields = struct_body.lines().filter_map(|line| { if !line.starts_with("    ") || line.starts_with("        ") { return None; } let declaration = line .trim() .strip_prefix("pub(crate) ") .or_else(|| line.trim().strip_prefix("pub ")) .unwrap_or_else(|| line.trim()); let (field, _) = declaration.split_once(':')?; field .chars() .all(|character| character == '_' || character.is_ascii_alphanumeric()) .then_some(field) }) };
-    assert!(struct_body.contains("operation_index_scope: iroha_allocation::OwnedAllocationScope"));
     for field in fields {
-        // This original allocation owner is process-local custody, not WSV
-        // content. Every persisted and derived ledger field remains checked.
-        if matches!(field, "dataspace_catalog" | "external_event_buf" | "operation_index_scope") {
+        // Block-local extras are not WSV content. Every persisted and derived
+        // ledger field remains checked.
+        if matches!(field, "dataspace_catalog" | "external_event_buf") {
             continue;
         }
         assert!(
@@ -1943,7 +1942,6 @@ fn deserialize_state_snapshot_value_with_kura(
     kura: Arc<Kura>,
 ) -> Result<Box<State>, deserialize::StateRestoreError> {
     deserialize::KuraSeed {
-        operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
         execution_budget: iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),
@@ -4385,8 +4383,7 @@ state_test! { sync account_alias_bindings_roundtrip_through_state_json
             "derived account index `{derived_field}` must not be serialized"
         );
     }
-    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -4657,8 +4654,7 @@ state_test! { sync asset_definition_alias_bindings_roundtrip_through_state_json
     seed_snapshot_asset_incarnations(&mut world);
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -4766,8 +4762,7 @@ state_test! { sync asset_escrow_record_roundtrips_through_state_json
     world.asset_escrows.insert(public_id, public_record.clone());
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.world_view();
     assert_eq!(
@@ -4931,8 +4926,7 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         block.commit();
     }
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value.clone()) .expect("deserialize state") };
     let roundtrip = norito::json::to_value(&restored).unwrap();
     for field in ["public_lane_validators", "public_lane_stake_shares", "public_lane_rewards", "public_lane_reward_claims", "public_lane_reward_accruals", "public_lane_reward_reserves", "public_lane_stake_custody", "public_lane_stake_reserves", "space_directory_manifests"] {
@@ -5613,7 +5607,7 @@ state_test! { sync rwas_status_and_frozen_iters_use_secondary_indexes
     );
 }
 state_test! { sync proofs_by_backend_iter_uses_backend_range
-    let backend = "halo2/ipa";
+    let backend = "pipa-r/pasta";
     let other_backend = "stark/fri";
     let_row! { first_id = ProofId { backend: backend.into(), proof_hash: [0x11; 32], } };
     let_row! { second_id = ProofId { backend: backend.into(), proof_hash: [0x22; 32], } };
@@ -5643,7 +5637,7 @@ state_test! { sync proofs_by_backend_iter_uses_backend_range
     );
 }
 state_test! { sync find_proof_records_by_status_uses_status_index_updates
-    let backend = "halo2/ipa";
+    let backend = "pipa-r/pasta";
     let_row! { verified_id = ProofId { backend: backend.into(), proof_hash: [0x11; 32], } };
     let_row! { rejected_id = ProofId { backend: backend.into(), proof_hash: [0x22; 32], } };
     let_row! { updated_id = ProofId { backend: backend.into(), proof_hash: [0x33; 32], } };
@@ -5678,7 +5672,7 @@ state_test! { sync find_proof_records_by_status_uses_status_index_updates
     assert_eq!(generic_by_backend_and_status, vec![rejected_id]);
 }
 state_test! { sync proof_status_index_roundtrips_through_state_json
-    let backend = "halo2/ipa";
+    let backend = "pipa-r/pasta";
     let_row! { verified_id = ProofId { backend: backend.into(), proof_hash: [0x11; 32], } };
     let_row! { rejected_id = ProofId { backend: backend.into(), proof_hash: [0x22; 32], } };
     let_row! { record = |id: &ProofId, status: ProofStatus| ProofRecord { id: id.clone(), vk_ref: None, vk_commitment: None, status, verified_at_height: Some(1), bridge: None, } };
@@ -5693,8 +5687,7 @@ state_test! { sync proof_status_index_roundtrips_through_state_json
     );
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let json_value = norito::json::to_value(&state).expect("serialize state");
-    let_row! { seed = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
+    let_row! { seed = deserialize::KuraSeed { execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: state.lane_manifests.read().clone(), kura: Kura::blank_kura_for_testing(), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } };
     let_row! { restored = seed .into_state_from_json(json_value) .expect("deserialize state") };
     let view = restored.view();
     let_row! { verified_ids = FindProofRecordsByStatus { status: ProofStatus::Verified, } .execute(CompoundPredicate::PASS, &view) .expect("query verified proof records") .map(|record| record.id) .collect::<Vec<_>>() };
@@ -8284,9 +8277,9 @@ state_test! { sync da_pin_intent_index_prune_keys_select_embedded_and_index_lane
 fn build_state_with_vk_order(order: &[(&str, &str)]) -> State {
     let mut world = World::new();
     for &(name, circuit) in order {
-        let id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", name);
+        let id = iroha_data_model::proof::VerifyingKeyId::new("pipa-r/pasta", name);
         let_row! { (schema_hash, commitment) = match name { "vk_alpha" => ([0xA1; 32], [0xB1; 32]), "vk_beta" => ([0xA2; 32], [0xB2; 32]), other => { let mut schema = [0u8; 32]; let mut commit = [0u8; 32]; let bytes = other.as_bytes(); let len = bytes.len().min(32); schema[..len].copy_from_slice(&bytes[..len]); commit[..len].copy_from_slice(&bytes[..len]); (schema, commit) } } };
-        let_row! { mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner( 1, circuit, None, "core", iroha_data_model::zk::BackendTag::Halo2IpaPasta, "pallas", schema_hash, commitment, ) };
+        let_row! { mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner( 1, circuit, None, "core", iroha_data_model::zk::BackendTag::NativePipaRPasta, "vesta", schema_hash, commitment, ) };
         record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
         record.public_inputs_schema_hash = schema_hash;
         record.gas_schedule_id = Some(format!("sched_{name}"));
@@ -11169,7 +11162,6 @@ state_test! { sync certified_runtime_snapshot_replay_preserves_lane_history
     let state = original.state();
     let snapshot = norito::json::to_value(state.as_ref()).expect("original native snapshot projection");
     assert!(matches!(deserialize::KuraSeed {
-        operation_index_budget: state.world.operation_index_budget().clone(),
         execution_budget: state.ivm_execution_budget(),
         lane_manifests: Arc::clone(&state.lane_manifests.read()),
         kura: Arc::clone(original.kura()),
@@ -17212,8 +17204,7 @@ state_test! { sync both_state_constructors_account_exactly_for_distinct_journal_
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let kura = state_journal_test_kura(temp_dir.path().join("kura").as_path());
         let expected = seed_distinct_state_journal_main_and_temp_files(&kura);
-        let_row! { state = if deserialize_snapshot { deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: Arc::new(LaneManifestRegistry::empty()), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(snapshot_value.clone()) .expect("deserialize state through snapshot constructor") } else { Box::new(State::new_for_testing( World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), )) } };
+        let_row! { state = if deserialize_snapshot { deserialize::KuraSeed { execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES), lane_manifests: Arc::new(LaneManifestRegistry::empty()), kura: Arc::clone(&kura), query_handle: LiveQueryStore::start_test(), #[cfg(feature = "telemetry")] telemetry: crate::telemetry::StateTelemetry::default(), } .into_state_from_json(snapshot_value.clone()) .expect("deserialize state through snapshot constructor") } else { Box::new(State::new_for_testing( World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), )) } };
         assert_eq!(state.query_index_status_snapshot(), expected.query_index);
         assert_eq!(
             state.query_projection_checkpoint_snapshot(),
@@ -20518,6 +20509,13 @@ state_test! { sync compute_confidential_digest_uses_config_defaults
         ))
     );
 }
+state_test! { sync default_test_identities_do_not_require_runtime_publisher_custody
+    assert_eq!(DEFAULT_TEST_CHAIN_ID.as_str(), "00000000-0000-0000-0000-000000000000");
+    let expected = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        .parse::<iroha_data_model::NetworkId>()
+        .expect("fixture's canonical network identity");
+    assert_eq!(*DEFAULT_TEST_NETWORK_ID, expected);
+}
 state_test! { sync default_genesis_confidential_policy_hash_uses_default_zk_and_sccp_v1_policy
     assert_eq!(
         default_genesis_confidential_policy_hash(),
@@ -20588,15 +20586,15 @@ state_test! { sync zk_policy_hash_ignores_operator_only_timing_and_workers
     let base = default_zk();
     let mut changed = base.clone();
     changed.verify_timeout = std::time::Duration::from_nanos(1);
-    changed.halo2.verifier_budget_ms = changed.halo2.verifier_budget_ms.saturating_add(1);
-    changed.halo2.verifier_worker_threads = changed.halo2.verifier_worker_threads.saturating_add(1);
-    changed.halo2.verifier_queue_cap = changed.halo2.verifier_queue_cap.saturating_add(1);
-    changed.halo2.verifier_enqueue_wait_ms =
-        changed.halo2.verifier_enqueue_wait_ms.saturating_add(1);
-    changed.halo2.verifier_retry_ring_cap = changed.halo2.verifier_retry_ring_cap.saturating_add(1);
-    changed.halo2.verifier_retry_max_attempts =
-        changed.halo2.verifier_retry_max_attempts.saturating_add(1);
-    changed.halo2.verifier_retry_tick_ms = changed.halo2.verifier_retry_tick_ms.saturating_add(1);
+    changed.trace.max_batch = changed.trace.max_batch.saturating_add(1);
+    changed.trace.worker_threads = changed.trace.worker_threads.saturating_add(1);
+    changed.trace.queue_cap = changed.trace.queue_cap.saturating_add(1);
+    changed.trace.enqueue_wait_ms =
+        changed.trace.enqueue_wait_ms.saturating_add(1);
+    changed.trace.retry_ring_cap = changed.trace.retry_ring_cap.saturating_add(1);
+    changed.trace.retry_max_attempts =
+        changed.trace.retry_max_attempts.saturating_add(1);
+    changed.trace.retry_tick_ms = changed.trace.retry_tick_ms.saturating_add(1);
     assert_eq!(
         compute_zk_consensus_policy_hash(&base),
         compute_zk_consensus_policy_hash(&changed)
@@ -20605,7 +20603,7 @@ state_test! { sync zk_policy_hash_ignores_operator_only_timing_and_workers
 state_test! { sync zk_policy_hash_tracks_consensus_limits
     let base = default_zk();
     let mut changed = base.clone();
-    changed.halo2.max_proof_bytes = changed.halo2.max_proof_bytes.saturating_add(1);
+    changed.pipa_r.max_proof_bytes = changed.pipa_r.max_proof_bytes.saturating_add(1);
     assert_ne!(
         compute_zk_consensus_policy_hash(&base),
         compute_zk_consensus_policy_hash(&changed)
@@ -20696,7 +20694,6 @@ state_test! { sync zk_policy_hash_tracks_every_sccp_resource_limit
     );
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 state_test! { sync confidential_digest_reflects_registry_commit
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -20726,7 +20723,7 @@ state_test! { sync confidential_digest_reflects_registry_commit
     let mut block2 = state.block(header2);
     {
         let mut stx = block2.transaction();
-        let id = VerifyingKeyId::new("halo2/ipa", "vk_cache");
+        let id = VerifyingKeyId::new("pipa-r/pasta", "vk_cache");
         let rec = crate::zk::confidential_v2::confidential_transfer_v2_vk_record("test", 1)
             .expect("canonical confidential-transfer verifier key");
         verifying_keys::RegisterVerifyingKey { id, record: rec }
@@ -22846,8 +22843,7 @@ state_test! { sync emergency_fast_manifest_constructor_binds_boundary_and_maps_h
         &lane_config,
     )
     .expect("reopen Fast Kura fixture");
-    let seed = || deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
-execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES),
+    let seed = || deserialize::KuraSeed { execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES),
         lane_manifests: Arc::new(LaneManifestRegistry::empty()),
         kura: Arc::clone(&fast_kura),
         query_handle: LiveQueryStore::start_test(),
@@ -22910,7 +22906,6 @@ execution_budget: iroha_allocation::AllocationBudget::new(iroha_config::paramete
         &empty_config, &lane_config,
     ).expect("reopen the initialized empty Fast Kura with the same catalog");
     let empty_seed = deserialize::KuraSeed {
-        operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
         execution_budget: iroha_allocation::AllocationBudget::new(
             iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
         ),

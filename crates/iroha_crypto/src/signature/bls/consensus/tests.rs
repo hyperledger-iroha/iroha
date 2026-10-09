@@ -173,7 +173,6 @@ fn sample_preimage(context: ConsensusContext) -> Vec<u8> {
             out.extend_from_slice(&2_u64.to_be_bytes());
             out.extend_from_slice(&BLOCK_HASH);
             out.extend_from_slice(&[0x44; 32]);
-            out.push(0x01);
             out
         }
         ConsensusContext::TimeoutWithoutHighQc => {
@@ -250,15 +249,6 @@ fn rejected_preimages() -> Vec<(String, Vec<u8>)> {
         wrong_kind[TAG_SIG.len()] = kind;
         cases.push((format!("vote_length_kind_{kind:#04x}"), wrong_kind));
     }
-    let mut proposal_as_vote = sample_preimage(ConsensusContext::Proposal);
-    proposal_as_vote[TAG_SIG.len()] = 0x02;
-    cases.push((
-        "prepare_kind_at_proposal_length".to_owned(),
-        proposal_as_vote,
-    ));
-    let mut vote_as_proposal = sample_preimage(ConsensusContext::Commit);
-    vote_as_proposal[TAG_SIG.len()] = 0x01;
-    cases.push(("proposal_kind_at_vote_length".to_owned(), vote_as_proposal));
     let mut echo_as_timeout = sample_preimage(ConsensusContext::Echo);
     echo_as_timeout[TAG_SIG.len()] = 0x04;
     cases.push(("timeout_kind_at_echo_length".to_owned(), echo_as_timeout));
@@ -297,7 +287,7 @@ fn rejected_preimages() -> Vec<(String, Vec<u8>)> {
     cases.push(("vote_tag_case_flipped".to_owned(), wrong_tag));
     let mut block_tag = b"sumeragi/block".to_vec();
     block_tag.extend_from_slice(&sample_preimage(ConsensusContext::Commit)[TAG_SIG.len()..]);
-    block_tag.truncate(166);
+    block_tag.truncate(165);
     cases.push(("block_tag_at_vote_length".to_owned(), block_tag));
     cases.push(("empty".to_owned(), Vec::new()));
     cases.push(("tag_sig_only".to_owned(), TAG_SIG.to_vec()));
@@ -347,6 +337,34 @@ fn allowlist_refuses_lengths_kinds_and_tags_outside_the_table() {
 }
 
 #[test]
+fn vote_kinds_bind_signatures_without_retired_attestation_byte() {
+    let key = private_key(0);
+    let admitted = admitted(&key);
+    let prepare = sample_preimage(ConsensusContext::Prepare);
+    let commit = sample_preimage(ConsensusContext::Commit);
+    assert_eq!(prepare.len(), 165);
+    assert_eq!(commit.len(), 165);
+    assert_eq!(&prepare[TAG_SIG.len() + 1..], &commit[TAG_SIG.len() + 1..]);
+    let prepare_digest = ConsensusDigest::from_preimage(&prepare).unwrap();
+    let commit_digest = ConsensusDigest::from_preimage(&commit).unwrap();
+    assert_ne!(prepare_digest, commit_digest);
+    for (preimage, digest, other) in [
+        (&prepare, prepare_digest, commit_digest),
+        (&commit, commit_digest, prepare_digest),
+    ] {
+        let signature = sign_preimage(&key, preimage).unwrap();
+        assert!(verify(&admitted, &digest, &signature));
+        assert!(!verify(&admitted, &other, &signature));
+        for retired_flag in [0, 1] {
+            let mut retired = preimage.clone();
+            retired.push(retired_flag);
+            assert!(ConsensusDigest::from_preimage(&retired).is_none());
+            assert!(sign_preimage(&key, &retired).is_err());
+        }
+    }
+}
+
+#[test]
 fn allowlist_admits_only_kinds_one_to_five_at_every_length() {
     for length in TAG_SIG.len() + 1..=256 {
         for kind in 0..=u8::MAX {
@@ -356,8 +374,8 @@ fn allowlist_admits_only_kinds_one_to_five_at_every_length() {
             let context = ConsensusContext::of_preimage(&preimage);
             let expected = match (kind, length) {
                 (0x01, 165) => Some(ConsensusContext::Proposal),
-                (0x02, 166) => Some(ConsensusContext::Prepare),
-                (0x03, 166) => Some(ConsensusContext::Commit),
+                (0x02, 165) => Some(ConsensusContext::Prepare),
+                (0x03, 165) => Some(ConsensusContext::Commit),
                 (0x04, 102) => Some(ConsensusContext::TimeoutWithoutHighQc),
                 (0x05, 101) => Some(ConsensusContext::Echo),
                 _ => None,

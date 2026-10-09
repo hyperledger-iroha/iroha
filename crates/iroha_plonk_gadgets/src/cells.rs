@@ -138,18 +138,35 @@ pub fn to_u128<F: PastaField>(value: &F) -> Option<u128> {
 /// The next free row of a group of columns.
 ///
 /// Rows are absolute (regions start at row 0). [`RowCursor::take`] hands out
-/// consecutive, non-overlapping row ranges with checked arithmetic; the
+/// consecutive, non-overlapping row ranges with checked arithmetic below an
+/// optional end row (chips that share columns get disjoint row ranges); the
 /// assembly rejects rows at or beyond the usable rows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RowCursor {
     next: usize,
+    end: usize,
+}
+
+impl Default for RowCursor {
+    fn default() -> Self {
+        Self::starting_at(0)
+    }
 }
 
 impl RowCursor {
     /// A cursor whose first free row is `row`.
     #[must_use]
     pub const fn starting_at(row: usize) -> Self {
-        Self { next: row }
+        Self {
+            next: row,
+            end: usize::MAX,
+        }
+    }
+
+    /// A cursor over the rows `[start, end)`.
+    #[must_use]
+    pub const fn bounded(start: usize, end: usize) -> Self {
+        Self { next: start, end }
     }
 
     /// The first free row.
@@ -158,14 +175,67 @@ impl RowCursor {
         self.next
     }
 
+    /// The end of the cursor's rows (`usize::MAX` when unbounded).
+    #[must_use]
+    pub const fn end(self) -> usize {
+        self.end
+    }
+
     /// Reserves `rows` consecutive rows and returns the first.
     ///
     /// # Errors
     ///
-    /// [`Error::BoundsFailure`] when the row index overflows.
+    /// [`Error::BoundsFailure`] when the row index overflows or the rows
+    /// pass the end.
     pub fn take(&mut self, rows: usize) -> Result<usize, Error> {
         let start = self.next;
-        self.next = start.checked_add(rows).ok_or(Error::BoundsFailure)?;
+        let next = start
+            .checked_add(rows)
+            .filter(|next| *next <= self.end)
+            .ok_or(Error::BoundsFailure)?;
+        self.next = next;
+        Ok(start)
+    }
+}
+
+/// A deterministic reservation cursor shared by chips using the same columns.
+/// Clones retain the same cursor within one synthesis; they must never be
+/// retained across independent synthesis runs. Reservations are single-threaded
+/// and structural, with the same checked bound as [`RowCursor`].
+#[derive(Clone, Debug)]
+pub struct SharedRows {
+    next: std::rc::Rc<std::cell::Cell<usize>>,
+    end: usize,
+}
+impl SharedRows {
+    /// Shares a fresh cursor over the supplied interval.
+    #[must_use]
+    pub fn new(rows: RowCursor) -> Self {
+        Self {
+            next: std::rc::Rc::new(std::cell::Cell::new(rows.next_row())),
+            end: rows.end(),
+        }
+    }
+    /// The next unreserved row, including reservations by other owners.
+    #[must_use]
+    pub fn next_row(&self) -> usize {
+        self.next.get()
+    }
+    pub(crate) const fn is_bounded(&self) -> bool {
+        self.end != usize::MAX
+    }
+
+    /// Reserves one consecutive interval. A refusal leaves every clone intact.
+    ///
+    /// # Errors
+    /// Arithmetic overflow or the interval's fixed end would be exceeded.
+    pub fn take(&self, rows: usize) -> Result<usize, Error> {
+        let start = self.next.get();
+        let next = start
+            .checked_add(rows)
+            .filter(|next| *next <= self.end)
+            .ok_or(Error::BoundsFailure)?;
+        self.next.set(next);
         Ok(start)
     }
 }
@@ -231,6 +301,30 @@ mod tests {
         let mut full = RowCursor::starting_at(usize::MAX);
         assert_eq!(full.take(1), Err(Error::BoundsFailure));
         assert_eq!(full.next_row(), usize::MAX);
+        // A bounded cursor stops at its end and is unchanged by a refusal.
+        let mut bounded = RowCursor::bounded(10, 14);
+        assert_eq!(bounded.end(), 14);
+        assert_eq!(bounded.take(3), Ok(10));
+        assert_eq!(bounded.take(2), Err(Error::BoundsFailure));
+        assert_eq!(bounded.next_row(), 13);
+        assert_eq!(bounded.take(1), Ok(13));
+        assert_eq!(bounded.take(0), Ok(14));
+        assert_eq!(RowCursor::default().end(), usize::MAX);
+    }
+
+    #[test]
+    fn shared_rows_preserve_disjoint_reservations_and_refusal() {
+        let owner = SharedRows::new(RowCursor::bounded(8, 16));
+        let second = owner.clone();
+        assert_eq!(owner.take(3), Ok(8));
+        assert_eq!(second.take(2), Ok(11));
+        assert_eq!(owner.next_row(), 13);
+        assert_eq!(second.take(4), Err(Error::BoundsFailure));
+        assert_eq!(owner.next_row(), 13);
+        assert_eq!(owner.take(3), Ok(13));
+        assert_eq!(second.next_row(), 16);
+        let independent = SharedRows::new(RowCursor::starting_at(0));
+        assert_eq!(independent.next_row(), 0);
     }
 
     #[test]

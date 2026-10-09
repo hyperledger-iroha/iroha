@@ -155,20 +155,11 @@ class StakingRewardClaimPlanV1(_Value):
 
 
 @dataclass(frozen=True)
-class StakingValidatorKeysV1(_Value):
-    """One complete peer and paired generation-bound Pasta verification keys."""
-    validator: StakingPeerIdV1
-    eq_proof_public_key: bytes
-    ep_proof_public_key: bytes
-
-
-@dataclass(frozen=True)
-class StakingAuthorityGenerationV1(_Value):
-    """Signing generation independent of scheduling epoch; not an authority proof."""
-    version: int
+class StakingValidatorGenerationV1(_Value):
+    """Ordered BLS roster under one generation; not an authority proof."""
     network_id: NetworkId
     generation: int
-    validators: tuple[StakingValidatorKeysV1, ...]
+    validators: tuple[StakingPeerIdV1, ...]
 
 
 @dataclass(frozen=True)
@@ -298,8 +289,7 @@ _SCHEMAS = {
     StakingRewardClaimSourceV1: (("source_asset", StakingAssetIdV1), ("destination_asset", StakingAssetIdV1), ("expected_accrued", ("option", "quantity")), ("payout", "quantity")),
     StakingFeeRewardClaimV1: (("lifecycle_seal", "bytes32"), ("beneficiary_id", "account"), ("beneficiary_revision", "u64"), ("source_asset", StakingAssetIdV1), ("destination_asset", StakingAssetIdV1), ("amount", "quantity"), ("expected_claim_sequence", "u64")),
     StakingRewardClaimPlanV1: (("network_scope", StakingScopeV1), ("valid_until_height", "u64"), ("expected_state", ("option", StakingRewardClaimStateV1)), ("records", ("vector", StakingRewardRecordRefV1, 64)), ("sources", ("vector", StakingRewardClaimSourceV1, 64)), ("fee_claim", ("option", StakingFeeRewardClaimV1))),
-    StakingValidatorKeysV1: (("validator", StakingPeerIdV1), ("eq_proof_public_key", "bytes32"), ("ep_proof_public_key", "bytes32")),
-    StakingAuthorityGenerationV1: (("version", "u16"), ("network_id", "network"), ("generation", "u64"), ("validators", ("vector", StakingValidatorKeysV1, 31))),
+    StakingValidatorGenerationV1: (("network_id", "network"), ("generation", "u64"), ("validators", ("vector", StakingPeerIdV1, 31))),
     StakingInstalledBeaconV1: (("session_id", "bytes32"), ("transcript_hash", "bytes32")),
     StakingEpochAuthorizationV1: (("version", "u16"), ("network_id", "network"), ("epoch", "u64"), ("first_height", "u64"), ("last_height", "u64"), ("authority_generation", "u64"), ("authority_id", "bytes32"), ("beacon", "beacon"), ("previous_authorization_id", "bytes32"), ("transition_id", "bytes32"), ("decision", "decision")),
 }
@@ -398,8 +388,17 @@ def _validate(value):
             if source.destination_asset.account != recipient: raise ValueError("reward plan changes recipient")
             previous_source = order
         if value.fee_claim and value.fee_claim.destination_asset.account != recipient: raise ValueError("fee claim changes recipient")
-    elif type(value) is StakingAuthorityGenerationV1:
-        if value.version != 1 or len(value.validators) < 4 or (len(value.validators) - 1) % 3: raise ValueError("invalid authority-generation geometry")
+    elif type(value) is StakingValidatorGenerationV1:
+        if len(value.validators) < 4 or (len(value.validators) - 1) % 3:
+            raise ValueError("invalid validator-generation geometry")
+        previous_key = None
+        for peer in value.validators:
+            algorithm, key = parse_public_key_multihash(peer.public_key)
+            if algorithm != "bls_normal" or len(key) != 48:
+                raise ValueError("validator generation requires BLS-normal keys")
+            if previous_key is not None and previous_key >= key:
+                raise ValueError("validator generation requires strictly ordered keys")
+            previous_key = key
     elif type(value) is StakingEpochAuthorizationV1:
         if value.version != 1 or value.first_height == 0 or value.last_height < value.first_height: raise ValueError("invalid epoch authorization")
 

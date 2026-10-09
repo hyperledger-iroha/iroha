@@ -16,7 +16,6 @@ use crate::sumeragi::{
 use iroha_allocation::AllocationBudget;
 use iroha_sumeragi::{
     availability::{AvailabilitySource, AvailableBody},
-    crypto::AttestationVerifier,
     message::{PayloadManifest, Qc, SyncEntry},
     types::Hash32,
 };
@@ -52,7 +51,7 @@ pub struct LaneFrameRead {
 
 impl LaneFrameRead {
     /// Begin inspecting an independently selected path and native height. The historical
-    /// schedule and verifier must come from authenticated authority, never the inspected frame.
+    /// schedule and BLS keys must come from authenticated authority, never the inspected frame.
     ///
     /// # Errors
     /// I/O, a non-regular artifact or an oversized frame.
@@ -62,9 +61,8 @@ impl LaneFrameRead {
         crypto: SharedCrypto,
         budget: AllocationBudget,
         schedule: Arc<dyn AvailabilitySchedule>,
-        verifier: Arc<dyn AttestationVerifier + Send + Sync>,
     ) -> io::Result<Self> {
-        let job = RestoreFrame::open(path, height, budget.clone(), schedule, crypto, verifier)?;
+        let job = RestoreFrame::open(path, height, budget.clone(), schedule, crypto)?;
         Ok(Self { budget, job })
     }
 
@@ -108,7 +106,7 @@ pub struct FileLaneBlockStore {
     faults: Arc<dyn Faults>,
     budget: AllocationBudget,
     schedule: Arc<dyn AvailabilitySchedule>,
-    verifier: Arc<dyn AttestationVerifier + Send + Sync>,
+
     state: Mutex<StoreState>,
     pub(super) batch_read: Mutex<Option<BatchRead>>,
     grown: Condvar,
@@ -158,17 +156,8 @@ impl FileLaneBlockStore {
         crypto: SharedCrypto,
         budget: AllocationBudget,
         schedule: Arc<dyn AvailabilitySchedule>,
-        verifier: Arc<dyn AttestationVerifier + Send + Sync>,
     ) -> io::Result<LaneStoreOpen> {
-        Self::begin_open_with_faults(
-            root,
-            instance,
-            crypto,
-            budget,
-            schedule,
-            verifier,
-            Arc::new(NoFaults),
-        )
+        Self::begin_open_with_faults(root, instance, crypto, budget, schedule, Arc::new(NoFaults))
     }
     /// Begin exclusive recovery with deterministic filesystem fault injection.
     ///
@@ -180,7 +169,7 @@ impl FileLaneBlockStore {
         crypto: SharedCrypto,
         budget: AllocationBudget,
         schedule: Arc<dyn AvailabilitySchedule>,
-        verifier: Arc<dyn AttestationVerifier + Send + Sync>,
+
         faults: Arc<dyn Faults>,
     ) -> io::Result<LaneStoreOpen> {
         if schedule.instance() != *instance {
@@ -229,7 +218,6 @@ impl FileLaneBlockStore {
             faults,
             budget,
             schedule,
-            verifier,
             state: Mutex::new(StoreState {
                 tip: 0,
                 write: None,
@@ -356,7 +344,6 @@ impl FileLaneBlockStore {
             self.budget.clone(),
             Arc::clone(&self.schedule),
             Arc::clone(&self.crypto),
-            Arc::clone(&self.verifier),
         )
     }
     fn read_prepared<'a>(
@@ -427,23 +414,11 @@ impl BlockStore for FileLaneBlockStore {
         resolve_source(&*self.schedule, self.instance, height, block_hash)
     }
     fn append(&self, body: &AvailableBody, qc: &Qc) -> Result<(), Attempt<io::Error>> {
-        if !body.admitted_to(&self.budget)
-            || qc
-                .attestation_witness
-                .as_ref()
-                .is_some_and(|w| !w.admitted_to(&self.budget))
-        {
+        if !body.admitted_to(&self.budget) {
             return Err(invalid("lane append original pool mismatch").into());
         }
         let height = body.header().height;
-        let source = certified_source(
-            &*self.schedule,
-            &*self.crypto,
-            &*self.verifier,
-            height,
-            body.header(),
-            qc,
-        )?;
+        let source = certified_source(&*self.schedule, &*self.crypto, height, body.header(), qc)?;
         if body.source() != &source {
             return Err(
                 invalid("lane body was authenticated under another historical source").into(),

@@ -33,6 +33,66 @@ use std::{
     sync::{Arc, OnceLock, RwLock},
     vec::Vec,
 };
+// Match direct byte-array syntax before a `ty` fragment makes it opaque.
+// Ordinary, optional, vector and nested array fields retain their canonical
+// value decoder; only the encoder's direct raw byte-array contract is special.
+macro_rules! impl_aos_decode_from_slice {
+    ($ty:ty { $first:ident: $($fields:tt)* }) => {
+        $crate::isi::impl_aos_decode_from_slice!(
+            @walk [$ty] [bytes flags offset] [] [];
+            $first: $($fields)* ,
+        );
+    };
+    (@walk [$ty:ty] [$bytes:ident $flags:ident $offset:ident]
+        [$($names:ident,)*] [$($reads:tt)*];) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice($bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let $flags = norito::core::effective_decode_flags()
+                    .unwrap_or_else(norito::core::default_encode_flags);
+                let mut $offset = 0usize;
+                $($reads)*
+                if $offset != $bytes.len() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access($bytes, $offset);
+                Ok((Self { $($names),* }, $offset))
+            }
+        }
+    };
+    (@walk [$ty:ty] [$bytes:ident $flags:ident $offset:ident]
+        [$($names:ident,)*] [$($reads:tt)*]; ,) => {
+        $crate::isi::impl_aos_decode_from_slice!(
+            @walk [$ty] [$bytes $flags $offset] [$($names,)*] [$($reads)*];
+        );
+    };
+    (@walk [$ty:ty] [$bytes:ident $flags:ident $offset:ident]
+        [$($names:ident,)*] [$($reads:tt)*];
+        $field:ident: [u8; $length:expr], $($rest:tt)*) => {
+        $crate::isi::impl_aos_decode_from_slice!(
+            @walk [$ty] [$bytes $flags $offset] [$($names,)* $field,]
+            [$($reads)*
+                let $field = $crate::isi::decode_aos_byte_array_field::<{ $length }>(
+                    $bytes, &mut $offset, $flags,
+                )?;
+            ]; $($rest)*
+        );
+    };
+    (@walk [$ty:ty] [$bytes:ident $flags:ident $offset:ident]
+        [$($names:ident,)*] [$($reads:tt)*];
+        $field:ident: $field_ty:ty, $($rest:tt)*) => {
+        $crate::isi::impl_aos_decode_from_slice!(
+            @walk [$ty] [$bytes $flags $offset] [$($names,)* $field,]
+            [$($reads)*
+                let $field = $crate::isi::decode_aos_canonical_field::<$field_ty>(
+                    $crate::isi::read_aos_field($bytes, &mut $offset, $flags)?,
+                    $flags,
+                )?;
+            ]; $($rest)*
+        );
+    };
+}
+pub(crate) use impl_aos_decode_from_slice;
+
 /// Consensus key lifecycle instructions.
 pub mod consensus_keys;
 /// Domain endorsement management instructions.
@@ -126,6 +186,7 @@ macro_rules! impl_direct_instruction_box {
 }
 // Allow direct boxing of standalone instructions that are not part of a grouped enum.
 impl_direct_instruction_box!(crate::isi::zk::VerifyProof);
+impl_direct_instruction_box!(crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1);
 impl_direct_instruction_box!(crate::isi::zk::PruneProofs);
 impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyProtocolActivationV1);
 impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyExact12QualificationV1);
@@ -488,9 +549,6 @@ impl_musubi_instruction_box!(
     SetMusubiRegistryPolicyV1,
     AssertMusubiReleaseDigestV1,
 );
-impl_direct_instruction_box!(crate::isi::kagemusha_v1::TopUpKagemushaV1);
-impl_direct_instruction_box!(crate::isi::kagemusha_v1::TopUpKagemushaOrdinaryV1);
-impl_direct_instruction_box!(crate::isi::kagemusha_v1::RedeemKagemushaV1);
 // Allow direct boxing of oracle feed instructions.
 impl_direct_instruction_box!(crate::isi::oracle::RegisterOracleFeed);
 impl_direct_instruction_box!(crate::isi::oracle::SubmitOracleObservation);
@@ -801,10 +859,7 @@ impl<W: std::io::Write + ?Sized> std::io::Write for ExactInstructionFrameWriter<
 pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&'static str> {
     let inner = &**instr;
     let type_name = Instruction::id(inner);
-    let registry = instruction_registry();
-    registry
-        .entry_for_type_name(type_name)
-        .map(|entry| entry.wire_id)
+    instruction_encoding_entry(type_name).map(|entry| entry.wire_id)
 }
 /// Encode one registered instruction into its stable wire id and exact Norito frame.
 ///
@@ -837,20 +892,14 @@ fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static 
 fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
     let inner = &**instr;
     let type_name = Instruction::id(inner);
-    let entry = {
-        let registry = instruction_registry();
-        registry.entry_for_type_name(type_name)?
-    };
+    let entry = instruction_encoding_entry(type_name)?;
     let framed_payload_len = inner.dyn_frame_len().ok()?;
     encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
 }
 fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {
     let inner = &**instr;
     let type_name = Instruction::id(inner);
-    let entry = {
-        let registry = instruction_registry();
-        registry.entry_for_type_name(type_name)?
-    };
+    let entry = instruction_encoding_entry(type_name)?;
     let payload_len = {
         let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         Instruction::dyn_encode_capacity_hint(inner)?
@@ -887,13 +936,10 @@ impl norito::core::SerializePayload for InstructionBox {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let inner = &**self;
         let type_name = Instruction::id(inner);
-        let entry = {
-            let registry = instruction_registry();
-            registry.entry_for_type_name(type_name)
-        }
-        .ok_or_else(|| {
-            norito::core::Error::Message("failed to encode instruction payload".to_owned())
-        })?;
+        let entry =
+            instruction_encoding_entry(type_name).ok_or(norito::core::Error::InvalidValue {
+                context: "unregistered instruction",
+            })?;
         inner.dyn_write_pair(writer, entry.wire_id)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -1379,6 +1425,21 @@ pub struct InstructionRegistry {
     /// Decoding-side lookup keyed only by the canonical wire identifier.
     wire_entries: HashMap<&'static str, RegistryEntry>,
 }
+/// Borrowed wire identity and frame geometry; constructing this record owns no registry.
+#[derive(Clone, Copy)]
+struct InstructionEncodingEntry {
+    wire_id: &'static str,
+    frame_len: fn(usize) -> Option<usize>,
+}
+impl From<RegistryEntry> for InstructionEncodingEntry {
+    fn from(entry: RegistryEntry) -> Self {
+        Self {
+            wire_id: entry.wire_id,
+            frame_len: entry.frame_len,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct RegistryEntry {
     type_name: &'static str,
@@ -1606,6 +1667,15 @@ pub(crate) fn read_aos_field<'a>(
     *offset = field_end;
     Ok(field)
 }
+/// Decode the encoder's direct raw byte-array member using the shared field prefix.
+pub(crate) fn decode_aos_byte_array_field<const N: usize>(
+    bytes: &[u8],
+    offset: &mut usize,
+    flags: u8,
+) -> Result<[u8; N], norito::core::Error> {
+    let _guard = norito::core::DecodeFlagsGuard::enter(flags);
+    norito::core::framed_byte_array_field::<N>(bytes, offset)?.decode_owned()
+}
 pub(crate) fn decode_aos_canonical_field<T>(
     field: &[u8],
     flags: u8,
@@ -1650,6 +1720,9 @@ thread_local! {
         const { RefCell::new(None) };
 }
 /// Set global [`InstructionRegistry`] used for deserializing [`crate::isi::InstructionBox`].
+///
+/// The supplied registry replaces an earlier registry even when decoder initialization races
+/// with this call. Test builds retain their independent thread-local override.
 pub fn set_instruction_registry(registry: InstructionRegistry) {
     let registry = Arc::new(registry);
     #[cfg(test)]
@@ -1659,14 +1732,7 @@ pub fn set_instruction_registry(registry: InstructionRegistry) {
         });
     }
     #[cfg(not(test))]
-    if let Some(lock) = INSTRUCTION_REGISTRY.get() {
-        let mut guard = lock
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *guard = registry;
-    } else {
-        let _ = INSTRUCTION_REGISTRY.set(RwLock::new(registry));
-    }
+    registry_install::install(&INSTRUCTION_REGISTRY, registry);
 }
 enum InstructionRegistryReadGuard {
     Global(std::sync::RwLockReadGuard<'static, Arc<InstructionRegistry>>),
@@ -1686,6 +1752,30 @@ impl std::ops::Deref for InstructionRegistryReadGuard {
         }
     }
 }
+// Installed registries are authoritative, including an intentionally missing entry.
+// Only an uninstalled cold registry uses the sole static built-in inventory.
+fn instruction_encoding_entry(type_name: &'static str) -> Option<InstructionEncodingEntry> {
+    #[cfg(test)]
+    if let Some(local) = INSTRUCTION_REGISTRY_OVERRIDE.with(|cell| {
+        cell.borrow().as_ref().map(|registry| {
+            registry
+                .entry_for_type_name(type_name)
+                .map(InstructionEncodingEntry::from)
+        })
+    }) {
+        return local;
+    }
+    if let Some(lock) = INSTRUCTION_REGISTRY.get() {
+        let registry = lock
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        return registry
+            .entry_for_type_name(type_name)
+            .map(InstructionEncodingEntry::from);
+    }
+    registry::default_encoding_entry(type_name)
+}
+
 fn instruction_registry() -> InstructionRegistryReadGuard {
     #[cfg(test)]
     if let Some(local) = INSTRUCTION_REGISTRY_OVERRIDE.with(|cell| cell.borrow().clone()) {
@@ -1861,8 +1951,8 @@ pub mod defi;
 pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.
 pub mod identifier;
-/// Clean-slate pooled-reserve KAGEMUSHA V1 instructions and operation records.
-pub mod kagemusha_v1;
+/// KAGEMUSHA wallet ledger boundary.
+pub mod kagemusha_wallet;
 /// Kaigi collaboration instructions.
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
@@ -1884,6 +1974,7 @@ pub mod ram_lfe;
 pub mod register;
 /// Instruction registries shared across instruction families.
 pub mod registry;
+mod registry_install;
 /// Repo settlement instructions.
 pub mod repo;
 pub mod retail_daily_limit;
@@ -1927,7 +2018,6 @@ pub use confidential::*;
 pub use contract_alias::*;
 pub use defi::*;
 pub use identifier::*;
-pub use kagemusha_v1::*;
 pub use kaigi::*;
 pub use ministry::*;
 pub use mint_burn::*;
@@ -2831,6 +2921,9 @@ mod tests;
 
 #[cfg(test)]
 mod framing_tests;
+
+#[cfg(test)]
+mod aos_field_decode_tests;
 
 #[cfg(test)]
 mod generated_argument_identity_tests;
