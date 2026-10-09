@@ -1042,6 +1042,9 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
     let state = State::new(World::default(), kura, query_handle);
     let mut program = ivm::ProgramMetadata::default().encode();
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        events: Vec::new(),
+        enum_types: Vec::new(),
+        permissions: Vec::new(),
         callables: vec![crate::ivm_test_support::unit_callable(0)],
         seiyaku_name: "QueryCacheFixture".to_owned(),
         compiler_fingerprint: "iroha-core-state-tests".to_owned(),
@@ -1058,7 +1061,7 @@ fn contract_query_cache_isolated_and_reuses_owned_runtime() {
             return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
                 nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
             }),
-            permission: None,
+            authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),
@@ -1150,8 +1153,8 @@ fn execute_called_trigger_fails_closed_on_missing_bytecode_with_warm_prepared_ar
     let program = kotodama_lang::compiler::Compiler::new()
         .compile_source(
             r#"
-seiyaku MissingBytecodeTrigger {
-  kotoage fn main(int marker) authorize("missing_bytecode_probe") {
+seiyaku MissingBytecodeTrigger { permission missing_bytecode_probe;
+  kotoage fn main(int marker) authorize(missing_bytecode_probe) {
 let _marker = marker;
   }
 }

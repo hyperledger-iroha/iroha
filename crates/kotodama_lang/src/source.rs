@@ -175,6 +175,9 @@ pub struct SourceFile {
     text: Arc<str>,
     original_len: usize,
     line_starts: Arc<[u32]>,
+    // Sparse byte-offset / Unicode-scalar-count pairs bound column lookup work
+    // even when an entire contract is written on one line.
+    character_checkpoints: Arc<[(u32, u32)]>,
 }
 impl SourceFile {
     /// Construct a source file without applying frontend budgets.
@@ -226,6 +229,13 @@ impl SourceFile {
                 line_starts.push(next);
             }
         }
+        let mut character_checkpoints = vec![(0_u32, 0_u32)];
+        for (characters, (offset, _)) in text.char_indices().enumerate() {
+            if offset - character_checkpoints.last().expect("initial checkpoint").0 as usize >= 256
+            {
+                character_checkpoints.push((offset as u32, characters as u32));
+            }
+        }
         Self {
             id,
             package_identity,
@@ -233,6 +243,7 @@ impl SourceFile {
             text,
             original_len,
             line_starts: line_starts.into(),
+            character_checkpoints: character_checkpoints.into(),
         }
     }
     /// Return the stable source identifier.
@@ -285,10 +296,15 @@ impl SourceFile {
         while byte_offset > line_start && !self.text.is_char_boundary(byte_offset) {
             byte_offset -= 1;
         }
-        let column = self
-            .text
-            .get(line_start..byte_offset)
-            .map_or(1, |prefix| prefix.chars().count().saturating_add(1));
+        let characters_before = |offset: usize| {
+            let index = self
+                .character_checkpoints
+                .partition_point(|(byte, _)| *byte as usize <= offset)
+                .saturating_sub(1);
+            let (byte, characters) = self.character_checkpoints[index];
+            characters as usize + self.text[byte as usize..offset].chars().count()
+        };
+        let column = characters_before(byte_offset) - characters_before(line_start) + 1;
         LineColumn {
             line: line_index.saturating_add(1),
             column,
@@ -401,6 +417,29 @@ mod tests {
         test(&path);
         fs::remove_file(path).expect("remove temporary source");
     }
+    #[test]
+    fn sparse_column_index_preserves_unicode_and_interior_byte_offsets() {
+        let text = format!("{}\n{}\n", "ab日本😀".repeat(180), "é文字x".repeat(180));
+        let source = SourceFile::new(SourceId(0), "unicode.ko", &text);
+        for offset in 0..=text.len() + 2 {
+            let mut boundary = offset.min(text.len());
+            while !text.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            let prefix = &text[..boundary];
+            let position = source.line_column(offset as u32);
+            assert_eq!(
+                position.line,
+                prefix.bytes().filter(|byte| *byte == b'\n').count() + 1
+            );
+            assert_eq!(
+                position.column,
+                prefix.rsplit('\n').next().unwrap().chars().count() + 1
+            );
+        }
+        assert!(source.character_checkpoints.len() < text.len() / 200);
+    }
+
     #[test]
     fn bounded_reader_accepts_exact_limit_and_rejects_one_extra_byte() {
         let exact = vec![b' '; MAX_SOURCE_BYTES];

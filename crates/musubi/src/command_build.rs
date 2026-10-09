@@ -10,7 +10,7 @@ pub(super) fn run_build(
     command: &'static str,
     args: &BuildArgs,
 ) -> CommandResult {
-    run_build_with_warnings(explicit_manifest, command, args).map(|(success, _)| success)
+    run_build_with_warnings(explicit_manifest, command, args, None).map(|(success, _)| success)
 }
 
 /// Run `check`, `build` or `test`, also returning canonical lint warnings for SARIF output.
@@ -18,6 +18,7 @@ pub(super) fn run_build_with_warnings(
     explicit_manifest: Option<&Path>,
     command: &'static str,
     args: &BuildArgs,
+    test: Option<&TestArgs>,
 ) -> Result<(Success, kotodama_lang::diagnostic::DiagnosticBundle), Diagnostic> {
     let PreparedBuild {
         workspace,
@@ -76,6 +77,11 @@ pub(super) fn run_build_with_warnings(
     if command == "test" {
         let mut options = WorkspaceTestOptionsV1::new(chain_discriminant);
         options.zk_enabled = args.zk;
+        if let Some(test) = test {
+            options.filter.clone_from(&test.filter);
+            options.exact = test.exact;
+            options.contract.clone_from(&test.contract);
+        }
         let report = execute_workspace_tests_v1(
             cache.as_ref(),
             &workspace,
@@ -271,12 +277,19 @@ pub(super) struct PreparedBuild {
     pub(super) execution: crate::compiler::CompilerExecutionV1,
 }
 
-pub(super) fn prepare_build(
+pub(super) struct PreparedProject {
+    pub(super) workspace: Workspace,
+    pub(super) selected_names: Vec<MusubiPackageSelectorV1>,
+    pub(super) network: network::SelectedNetwork,
+    pub(super) graph: ResolvedWorkspaceGraphV1,
+    pub(super) cache: Option<MusubiCache>,
+    pub(super) archives: Vec<Value>,
+}
+pub(super) fn prepare_project(
     explicit_manifest: Option<&Path>,
     args: &BuildArgs,
-    action: CompilerActionV1,
     purpose: network::NetworkPurpose,
-) -> Result<PreparedBuild, Diagnostic> {
+) -> Result<PreparedProject, Diagnostic> {
     let (workspace, selected_names) = load_selected_workspace(explicit_manifest, &args.selection)?;
     let network = network::select_network(
         workspace.root(),
@@ -312,6 +325,29 @@ pub(super) fn prepare_build(
         Some(cache) => ensure_graph_archives(cache, &graph, args.mode)?,
         None => Vec::new(),
     };
+    Ok(PreparedProject {
+        workspace,
+        selected_names,
+        network,
+        graph,
+        cache,
+        archives,
+    })
+}
+pub(super) fn prepare_build(
+    explicit_manifest: Option<&Path>,
+    args: &BuildArgs,
+    action: CompilerActionV1,
+    purpose: network::NetworkPurpose,
+) -> Result<PreparedBuild, Diagnostic> {
+    let PreparedProject {
+        workspace,
+        selected_names,
+        network,
+        graph,
+        cache,
+        archives,
+    } = prepare_project(explicit_manifest, args, purpose)?;
     let chain_discriminant = graph.account_chain_discriminant()?;
     let execution = execute_compiler_graph(
         cache.as_ref(),
@@ -319,8 +355,11 @@ pub(super) fn prepare_build(
         &selected_names,
         &graph.lock,
         action,
-        chain_discriminant,
-        args.zk,
+        CompilerSettingsV1 {
+            chain_discriminant,
+            zk_enabled: args.zk,
+            profile: &args.profile,
+        },
     )
     .map_err(|error| graph_mode_compiler_diagnostic(&error, args.mode))?;
     Ok(PreparedBuild {
@@ -334,17 +373,33 @@ pub(super) fn prepare_build(
     })
 }
 
+/// Exact local package and contract selection retained across a runtime build.
+#[derive(Clone, Copy)]
+pub struct RuntimePackageSelection<'a> {
+    /// Selected manifest handle whose identity the caller retains and revalidates.
+    pub manifest: &'a iroha_fs::SelectedRegularFile,
+    /// Explicit package selector, if the workspace does not select it implicitly.
+    pub package: Option<&'a str>,
+    /// Explicit contract target, if the package has more than one.
+    pub contract: Option<&'a str>,
+    /// Require the existing lock graph without resolving a replacement.
+    pub locked: bool,
+}
+
 pub(super) fn build_runtime_package(
     config: &iroha::config::Config,
     cache_root: &Path,
     registry_config: Option<&iroha::config::Config>,
     registry_resolver: Option<&crate::deployment_runtime::BuildRegistryResolver>,
-    manifest: &iroha_fs::SelectedRegularFile,
-    package: Option<&str>,
-    contract: Option<&str>,
-    locked: bool,
+    selection: &RuntimePackageSelection<'_>,
     mut archive_transport: Option<PreparedProductionSorafsArchiveTransportV1>,
 ) -> Result<crate::deployment_runtime::BuiltArtifact, Diagnostic> {
+    let RuntimePackageSelection {
+        manifest,
+        package,
+        contract,
+        locked,
+    } = *selection;
     let mut selection = SelectionArgs {
         packages: package
             .map(str::parse)
@@ -541,8 +596,11 @@ pub(super) fn build_runtime_package(
         &selected,
         &graph.lock,
         CompilerActionV1::Build,
-        config.account_chain_discriminant,
-        false,
+        CompilerSettingsV1 {
+            chain_discriminant: config.account_chain_discriminant,
+            zk_enabled: false,
+            profile: "production",
+        },
     )
     .map_err(|error| graph_mode_compiler_diagnostic(&error, mode))?;
     let artifact = deploy::select_artifact(&execution.artifacts, contract)?;
@@ -631,6 +689,7 @@ fn render_test_report(report: &WorkspaceTestReportV1) -> (String, Map) {
                         ("name", Value::from(case.name.clone())),
                         ("line", Value::from(u64::from(case.line))),
                         ("passed", Value::from(case.passed)),
+                        ("fault", norito::json!(case.fault)),
                         (
                             "failure",
                             case.failure
@@ -718,18 +777,21 @@ mod tests {
                             name: "first".to_owned(),
                             line: 3,
                             passed: false,
+                            fault: None,
                             failure: Some("actual 29; expected 30".to_owned()),
                         },
                         KotoTestCaseOutcomeV1 {
                             name: "second".to_owned(),
                             line: 8,
                             passed: false,
+                            fault: None,
                             failure: Some("VM gas exhausted".to_owned()),
                         },
                         KotoTestCaseOutcomeV1 {
                             name: "third".to_owned(),
                             line: 13,
                             passed: true,
+                            fault: None,
                             failure: None,
                         },
                     ],

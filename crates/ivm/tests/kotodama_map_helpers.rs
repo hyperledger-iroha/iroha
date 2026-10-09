@@ -32,10 +32,10 @@ fn ephemeral_map_constructor_is_rejected() {
 #[test]
 fn get_unwrap_or_state_map() {
     let src = r#"
-        seiyaku StateMapHelpers {
+        seiyaku StateMapHelpers { permission WriteState;
           state StateMap<int, int> m;
 
-          kotoage fn main() -> int authorize("WriteState") {
+          kotoage fn main() authorize(WriteState) -> int {
               m[7] = 111;
               let a = m.get(7).unwrap_or(5);
               let b = m.get(8).unwrap_or(9);
@@ -54,9 +54,9 @@ fn get_unwrap_or_state_map() {
 #[test]
 fn ir_lower_get_or_insert_state_map() {
     let src = r#"
-        seiyaku GetOrInsertLowering {
+        seiyaku GetOrInsertLowering { permission WriteState;
           state StateMap<int, int> m;
-          kotoage fn f(int k) -> int authorize("WriteState") { return m.get_or_insert(k, 0); }
+          kotoage fn f(int k) authorize(WriteState) -> int { return m.get_or_insert(k, 0); }
         }
     "#;
     let prog = parse(src).expect("parse get_or_insert");
@@ -119,9 +119,9 @@ fn ir_lower_ensure_pointer_variants_use_pointer_syscalls() {
     for (ty, ctor) in cases {
         let src = format!(
             r#"
-        seiyaku C {{
+        seiyaku C {{ permission WriteState;
             state StateMap<int, {ty}> S;
-            kotoage fn main() -> {ty} authorize("WriteState") {{
+            kotoage fn main() authorize(anyone) -> {ty} authorize(WriteState) {{
                 return S.get_or_insert(7, {ctor});
             }}
         }}
@@ -203,9 +203,9 @@ fn ir_lower_ensure_pointer_variants_use_pointer_syscalls() {
 #[test]
 fn runtime_durable_get_or_insert_state_map() {
     let src = r#"
-        seiyaku C {
+        seiyaku C { permission WriteState;
             state StateMap<int, int> S;
-            kotoage fn main() -> int authorize("WriteState") {
+            kotoage fn main() authorize(WriteState) -> int {
                 let x = S.get_or_insert(7, 0);
                 let y = S.get_or_insert(7, 5);
                 return x + y;
@@ -231,14 +231,11 @@ fn runtime_durable_get_or_insert_state_map() {
     let host_ref = vm.host_mut_any().unwrap();
     let host = host_ref.downcast_ref::<WsvHost>().unwrap();
     let base = iroha_model_base::name::Name::from_str("S").expect("valid Name literal");
-    let key = ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
-        .expect("encode canonical pointer-backed StateMap key");
+    let key = common::encode_int_state_value(7);
     let expected_path = format!("{}/{}", base.as_ref(), hex::encode(key));
-    let mut val = host.wsv.sc_get(&expected_path);
-    if val.is_none() {
-        let namespaced_path = format!("{}\0\0\0\0\0\0\0{}", char::from(0x01), expected_path);
-        val = host.wsv.sc_get(&namespaced_path);
-    }
-    let val = val.expect("durable state entry should exist");
+    let val = host
+        .wsv
+        .sc_get(&expected_path)
+        .expect("durable state entry should exist");
     assert_eq!(common::decode_int_state_value(&val), 0);
 }

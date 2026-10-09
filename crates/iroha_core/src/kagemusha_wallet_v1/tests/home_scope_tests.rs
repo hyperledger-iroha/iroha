@@ -8,9 +8,12 @@ use crate::{
 use iroha_data_model::{
     Registrable,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinition, AssetDefinitionId},
-    nexus::{DataSpaceCatalog, DataSpaceMetadata},
+    nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
 };
-use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
+use iroha_model_base::{
+    domain::DomainId,
+    topology::{DataSpaceId, LaneId},
+};
 use iroha_test_samples::ALICE_ID;
 
 fn definition(name: &str, policy: AssetBalancePolicy, domain: Option<&str>) -> AssetDefinition {
@@ -57,6 +60,24 @@ fn registration_scope_must_equal_the_definition_home() {
                     fault_tolerance: 1,
                 },
             ])
+            .unwrap(),
+            lane_catalog: LaneCatalog::new(
+                core::num::NonZeroU32::new(3).unwrap(),
+                [
+                    (0, "core", DataSpaceId::UNIVERSAL, LaneVisibility::Public),
+                    (1, "bpng", bpng, LaneVisibility::Public),
+                    (2, "cbsi", cbsi, LaneVisibility::Restricted),
+                ]
+                .into_iter()
+                .map(|(id, alias, dataspace_id, visibility)| LaneConfig {
+                    id: LaneId::new(id),
+                    alias: alias.to_owned(),
+                    dataspace_id,
+                    visibility,
+                    ..LaneConfig::default()
+                })
+                .collect(),
+            )
             .unwrap(),
             ..Default::default()
         },

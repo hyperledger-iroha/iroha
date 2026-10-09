@@ -1852,6 +1852,9 @@ mod tests {
 
         const MAX_IMAGE_BYTES: usize = 0x0010_0000; // IVM V1's image ceiling after the fixed header.
         let interface = ivm::EmbeddedContractInterfaceV1 {
+            events: Vec::new(),
+            enum_types: Vec::new(),
+            permissions: Vec::new(),
             callables: vec![crate::ivm_test_support::unit_callable(0)],
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-state-root-test".to_owned(),
@@ -1868,7 +1871,7 @@ mod tests {
                 return_schema: Some(EntrypointValueTypeV1 {
                     nodes: vec![EntrypointValueTypeNodeV1::Unit],
                 }),
-                permission: Some("CanInvoke".to_owned()),
+                authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
                 access_hints_complete: None,

@@ -7,9 +7,11 @@
 //! Its original source and captured execution route survive rejection and fee handling.
 
 use super::*;
+use crate::state::StateReadOnly;
 use crate::{
     queue::RoutingDecision,
     smartcontracts::ivm::cache::IvmCache,
+    state::contract_event_journal::DrainedContractEvents,
     state::network_policy_routes::CapturedNetworkPolicyRoute,
     tx::{
         AcceptedTransaction, execution_rejection_from_admission_failure,
@@ -464,6 +466,9 @@ fn execute_network_attempt_with_amx<'attempt>(
         transaction
             .callback_journal
             .discard_rejected(Hash::from(input.execution_call_hash()))?;
+        transaction
+            .contract_event_journal
+            .discard_rejected(Hash::from(input.execution_call_hash()))?;
         drop(attempt);
         return complete_network_rejection(
             state,
@@ -508,11 +513,23 @@ fn execute_network_attempt_with_amx<'attempt>(
         return Err("Network receipts belong to another execution call".into());
     }
     let fee_receipt = transaction.pending_nexus_fee_receipt.take();
-    let (actual, journal_overflow) = match transaction.callback_journal.take(call)? {
-        DrainedCallbacks::Complete { steps, completions } => {
+    let callback_capture = transaction.callback_journal.take(call)?;
+    let event_capture = if matches!(callback_capture, DrainedCallbacks::OutputLimit) {
+        transaction.contract_event_journal.discard_rejected(call)?;
+        DrainedContractEvents::OutputLimit
+    } else {
+        let budget = transaction.execution_budget();
+        transaction.contract_event_journal.take(call, &budget)?
+    };
+    let (actual, journal_overflow) = match (callback_capture, event_capture) {
+        (
+            DrainedCallbacks::Complete { steps, completions },
+            DrainedContractEvents::Complete(events),
+        ) => {
             let mut result = TransactionResult::new(Ok(steps));
             result.set_batch_transfer_outcomes(owned);
             result.set_nexus_fee_receipt(fee_receipt);
+            result.set_contract_events(events);
             (
                 ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
                     input_index,
@@ -522,7 +539,7 @@ fn execute_network_attempt_with_amx<'attempt>(
                 false,
             )
         }
-        DrainedCallbacks::OutputLimit => (
+        _ => (
             ExecutionOutputV1::network_output_limit_rejection(input_index),
             true,
         ),

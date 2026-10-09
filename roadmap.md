@@ -106,7 +106,9 @@ and [verification checklist](specs/kagemusha_evidence_gate.md).
 ## Cryptography and VM
 
 Contracts: [Norito](norito.md), [schema](specs/norito_schema_identity.md),
-[IVM completion](specs/kotodama_ivm_completion.md), [FASTPQ](specs/fastpq_plan.md)
+[IVM completion](specs/kotodama_ivm_completion.md),
+[Kotodama syntax and developer experience](specs/kotodama_devex_goals.md),
+[FASTPQ](specs/fastpq_plan.md)
 and [privacy closure](specs/privacy_first_release_closure.md).
 
 The [ZK delivery plan](specs/zk_delivery_plan.md) and its

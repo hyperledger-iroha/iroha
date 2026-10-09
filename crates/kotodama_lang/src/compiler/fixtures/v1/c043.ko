@@ -1,7 +1,7 @@
 
-seiyaku CompilerFixture {
+seiyaku CompilerFixture { permission FixtureAccess;
 
-kotoage fn main() authorize("CompilerFixture") {
+kotoage fn main() authorize(FixtureAccess) {
   let trigger_id = Name::parse("wake");
   ledger::peer::register(peer: Json::parse("{}"));
   ledger::peer::unregister(peer: Json::parse("{}"));

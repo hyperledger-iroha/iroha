@@ -104,7 +104,12 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "axt::touch",
         "Declare a dataspace touch and its manifest in an atomic transaction.",
     ),
+    ("bytes::concat", "Concatenate two byte values."),
     ("bytes::len", "Read the length of a byte value."),
+    (
+        "codec::encode",
+        "Encode a public value using its canonical typed Norito record.",
+    ),
     (
         "contains",
         "Check whether a durable state map contains a key.",
@@ -139,10 +144,6 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "context::trigger_event",
         "Read the current trigger event as JSON.",
     ),
-    (
-        "contract::invoke",
-        "Invoke a seiyaku with quantity input and minimum-output constraints.",
-    ),
     ("crypto::blake2b256", "Hash bytes with BLAKE2b-256."),
     (
         "crypto::commit_output",
@@ -159,7 +160,7 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
     ("crypto::keccak256", "Hash bytes with Keccak-256."),
     (
         "crypto::private_input",
-        "Read a private numeric input in ZK mode.",
+        "Read a private numeric input in ZK mode from a prover or local test host. Production consensus hosts never provide raw private witnesses; deploy a public-proof verifier instead.",
     ),
     ("crypto::sha256", "Hash bytes with SHA-256."),
     ("crypto::sha3", "Hash bytes with SHA-3."),
@@ -193,7 +194,10 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "crypto::verify_signature",
         "Verify `signature` over `message` with `public_key` under a compile-time `SignatureScheme` and return whether it is valid.",
     ),
-    ("crypto::vrf::epoch_seed", "Read an encoded VRF epoch seed."),
+    (
+        "crypto::vrf::epoch_seed",
+        "Read the exact epoch’s 32-byte VRF seed, or None when unavailable. No latest-epoch fallback.",
+    ),
     (
         "crypto::vrf::verify",
         "Verify an encoded VRF request and return its response.",
@@ -290,18 +294,6 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
     (
         "ledger::asset::balance",
         "Read the quantity held by an account for an asset definition.",
-    ),
-    (
-        "ledger::asset::batch::apply",
-        "Apply an encoded V1 asset transfer batch.",
-    ),
-    (
-        "ledger::asset::batch::begin",
-        "Begin a host-managed V1 asset transfer batch.",
-    ),
-    (
-        "ledger::asset::batch::end",
-        "End a host-managed V1 asset transfer batch.",
     ),
     (
         "ledger::asset::burn",
@@ -436,6 +428,10 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "Query a bounded page of projected asset views.",
     ),
     (
+        "ledger::query::assets_of",
+        "Read a bounded asset page belonging to the exact account.",
+    ),
+    (
         "ledger::query::domain",
         "Query the optional projected view of a domain.",
     ),
@@ -471,12 +467,12 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
     ("ledger::role::revoke", "Revoke a role from an account."),
     ("ledger::role::unregister", "Unregister a named role."),
     (
-        "ledger::seiyaku::grant_kotoage",
-        "Grant an account the exact `CanInvokeContractEntrypoint` permission for one seiyaku entrypoint selector.",
+        "ledger::seiyaku::grant_permission",
+        "Grant an account a declared instance permission for the authenticated executing seiyaku. Only the instance owner or an exact permission holder may delegate it.",
     ),
     (
-        "ledger::seiyaku::revoke_kotoage",
-        "Revoke an account's exact `CanInvokeContractEntrypoint` permission for one seiyaku entrypoint selector.",
+        "ledger::seiyaku::revoke_permission",
+        "Revoke an account's declared instance permission for the authenticated executing seiyaku.",
     ),
     (
         "ledger::subscription::bill",
@@ -495,7 +491,10 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "Change a named trigger's enabled state.",
     ),
     ("ledger::trigger::unregister", "Unregister a named trigger."),
-    ("math::abs", "Compute an integer's absolute value."),
+    (
+        "math::abs",
+        "Return the absolute value, preserving its int, decimal, or quantity type.",
+    ),
     (
         "math::div_ceil",
         "Divide integers with rounding toward positive infinity.",
@@ -505,9 +504,15 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "Compute the greatest common divisor of two integers.",
     ),
     ("math::isqrt", "Compute the integer square root."),
-    ("math::max", "Select the larger of two integers."),
+    (
+        "math::max",
+        "Select the larger of two values with the same int, decimal, or quantity type.",
+    ),
     ("math::mean", "Compute the integer mean of two integers."),
-    ("math::min", "Select the smaller of two integers."),
+    (
+        "math::min",
+        "Select the smaller of two values with the same int, decimal, or quantity type.",
+    ),
     (
         "math::wrapping_add",
         "Explicit modulo-2^512 `int` addition.",
@@ -548,6 +553,17 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "Read the length reported by the durable state path syscall.",
     ),
     ("state::set", "Write a byte value at a durable state path."),
+    ("string::as_bytes", "Expose the UTF-8 bytes of a string."),
+    ("string::concat", "Concatenate two UTF-8 strings."),
+    (
+        "string::from",
+        "Render a public scalar as its canonical string.",
+    ),
+    (
+        "string::from_bytes",
+        "Validate UTF-8 bytes and return an optional string.",
+    ),
+    ("string::len", "Return the UTF-8 byte length of a string."),
     (
         "test::actor_account",
         "Read a fixture actor's canonical account identity.",
@@ -579,11 +595,11 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
     ),
     (
         "test::invoke_kotoage",
-        "Invoke a target `kotoage`/`言挙げ` or `view fn` by its declared name from a test, as the current caller.",
+        "Invoke a target `kotoage`/`言挙げ` or `view fn` by its declared name from a test with an exact typed argument record, as the current caller.",
     ),
     (
         "test::invoke_kotoage_as",
-        "Invoke a target `kotoage`/`言挙げ` or `view fn` by its declared name from a test, as a fixture actor.",
+        "Invoke a target `kotoage`/`言挙げ` or `view fn` by its declared name from a test with an exact typed argument record, as a fixture actor.",
     ),
     (
         "test::set_block_height",
@@ -659,6 +675,14 @@ mod tests {
                 .is_some_and(|summary| summary.starts_with("Transfer an asset quantity"))
         );
         assert!(builtin_doc("get_or_insert").is_some());
+        assert_eq!(
+            builtin_doc("bytes::concat"),
+            Some("Concatenate two byte values.")
+        );
+        assert_eq!(
+            builtin_doc("string::as_bytes"),
+            Some("Expose the UTF-8 bytes of a string.")
+        );
         assert_eq!(builtin_doc("ledger::asset"), None);
         assert_eq!(builtin_doc("transfer"), None);
     }

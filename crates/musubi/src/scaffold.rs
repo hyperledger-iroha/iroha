@@ -859,7 +859,7 @@ mod tests {
                 }
             }
             assert!(
-                root.join("target/kotodama/demo/coffee-club/production/coffee-club.to")
+                root.join("target/kotodama/demo/coffee-club/dev/coffee-club.to")
                     .is_file()
             );
             let contract_path = root.join("contracts/coffee-club.ko");
@@ -874,7 +874,7 @@ mod tests {
             assert!(tests.contains("test::expect_reject_as("));
             let readme = fs::read_to_string(root.join("README.md")).expect("generated README");
             assert!(readme.contains("`CoffeeClub` seiyaku"));
-            assert!(readme.contains("target/kotodama/demo/coffee-club/production/coffee-club.to"));
+            assert!(readme.contains("target/kotodama/demo/coffee-club/dev/coffee-club.to"));
             assert!(readme.contains("musubi deploy --activate"));
             assert!(!readme.contains("{{"));
             assert_eq!(
@@ -981,7 +981,7 @@ mod tests {
         ));
         assert_eq!(manifest.tests[0].name.to_string(), "hello");
         let readme = fs::read_to_string(root.join("README.md")).expect("README");
-        assert!(readme.contains("target/kotodama/local/hello/production/hello.to"));
+        assert!(readme.contains("target/kotodama/local/hello/dev/hello.to"));
         let existing = TempDir::new().expect("init directory");
         let init_root = existing.path().join("kept");
         fs::create_dir(&init_root).expect("existing directory");

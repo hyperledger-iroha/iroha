@@ -1,10 +1,10 @@
-seiyaku CompactPermission {
+seiyaku CompactPermission { permission ManageRoles;
     error enum Failure {
         Low = 3,
         High = 9,
     }
 
-    kotoage fn main() authorize("ManageRoles") {
+    kotoage fn main() authorize(ManageRoles) {
         require(true, Failure::Low);
         require(true, Failure::High);
         ledger::role::register(

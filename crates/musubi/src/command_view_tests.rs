@@ -9,14 +9,14 @@ use std::{
 };
 
 const SOURCE: &str = r#"
-seiyaku Counter {
+seiyaku Counter { permission Update;
     state int count;
     hajimari() { count = 0; }
-    kotoage fn increment(int delta) authorize("CanInvokeContractEntrypoint") {
+    kotoage fn increment(int delta) authorize(Update) {
         count = count + delta;
     }
-    view fn current() -> int { return count; }
-    view fn plus(int delta) -> int { return count + delta; }
+    view fn current() authorize(anyone) -> int { return count; }
+    view fn plus(int delta) authorize(anyone) -> int { return count + delta; }
 }
 "#;
 

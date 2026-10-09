@@ -1863,6 +1863,14 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         owner: UseOwner::Other(Use::Name, "Prelude re-export of the Merkle tree type"),
     },
     ConstructionUse {
+        path: "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1/load_finality.rs",
+        uses: &[("MerkleTree", 1)],
+        owner: UseOwner::Other(
+            Use::Test,
+            "Shape-only counted event path fixture in the native Load finality canonical encoding tests; it creates no verified certificate or State-content commitment",
+        ),
+    },
+    ConstructionUse {
         path: "crates/iroha_data_model/src/nexus/privacy.rs",
         uses: &[("MerkleTree", 2)],
         owner: UseOwner::Other(Use::Test, "Fixtures of the inline lane-privacy tests"),

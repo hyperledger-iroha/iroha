@@ -54,6 +54,11 @@ required native checks before using its credential-bound signing key.
   use retained older epoch authority. The SDK's 64-boundary work budget applies
   to one resumable call, not the chain's lifetime; each verified boundary is
   durably selected before the next request.
+- Torii must retain the original Kura boundary certificates and receipt event paths
+  required by outstanding wallets. Missing or pruned originals stop synchronization
+  and Load admission; neither an HTTP response nor an imported checkpoint fills a gap.
+  Epoch verification skips ordinary blocks, while long-offline catch-up and source
+  retention still require release qualification.
 - Focused checks cover more than 64 authenticated transitions and bounded
   checkpoint restoration. Native integration checks exercise restart between
   pages, identical retry, missing/forged/wrong-root evidence, publication

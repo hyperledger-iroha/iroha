@@ -68,17 +68,12 @@ pub const V1_DECLARATION_RESERVED_EXTRA_NAMES: &[&str] = &[
     "__kotodama_quantity_ratio_round",
     "__kotodama_decimal_to_int_trunc",
     "__kotodama_decimal_to_int_round",
-    "is_some",
-    "is_none",
-    "is_ok",
-    "is_err",
-    "unwrap_or",
-    "unwrap_err_or",
-    "expect",
+    "__kotodama_option_ok_or",
+    "__kotodama_result_or_err",
 ];
 /// Exact identifier spellings forbidden in every source position.
 pub const V1_FORBIDDEN_SOURCE_IDENTIFIERS: &[&str] = &["Amount"];
-/// Exact canonical scalar types permitted as durable StateMap keys.
+/// Exact canonical scalar types permitted as durable `StateMap` keys.
 pub const V1_STATE_MAP_KEY_TYPE_NAMES: &[&str] = &[
     "int",
     "decimal",
@@ -94,15 +89,15 @@ pub const V1_STATE_MAP_KEY_TYPE_NAMES: &[&str] = &[
     "DomainId",
     "Name",
 ];
-/// Canonical bounded StateMap scan provenance in manifest order.
+/// Canonical bounded `StateMap` scan provenance in manifest order.
 pub const V1_DYNAMIC_ACCESS_BOUND_KINDS: &[&str] = &["page", "take"];
 /// Maximum keys advertised by one bounded dynamic-access hint.
 pub const V1_DYNAMIC_ACCESS_MAX_KEYS: u32 = 64;
-/// Canonical prefix for a direct durable StateMap hint base.
+/// Canonical prefix for a direct durable `StateMap` hint base.
 pub const V1_DYNAMIC_ACCESS_BASE_PREFIX: &str = "state:";
-/// Canonical validation policy for the StateMap base identifier.
+/// Canonical validation policy for the `StateMap` base identifier.
 pub const V1_DYNAMIC_ACCESS_BASE_IDENTIFIER_POLICY: &str = "state_declaration_identifier";
-/// Dynamic hints may refer only to a directly declared top-level StateMap.
+/// Dynamic hints may refer only to a directly declared top-level `StateMap`.
 pub const V1_DYNAMIC_ACCESS_REQUIRES_DECLARED_STATE_MAP: bool = true;
 /// Dynamic hints are advisory and never scheduler-authoritative in V1.
 pub const V1_DYNAMIC_ACCESS_SCHEDULER_AUTHORITATIVE: bool = false;
@@ -174,9 +169,8 @@ pub const LINKED_SYMBOL_PREFIX: &str = "__kotodama_link_";
 /// Only names source code can refer to are reserved: types, keywords handled
 /// by the lexer, compiler-owned extras and unnamespaced source builtins such
 /// as `require`. Compiler-internal lowering spellings (`min`, `authority`,
-/// `mint_asset`, ...) are not source names, so kotoage and view functions may
-/// use them as public selectors; [`builtin_lowering_collision`] identifies the
-/// private helpers whose calls would still be ambiguous with builtin lowering.
+/// `mint_asset`, ...) are not source names. All source functions may use them:
+/// typed calls retain separate user, builtin and compiler-intrinsic identities.
 pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
         || V1_SOURCE_TYPE_NAMES.contains(&name)
@@ -193,18 +187,6 @@ pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
 pub fn is_compile_time_nominal_type(name: &str) -> bool {
     Builtin::all()
         .any(|builtin| builtin.is_compile_time_nominal() && builtin.signature().return_type == name)
-}
-/// Return the builtin whose compiler-internal lowering name equals `name`.
-///
-/// Typed calls to a private helper and to a builtin share one call namespace
-/// after semantic analysis, so a private `fn` must not reuse a lowering name.
-/// Public selectors (kotoage, view and lifecycle declarations) are never
-/// called from source and may use these names.
-// TODO: give typed builtin calls their own HIR identity so private helpers can
-// reuse lowering names too; this needs semantic, IR, secret-flow and lint
-// passes to stop dispatching builtins by call name.
-pub fn builtin_lowering_collision(name: &str) -> Option<Builtin> {
-    Builtin::from_name(name)
 }
 /// Return whether a declared source type collides with an active or retired
 /// compiler-owned type spelling.
@@ -235,12 +217,11 @@ mod tests {
             "register_account",
             "info",
             "name",
+            "is_some",
+            "expect",
         ] {
             assert!(!is_reserved_source_declaration(name, true), "{name}");
-            assert!(builtin_lowering_collision(name).is_some(), "{name}");
         }
-        assert_eq!(builtin_lowering_collision("min"), Some(Builtin::Min));
-        assert_eq!(builtin_lowering_collision("transfer"), None);
     }
 
     #[test]

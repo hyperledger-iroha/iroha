@@ -11,9 +11,16 @@ fn fixture_environment() -> FixtureEnvironment<'static> {
     static NO_CONSTS: std::sync::LazyLock<HashMap<String, Expr>> =
         std::sync::LazyLock::new(HashMap::new);
     FixtureEnvironment {
+        artifacts: empty_fixture_artifacts(),
+        source_name: None,
         consts: &NO_CONSTS,
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
     }
+}
+fn empty_fixture_artifacts() -> &'static BTreeMap<String, ivm::PreparedContract> {
+    static EMPTY: std::sync::LazyLock<BTreeMap<String, ivm::PreparedContract>> =
+        std::sync::LazyLock::new(BTreeMap::new);
+    &EMPTY
 }
 fn decode_i64_word(vm: &IVM, pointer: u64) -> i64 {
     let tlv = vm.validate_tlv(pointer).expect("validate returned int TLV");
@@ -102,6 +109,7 @@ fn compiled_suite_with_fixtures(fixtures: Vec<FixtureDecl>) -> CompiledSuite {
     let target_source = "seiyaku FixtureDemo { fn helper() {} #[test] fn smoke() {} }";
     let target_program = parser::parse(target_source).expect("parse fixture test target");
     let suite = DiscoveredSuite {
+        artifacts: Vec::new(),
         sources: Vec::new(),
         source_root: None,
         target_path: PathBuf::from("/tmp/fixture_demo.ko"),
@@ -311,6 +319,7 @@ fn zk_test_option_marks_both_test_and_runtime_artifacts() {
     let target_source = "seiyaku ZkTest { hajimari() {} #[test] fn smoke() {} }";
     let target_program = parser::parse(target_source).expect("parse ZK test target");
     let suite = DiscoveredSuite {
+        artifacts: Vec::new(),
         sources: Vec::new(),
         source_root: None,
         target_path: PathBuf::from("/tmp/zk_test.ko"),
@@ -512,12 +521,14 @@ fn structured_module_graph_executes_exact_dependency_and_ignores_ambient_tests()
     );
     let dependency = "std/math@1.0.0".to_owned();
     let modules = KotoTestModuleGraphV1 {
+        artifacts: Vec::new(),
         sources: Vec::new(),
         imports: vec![ImportBinding {
             alias: "calc".to_owned(),
             package: dependency.clone(),
         }],
         packages: vec![SourcePackageUnit {
+            artifacts: Vec::new(),
             sources: Vec::new(),
             identity: dependency,
             modules: vec![SourceModuleUnit {
@@ -583,15 +594,17 @@ fn structured_source_root_is_bound_and_never_reopened_from_the_target_path() {
 }
 #[test]
 fn structured_standalone_sources_execute_private_target_and_exact_package() {
-    let target = SourceModuleUnit { source_name: "contracts/app.ko".to_owned(), source: "seiyaku App { fn reward() -> int { return calc::value(); } view fn current() -> int { return reward(); } }".to_owned() };
+    let target = SourceModuleUnit { source_name: "contracts/app.ko".to_owned(), source: "seiyaku App { fn reward() -> int { return calc::value(); } view fn current() authorize(anyone) -> int { return reward(); } }".to_owned() };
     let test = SourceModuleUnit { source_name: "tests/unit.ko".to_owned(), source: r#"module Tests { koto_test { target: "../contracts/app.ko" } #[test] fn exact_reward() { test::assert(reward() == 7); test::assert(calc::value() == 7); } }"#.to_owned() };
     let modules = KotoTestModuleGraphV1 {
+        artifacts: Vec::new(),
         sources: Vec::new(),
         imports: vec![ImportBinding {
             alias: "calc".to_owned(),
             package: "demo/math@1.0.0".to_owned(),
         }],
         packages: vec![SourcePackageUnit {
+            artifacts: Vec::new(),
             sources: Vec::new(),
             identity: "demo/math@1.0.0".to_owned(),
             modules: vec![SourceModuleUnit {
@@ -630,6 +643,45 @@ fn structured_standalone_sources_execute_private_target_and_exact_package() {
     .expect_err("undeclared import");
     assert_eq!(error.phase, KotoTestRunPhaseV1::Compilation);
     assert!(error.message.contains("missing"));
+    let diagnostics = error
+        .diagnostics
+        .expect("canonical compilation diagnostics");
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("missing")
+            && diagnostic
+                .primary_span
+                .as_ref()
+                .is_some_and(|span| span.source.as_deref() == Some("tests/unit.ko"))
+    }));
+}
+#[test]
+fn structured_source_discovery_preserves_parse_diagnostics_and_fixes() {
+    let root = SourceModuleUnit {
+        source_name: "tests/invalid.ko".to_owned(),
+        source: "module Tests { #[test] fn check() { let int value = 1 } }".to_owned(),
+    };
+    for error in [
+        declared_test_target_source_v1(&root).expect_err("invalid target source"),
+        run_tests_structured_source_with_modules_v1(
+            &KotoTestRunRequestV1::new(&root.source_name, 753),
+            &root,
+            &KotoTestModuleGraphV1::default(),
+        )
+        .expect_err("invalid suite source"),
+    ] {
+        assert_eq!(error.phase, KotoTestRunPhaseV1::Compilation);
+        let diagnostics = error.diagnostics.expect("structured parsing diagnostics");
+        assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .primary_span
+                .as_ref()
+                .is_some_and(|span| span.source.as_deref() == Some("tests/invalid.ko"))
+                && diagnostic
+                    .fix
+                    .as_ref()
+                    .is_some_and(|fix| fix.replacement == ";")
+        }));
+    }
 }
 #[test]
 fn structured_standalone_sources_reject_missing_mismatched_and_escaping_targets() {
@@ -664,8 +716,9 @@ fn structured_standalone_sources_reject_missing_mismatched_and_escaping_targets(
 /// A discovered suite and results for report-rendering tests: a seiyaku in `contracts/` whose
 /// tests live in `tests/vault.test.ko`.
 fn report_fixture() -> (DiscoveredSuite, Vec<TestRunResult>) {
-    let target_source = "seiyaku Vault { view fn value() -> int { return 1; } }";
+    let target_source = "seiyaku Vault { view fn value() authorize(anyone) -> int { return 1; } }";
     let suite = DiscoveredSuite {
+        artifacts: Vec::new(),
         sources: Vec::new(),
         source_root: None,
         target_path: PathBuf::from("/work/contracts/vault.ko"),
@@ -872,20 +925,21 @@ fn execute_suite_supports_native_contract_flow_helpers() {
 
                 fixture actors {{
                     actor("issuer", AccountId::parse("{actor_account}"), "0x{seed_hex}");
-                    grant_permission("issuer", "Test");
+                    grant_seiyaku_permission("issuer", "Test");
+                    grant_seiyaku_lifecycle_permission("issuer", "hajimari");
                 }}
 
                 #[test(fixture="actors")]
                 fn drive_contract_flow() {{
-                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
-                    test::invoke_kotoage_as(actor: "issuer", kotoage: "increment", arguments: Json::parse("{{}}"));
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: {{}});
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "increment", arguments: {{}});
                     test::invoke_kotoage_as(
                         actor: "issuer",
                         kotoage: "remember_caller",
-                        arguments: Json::parse("{{}}")
+                        arguments: {{}}
                     );
 
-                    test::expect_reject_as(actor: "issuer", kotoage: "reject_me", arguments: Json::parse("{{}}"), expected: DemoError::Rejected);
+                    test::expect_reject_as(actor: "issuer", kotoage: "reject_me", arguments: {{}}, expected: DemoError::Rejected);
                 }}
                 }}
                 "#,
@@ -902,14 +956,6 @@ fn execute_suite_supports_native_contract_flow_helpers() {
         let ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::Blob, value.as_bytes()))
             .expect("blob tlv");
-        vm.set_register(reg, ptr);
-    };
-    let put_json = |vm: &mut IVM, reg: usize, raw: &str| {
-        let json = Json::from_str_norito(raw).expect("json payload");
-        let bytes = norito::to_bytes(&json).expect("json norito");
-        let ptr = vm
-            .alloc_input_tlv(&make_tlv(PointerType::Json, &bytes))
-            .expect("json tlv");
         vm.set_register(reg, ptr);
     };
     put_blob(&mut vm, 10, "issuer");
@@ -956,35 +1002,34 @@ fn execute_suite_supports_native_contract_flow_helpers() {
         .expect("signature verifies");
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "hajimari");
-    put_json(&mut vm, 12, "{}");
+    vm.set_register(12, 0);
+    vm.set_register(13, 0);
     let result_table = vm.alloc_heap(8).expect("result table");
-    vm.set_register(13, result_table);
-    vm.set_register(14, 1);
+    vm.set_register(14, result_table);
+    vm.set_register(15, 1);
     host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
         .expect("invoke hajimari");
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "increment");
-    put_json(&mut vm, 12, "{}");
+    vm.set_register(12, 0);
+    vm.set_register(13, 0);
     let result_table = vm.alloc_heap(8).expect("result table");
-    vm.set_register(13, result_table);
-    vm.set_register(14, 1);
+    vm.set_register(14, result_table);
+    vm.set_register(15, 1);
     host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
         .expect("invoke increment");
-    let counter_state = host.inner.wsv.sc_get("counter").expect("counter state");
+    let counter_state = host.fixture_state("counter").expect("counter state");
     assert_eq!(decode_int_state_value(&counter_state), 5);
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "remember_caller");
-    put_json(&mut vm, 12, "{}");
+    vm.set_register(12, 0);
+    vm.set_register(13, 0);
     let result_table = vm.alloc_heap(8).expect("result table");
-    vm.set_register(13, result_table);
-    vm.set_register(14, 1);
+    vm.set_register(14, result_table);
+    vm.set_register(15, 1);
     host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
         .expect("invoke remember_caller");
-    let remembered_state = host
-        .inner
-        .wsv
-        .sc_get("last_actor")
-        .expect("last_actor state");
+    let remembered_state = host.fixture_state("last_actor").expect("last_actor state");
     let remembered_account_envelope =
         decode_pointer_state_value(&remembered_state, StateValueKindV1::AccountId);
     let remembered_account_tlv = ivm::pointer_abi::validate_tlv_bytes(&remembered_account_envelope)
@@ -1000,10 +1045,11 @@ fn execute_suite_supports_native_contract_flow_helpers() {
     );
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "pair");
-    put_json(&mut vm, 12, "{}");
+    vm.set_register(12, 0);
+    vm.set_register(13, 0);
     let result_table = vm.alloc_heap(16).expect("result table");
-    vm.set_register(13, result_table);
-    vm.set_register(14, 2);
+    vm.set_register(14, result_table);
+    vm.set_register(15, 2);
     host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
         .expect("invoke pair");
     assert_eq!(vm.register(10), result_table);
@@ -1015,14 +1061,14 @@ fn execute_suite_supports_native_contract_flow_helpers() {
     );
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "reject_me");
-    put_json(&mut vm, 12, "{}");
+    vm.set_register(12, 0);
+    vm.set_register(13, 0);
     let expectation = kotodama_lang::testing::RejectionExpectation::Any;
     let bytes = norito::encode_canonical(&expectation).expect("encode expectation");
     let ptr = vm
         .alloc_input_tlv(&make_tlv(PointerType::Blob, &bytes))
         .expect("expectation tlv");
-    vm.set_register(13, ptr);
-    vm.set_register(14, 0);
+    vm.set_register(14, ptr);
     vm.set_register(15, 0);
     host.syscall(TEST_SYSCALL_EXPECT_REJECT_AS, &mut vm)
         .expect("expect reject");
@@ -1044,39 +1090,37 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
         DomainId::try_new("rejections", "universal").unwrap(),
         "unit".parse().unwrap(),
     );
-    let mint_permission = format!("mint_asset:{}", scoped_asset.canonical_address());
     temp.write(
         "rejection.ko",
-        &r#"seiyaku Rejections {
+        &r#"seiyaku Rejections { permission CanCustomProbe; permission CanEnactGovernance; permission Update; permission Mint; permission manage_roles;
         error enum RejectionError { First = 1, Second = 2, }
         state int counter;
         hajimari() { counter = 7; }
-        kotoage fn reset() authorize("CanInvokeContractEntrypoint") { counter = 7; }
-        kotoage fn reject(int value) authorize("CanInvokeContractEntrypoint") {
+        kotoage fn reset() authorize(Update) { counter = 7; }
+        kotoage fn reject(int value) authorize(Update) {
             counter = value;
             require(false, RejectionError::First);
         }
-        kotoage fn succeed(int value) authorize("CanInvokeContractEntrypoint") {
+        kotoage fn succeed(int value) authorize(Update) {
             counter = value;
         }
-        kotoage fn govern() authorize("CanEnactGovernance") {
+        kotoage fn govern() authorize(CanEnactGovernance) {
             counter = 99;
             require(false, RejectionError::First);
         }
-        kotoage fn custom() authorize("CanCustomProbe") {
+        kotoage fn custom() authorize(CanCustomProbe) {
             counter = 99;
             require(false, RejectionError::First);
         }
-        kotoage fn mapped() authorize("manage_roles") {
+        kotoage fn mapped() authorize(manage_roles) {
             counter = 99;
             require(false, RejectionError::First);
         }
-        kotoage fn scoped() authorize("MINT_PERMISSION") {
+        kotoage fn scoped() authorize(Mint) {
             counter = 99;
             require(false, RejectionError::First);
         }
-    }"#
-        .replace("MINT_PERMISSION", &mint_permission),
+    }"#,
     );
     let path = temp.write(
         "rejection.test.ko",
@@ -1085,16 +1129,16 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
         koto_test {{ target: "rejection.ko" }}
         fixture allowed {{
             actor("app", AccountId::parse("{DEFAULT_CALLER}"));
-            grant_seiyaku_kotoage_permission("app", "reject");
-            grant_seiyaku_kotoage_permission("app", "succeed");
-            grant_seiyaku_kotoage_permission("app", "reset");
-            grant_permission("app", "CanEnactGovernance");
-            grant_permission("app", "CanCustomProbe");
-            grant_permission("app", Json::parse("{{\"name\":\"manage_roles\",\"type\":\"custom\"}}"));
-            grant_permission("app", Json::parse("{{\"name\":\"{mint_permission}\",\"type\":\"custom\"}}"));
+            grant_seiyaku_lifecycle_permission("app", "hajimari");
+            grant_seiyaku_permission("app", "Update");
+            grant_seiyaku_permission("app", "CanEnactGovernance");
+            grant_seiyaku_permission("app", "CanCustomProbe");
+            grant_seiyaku_permission("app", "manage_roles");
+            grant_seiyaku_permission("app", "Mint");
         }}
         fixture unpermitted {{
             actor("app", AccountId::parse("{DEFAULT_CALLER}"));
+            grant_seiyaku_lifecycle_permission("app", "hajimari");
         }}
         #[test(fixture = "allowed")]
         fn placeholder() {{}}
@@ -1111,29 +1155,59 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
             .expect("test operand");
         vm.set_register(register, pointer);
     };
+    #[derive(Clone, Copy, Debug)]
+    enum Arguments {
+        Empty,
+        Int(i64),
+        WrongCount,
+        Misaligned,
+        InvalidValue,
+        NullTable,
+    }
     let call = |host: &mut KotoTestHost,
                 vm: &mut IVM,
                 entrypoint: &str,
-                payload: &str,
+                payload: Arguments,
                 expected: Option<&RejectionExpectation>| {
-        let payload =
-            norito::to_bytes(&Json::from_str_norito(payload).expect("json")).expect("payload");
         put(vm, 10, b"app", PointerType::Blob);
         put(vm, 11, entrypoint.as_bytes(), PointerType::Blob);
-        put(vm, 12, &payload, PointerType::Json);
+        let (base, words) = match payload {
+            Arguments::Empty => (0, 0),
+            Arguments::NullTable => (0, 1),
+            Arguments::WrongCount => (vm.alloc_heap(16).unwrap(), 2),
+            Arguments::Misaligned => (vm.alloc_heap(16).unwrap() + 1, 1),
+            Arguments::InvalidValue => {
+                let base = vm.alloc_heap(8).unwrap();
+                vm.store_u64(base, 42).unwrap();
+                (base, 1)
+            }
+            Arguments::Int(value) => {
+                let frame = IntValueV1::prepare_frame(&value.into())
+                    .unwrap()
+                    .encode_frame()
+                    .unwrap();
+                let value = vm
+                    .alloc_input_tlv(&make_tlv(PointerType::Int, &frame))
+                    .unwrap();
+                let base = vm.alloc_heap(8).unwrap();
+                vm.store_u64(base, value).unwrap();
+                (base, 1)
+            }
+        };
+        vm.set_register(12, base);
+        vm.set_register(13, words);
         if let Some(expected) = expected {
             put(
                 vm,
-                13,
+                14,
                 &norito::encode_canonical(expected).expect("expectation"),
                 PointerType::Blob,
             );
         } else {
             let result_table = vm.alloc_heap(8).expect("result table");
-            vm.set_register(13, result_table);
+            vm.set_register(14, result_table);
         }
-        vm.set_register(14, u64::from(expected.is_none()));
-        vm.set_register(15, 0);
+        vm.set_register(15, u64::from(expected.is_none()));
         host.syscall(
             if expected.is_some() {
                 TEST_SYSCALL_EXPECT_REJECT_AS
@@ -1143,8 +1217,22 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
             vm,
         )
     };
-    call(&mut host, &mut vm, "hajimari", "{}", None).expect("initialize");
-    let valid_payload = r#"{"value":"99"}"#;
+    call(&mut host, &mut vm, "hajimari", Arguments::Empty, None).expect("initialize");
+    let valid_payload = Arguments::Int(99);
+    host.record_budget.set_limit_bytes(0);
+    let deferred = call(&mut host, &mut vm, "succeed", valid_payload, None)
+        .expect_err("argument capture must retain its allocation refusal");
+    assert!(deferred.execution_deferral().is_some(), "{deferred:?}");
+    assert_eq!(host.record_budget.reserved_bytes(), 0);
+    assert_eq!(
+        decode_int_state_value(&host.fixture_state("counter").unwrap()),
+        7
+    );
+    assert!(
+        host.last_test_error().is_none(),
+        "resource refusal is not a source rejection"
+    );
+    host.record_budget.set_limit_bytes(16 * 1024 * 1024);
     let control = call(&mut host, &mut vm, "succeed", valid_payload, None);
     assert!(
         control.is_ok(),
@@ -1155,11 +1243,11 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
             .and_then(|entry| entry.argument_schema.as_ref())
     );
     assert_eq!(
-        decode_int_state_value(&host.inner.wsv.sc_get("counter").expect("state")),
+        decode_int_state_value(&host.fixture_state("counter").expect("state")),
         99
     );
-    call(&mut host, &mut vm, "reset", "{}", None).expect("reset control state");
-    call(&mut host, &mut vm, "hajimari", "{}", None)
+    call(&mut host, &mut vm, "reset", Arguments::Empty, None).expect("reset control state");
+    call(&mut host, &mut vm, "hajimari", Arguments::Empty, None)
         .expect_err("a consumed hajimari cannot be replayed");
     assert!(
         host.last_test_error()
@@ -1225,7 +1313,7 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
             host.last_test_error()
         );
         assert_eq!(
-            decode_int_state_value(&host.inner.wsv.sc_get("counter").expect("state")),
+            decode_int_state_value(&host.fixture_state("counter").expect("state")),
             7
         );
         assert_eq!(host.inner.caller_subject(), caller_before);
@@ -1247,11 +1335,11 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
                 .contains("but the call succeeded")
         );
         assert_eq!(
-            decode_int_state_value(&host.inner.wsv.sc_get("counter").expect("state")),
+            decode_int_state_value(&host.fixture_state("counter").expect("state")),
             7
         );
     }
-    let invalid_payload = r#"{"value":"not-an-int"}"#;
+    let invalid_payload = Arguments::InvalidValue;
     for (expected, matches) in [
         (nominal.clone(), false),
         (RejectionExpectation::PermissionDenied, false),
@@ -1279,13 +1367,14 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
             );
         }
         assert_eq!(
-            decode_int_state_value(&host.inner.wsv.sc_get("counter").expect("state")),
+            decode_int_state_value(&host.fixture_state("counter").expect("state")),
             7
         );
     }
     let mut denied =
         build_host_for_fixture(&compiled, Some("unpermitted")).expect("unpermitted host");
-    call(&mut denied, &mut vm, "hajimari", "{}", None).expect("initialize denied fixture");
+    call(&mut denied, &mut vm, "hajimari", Arguments::Empty, None)
+        .expect("initialize denied fixture");
     let denied_actor = denied.actor_account("app").unwrap();
     denied
         .inner
@@ -1328,7 +1417,7 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
             );
         }
         assert_eq!(
-            decode_int_state_value(&denied.inner.wsv.sc_get("counter").expect("state")),
+            decode_int_state_value(&denied.fixture_state("counter").expect("state")),
             7
         );
     }
@@ -1336,7 +1425,7 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
         ("govern", "CanEnactGovernance"),
         ("custom", "CanCustomProbe"),
         ("mapped", "manage_roles"),
-        ("scoped", mint_permission.as_str()),
+        ("scoped", "Mint"),
     ] {
         // A generic exact-entrypoint grant cannot replace the distinct declared permission.
         let actor = denied.actor_account("app").unwrap();
@@ -1347,7 +1436,7 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
                 entrypoint: entrypoint.to_owned(),
             },
         );
-        call(&mut denied, &mut vm, entrypoint, "{}", None)
+        call(&mut denied, &mut vm, entrypoint, Arguments::Empty, None)
             .expect_err("missing declared permission");
         assert!(denied.last_test_error().unwrap().contains(permission_name));
         for (expected, matches) in [
@@ -1366,7 +1455,7 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
                     &mut denied,
                     &mut vm,
                     entrypoint,
-                    r#"{"unexpected":true}"#,
+                    Arguments::WrongCount,
                     Some(&expected)
                 )
                 .is_ok(),
@@ -1375,14 +1464,25 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
                 denied.last_test_error()
             );
             assert_eq!(
-                decode_int_state_value(&denied.inner.wsv.sc_get("counter").unwrap()),
+                decode_int_state_value(&denied.fixture_state("counter").unwrap()),
                 7
             );
             assert_eq!(denied.inner.caller_subject(), caller_before);
         }
-        call(&mut host, &mut vm, entrypoint, "{}", Some(&nominal))
-            .expect("declared fixture permission reaches typed rejection");
-        for payload in [r#"{"unexpected":true}"#, "[]", "null", r#""{}""#] {
+        call(
+            &mut host,
+            &mut vm,
+            entrypoint,
+            Arguments::Empty,
+            Some(&nominal),
+        )
+        .expect("declared fixture permission reaches typed rejection");
+        for payload in [
+            Arguments::WrongCount,
+            Arguments::Misaligned,
+            Arguments::NullTable,
+            Arguments::InvalidValue,
+        ] {
             for (expected, matches) in [
                 (nominal.clone(), false),
                 (RejectionExpectation::PermissionDenied, false),
@@ -1393,11 +1493,11 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
                 assert_eq!(
                     call(&mut host, &mut vm, entrypoint, payload, Some(&expected)).is_ok(),
                     matches,
-                    "{entrypoint} {payload} {expected:?}: {:?}",
+                    "{entrypoint} {payload:?} {expected:?}: {:?}",
                     host.last_test_error()
                 );
                 assert_eq!(
-                    decode_int_state_value(&host.inner.wsv.sc_get("counter").unwrap()),
+                    decode_int_state_value(&host.fixture_state("counter").unwrap()),
                     7
                 );
                 assert_eq!(host.inner.caller_subject(), caller_before);
@@ -1405,20 +1505,23 @@ fn exact_rejection_mismatches_fail_and_restore_nested_state() {
         }
     }
     call(&mut host, &mut vm, "succeed", valid_payload, None).expect("normal mutation control");
-    call(&mut host, &mut vm, "reset", "[]", None)
+    call(&mut host, &mut vm, "reset", Arguments::WrongCount, None)
         .expect_err("normal zero-parameter calls reject nonempty arguments too");
     assert!(
         host.last_test_error()
             .expect("argument diagnostic")
-            .contains("takes no arguments, so its argument object must be `{}`")
+            .contains(
+                "takes no arguments, so its argument table must have zero base and zero words"
+            )
     );
     assert_eq!(
-        decode_int_state_value(&host.inner.wsv.sc_get("counter").unwrap()),
+        decode_int_state_value(&host.fixture_state("counter").unwrap()),
         99
     );
-    call(&mut host, &mut vm, "reset", "{}", None).expect("canonical empty arguments execute");
+    call(&mut host, &mut vm, "reset", Arguments::Empty, None)
+        .expect("canonical empty arguments execute");
     assert_eq!(
-        decode_int_state_value(&host.inner.wsv.sc_get("counter").unwrap()),
+        decode_int_state_value(&host.fixture_state("counter").unwrap()),
         7
     );
 }
@@ -1450,7 +1553,8 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
 
                 fixture actors {{
                     actor("issuer", AccountId::parse("{actor_account}"), "0x{seed_hex}");
-                    grant_permission("issuer", "Test");
+                    grant_seiyaku_permission("issuer", "Test");
+                    grant_seiyaku_lifecycle_permission("issuer", "hajimari");
                 }}
 
                 #[test(fixture="actors")]
@@ -1466,40 +1570,32 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
 
                 #[test(fixture="actors")]
                 fn invoke_kotoage_as_runs_the_seiyaku() {{
-                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
-                    test::invoke_kotoage_as(actor: "issuer", kotoage: "increment", arguments: Json::parse("{{}}"));
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: {{}});
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "increment", arguments: {{}});
                     test::assert(counter == 5);
 
-                    test::invoke_kotoage_as(actor: "issuer", kotoage: "remember_caller", arguments: Json::parse("{{}}"));
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "remember_caller", arguments: {{}});
                     test::assert(last_actor == AccountId::parse("{actor_account}"));
 
-                    let pair_result = test::invoke_kotoage_as(actor: "issuer", kotoage: "pair", arguments: Json::parse("{{}}"));
+                    let pair_result = test::invoke_kotoage_as(actor: "issuer", kotoage: "pair", arguments: {{}});
                     test::assert_eq(actual: pair_result.0, expected: 2);
                     test::assert_eq(actual: pair_result.1, expected: 3);
                 }}
 
                 #[test(fixture="actors")]
                 fn expect_reject_as_captures_seiyaku_rejection() {{
-                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
-                    test::expect_reject_as(actor: "issuer", kotoage: "reject_me", arguments: Json::parse("{{}}"), expected: DemoError::Rejected);
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: {{}});
+                    test::expect_reject_as(actor: "issuer", kotoage: "reject_me", arguments: {{}}, expected: DemoError::Rejected);
                 }}
 
                 #[test(fixture="actors")]
                 fn calls_before_hajimari_are_lifecycle_rejections() {{
-                    test::expect_any_reject_as(actor: "issuer", kotoage: "increment", arguments: Json::parse("{{}}"));
-                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
-                    test::expect_any_reject_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
+                    test::expect_any_reject_as(actor: "issuer", kotoage: "increment", arguments: {{}});
+                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: {{}});
+                    test::expect_any_reject_as(actor: "issuer", kotoage: "hajimari", arguments: {{}});
                     test::assert_eq(actual: counter, expected: 1);
                 }}
 
-                #[test(fixture="actors")]
-                fn expect_reject_as_captures_argument_schema_rejection() {{
-                    test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
-                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{\"value\":\"not-an-int\"}}"), expected: test::Rejection::InvalidArguments);
-                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{}}"), expected: test::Rejection::InvalidArguments);
-                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{\"unexpected\":true,\"value\":7}}"), expected: test::Rejection::InvalidArguments);
-                    test::assert(counter == 1);
-                }}
                 }}
                 "#,
                 actor_account = actor_account,
@@ -1608,6 +1704,7 @@ fn standalone_test_source_parser_rejects_public_functions() {
 #[test]
 fn finalize_suite_rejects_program_without_tests() {
     let program = Program {
+        permissions: Vec::new(),
         directives: Vec::new(),
         exports: Vec::new(),
         unit: kotodama_lang::ast::SourceUnit {
@@ -1636,9 +1733,9 @@ fn finalize_suite_rejects_program_without_tests() {
     )
     .err()
     .expect("program without tests should fail");
-    assert!(err.contains("no #[test] Kotodama functions"));
+    assert!(err.to_string().contains("no #[test] Kotodama functions"));
     assert!(
-        err.contains("pass that module to `koto test`"),
+        err.to_string().contains("pass that module to `koto test`"),
         "the error says where tests live: {err}"
     );
 }
@@ -1649,6 +1746,7 @@ fn contract_backed_suite_preserves_runtime_coverage_and_suite_hash() {
         .expect("fixture sentinel newline");
     let program = parser::parse(source).expect("parse program");
     let suite = DiscoveredSuite {
+        artifacts: Vec::new(),
         sources: Vec::new(),
         source_root: None,
         target_path: PathBuf::from("/tmp/demo.ko"),
@@ -1705,10 +1803,10 @@ fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
     .canonical_address();
     let target_source = format!(
         r#"
-            seiyaku EffectIdentity {{
+            seiyaku EffectIdentity {{ permission Update;
                 error enum EffectError {{ WrongInvoker = 9001, }}
 
-                kotoage fn mint(AccountId destination) authorize("CanInvokeContractEntrypoint") {{
+                kotoage fn mint(AccountId destination) authorize(Update) {{
                     require(
                         context::authority() == AccountId::parse("{DEFAULT_CALLER}"),
                         EffectError::WrongInvoker,
@@ -1731,14 +1829,14 @@ fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
                     actor("app", AccountId::parse("{DEFAULT_CALLER}"));
                     caller(AccountId::parse("{DEFAULT_CALLER}"));
                     register_asset_definition(AssetDefinitionId::parse("{asset}"));
-                    grant_seiyaku_kotoage_permission("app", "mint");
+                    grant_seiyaku_permission("app", "Update");
                 }}
 
                 fixture app_only_effect_grant {{
                     actor("app", AccountId::parse("{DEFAULT_CALLER}"));
                     caller(AccountId::parse("{DEFAULT_CALLER}"));
                     register_asset_definition(AssetDefinitionId::parse("{asset}"));
-                    grant_seiyaku_kotoage_permission("app", "mint");
+                    grant_seiyaku_permission("app", "Update");
                     grant_permission("app", "mint_asset:{asset}");
                 }}
 
@@ -1746,7 +1844,7 @@ fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
                     actor("app", AccountId::parse("{DEFAULT_CALLER}"));
                     caller(AccountId::parse("{DEFAULT_CALLER}"));
                     register_asset_definition(AssetDefinitionId::parse("{asset}"));
-                    grant_seiyaku_kotoage_permission("app", "mint");
+                    grant_seiyaku_permission("app", "Update");
                     grant_seiyaku_effect_permission("mint_asset:{asset}");
                 }}
 
@@ -1755,7 +1853,7 @@ fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
                     test::expect_reject_as(
                         actor: "app",
                         kotoage: "mint",
-                        arguments: Json::parse("{{\"destination\":\"{DEFAULT_CALLER}\"}}"),
+                        arguments: {{destination: AccountId::parse("{DEFAULT_CALLER}")}},
                         expected: test::Rejection::RuntimePermissionDenied,
                     );
                 }}
@@ -1765,7 +1863,7 @@ fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
                     test::expect_reject_as(
                         actor: "app",
                         kotoage: "mint",
-                        arguments: Json::parse("{{\"destination\":\"{DEFAULT_CALLER}\"}}"),
+                        arguments: {{destination: AccountId::parse("{DEFAULT_CALLER}")}},
                         expected: test::Rejection::RuntimePermissionDenied,
                     );
                 }}
@@ -1775,7 +1873,7 @@ fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
                     test::invoke_kotoage_as(
                         actor: "app",
                         kotoage: "mint",
-                        arguments: Json::parse("{{\"destination\":\"{DEFAULT_CALLER}\"}}"),
+                        arguments: {{destination: AccountId::parse("{DEFAULT_CALLER}")}},
                     );
                 }}
             }}
@@ -1997,12 +2095,16 @@ fn apply_fixture_action_registers_actor_seed() {
     );
 }
 #[test]
-fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
+fn fixture_permission_grant_is_address_and_declaration_scoped() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
     let actor = caller.clone();
+    let artifact = kotodama_lang::compiler::Compiler::new()
+        .compile_source("seiyaku Grants { permission Apply; permission Other; kotoage fn apply() authorize(Apply) {} }")
+        .expect("compile permission declarations");
+    let program = ivm::prepare_contract(Arc::from(artifact)).expect("prepare contract");
     let mut host = KotoTestHost::new(
         WsvHost::new_with_subject(MockWorldStateView::default(), caller),
-        None,
+        Some(program),
         HashMap::new(),
         Arc::new(SourceContext::empty("FixtureDemo")),
     );
@@ -2011,10 +2113,10 @@ fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
     let mut public_inputs = BTreeMap::new();
     apply_fixture_action(
         &FixtureAction {
-            name: "grant_seiyaku_kotoage_permission".to_owned(),
+            name: "grant_seiyaku_permission".to_owned(),
             args: vec![
                 Expr::String("operator".to_owned()),
-                Expr::String("apply".to_owned()),
+                Expr::String("Apply".to_owned()),
             ],
         },
         &mut host,
@@ -2022,25 +2124,40 @@ fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
         &fixture_environment(),
     )
     .expect("grant exact fixture permission");
-    let exact = PermissionToken::ContractEntrypoint {
+    let exact = PermissionToken::ContractPermission {
         contract: host.contract_address.clone(),
-        entrypoint: "apply".to_owned(),
+        permission: "Apply".parse().unwrap(),
     };
-    let wrong_selector = PermissionToken::ContractEntrypoint {
+    let wrong_permission = PermissionToken::ContractPermission {
         contract: host.contract_address.clone(),
-        entrypoint: "other".to_owned(),
+        permission: "Other".parse().unwrap(),
     };
     assert!(host.inner.wsv.has_permission(&actor, &exact));
-    assert!(!host.inner.wsv.has_permission(&actor, &wrong_selector));
+    assert!(!host.inner.wsv.has_permission(&actor, &wrong_permission));
     host.inner.wsv.grant_permission(
         &actor,
         PermissionToken::Custom("CanInvokeContractEntrypoint".to_owned()),
     );
     assert!(
-        !host.inner.wsv.has_permission(&actor, &wrong_selector),
-        "name-only grants must never materialize a scoped entrypoint capability"
+        !host.inner.wsv.has_permission(&actor, &wrong_permission),
+        "name-only grants must never materialize an instance permission"
     );
+    let error = apply_fixture_action(
+        &FixtureAction {
+            name: "grant_seiyaku_permission".to_owned(),
+            args: vec![
+                Expr::String("operator".to_owned()),
+                Expr::String("Typo".to_owned()),
+            ],
+        },
+        &mut host,
+        &mut public_inputs,
+        &fixture_environment(),
+    )
+    .expect_err("undeclared grants reject");
+    assert!(error.contains("no declared permission `Typo`"));
 }
+
 #[test]
 fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
     let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
@@ -2053,6 +2170,7 @@ fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
     let mut public_inputs = BTreeMap::new();
     for retired in [
         "grant_contract_entrypoint_permission",
+        "grant_seiyaku_kotoage_permission",
         "grant_contract_effect_permission",
         "grant_contract_transfer_effect_permission",
     ] {
@@ -2074,7 +2192,8 @@ fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
         );
     }
     for (branded, arity) in [
-        ("grant_seiyaku_kotoage_permission", 2),
+        ("grant_seiyaku_permission", 2),
+        ("grant_seiyaku_lifecycle_permission", 2),
         ("grant_seiyaku_effect_permission", 1),
         ("grant_seiyaku_transfer_effect_permission", 3),
     ] {
@@ -2101,6 +2220,68 @@ fn fixture_feature_actions_use_seiyaku_and_kotoage_names_only() {
     assert!(
         eval_fixture_account_or_actor(&Expr::Ident("contract_subject".to_owned()), &host).is_err(),
         "English feature expression must not remain compatible"
+    );
+}
+#[test]
+fn fixture_account_metadata_uses_current_action_and_permission_names() {
+    let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
+    let mut host = KotoTestHost::new(
+        WsvHost::new_with_subject(MockWorldStateView::default(), caller.clone()),
+        None,
+        HashMap::new(),
+        Arc::new(SourceContext::empty("FixtureDemo")),
+    );
+    let mut public_inputs = BTreeMap::new();
+    let mut action = FixtureAction {
+        name: "set_account_metadata".to_owned(),
+        args: vec![
+            Expr::String(DEFAULT_CALLER.to_owned()),
+            Expr::String("label".to_owned()),
+            Expr::String("value".to_owned()),
+        ],
+    };
+    apply_fixture_action(
+        &action,
+        &mut host,
+        &mut public_inputs,
+        &fixture_environment(),
+    )
+    .expect("set account metadata");
+    assert_eq!(
+        host.inner.wsv.account_detail_value(&caller, "label"),
+        Some(b"value".to_vec())
+    );
+    action.name = "set_account_detail".to_owned();
+    assert!(
+        apply_fixture_action(
+            &action,
+            &mut host,
+            &mut public_inputs,
+            &fixture_environment()
+        )
+        .expect_err("retired action is rejected")
+        .contains("unknown fixture action")
+    );
+    for permission in [
+        parse_permission_token_name(
+            &format!("set_account_metadata:{DEFAULT_CALLER}"),
+            &parse_account_literal,
+        ),
+        parse_permission_token_json(
+            &format!(r#"{{"type":"set_account_metadata","target":"{DEFAULT_CALLER}"}}"#),
+            &parse_account_literal,
+        ),
+    ] {
+        assert!(
+            matches!(permission.expect("metadata permission"), PermissionToken::SetAccountDetail(account) if account == caller)
+        );
+    }
+    assert!(
+        parse_permission_token_json(
+            &format!(r#"{{"type":"set_account_detail","target":"{DEFAULT_CALLER}"}}"#),
+            &parse_account_literal
+        )
+        .is_err()
     );
 }
 #[test]
@@ -2768,6 +2949,7 @@ fn coverage_helper_functions_handle_internal_and_boundary_cases() {
 #[test]
 fn collect_tests_rejects_duplicate_test_names() {
     let program = Program {
+        permissions: Vec::new(),
         directives: Vec::new(),
         exports: Vec::new(),
         unit: kotodama_lang::ast::SourceUnit {
@@ -2797,18 +2979,18 @@ seiyaku Rewards {
         if coffees < 0 { return 0; }
         return coffees * 10;
     }
-    view fn quote(int coffees) -> int { return points(coffees: coffees); }
-    view fn pair(int coffees) -> (int, int) { return (coffees, points(coffees: coffees)); }
+    view fn quote(int coffees) authorize(anyone) -> int { return points(coffees: coffees); }
+    view fn pair(int coffees) authorize(anyone) -> (int, int) { return (coffees, points(coffees: coffees)); }
     #[test]
     fn negative_quote() {
-        let result = test::invoke_kotoage(kotoage: "quote", arguments: Json::parse("{\"coffees\":\"-1\"}"));
+        let result = test::invoke_kotoage(kotoage: "quote", arguments: {coffees: -1});
         test::assert_eq(actual: result, expected: 0);
     }
     #[test]
     fn repeated_quote_and_tuple() {
-        let first = test::invoke_kotoage(kotoage: "quote", arguments: Json::parse("{\"coffees\":\"3\"}"));
-        let second = test::invoke_kotoage(kotoage: "quote", arguments: Json::parse("{\"coffees\":\"1\"}"));
-        let quoted_pair = test::invoke_kotoage(kotoage: "pair", arguments: Json::parse("{\"coffees\":\"3\"}"));
+        let first = test::invoke_kotoage(kotoage: "quote", arguments: {coffees: 3});
+        let second = test::invoke_kotoage(kotoage: "quote", arguments: {coffees: 1});
+        let quoted_pair = test::invoke_kotoage(kotoage: "pair", arguments: {coffees: 3});
         test::assert_eq(actual: first, expected: 30);
         test::assert_eq(actual: second, expected: 10);
         test::assert_eq(actual: quoted_pair.0, expected: 3);
@@ -2832,20 +3014,20 @@ fn current_caller_public_invocation_enforces_arguments_and_declared_permissions(
         (
             "arguments.ko",
             r#"seiyaku Arguments {
-                view fn quote(int count) -> int { return count; }
+                view fn quote(int count) authorize(anyone) -> int { return count; }
                 fn missing_count() -> Json { return json { other: 1 }; }
                 #[test] fn malformed() {
                     test::invoke_kotoage(kotoage: "quote", arguments: missing_count());
                 }
             }"#,
-            "calling `quote`: argument `count`",
+            "E_TEST_ARGUMENT_RECORD",
         ),
         (
             "permissions.ko",
-            r#"seiyaku Permissions {
-                kotoage fn restricted() authorize("UnrequestedBoundaryPermission") {}
+            r#"seiyaku Permissions { permission UnrequestedBoundaryPermission;
+                kotoage fn restricted() authorize(UnrequestedBoundaryPermission) {}
                 #[test] fn denied() {
-                    test::invoke_kotoage(kotoage: "restricted", arguments: Json::parse("{}"));
+                    test::invoke_kotoage(kotoage: "restricted", arguments: {});
                 }
             }"#,
             "lacks the `UnrequestedBoundaryPermission` permission",
@@ -2854,6 +3036,13 @@ fn current_caller_public_invocation_enforces_arguments_and_declared_permissions(
         let temp = TestTempDir::new();
         let path = temp.write(name, source);
         let suite = discover_suite(&path).expect("discover rejected public invocation");
+        if name == "arguments.ko" {
+            let error = compile_suite(&suite, false)
+                .err()
+                .expect("untyped arguments fail compilation");
+            assert!(error.to_string().contains(expected), "{error}");
+            continue;
+        }
         let compiled = compile_suite(&suite, false).expect("compile rejected public invocation");
         let results = execute_suite(&compiled, TraceMode::Off, 1).expect("execute rejection probe");
         assert_eq!(results.len(), 1);
@@ -2884,10 +3073,10 @@ fn public_test_invocation_transfers_wide_results_through_owned_table() {
     let source = format!(
         r#"
 seiyaku WideResults {{
-    view fn values() -> ({types}) {{ return ({values}); }}
+    view fn values() authorize(anyone) -> ( {types}) {{ return ({values}); }}
     #[test]
     fn wide() {{
-        let result = test::invoke_kotoage(kotoage: "values", arguments: Json::parse("{{}}"));
+        let result = test::invoke_kotoage(kotoage: "values", arguments: {{}});
         test::assert_eq(actual: result.0, expected: 0);
         test::assert_eq(actual: result.13, expected: 13);
         test::assert_eq(actual: result.64, expected: 64);
@@ -2910,13 +3099,13 @@ fn public_test_invocation_roundtrips_nominal_empty_products() {
     let path = temp.write("empty_products.ko", r#"
 seiyaku EmptyProducts {
     struct Empty {}
-    view fn echo(Empty value) -> Empty { value }
-    view fn list(List<Empty, 2> values) -> List<Empty, 2> { values }
+    view fn echo(Empty value) authorize(anyone) -> Empty { value }
+    view fn list(List<Empty, 2> values) authorize(anyone) -> List<Empty, 2> { values }
     #[test]
     fn roundtrip() {
-        let value = test::invoke_kotoage(kotoage: "echo", arguments: Json::parse("{\"value\":{}}"));
+        let value = test::invoke_kotoage(kotoage: "echo", arguments: {value: Empty {  }});
         test::assert(value == Empty {});
-        let values = test::invoke_kotoage(kotoage: "list", arguments: Json::parse("{\"values\":[{},{}]}"));
+        let values = test::invoke_kotoage(kotoage: "list", arguments: {values: [Empty {  }, Empty {  }]});
         test::assert(values == [Empty {}, Empty {}]);
     }
 }
@@ -2926,6 +3115,47 @@ seiyaku EmptyProducts {
     let results = execute_suite(&compiled, TraceMode::Off, 1).expect("execute empty-product test");
     assert_eq!(results.len(), 1);
     assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn public_test_invocation_roundtrips_returned_state_cursor_in_typed_arguments() {
+    let root = SourceModuleUnit {
+        source_name: "tests/pagination.ko".to_owned(),
+        source: r#"
+seiyaku Pagination {
+    state StateMap<int, int> Entries;
+    hajimari() {
+        Entries[1] = 10;
+        Entries[2] = 20;
+    }
+    view fn page(Option<StateCursor<int>> after) authorize(anyone) -> StatePage<int, int, 1> {
+        Entries.page(after: after, limit: 1)
+    }
+    fixture owner {
+        grant_seiyaku_lifecycle_permission(AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), "hajimari");
+    }
+    #[test(fixture = owner)]
+    fn traverses_pages() {
+        test::invoke_kotoage(kotoage: "hajimari", arguments:  {});
+        let first = test::invoke_kotoage(kotoage: "page", arguments: {after: Option::none});
+        test::assert_eq(actual: first.items, expected: [(1, 10)]);
+        test::assert(match first.next { Option::some(_) => true, Option::none => false });
+        let second = test::invoke_kotoage(kotoage: "page", arguments:  { after: first.next });
+        test::assert_eq(actual: second.items, expected: [(2, 20)]);
+        let terminal = test::invoke_kotoage(kotoage: "page", arguments:  { after: second.next });
+        test::assert_eq(actual: terminal.items.len(), expected: 0);
+        test::assert(match terminal.next { Option::some(_) => false, Option::none => true });
+    }
+}
+"#.to_owned(),
+    };
+    let report = run_tests_structured_source_with_modules_v1(
+        &KotoTestRunRequestV1::new(&root.source_name, 753),
+        &root,
+        &KotoTestModuleGraphV1::default(),
+    )
+    .expect("compile and execute cursor round trip");
+    assert_eq!(report.passed(), 1, "{report:?}");
 }
 
 #[test]
@@ -3003,6 +3233,7 @@ fn immutable_source_suite_uses_supplied_include_and_never_loads_ambient_file() {
         source: "seiyaku App { include \"body.ko\"; }".into(),
     };
     let modules = KotoTestModuleGraphV1 {
+        artifacts: Vec::new(),
         sources: vec![SourceModuleUnit {
             source_name: "tests/body.ko".into(),
             source: "#[test] fn included() { test::assert(true); }".into(),
@@ -3019,23 +3250,75 @@ fn immutable_source_suite_uses_supplied_include_and_never_loads_ambient_file() {
     assert!(report.is_success());
     assert_eq!(report.cases.len(), 1);
 }
+#[test]
+fn test_discovery_keeps_import_and_included_parse_errors_structured() {
+    let temp = TestTempDir::new();
+    let path = temp.write(
+        "app.ko",
+        r#"seiyaku App {
+        import "feemath" as fees;
+        #[test] fn check() { test::assert(true); }
+    }"#,
+    );
+    let error = run_tests_structured_v1(&KotoTestRunRequestV1::new(&path, 753))
+        .expect_err("invalid import path");
+    let diagnostics = error.diagnostics.expect("import resolution diagnostics");
+    assert!(
+        diagnostics
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E_INVALID_SOURCE_PATH")
+    );
+    assert!(
+        diagnostics
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.message.starts_with("error["))
+    );
+
+    let root = SourceModuleUnit {
+        source_name: "tests/app.ko".to_owned(),
+        source: "seiyaku App { include \"body.ko\"; }".to_owned(),
+    };
+    let modules = KotoTestModuleGraphV1 {
+        artifacts: Vec::new(),
+        sources: vec![SourceModuleUnit {
+            source_name: "tests/body.ko".to_owned(),
+            source: "#[test] fn broken() { let int value = 1 }".to_owned(),
+        }],
+        ..KotoTestModuleGraphV1::default()
+    };
+    let error = run_tests_structured_source_with_modules_v1(
+        &KotoTestRunRequestV1::new(&root.source_name, 753),
+        &root,
+        &modules,
+    )
+    .expect_err("invalid included test");
+    let diagnostics = error.diagnostics.expect("included parser diagnostics");
+    assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .primary_span
+            .as_ref()
+            .is_some_and(|span| span.source.as_deref() == Some("tests/body.ko"))
+    }));
+}
 /// A seiyaku in `contracts/` and its standalone tests in `tests/`, the layout `musubi new` uses.
 fn write_ledger_package(temp: &TestTempDir, tests: &str) -> PathBuf {
     temp.write(
         "contracts/ledger.ko",
-        r#"seiyaku Ledger {
+        r#"seiyaku Ledger { permission Renew;
     error enum LedgerError { Expired = 1, }
     struct Pair { int left, string right }
     state int balance;
     hajimari() { balance = 100; }
     kaizen() {}
-    kotoage fn renew(int until) authorize("Renew") {
+    kotoage fn renew(int until) authorize(Renew) {
         require(context::block_height() <= until, LedgerError::Expired);
         balance = balance + 1;
     }
-    view fn height() -> int { return context::block_height(); }
-    view fn time() -> int { return context::transaction_time_ms(); }
-    view fn pair() -> Pair { return Pair { left: 1, right: "two" }; }
+    view fn height() authorize(anyone) -> int { return context::block_height(); }
+    view fn time() authorize(anyone) -> int { return context::transaction_time_ms(); }
+    view fn pair() authorize(anyone) -> Pair { return Pair { left: 1, right: "two" }; }
 }
 "#,
     );
@@ -3047,10 +3330,11 @@ fn write_ledger_package(temp: &TestTempDir, tests: &str) -> PathBuf {
     fixture people {{
         actor("alice");
         actor("bob");
-        grant_permission("alice", "Renew");
+        grant_seiyaku_permission("alice", "Renew");
+        grant_seiyaku_lifecycle_permission(AccountId::parse("{DEFAULT_CALLER}"), "hajimari");
     }}
     fn activate() {{
-        test::invoke_kotoage(kotoage: "hajimari", arguments: Json::parse("{{}}"));
+        test::invoke_kotoage(kotoage: "hajimari", arguments: {{}});
     }}
 {tests}
 }}
@@ -3080,13 +3364,13 @@ fn block_height_and_time_are_test_controlled_and_helpers_may_use_test_builtins()
     fn block_height_controls_renewal() {
         activate();
         test::set_block_height(height: 10);
-        test::invoke_kotoage_as(actor: "alice", kotoage: "renew", arguments: Json::parse("{\"until\":\"12\"}"));
+        test::invoke_kotoage_as(actor: "alice", kotoage: "renew", arguments: {until: 12});
         test::advance_blocks(count: 5);
-        let observed_height = test::invoke_kotoage(kotoage: "height", arguments: Json::parse("{}"));
+        let observed_height = test::invoke_kotoage(kotoage: "height", arguments: {});
         test::assert_eq(actual: observed_height, expected: 15);
-        test::expect_reject_as(actor: "alice", kotoage: "renew", arguments: Json::parse("{\"until\":\"12\"}"), expected: LedgerError::Expired);
+        test::expect_reject_as(actor: "alice", kotoage: "renew", arguments: {until: 12}, expected: LedgerError::Expired);
         test::set_transaction_time_ms(time_ms: 1234);
-        let observed_time = test::invoke_kotoage(kotoage: "time", arguments: Json::parse("{}"));
+        let observed_time = test::invoke_kotoage(kotoage: "time", arguments: {});
         test::assert_eq(actual: observed_time, expected: 1234);
         test::assert_eq(actual: balance, expected: 101);
     }
@@ -3118,25 +3402,25 @@ fn block_height_and_time_are_test_controlled_and_helpers_may_use_test_builtins()
 fn assertions_report_location_source_message_and_typed_values() {
     let results = run_ledger_tests(
         r#"
-    #[test]
+    #[test(fixture = "people")]
     fn generic_equality_passes() {
         activate();
-        let returned = test::invoke_kotoage(kotoage: "pair", arguments: Json::parse("{}"));
+        let returned = test::invoke_kotoage(kotoage: "pair", arguments: {});
         test::assert_eq(actual: returned, expected: Pair { left: 1, right: "two" });
         test::assert_eq(actual: "vault", expected: "vault");
         test::assert_eq(actual: true, expected: true);
     }
-    #[test]
+    #[test(fixture = "people")]
     fn struct_mismatch() {
         activate();
-        let returned = test::invoke_kotoage(kotoage: "pair", arguments: Json::parse("{}"));
+        let returned = test::invoke_kotoage(kotoage: "pair", arguments: {});
         test::assert_eq(actual: returned, expected: Pair { left: 2, right: "two" }, message: "pair mismatch");
     }
     #[test(fixture = "people")]
     fn account_mismatch() {
         test::assert_eq(actual: test::actor_account("alice"), expected: test::actor_account("bob"));
     }
-    #[test]
+    #[test(fixture = "people")]
     fn plain_assert_keeps_its_message() {
         test::assert(1 > 2, message: "one is not greater than two");
     }
@@ -3156,7 +3440,7 @@ fn assertions_report_location_source_message_and_typed_values() {
     assert_eq!(structure.message, "pair mismatch");
     let location = structure.location.as_deref().expect("assertion location");
     assert!(
-        location.ends_with("tests/ledger.test.ko:24:9"),
+        location.ends_with("tests/ledger.test.ko:25:9"),
         "{location}"
     );
     assert!(
@@ -3193,10 +3477,10 @@ fn assertions_report_location_source_message_and_typed_values() {
 fn helper_call_failures_are_located_at_the_call_site() {
     let results = run_ledger_tests(
         r#"
-    #[test]
+    #[test(fixture = "people")]
     fn default_caller_lacks_permission() {
         activate();
-        test::invoke_kotoage(kotoage: "renew", arguments: Json::parse("{\"until\":\"1\"}"));
+        test::invoke_kotoage(kotoage: "renew", arguments: {until: 1});
     }
     fn lookup_carol() -> AccountId {
         return test::actor_account(actor: "carol");
@@ -3211,7 +3495,7 @@ fn helper_call_failures_are_located_at_the_call_site() {
         test::expect_reject_as(
             actor: "alice",
             kotoage: "renew",
-            arguments: Json::parse("{\"until\":\"1\"}"),
+            arguments: {until: 1},
             expected: LedgerError::Expired,
         );
     }
@@ -3221,12 +3505,12 @@ fn helper_call_failures_are_located_at_the_call_site() {
     assert_eq!(permission.kind, FailureKind::PermissionDenied);
     let location = permission.location.as_deref().expect("call-site location");
     assert!(
-        location.ends_with("tests/ledger.test.ko:15:9"),
+        location.ends_with("tests/ledger.test.ko:16:9"),
         "{location}"
     );
     assert_eq!(
         permission.details[0],
-        "test::invoke_kotoage(kotoage: \"renew\", arguments: Json::parse(\"{\\\"until\\\":\\\"1\\\"}\"))"
+        "test::invoke_kotoage(kotoage: \"renew\", arguments: {until: 1})"
     );
     let actor = failure_of(&results, "unknown_actor_in_helper");
     assert_eq!(actor.kind, FailureKind::Harness);
@@ -3240,7 +3524,7 @@ fn helper_call_failures_are_located_at_the_call_site() {
         .as_deref()
         .expect("helper call-site location");
     assert!(
-        location.ends_with("tests/ledger.test.ko:18:16"),
+        location.ends_with("tests/ledger.test.ko:19:16"),
         "{location}"
     );
     let rejection = failure_of(&results, "wrong_rejection");
@@ -3250,12 +3534,12 @@ fn helper_call_failures_are_located_at_the_call_site() {
         .as_deref()
         .expect("multi-line call location");
     assert!(
-        location.ends_with("tests/ledger.test.ko:27:9"),
+        location.ends_with("tests/ledger.test.ko:28:9"),
         "{location}"
     );
     assert_eq!(
         rejection.details[0],
-        "test::expect_reject_as(actor: \"alice\", kotoage: \"renew\", arguments: Json::parse(\"{\\\"until\\\":\\\"1\\\"}\"), expected: LedgerError::Expired)"
+        "test::expect_reject_as(actor: \"alice\", kotoage: \"renew\", arguments: {until: 1 }, expected: LedgerError::Expired)"
     );
 }
 #[test]
@@ -3337,19 +3621,19 @@ fn one_line_source_collapses_layout_outside_string_literals() {
 fn lifecycle_rejections_mirror_activation_rules() {
     let results = run_ledger_tests(
         r#"
-    #[test]
+    #[test(fixture = "people")]
     fn view_before_hajimari() {
-        test::invoke_kotoage(kotoage: "height", arguments: Json::parse("{}"));
+        test::invoke_kotoage(kotoage: "height", arguments: {});
     }
-    #[test]
+    #[test(fixture = "people")]
     fn hajimari_replay() {
         activate();
         activate();
     }
-    #[test]
+    #[test(fixture = "people")]
     fn kaizen_without_replacement() {
         activate();
-        test::invoke_kotoage(kotoage: "kaizen", arguments: Json::parse("{}"));
+        test::invoke_kotoage(kotoage: "kaizen", arguments: {});
     }
 "#,
     );
@@ -3377,42 +3661,38 @@ fn lifecycle_rejections_mirror_activation_rules() {
     }
 }
 #[test]
-fn literal_argument_records_are_checked_against_the_target_schema_at_compile_time() {
-    let temp = TestTempDir::new();
-    let path = write_ledger_package(
-        &temp,
-        r#"
+fn typed_argument_records_are_checked_against_the_target_schema_at_compile_time() {
+    for arguments in [
+        "{ until: true }",
+        "{}",
+        "{ until: 12, extra: false }",
+        "Json::parse(\"{}\")",
+    ] {
+        let temp = TestTempDir::new();
+        let source = format!(
+            r#"
     #[test(fixture = "people")]
-    fn numeric_json() {
-        test::invoke_kotoage_as(actor: "alice", kotoage: "renew", arguments: Json::parse("{\"until\":12}"));
+    fn invalid_argument() {{
+        test::invoke_kotoage_as(actor: "alice", kotoage: "renew", arguments: {arguments});
+    }}
+"#
+        );
+        let path = write_ledger_package(&temp, &source);
+        let suite = discover_suite(&path).expect("discover");
+        let Err(SuiteError::Diagnostics(diagnostics)) = compile_suite(&suite, false) else {
+            panic!("invalid typed argument record must not compile: {arguments}");
+        };
+        let diagnostic = &diagnostics.diagnostics[0];
+        assert_eq!(diagnostic.code, "E_TEST_ARGUMENT_RECORD", "{diagnostic:?}");
+        assert!(
+            diagnostic.message.contains("arguments for `renew`"),
+            "{diagnostic:?}"
+        );
+        assert!(
+            diagnostic.primary_span.is_some(),
+            "argument failure must retain a source span"
+        );
     }
-"#,
-    );
-    let suite = discover_suite(&path).expect("discover");
-    let Err(SuiteError::Diagnostics(diagnostics)) = compile_suite(&suite, false) else {
-        panic!("a literal record with a JSON number for an int must not compile");
-    };
-    let diagnostic = &diagnostics.diagnostics[0];
-    assert_eq!(diagnostic.code, "K2003");
-    assert!(
-        diagnostic
-            .message
-            .contains("arguments for `renew`: argument `until` expects int"),
-        "{}",
-        diagnostic.message
-    );
-    assert!(
-        diagnostic.message.ends_with("write \"12\""),
-        "{}",
-        diagnostic.message
-    );
-    // The record itself is underlined, with the target's parameters as site help.
-    assert_eq!(
-        primary_text(&path, diagnostic),
-        r#"Json::parse("{\"until\":12}")"#
-    );
-    let help = diagnostic.help.as_deref().expect("site help");
-    assert!(help.starts_with("`renew` takes `int until`;"), "{help}");
 }
 /// Source text a diagnostic's primary span covers on its first line.
 fn primary_text(path: &Path, diagnostic: &kotodama_lang::diagnostic::Diagnostic) -> String {
@@ -3443,7 +3723,7 @@ fn unknown_call_targets_are_located_at_the_selector_with_the_declared_selectors(
         r#"
     #[test(fixture = "people")]
     fn misspelt_selector() {
-        test::invoke_kotoage_as(actor: "alice", kotoage: "renw", arguments: Json::parse("{}"));
+        test::invoke_kotoage_as(actor: "alice", kotoage: "renw", arguments: {});
     }
 "#,
     );
@@ -3543,7 +3823,7 @@ fn named_actors_are_deterministic_and_fixture_errors_are_located() {
         failure
             .location
             .as_deref()
-            .is_some_and(|location| location.ends_with("tests/ledger.test.ko:14:9")),
+            .is_some_and(|location| location.ends_with("tests/ledger.test.ko:15:9")),
         "{}",
         failure.render()
     );
@@ -3601,7 +3881,7 @@ fn misspelt_fixtures_and_actions_suggest_the_declared_name_at_their_site() {
         failure
             .location
             .as_deref()
-            .is_some_and(|location| location.ends_with("tests/ledger.test.ko:13:8")),
+            .is_some_and(|location| location.ends_with("tests/ledger.test.ko:14:8")),
         "an unknown fixture is reported at the test that names it: {}",
         failure.render()
     );
@@ -3634,34 +3914,34 @@ fn numeric_faults_name_their_numeric_error_variant() {
     }
 }
 #[test]
-fn runtime_argument_errors_pair_undeclared_keys_with_parameters() {
-    let results = run_ledger_tests(
+fn typed_argument_errors_pair_undeclared_keys_with_parameters() {
+    let temp = TestTempDir::new();
+    let path = write_ledger_package(
+        &temp,
         r#"
     #[test(fixture = "people")]
     fn misspelt_key() {
-        activate();
-        let arguments = json { untill: 5 };
-        test::invoke_kotoage_as(actor: "alice", kotoage: "renew", arguments: arguments);
+        test::invoke_kotoage_as(actor: "alice", kotoage: "renew", arguments: { untill: 5 });
     }
 "#,
     );
-    let failure = failure_of(&results, "misspelt_key");
-    assert_eq!(failure.kind, FailureKind::Arguments);
+    let suite = discover_suite(&path).expect("discover typed argument failure");
+    let error = compile_suite(&suite, false)
+        .err()
+        .expect("unknown parameter fails compilation");
     assert!(
-        failure
-            .message
-            .ends_with("; `untill` is not a parameter; did you mean `until`?"),
-        "{}",
-        failure.render()
+        error.to_string().contains("did you mean `until`?"),
+        "{error}"
     );
 }
+
 #[test]
 fn compile_diagnostics_name_suite_files_as_the_cli_prints_them() {
     let temp = TestTempDir::new();
     let path = write_ledger_package(
         &temp,
         r#"
-    #[test]
+    #[test(fixture = "people")]
     fn broken() { test::assert_eq(actual: 1, expected: "x"); }
 "#,
     );
@@ -3695,6 +3975,8 @@ fn fixture_numbers_accept_constant_expressions() {
         ("FEE".to_owned(), Expr::DecimalLiteral("0.5".to_owned())),
     ]);
     let environment = FixtureEnvironment {
+        artifacts: empty_fixture_artifacts(),
+        source_name: None,
         consts: &consts,
         chain_discriminant: 753,
     };
@@ -3731,10 +4013,10 @@ fn coverage_and_trace_attribute_runtime_and_test_steps_separately() {
     let path = write_ledger_package(
         &temp,
         r#"
-    #[test]
+    #[test(fixture = "people")]
     fn reads_height() {
         activate();
-        test::invoke_kotoage(kotoage: "height", arguments: Json::parse("{}"));
+        test::invoke_kotoage(kotoage: "height", arguments: {});
     }
 "#,
     );
@@ -3794,6 +4076,731 @@ fn coverage_and_trace_attribute_runtime_and_test_steps_separately() {
             .all(|step| step.function != Some("reads_height")),
         "seiyaku steps never map to the test projection"
     );
+    let test_source = fs::read_to_string(&path).unwrap();
+    // Inlining retains the helper body's provenance; the eliminated call itself
+    // has no executable instruction to attribute to its call-site line.
+    for statement in [
+        "test::invoke_kotoage(kotoage: \"hajimari\", arguments: {});",
+        "test::invoke_kotoage(kotoage: \"height\", arguments: {});",
+    ] {
+        let line = test_source
+            .lines()
+            .position(|line| line.trim() == statement)
+            .unwrap()
+            + 1;
+        let suffix = format!(":{line}:");
+        assert!(
+            steps.iter().any(|step| step.segment == "test"
+                && step
+                    .source
+                    .as_deref()
+                    .is_some_and(|source| source.contains(&suffix))),
+            "executed statement {statement} retains its exact source line {line}"
+        );
+    }
     let first = steps.first().expect("first step");
     assert!(first.registers.iter().all(|(_, value)| *value != 0));
+}
+
+#[test]
+fn result_error_returns_value_without_committing_invocation_state() {
+    let temp = TestTempDir::new();
+    temp.write(
+        "result_rollback.ko",
+        r#"
+seiyaku ResultRollback { permission Update;
+    state StateMap<int, int> Values;
+    kotoage fn write(bool succeed) authorize(Update) -> Result<int, int> {
+        Values[1] = 9;
+        if succeed { return Result::ok(9); }
+        return Result::err(7);
+    }
+    view fn value() authorize(anyone) -> int { Values.get(1).unwrap_or(0) }
+}
+"#,
+    );
+    let path = temp.write("result_rollback.test.ko", &format!(r#"
+module ResultRollbackTests {{
+    koto_test {{ target: "result_rollback.ko" }}
+    fixture allowed {{
+        actor("app", AccountId::parse("{DEFAULT_CALLER}"));
+        grant_seiyaku_permission("app", "Update");
+    }}
+    #[test(fixture = "allowed")]
+    fn rollback_and_success() {{
+        let failure = test::invoke_kotoage_as(actor: "app", kotoage: "write", arguments: {{succeed: false}});
+        match failure {{ Result::err(observed) => {{ test::assert_eq(actual: observed, expected: 7); }}, Result::ok(_) => {{ test::assert_eq(actual: false, expected: true); }} }}
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "value", arguments: {{}}), expected: 0);
+        let success = test::invoke_kotoage_as(actor: "app", kotoage: "write", arguments: {{succeed: true}});
+        match success {{ Result::ok(observed) => {{ test::assert_eq(actual: observed, expected: 9); }}, Result::err(_) => {{ test::assert_eq(actual: false, expected: true); }} }}
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "value", arguments: {{}}), expected: 9);
+    }}
+}}
+"#));
+    let suite = discover_suite(&path).expect("discover Result rollback test");
+    let compiled = compile_suite(&suite, false).expect("compile Result rollback test");
+    let results =
+        execute_suite(&compiled, TraceMode::Off, 1).expect("execute Result rollback test");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn option_and_result_error_bridges_evaluate_once_lazily_and_roll_back_aborts() {
+    let temp = TestTempDir::new();
+    temp.write(
+        "bridges.ko",
+        r#"seiyaku Bridges {
+    error enum Old { Bad = 1 }
+    error enum Failure { Missing = 7, RepeatedReceiver = 8, RepeatedError = 9 }
+    struct Probe { int receivers, int errors, int value }
+    state StateMap<int, int> Calls;
+    fn reset() { Calls[1] = 0; Calls[2] = 0; }
+    fn receiver(bool success) -> Option<int> {
+        Calls[1] = Calls.get(1).unwrap_or(0) + 1;
+        require(Calls.get(1).unwrap_or(0) == 1, Failure::RepeatedReceiver);
+        if success { return Option::some(7); }
+        Option::none
+    }
+    fn result_receiver(bool success) -> Result<int, Old> {
+        Calls[1] = Calls.get(1).unwrap_or(0) + 1;
+        require(Calls.get(1).unwrap_or(0) == 1, Failure::RepeatedReceiver);
+        if success { return Result::ok(7); }
+        Result::err(Old::Bad)
+    }
+    fn fallback() -> Failure {
+        Calls[2] = Calls.get(2).unwrap_or(0) + 1;
+        require(Calls.get(2).unwrap_or(0) == 1, Failure::RepeatedError);
+        Failure::Missing
+    }
+    fn probe(int value) -> Probe {
+        Probe { receivers: Calls.get(1).unwrap_or(0), errors: Calls.get(2).unwrap_or(0), value: value }
+    }
+    kotoage fn option_value(bool success, bool labeled) authorize(anyone) -> Probe {
+        reset();
+        if labeled {
+            let Result<int, Failure> converted = receiver(success: success).ok_or(error: fallback());
+            return probe(value: converted.unwrap_or(0));
+        }
+        let Result<int, Failure> converted = receiver(success: success).ok_or(fallback());
+        probe(value: converted.unwrap_or(0))
+    }
+    kotoage fn result_value(bool success, bool labeled) authorize(anyone) -> Probe {
+        reset();
+        if labeled {
+            let Result<int, Failure> converted = result_receiver(success: success).or_err(error: fallback());
+            return probe(value: converted.unwrap_or(0));
+        }
+        let Result<int, Failure> converted = result_receiver(success: success).or_err(fallback());
+        probe(value: converted.unwrap_or(0))
+    }
+    kotoage fn expect_option(bool success) authorize(anyone) -> Probe {
+        reset();
+        let value = receiver(success: success).expect(error: fallback());
+        probe(value: value)
+    }
+    kotoage fn expect_result(bool success) authorize(anyone) -> Probe {
+        reset();
+        let value = result_receiver(success: success).expect(fallback());
+        probe(value: value)
+    }
+    view fn counts() authorize(anyone) -> (int, int) {
+        (Calls.get(1).unwrap_or(0), Calls.get(2).unwrap_or(0))
+    }
+}"#,
+    );
+    let path = temp.write(
+        "bridges.test.ko",
+        r#"module BridgesTests {
+    koto_test { target: "bridges.ko" }
+    fixture actors { actor("app"); }
+    #[test(fixture = "actors")]
+    fn branches_are_lazy_and_nominal_failures_roll_back() {
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "option_value", arguments:  { success: true, labeled: false }), expected: Probe { receivers: 1, errors: 0, value: 7 });
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "option_value", arguments:  { success: false, labeled: false }), expected: Probe { receivers: 1, errors: 1, value: 0 });
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "option_value", arguments:  { success: true, labeled: true }), expected: Probe { receivers: 1, errors: 0, value: 7 });
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "option_value", arguments:  { success: false, labeled: true }), expected: Probe { receivers: 1, errors: 1, value: 0 });
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "result_value", arguments:  { success: true, labeled: false }), expected: Probe { receivers: 1, errors: 0, value: 7 });
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "result_value", arguments:  { success: false, labeled: false }), expected: Probe { receivers: 1, errors: 1, value: 0 });
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "result_value", arguments:  { success: true, labeled: true }), expected: Probe { receivers: 1, errors: 0, value: 7 });
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "result_value", arguments:  { success: false, labeled: true }), expected: Probe { receivers: 1, errors: 1, value: 0 });
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "expect_option", arguments:  { success: true }), expected: Probe { receivers: 1, errors: 0, value: 7 });
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "expect_result", arguments:  { success: true }), expected: Probe { receivers: 1, errors: 0, value: 7 });
+        test::expect_reject_as(actor: "app", kotoage: "expect_option", arguments:  { success: false }, expected: Failure::Missing);
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "counts", arguments:  {}), expected: (1, 0));
+        test::expect_reject_as(actor: "app", kotoage: "expect_result", arguments:  { success: false }, expected: Failure::Missing);
+        test::assert_eq(actual: test::invoke_kotoage(kotoage: "counts", arguments:  {}), expected: (1, 0));
+    }
+}"#,
+    );
+    let suite = discover_suite(&path).expect("discover lazy nominal error bridge tests");
+    let compiled = compile_suite(&suite, false).expect("compile lazy nominal error bridges");
+    let results = execute_suite(&compiled, TraceMode::Off, 1).expect("execute lazy error bridges");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn private_functions_resembling_builtins_keep_their_own_runtime_identity() {
+    let temp = TestTempDir::new();
+    temp.write("names.ko", r#"seiyaku Names {
+        error enum Failure { Missing = 1 }
+        fn min(int value) -> int { value + 100 }
+        fn authority() -> int { 7 }
+        fn mint_asset(int value) -> int { value + 10 }
+        fn is_some(int value) -> int { value + 1 }
+        fn expect(int value) -> int { value + 2 }
+        view fn evaluate() authorize(anyone) -> (int, int, int, int, int, int, bool, int, bool) {
+            let Option<int> value = Option::some(4);
+            (min(3), authority(), mint_asset(4), is_some(5), expect(6), math::min(8, 2), value.is_some(), value.expect(Failure::Missing), context::authority() == context::authority())
+        }
+    }"#);
+    let path=temp.write("names.test.ko",r#"module NamesTests {
+        koto_test { target: "./names.ko" }
+        fixture actors { actor("app"); }
+        #[test(fixture = "actors")]
+        fn private_and_builtin_calls_stay_distinct() {
+            test::assert_eq(actual: test::invoke_kotoage(kotoage: "evaluate", arguments:  {}), expected: (103, 7, 14, 6, 8, 2, true, 4, true));
+        }
+    }"#);
+    let suite = discover_suite(&path).expect("discover private identity suite");
+    let compiled = compile_suite(&suite, false).expect("private mint_asset remains pure in a view");
+    let results =
+        execute_suite(&compiled, TraceMode::Off, 1).expect("execute private and builtin calls");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn failed_public_test_invocation_retains_typed_artifact_fault_in_reports() {
+    use iroha_data_model::executor::fault::{IvmFaultKindV1, IvmFaultPositionV1, NumericFaultV1};
+    let temp = TestTempDir::new();
+    let path = temp.write(
+        "fault.ko",
+        r#"seiyaku Faults {
+        view fn quotient(int divisor) authorize(anyone) -> int { 10 / divisor }
+        #[test]
+        fn reports_origin() {
+            test::invoke_kotoage(kotoage: "quotient", arguments:  { divisor: 0 });
+        }
+    }"#,
+    );
+    let suite = discover_suite(&path).unwrap();
+    let compiled = compile_suite(&suite, false).unwrap();
+    let results = execute_suite(&compiled, TraceMode::Off, 1).unwrap();
+    let failure = results[0].failure.as_ref().expect("division fails");
+    let fault = failure.fault.expect("canonical runtime fault");
+    assert_eq!(
+        fault.kind,
+        IvmFaultKindV1::Numeric(NumericFaultV1::DivisionByZero)
+    );
+    assert_eq!(
+        fault.site.code_hash,
+        compiled.runtime.as_ref().unwrap().report.artifact_hash
+    );
+    assert!(matches!(
+        fault.site.position,
+        IvmFaultPositionV1::Execute { .. }
+    ));
+    assert!(failure.message.contains("quotient"), "{}", failure.render());
+    let json = failure_json(failure);
+    assert_eq!(json.get("fault"), Some(&norito::json!(fault)));
+}
+
+#[test]
+fn typed_test_arguments_preserve_nominal_values_and_single_source_order_evaluation() {
+    let temp = TestTempDir::new();
+    let path = temp.write("typed_arguments.ko", r#"
+seiyaku TypedArguments {
+    enum Status { Active = 7, Inactive = 9 }
+    error enum Failure { Missing = 1 }
+    struct Payload { Status status; Option<Status> previous; List<Status, 2> history; Result<int, Failure> result; }
+    state int order;
+    hajimari() { order = 0; }
+    fixture active { actor("app"); grant_seiyaku_lifecycle_permission("app", "hajimari"); }
+    fn produce_first() -> int { order = order * 10 + 1; 1 }
+    fn produce_second() -> int { order = order * 10 + 2; 2 }
+    view fn pair(int first, int second) authorize(anyone) -> (int, int, int) { (first, second, order) }
+    view fn echo(Payload payload) authorize(anyone) -> Payload { payload }
+    #[test(fixture = "active")]
+    fn roundtrip() {
+        test::invoke_kotoage_as(actor: "app", kotoage: "hajimari", arguments: {});
+        let observed_pair = test::invoke_kotoage(arguments: { second: produce_second(), first: produce_first() }, kotoage: "pair");
+        test::assert_eq(actual: observed_pair, expected: (1, 2, 21));
+        let payload = Payload { status: Status::Active, previous: Option::some(Status::Inactive), history: [Status::Active, Status::Inactive], result: Result::ok(27) };
+        let returned = test::invoke_kotoage(kotoage: "echo", arguments: { payload });
+        test::assert_eq(actual: returned, expected: payload);
+    }
+}
+"#);
+    let suite = discover_suite(&path).expect("discover typed arguments");
+    let compiled = compile_suite(&suite, false).expect("compile typed arguments");
+    let results = execute_suite(&compiled, TraceMode::Off, 1).expect("execute typed arguments");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn native_test_events_capture_canonical_payloads_and_rollback_failed_invocations() {
+    let temp = TestTempDir::new();
+    let path = temp.write("events.ko", r#"
+seiyaku EventTests {
+    enum Status { Active = 7 }
+    error enum Failure { Missing = 1 }
+    event Changed { Status status; int value; }
+    kotoage fn commit() authorize(anyone) { emit Changed { value: 3, status: Status::Active }; }
+    kotoage fn result(bool success) authorize(anyone) -> Result<int, Failure> {
+        emit Changed { value: 5, status: Status::Active };
+        if success { Result::ok(1) } else { Result::err(Failure::Missing) }
+    }
+    kotoage fn reject() authorize(anyone) { emit Changed { value: 9, status: Status::Active }; require(false, Failure::Missing); }
+    #[test]
+    fn capture() {
+        test::invoke_kotoage(kotoage: "commit", arguments: {});
+        let failed = test::invoke_kotoage(kotoage: "result", arguments: { success: false });
+        test::assert(failed.is_err());
+        let succeeded = test::invoke_kotoage(kotoage: "result", arguments: { success: true });
+        test::assert(succeeded.is_ok());
+    }
+}
+"#);
+    let suite = discover_suite(&path).expect("discover event tests");
+    let compiled = compile_suite(&suite, false).expect("compile event tests");
+    let mut host = build_host_for_fixture(&compiled, None).expect("event host");
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_koto_test_harness(&compiled.suite.program)
+        .expect("load event harness");
+    vm.set_program_counter(compiled.tests[0].pc)
+        .expect("jump to event test");
+    vm.run_with_host(&mut host).expect("run event harness");
+    assert_eq!(host.events.len(), 2, "returned Err must discard its event");
+    for event in &host.events {
+        assert_eq!(event.name.as_ref(), "Changed");
+        assert!(matches!(
+            event.payload.atoms[0],
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueAtomV1::EnumCode(7)
+        ));
+    }
+    // A direct host call exercises trap rollback without needing another fixture actor.
+    let actor = host.inner.caller_subject();
+    host.actors.insert(
+        "caller".into(),
+        FixtureActor {
+            account: actor,
+            seed: None,
+        },
+    );
+    for (reg, bytes) in [(10, b"caller".as_slice()), (11, b"reject".as_slice())] {
+        let pointer = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Blob, bytes))
+            .unwrap();
+        vm.set_register(reg, pointer);
+    }
+    vm.set_register(12, 0);
+    vm.set_register(13, 0);
+    let output = vm.alloc_heap(8).unwrap();
+    vm.set_register(14, output);
+    vm.set_register(15, 1);
+    host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
+        .expect_err("typed rejection");
+    assert_eq!(host.events.len(), 2, "trap must discard its event");
+}
+
+#[test]
+fn lists_of_structs_mutate_through_stable_local_product_fields() {
+    let temp = TestTempDir::new();
+    let path = temp.write(
+        "list_fields.ko",
+        r#"
+seiyaku Lists {
+    struct Item { int value; }
+    struct Holder { List<Item, 3> items; }
+    view fn compute() authorize(anyone) -> (List<Item, 3>, List<Item, 3>) {
+        var holder = Holder { items: [Item { value: 1 }] };
+        holder.items.push(Item { value: 2 });
+        holder.items.set(0, Item { value: 3 });
+        let removed = holder.items.pop();
+        let expected_removed = Option::some(Item { value: 2 });
+        if removed != expected_removed { return ([], []); }
+        var pair = (0, Holder { items: [] });
+        pair.1.items.push(Item { value: 4 });
+        (holder.items, pair.1.items)
+    }
+    #[test]
+    fn roundtrip() {
+        let pair = test::invoke_kotoage(kotoage: "compute", arguments: {});
+        test::assert_eq(actual: pair.0, expected: [Item { value: 3 }]);
+        test::assert_eq(actual: pair.1, expected: [Item { value: 4 }]);
+    }
+}
+"#,
+    );
+    let suite = discover_suite(&path).expect("discover mutable fields");
+    let compiled = compile_suite(&suite, false).expect("compile mutable fields");
+    let results = execute_suite(&compiled, TraceMode::Off, 1).expect("run mutable fields");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn list_boundary_widening_copies_outer_storage_and_preserves_nested_handles() {
+    let temp = TestTempDir::new();
+    let path = temp.write("list_widening.ko", r#"
+seiyaku Lists {
+    state int evaluations;
+    hajimari() { evaluations = 0; }
+    fixture active { actor("app"); grant_seiyaku_lifecycle_permission("app", "hajimari"); }
+    error enum Failure { Missing = 1 }
+    fn produced() -> List<int, 2> { evaluations += 1; [1] }
+    fn append(List<int, 4> input) -> List<int, 4> {
+        var output = input;
+        output.push(2);
+        output
+    }
+    fn expanded(List<int, 2> input, bool choose) -> List<int, 4> {
+        if choose { input } else { [] }
+    }
+    fn expanded_nested(List<List<int, 2>, 1> input) -> List<List<int, 2>, 2> {
+        input
+    }
+    kotoage fn compute() authorize(anyone) -> (int, int, int, int, int, int) {
+        evaluations = 0;
+        let produced_result = append(produced());
+        let List<int, 2> original = [1];
+        var copied = expanded(original, true);
+        copied.push(3);
+        let List<List<int, 2>, 1> nested = [[5]];
+        var wide_nested = expanded_nested(nested);
+        var shared_inner = wide_nested.get(0).expect(Failure::Missing);
+        shared_inner.push(8);
+        wide_nested.push([9]);
+        (evaluations, produced_result.len(), original.len(), copied.len(), nested.len(), nested.get(0).expect(Failure::Missing).len())
+    }
+    #[test(fixture = "active")]
+    fn boundaries() {
+        test::invoke_kotoage_as(actor: "app", kotoage: "hajimari", arguments: {});
+        let observed = test::invoke_kotoage(kotoage: "compute", arguments: {});
+        test::assert_eq(actual: observed, expected: (1, 2, 1, 2, 1, 2));
+    }
+}
+"#);
+    let suite = discover_suite(&path).expect("discover capacity conversions");
+    let compiled = compile_suite(&suite, false).expect("compile capacity conversions");
+    let results = execute_suite(&compiled, TraceMode::Off, 1).expect("run capacity conversions");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn imported_contract_methods_preserve_nominal_tables_order_and_nested_event_rollback() {
+    let temp = TestTempDir::new();
+    let child_source = r#"
+seiyaku Pool {
+    enum Status { Active = 7 }
+    error enum Failure { Missing = 1 }
+    struct Payload { Status status; int first; int second; }
+    event Called { Payload payload; }
+    kotoage fn exchange(int first, int second, bool accept) authorize(anyone) -> Result<Payload, Failure> {
+        let payload = Payload { status: Status::Active, first, second };
+        emit Called { payload };
+        if accept { Result::ok(payload) } else { Result::err(Failure::Missing) }
+    }
+    view fn echo(Payload payload) authorize(anyone) -> Payload { payload }
+}
+"#;
+    let child = CompilerSession::default()
+        .build(kotodama_lang::session::CompileRequest {
+            source: child_source,
+            source_name: Some("pool.ko"),
+        })
+        .expect("compile admitted Pool interface");
+    fs::write(temp.path.join("pool.to"), &child.artifact).expect("write imported artifact");
+    let target = temp.write("caller.ko", r#"
+seiyaku Caller {
+    import seiyaku "./pool.to" as Pool;
+    state int order;
+    hajimari() { order = 0; }
+    fn receiver(bytes _ address) -> Pool { order = order * 10 + 1; Pool::at(address: address) }
+    fn first_argument() -> int { order = order * 10 + 2; 2 }
+    fn second_argument() -> int { order = order * 10 + 3; 3 }
+    kotoage fn relay(bytes address, bool accept) authorize(anyone) -> Result<(Pool::Payload, int), Pool::Failure> {
+        let result = receiver(address).exchange(second: second_argument(), accept: accept, first: first_argument());
+        match result {
+            Result::ok(payload) => Result::ok((payload, order)),
+            Result::err(failure) => Result::err(failure),
+        }
+    }
+    view fn read(bytes address, Pool::Payload payload) authorize(anyone) -> Pool::Payload {
+        Pool::at(address: address).echo(payload: payload)
+    }
+    fixture active { actor("app"); grant_seiyaku_lifecycle_permission("app", "hajimari"); }
+}
+"#);
+    // The instance address is independent of its artifact identity; both are authenticated at A9.
+    let actor = default_caller_account().unwrap();
+    let address = ContractAddress::derive(
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .unwrap(),
+        &actor,
+        17,
+        DataSpaceId::UNIVERSAL,
+    )
+    .unwrap();
+    temp.write("tests/caller.test.ko", &format!(r#"
+module CallerTests {{
+    koto_test {{ target: "../caller.ko" }}
+    #[test(fixture = "active")]
+    fn nested() {{
+        test::invoke_kotoage_as(actor: "app", kotoage: "hajimari", arguments: {{}});
+        let failed = test::invoke_kotoage(kotoage: "relay", arguments: {{ address: b"{address}", accept: false }});
+        test::assert(failed.is_err());
+        let succeeded = test::invoke_kotoage(kotoage: "relay", arguments: {{ address: b"{address}", accept: true }});
+        let (payload, observed_order) = succeeded.expect(Pool::Failure::Missing);
+        test::assert_eq(actual: observed_order, expected: 132);
+        test::assert_eq(actual: payload.first, expected: 2);
+        test::assert_eq(actual: payload.second, expected: 3);
+        test::assert(payload.status == Pool::Status::Active);
+        let echoed = test::invoke_kotoage(kotoage: "read", arguments: {{ address: b"{address}", payload }});
+        test::assert_eq(actual: echoed, expected: payload);
+    }}
+}}
+"#));
+    let suite = discover_suite(&target).expect("discover imported contract tests");
+    let compiled = compile_suite(&suite, false).expect("compile imported contract tests");
+    let mut host = build_host_for_fixture(&compiled, Some("active")).expect("fixture host");
+    let mut control = iroha_data_model::smart_contract::ContractLifecycleControlV1::direct(actor);
+    control.active_code_hash = Some(child.report.artifact_hash);
+    control.retained_code_hash = control.active_code_hash;
+    host.inner
+        .install_contract_fixture(address, child.artifact, control, None)
+        .expect("install Pool fixture");
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_koto_test_harness(&compiled.suite.program).unwrap();
+    vm.set_program_counter(compiled.tests[0].pc).unwrap();
+    vm.run_with_host(&mut host)
+        .expect("run typed imported methods");
+    assert_eq!(
+        host.events.len(),
+        1,
+        "failed nested and outer Results discard their events"
+    );
+    assert_eq!(host.events[0].name.as_ref(), "Called");
+    assert_eq!(
+        decode_int_state_value(&host.fixture_state("order").unwrap()),
+        132
+    );
+}
+
+#[test]
+fn matching_private_receiver_helpers_override_native_names_and_evaluate_once() {
+    let temp = TestTempDir::new();
+    let path = temp.write("receiver.ko", r#"seiyaku ReceiverHelpers {
+        error enum Failure { Missing = 1 }
+        state int order;
+        hajimari() { order = 0; }
+        fixture active { actor("app"); grant_seiyaku_lifecycle_permission("app", "hajimari"); }
+        fn produce() -> int { order = order * 10 + 1; 7 }
+        fn left_value() -> int { order = order * 10 + 2; 2 }
+        fn right_value() -> int { order = order * 10 + 3; 3 }
+        fn expect(int value, int left, int right) -> int { value + left * 10 + right }
+        fn len(List<int, 4> values) -> int { values.get(0).expect(Failure::Missing) + 100 }
+        kotoage fn exercise() authorize(anyone) -> (int, int, int, int, bool) {
+            let selected = produce().expect(right: right_value(), left: left_value());
+            let List<int, 1> small = [8];
+            let Option<int> optional = Option::some(9);
+            (selected, order, small.len(), optional.expect(Failure::Missing), optional.is_some())
+        }
+        #[test(fixture = "active")]
+        fn check() {
+            test::invoke_kotoage_as(actor: "app", kotoage: "hajimari", arguments: {});
+            test::assert_eq(actual: test::invoke_kotoage(kotoage: "exercise", arguments: {}), expected: (30, 132, 108, 9, true));
+        }
+    }"#);
+    let suite = discover_suite(&path).unwrap();
+    let compiled = compile_suite(&suite, false).unwrap();
+    let results = execute_suite(&compiled, TraceMode::Off, 1).unwrap();
+    assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn public_value_utilities_encode_typed_values_and_preserve_utf8_and_evaluation_order() {
+    let temp = TestTempDir::new();
+    let path = temp.write("utilities.ko", r#"seiyaku UtilityValues {
+        error enum Failure { InvalidText = 1 }
+        enum Status { Ready = 9 }
+        struct Payload { Status status; List<Option<int>, 2> values; Json metadata }
+        state int order;
+        hajimari() { order = 0; }
+        fixture active { actor("app"); grant_seiyaku_lifecycle_permission("app", "hajimari"); }
+        fn produce() -> Payload {
+            order = order + 1;
+            Payload { status: Status::Ready, values: [Option::some(7), Option::none], metadata: json { ok: true } }
+        }
+        kotoage fn check_values() authorize(anyone) -> bool {
+            let captured = codec::encode(produce());
+            let Payload expected = Payload { status: Status::Ready, values: [Option::some(7), Option::none], metadata: json { ok: true } };
+            let joined = string::concat("海", "!");
+            let restored = string::from_bytes(string::as_bytes(joined)).expect(Failure::InvalidText);
+            captured == codec::encode(expected) && order == 1
+                && restored == "海!" && string::len(restored) == 4
+                && bytes::concat(b"ab", b"cd") == b"abcd"
+                && string::from_bytes(b"\xff").is_none()
+                && string::from(true) == "true" && string::from(-7) == "-7"
+                && string::from(Name::parse("alpha")) == "alpha"
+        }
+        #[test(fixture = "active")]
+        fn check() {
+            test::invoke_kotoage_as(actor: "app", kotoage: "hajimari", arguments: {});
+            test::assert(test::invoke_kotoage(kotoage: "check_values", arguments: {}));
+        }
+    }"#);
+    let suite = discover_suite(&path).unwrap();
+    let compiled = compile_suite(&suite, false).unwrap();
+    let results = execute_suite(&compiled, TraceMode::Off, 1).unwrap();
+    assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn numeric_selection_supports_exact_decimal_and_quantity_domains_once() {
+    let temp = TestTempDir::new();
+    let path = temp.write(
+        "selection.ko",
+        r#"seiyaku NumericChoices {
+        state int order;
+        hajimari() { order = 0; }
+        fixture active { actor("app"); grant_seiyaku_lifecycle_permission("app", "hajimari"); }
+        fn low_value() -> decimal { order = order * 10 + 1; -2.5 }
+        fn high_value() -> decimal { order = order * 10 + 2; 1.25 }
+        kotoage fn check_values() authorize(anyone) -> bool {
+            let selected = math::max(right: high_value(), left: low_value());
+            let quantity low = 2.5;
+            let quantity high = 3.75;
+            selected == 1.25 && order == 21
+                && math::min(-2.5, 1.25) == -2.5 && math::abs(-2.5) == 2.5
+                && math::abs(2.5) == 2.5 && math::abs(0.0) == 0.0
+                && math::min(low, high) == low && math::max(low, high) == high
+                && math::abs(low) == low && math::abs(-7) == 7
+        }
+        #[test(fixture = "active")]
+        fn check() {
+            test::invoke_kotoage_as(actor: "app", kotoage: "hajimari", arguments: {});
+            test::assert(test::invoke_kotoage(kotoage: "check_values", arguments: {}));
+        }
+    }"#,
+    );
+    let suite = discover_suite(&path).unwrap();
+    let compiled = compile_suite(&suite, false).unwrap();
+    let results = execute_suite(&compiled, TraceMode::Off, 1).unwrap();
+    assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn tuple_state_keys_round_trip_through_public_cursor_arguments_and_share_scalar_records() {
+    let temp = TestTempDir::new();
+    let path = temp.write("tuple_keys.ko", r#"seiyaku TupleKeys {
+        error enum Failure { Missing = 1 }
+        state StateMap<(int, (Name, bool)), int> values;
+        state StateMap<int, int> scalars;
+        kotoage fn seed() authorize(anyone) {
+            values[(7, (Name::parse("first"), true))] = 10;
+            values[(8, (Name::parse("second"), false))] = 20;
+            scalars[7] = 30;
+        }
+        view fn page(Option<StateCursor<(int, (Name, bool))>> after) authorize(anyone) -> StatePage<(int, (Name, bool)), int, 1> {
+            values.page(after: after, limit: 1)
+        }
+        view fn lookup() authorize(anyone) -> int {
+            values.get((7, (Name::parse("first"), true))).expect(Failure::Missing) + scalars.get(7).expect(Failure::Missing)
+        }
+        #[test]
+        fn check() {
+            test::invoke_kotoage(kotoage: "seed", arguments: {});
+            let first = test::invoke_kotoage(kotoage: "page", arguments: { after: Option::none });
+            let second = test::invoke_kotoage(kotoage: "page", arguments: { after: first.next });
+            let end = test::invoke_kotoage(kotoage: "page", arguments: { after: second.next });
+            test::assert_eq(actual: first.items.len(), expected: 1);
+            test::assert_eq(actual: second.items.len(), expected: 1);
+            test::assert_eq(actual: end.items.len(), expected: 0);
+            test::assert(end.next.is_none());
+            let a = first.items.get(0).expect(Failure::Missing);
+            let b = second.items.get(0).expect(Failure::Missing);
+            test::assert_eq(actual: a.0.0 + b.0.0, expected: 15);
+            test::assert_eq(actual: a.1 + b.1, expected: 30);
+            test::assert_eq(actual: test::invoke_kotoage(kotoage: "lookup", arguments: {}), expected: 40);
+        }
+    }"#);
+    let suite = discover_suite(&path).unwrap();
+    let compiled = compile_suite(&suite, false).unwrap();
+    let results = execute_suite(&compiled, TraceMode::Off, 1).unwrap();
+    assert!(results[0].passed, "{:?}", results[0].failure);
+}
+
+#[test]
+fn numeric_conversion_modes_preserve_faults_and_recoverable_results() {
+    use iroha_data_model::executor::fault::{IvmFaultKindV1, NumericFaultV1};
+    let temp = TestTempDir::new();
+    let path = temp.write("conversions.ko", r#"seiyaku Conversions {
+        error enum Check { WrongFault = 1 }
+        view fn recover_int(int value) authorize(anyone) -> Result<quantity, NumericError> {
+            quantity::try_from_int(value)
+        }
+        view fn recover_decimal(decimal value) authorize(anyone) -> Result<quantity, NumericError> {
+            quantity::try_from_decimal(value)
+        }
+        view fn exact(decimal value) authorize(anyone) -> int {
+            let recovered = quantity::try_from_decimal(-value);
+            match recovered {
+                Result::ok(_) => { require(false, Check::WrongFault); },
+                Result::err(failure) => { require(failure == NumericError::NegativeQuantity, Check::WrongFault); },
+            }
+            decimal::to_int_exact(value)
+        }
+        #[test]
+        fn recovered_values() {
+            let integer = test::invoke_kotoage(kotoage: "recover_int", arguments: { value: -1 });
+            let fraction = test::invoke_kotoage(kotoage: "recover_decimal", arguments: { value: -1.5 });
+            match integer {
+                Result::ok(_) => { test::assert(false); },
+                Result::err(failure) => { test::assert_eq(actual: failure, expected: NumericError::NegativeQuantity); },
+            }
+            match fraction {
+                Result::ok(_) => { test::assert(false); },
+                Result::err(failure) => { test::assert_eq(actual: failure, expected: NumericError::NegativeQuantity); },
+            }
+            test::assert(test::invoke_kotoage(kotoage: "recover_int", arguments: { value: 1 }).is_ok());
+            test::assert(test::invoke_kotoage(kotoage: "recover_decimal", arguments: { value: 1.5 }).is_ok());
+            test::assert_eq(actual: test::invoke_kotoage(kotoage: "exact", arguments: { value: 2.0 }), expected: 2);
+        }
+        #[test]
+        fn exact_conversion_traps() {
+            test::invoke_kotoage(kotoage: "exact", arguments: { value: 1.5 });
+        }
+    }"#);
+    let suite = discover_suite(&path).expect("discover conversion policy");
+    let compiled = compile_suite(&suite, false).expect("compile conversion policy");
+    let results = execute_suite(&compiled, TraceMode::Off, 1).expect("execute conversion policy");
+    assert_eq!(results.len(), 2);
+    assert_eq!(
+        results.iter().filter(|result| result.passed).count(),
+        1,
+        "{:?}",
+        results
+            .iter()
+            .map(|result| (&result.name, result.passed, &result.failure))
+            .collect::<Vec<_>>()
+    );
+    let failure = results
+        .iter()
+        .find_map(|result| result.failure.as_ref())
+        .unwrap();
+    let fault = failure.fault.expect("canonical conversion fault");
+    assert_eq!(
+        fault.kind,
+        IvmFaultKindV1::Numeric(NumericFaultV1::InexactConversion)
+    );
+    assert_eq!(
+        fault.site.code_hash,
+        compiled.runtime.as_ref().unwrap().report.artifact_hash
+    );
 }

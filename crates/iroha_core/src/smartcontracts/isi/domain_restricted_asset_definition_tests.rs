@@ -1,5 +1,5 @@
 #[test]
-fn register_restricted_asset_definition_requires_explicit_owning_domain() {
+fn register_restricted_asset_definition_cannot_infer_home_from_alias() {
     let state = test_state();
     let authority = (*ALICE_ID).clone();
     let paynet = DataSpaceId::new(7);
@@ -24,15 +24,21 @@ fn register_restricted_asset_definition_requires_explicit_owning_domain() {
     tx.world.current_dataspace_id = Some(paynet);
     let error = Register::asset_definition(definition)
         .execute(&authority, &mut tx)
-        .expect_err("restricted definitions must not omit authoritative domain context");
+        .expect_err("a namespace alias is not immutable home authority");
     assert!(
         error
             .to_string()
-            .contains("requires an explicit owning domain"),
+            .contains("a restricted dataspace namespace cannot alias another dataspace"),
         "unexpected error: {error}"
     );
     assert!(tx.world.asset_definitions.get(&definition_id).is_none());
     assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
+    assert!(
+        tx.world
+            .asset_definition_direct_homes
+            .get(&definition_id)
+            .is_none()
+    );
     assert!(
         tx.world
             .asset_definition_domains

@@ -12,6 +12,7 @@ documentation = "https://docs.rs/ivm"
 build = "build.rs"
 
 [dependencies]
+thiserror = { workspace = true }
 iroha_allocation = { workspace = true }
 iroha_accel = { workspace = true }
 iroha_model_base = { workspace = true }

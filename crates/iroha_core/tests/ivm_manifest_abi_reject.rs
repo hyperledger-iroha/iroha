@@ -29,6 +29,9 @@ fn ivm_manifest_fixture_uses_checked_randomness() {
 }
 fn minimal_contract_interface() -> ivm::EmbeddedContractInterfaceV1 {
     ivm::EmbeddedContractInterfaceV1 {
+        events: Vec::new(),
+        enum_types: Vec::new(),
+        permissions: vec![iroha_data_model::smart_contract::manifest::ContractPermissionDescriptorV1 { name: "CanManageSmartContractCode".parse().unwrap(), scope: iroha_data_model::smart_contract::manifest::ContractPermissionScopeV1::Chain { permission_name: "CanManageSmartContractCode".parse().unwrap() } }],
         callables: vec![ivm::call::EmbeddedCallableV1 {
             entry_pc: 0,
             frame_bytes: 0,
@@ -50,7 +53,7 @@ fn minimal_contract_interface() -> ivm::EmbeddedContractInterfaceV1 {
             return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
                 nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
             }),
-            permission: Some("CanManageSmartContractCode".to_owned()),
+            authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Permission("CanManageSmartContractCode".parse().unwrap()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),

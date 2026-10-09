@@ -892,12 +892,14 @@ impl CompilerSession {
         let target_environment =
             target_semantic.test_target_environment(target_signatures, external_states);
         let resolution_environment = crate::resolved::ExternalResolutionEnvironment {
+            contracts: target_environment.contracts.clone(),
+            permissions: BTreeSet::new(),
             functions: target_environment.functions.keys().cloned().collect(),
             states: target_environment.states.keys().cloned().collect(),
             structs: target_environment.structs.keys().cloned().collect(),
             consts: target_environment.consts.keys().cloned().collect(),
-            error_codes: target_environment
-                .error_codes
+            variant_codes: target_environment
+                .variant_codes
                 .iter()
                 .map(|(name, code)| (name.clone(), *code))
                 .collect(),
@@ -1179,7 +1181,11 @@ pub(crate) fn validate_test_module_source(
             {
                 Some("public or lifecycle function")
             }
-            Item::Function(_) | Item::Struct(_) | Item::ErrorEnum(_) | Item::Const(_) => None,
+            Item::Function(_)
+            | Item::Struct(_)
+            | Item::Event(_)
+            | Item::Enum(_)
+            | Item::Const(_) => None,
         };
         if let Some(invalid) = invalid {
             return Err(DiagnosticBundle::single(Diagnostic::error(
@@ -1499,7 +1505,7 @@ mod tests {
 
     #[test]
     fn lint_config_allows_denies_and_rejects_unknown_slugs() {
-        let source = "seiyaku Cfg {\n    view fn f(int x) -> int {\n        let unused = 3;\n        return x;\n    }\n}";
+        let source = "seiyaku Cfg {\n    view fn f(int x) authorize(anyone) -> int {\n        let unused = 3;\n        return x;\n    }\n}";
         let request = CompileRequest {
             source,
             source_name: Some("cfg.ko"),
@@ -1578,7 +1584,10 @@ mod tests {
         let merged = manifest.merged_with(&flags);
         assert_eq!(merged.level("unused-state"), LintLevel::Deny);
         assert_eq!(merged.level("dead-store"), LintLevel::Allow);
-        assert_eq!(LintConfig::new().merged_with(&LintConfig::new()), LintConfig::new());
+        assert_eq!(
+            LintConfig::new().merged_with(&LintConfig::new()),
+            LintConfig::new()
+        );
     }
 
     fn source_fixture(source: &'static str) -> &'static str {
@@ -1635,7 +1644,7 @@ mod tests {
         let session = CompilerSession::default();
         let output = session
             .build(CompileRequest {
-                source: "seiyaku Demo { view fn ping() -> int { return 1; } }",
+                source: "seiyaku Demo { view fn ping() authorize(anyone) -> int { return 1; } }",
                 source_name: Some("demo.ko"),
             })
             .expect("compile canonical source");
@@ -1679,7 +1688,7 @@ mod tests {
         const TAIRA_RECIPIENT: &str =
             "testﾜヰ8ｽuimdh9FﾂｦUｸﾈbﾕﾆヱMUYｴGｷﾙｹﾐRヱbﾐｷwﾄ6ﾃdDLPQﾋW496uﾙﾜFpﾈtHd4Hﾙﾎ45M1L5";
         let source = format!(
-            "seiyaku TairaLiteral {{ view fn recipient() -> AccountId {{ return AccountId::parse(\"{TAIRA_RECIPIENT}\"); }} }}"
+            "seiyaku TairaLiteral {{ view fn recipient() authorize(anyone) -> AccountId {{ return AccountId::parse(\"{TAIRA_RECIPIENT}\"); }} }}"
         );
         let taira = CompilerSession::new(CompilerOptions {
             chain_discriminant: 369,
@@ -1724,12 +1733,7 @@ mod tests {
     }
     #[test]
     fn contextual_retired_type_words_remain_valid_value_and_entrypoint_names() {
-        let source = "seiyaku ValueNames { \
-            view fn amount(quantity money) -> quantity { \
-                let quantity number = money; \
-                return number; \
-            } \
-        }";
+        let source = "seiyaku ValueNames { view fn amount(quantity money) authorize(anyone) -> quantity { let quantity number = money; return number; } }";
         let output = CompilerSession::default()
             .build(CompileRequest {
                 source,
@@ -1759,7 +1763,7 @@ mod tests {
         let session = CompilerSession::default();
         let contract_diagnostics = session
             .build(CompileRequest {
-                source: "seiyaku Amount { view fn run() {} }",
+                source: "seiyaku Amount { view fn run() authorize(anyone) {} }",
                 source_name: Some("retired-contract.ko"),
             })
             .expect_err("a retired numeric type must not identify a deployable seiyaku");
@@ -2141,11 +2145,11 @@ mod tests {
                 "E_SECRET_STATE_TYPE",
             ),
             (
-                "seiyaku Privacy { kotoage fn leak(Secret<int> value) authorize(\"Leak\") {} }",
+                "seiyaku Privacy { permission Leak;  kotoage fn leak(Secret<int> value) authorize(Leak) {} }",
                 "E_SECRET_PUBLIC_PARAMETER",
             ),
             (
-                "seiyaku Privacy { kotoage fn leak() -> Secret<int> authorize(\"Leak\") { return crypto::private_input(0); } }",
+                "seiyaku Privacy { permission Leak;  kotoage fn leak() authorize(Leak) -> Secret<int> { return crypto::private_input(0); } }",
                 "E_SECRET_PUBLIC_RETURN",
             ),
         ] {
@@ -2285,7 +2289,7 @@ mod tests {
             fix_text(legacy_sum, legacy_diagnostic),
             ("option::none(0)", "Option::none")
         );
-        let query_key = "seiyaku C { view fn account(bytes raw) { let account_view = ledger::query::account(raw); } }";
+        let query_key = "seiyaku C { view fn account(bytes raw) authorize(anyone) { let account_view = ledger::query::account(raw); } }";
         let query_key_error = reject(query_key);
         let query_key_diagnostic = diagnostic(&query_key_error, "E_QUERY_KEY_TYPE");
         assert_eq!(
@@ -2293,7 +2297,7 @@ mod tests {
             "ledger::query::account(raw)"
         );
         assert!(query_key_diagnostic.fix.is_none());
-        let query_result = "seiyaku C { view fn account(AccountId id) { let bytes raw = ledger::query::account(id); } }";
+        let query_result = "seiyaku C { view fn account(AccountId id) authorize(anyone) { let bytes raw = ledger::query::account(id); } }";
         let query_result_error = reject(query_result);
         let query_result_diagnostic = diagnostic(&query_result_error, "E_QUERY_RESULT_TYPE");
         assert_eq!(primary_text(query_result, query_result_diagnostic), "bytes");
@@ -2422,7 +2426,7 @@ mod tests {
             ("contract", "contract Demo {}"),
             (
                 "entry",
-                "seiyaku Demo { entry fn run() authorize(\"Run\") {} }",
+                "seiyaku Demo { entry fn run() authorize(anyone) {} }",
             ),
             ("init", "seiyaku Demo { init() {} }"),
             ("upgrade", "seiyaku Demo { upgrade() {} }"),
@@ -2503,7 +2507,7 @@ mod tests {
         let session = CompilerSession::default();
         for (source, code, expected_primary) in [
             (
-                "seiyaku Missing { state int value; view fn read() -> int { return value; } }",
+                "seiyaku Missing { state int value; view fn read() authorize(anyone) -> int { return value; } }",
                 "E_STATE_HAJIMARI_REQUIRED",
                 "state",
             ),
@@ -2590,15 +2594,15 @@ mod tests {
         });
         for (source, expected_span) in [
             (
-                "seiyaku Demo { view fn helper() {} #[test] fn smoke() {} }",
+                "seiyaku Demo { view fn helper() authorize(anyone) {} #[test] fn smoke() {} }",
                 "#[test]",
             ),
             (
-                "seiyaku Demo { view fn helper() {} fixture seeded { caller(\"alice\"); } }",
+                "seiyaku Demo { view fn helper() authorize(anyone) {} fixture seeded { caller(\"alice\"); } }",
                 "fixture",
             ),
             (
-                "seiyaku Demo { view fn helper() {} koto_test { target: \"demo.ko\" } }",
+                "seiyaku Demo { view fn helper() authorize(anyone) {} koto_test { target: \"demo.ko\" } }",
                 "koto_test",
             ),
         ] {
@@ -2964,11 +2968,11 @@ mod tests {
         let session = CompilerSession::default();
         for (source, expected_code) in [
             (
-                "seiyaku InvalidIndex { state StateMap<int, int> values; view fn read() -> int { return values[1]; } }",
+                "seiyaku InvalidIndex { state StateMap<int, int> values; view fn read() authorize(anyone) -> int { return values[1]; } }",
                 "E_STATE_MAP_OPTIONAL_READ",
             ),
             (
-                "seiyaku InvalidFlatGet { state StateMap<int, int> values; view fn read() -> Option<int> { return get(values, 1); } }",
+                "seiyaku InvalidFlatGet { state StateMap<int, int> values; view fn read() authorize(anyone) -> Option<int> { return get(values, 1); } }",
                 "K2002",
             ),
         ] {

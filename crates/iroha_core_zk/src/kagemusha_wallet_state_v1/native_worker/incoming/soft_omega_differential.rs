@@ -451,7 +451,7 @@ fn current_omega_soft_local_decoders_match_native_and_retain_opening() {
     assert_eq!(binding.encoded(), fixture.originals[0]);
     let descriptor = binding.descriptor();
     assert_eq!(descriptor.curve, CurveV1::Pallas);
-    assert_eq!(descriptor.k, K);
+    assert_eq!(u32::from(descriptor.k), K);
     assert_eq!(
         descriptor.transcript,
         TranscriptV2::KagemushaPoseidonRp57Base

@@ -12,7 +12,9 @@ use std::collections::BTreeMap;
 const GAS_LIMIT: u64 = u64::MAX;
 fn benchmark_program() -> Vec<u8> {
     Compiler::new()
-        .compile_source("seiyaku Add { view fn add(int a, int b) -> int { return a + b; } }")
+        .compile_source(
+            "seiyaku Add { view fn add(int a, int b) authorize(anyone) -> int { return a + b; } }",
+        )
         .expect("compile benchmark contract")
 }
 fn entrypoint_pc(program: &[u8], name: &str) -> u64 {

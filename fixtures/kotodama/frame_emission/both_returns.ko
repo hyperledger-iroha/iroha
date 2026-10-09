@@ -1,4 +1,4 @@
-seiyaku BothFrameReturns {
+seiyaku BothFrameReturns { permission WriteState;
     state int trace;
     hajimari() {
         trace = 0;
@@ -226,7 +226,7 @@ seiyaku BothFrameReturns {
         );
     }
 
-    kotoage fn main() -> (
+    kotoage fn main() authorize(WriteState) -> (
         int,
         int,
         int,
@@ -329,7 +329,7 @@ seiyaku BothFrameReturns {
         int,
         int,
         int
-    ) authorize("WriteState") {
+    ) {
         let left = compute(0);
         let right = compute(1);
         return (

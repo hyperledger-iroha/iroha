@@ -57,7 +57,7 @@ impl ExecutionDeferred {
         match error.as_unmetered() {
             VMError::AllocationDeferred(refusal) => Some(refusal.clone().into()),
             VMError::ExecutionDeferred(reason) => Some((*reason).into()),
-            _ => None,
+            other => other.execution_deferral().map(Into::into),
         }
     }
 

@@ -556,6 +556,8 @@ mod model {
         /// Exact actual Nexus charge; explicitly absent when no charge committed.
         /// The binary tuple frame and manual JSON key are mandatory, including `None`.
         pub Option<NexusFeeReceipt>,
+        /// Actual native contract emissions in execution order, required even when empty.
+        pub crate::smart_contract::event::ContractEmissionsV1,
     );
     /// The outcome of processing a transaction:
     /// either a sequence of data triggers, or a rejection reason.
@@ -2120,6 +2122,8 @@ impl norito::json::JsonSerialize for TransactionResult {
         norito::json::write_json_string("nexus_fee_receipt", out);
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.2, out);
+        out.push_str(",\"contract_events\":");
+        norito::json::JsonSerialize::json_serialize(&self.3, out);
         out.push('}');
     }
     fn json_serialize_to(
@@ -2143,6 +2147,8 @@ impl norito::json::JsonSerialize for TransactionResult {
             norito::json::JsonSerialize::json_serialize_to(&self.1, out)?;
             out.push_str(",\"nexus_fee_receipt\":")?;
             norito::json::JsonSerialize::json_serialize_to(&self.2, out)?;
+            out.push_str(",\"contract_events\":")?;
+            norito::json::JsonSerialize::json_serialize_to(&self.3, out)?;
             out.push('}')?;
             Ok(())
         })();
@@ -2161,6 +2167,7 @@ impl norito::json::JsonDeserialize for TransactionResult {
         let mut inner = None;
         let mut batch_transfer_outcomes = None;
         let mut nexus_fee_receipt = None;
+        let mut contract_events = None;
         loop {
             parser.skip_ws();
             if parser.try_consume_char(b'}')? {
@@ -2193,6 +2200,16 @@ impl norito::json::JsonDeserialize for TransactionResult {
                     batch_transfer_outcomes =
                         Some(Vec::<AssetBatchTransferOutcome>::json_deserialize(parser)?);
                 }
+                "contract_events" => {
+                    if contract_events.is_some() {
+                        return Err(norito::json::Error::duplicate_field("contract_events"));
+                    }
+                    contract_events = Some(
+                        crate::smart_contract::event::ContractEmissionsV1::json_deserialize(
+                            parser,
+                        )?,
+                    );
+                }
                 "nexus_fee_receipt" => {
                     if nexus_fee_receipt.is_some() {
                         return Err(norito::json::Error::duplicate_field("nexus_fee_receipt"));
@@ -2213,6 +2230,7 @@ impl norito::json::JsonDeserialize for TransactionResult {
             batch_transfer_outcomes.unwrap_or_default(),
             nexus_fee_receipt
                 .ok_or_else(|| norito::json::Error::missing_field("nexus_fee_receipt"))?,
+            contract_events.ok_or_else(|| norito::json::Error::missing_field("contract_events"))?,
         ))
     }
 }
@@ -2672,7 +2690,12 @@ impl TransactionResult {
     #[inline]
     #[must_use]
     pub fn new(inner: TransactionResultInner) -> Self {
-        Self(inner, Vec::new(), None)
+        Self(
+            inner,
+            Vec::new(),
+            None,
+            crate::smart_contract::event::ContractEmissionsV1::default(),
+        )
     }
     /// Durable per-leg receipts emitted by an independently settled native transfer batch.
     #[inline]
@@ -2695,6 +2718,20 @@ impl TransactionResult {
     #[inline]
     pub fn set_nexus_fee_receipt(&mut self, receipt: Option<NexusFeeReceipt>) {
         self.2 = receipt;
+    }
+    /// Actual committed native contract emissions in execution order.
+    #[inline]
+    #[must_use]
+    pub fn contract_events(&self) -> &crate::smart_contract::event::ContractEmissionsV1 {
+        &self.3
+    }
+    /// Install the execution owner's immutable event collection before sizing and hashing.
+    #[inline]
+    pub fn set_contract_events(
+        &mut self,
+        events: crate::smart_contract::event::ContractEmissionsV1,
+    ) {
+        self.3 = events;
     }
     /// Hash for this transaction result.
     #[inline]

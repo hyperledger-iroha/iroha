@@ -19209,6 +19209,17 @@
               }
             ]
           },
+          "retained_code_hash_hex": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "revision": {
             "format": "uint64",
             "minimum": 1,
@@ -19230,6 +19241,7 @@
           "pending_owner",
           "parliament_delegated",
           "active_code_hash_hex",
+          "retained_code_hash_hex",
           "revision",
           "emergency_hold"
         ],

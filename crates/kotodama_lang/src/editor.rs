@@ -4,10 +4,11 @@
 //! recovered AST, a rename edit, or a claimed cross-file reference. The explicit source and locked
 //! import graph authorizes cross-file symbols; this module never reads the filesystem.
 use crate::{
-    ast::ParameterCallMode,
+    ast::{FunctionKind, ParameterCallMode},
     lexer::{Token, TokenKind},
     linker::{
-        ImportBinding, LinkerOptions, ModuleBuildGraph, ModuleUnit, SourceLinkRequest, TypedLinker,
+        ImportBinding, LinkerOptions, ModuleBuildGraph, ModuleUnit, SourceLinkRequest,
+        SourcePackageGraphRequest, TypedLinker,
     },
     resolved::{
         BindingId, ResolvedCallTarget, ResolvedProgram, ResolvedSymbolKind, ResolvedTarget,
@@ -62,8 +63,10 @@ pub struct EditorSignature {
     pub return_type: String,
     /// Markdown prose: what the callable does, its effects, access and authorization.
     pub documentation: String,
+    /// Authored Markdown only, without the generated function-role explanation.
+    pub authored_documentation: String,
     /// Source-syntax declaration header, using the keyword spelling written at the
-    /// declaration site (for example `言挙げ fn bump(int delta) -> int authorize("CanBump")`).
+    /// declaration site (for example `言挙げ fn bump(int delta) authorize(CanBump) -> int`).
     pub declaration: String,
     /// Source declaration kind; `None` for builtins and compiler-provided members.
     pub function_kind: Option<crate::ast::FunctionKind>,
@@ -150,6 +153,8 @@ pub struct EditorDefinition {
     pub detail: String,
     /// Callable interface, when applicable.
     pub signature: Option<EditorSignature>,
+    /// Authored documentation attached to this declaration.
+    pub documentation: String,
 }
 /// A package export that must change atomically with its resolved source declaration.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,13 +197,14 @@ struct EditorUnit {
     binding_types: BTreeMap<BindingId, Type>,
     typed_nodes: Vec<TypedHirNode>,
     signatures: BTreeMap<String, FunctionSignature>,
+    contract_types: BTreeMap<String, Type>,
 }
 fn source_error_messages(program: &crate::ast::Program) -> BTreeMap<(String, String), String> {
     program
         .items
         .iter()
         .filter_map(|item| {
-            if let crate::ast::Item::ErrorEnum(error) = item {
+            if let crate::ast::Item::Enum(error) = item {
                 Some(error)
             } else {
                 None
@@ -252,6 +258,7 @@ pub struct EditorSnapshot {
     /// First diagnostic that made the graph incomplete: its code and location, and message.
     blocking: Option<(String, String)>,
     project_request: Option<SourceLinkRequest>,
+    package_request: Option<SourcePackageGraphRequest>,
     zk_enabled: bool,
     /// Standalone test modules attached for selector navigation, in attachment order.
     test_modules: Vec<(SourceId, crate::linker::SourceModuleUnit)>,
@@ -471,6 +478,106 @@ impl EditorSnapshot {
         })
         .unwrap_or_default()
     }
+    /// Analyze a reusable package and its exact locked dependencies without a deployable root.
+    ///
+    /// Source ownership, nominal types, dependency aliases, and manifest exports retain their
+    /// package identities. Only a successfully validated package graph permits rename operations.
+    pub fn package(request: &SourcePackageGraphRequest, zk_enabled: bool) -> Self {
+        crate::session::run_with_compiler_stack(|| {
+            let Ok(request) = ModuleBuildGraph::canonical_source_package_bundle(request.clone())
+            else {
+                return Self::default();
+            };
+            let mut snapshot = Self {
+                complete: true,
+                zk_enabled,
+                package_request: Some(request.clone()),
+                ..Self::default()
+            };
+            let graph = ModuleBuildGraph::default();
+            let resolved = graph.resolve_package_sources(request.clone());
+            match &resolved {
+                Ok(packages) => {
+                    for package in packages {
+                        let modules = package.modules.iter().collect::<Vec<_>>();
+                        for module in &modules {
+                            snapshot.add_resolved_unit(
+                                module,
+                                &modules,
+                                &package.imports,
+                                Some(&package.identity),
+                                &package.exports,
+                            );
+                        }
+                    }
+                }
+                Err(_) => {
+                    let files = std::iter::once(&request.package)
+                        .chain(&request.dependencies)
+                        .flat_map(|package| {
+                            package
+                                .modules
+                                .iter()
+                                .chain(&package.sources)
+                                .map(move |file| (package, file))
+                        })
+                        .collect::<Vec<_>>();
+                    let keys = files
+                        .iter()
+                        .map(|(package, file)| {
+                            format!("package\0{}\0{}", package.identity, file.source_name)
+                        })
+                        .collect::<Vec<_>>();
+                    for ((package, file), id) in files
+                        .into_iter()
+                        .zip(crate::linker::stable_source_ids(&keys))
+                    {
+                        snapshot.add_unit(
+                            SourceFile::new_in_package(
+                                id,
+                                package.identity.as_str(),
+                                file.source_name.as_str(),
+                                &file.source,
+                            ),
+                            package.imports.clone(),
+                            Some(package.identity.clone()),
+                            package.exports.clone(),
+                            zk_enabled,
+                        );
+                    }
+                    snapshot.complete = false;
+                }
+            }
+            let options = LinkerOptions {
+                zk_enabled,
+                ..LinkerOptions::default()
+            };
+            match graph.validate_package(request, options) {
+                Ok(_) => {
+                    snapshot.complete = snapshot.units.values().all(|unit| unit.resolved.is_some())
+                }
+                Err(error) => {
+                    snapshot.complete = false;
+                    snapshot.blocking = Some(blocking_summary(&error.into_diagnostics()));
+                }
+            }
+            // Editor facts also survive body errors, while strict validation remains authoritative.
+            if let Ok(packages) = resolved
+                && let Ok(facts) = TypedLinker::new(options).analyze_editor_package_graph(packages)
+            {
+                for (source, facts) in facts {
+                    if let Some(unit) = snapshot.units.get_mut(&source) {
+                        unit.signatures = facts.signatures;
+                        unit.binding_types = facts.bindings;
+                        unit.typed_nodes = facts.nodes;
+                    }
+                }
+            }
+            snapshot.index();
+            snapshot
+        })
+        .unwrap_or_default()
+    }
     /// Re-analyze this snapshot with one source replaced, keeping its graph and attached tests.
     /// Used only for completion recovery; the result never reaches a build API.
     fn with_replaced_source(&self, unit: &EditorUnit, text: String) -> Self {
@@ -512,6 +619,20 @@ impl EditorSnapshot {
                 file.source = text;
             }
             Self::project_with_tests(&request, &tests, self.zk_enabled)
+        } else if let Some(request) = &self.package_request {
+            let mut request = request.clone();
+            for package in std::iter::once(&mut request.package).chain(&mut request.dependencies) {
+                if Some(&package.identity) == unit.package.as_ref()
+                    && let Some(file) = package
+                        .modules
+                        .iter_mut()
+                        .chain(&mut package.sources)
+                        .find(|file| file.source_name == unit.file.name())
+                {
+                    file.source.clone_from(&text);
+                }
+            }
+            Self::package(&request, self.zk_enabled)
         } else {
             let Some(root) = self.units.get(&SourceId(0)) else {
                 return Self::default();
@@ -588,6 +709,11 @@ impl EditorSnapshot {
                     binding_types: BTreeMap::new(),
                     typed_nodes: Vec::new(),
                     signatures: BTreeMap::new(),
+                    contract_types: crate::semantic::contract_imports::namespace_types(
+                        &module.contracts,
+                        &module.program.program().directives,
+                    )
+                    .unwrap_or_default(),
                 },
             );
         }
@@ -643,7 +769,7 @@ impl EditorSnapshot {
                 self.blocking.get_or_insert_with(|| {
                     (
                         "an `include`/`import` directive".to_owned(),
-                        "a loose document has no project graph; start the server with `koto lsp --project <kotodama.project.json>`".to_owned(),
+                        "a loose document has no project graph; start the server with `musubi lsp --manifest-path <Musubi.toml>`".to_owned(),
                     )
                 });
             }
@@ -688,6 +814,7 @@ impl EditorSnapshot {
                 binding_types,
                 typed_nodes,
                 signatures,
+                contract_types: BTreeMap::new(),
             },
         );
     }
@@ -707,6 +834,7 @@ impl EditorSnapshot {
                             &symbol.name,
                             signature,
                             declaration_keyword(unit, symbol.source.range).as_deref(),
+                            authored_documentation(unit, symbol.source.range),
                         )
                     });
                 let detail = signature
@@ -717,9 +845,11 @@ impl EditorSnapshot {
                 let kind = match symbol.kind {
                     ResolvedSymbolKind::Function => 3,
                     ResolvedSymbolKind::Struct => 22,
-                    ResolvedSymbolKind::ErrorEnum => 13,
+                    ResolvedSymbolKind::Event => 23,
+                    ResolvedSymbolKind::Enum => 13,
                     ResolvedSymbolKind::State => 6,
                     ResolvedSymbolKind::Const => 21,
+                    ResolvedSymbolKind::Permission => 14,
                     _ => 9,
                 };
                 self.definitions.insert(
@@ -728,6 +858,7 @@ impl EditorSnapshot {
                         identity,
                         source: symbol.source,
                         name: symbol.name.clone(),
+                        documentation: authored_documentation(unit, symbol.source.range).to_owned(),
                         kind,
                         detail,
                         signature,
@@ -753,6 +884,7 @@ impl EditorSnapshot {
                 self.definitions.insert(
                     identity,
                     EditorDefinition {
+                        documentation: String::new(),
                         identity,
                         source: range,
                         name: binding.name.clone(),
@@ -802,17 +934,54 @@ impl EditorSnapshot {
             let Some(resolved) = &unit.resolved else {
                 continue;
             };
+            // Permission references are authenticated parser/resolver facts. Chain-token
+            // strings never enter the rename set.
+            let arena = resolved.arena();
+            let permission_references = unit
+                .facts
+                .authorizations
+                .iter()
+                .filter_map(|authorization| {
+                    unit.facts
+                        .source_map
+                        .source_range(authorization.name_node)
+                        .map(|range| (authorization.name.as_str(), range))
+                })
+                .chain(arena.nodes().filter_map(|node| {
+                    if node.target != Some(ResolvedTarget::Value(ResolvedValueTarget::Intrinsic)) {
+                        return None;
+                    }
+                    let range = node.source?;
+                    Some((unit.file.slice(range.range)?, range))
+                }));
+            for (name, range) in permission_references {
+                if let Some(identity) = self.shared_identity(unit, name)
+                    && self
+                        .definitions
+                        .get(&identity)
+                        .is_some_and(|definition| definition.kind == 14)
+                {
+                    self.occurrences.push(Occurrence {
+                        source: range,
+                        identity,
+                        declaration: false,
+                        write: false,
+                    });
+                }
+            }
             for node in resolved.arena().nodes() {
                 if let Some(ResolvedTarget::Value(
-                    target @ (ResolvedValueTarget::ErrorCode(_)
-                    | ResolvedValueTarget::ImportedErrorVariant),
+                    target @ (ResolvedValueTarget::VariantCode(_)
+                    | ResolvedValueTarget::ImportedVariant),
                 )) = node.target
                     && let Some(source) = node.source
-                    && let Some((namespace, range)) = error_namespace_source(unit, source)
+                    && let Some((namespace, range)) = enum_namespace_source(unit, source)
                 {
                     let identity = match target {
-                        ResolvedValueTarget::ErrorCode(_) => self.shared_identity(unit, &namespace),
-                        ResolvedValueTarget::ImportedErrorVariant => {
+                        ResolvedValueTarget::VariantCode(_) => {
+                            self.shared_identity(unit, &namespace)
+                        }
+                        ResolvedValueTarget::ImportedVariant => {
                             self.imported_identity(unit, &namespace)
                         }
                         _ => None,
@@ -906,7 +1075,7 @@ impl EditorSnapshot {
                     ResolvedTypeTarget::ExternalType | ResolvedTypeTarget::ExternalStruct => {
                         self.imported_identity(unit, &ty.name)
                     }
-                    ResolvedTypeTarget::Struct(id) | ResolvedTypeTarget::ErrorEnum(id) => {
+                    ResolvedTypeTarget::Struct(id) | ResolvedTypeTarget::Enum(id) => {
                         Some(EditorIdentity::Symbol(*source, id))
                     }
                     _ => None,
@@ -1051,8 +1220,7 @@ impl EditorSnapshot {
                 if matches!(
                     node.target,
                     Some(ResolvedTarget::Value(
-                        ResolvedValueTarget::ErrorCode(_)
-                            | ResolvedValueTarget::ImportedErrorVariant
+                        ResolvedValueTarget::VariantCode(_) | ResolvedValueTarget::ImportedVariant
                     ))
                 ) && let Some(range) = node.source
                     && contains(range.range, offset)
@@ -1102,7 +1270,14 @@ impl EditorSnapshot {
             }
             return Some((
                 definition.detail.clone(),
-                symbol_documentation(&definition.detail),
+                [
+                    definition.documentation.clone(),
+                    symbol_documentation(&definition.detail),
+                ]
+                .into_iter()
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n"),
             ));
         }
         if let Some(token) = unit
@@ -1284,6 +1459,43 @@ impl EditorSnapshot {
                 }
             }
             Self::project_with_tests(&request, &rewritten_tests, self.zk_enabled)
+        } else if let Some(request) = &self.package_request {
+            let mut request = request.clone();
+            for export in &exports {
+                let package = std::iter::once(&mut request.package)
+                    .chain(&mut request.dependencies)
+                    .find(|package| package.identity == export.package)
+                    .ok_or("Rename export package is unavailable.")?;
+                if export.old_name != export.new_name && package.exports.contains(&export.new_name)
+                {
+                    return Err(format!(
+                        "`{name}` is already exported by `{}`.",
+                        export.package
+                    ));
+                }
+                if !package.exports.remove(&export.old_name) {
+                    return Err("Rename export no longer matches its checked graph.".into());
+                }
+                package.exports.insert(export.new_name.clone());
+            }
+            for package in std::iter::once(&mut request.package).chain(&mut request.dependencies) {
+                for (id, unit) in self
+                    .units
+                    .iter()
+                    .filter(|(_, unit)| unit.package.as_ref() == Some(&package.identity))
+                {
+                    if let Some(file) = package
+                        .modules
+                        .iter_mut()
+                        .chain(&mut package.sources)
+                        .find(|file| file.source_name == unit.file.name())
+                    {
+                        file.source
+                            .clone_from(rewritten.get(id).expect("rewritten source"));
+                    }
+                }
+            }
+            Self::package(&request, self.zk_enabled)
         } else {
             let (id, unit) = self
                 .units
@@ -1390,6 +1602,27 @@ impl EditorSnapshot {
         name: &str,
         offset: u32,
     ) -> Option<EditorSignature> {
+        if let Some((alias, "at")) = name.split_once("::")
+            && let Some(Type::ContractRef(contract)) = unit.contract_types.get(alias)
+        {
+            return Some(editor_signature(
+                name,
+                vec![("address", "bytes".into(), true)],
+                alias.to_owned(),
+                &format!(
+                    "Bind the authenticated {} interface to a contract address.",
+                    contract.interface.seiyaku_name
+                ),
+            ));
+        }
+        if let Some(receiver) = receiver_before(&unit.tokens, offset)
+            && let Some(ty) = self.type_at(unit, receiver)
+        {
+            return self
+                .receiver_signatures(unit, ty)
+                .into_iter()
+                .find(|signature| signature.name == name);
+        }
         if let Some(signature) = intrinsic_signatures()
             .into_iter()
             .find(|signature| signature.name == name)
@@ -1419,6 +1652,33 @@ impl EditorSnapshot {
                     .into_iter()
                     .find(|signature| signature.name == name)
             })
+    }
+    fn receiver_signatures(&self, unit: &EditorUnit, ty: &Type) -> Vec<EditorSignature> {
+        let mut signatures = member_signatures(ty)
+            .into_iter()
+            .map(|signature| (signature.name.clone(), signature))
+            .collect::<BTreeMap<_, _>>();
+        // Contract members always come from the authenticated imported interface.
+        if !matches!(ty, Type::ContractRef(_)) {
+            for owner in self
+                .units
+                .values()
+                .filter(|candidate| candidate.owner == unit.owner)
+            {
+                for (name, signature) in &owner.signatures {
+                    if signature.modifiers.kind == FunctionKind::Private
+                        && let Some(receiver) = signature.params.first()
+                        && crate::semantic::user_receiver_accepts(&receiver.ty, ty)
+                    {
+                        let mut method = signature.clone();
+                        method.params.remove(0);
+                        signatures
+                            .insert(name.clone(), unit_source_signature(owner, name, &method));
+                    }
+                }
+            }
+        }
+        signatures.into_values().collect()
     }
     fn type_at<'a>(&'a self, unit: &'a EditorUnit, range: TextRange) -> Option<&'a Type> {
         unit.typed_nodes
@@ -1481,7 +1741,8 @@ impl EditorSnapshot {
             return self
                 .type_at(unit, receiver)
                 .map(|ty| {
-                    let mut candidates = member_signatures(ty)
+                    let mut candidates = self
+                        .receiver_signatures(unit, ty)
                         .into_iter()
                         .map(signature_completion)
                         .collect::<Vec<_>>();
@@ -1504,6 +1765,52 @@ impl EditorSnapshot {
         if let Some((namespace, _)) = prefix.rsplit_once("::") {
             let alias = namespace.split("::").next().unwrap_or(namespace);
             let mut candidates = Vec::new();
+            if unit.contract_types.contains_key(alias) {
+                if let Some(ty) = unit.contract_types.get(namespace) {
+                    let variants = match ty {
+                        Type::Enum(descriptor) => descriptor
+                            .variants
+                            .iter()
+                            .map(|variant| (&variant.name, variant.code))
+                            .collect::<Vec<_>>(),
+                        Type::ErrorEnum(descriptor) => descriptor
+                            .variants
+                            .iter()
+                            .map(|variant| (&variant.name, variant.code))
+                            .collect::<Vec<_>>(),
+                        Type::ContractRef(_) => {
+                            let mut signature = self
+                                .signature_for_name(unit, &format!("{alias}::at"), offset)
+                                .expect("contract namespace constructor");
+                            signature.name = "at".into();
+                            candidates.push(signature_completion(signature));
+                            Vec::new()
+                        }
+                        _ => Vec::new(),
+                    };
+                    candidates.extend(variants.into_iter().map(|(name, code)| {
+                        plain_completion(name, 20, &format!("{namespace}::{name} = {code}"))
+                    }));
+                }
+                let prefix = format!("{namespace}::");
+                let mut seen = BTreeSet::new();
+                for (path, ty) in &unit.contract_types {
+                    if let Some(suffix) = path.strip_prefix(&prefix) {
+                        let label = suffix
+                            .split("::")
+                            .next()
+                            .expect("nonempty imported type suffix");
+                        if seen.insert(label) {
+                            candidates.push(plain_completion(
+                                label,
+                                if suffix.contains("::") { 9 } else { 22 },
+                                &render_type_name(ty),
+                            ));
+                        }
+                    }
+                }
+                return candidates;
+            }
             if unit.local_imports.contains_key(alias)
                 || unit.imports.iter().any(|import| import.alias == alias)
             {
@@ -1517,7 +1824,7 @@ impl EditorSnapshot {
                             .and_then(|owner| owner.resolved.as_ref())
                             .and_then(|resolved| {
                                 resolved.program().items.iter().find_map(|item| {
-                                    if let crate::ast::Item::ErrorEnum(error) = item {
+                                    if let crate::ast::Item::Enum(error) = item {
                                         (error.name == definition.name).then_some(error)
                                     } else {
                                         None
@@ -1588,7 +1895,7 @@ impl EditorSnapshot {
                 .filter(|candidate| candidate.owner == unit.owner)
             {
                 for declaration in owner.facts.declarations.iter().filter(|declaration| {
-                    declaration.kind == DeclarationKind::ErrorEnum && declaration.name == namespace
+                    declaration.kind == DeclarationKind::Enum && declaration.name == namespace
                 }) {
                     if let Some(node) = owner.facts.source_map.node(declaration.node)
                         && let Some(source) = owner.file.slice(node.range)
@@ -1596,7 +1903,7 @@ impl EditorSnapshot {
                             crate::parser::parse(&format!("module Editor {{ {source} }}"))
                     {
                         for item in program.items {
-                            if let crate::ast::Item::ErrorEnum(error) = item {
+                            if let crate::ast::Item::Enum(error) = item {
                                 for variant in error.variants {
                                     let mut completion = plain_completion(
                                         &variant.name,
@@ -1676,6 +1983,44 @@ impl EditorSnapshot {
             }
             context::CompletionSite::ItemStart(kind) => return context::item_start_items(kind),
             context::CompletionSite::Type => return self.type_completions(unit),
+            context::CompletionSite::Event => {
+                return self
+                    .units
+                    .values()
+                    .filter(|candidate| candidate.owner == unit.owner)
+                    .flat_map(|candidate| candidate.facts.declarations.iter())
+                    .filter(|declaration| declaration.kind == DeclarationKind::Event)
+                    .map(|declaration| {
+                        plain_completion(&declaration.name, 23, "Declared native event")
+                    })
+                    .collect();
+            }
+            context::CompletionSite::Authorization => {
+                let mut items = vec![plain_completion(
+                    "anyone",
+                    14,
+                    "Explicitly allow every caller",
+                )];
+                for candidate in self
+                    .units
+                    .values()
+                    .filter(|candidate| candidate.owner == unit.owner)
+                {
+                    for declaration in candidate
+                        .facts
+                        .declarations
+                        .iter()
+                        .filter(|declaration| declaration.kind == DeclarationKind::Permission)
+                    {
+                        items.push(plain_completion(
+                            &declaration.name,
+                            14,
+                            "Declared caller permission",
+                        ));
+                    }
+                }
+                return items;
+            }
             context::CompletionSite::Nothing => return Vec::new(),
             context::CompletionSite::Statement | context::CompletionSite::Expression => {}
             _ => return context::modifier_items(site),
@@ -1698,7 +2043,12 @@ impl EditorSnapshot {
                 signature.function_kind == Some(crate::ast::FunctionKind::Private)
             });
             let visible = match definition.identity {
-                EditorIdentity::Symbol(..) => definition.kind != 9 && callable,
+                EditorIdentity::Symbol(..) => {
+                    definition.kind != 9
+                        && definition.kind != 14
+                        && definition.kind != 23
+                        && callable
+                }
                 EditorIdentity::Binding(_, binding) => visible_binding(unit, binding, offset),
             };
             if visible {
@@ -1715,8 +2065,11 @@ impl EditorSnapshot {
                 let kind = match declaration.kind {
                     DeclarationKind::Function => 3,
                     DeclarationKind::Struct => 22,
-                    DeclarationKind::ErrorEnum => 13,
-                    DeclarationKind::SourceUnit | DeclarationKind::Trigger => continue,
+                    DeclarationKind::Event => continue,
+                    DeclarationKind::Enum => 13,
+                    DeclarationKind::SourceUnit
+                    | DeclarationKind::Trigger
+                    | DeclarationKind::Permission => continue,
                     _ => 6,
                 };
                 if crate::glossary::by_spelling(&declaration.name).is_some()
@@ -1920,7 +2273,7 @@ fn symbol_documentation(header: &str) -> String {
         }
         None if matches!(
             written,
-            "state" | "const" | "struct" | "error" | "trigger" | "module"
+            "state" | "const" | "struct" | "enum" | "error" | "trigger" | "module"
         ) =>
         {
             context::keyword_documentation(written).unwrap_or_default()
@@ -1938,16 +2291,14 @@ fn local_target(source: SourceId, target: ResolvedTarget) -> Option<EditorIdenti
         | ResolvedTarget::Assignment(
             ResolvedValueTarget::State(id) | ResolvedValueTarget::Const(id),
         )
-        | ResolvedTarget::Type(
-            ResolvedTypeTarget::Struct(id) | ResolvedTypeTarget::ErrorEnum(id),
-        )
+        | ResolvedTarget::Type(ResolvedTypeTarget::Struct(id) | ResolvedTypeTarget::Enum(id))
         | ResolvedTarget::StructLiteral(id) => EditorIdentity::Symbol(source, id),
         _ => return None,
     })
 }
 // The resolver authenticated this value as a nominal variant. Read only its exact
 // source-backed path tokens; numeric codes alone cannot identify the declaring enum.
-fn error_namespace_source(unit: &EditorUnit, source: SourceRange) -> Option<(String, SourceRange)> {
+fn enum_namespace_source(unit: &EditorUnit, source: SourceRange) -> Option<(String, SourceRange)> {
     let start = unit
         .tokens
         .partition_point(|token| token.range.start < source.range.start);
@@ -2077,6 +2428,7 @@ fn source_signature(
     name: &str,
     signature: &FunctionSignature,
     keyword: Option<&str>,
+    authored: &str,
 ) -> EditorSignature {
     let parameters = signature
         .params
@@ -2098,11 +2450,12 @@ fn source_signature(
         .collect::<Vec<_>>();
     let declaration = crate::signature_render::SourceDeclaration {
         kind: signature.modifiers.kind,
+        documentation: Some(authored),
         keyword,
         name,
         parameters: &rendered,
         return_type: &return_type,
-        permission: signature.modifiers.permission.as_deref(),
+        authorization: signature.modifiers.authorization.as_deref(),
         is_test: signature.modifiers.is_test,
         fixture: signature.modifiers.test_fixture.as_deref(),
     };
@@ -2113,9 +2466,23 @@ fn source_signature(
         parameters,
         return_type,
         documentation,
+        authored_documentation: authored.to_owned(),
         declaration,
         function_kind: Some(signature.modifiers.kind),
     }
+}
+fn authored_documentation(unit: &EditorUnit, name: TextRange) -> &str {
+    unit.facts
+        .declarations
+        .iter()
+        .find(|declaration| {
+            unit.facts
+                .source_map
+                .node(declaration.name_node)
+                .is_some_and(|node| node.range == name)
+        })
+        .map(|declaration| declaration.documentation.as_str())
+        .unwrap_or_default()
 }
 fn unit_source_signature(
     unit: &EditorUnit,
@@ -2131,7 +2498,17 @@ fn unit_source_signature(
                 .find(|symbol| symbol.name == name && symbol.kind == ResolvedSymbolKind::Function)
         })
         .and_then(|symbol| declaration_keyword(unit, symbol.source.range));
-    source_signature(name, signature, keyword.as_deref())
+    let authored = unit
+        .resolved
+        .as_ref()
+        .and_then(|resolved| {
+            resolved
+                .symbols()
+                .find(|symbol| symbol.name == name && symbol.kind == ResolvedSymbolKind::Function)
+        })
+        .map(|symbol| authored_documentation(unit, symbol.source.range))
+        .unwrap_or_default();
+    source_signature(name, signature, keyword.as_deref(), authored)
 }
 /// Keyword spelling written at a function or lifecycle declaration whose name occupies
 /// `name`: `言挙げ`/`kotoage`/`view` before `fn`, or the lifecycle keyword itself.
@@ -2232,6 +2609,7 @@ fn builtin_signature(builtin: Builtin, receiver: bool) -> EditorSignature {
         BuiltinCallPolicy::PositionalPrefix(count) => count,
     };
     let mut rendered = EditorSignature {
+        authored_documentation: String::new(),
         name: if receiver {
             builtin.name()
         } else {
@@ -2286,6 +2664,7 @@ fn editor_signature(
     documentation: &str,
 ) -> EditorSignature {
     let mut signature = EditorSignature {
+        authored_documentation: String::new(),
         name: name.into(),
         parameters: parameters
             .into_iter()
@@ -2342,6 +2721,26 @@ fn intrinsic_signatures() -> Vec<EditorSignature> {
     signatures
 }
 fn member_signatures(ty: &Type) -> Vec<EditorSignature> {
+    if let Type::ContractRef(contract) = ty {
+        use iroha_data_model::smart_contract::manifest::EntryPointKind;
+        return contract.interface.entrypoints.iter().filter_map(|entry| {
+            let kind = match entry.kind {
+                EntryPointKind::View => crate::ast::FunctionKind::View,
+                EntryPointKind::Kotoage => crate::ast::FunctionKind::Kotoage,
+                _ => return None,
+            };
+            let parameters = entry.argument_schema.as_ref()?.fields.iter().map(|field| {
+                crate::semantic::contract_imports::schema_type(&field.ty).ok().map(|ty| {
+                    (field.name.as_str(), render_type_name(&ty), true)
+                })
+            }).collect::<Option<Vec<_>>>()?;
+            let result = crate::semantic::contract_imports::schema_type(entry.return_schema.as_ref()?).ok()?;
+            let mut signature = editor_signature(&entry.name, parameters, render_type_name(&result),
+                "Public method from the authenticated imported artifact. Argument names and nominal types must match its signed interface.");
+            signature.function_kind = Some(kind);
+            Some(signature)
+        }).collect();
+    }
     if let Type::Option(value) | Type::Result(value, _) = ty {
         let value = render_type_name(value);
         let option = matches!(ty, Type::Option(_));
@@ -2381,14 +2780,23 @@ fn member_signatures(ty: &Type) -> Vec<EditorSignature> {
                 error,
                 "Extract the error, or use the fallback. The fallback is evaluated eagerly.",
             ));
-        } else {
-            signatures.push(editor_signature(
-                "expect",
-                vec![("error", "error enum".into(), false)],
-                value,
-                "Extract the value or reject with the supplied nominal error, such as Error::Missing. The receiver and error are evaluated once in source order.",
-            ));
         }
+        signatures.push(editor_signature(
+            "expect",
+            vec![("error", "error enum".into(), false)],
+            value.clone(),
+            "Extract the value or reject with the supplied nominal error, such as Error::Missing. The receiver is evaluated once; the error is evaluated only on none or err.",
+        ));
+        signatures.push(editor_signature(
+            if option { "ok_or" } else { "or_err" },
+            vec![("error", "E (error enum)".into(), false)],
+            format!("Result<{value}, E>"),
+            if option {
+                "Turn some into ok, or none into err with the supplied nominal error. The receiver is evaluated once; the error is evaluated only on none."
+            } else {
+                "Keep the successful payload, or replace the original error with the supplied nominal error. The receiver is evaluated once; the replacement error is evaluated only on err."
+            },
+        ));
         return signatures;
     }
     if let Type::List(element, _) = ty {
@@ -2563,7 +2971,14 @@ fn definition_completion(definition: &EditorDefinition) -> EditorCompletion {
         .signature
         .clone()
         .map(signature_completion)
-        .unwrap_or_else(|| plain_completion(&definition.name, definition.kind, &definition.detail))
+        .unwrap_or_else(|| {
+            let mut completion =
+                plain_completion(&definition.name, definition.kind, &definition.detail);
+            completion
+                .documentation
+                .clone_from(&definition.documentation);
+            completion
+        })
 }
 fn path_prefix(tokens: &[Token], offset: u32) -> String {
     let mut pieces = Vec::new();
@@ -2581,8 +2996,9 @@ fn path_prefix(tokens: &[Token], offset: u32) -> String {
     pieces.reverse();
     pieces.concat()
 }
-/// Whether `offset` lies inside a comment or a string or byte literal, including an
-/// unterminated one that runs to the end of its line, where no Kotodama word applies.
+/// Whether `offset` lies in a comment or literal where no Kotodama word applies.
+/// Numeric tokens include a partially written decimal such as `1.`; that dot
+/// belongs to the number and must not trigger member or global completions.
 fn inside_comment_or_literal(file: &SourceFile, offset: u32) -> bool {
     use crate::syntax::SyntaxKind;
     crate::syntax::lex(file, FrontendBudget::v1())
@@ -2593,16 +3009,26 @@ fn inside_comment_or_literal(file: &SourceFile, offset: u32) -> bool {
             // A line comment, and an unterminated literal, still covers the end of its line.
             let through_end = token.range.start < offset && offset <= token.range.end;
             match token.kind {
-                SyntaxKind::LineComment => through_end,
+                SyntaxKind::LineComment | SyntaxKind::DocComment => {
+                    // The lossless token includes its newline. Completion at the
+                    // next line belongs to code, even though it is the token end.
+                    file.slice(token.range).is_some_and(|text| {
+                        let end =
+                            token.range.start + text.trim_end_matches(['\r', '\n']).len() as u32;
+                        token.range.start < offset && offset <= end
+                    })
+                }
+                SyntaxKind::Number | SyntaxKind::Decimal => through_end,
                 SyntaxKind::BlockComment | SyntaxKind::String | SyntaxKind::Bytes => {
                     strictly_inside
                 }
                 SyntaxKind::ErrorToken => {
                     through_end
                         && file.slice(token.range).is_some_and(|text| {
-                            ["\"", "b\"", "r\"", "r#", "br", "rb", "/*"]
-                                .iter()
-                                .any(|opening| text.starts_with(opening))
+                            text.as_bytes().first().is_some_and(u8::is_ascii_digit)
+                                || ["\"", "b\"", "r\"", "r#", "br", "rb", "/*"]
+                                    .iter()
+                                    .any(|opening| text.starts_with(opening))
                         })
                 }
                 _ => false,
@@ -2723,10 +3149,57 @@ mod tests {
             .collect()
     }
     #[test]
+    fn permission_identifiers_navigate_rename_and_complete_without_chain_token_edits() {
+        let source = r#"seiyaku Policies { permission Admin; import permission "CanSetParameters" as ChainAdmin;
+            kotoage fn grant(AccountId account) authorize(Admin) {
+                ledger::seiyaku::grant_permission(account: account, permission: Admin);
+            }
+            view fn inspect() authorize(ChainAdmin) -> int { 1 }
+        }"#;
+        let snapshot = EditorSnapshot::single("permissions.ko", source, false);
+        assert!(snapshot.is_complete(), "{:?}", snapshot.blocking);
+        let position = source.find("authorize(Admin)").unwrap() + "authorize(".len();
+        let definition = snapshot
+            .definition(SourceId(0), position as u32)
+            .expect("permission declaration navigation");
+        assert_eq!(definition.name, "Admin");
+        let rename = snapshot
+            .rename(SourceId(0), position as u32, "Manager")
+            .expect("permission rename");
+        assert_eq!(
+            rename.sources.len(),
+            3,
+            "declaration, guard and grant operand"
+        );
+        let position = source.find("authorize(ChainAdmin)").unwrap() + "authorize(".len();
+        let rename = snapshot
+            .rename(SourceId(0), position as u32, "ChainManager")
+            .unwrap();
+        assert_eq!(rename.sources.len(), 2, "alias declaration and guard only");
+        for range in rename.sources {
+            assert_eq!(
+                &source[range.range.start as usize..range.range.end as usize],
+                "ChainAdmin"
+            );
+        }
+        let incomplete = "seiyaku Policies { permission Admin; view fn inspect() authorize(";
+        let snapshot = EditorSnapshot::single("permissions.ko", incomplete, false);
+        let completions = snapshot.completions(SourceId(0), incomplete.len() as u32);
+        let labels = completions
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            labels.contains(&"Admin") && labels.contains(&"anyone"),
+            "{labels:?}"
+        );
+        assert!(!labels.contains(&"int"));
+    }
+    #[test]
     fn comments_strings_and_non_member_dots_offer_no_completions() {
         let body = |statement: &str| {
             format!(
-                "seiyaku A {{\n    state StateMap<int, int> Scores;\n    view fn f(int who) -> int {{\n        {statement}\n        return 0;\n    }}\n}}\n"
+                "seiyaku A {{\n    state StateMap<int, int> Scores;\n    view fn f(int who) authorize(anyone) -> int {{\n        {statement}\n        return 0;\n    }}\n}}\n"
             )
         };
         for (statement, needle, delta) in [
@@ -2736,6 +3209,8 @@ mod tests {
             ("debug::info(\"Scores.\");", "Scores.\"", 7),
             ("debug::info(\"Scores.", "Scores.", 7),
             ("let x = 1.", "1.", 2),
+            ("let x = 1.25", "1.25", 4),
+            ("let x = 0x", "0x", 2),
             ("let x = true.", "true.", 5),
         ] {
             let source = body(statement);
@@ -2757,6 +3232,9 @@ mod tests {
         let file = SourceFile::new(SourceId(0), "edge.ko", "// end\nlet s = \"ab\"; /* c */");
         assert!(inside_comment_or_literal(&file, 6), "end of a line comment");
         assert!(!inside_comment_or_literal(&file, 7), "next line");
+        let crlf = SourceFile::new(SourceId(0), "crlf.ko", "// end\r\nlet x = 0;");
+        assert!(inside_comment_or_literal(&crlf, 6), "before CRLF");
+        assert!(!inside_comment_or_literal(&crlf, 8), "after CRLF");
         assert!(inside_comment_or_literal(&file, 17), "inside a string");
         assert!(
             !inside_comment_or_literal(&file, 19),
@@ -2764,6 +3242,41 @@ mod tests {
         );
         assert!(!inside_comment_or_literal(&file, 28), "after `*/`");
     }
+    #[test]
+    fn authored_docs_follow_declaration_identity_and_preserve_markdown() {
+        let source = r#"module Guide {
+            /// A **named** record.
+            export struct Payload { int value; }
+            /// Read the value.
+            ///
+            /// Keeps the caller's data unchanged.
+            export fn inspect(Payload payload) -> int { payload.value }
+            /// This block is detached.
+
+            export fn plain() -> int { 0 }
+            /// This block is interrupted.
+            // Ordinary comment.
+            export fn other() -> int { 0 }
+        }"#;
+        let snapshot = EditorSnapshot::single("guide.ko", source, false);
+        assert!(snapshot.is_complete());
+        let (_, prose) = snapshot
+            .hover(SourceId(0), cursor(source, "inspect"))
+            .unwrap();
+        assert!(
+            prose.starts_with("Read the value.\n\nKeeps the caller's data unchanged."),
+            "{prose}"
+        );
+        let (_, prose) = snapshot
+            .hover(SourceId(0), cursor(source, "Payload"))
+            .unwrap();
+        assert!(prose.contains("A **named** record."), "{prose}");
+        for name in ["plain", "other"] {
+            let (_, prose) = snapshot.hover(SourceId(0), cursor(source, name)).unwrap();
+            assert!(!prose.contains("This block"), "{prose}");
+        }
+    }
+
     #[test]
     fn declaration_hovers_document_their_leading_keyword_in_the_written_spelling() {
         assert!(symbol_documentation("誓約 Counter").starts_with("**誓約** (seiyaku)"));
@@ -2773,7 +3286,7 @@ mod tests {
         assert!(symbol_documentation("struct Pair").contains("record type"));
         assert_eq!(symbol_documentation("Pair"), "");
         assert_eq!(symbol_documentation(""), "");
-        let source = "seiyaku Timer {\n    state int ticks;\n    hajimari() {\n        ticks = 0;\n    }\n    trigger wake -> tick {\n        on time pre_commit;\n    }\n    kotoage fn tick() authorize(\"CanTick\") {\n        ticks = ticks + 1;\n    }\n}\n";
+        let source = "seiyaku Timer { permission CanTick; \n    state int ticks;\n    hajimari() {\n        ticks = 0;\n    }\n    trigger wake -> tick {\n        on time pre_commit;\n    }\n    kotoage fn tick() authorize(CanTick) {\n        ticks = ticks + 1;\n    }\n}\n";
         let snapshot = EditorSnapshot::single("timer.ko", source, false);
         let (detail, documentation) = snapshot
             .hover(SourceId(0), cursor(source, "wake"))
@@ -2836,7 +3349,7 @@ mod tests {
     }
     #[test]
     fn rename_refusals_name_keywords_hooks_and_the_failing_check() {
-        let source = "seiyaku Counter {\n    state int value;\n    始まり() {\n        value = 0;\n    }\n    fn helper(int _ input) -> int { input }\n    view fn read() -> int { helper(value) }\n}\n";
+        let source = "seiyaku Counter {\n    state int value;\n    始まり() {\n        value = 0;\n    }\n    fn helper(int _ input) -> int { input }\n    view fn read() authorize(anyone) -> int { helper(value) }\n}\n";
         let snapshot = EditorSnapshot::single("counter.ko", source, false);
         assert!(snapshot.is_complete());
         let helper = cursor(source, "helper(int");
@@ -2918,7 +3431,9 @@ mod tests {
             members,
             kotodama_surface::source_policy::V1_LIST_MEMBER_NAMES
                 .iter()
-                .map(|name| (*name).to_owned())
+                .copied()
+                .chain(["read"])
+                .map(str::to_owned)
                 .collect()
         );
         assert!(!members.contains("ledger::asset::mint"));
@@ -2942,14 +3457,22 @@ mod tests {
             (
                 "Option<int>",
                 "value.expect(Failure::Missing)",
-                vec!["expect", "is_none", "is_some", "unwrap_or"],
+                vec!["expect", "is_none", "is_some", "ok_or", "read", "unwrap_or"],
                 "unwrap_err_or",
             ),
             (
                 "Result<int, Failure>",
                 "value.unwrap_or(0)",
-                vec!["is_err", "is_ok", "unwrap_err_or", "unwrap_or"],
-                "expect",
+                vec![
+                    "expect",
+                    "is_err",
+                    "is_ok",
+                    "or_err",
+                    "read",
+                    "unwrap_err_or",
+                    "unwrap_or",
+                ],
+                "ok_or",
             ),
         ] {
             let source = format!(
@@ -2976,9 +3499,7 @@ mod tests {
     }
     #[test]
     fn chained_state_reads_offer_expect_with_the_record_return_type() {
-        let source = "seiyaku Notes { error enum Failure { Missing = 1 } \
-            struct Note { int amount } state StateMap<int, Note> Values; \
-            view fn read() -> Note { Values.get(1).expect(Failure::Missing) } }";
+        let source = "seiyaku Notes { error enum Failure { Missing = 1 } struct Note { int amount } state StateMap<int, Note> Values; view fn read() authorize(anyone) -> Note { Values.get(1).expect(Failure::Missing) } }";
         let snapshot = EditorSnapshot::single("notes.ko", source, false);
         assert!(snapshot.is_complete());
         let candidates = snapshot.completions(SourceId(0), cursor(source, ".expect") + 1);
@@ -2996,7 +3517,7 @@ mod tests {
         let (signature, _) = snapshot
             .signature_help(SourceId(0), cursor(source, "Failure::Missing)"))
             .expect("chained extraction signature");
-        assert_eq!(signature.return_type, "Note");
+        assert_eq!(signature.return_type, "Notes::Note");
     }
     #[test]
     fn extraction_completion_handles_nested_fields_and_incomplete_chains() {
@@ -3005,8 +3526,7 @@ mod tests {
         let snapshot = EditorSnapshot::single("fields.ko", source, false);
         assert!(snapshot.is_complete());
         assert!(labels(&snapshot, cursor(source, ".is_some") + 1).contains("expect"));
-        let incomplete = "seiyaku Notes { state StateMap<int, int> Values; \
-            view fn read() { Values.get(1). } }";
+        let incomplete = "seiyaku Notes { state StateMap<int, int> Values; view fn read() authorize(anyone) { Values.get(1). } }";
         let snapshot = EditorSnapshot::single("notes.ko", incomplete, false);
         assert!(!snapshot.is_complete());
         assert!(labels(&snapshot, cursor(incomplete, ". }") + 1).contains("expect"));
@@ -3029,20 +3549,233 @@ mod tests {
         assert!(hover.contains("Json::parse"));
         assert!(hover.contains("string _"));
     }
+    fn library_editor_request(body: &str) -> SourcePackageGraphRequest {
+        use crate::linker::{SourceModuleUnit, SourcePackageUnit};
+        SourcePackageGraphRequest {
+            package: SourcePackageUnit { artifacts: Vec::new(),
+                identity: "local/editor@1".into(),
+                modules: vec![SourceModuleUnit {
+                    source_name: "src/lib.ko".into(),
+                    source: format!(r#"module Library {{ import "./detail.ko" as helper; export fn value(rows::Row row) -> int {{ {body} }} }}"#),
+                }],
+                sources: vec![SourceModuleUnit {
+                    source_name: "src/detail.ko".into(),
+                    source: "module Detail { export const int SEED = 1; }".into(),
+                }],
+                imports: vec![ImportBinding { alias: "rows".into(), package: "locked/rows@1".into() }],
+                exports: BTreeSet::from(["value".into()]),
+            },
+            dependencies: vec![SourcePackageUnit { artifacts: Vec::new(),
+                identity: "locked/rows@1".into(),
+                modules: vec![SourceModuleUnit {
+                    source_name: "src/lib.ko".into(),
+                    source: "module Rows { export struct Row { int amount; string memo; } struct Hidden { int secret; } }".into(),
+                }],
+                sources: vec![], imports: vec![], exports: BTreeSet::from(["Row".into()]),
+            }],
+        }
+    }
+    #[test]
+    fn native_event_editor_resolves_emission_and_offers_only_declared_events() {
+        let source = "seiyaku Events { event Note { int value; } kotoage fn run() authorize(anyone) { emit Note { value: 1 }; } }";
+        let snapshot = EditorSnapshot::single("events.ko", source, false);
+        assert!(snapshot.is_complete(), "{:?}", snapshot.blocking);
+        let file = snapshot.sources().next().unwrap();
+        let offset = cursor(source, "Note { value");
+        let definition = snapshot
+            .definition(file.id(), offset)
+            .expect("event reference");
+        assert_eq!(definition.name, "Note");
+        assert!(
+            definition.detail.starts_with("event Note"),
+            "{}",
+            definition.detail
+        );
+        assert!(snapshot.rename(file.id(), offset, "Changed").is_ok());
+        let candidates = snapshot.completions(file.id(), offset);
+        assert!(candidates.iter().any(|item| item.label == "Note"));
+        assert!(!candidates.iter().any(|item| item.label == "run"));
+        let empty = "seiyaku Events {  }";
+        let snapshot = EditorSnapshot::single("empty.ko", empty, false);
+        let file = snapshot.sources().next().unwrap();
+        assert!(
+            snapshot
+                .completions(file.id(), 17)
+                .iter()
+                .any(|item| item.label == "event")
+        );
+    }
+    #[test]
+    fn ordinary_enum_editor_supports_variant_completion_navigation_and_rename() {
+        let source = "module Data { enum Status { Active = 1, Paused = 2 } export fn echo(Status value) -> Status { if value == Status::Active { value } else { Status::Paused } } }";
+        let snapshot = EditorSnapshot::single("data.ko", source, false);
+        assert!(snapshot.is_complete(), "{:?}", snapshot.blocking);
+        let file = snapshot.sources().next().unwrap();
+        let offset = cursor(source, "Status::Active") + u32::try_from("Status::".len()).unwrap();
+        let completions = snapshot.completions(file.id(), offset);
+        assert!(completions.iter().any(|item| item.label == "Active"));
+        assert!(completions.iter().any(|item| item.label == "Paused"));
+        let definition = snapshot
+            .definition(file.id(), cursor(source, "Status value"))
+            .unwrap();
+        assert_eq!(definition.name, "Status");
+        assert!(definition.detail.starts_with("enum Status"));
+        let rename = snapshot
+            .rename(file.id(), cursor(source, "Status value"), "Mode")
+            .unwrap();
+        assert_eq!(
+            rename.sources.len(),
+            5,
+            "rename updates declaration, parameter, return, and both qualified variants"
+        );
+        let suggestions = EditorSnapshot::single("empty.ko", "module Data {  }", false);
+        let file = suggestions.sources().next().unwrap();
+        assert!(
+            suggestions
+                .completions(file.id(), 14)
+                .iter()
+                .any(|item| item.label == "enum")
+        );
+    }
+    #[test]
+    fn package_editor_preserves_nominal_source_imports_and_manifest_rename() {
+        let request = library_editor_request("row.amount + helper::SEED");
+        let snapshot = EditorSnapshot::package(&request, false);
+        assert!(snapshot.is_complete(), "{:?}", snapshot.blocking);
+        assert_eq!(snapshot.sources().count(), 3);
+        assert!(
+            snapshot
+                .sources()
+                .all(|file| file.package_identity().is_some())
+        );
+        let local = snapshot
+            .sources()
+            .find(|file| {
+                file.package_identity() == Some("local/editor@1") && file.name() == "src/lib.ko"
+            })
+            .unwrap();
+        let dependency = snapshot
+            .sources()
+            .find(|file| file.package_identity() == Some("locked/rows@1"))
+            .unwrap();
+        assert_ne!(local.id(), dependency.id());
+        let row = snapshot
+            .definition(local.id(), cursor(local.text(), "Row row"))
+            .unwrap();
+        assert_eq!(row.source.source, dependency.id());
+        let seed = snapshot
+            .definition(local.id(), cursor(local.text(), "SEED"))
+            .unwrap();
+        assert_eq!(
+            snapshot.source(seed.source.source).unwrap().name(),
+            "src/detail.ko"
+        );
+        let rename = snapshot
+            .rename(local.id(), cursor(local.text(), "value("), "quote")
+            .unwrap();
+        assert_eq!(
+            rename.exports,
+            vec![EditorExportRename {
+                package: "local/editor@1".into(),
+                old_name: "value".into(),
+                new_name: "quote".into()
+            }]
+        );
+        let dependency_rename = snapshot
+            .rename(local.id(), cursor(local.text(), "Row row"), "Receipt")
+            .unwrap();
+        assert_eq!(dependency_rename.sources.len(), 2);
+        assert_eq!(
+            dependency_rename.exports,
+            vec![EditorExportRename {
+                package: "locked/rows@1".into(),
+                old_name: "Row".into(),
+                new_name: "Receipt".into()
+            }]
+        );
+    }
+    #[test]
+    fn package_editor_recovery_preserves_locked_receiver_types_and_export_authority() {
+        for body in ["row.", "row.am", "row.amount + true"] {
+            let request = library_editor_request(body);
+            let snapshot = EditorSnapshot::package(&request, false);
+            assert!(!snapshot.is_complete());
+            let source = snapshot
+                .sources()
+                .find(|file| {
+                    file.package_identity() == Some("local/editor@1") && file.name() == "src/lib.ko"
+                })
+                .unwrap();
+            let offset = cursor(source.text(), "row.") + if body == "row.am" { 6 } else { 4 };
+            let candidates = snapshot.completions(source.id(), offset);
+            assert_eq!(
+                candidates
+                    .iter()
+                    .map(|item| item.label.as_str())
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["amount", "memo", "value"]),
+                "{body}: {candidates:?}"
+            );
+            assert!(
+                snapshot
+                    .rename(source.id(), cursor(source.text(), "value("), "quote")
+                    .is_err()
+            );
+        }
+        let mut request = library_editor_request("row.amount");
+        request.package.imports.clear();
+        let snapshot = EditorSnapshot::package(&request, false);
+        assert!(!snapshot.is_complete());
+        let source = snapshot
+            .sources()
+            .find(|file| {
+                file.package_identity() == Some("local/editor@1") && file.name() == "src/lib.ko"
+            })
+            .unwrap();
+        assert!(
+            snapshot
+                .definition(source.id(), cursor(source.text(), "Row row"))
+                .is_none()
+        );
+        assert!(
+            snapshot
+                .completions(source.id(), cursor(source.text(), "rows::") + 6)
+                .is_empty()
+        );
+    }
+    #[test]
+    fn package_editor_rejects_nominal_type_substitution_and_preserves_body_facts() {
+        let mut request = library_editor_request("accept(row: row)");
+        request.package.modules[0].source = request.package.modules[0].source.replace("export fn value", "struct Row { int amount; string memo; } fn accept(Row row) -> int { row.amount } export fn value");
+        let snapshot = EditorSnapshot::package(&request, false);
+        assert!(
+            !snapshot.is_complete(),
+            "local and locked structs must stay nominally distinct"
+        );
+        assert!(
+            ModuleBuildGraph::default()
+                .validate_package(request, LinkerOptions::default())
+                .is_err()
+        );
+    }
     #[test]
     fn locked_import_references_keep_source_and_package_identity() {
         use crate::linker::{SourceModuleUnit, SourcePackageUnit};
         let request = SourceLinkRequest {
+            artifacts: Vec::new(),
             sources: Vec::new(),
             root: SourceModuleUnit {
                 source_name: "app.ko".into(),
-                source: "seiyaku App { view fn run() -> int { arithmetic::value() } }".into(),
+                source:
+                    "seiyaku App { view fn run() authorize(anyone) -> int { arithmetic::value() } }"
+                        .into(),
             },
             imports: vec![ImportBinding {
                 alias: "arithmetic".into(),
                 package: "std/math@1.0.0".into(),
             }],
             packages: vec![SourcePackageUnit {
+                artifacts: Vec::new(),
                 sources: Vec::new(),
                 identity: "std/math@1.0.0".into(),
                 modules: vec![SourceModuleUnit {
@@ -3102,13 +3835,13 @@ mod tests {
     #[test]
     fn imported_error_namespace_completion_uses_the_exported_nominal_type() {
         use crate::linker::{SourceModuleUnit, SourcePackageUnit};
-        let request = SourceLinkRequest { sources: Vec::new(),
+        let request = SourceLinkRequest { artifacts: Vec::new(), sources: Vec::new(),
             root: SourceModuleUnit {
                 source_name: "app.ko".into(),
-                source: "seiyaku App { view fn run() -> errors::Failure { errors::Failure::Missing } }".into(),
+                source: "seiyaku App { view fn run() authorize(anyone) -> errors::Failure { errors::Failure::Missing } }".into(),
             },
             imports: vec![ImportBinding { alias: "errors".into(), package: "local/errors@1".into() }],
-            packages: vec![SourcePackageUnit { sources: Vec::new(),
+            packages: vec![SourcePackageUnit { artifacts: Vec::new(), sources: Vec::new(),
                 identity: "local/errors@1".into(),
                 modules: vec![SourceModuleUnit {
                     source_name: "errors.ko".into(),
@@ -3158,6 +3891,88 @@ mod tests {
                 .iter()
                 .any(|candidate| candidate.label == "IndexOutOfBounds")
         );
+    }
+    #[test]
+    fn admitted_contract_members_offer_exact_named_signatures_without_lifecycle_hooks() {
+        use crate::linker::{SourceContractArtifact, SourceModuleUnit};
+        let artifact = crate::compiler::Compiler::new().compile_source(
+            "seiyaku Pool { struct Payload { int amount; } hajimari() {} view fn quote(Payload payload) authorize(anyone) -> Payload { payload } kotoage fn update(int amount) authorize(anyone) {} }"
+        ).expect("compile imported interface");
+        let source = r#"seiyaku App { import seiyaku "pool.to" as Pool; view fn relay(bytes address, Pool::Payload payload) authorize(anyone) -> Pool::Payload { let pool = Pool::at(address: address); pool.quote(payload: payload) } }"#;
+        let request = SourceLinkRequest {
+            root: SourceModuleUnit {
+                source_name: "app.ko".into(),
+                source: source.into(),
+            },
+            artifacts: vec![SourceContractArtifact {
+                source_name: "pool.to".into(),
+                artifact,
+            }],
+            sources: vec![],
+            imports: vec![],
+            packages: vec![],
+        };
+        let snapshot = EditorSnapshot::project(&request, false);
+        assert!(
+            snapshot.is_complete(),
+            "{:?}",
+            ModuleBuildGraph::default().link(request.clone(), LinkerOptions::default())
+        );
+        let root = snapshot
+            .sources()
+            .find(|file| file.name() == "app.ko")
+            .unwrap();
+        let members = snapshot.completions(root.id(), cursor(source, "pool.quote") + 5);
+        assert_eq!(
+            members
+                .iter()
+                .map(|member| member.label.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["quote", "update"])
+        );
+        let (signature, _) = snapshot
+            .signature_help(root.id(), cursor(source, "payload: payload") + 12)
+            .expect("typed method signature");
+        assert_eq!(
+            signature.label(),
+            "quote(Pool::Payload payload) -> Pool::Payload"
+        );
+        assert_eq!(signature.snippet(), "quote(payload: ${1:payload})");
+        assert_eq!(
+            signature.function_kind,
+            Some(crate::ast::FunctionKind::View)
+        );
+    }
+    #[test]
+    fn matching_private_receiver_helpers_supply_method_signatures_and_completions() {
+        let source = "module Helpers { error enum Failure { Missing = 1 } fn expect(int value, int extra) -> int { value + extra } fn read(int value) -> int { value.expect(extra: 2) } fn native(Option<int> option) -> int { option.expect(Failure::Missing) } }";
+        let snapshot = EditorSnapshot::single("helpers.ko", source, false);
+        assert!(snapshot.is_complete());
+        let (signature, active) = snapshot
+            .signature_help(SourceId(0), cursor(source, "extra: 2") + 8)
+            .unwrap();
+        assert_eq!(signature.label(), "expect(int extra) -> int");
+        assert_eq!(active, 0);
+        let completions = snapshot.completions(SourceId(0), cursor(source, "value.expect") + 6);
+        assert_eq!(
+            completions
+                .iter()
+                .filter(|candidate| candidate.label == "expect")
+                .count(),
+            1
+        );
+        assert_eq!(
+            completions
+                .iter()
+                .find(|candidate| candidate.label == "expect")
+                .unwrap()
+                .insert_text,
+            "expect(extra: ${1:extra})"
+        );
+        let (native, _) = snapshot
+            .signature_help(SourceId(0), cursor(source, "Failure::Missing)"))
+            .unwrap();
+        assert_eq!(native.parameters[0].name, "error");
     }
     #[test]
     fn numeric_and_cursor_signatures_offer_exact_labels_and_types() {
@@ -3213,8 +4028,8 @@ mod tests {
     #[test]
     fn multifile_editor_tracks_includes_imports_messages_and_rename() {
         use crate::linker::SourceModuleUnit;
-        let request = SourceLinkRequest {
-            root: SourceModuleUnit { source_name: "app.ko".into(), source: r#"seiyaku App { include "./parts.ko"; import "./math.ko" as arithmetic; view fn run() -> int { helper(arithmetic::SCALE) } fn fail() -> Fault { Fault::Denied } }"#.into() },
+        let request = SourceLinkRequest { artifacts: Vec::new(),
+            root: SourceModuleUnit { source_name: "app.ko".into(), source: r#"seiyaku App { include "./parts.ko"; import "./math.ko" as arithmetic; view fn run() authorize(anyone) -> int { helper(arithmetic::SCALE) } fn fail() -> Fault { Fault::Denied } }"#.into() },
             sources: vec![
                 SourceModuleUnit { source_name: "parts.ko".into(), source: r#"const int BASE = 1; fn helper(int _ value) -> int { value + BASE } error enum Fault { #[message("Permission required")] Denied = 3; }"#.into() },
                 SourceModuleUnit { source_name: "math.ko".into(), source: "module Math { export const int SCALE = 7; fn hidden() -> int { 2 } }".into() },
@@ -3282,8 +4097,8 @@ mod tests {
     #[test]
     fn multifile_editor_retains_shared_receiver_facts_after_body_error() {
         use crate::linker::SourceModuleUnit;
-        let request = SourceLinkRequest {
-            root: SourceModuleUnit { source_name: "app.ko".into(), source: r#"seiyaku App { include "./types.ko"; view fn run(Receipt receipt) -> int { receipt.amount + true } }"#.into() },
+        let request = SourceLinkRequest { artifacts: Vec::new(),
+            root: SourceModuleUnit { source_name: "app.ko".into(), source: r#"seiyaku App { include "./types.ko"; view fn run(Receipt receipt) authorize(anyone) -> int { receipt.amount + true } }"#.into() },
             sources: vec![SourceModuleUnit { source_name: "types.ko".into(), source: "struct Receipt { int amount; }".into() }],
             imports: vec![], packages: vec![],
         };
@@ -3311,10 +4126,10 @@ mod tests {
     #[test]
     fn multifile_editor_package_paths_preserve_source_and_manifest_exports() {
         use crate::linker::{SourceModuleUnit, SourcePackageUnit};
-        let request = SourceLinkRequest {
-            root: SourceModuleUnit { source_name: "app.ko".into(), source: "seiyaku App { view fn run() -> int { library::value() } }".into() },
+        let request = SourceLinkRequest { artifacts: Vec::new(),
+            root: SourceModuleUnit { source_name: "app.ko".into(), source: "seiyaku App { view fn run() authorize(anyone) -> int { library::value() } }".into() },
             sources: vec![], imports: vec![ImportBinding { alias: "library".into(), package: "local/tools@1".into() }],
-            packages: vec![SourcePackageUnit {
+            packages: vec![SourcePackageUnit { artifacts: Vec::new(),
                 identity: "local/tools@1".into(),
                 modules: vec![SourceModuleUnit { source_name: "lib.ko".into(), source: r#"module Tools { import "./detail.ko" as helper; export fn value() -> int { helper::SEED } }"#.into() }],
                 sources: vec![SourceModuleUnit { source_name: "detail.ko".into(), source: "module Detail { export const int SEED = 7; fn hidden() -> int { 2 } }".into() }],
@@ -3366,7 +4181,7 @@ mod tests {
     }
     #[test]
     fn multifile_loose_document_requires_dependency_authority_before_rename() {
-        let source = r#"seiyaku App { include "./missing.ko"; view fn answer() -> int { 1 } }"#;
+        let source = r#"seiyaku App { include "./missing.ko"; view fn answer() authorize(anyone) -> int { 1 } }"#;
         let snapshot = EditorSnapshot::single("app.ko", source, false);
         assert!(!snapshot.is_complete());
         assert!(

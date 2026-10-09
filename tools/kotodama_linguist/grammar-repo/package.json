@@ -2,7 +2,7 @@
   "name": "kotodama",
   "publisher": "hyperledger-iroha",
   "displayName": "Kotodama Language",
-  "description": "Kotodama smart contracts for the Iroha Virtual Machine: highlighting, diagnostics, completion, navigation, outline, tests and formatting through the koto toolchain",
+  "description": "Kotodama smart contracts for the Iroha Virtual Machine: highlighting, diagnostics, completion, navigation, outline, tests and formatting through the Musubi and koto toolchain",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "homepage": "https://docs.iroha.tech/blockchain/smart-contracts",
@@ -19,7 +19,7 @@
   "activationEvents": ["onLanguage:kotodama", "onCommand:kotodama.restart"],
   "capabilities": { "untrustedWorkspaces": { "supported": false } },
   "scripts": {
-    "test": "node --test client/config.test.cjs client/grammar.test.cjs",
+    "test": "node --test client/config.test.cjs client/extension.test.cjs client/grammar.test.cjs",
     "package": "vsce package --out kotodama.vsix"
   },
   "dependencies": { "vscode-languageclient": "10.1.1" },
@@ -39,8 +39,11 @@
     "configuration": {
       "title": "Kotodama",
       "properties": {
-        "kotodama.serverPath": { "type": "string", "default": "koto", "description": "Path to the koto executable that serves `koto lsp` and runs tests.", "scope": "machine-overridable" },
-        "kotodama.project": { "type": "string", "default": "kotodama.project.json", "description": "Exact project graph, relative to the workspace folder. Supports ${workspaceFolder}.", "scope": "resource" },
+        "kotodama.kotoPath": { "type": "string", "default": "koto", "description": "Path to the koto executable for standalone files and tests.", "scope": "machine-overridable" },
+        "kotodama.musubiPath": { "type": "string", "default": "musubi", "description": "Path to the Musubi executable for project diagnostics and tests.", "scope": "machine-overridable" },
+        "kotodama.manifestPath": { "type": "string", "default": "", "description": "Musubi.toml path, relative to the workspace folder. Empty discovers its nearest ancestor manifest. Supports ${workspaceFolder}.", "scope": "resource" },
+        "kotodama.contract": { "type": "string", "default": "", "description": "Contract target used for navigation when a file belongs to several graphs; use a unique target name or namespace/package::target. Empty reports diagnostics for all targets.", "scope": "resource" },
+        "kotodama.chainDiscriminant": { "type": "integer", "default": 753, "minimum": 1, "maximum": 65535, "description": "Account-address chain discriminant for standalone koto sources. Musubi projects resolve their network context from project configuration.", "scope": "resource" },
         "kotodama.zk": { "type": "boolean", "default": false, "description": "Enable the explicit ZK compilation capability for this project's diagnostics.", "scope": "resource" }
       }
     },

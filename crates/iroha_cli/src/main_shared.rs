@@ -594,7 +594,7 @@ enum Command {
     /// App API helpers and product tooling
     #[command(subcommand)]
     App(app::Command),
-    /// Contract app bundles, deploys, calls, and alias tooling
+    /// Contract code, aliases, calls, views and local debugging; deploy with `musubi deploy`
     #[command(subcommand)]
     Contract(crate::contracts::Command),
     /// Developer utilities and diagnostics
@@ -10450,6 +10450,9 @@ mod cli_integration_harness {
             compiler_fingerprint: Some("kotodama-compiler".into()),
             features_bitmap: Some(0b1010),
             access_set_hints: None,
+            permissions: Vec::new(),
+            events: Vec::new(),
+            enum_types: Vec::new(),
             entrypoints: None,
             states: None,
             kotoba: None,

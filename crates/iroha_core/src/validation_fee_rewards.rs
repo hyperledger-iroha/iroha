@@ -1,4 +1,4 @@
-//! Native fee-credit provenance, reference-price guards and funded Nexus rewards.
+//! Native fee-credit provenance, reference-price guards and funded SORA Nexus rewards.
 //!
 //! Only consensus fee collection, authenticated native oracle admission and the
 //! exact Parliament-enacted conversion effect plan can write this state.
@@ -38,6 +38,24 @@ use std::collections::{BTreeMap, BTreeSet};
 const PREFIX: &str = "ValidationFeeRewards";
 const HONIARA_OFFSET_MS: u64 = 11 * 60 * 60 * 1000;
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+fn conversion_projection_map_key(index: i128) -> Result<Vec<u8>, Error> {
+    use ivm_abi::state_value::{
+        StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
+        StateValueSchemaV1, state_value_schema_hash_v1,
+    };
+    let schema = StateValueSchemaV1 {
+        nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
+    };
+    let encoded_schema = norito::to_bytes(&schema).map_err(|error| fail(error.to_string()))?;
+    let envelope =
+        ivm_abi::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(index))
+            .map_err(|error| fail(error.to_string()))?;
+    norito::to_bytes(&StateValueRecordV1 {
+        schema_hash: state_value_schema_hash_v1(&encoded_schema),
+        atoms: vec![StateValueAtomV1::Pointer(envelope)],
+    })
+    .map_err(|error| fail(error.to_string()))
+}
 fn fail(message: impl Into<String>) -> Error {
     Error::InvariantViolation(message.into().into())
 }
@@ -1226,10 +1244,7 @@ pub(crate) fn publish_conversion_offers(
                 let base = "ValidationFeeConversion"
                     .parse()
                     .map_err(|e| fail(format!("invalid conversion base: {e}")))?;
-                let encoded_key = ivm_abi::numeric_tlv::encode_int(
-                    &iroha_primitives::bigint::BigInt::from_i128(index),
-                )
-                .map_err(|e| fail(e.to_string()))?;
+                let encoded_key = conversion_projection_map_key(index)?;
                 let path = ivm::host::canonical_state_map_path(&base, &encoded_key)
                     .map_err(|e| fail(e.to_string()))?;
                 let key = format!("sc/{digest}/{path}")
@@ -1284,6 +1299,29 @@ mod tests {
         smart_contract::ContractAddress,
     };
     use iroha_model_base::{domain::DomainId, name::Name, topology::DataSpaceId};
+    #[test]
+    fn conversion_projection_keys_match_compiler_declared_map_storage() {
+        let artifact = kotodama_lang::compiler::Compiler::new().compile_source(
+            "seiyaku ConversionKeys { state StateMap<int, quantity> ValidationFeeConversion; view fn amount(int index) authorize(anyone) -> quantity { ValidationFeeConversion.get(key: index).unwrap_or(default: 0) } }",
+        ).expect("compile conversion map schema");
+        let mut vm = ivm::IVM::new(1_000_000);
+        vm.load_program(&artifact).expect("load conversion schema");
+        let base = "ValidationFeeConversion".parse().unwrap();
+        let mut paths = BTreeSet::new();
+        for index in [0, 1] {
+            let encoded = conversion_projection_map_key(index).expect("canonical key");
+            let path = ivm::host::canonical_state_map_path(&base, &encoded).unwrap();
+            ivm::host::validate_declared_state_path(&vm, &path)
+                .expect("native projection matches the contract's complete key schema");
+            assert!(paths.insert(path));
+            let retired = ivm_abi::numeric_tlv::encode_int(
+                &iroha_primitives::bigint::BigInt::from_i128(index),
+            )
+            .unwrap();
+            let retired_path = ivm::host::canonical_state_map_path(&base, &retired).unwrap();
+            assert!(ivm::host::validate_declared_state_path(&vm, &retired_path).is_err());
+        }
+    }
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key")
     }

@@ -1,6 +1,7 @@
 // Constant-product (XYK) DEX sample with basic pool lifecycle.
 // Pools are keyed by a caller-provided `Name` so multiple pairs can coexist.
 seiyaku IrohaSwap {
+    permission Admin;
     // Example settlement policy: both pool assets and LP tokens use 18 decimal places.
     // Each fee, LP mint, withdrawal and swap output rounds toward the pool explicitly.
     const int INPUT_PRECISION = 18;
@@ -54,7 +55,7 @@ seiyaku IrohaSwap {
         AssetDefinitionId asset_b,
         AccountId pool_account,
         AssetDefinitionId lp_asset,
-    ) authorize("Admin") {
+    ) authorize(Admin) {
         let quantity zero = 0;
         require(asset_a != asset_b, PoolError::IdenticalAssets);
         // Refuse duplicate pool creation.
@@ -75,7 +76,7 @@ seiyaku IrohaSwap {
         Name pool,
         quantity amount_a,
         quantity amount_b,
-    ) authorize("Admin") {
+    ) authorize(Admin) {
         let quantity zero = 0;
         require(amount_a > zero, PoolError::InvalidAssetAAmount);
         require(amount_b > zero, PoolError::InvalidAssetBAmount);
@@ -138,7 +139,7 @@ seiyaku IrohaSwap {
         AccountId provider,
         Name pool,
         quantity lp_amount,
-    ) authorize("Admin") {
+    ) authorize(Admin) {
         let quantity zero = 0;
         require(lp_amount > zero, PoolError::InvalidLiquidityAmount);
         ensure_pool(pool: pool);
@@ -193,7 +194,7 @@ seiyaku IrohaSwap {
         AssetDefinitionId input_asset,
         quantity amount_in,
         quantity min_output,
-    ) -> quantity authorize("Admin") {
+    ) authorize(Admin) -> quantity {
         let quantity zero = 0;
         require(amount_in > zero, PoolError::InvalidSwapAmount);
         ensure_pool(pool: pool);

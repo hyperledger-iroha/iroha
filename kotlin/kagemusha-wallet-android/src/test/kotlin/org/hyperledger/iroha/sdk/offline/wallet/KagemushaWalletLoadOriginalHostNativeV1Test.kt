@@ -63,6 +63,28 @@ class KagemushaWalletLoadOriginalHostNativeV1Test {
     }
 
     @Test
+    fun retainedReopeningUsesExactOriginalsAndRechecksRequestIdentityThroughJni() {
+        val fixture = Fixture.read()
+        val issuance = fixture.issuance()
+        val retained = KagemushaWalletLoadOriginalV1.decodeRetained(fixture.selection,
+            issuance.payerAccountId, fixture.network, fixture.receipt, fixture.finality)
+        assertEquals(BigInteger.valueOf(42), retained.blockHeight)
+        assertContentEquals(fixture.receipt, retained.receiptOriginal())
+        assertContentEquals(fixture.finality, retained.finalityOriginal())
+        val wrong = ToriiKagemushaWalletLoadSelectionV1(fixture.selection.schemeId,
+            fixture.selection.walletId, ByteArray(32) { 0x7f })
+        assertNativeInvalid {
+            KagemushaWalletLoadOriginalV1.decodeRetained(wrong, issuance.payerAccountId,
+                fixture.network, retained.receiptOriginal(), retained.finalityOriginal())
+        }
+        fixture.receipt.fill(0); fixture.finality.fill(0)
+        val reopened = KagemushaWalletLoadOriginalV1.decodeRetained(retained.selection,
+            retained.payerAccountId, retained.networkId, retained.receiptOriginal(), retained.finalityOriginal())
+        assertContentEquals(retained.receiptOriginal(), reopened.receiptOriginal())
+        assertContentEquals(retained.finalityOriginal(), reopened.finalityOriginal())
+    }
+
+    @Test
     fun publicDecodeRejectsEachForeignReadIdentityThroughJni() {
         val fixture = Fixture.read()
         val ids = listOf(fixture.selection.schemeId, fixture.selection.walletId, fixture.selection.requestId)

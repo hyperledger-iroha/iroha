@@ -319,7 +319,8 @@ impl EditorSnapshot {
                 (kind, detail, Vec::new())
             }
             DeclarationKind::Struct => (23, "struct".to_owned(), members(unit, range, false)),
-            DeclarationKind::ErrorEnum => (10, "error enum".to_owned(), members(unit, range, true)),
+            DeclarationKind::Event => (24, "event".to_owned(), members(unit, range, false)),
+            DeclarationKind::Enum => (10, "error enum".to_owned(), members(unit, range, true)),
             DeclarationKind::State | DeclarationKind::Const => {
                 let keyword = first(&[TokenKind::State, TokenKind::Const])?;
                 let keyword_index = header
@@ -359,6 +360,7 @@ impl EditorSnapshot {
                     Vec::new(),
                 )
             }
+            DeclarationKind::Permission => (14, "permission".to_owned(), Vec::new()),
             DeclarationKind::Parameter => return None,
         };
         Some(EditorSymbol {
@@ -478,7 +480,7 @@ impl EditorSnapshot {
                         comment: true,
                     });
                 }
-                crate::syntax::SyntaxKind::LineComment => {
+                crate::syntax::SyntaxKind::LineComment | crate::syntax::SyntaxKind::DocComment => {
                     let current = line(token.range.start);
                     run = match run.take() {
                         Some((range, first, last)) if current == last + 1 => {
@@ -658,7 +660,7 @@ impl EditorSnapshot {
 mod tests {
     use super::*;
 
-    const SOURCE: &str = "// Counter seiyaku.\n// Mixed spellings are one language.\n誓約 Counter {\n    state int value;\n    const int LIMIT = 10;\n    error enum Failure {\n        #[message(\"Too large\")]\n        TooLarge = 1,\n    }\n    struct Pair { int first; int second; }\n    始まり() {\n        value = 0;\n    }\n    改善() {\n        value = 1;\n    }\n    trigger wake -> reset {\n        on time pre_commit;\n    }\n    kotoage fn bump(int delta) -> int authorize(\"CanBump\") {\n        value = value + delta;\n        value\n    }\n    言挙げ fn reset() authorize(\"CanReset\") {\n        value = 0;\n    }\n    view fn read() -> int { value }\n}\n";
+    const SOURCE: &str = "// Counter seiyaku.\n// Mixed spellings are one language.\n誓約 Counter { permission CanBump; permission CanReset; \n    state int value;\n    const int LIMIT = 10;\n    error enum Failure {\n        #[message(\"Too large\")]\n        TooLarge = 1,\n    }\n    struct Pair { int first; int second; }\n    始まり() {\n        value = 0;\n    }\n    改善() {\n        value = 1;\n    }\n    trigger wake -> reset {\n        on time pre_commit;\n    }\n    kotoage fn bump(int delta) authorize(CanBump) -> int {\n        value = value + delta;\n        value\n    }\n    言挙げ fn reset() authorize(CanReset) {\n        value = 0;\n    }\n    view fn read() authorize(anyone) -> int { value }\n}\n";
 
     fn snapshot() -> EditorSnapshot {
         EditorSnapshot::single("counter.ko", SOURCE, false)
@@ -683,6 +685,8 @@ mod tests {
         assert_eq!(
             children,
             vec![
+                ("CanBump", "permission", 14),
+                ("CanReset", "permission", 14),
                 ("value", "state int", 7),
                 ("LIMIT", "const int", 14),
                 ("Failure", "error enum", 10),
@@ -690,15 +694,15 @@ mod tests {
                 ("始まり", "始まり", 9),
                 ("改善", "改善", 9),
                 ("wake", "trigger -> reset", 24),
-                ("bump", "kotoage fn authorize(\"CanBump\")", 6),
-                ("reset", "言挙げ fn authorize(\"CanReset\")", 6),
-                ("read", "view fn", 6),
+                ("bump", "kotoage fn authorize(CanBump)", 6),
+                ("reset", "言挙げ fn authorize(CanReset)", 6),
+                ("read", "view fn authorize(anyone)", 6),
             ]
         );
-        let failure = &unit.children[2];
+        let failure = &unit.children[4];
         assert_eq!(failure.children[0].name, "TooLarge");
         assert_eq!(failure.children[0].detail, "= 1");
-        let pair = &unit.children[3];
+        let pair = &unit.children[5];
         assert_eq!(
             pair.children
                 .iter()
@@ -720,6 +724,7 @@ mod tests {
                 .map(|(_, symbol, container)| (symbol.name.as_str(), container.as_deref()))
                 .collect::<Vec<_>>(),
             vec![
+                ("CanReset", Some("Counter")),
                 ("Failure", Some("Counter")),
                 ("reset", Some("Counter")),
                 ("read", Some("Counter"))
@@ -746,7 +751,7 @@ mod tests {
         assert_eq!(type_of("delta)"), Some("parameter"));
         assert_eq!(type_of("bump"), Some("method"));
         assert_eq!(type_of("Failure {"), Some("enum"));
-        assert_eq!(type_of("\"CanBump\""), Some("string"));
+        assert_eq!(type_of("CanBump;"), Some("type"));
         let mut previous = None;
         for token in &tokens {
             assert!(previous.is_none_or(|end| end <= token.range.start));
@@ -792,7 +797,7 @@ mod tests {
                 .any(|fold| fold.comment && fold.range.start == 0)
         );
         assert!(folds.iter().any(|fold| !fold.comment
-            && fold.range.start == u32::try_from(SOURCE.find("{\n    state").unwrap()).unwrap()));
+            && fold.range.start == u32::try_from(SOURCE.find("{ permission").unwrap()).unwrap()));
         let value = u32::try_from(SOURCE.find("value;").unwrap()).unwrap();
         let highlights = snapshot.highlights(SourceId(0), value);
         assert_eq!(

@@ -24,7 +24,7 @@ use kotodama_lang::{
     diagnostic::{Diagnostic, DiagnosticBundle, SourceSpan},
     driver::{
         BuildDriver, BuildError, BuildStatus, LinkedSourceBuildRequest, PublishLayout, PublishMode,
-        discover_source_link_request, discover_source_modules,
+        discover_source_modules,
     },
     linker::{
         ImportBinding, ModuleBuildGraph, SourceLinkRequest, SourceModuleUnit,
@@ -146,7 +146,7 @@ impl CompilerBridgeErrorV1 {
     }
 }
 /// Workspace-relative directory of one member, empty for the package at the workspace root.
-fn member_directory(member: &WorkspaceMember) -> &str {
+pub fn member_directory(member: &WorkspaceMember) -> &str {
     match member.workspace_path.as_str() {
         "." => "",
         path => path,
@@ -160,7 +160,7 @@ fn member_directory(member: &WorkspaceMember) -> &str {
 /// identity is a local package belongs to that package's directory. Both become
 /// `<directory>/<source>` without a package identity, so human, JSON and SARIF output name the
 /// file the user edits. Registry package spans keep their identity and logical path.
-fn locate_workspace_diagnostic(
+pub fn locate_workspace_diagnostic(
     diagnostic: &mut Diagnostic,
     member_directory: &str,
     local_directories: &BTreeMap<String, String>,
@@ -236,29 +236,30 @@ impl RegistryCompilerSourceV1 for Option<&MusubiCache> {
         .load(node)
     }
 }
+/// Compiler settings shared by every selected package in one graph execution.
+#[derive(Clone, Copy, Debug)]
+pub struct CompilerSettingsV1<'a> {
+    /// Canonical account network discriminant used by compilation.
+    pub chain_discriminant: u16,
+    /// Enable the Kotodama ZK source surface for every selected contract root.
+    pub zk_enabled: bool,
+    /// Output profile selected by the command.
+    pub profile: &'a str,
+}
 /// Execute one compiler operation for selected workspace packages.
 ///
 /// Local graphs need no registry cache. Every registry node requires an authenticated cache.
 ///
-/// `zk_enabled` enables the Kotodama ZK compilation surface for every selected contract root.
+/// The settings apply uniformly to every selected contract root.
 pub fn execute_compiler_graph(
     cache: Option<&MusubiCache>,
     workspace: &Workspace,
     selected: &[MusubiPackageSelectorV1],
     lock: &LockfileV1,
     action: CompilerActionV1,
-    chain_discriminant: u16,
-    zk_enabled: bool,
+    settings: CompilerSettingsV1<'_>,
 ) -> Result<CompilerExecutionV1, CompilerBridgeErrorV1> {
-    execute_with_source(
-        &cache,
-        workspace,
-        selected,
-        lock,
-        action,
-        chain_discriminant,
-        zk_enabled,
-    )
+    execute_with_source(&cache, workspace, selected, lock, action, settings)
 }
 /// Rebuild and validate the exact clean source tree that will enter a release bundle.
 ///
@@ -380,6 +381,7 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
                     .filter(|source| !existing_names.contains(&source.source_name)),
             );
             Ok(SourcePackageUnit {
+                artifacts: packaged_artifact_inventory(plan),
                 sources,
                 identity: registry_release(&verification_lock.root),
                 modules,
@@ -537,7 +539,7 @@ fn validate_packaged_contract_targets(
         let root = packaged_contract_source_unit(plan, &target.path)?;
         let source_name = root.source_name.clone();
         driver
-            .check_project(SourceLinkRequest {
+            .check_project(SourceLinkRequest { artifacts: packaged_artifact_inventory(plan),
                 sources: packaged_source_inventory(plan)?.into_iter().filter(|source| source.source_name != root.source_name).collect(),
                 root,
                 imports: imports.to_vec(),
@@ -572,8 +574,12 @@ fn validate_packaged_test_targets(
     for target in targets {
         for root in packaged_test_source_units(plan, &target.path)? {
             let source_name = root.source_name.clone();
-            let declared_target =
-                declared_test_target_source_v1(&root).map_err(CompilerBridgeErrorV1::Package)?;
+            let declared_target = declared_test_target_source_v1(&root).map_err(|error| {
+                error.diagnostics.map_or_else(
+                    || CompilerBridgeErrorV1::Package(error.message),
+                    CompilerBridgeErrorV1::Diagnostics,
+                )
+            })?;
             let contract = declared_target.as_ref().map(|name| {
                 contracts.get(name).ok_or_else(|| CompilerBridgeErrorV1::Package(format!(
                     "packaged test source `{source_name}` targets `{name}`, which is not a packaged manifest-declared contract"
@@ -592,7 +598,7 @@ fn validate_packaged_test_targets(
             let compile_source_name = compile_root.source_name.clone();
             graph
                 .build_test_project_with_sources(
-                    SourceLinkRequest {
+                    SourceLinkRequest { artifacts: packaged_artifact_inventory(plan),
                         sources: packaged_source_inventory(plan)?.into_iter().filter(|source| source.source_name != compile_root.source_name && !test_sources.iter().any(|test| test.source_name == source.source_name)).collect(),
                         root: compile_root,
                         imports: imports.to_vec(),
@@ -631,6 +637,22 @@ fn packaged_contract_source_unit(
             "packaged contract target `{path}` must identify one exact `.ko` source file; contract directory discovery is not supported"
         )))?;
     packaged_source_unit(path, path, file.bytes(), PackagedTargetKindV1::Contract)
+}
+fn packaged_artifact_inventory(
+    plan: &PackagePlan,
+) -> Vec<kotodama_lang::linker::SourceContractArtifact> {
+    plan.files()
+        .iter()
+        .filter(|file| {
+            Path::new(file.path())
+                .extension()
+                .is_some_and(|extension| extension == "to")
+        })
+        .map(|file| kotodama_lang::linker::SourceContractArtifact {
+            source_name: file.path().to_owned(),
+            artifact: file.bytes().to_vec(),
+        })
+        .collect()
 }
 fn packaged_source_inventory(
     plan: &PackagePlan,
@@ -775,20 +797,20 @@ fn packaged_source_unit(
     clippy::too_many_lines,
     reason = "compiler graph authentication and execution form one deterministic workflow"
 )]
-fn execute_with_source<S: RegistryCompilerSourceV1>(
+struct PreparedSourceGraph {
+    local_members: Vec<WorkspaceMember>,
+    local_identities: BTreeMap<PathBuf, String>,
+    local_directories: BTreeMap<String, String>,
+    local_units: BTreeMap<String, SourcePackageUnit>,
+    all_packages: Vec<SourcePackageUnit>,
+}
+fn prepare_source_graph<S: RegistryCompilerSourceV1>(
     source: &S,
     workspace: &Workspace,
     selected: &[MusubiPackageSelectorV1],
     lock: &LockfileV1,
-    action: CompilerActionV1,
-    chain_discriminant: u16,
-    zk_enabled: bool,
-) -> Result<CompilerExecutionV1, CompilerBridgeErrorV1> {
-    if chain_discriminant == 0 {
-        return Err(CompilerBridgeErrorV1::Package(
-            "account chain discriminant must be non-zero".to_owned(),
-        ));
-    }
+    overlays: &BTreeMap<PathBuf, String>,
+) -> Result<PreparedSourceGraph, CompilerBridgeErrorV1> {
     lock.validate()
         .map_err(|error| CompilerBridgeErrorV1::Lock(error.to_string()))?;
     if matches!(&lock.context, LockContextV1::Local { .. }) {
@@ -807,7 +829,6 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     }
     let local_members =
         collect_local_members(workspace, selected).map_err(|error| graph_error(&error))?;
-    let selected_set = selected.iter().cloned().collect::<BTreeSet<_>>();
     let local_identities = local_members
         .iter()
         .map(|member| {
@@ -832,9 +853,8 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
         })
         .collect::<BTreeMap<_, _>>();
     let mut local_units = BTreeMap::new();
-    let mut package_interfaces = Vec::with_capacity(local_members.len());
     for member in &local_members {
-        let Some(unit) = local_source_package(member, lock, &local_identities)
+        let Some(unit) = local_source_package(member, lock, &local_identities, overlays)
             .map_err(|error| error.located(member_directory(member), &local_directories))?
         else {
             continue;
@@ -869,6 +889,41 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
         .chain(registry_units.values())
         .cloned()
         .collect::<Vec<_>>();
+    Ok(PreparedSourceGraph {
+        local_members,
+        local_identities,
+        local_directories,
+        local_units,
+        all_packages,
+    })
+}
+fn execute_with_source<S: RegistryCompilerSourceV1>(
+    source: &S,
+    workspace: &Workspace,
+    selected: &[MusubiPackageSelectorV1],
+    lock: &LockfileV1,
+    action: CompilerActionV1,
+    settings: CompilerSettingsV1<'_>,
+) -> Result<CompilerExecutionV1, CompilerBridgeErrorV1> {
+    let CompilerSettingsV1 {
+        chain_discriminant,
+        zk_enabled,
+        profile,
+    } = settings;
+    if chain_discriminant == 0 {
+        return Err(CompilerBridgeErrorV1::Package(
+            "account chain discriminant must be non-zero".to_owned(),
+        ));
+    }
+    let PreparedSourceGraph {
+        local_members,
+        local_identities,
+        local_directories,
+        local_units,
+        all_packages,
+    } = prepare_source_graph(source, workspace, selected, lock, &BTreeMap::new())?;
+    let selected_set = selected.iter().cloned().collect::<BTreeSet<_>>();
+    let mut package_interfaces = Vec::with_capacity(local_members.len());
     let options = CompilerOptions {
         chain_discriminant,
         mode: CompilerMode::Production,
@@ -902,7 +957,6 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
         });
     }
     package_interfaces.sort_by(|left, right| left.package.cmp(&right.package));
-    let profile = "production";
     let mut result = CompilerExecutionV1 {
         validated_packages: local_members.len(),
         contract_targets: 0,
@@ -919,21 +973,53 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
             error.located(member_directory(member), &local_directories)
         };
         let imports = local_imports(member, lock, &local_identities).map_err(locate)?;
+        if matches!(action, CompilerActionV1::Check) {
+            let identity = local_package(&member.package.selector, &member.package.version);
+            if let Some(package) = local_units.get(&identity) {
+                let lints = member_lint_config(workspace, member);
+                let warnings = driver
+                    .check_package_project(SourcePackageGraphRequest {
+                        package: package.clone(),
+                        dependencies: all_packages
+                            .iter()
+                            .filter(|package| package.identity != identity)
+                            .cloned()
+                            .collect(),
+                    })
+                    .map_err(CompilerBridgeErrorV1::from_build_error)
+                    .map_err(locate)?;
+                result
+                    .warnings
+                    .extend(warnings.into_iter().filter_map(|warning| {
+                        let lint = match lints.level(warning.warning.code) {
+                            kotodama_lang::lint::LintLevel::Allow => return None,
+                            level => warning.warning.with_level(level),
+                        };
+                        let mut diagnostic = lint.to_diagnostic(
+                            &warning.source_name,
+                            warning.package_identity.as_deref(),
+                            kotodama_lang::i18n::detect_language(),
+                        );
+                        locate_workspace_diagnostic(
+                            &mut diagnostic,
+                            member_directory(member),
+                            &local_directories,
+                        );
+                        Some(diagnostic)
+                    }));
+            }
+        }
         for target in &member.manifest.contracts {
             let root = contract_source_unit(member, &target.path).map_err(locate)?;
             result.contract_targets += 1;
-            let graph = SourceLinkRequest {
-                sources: kotodama_lang::driver::load_source_companions(
-                    std::slice::from_ref(&root),
-                    &member.package_root,
-                    &BTreeMap::new(),
-                )
-                .map_err(CompilerBridgeErrorV1::from_build_error)
-                .map_err(locate)?,
-                root: root.clone(),
-                imports: imports.clone(),
-                packages: all_packages.clone(),
-            };
+            let graph = contract_source_graph(
+                member,
+                &target.path,
+                imports.clone(),
+                all_packages.clone(),
+                &BTreeMap::new(),
+            )
+            .map_err(locate)?;
             match action {
                 CompilerActionV1::Check => {
                     let language = kotodama_lang::i18n::detect_language();
@@ -977,6 +1063,16 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
                         })
                         .map_err(CompilerBridgeErrorV1::from_build_error)
                         .map_err(locate)?;
+                    let deployment_warnings =
+                        kotodama_toolchain::deployment_diagnostics::artifact_deployment_warnings(
+                            &outcome.artifact,
+                        )
+                        .map_err(|error| {
+                            CompilerBridgeErrorV1::Compiler(format!(
+                                "fresh artifact failed canonical admission: {error}"
+                            ))
+                        })?;
+                    result.warnings.extend(deployment_warnings.diagnostics);
                     result.artifacts.push(CompilerArtifactV1 {
                         package: member.package.selector.clone(),
                         target: stem,
@@ -1047,6 +1143,7 @@ fn local_source_package(
     member: &WorkspaceMember,
     lock: &LockfileV1,
     local_identities: &BTreeMap<PathBuf, String>,
+    overlays: &BTreeMap<PathBuf, String>,
 ) -> Result<Option<SourcePackageUnit>, CompilerBridgeErrorV1> {
     let Some(library) = member.manifest.library.as_ref() else {
         return Ok(None);
@@ -1059,14 +1156,30 @@ fn local_source_package(
             source.source_name = format!("{}/{}", library.source_dir.as_str(), source.source_name);
         }
     }
+    for (path, text) in overlays {
+        if path.extension().is_some_and(|ext| ext == "ko")
+            && path.starts_with(member.package_root.join(library.source_dir.to_path_buf()))
+        {
+            let relative = path
+                .strip_prefix(&member.package_root)
+                .map_err(|error| CompilerBridgeErrorV1::Package(error.to_string()))?;
+            let name = relative.to_string_lossy().replace('\\', "/");
+            if let Some(source) = units.iter_mut().find(|source| source.source_name == name) {
+                source.source.clone_from(text);
+            } else {
+                units.push(SourceModuleUnit {
+                    source_name: name,
+                    source: text.clone(),
+                });
+            }
+        }
+    }
+    units.sort_by(|left, right| left.source_name.cmp(&right.source_name));
     let (modules, mut sources) = partition_library_sources(units)?;
-    let loaded = kotodama_lang::driver::load_source_companions(
-        &modules,
-        &member.package_root,
-        &BTreeMap::new(),
-    )
-    .map_err(CompilerBridgeErrorV1::from_build_error)?;
-    for source in loaded {
+    let loaded =
+        kotodama_lang::driver::load_source_inventory(&modules, &member.package_root, overlays)
+            .map_err(CompilerBridgeErrorV1::from_build_error)?;
+    for source in loaded.sources {
         if !sources_contains_path(&sources, &source.source_name) {
             sources.push(source);
         }
@@ -1078,6 +1191,7 @@ fn local_source_package(
         )));
     }
     Ok(Some(SourcePackageUnit {
+        artifacts: loaded.artifacts,
         sources,
         identity: local_package(&member.package.selector, &member.package.version),
         modules,
@@ -1256,6 +1370,7 @@ fn cached_source_package(
         })
         .collect();
     Ok(SourcePackageUnit {
+        artifacts: cached.contract_artifacts,
         sources,
         identity: registry_release(&node.release),
         modules,
@@ -1314,6 +1429,234 @@ fn relative_library_source(path: &str, source_dir: &PortablePath) -> Option<Stri
 fn has_kotodama_extension(path: &str) -> bool {
     path.strip_suffix(".ko").is_some()
 }
+fn contract_source_graph(
+    member: &WorkspaceMember,
+    path: &PortablePath,
+    imports: Vec<ImportBinding>,
+    packages: Vec<SourcePackageUnit>,
+    overlays: &BTreeMap<PathBuf, String>,
+) -> Result<SourceLinkRequest, CompilerBridgeErrorV1> {
+    let mut root = contract_source_unit(member, path)?;
+    if let Some(text) = overlays.get(&member.package_root.join(path.to_path_buf())) {
+        root.source.clone_from(text);
+    }
+    let kotodama_lang::driver::SourceInventory { sources, artifacts } =
+        kotodama_lang::driver::load_source_inventory(
+            std::slice::from_ref(&root),
+            &member.package_root,
+            overlays,
+        )
+        .map_err(CompilerBridgeErrorV1::from_build_error)?;
+    Ok(SourceLinkRequest {
+        artifacts,
+        root,
+        sources,
+        imports,
+        packages,
+    })
+}
+/// Capture every selected target through the same authenticated source boundary as a build.
+pub fn load_editor_projects(
+    cache: Option<&MusubiCache>,
+    workspace: &Workspace,
+    selected: &[MusubiPackageSelectorV1],
+    lock: &LockfileV1,
+    overlays: &BTreeMap<PathBuf, String>,
+) -> Result<Vec<kotodama_toolchain::lsp::ProjectTarget>, CompilerBridgeErrorV1> {
+    use kotodama_lang::driver::{
+        LoadedProjectGraph, LoadedSourceProject, ProjectManifestSource, ProjectSourceKey,
+    };
+    use kotodama_lang::source::TextRange;
+    let PreparedSourceGraph {
+        local_members,
+        local_identities,
+        all_packages,
+        ..
+    } = prepare_source_graph(&cache, workspace, selected, lock, overlays)?;
+    let physical_directories = local_members
+        .iter()
+        .map(|member| {
+            (
+                local_package(&member.package.selector, &member.package.version),
+                member.package_root.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut manifests = Vec::new();
+    for member in &local_members {
+        let path = &member.manifest_path;
+        let text = overlays
+            .get(path)
+            .cloned()
+            .map_or_else(|| kotodama_lang::driver::read_source_file(path), Ok)
+            .map_err(CompilerBridgeErrorV1::from_build_error)?;
+        // Policy is owned by parse_manifest; the immutable TOML tree supplies exact token ranges.
+        let captured = parse_manifest(&text)
+            .map_err(|error| CompilerBridgeErrorV1::Package(error.to_string()))?;
+        if captured != member.manifest {
+            return Err(CompilerBridgeErrorV1::Package(format!(
+                "manifest `{}` changed while capturing the project; reload",
+                path.display()
+            )));
+        }
+        let document = toml_edit::Document::parse(text.as_str())
+            .map_err(|error| CompilerBridgeErrorV1::Package(error.to_string()))?;
+        let mut exports = BTreeMap::new();
+        if let Some(values) = document
+            .get("lib")
+            .and_then(|lib| lib.get("exports"))
+            .and_then(toml_edit::Item::as_array)
+        {
+            for value in values {
+                let name = value.as_str().ok_or_else(|| {
+                    CompilerBridgeErrorV1::Package("export must be a string".into())
+                })?;
+                let range = value.span().ok_or_else(|| {
+                    CompilerBridgeErrorV1::Package(
+                        "export token has no exact TOML source range".into(),
+                    )
+                })?;
+                exports.insert(
+                    (
+                        local_package(&member.package.selector, &member.package.version),
+                        name.to_owned(),
+                    ),
+                    TextRange::new(
+                        u32::try_from(range.start).map_err(|_| {
+                            CompilerBridgeErrorV1::Package(
+                                "manifest source start exceeds the V1 offset bound".into(),
+                            )
+                        })?,
+                        u32::try_from(range.end).map_err(|_| {
+                            CompilerBridgeErrorV1::Package(
+                                "manifest source end exceeds the V1 offset bound".into(),
+                            )
+                        })?,
+                    ),
+                );
+            }
+        }
+        manifests.push(ProjectManifestSource::new(path.clone(), text, exports));
+    }
+    if !manifests
+        .iter()
+        .any(|manifest| manifest.path() == workspace.root_manifest_path())
+    {
+        let path = workspace.root_manifest_path();
+        let text = overlays
+            .get(path)
+            .cloned()
+            .map_or_else(|| kotodama_lang::driver::read_source_file(path), Ok)
+            .map_err(CompilerBridgeErrorV1::from_build_error)?;
+        manifests.push(ProjectManifestSource::new(
+            path.to_path_buf(),
+            text,
+            BTreeMap::new(),
+        ));
+    }
+    let mut targets = Vec::new();
+    for member in local_members
+        .iter()
+        .filter(|member| selected.contains(&member.package.selector))
+    {
+        let imports = local_imports(member, lock, &local_identities)?;
+        for target in &member.manifest.contracts {
+            let graph = contract_source_graph(
+                member,
+                &target.path,
+                imports.clone(),
+                all_packages.clone(),
+                overlays,
+            )?;
+            let mut source_paths = BTreeMap::new();
+            for (owner, unit) in std::iter::once((None, &graph.root))
+                .chain(graph.sources.iter().map(|source| (None, source)))
+                .chain(graph.packages.iter().flat_map(|package| {
+                    package
+                        .modules
+                        .iter()
+                        .chain(&package.sources)
+                        .map(move |source| (Some(package.identity.clone()), source))
+                }))
+            {
+                let root = match &owner {
+                    None => &member.package_root,
+                    Some(identity) => match physical_directories.get(identity) {
+                        Some(root) => root,
+                        None => continue,
+                    },
+                };
+                let path = root.join(&unit.source_name);
+                let path = path.canonicalize().unwrap_or(path);
+                source_paths.insert(
+                    ProjectSourceKey {
+                        package_identity: owner,
+                        source_name: unit.source_name.clone(),
+                    },
+                    path,
+                );
+            }
+            targets.push(kotodama_toolchain::lsp::ProjectTarget {
+                name: format!("{}::{}", member.package.selector, target.name),
+                test_context: Some(kotodama_toolchain::lsp::TestContext {
+                    manifest_path: workspace.root_manifest_path().to_path_buf(),
+                    package: member.package.selector.to_string(),
+                    contract: target.name.to_string(),
+                    network: None,
+                    config_path: None,
+                }),
+                project: LoadedSourceProject {
+                    graph: LoadedProjectGraph::Source(graph),
+                    source_paths,
+                    manifests: manifests.clone(),
+                    lints: member_lint_config(workspace, member),
+                },
+            });
+        }
+        let identity = local_package(&member.package.selector, &member.package.version);
+        if let Some(package) = all_packages
+            .iter()
+            .find(|package| package.identity == identity)
+        {
+            let graph = SourcePackageGraphRequest {
+                package: package.clone(),
+                dependencies: all_packages
+                    .iter()
+                    .filter(|package| package.identity != identity)
+                    .cloned()
+                    .collect(),
+            };
+            let mut source_paths = BTreeMap::new();
+            for package in std::iter::once(&graph.package).chain(&graph.dependencies) {
+                let Some(root) = physical_directories.get(&package.identity) else {
+                    continue;
+                };
+                for unit in package.modules.iter().chain(&package.sources) {
+                    let path = root.join(&unit.source_name);
+                    let path = path.canonicalize().unwrap_or(path);
+                    source_paths.insert(
+                        ProjectSourceKey {
+                            package_identity: Some(package.identity.clone()),
+                            source_name: unit.source_name.clone(),
+                        },
+                        path,
+                    );
+                }
+            }
+            targets.push(kotodama_toolchain::lsp::ProjectTarget {
+                name: format!("{}::[lib]", member.package.selector),
+                test_context: None,
+                project: LoadedSourceProject {
+                    graph: LoadedProjectGraph::Package(graph),
+                    source_paths,
+                    manifests: manifests.clone(),
+                    lints: member_lint_config(workspace, member),
+                },
+            });
+        }
+    }
+    Ok(targets)
+}
 fn contract_source_unit(
     member: &WorkspaceMember,
     target: &PortablePath,
@@ -1337,8 +1680,11 @@ fn contract_source_unit(
             target.as_str()
         )));
     }
-    discover_source_link_request(&path, &member.package_root, Vec::new(), Vec::new())
-        .map(|request| request.root)
+    kotodama_lang::driver::read_source_file(&path)
+        .map(|source| SourceModuleUnit {
+            source_name: target.to_string(),
+            source,
+        })
         .map_err(CompilerBridgeErrorV1::from_build_error)
 }
 #[cfg(all(test, unix))]
@@ -1575,8 +1921,11 @@ exports = ["value"]
             std::slice::from_ref(&selector),
             &lock,
             CompilerActionV1::Check,
-            1,
-            false,
+            CompilerSettingsV1 {
+                chain_discriminant: 1,
+                zk_enabled: false,
+                profile: "dev",
+            },
         )
         .expect("compiler graph");
         assert_eq!(execution.validated_packages, 1);
@@ -1663,6 +2012,7 @@ exports = ["value"]
         };
         let registry = FixedRegistry {
             package: CachedCompilerPackageV1 {
+                contract_artifacts: Vec::new(),
                 source_path: temp.path().join("authenticated-cache-path-is-not-reopened"),
                 manifest: r#"manifest-version = 1
 [package]
@@ -1810,8 +2160,11 @@ path = "tests"
             &selected,
             &local,
             CompilerActionV1::Build,
-            1,
-            false,
+            CompilerSettingsV1 {
+                chain_discriminant: 1,
+                zk_enabled: false,
+                profile: "dev",
+            },
         )
         .expect("build exact named targets");
         assert_eq!(built.contract_targets, 2);

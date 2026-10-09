@@ -124,7 +124,7 @@ enum BraceKind {
     /// Struct declaration fields.
     StructFields,
     /// Error-enum variants.
-    ErrorVariants,
+    EnumVariants,
 }
 impl BraceKind {
     /// Whether the members are comma separated and end with a trailing comma when multi-line.
@@ -143,7 +143,7 @@ impl BraceKind {
                         || matches!(token.kind, SyntaxKind::LBrace | SyntaxKind::RBrace)
                 })
             }),
-            Self::Block | Self::Match | Self::StructFields | Self::ErrorVariants => false,
+            Self::Block | Self::Match | Self::StructFields | Self::EnumVariants => false,
         }
     }
 }
@@ -201,11 +201,13 @@ impl SyntaxRoles {
                 })
             };
             let brace = match node.kind {
-                SyntaxKind::StructLiteral | SyntaxKind::JsonObjectExpr => Some(BraceKind::Record),
+                SyntaxKind::StructLiteral
+                | SyntaxKind::ArgumentRecord
+                | SyntaxKind::JsonObjectExpr => Some(BraceKind::Record),
                 SyntaxKind::StructPattern => Some(BraceKind::Pattern),
                 SyntaxKind::TestTargetItem => Some(BraceKind::TestTarget),
-                SyntaxKind::StructItem => Some(BraceKind::StructFields),
-                SyntaxKind::ErrorEnumItem => Some(BraceKind::ErrorVariants),
+                SyntaxKind::StructItem | SyntaxKind::EventItem => Some(BraceKind::StructFields),
+                SyntaxKind::EnumItem => Some(BraceKind::EnumVariants),
                 SyntaxKind::MatchExpr => Some(BraceKind::Match),
                 _ => None,
             };
@@ -275,7 +277,8 @@ impl SyntaxRoles {
                 node.kind,
                 SyntaxKind::FunctionItem
                     | SyntaxKind::StructItem
-                    | SyntaxKind::ErrorEnumItem
+                    | SyntaxKind::EventItem
+                    | SyntaxKind::EnumItem
                     | SyntaxKind::TriggerItem
                     | SyntaxKind::FixtureItem
                     | SyntaxKind::TestTargetItem
@@ -326,7 +329,7 @@ impl Tok<'_> {
     const fn is_comment(&self) -> bool {
         matches!(
             self.kind,
-            SyntaxKind::LineComment | SyntaxKind::BlockComment
+            SyntaxKind::LineComment | SyntaxKind::DocComment | SyntaxKind::BlockComment
         )
     }
     fn separator(kind: SyntaxKind, at: u32) -> Self {
@@ -412,12 +415,12 @@ fn prepare_tokens<'source>(
             newlines_before,
             role,
             segment: previous_kind == Some(SyntaxKind::ColonColon)
-                && token.kind != SyntaxKind::LineComment
+                && !token.kind.is_line_comment()
                 && token.kind != SyntaxKind::BlockComment,
         });
         previous_end = Some((
             token.range.end,
-            token.kind == SyntaxKind::LineComment && token_text.ends_with('\n'),
+            token.kind.is_line_comment() && token_text.ends_with('\n'),
         ));
         if !token.kind.is_trivia() {
             previous_kind = Some(token.kind);
@@ -593,7 +596,7 @@ fn normalize_record_separators<'source>(
         let token = tokens[index];
         let body = match token.role {
             Role::Brace(
-                kind @ (BraceKind::StructFields | BraceKind::ErrorVariants | BraceKind::TestTarget),
+                kind @ (BraceKind::StructFields | BraceKind::EnumVariants | BraceKind::TestTarget),
             ) => partners[index].map(|close| (kind, close)),
             _ => None,
         };
@@ -607,7 +610,7 @@ fn normalize_record_separators<'source>(
             BraceKind::StructFields if !type_ranges.is_empty() => {
                 normalize_struct_fields(members, in_type, &mut output);
             }
-            BraceKind::ErrorVariants => normalize_error_variants(members, &mut output),
+            BraceKind::EnumVariants => normalize_enum_variants(members, &mut output),
             _ => {
                 output.extend(members.iter().map(|member| {
                     if member.kind == SyntaxKind::Semicolon {
@@ -664,7 +667,7 @@ fn normalize_struct_fields<'source>(
         }
     }
 }
-fn normalize_error_variants<'source>(members: &[Tok<'source>], output: &mut Vec<Tok<'source>>) {
+fn normalize_enum_variants<'source>(members: &[Tok<'source>], output: &mut Vec<Tok<'source>>) {
     let mut depth = 0_usize;
     let mut after_code: Option<usize> = None;
     let mut previous = None;
@@ -1050,7 +1053,10 @@ impl<'tokens, 'source> Printer<'tokens, 'source> {
             let token = self.tokens[index];
             self.enter_token(index);
             match (token.kind, token.role) {
-                (SyntaxKind::LineComment | SyntaxKind::BlockComment, _) => self.comment(index),
+                (
+                    SyntaxKind::LineComment | SyntaxKind::DocComment | SyntaxKind::BlockComment,
+                    _,
+                ) => self.comment(index),
                 (SyntaxKind::Comma, _) => self.comma(index),
                 (SyntaxKind::Semicolon, _) => self.semicolon(),
                 (SyntaxKind::LBrace, _) => self.open_brace(index),
@@ -1470,7 +1476,7 @@ impl<'tokens, 'source> Printer<'tokens, 'source> {
     }
     fn comment(&mut self, index: usize) {
         let token = self.tokens[index];
-        let text = if token.kind == SyntaxKind::LineComment {
+        let text = if token.kind.is_line_comment() {
             token.text.trim_end_matches(['\r', '\n'])
         } else {
             token.text
@@ -1480,7 +1486,7 @@ impl<'tokens, 'source> Printer<'tokens, 'source> {
         if trailing {
             // Trailing trivia stays bound to the token before it, ahead of any pending break. A
             // block comment directly after `(` or `[` hugs the delimiter like the token it precedes.
-            if token.kind == SyntaxKind::LineComment || !self.output.ends_with(['(', '[']) {
+            if token.kind.is_line_comment() || !self.output.ends_with(['(', '[']) {
                 self.space();
             }
             self.write(text);
@@ -1501,7 +1507,7 @@ impl<'tokens, 'source> Printer<'tokens, 'source> {
             self.anchor = self.output.len();
         }
         self.comments_after_anchor = !separator_follows;
-        if token.kind == SyntaxKind::LineComment {
+        if token.kind.is_line_comment() {
             self.pending_newlines = self.pending_newlines.max(1);
             self.line_comment_open = true;
         } else if self.pending_newlines == 0 {
@@ -1549,6 +1555,7 @@ impl<'tokens, 'source> Printer<'tokens, 'source> {
             match token.kind {
                 SyntaxKind::BlockComment => {}
                 SyntaxKind::LineComment
+                | SyntaxKind::DocComment
                 | SyntaxKind::Comma
                 | SyntaxKind::Semicolon
                 | SyntaxKind::RParen
@@ -1622,7 +1629,7 @@ impl<'tokens, 'source> Printer<'tokens, 'source> {
                         | BraceKind::Pattern
                         | BraceKind::TestTarget
                         | BraceKind::StructFields
-                        | BraceKind::ErrorVariants,
+                        | BraceKind::EnumVariants,
                     ),
                 ..
             }) => self.pending_newlines = self.pending_newlines.max(1),
@@ -1853,7 +1860,7 @@ impl<'tokens, 'source> Printer<'tokens, 'source> {
                     line.column = line.column.saturating_add(1);
                     break;
                 }
-                if token.kind == SyntaxKind::LineComment {
+                if token.kind.is_line_comment() {
                     break;
                 }
                 continue;
@@ -1996,6 +2003,7 @@ fn record_is_compact(tokens: &[Tok<'_>], open: usize, close: usize) -> bool {
     for (offset, token) in inner.iter().enumerate() {
         match token.kind {
             SyntaxKind::LineComment
+            | SyntaxKind::DocComment
             | SyntaxKind::BlockComment
             | SyntaxKind::LBrace
             | SyntaxKind::RBrace => return false,
@@ -2191,7 +2199,7 @@ impl<'printer, 'tokens, 'source> Projection<'printer, 'tokens, 'source> {
 fn projects_flat(tokens: &[Tok<'_>], partners: &[Option<usize>], index: usize) -> bool {
     let token = &tokens[index];
     match (token.kind, token.role) {
-        (SyntaxKind::LineComment | SyntaxKind::Semicolon, _) => false,
+        (SyntaxKind::LineComment | SyntaxKind::DocComment | SyntaxKind::Semicolon, _) => false,
         (SyntaxKind::LBrace, Role::Brace(kind)) => {
             let close = partners[index].unwrap_or(index);
             kind.may_stay_inline(tokens, index, close)
@@ -2275,6 +2283,8 @@ const fn is_word(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwContinue
             | SyntaxKind::KwState
             | SyntaxKind::KwStruct
+            | SyntaxKind::KwEvent
+            | SyntaxKind::KwEmit
             | SyntaxKind::KwError
             | SyntaxKind::KwEnum
             | SyntaxKind::KwAuthorize
@@ -2287,6 +2297,7 @@ const fn is_word(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwSeiyaku
             | SyntaxKind::KwModule
             | SyntaxKind::KwInclude
+            | SyntaxKind::KwPermission
             | SyntaxKind::KwImport
             | SyntaxKind::KwAs
             | SyntaxKind::KwExport

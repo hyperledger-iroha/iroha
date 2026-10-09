@@ -30,7 +30,9 @@ use iroha_data_model::{
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress},
     sorafs::pricing::PricingScheduleRecord,
 };
-use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+use iroha_executor_data_model::permission::smart_contract::{
+    CanInvokeContractEntrypoint, CanUseContractPermission,
+};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
@@ -188,6 +190,9 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         abi_version,
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
+        events: Vec::new(),
+        enum_types: Vec::new(),
+        permissions: Vec::new(),
         callables: Vec::new(),
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "torii-test-utils".to_owned(),
@@ -204,7 +209,7 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
             return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
                 nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
             }),
-            permission: None,
+            authorization: iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),
@@ -317,6 +322,29 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
     private_key: &ExposedPrivateKey,
     artifact: &[u8],
     subject_permissions: impl IntoIterator<Item = permission::Permission>,
+) -> (ContractAddress, String, String) {
+    enqueue_locally_signed_contract_deployment_with_permissions(
+        state,
+        queue,
+        authority,
+        private_key,
+        artifact,
+        subject_permissions,
+        std::iter::empty(),
+    )
+}
+/// Deploy a fixture and grant explicitly named instance permissions to its caller.
+///
+/// Caller grants follow deployment in the same signed transaction and bind this exact
+/// contract address. Subject permissions separately authorize emitted ledger operations.
+pub fn enqueue_locally_signed_contract_deployment_with_permissions(
+    state: &Arc<State>,
+    queue: &Arc<Queue>,
+    authority: &AccountId,
+    private_key: &ExposedPrivateKey,
+    artifact: &[u8],
+    subject_permissions: impl IntoIterator<Item = permission::Permission>,
+    caller_permissions: impl IntoIterator<Item = Name>,
 ) -> (ContractAddress, String, String) {
     let verified = ivm::verify_contract_artifact(artifact).expect("verify contract artifact");
     let key_pair =
@@ -453,6 +481,15 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
         instructions.push(InstructionBox::from(Grant::account_permission(
             permission,
             contract_address.subject_id(),
+        )));
+    }
+    for permission in caller_permissions {
+        instructions.push(InstructionBox::from(Grant::account_permission(
+            CanUseContractPermission {
+                contract: contract_address.clone(),
+                permission,
+            },
+            authority.clone(),
         )));
     }
     if let Some(entrypoint) = hajimari_entrypoint {

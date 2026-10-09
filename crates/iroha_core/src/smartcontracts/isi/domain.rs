@@ -8021,6 +8021,12 @@ mod tests {
                     .expect("retained contract binding")
                     .lifecycle
                     .active_code_hash = Some(code_hash);
+                tx.world
+                    .contract_subject_bindings
+                    .get_mut(&contract)
+                    .unwrap()
+                    .lifecycle
+                    .retained_code_hash = Some(code_hash);
             }
 
             let error = Unregister::account(subject.clone())
@@ -10114,7 +10120,10 @@ mod tests {
         let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect_err("a public definition cannot take an alias in a restricted namespace");
-        assert!(error.to_string().contains("restricted dataspace"), "{error}");
+        assert!(
+            error.to_string().contains("restricted dataspace"),
+            "{error}"
+        );
         assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
         assert!(
             tx.world
@@ -10190,7 +10199,10 @@ mod tests {
         let error = SetAssetDefinitionAlias::bind(definition_id.clone(), alias.clone(), None)
             .execute(&authority, &mut tx)
             .expect_err("a restricted-homed definition keeps its aliases in its home namespace");
-        assert!(error.to_string().contains("restricted dataspace"), "{error}");
+        assert!(
+            error.to_string().contains("restricted dataspace"),
+            "{error}"
+        );
         assert!(tx.world.asset_definition_aliases.get(&alias).is_none());
     }
     #[test]

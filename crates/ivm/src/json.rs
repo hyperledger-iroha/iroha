@@ -312,6 +312,7 @@ fn state_node_word_count(
             | StateValueNodeV1::Leaf(_)
             | StateValueNodeV1::Unit
             | StateValueNodeV1::Error(_)
+            | StateValueNodeV1::Enum(_)
             | StateValueNodeV1::StateCursor(_) => return Ok(1),
             StateValueNodeV1::Struct { .. }
             | StateValueNodeV1::Tuple { .. }
@@ -550,7 +551,7 @@ fn convert_state_schema(
                         let payload =
                             pointer_leaf(vm, words[0], PointerType::NoritoBytes, resolver, stats)?;
                         let cursor = iroha_data_model::smart_contract::state_cursor::StateCursorV1::decode_frame(payload).map_err(|_| VMError::DecodeError)?;
-                        if cursor.key_type != *key {
+                        if Some(cursor.key_schema_hash) != iroha_data_model::smart_contract::entrypoint::state_key_schema_hash_v1(key) {
                             return Err(VMError::DecodeError);
                         }
                         completed.push(njson::Value::from(format!("0x{}", hex::encode(payload))));
@@ -569,6 +570,15 @@ fn convert_state_schema(
                         }
                         let code = u32::try_from(words[0]).map_err(|_| VMError::DecodeError)?;
                         let variant = error.variant(code).ok_or(VMError::DecodeError)?;
+                        completed.push(njson::Value::String(variant.name.clone()));
+                        break;
+                    }
+                    StateValueNodeV1::Enum(descriptor) => {
+                        if next_node != node_end {
+                            return Err(VMError::DecodeError);
+                        }
+                        let code = u32::try_from(words[0]).map_err(|_| VMError::DecodeError)?;
+                        let variant = descriptor.variant(code).ok_or(VMError::DecodeError)?;
                         completed.push(njson::Value::String(variant.name.clone()));
                         break;
                     }
@@ -1170,14 +1180,14 @@ mod tests {
             instance: "local::金庫".into(),
             map: "balances".parse().unwrap(),
             schema_hash: [3; 32],
-            key_type: EntrypointValueKindV1::Int,
+            key_schema_hash: iroha_data_model::smart_contract::entrypoint::state_key_schema_hash_v1(&iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 { nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int)] }).unwrap(),
             last_key: "balances/00".parse().unwrap(),
         };
         let frame = cursor.encode_frame().unwrap();
         let mut vm = IVM::new(u64::MAX);
         let pointer = allocate_tlv(&mut vm, PointerType::NoritoBytes, &frame).unwrap();
         let schema = StateValueSchemaV1 {
-            nodes: vec![StateValueNodeV1::StateCursor(EntrypointValueKindV1::Int)],
+            nodes: vec![StateValueNodeV1::StateCursor(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 { nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int)] })],
         };
         let value = convert_state_schema(
             &vm,
@@ -1192,7 +1202,7 @@ mod tests {
             &njson::Value::from(format!("0x{}", hex::encode(frame)))
         );
         let wrong = StateValueSchemaV1 {
-            nodes: vec![StateValueNodeV1::StateCursor(EntrypointValueKindV1::Bool)],
+            nodes: vec![StateValueNodeV1::StateCursor(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 { nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool)] })],
         };
         assert!(
             convert_state_schema(
@@ -1210,6 +1220,13 @@ mod tests {
         let vm = IVM::new(u64::MAX);
         for (node, word, expected) in [
             (StateValueNodeV1::Unit, 0, njson::Value::Null),
+            (StateValueNodeV1::Enum(iroha_data_model::smart_contract::manifest::ContractEnumTypeDescriptorV1 {
+                identity: "local::Status".into(),
+                variants: vec![
+                    iroha_data_model::smart_contract::manifest::ContractEnumVariantDescriptorV1 { name: "Open".into(), code: 1 },
+                    iroha_data_model::smart_contract::manifest::ContractEnumVariantDescriptorV1 { name: "Closed".into(), code: 7 },
+                ],
+            }), 7, njson::Value::String("Closed".into())),
             (
                 StateValueNodeV1::Error(ivm_abi::error_types::list_error_type()),
                 2,
@@ -2320,7 +2337,7 @@ mod tests {
             .alloc_input_tlv(&tlv(PointerType::Json, &json_payload))
             .expect("JSON TLV");
         let layout = crate::sum::SumLayoutV1::option(1).expect("Option layout");
-        let mut get = |vm: &mut IVM, number: u32, key: &str| {
+        let get = |vm: &mut IVM, number: u32, key: &str| {
             let key: Name = key.parse().expect("valid key");
             let key_ptr = vm
                 .alloc_input_tlv(&tlv(PointerType::Name, &to_bytes(&key).expect("key")))

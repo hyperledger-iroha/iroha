@@ -26,7 +26,7 @@ seiyaku Wrapping {
 
     view fn mirror(
         Name position_id,
-    ) -> (int, int, quantity, decimal, decimal, quantity, quantity, int, int) {
+    ) authorize(anyone) -> (int, int, quantity, decimal, decimal, quantity, quantity, int, int) {
         return (
             1,
             2,
@@ -40,7 +40,7 @@ seiyaku Wrapping {
         );
     }
 
-    view fn chain(Name position_id) -> quantity {
+    view fn chain(Name position_id) authorize(anyone) -> quantity {
         return Credit
             .get(position_id)
             .unwrap_or_default()

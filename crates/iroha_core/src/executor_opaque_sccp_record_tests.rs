@@ -15,7 +15,7 @@ use crate::{
             },
             triggers::set::SetReadOnly as _,
         },
-        ivm::{cache::IvmCache, host::QueuedInstruction},
+        ivm::{cache::IvmCache, host::QueuedEffect},
     },
     state::{StateBlock, StateTransaction},
     tx::TransactionRejectionReason,
@@ -302,8 +302,8 @@ fn supplied_proved_replay_cannot_derive_a_record() {
             queued: instructions
                 .iter()
                 .cloned()
-                .map(|instruction| QueuedInstruction {
-                    instruction,
+                .map(|instruction| QueuedEffect {
+            payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(instruction),
                     authority: authority.clone(),
                     contract_runtime_context: None,
                     entrypoint_authorization: None,

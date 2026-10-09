@@ -18,7 +18,7 @@ use iroha_data_model::{
     query::{QueryRequest, SingularQueryBox},
 };
 use kotodama_surface::builtins::{Builtin, BuiltinSurface, PointerConstructor};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 /// A lint warning produced by [`lint_program`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintWarning {
@@ -169,12 +169,18 @@ impl LintWarning {
         // output never mixes a translated message with English help or notes.
         let english = self.localized_message(Language::English);
         let mut diagnostic = match self.severity {
-            LintSeverity::Warning => {
-                Diagnostic::warning(self.diagnostic_code(), DiagnosticPhase::Semantic, english, span)
-            }
-            LintSeverity::Error => {
-                Diagnostic::error(self.diagnostic_code(), DiagnosticPhase::Semantic, english, span)
-            }
+            LintSeverity::Warning => Diagnostic::warning(
+                self.diagnostic_code(),
+                DiagnosticPhase::Semantic,
+                english,
+                span,
+            ),
+            LintSeverity::Error => Diagnostic::error(
+                self.diagnostic_code(),
+                DiagnosticPhase::Semantic,
+                english,
+                span,
+            ),
         };
         diagnostic.notes.push(format!(
             "lint `{}` in category `{}`",
@@ -1014,7 +1020,7 @@ fn lint_state_path_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
             lint_state_path_expr(target, warnings);
             lint_state_path_expr(value, warnings);
         }
-        Statement::Expr(expr) => lint_state_path_expr(expr, warnings),
+        Statement::Expr(expr) | Statement::Emit(expr) => lint_state_path_expr(expr, warnings),
         Statement::Return(Some(expr)) => lint_state_path_expr(expr, warnings),
         Statement::Return(None) | Statement::Break | Statement::Continue => {}
         Statement::If {
@@ -1157,7 +1163,7 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
                 lint_state_path_expr(condition, warnings);
             }
         }
-        Expr::StructLiteral { fields, .. } => {
+        Expr::StructLiteral { fields, .. } | Expr::ArgumentRecord { fields } => {
             for field in fields {
                 lint_state_path_expr(&field.value, warnings);
             }
@@ -1212,7 +1218,7 @@ fn lint_opaque_access_stmt(stmt: &Statement, warnings: &mut Vec<LintWarning>) {
             lint_opaque_access_expr(target, warnings);
             lint_opaque_access_expr(value, warnings);
         }
-        Statement::Expr(expr) => lint_opaque_access_expr(expr, warnings),
+        Statement::Expr(expr) | Statement::Emit(expr) => lint_opaque_access_expr(expr, warnings),
         Statement::Return(Some(expr)) => lint_opaque_access_expr(expr, warnings),
         Statement::Return(None) | Statement::Break | Statement::Continue => {}
         Statement::If {
@@ -1365,7 +1371,7 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
                 lint_opaque_access_expr(condition, warnings);
             }
         }
-        Expr::StructLiteral { fields, .. } => {
+        Expr::StructLiteral { fields, .. } | Expr::ArgumentRecord { fields } => {
             for field in fields {
                 lint_opaque_access_expr(&field.value, warnings);
             }
@@ -1524,7 +1530,7 @@ fn lint_unused_state(program: &Program, warnings: &mut Vec<LintWarning>) {
                 record_expr_idents(target, &state_lookup, &mut used);
                 record_expr_idents(value, &state_lookup, &mut used);
             }
-            Statement::Expr(expr) => {
+            Statement::Expr(expr) | Statement::Emit(expr) => {
                 record_expr_idents(expr, &state_lookup, &mut used);
             }
             Statement::Return(Some(expr)) => {
@@ -1711,6 +1717,7 @@ fn lint_statement_state_shadowing(
         Statement::Assign { .. }
         | Statement::AssignExpr { .. }
         | Statement::Expr(_)
+        | Statement::Emit(_)
         | Statement::Return(_)
         | Statement::Break
         | Statement::Continue => {}
@@ -1833,7 +1840,7 @@ fn lint_unused_parameters(program: &Program, warnings: &mut Vec<LintWarning>) {
                         record_expr_idents(target, &lookup, &mut used);
                         record_expr_idents(value, &lookup, &mut used);
                     }
-                    Statement::Expr(expr) => {
+                    Statement::Expr(expr) | Statement::Emit(expr) => {
                         record_expr_idents(expr, &lookup, &mut used);
                     }
                     Statement::Return(Some(expr)) => {
@@ -2000,6 +2007,7 @@ fn lint_unreachable_after_return(program: &Program, warnings: &mut Vec<LintWarni
                         | Statement::Assign { .. }
                         | Statement::AssignExpr { .. }
                         | Statement::Expr(_)
+                        | Statement::Emit(_)
                         | Statement::Break
                         | Statement::Continue => {}
                     }
@@ -2104,7 +2112,7 @@ fn record_expr_idents(expr: &Expr, state_lookup: &HashSet<String>, hits: &mut Ha
                     stack.push(condition);
                 }
             }
-            Expr::StructLiteral { fields, .. } => {
+            Expr::StructLiteral { fields, .. } | Expr::ArgumentRecord { fields } => {
                 for field in fields {
                     stack.push(&field.value);
                 }
@@ -2155,6 +2163,7 @@ fn record_statement_idents(
         Statement::Let { value, .. }
         | Statement::Assign { value, .. }
         | Statement::Expr(value)
+        | Statement::Emit(value)
         | Statement::Return(Some(value)) => record_expr_idents(value, lookup, hits),
         Statement::AssignExpr { target, value, .. } => {
             record_expr_idents(target, lookup, hits);
@@ -2333,6 +2342,7 @@ fn lint_trigger_specs_in_stmt(stmt: &Statement, func_name: &str, warnings: &mut 
         Statement::Let { value, .. }
         | Statement::Assign { value, .. }
         | Statement::Expr(value)
+        | Statement::Emit(value)
         | Statement::Return(Some(value)) => {
             lint_trigger_specs_in_expr(value, func_name, warnings);
         }
@@ -2481,7 +2491,7 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
                 lint_trigger_specs_in_expr(condition, func_name, warnings);
             }
         }
-        Expr::StructLiteral { fields, .. } => {
+        Expr::StructLiteral { fields, .. } | Expr::ArgumentRecord { fields } => {
             for field in fields {
                 lint_trigger_specs_in_expr(&field.value, func_name, warnings);
             }
@@ -2543,7 +2553,7 @@ fn collect_pointer_literals_from_stmt(
             collect_pointer_literals_from_expr(target, constructors, counts);
             collect_pointer_literals_from_expr(value, constructors, counts);
         }
-        Statement::Expr(expr) => {
+        Statement::Expr(expr) | Statement::Emit(expr) => {
             collect_pointer_literals_from_expr(expr, constructors, counts);
         }
         Statement::Return(Some(expr)) => {
@@ -2718,7 +2728,7 @@ fn collect_pointer_literals_from_expr(
                 collect_pointer_literals_from_expr(condition, constructors, counts);
             }
         }
-        Expr::StructLiteral { fields, .. } => {
+        Expr::StructLiteral { fields, .. } | Expr::ArgumentRecord { fields } => {
             for field in fields {
                 collect_pointer_literals_from_expr(&field.value, constructors, counts);
             }
@@ -2752,7 +2762,7 @@ fn lint_unused_pointer_constructor(
         Statement::Source { .. } | Statement::Resolved { .. } => {
             unreachable!("kind() strips provenance wrappers")
         }
-        Statement::Expr(expr) => {
+        Statement::Expr(expr) | Statement::Emit(expr) => {
             warn_if_unused_pointer_call(expr, constructors, func_name, warnings)
         }
         // A returned constructor value is consumed by the caller. Only a
@@ -2859,6 +2869,7 @@ fn walk_statement<'a>(statement: &'a Statement, visit: &mut dyn FnMut(Visit<'a>)
         Statement::Let { value, .. }
         | Statement::Assign { value, .. }
         | Statement::Expr(value)
+        | Statement::Emit(value)
         | Statement::Return(Some(value)) => walk_expr(value, visit),
         Statement::AssignExpr { target, value, .. } => {
             walk_expr(target, visit);
@@ -2974,7 +2985,7 @@ fn walk_expr<'a>(expr: &'a Expr, visit: &mut dyn FnMut(Visit<'a>)) {
                 walk_expr(arg, visit);
             }
         }
-        Expr::StructLiteral { fields, .. } => {
+        Expr::StructLiteral { fields, .. } | Expr::ArgumentRecord { fields } => {
             for field in fields {
                 walk_expr(&field.value, visit);
             }
@@ -3030,61 +3041,96 @@ fn plain_assignment(statement: &Statement) -> Option<(&str, &Expr)> {
         _ => None,
     }
 }
-/// Whether `name` is read anywhere under `statement`. The target of a plain
-/// `name = value;` assignment is a write, not a read.
-fn statement_reads(statement: &Statement, name: &str) -> bool {
-    let mut writes: Vec<&Expr> = Vec::new();
-    let mut found = false;
-    walk_statement(statement, &mut |node| match node {
-        Visit::Statement(statement) => {
-            if let Statement::AssignExpr {
-                target,
-                op: crate::ast::AssignOp::Set,
-                ..
-            } = statement.kind()
-                && matches!(target.kind(), Expr::Ident(_))
-            {
-                writes.push(target);
-            }
-        }
-        Visit::Expr(expr) => {
-            if matches!(expr.kind(), Expr::Ident(ident) if ident == name)
-                && !writes.iter().any(|write| std::ptr::eq(*write, expr))
-            {
-                found = true;
-            }
-        }
-        Visit::Block(_) => {}
-    });
-    found
+/// Indexed uses in one block. Each statement is walked once; querying whether
+/// a binding is used later never scans the rest of a large block again.
+#[derive(Default)]
+struct BlockUses<'a> {
+    last_read: HashMap<&'a str, usize>,
+    last_change: HashMap<&'a str, usize>,
+    mentions: HashMap<&'a str, Vec<usize>>,
+    exits: Vec<usize>,
 }
-/// Whether `name` is mentioned under `statement` at all, including as an assignment target.
-fn statement_mentions(statement: &Statement, name: &str) -> bool {
-    let mut found = false;
-    walk_statement(statement, &mut |node| match node {
-        Visit::Statement(statement) if matches!(statement.kind(), Statement::Assign { name: target, .. } if target == name) =>
-        {
-            found = true;
+impl<'a> BlockUses<'a> {
+    fn new(block: &'a Block) -> Self {
+        let mut uses = Self::default();
+        let mut writes = HashSet::<*const Expr>::new();
+        let mut visit = |index, node: Visit<'a>| {
+            let mut mention = |name| {
+                let sites = uses.mentions.entry(name).or_default();
+                if sites.last() != Some(&index) {
+                    sites.push(index);
+                }
+            };
+            match node {
+                Visit::Statement(statement) => match statement.kind() {
+                    Statement::Assign { name, .. } => {
+                        mention(name.as_str());
+                        uses.last_change.insert(name.as_str(), index);
+                    }
+                    Statement::AssignExpr { target, op, .. } => {
+                        if let Some(name) = assignment_root(target) {
+                            uses.last_change.insert(name, index);
+                        }
+                        if *op == crate::ast::AssignOp::Set
+                            && matches!(target.kind(), Expr::Ident(_))
+                        {
+                            writes.insert(target as *const Expr);
+                        }
+                    }
+                    Statement::Break | Statement::Continue | Statement::Return(_) => {
+                        if uses.exits.last() != Some(&index) {
+                            uses.exits.push(index);
+                        }
+                    }
+                    _ => {}
+                },
+                Visit::Expr(expr) => match expr.kind() {
+                    Expr::Ident(name) => {
+                        mention(name.as_str());
+                        if !writes.contains(&(expr as *const Expr)) {
+                            uses.last_read.insert(name.as_str(), index);
+                        }
+                    }
+                    Expr::Call {
+                        name,
+                        args,
+                        implicit_receiver: true,
+                        ..
+                    } if !READ_ONLY_METHODS.contains(&name.as_str()) => {
+                        if let Some(binding) = args.first().and_then(assignment_root) {
+                            uses.last_change.insert(binding, index);
+                        }
+                    }
+                    _ => {}
+                },
+                Visit::Block(_) => {}
+            }
+        };
+        for (index, statement) in block.statements.iter().enumerate() {
+            walk_statement(statement, &mut |node| visit(index, node));
         }
-        Visit::Expr(expr) if matches!(expr.kind(), Expr::Ident(ident) if ident == name) => {
-            found = true;
+        if let Some(tail) = &block.tail {
+            walk_expr(tail, &mut |node| visit(block.statements.len(), node));
         }
-        _ => {}
-    });
-    found
-}
-/// Whether `statement` contains a `break` or `continue` anywhere, which may
-/// transfer control past the rest of the enclosing loop body.
-fn statement_may_leave_loop(statement: &Statement) -> bool {
-    let mut found = false;
-    walk_statement(statement, &mut |node| {
-        if let Visit::Statement(statement) = node
-            && matches!(statement.kind(), Statement::Break | Statement::Continue)
-        {
-            found = true;
-        }
-    });
-    found
+        uses
+    }
+    fn read_after(&self, name: &str, index: usize) -> bool {
+        self.last_read.get(name).is_some_and(|last| *last > index)
+    }
+    fn changed_after(&self, name: &str, index: usize) -> bool {
+        self.last_change.get(name).is_some_and(|last| *last > index)
+    }
+    fn next_mention(&self, name: &str, index: usize) -> Option<usize> {
+        let sites = self.mentions.get(name)?;
+        sites
+            .get(sites.partition_point(|site| *site <= index))
+            .copied()
+    }
+    fn exits_between(&self, start: usize, end: usize) -> bool {
+        self.exits
+            .get(self.exits.partition_point(|site| *site <= start))
+            .is_some_and(|site| *site < end)
+    }
 }
 fn expr_reads(expr: &Expr, name: &str) -> bool {
     let mut found = false;
@@ -3143,15 +3189,15 @@ impl<'a> ProgramFacts<'a> {
                 Item::Function(function) => {
                     facts.functions.insert(function.name.as_str(), function);
                 }
-                Item::Struct(definition) => {
+                Item::Struct(definition) | Item::Event(definition) => {
                     facts.structs.insert(definition.name.as_str(), definition);
                 }
-                Item::Trigger(trigger) if trigger.call.namespace.is_none() => {
+                Item::Trigger(trigger) => {
                     facts
                         .trigger_targets
                         .insert(trigger.call.entrypoint.as_str());
                 }
-                Item::Trigger(_) | Item::ErrorEnum(_) => {}
+                Item::Enum(_) => {}
             }
         }
         facts
@@ -3399,6 +3445,8 @@ const READ_ONLY_METHODS: &[&str] = &[
     "is_ok",
     "is_err",
     "expect",
+    "ok_or",
+    "or_err",
     "unwrap_or",
     "unwrap_err_or",
 ];
@@ -3512,9 +3560,9 @@ fn lint_kotoage_without_effects(
         if function_may_have_effects(&function.name, facts, &mut memo, &mut visiting) {
             continue;
         }
-        let authorize = function.modifiers.permission.as_deref().map_or_else(
+        let authorize = function.modifiers.authorization.as_deref().map_or_else(
             String::new,
-            |permission| format!(" Keep `authorize({permission:?})` on the view to restrict who may query it, or remove it to make the view public."),
+            |permission| format!(" Keep the explicit policy `authorize({permission})` on the view; use `authorize(anyone)` only if every caller may query it."),
         );
         warnings.push(
             LintWarning::new(
@@ -3819,8 +3867,8 @@ fn lint_unused_locals_and_dead_stores(
             let Visit::Block(block) = node else {
                 return;
             };
+            let uses = BlockUses::new(block);
             for (index, statement) in block.statements.iter().enumerate() {
-                let rest = &block.statements[index + 1..];
                 if let Statement::Let { mutable, pat, .. } = statement.kind() {
                     let struct_fields = match pat {
                         Pattern::Struct { fields, .. } => fields
@@ -3835,13 +3883,7 @@ fn lint_unused_locals_and_dead_stores(
                         if name == "_" || name.starts_with('_') {
                             continue;
                         }
-                        let read = rest
-                            .iter()
-                            .any(|statement| statement_reads(statement, name))
-                            || block
-                                .tail
-                                .as_deref()
-                                .is_some_and(|tail| expr_reads(tail, name));
+                        let read = uses.read_after(name, index);
                         if !read {
                             warnings.push(
                                 LintWarning::new(
@@ -3878,24 +3920,17 @@ fn lint_unused_locals_and_dead_stores(
                 else {
                     continue;
                 };
-                let Some(next) = rest
-                    .iter()
-                    .find(|statement| statement_mentions(statement, name))
-                else {
+                let Some(next_index) = uses.next_mention(name, index) else {
                     continue;
                 };
-                // A `break` or `continue` between the two stores can leave the
-                // loop with the first value still live, so that store is not dead.
+                let Some(next) = block.statements.get(next_index) else {
+                    continue;
+                };
+                // A control-flow exit between stores can keep the first value live.
                 if let Some((target, value)) = plain_assignment(next)
                     && target == name
                     && !expr_reads(value, name)
-                    && rest
-                        .iter()
-                        .take_while(|statement| !std::ptr::eq(*statement, next))
-                        .all(|statement| {
-                            !statement_mentions(statement, name)
-                                && !statement_may_leave_loop(statement)
-                        })
+                    && !uses.exits_between(index, next_index)
                 {
                     warnings.push(
                         LintWarning::new(
@@ -3966,41 +4001,6 @@ fn lint_underscore_public_parameters(program: &Program, warnings: &mut Vec<LintW
         );
     }
 }
-/// Whether one visited node may change the local `binding`: an assignment to
-/// it or to one of its fields or elements, or a receiver method call on it
-/// that is not known to be read-only.
-fn node_may_change(node: Visit<'_>, binding: &str) -> bool {
-    match node {
-        Visit::Statement(statement) => match statement.kind() {
-            Statement::AssignExpr { target, .. } => assignment_root(target) == Some(binding),
-            Statement::Assign { name, .. } => name == binding,
-            _ => false,
-        },
-        Visit::Expr(expr) => matches!(
-            expr.kind(),
-            Expr::Call {
-                name,
-                args,
-                implicit_receiver: true,
-                ..
-            } if args.first().and_then(assignment_root) == Some(binding)
-                && !READ_ONLY_METHODS.contains(&name.as_str())
-        ),
-        Visit::Block(_) => false,
-    }
-}
-fn statement_may_change(statement: &Statement, binding: &str) -> bool {
-    let mut changes = false;
-    walk_statement(statement, &mut |node| {
-        changes |= node_may_change(node, binding)
-    });
-    changes
-}
-fn expr_may_change(expr: &Expr, binding: &str) -> bool {
-    let mut changes = false;
-    walk_expr(expr, &mut |node| changes |= node_may_change(node, binding));
-    changes
-}
 /// Report `var` bindings that are read but never reassigned or mutated.
 fn lint_never_mutated_vars(program: &Program, warnings: &mut Vec<LintWarning>) {
     for item in &program.items {
@@ -4011,6 +4011,7 @@ fn lint_never_mutated_vars(program: &Program, warnings: &mut Vec<LintWarning>) {
             let Visit::Block(block) = node else {
                 return;
             };
+            let uses = BlockUses::new(block);
             for (index, statement) in block.statements.iter().enumerate() {
                 let Statement::Let {
                     mutable: true,
@@ -4023,17 +4024,9 @@ fn lint_never_mutated_vars(program: &Program, warnings: &mut Vec<LintWarning>) {
                 if name.starts_with('_') {
                     continue;
                 }
-                let rest = &block.statements[index + 1..];
-                let tail = block.tail.as_deref();
                 // An unread binding is reported by `unused-local` instead.
-                let read = rest
-                    .iter()
-                    .any(|statement| statement_reads(statement, name))
-                    || tail.is_some_and(|tail| expr_reads(tail, name));
-                let changed = rest
-                    .iter()
-                    .any(|statement| statement_may_change(statement, name))
-                    || tail.is_some_and(|tail| expr_may_change(tail, name));
+                let read = uses.read_after(name, index);
+                let changed = uses.changed_after(name, index);
                 if !read || changed {
                     continue;
                 }
@@ -4084,7 +4077,7 @@ fn lint_seiyaku_without_entrypoint(program: &Program, warnings: &mut Vec<LintWar
         )
         .with_help(format!(
             "Private `fn` helpers run only when a public function calls them. Add a {kotoage} \
-             function with `authorize(\"Permission\")` for state changes, or a `view fn` for queries."
+             function with `authorize(Admin)` for state changes, or a `view fn` for queries."
         )),
     );
     true
@@ -4213,7 +4206,7 @@ mod tests {
     }
     #[test]
     fn state_copies_changed_without_write_back_get_a_write_back_fix() {
-        let text = "seiyaku Wb {\n    error enum E { Missing = 1 }\n    struct Config { int fee, bool paused }\n    state StateMap<int, Config> Configs;\n    kotoage fn pause(int id) authorize(\"Admin\") {\n        var c = Configs.get(id).expect(E::Missing);\n        c.paused = true;\n    }\n    kotoage fn persisted(int id) authorize(\"Admin\") {\n        var c = Configs.get(id).expect(E::Missing);\n        c.paused = true;\n        Configs[id] = c;\n    }\n    view fn projected(int id) -> Config {\n        var c = Configs.get(id).expect(E::Missing);\n        c.fee = 0;\n        return c;\n    }\n}";
+        let text = "seiyaku Wb { permission Admin; \n    error enum E { Missing = 1 }\n    struct Config { int fee, bool paused }\n    state StateMap<int, Config> Configs;\n    kotoage fn pause(int id) authorize(Admin) {\n        var c = Configs.get(id).expect(E::Missing);\n        c.paused = true;\n    }\n    kotoage fn persisted(int id) authorize(Admin) {\n        var c = Configs.get(id).expect(E::Missing);\n        c.paused = true;\n        Configs[id] = c;\n    }\n    view fn projected(int id) authorize(anyone) -> Config {\n        var c = Configs.get(id).expect(E::Missing);\n        c.fee = 0;\n        return c;\n    }\n}";
         let (source, warnings) = lint_text(text);
         let lost = found(&warnings, "unpersisted-state-copy");
         assert_eq!(lost.len(), 1, "{warnings:?}");
@@ -4230,7 +4223,7 @@ mod tests {
     }
     #[test]
     fn effect_free_kotoage_suggests_view_in_the_written_spelling() {
-        let text = "誓約 Pure {\n    state int count;\n    言挙げ fn add(int a, int b) -> int authorize(\"Entry\") {\n        return a + b;\n    }\n    kotoage fn bump() authorize(\"Entry\") {\n        count += 1;\n    }\n    kotoage fn relay() authorize(\"Entry\") {\n        helper();\n    }\n    fn helper() {\n        count = 2;\n    }\n}";
+        let text = "誓約 Pure { permission Entry; \n    state int count;\n    言挙げ fn add(int a, int b) authorize(Entry) -> int {\n        return a + b;\n    }\n    kotoage fn bump() authorize(Entry) {\n        count += 1;\n    }\n    kotoage fn relay() authorize(Entry) {\n        helper();\n    }\n    fn helper() {\n        count = 2;\n    }\n}";
         let (source, warnings) = lint_text(text);
         let pure = found(&warnings, "kotoage-without-effects");
         assert_eq!(pure.len(), 1, "{warnings:?}");
@@ -4246,12 +4239,12 @@ mod tests {
             pure[0]
                 .help
                 .as_deref()
-                .is_some_and(|help| help.contains("authorize(\"Entry\")"))
+                .is_some_and(|help| help.contains("authorize(Entry)"))
         );
     }
     #[test]
     fn exact_division_by_runtime_values_warns_but_literals_do_not() {
-        let text = "seiyaku Div {\n    const decimal SCALE = 1000;\n    view fn ratio(decimal total, decimal parts) -> decimal {\n        return total / parts;\n    }\n    view fn third(quantity q) -> quantity {\n        return q / 3;\n    }\n    view fn scaled(decimal total) -> decimal {\n        return total / SCALE;\n    }\n    view fn ints(int a, int b) -> int {\n        return a / b;\n    }\n    view fn share(quantity q, quantity r) -> decimal {\n        return q / r;\n    }\n}";
+        let text = "seiyaku Div {\n    const decimal SCALE = 1000;\n    view fn ratio(decimal total, decimal parts) authorize(anyone) -> decimal {\n        return total / parts;\n    }\n    view fn third(quantity q) authorize(anyone) -> quantity {\n        return q / 3;\n    }\n    view fn scaled(decimal total) authorize(anyone) -> decimal {\n        return total / SCALE;\n    }\n    view fn ints(int a, int b) authorize(anyone) -> int {\n        return a / b;\n    }\n    view fn share(quantity q, quantity r) authorize(anyone) -> decimal {\n        return q / r;\n    }\n}";
         let (source, warnings) = lint_text(text);
         let division = found(&warnings, "exact-division");
         let spelled = division
@@ -4269,7 +4262,7 @@ mod tests {
     }
     #[test]
     fn unused_locals_and_dead_stores_are_reported() {
-        let text = "seiyaku Locals {\n    view fn f(int x) -> int {\n        let unused = 3;\n        let _ignored = 4;\n        var acc = 0;\n        acc = 5;\n        var kept = 1;\n        kept += x;\n        return acc + kept;\n    }\n}";
+        let text = "seiyaku Locals {\n    view fn f(int x) authorize(anyone) -> int {\n        let unused = 3;\n        let _ignored = 4;\n        var acc = 0;\n        acc = 5;\n        var kept = 1;\n        kept += x;\n        return acc + kept;\n    }\n}";
         let (source, warnings) = lint_text(text);
         let unused = found(&warnings, "unused-local");
         assert_eq!(unused.len(), 1, "{warnings:?}");
@@ -4283,6 +4276,59 @@ mod tests {
         assert_eq!(spelled(&source, dead[0]), "var acc = 0;");
         assert_eq!(dead[0].labels.len(), 1);
     }
+    #[test]
+    fn indexed_block_uses_distinguish_reads_writes_and_control_flow() {
+        let text = r#"seiyaku Uses {
+            view fn f(int n) authorize(anyone) -> int {
+                var unread = 0;
+                unread = 1;
+                var counter = 0;
+                counter = counter + 1;
+                var nested = 0;
+                if n > 0 { nested = 2; }
+                var tail_only = 3;
+                counter + nested + tail_only
+            }
+        }"#;
+        let (_, warnings) = lint_text(text);
+        let unused = found(&warnings, "unused-local");
+        assert_eq!(unused.len(), 1, "{warnings:?}");
+        assert!(
+            matches!(&unused[0].message, LintMessage::UnusedLocal { name, .. } if name == "unread")
+        );
+        let dead = found(&warnings, "dead-store");
+        assert_eq!(dead.len(), 1, "{warnings:?}");
+        assert!(
+            dead[0]
+                .localized_message(Language::English)
+                .contains("`unread`")
+        );
+        let never = found(&warnings, "never-mutated-var");
+        assert_eq!(never.len(), 1, "{warnings:?}");
+        assert!(
+            matches!(&never[0].message, LintMessage::NeverMutatedVar { name } if name == "tail_only")
+        );
+        let (_, returned) = lint_text(
+            "seiyaku Exit { view fn f() authorize(anyone) -> int { var x = 1; return 0; x = 2; } }",
+        );
+        assert!(found(&returned, "dead-store").is_empty());
+    }
+
+    #[test]
+    fn large_flat_blocks_keep_all_lints_with_exact_source_ranges() {
+        let mut text = String::from("seiyaku Large { view fn f() authorize(anyone) -> int { ");
+        for index in 0..4096 {
+            text.push_str(&format!("let local_{index} = {index}; "));
+        }
+        text.push_str("return 0; } }");
+        let (source, warnings) = lint_text(&text);
+        let unused = found(&warnings, "unused-local");
+        assert_eq!(unused.len(), 4096);
+        assert_eq!(spelled(&source, unused[0]), "local_0");
+        assert_eq!(spelled(&source, unused[4095]), "local_4095");
+        assert!(unused.iter().all(|warning| warning.fix.is_some()));
+    }
+
     #[test]
     fn underscore_public_parameters_are_abi_keys() {
         let text = "seiyaku Abi {\n    state int value;\n    改善(int _new_impl) {\n        value = _new_impl;\n    }\n    fn private(int _unused) {}\n}";
@@ -4306,7 +4352,7 @@ mod tests {
         assert!(!help.contains("int _ new_impl"), "{help}");
         // Applying the fix leaves nothing to report: public parameters are
         // interface keys and are never reported as unused.
-        let renamed = "seiyaku Abi {\n    改善(int new_impl) {\n    }\n    view fn ignore(int key) -> int {\n        return 0;\n    }\n}";
+        let renamed = "seiyaku Abi {\n    改善(int new_impl) {\n    }\n    view fn ignore(int key) authorize(anyone) -> int {\n        return 0;\n    }\n}";
         let (_, warnings) = lint_text(renamed);
         assert!(
             found(&warnings, "underscore-public-parameter").is_empty()
@@ -4316,7 +4362,7 @@ mod tests {
     }
     #[test]
     fn a_shared_underscore_parameter_name_is_one_finding() {
-        let text = "seiyaku Handlers {\n    view fn health(bytes _body) -> int {\n        return 1;\n    }\n    view fn status(bytes _body, int _height) -> int {\n        return 2;\n    }\n}";
+        let text = "seiyaku Handlers {\n    view fn health(bytes _body) authorize(anyone) -> int {\n        return 1;\n    }\n    view fn status(bytes _body, int _height) authorize(anyone) -> int {\n        return 2;\n    }\n}";
         let (source, warnings) = lint_text(text);
         let underscore = found(&warnings, "underscore-public-parameter");
         assert_eq!(underscore.len(), 2, "{warnings:?}");
@@ -4338,7 +4384,7 @@ mod tests {
     }
     #[test]
     fn unused_parameters_are_reported_only_for_private_functions() {
-        let text = "seiyaku Params {\n    state int total;\n    hajimari() {\n        total = 0;\n    }\n    fn helper(int unused) -> int {\n        return 1;\n    }\n    kotoage fn record(int amount) authorize(\"Entry\") {\n        total = helper(unused: 0);\n    }\n}";
+        let text = "seiyaku Params { permission Entry; \n    state int total;\n    hajimari() {\n        total = 0;\n    }\n    fn helper(int unused) -> int {\n        return 1;\n    }\n    kotoage fn record(int amount) authorize(Entry) {\n        total = helper(unused: 0);\n    }\n}";
         let (source, warnings) = lint_text(text);
         let unused = found(&warnings, "unused-parameter");
         assert_eq!(unused.len(), 1, "{warnings:?}");
@@ -4346,7 +4392,7 @@ mod tests {
     }
     #[test]
     fn unused_struct_pattern_bindings_get_a_valid_discard_fix() {
-        let text = "seiyaku Fields {\n    struct Point { int x; int y; }\n    view fn shorthand() -> int {\n        let Point { x, y } = Point { x: 1, y: 2 };\n        return y;\n    }\n    view fn renamed() -> int {\n        let Point { x: px, y } = Point { x: 1, y: 2 };\n        return y;\n    }\n}";
+        let text = "seiyaku Fields {\n    struct Point { int x; int y; }\n    view fn shorthand() authorize(anyone) -> int {\n        let Point { x, y } = Point { x: 1, y: 2 };\n        return y;\n    }\n    view fn renamed() authorize(anyone) -> int {\n        let Point { x: px, y } = Point { x: 1, y: 2 };\n        return y;\n    }\n}";
         let (source, warnings) = lint_text(text);
         let fixes = found(&warnings, "unused-local")
             .into_iter()
@@ -4362,7 +4408,7 @@ mod tests {
     }
     #[test]
     fn vars_that_never_change_suggest_let() {
-        let text = "seiyaku Vars {\n    view fn f(int x) -> int {\n        var total = x + 1;\n        var List<int, 4> values = [1];\n        let _ = values.try_push(2);\n        var count = 0;\n        count += 1;\n        var unread = 3;\n        return total + values.len() + count;\n    }\n}";
+        let text = "seiyaku Vars {\n    view fn f(int x) authorize(anyone) -> int {\n        var total = x + 1;\n        var List<int, 4> values = [1];\n        let _ = values.try_push(2);\n        var count = 0;\n        count += 1;\n        var unread = 3;\n        return total + values.len() + count;\n    }\n}";
         let (source, warnings) = lint_text(text);
         let never = found(&warnings, "never-mutated-var");
         assert_eq!(never.len(), 1, "{warnings:?}");
@@ -4376,7 +4422,7 @@ mod tests {
     }
     #[test]
     fn private_functions_nothing_calls_are_reported() {
-        let text = "seiyaku Fns {\n    fn helper() -> int {\n        return 1;\n    }\n    fn orphan() -> int {\n        return 2;\n    }\n    fn spin(int n) -> int {\n        return spin(n: n);\n    }\n    fn _kept() -> int {\n        return 3;\n    }\n    view fn value() -> int {\n        return helper();\n    }\n}";
+        let text = "seiyaku Fns {\n    fn helper() -> int {\n        return 1;\n    }\n    fn orphan() -> int {\n        return 2;\n    }\n    fn spin(int n) -> int {\n        return spin(n: n);\n    }\n    fn _kept() -> int {\n        return 3;\n    }\n    view fn value() authorize(anyone) -> int {\n        return helper();\n    }\n}";
         let (source, warnings) = lint_text(text);
         let unused = found(&warnings, "unused-private-fn")
             .into_iter()
@@ -4424,7 +4470,7 @@ mod tests {
     }
     #[test]
     fn dead_stores_stay_live_across_break_and_continue() {
-        let text = "seiyaku Loops {\n    view fn last(int n) -> int {\n        var x = 0;\n        for i in range(8) {\n            x = 1;\n            if i > n { break; }\n            x = 2;\n        }\n        var y = 0;\n        for j in range(8) {\n            y = 1;\n            if j > n { continue; }\n            y = 2;\n        }\n        var z = 0;\n        for k in range(8) {\n            z = k;\n            z = k + 1;\n        }\n        return x + y + z;\n    }\n}";
+        let text = "seiyaku Loops {\n    view fn last(int n) authorize(anyone) -> int {\n        var x = 0;\n        for i in range(8) {\n            x = 1;\n            if i > n { break; }\n            x = 2;\n        }\n        var y = 0;\n        for j in range(8) {\n            y = 1;\n            if j > n { continue; }\n            y = 2;\n        }\n        var z = 0;\n        for k in range(8) {\n            z = k;\n            z = k + 1;\n        }\n        return x + y + z;\n    }\n}";
         let (source, warnings) = lint_text(text);
         let dead = found(&warnings, "dead-store")
             .into_iter()
@@ -4436,7 +4482,7 @@ mod tests {
     fn repeated_typed_literals_suggest_a_named_constant() {
         let literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let text = format!(
-            "seiyaku Ids {{\n    view fn a() -> AssetDefinitionId {{ return AssetDefinitionId::parse(\"{literal}\"); }}\n    view fn b() -> AssetDefinitionId {{ return AssetDefinitionId::parse(\"{literal}\"); }}\n}}"
+            "seiyaku Ids {{\n    view fn a() authorize(anyone) -> AssetDefinitionId {{ return AssetDefinitionId::parse(\"{literal}\"); }}\n    view fn b() authorize(anyone) -> AssetDefinitionId {{ return AssetDefinitionId::parse(\"{literal}\"); }}\n}}"
         );
         let (_, warnings) = lint_text(&text);
         let repeated = found(&warnings, "duplicate-pointer-literal");
@@ -4639,8 +4685,10 @@ mod tests {
     }
     #[test]
     fn lint_program_combines_checks() {
-        let program =
-            parse("state int counter; view fn main() { return; let x = counter; }").unwrap();
+        let program = parse(
+            "state int counter; view fn main() authorize(anyone) { return; let x = counter; }",
+        )
+        .unwrap();
         let warnings = lint_program(&program);
         let codes = warnings
             .iter()
@@ -4835,7 +4883,7 @@ mod tests {
     #[test]
     fn lint_nonliteral_state_map_key_is_silent() {
         let program = parse(
-            "state StateMap<int, int> Foo; view fn main() { let k = 1; let _x = Foo.get(k); }",
+            "state StateMap<int, int> Foo; view fn main() authorize(anyone) { let k = 1; let _x = Foo.get(k); }",
         )
         .expect("parse map");
         let warnings = lint_program(&program);
@@ -4844,7 +4892,7 @@ mod tests {
     #[test]
     fn lint_literal_state_map_key_is_silent() {
         let program =
-            parse("state StateMap<int, int> Foo; view fn main() { let _x = Foo.get(1); }")
+            parse("state StateMap<int, int> Foo; view fn main() authorize(anyone) { let _x = Foo.get(1); }")
                 .expect("parse map");
         let warnings = lint_program(&program);
         assert!(warnings.is_empty());

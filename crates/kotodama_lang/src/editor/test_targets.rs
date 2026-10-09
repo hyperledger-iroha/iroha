@@ -209,9 +209,8 @@ impl EditorSnapshot {
 mod tests {
     use super::*;
 
-    const TARGET: &str = "seiyaku Club { fn points(int coffees) -> int { coffees * 10 } \
-        view fn quote(int coffees) -> int { points(coffees: coffees) } }";
-    const TEST: &str = "module ClubTests {\n    koto_test { target: \"../contracts/club.ko\" }\n    #[test]\n    fn quotes() {\n        let points = test::invoke_kotoage(kotoage: \"quote\", arguments: Json::parse(\"{}\"));\n        test::assert_eq(actual: points, expected: 0);\n    }\n}\n";
+    const TARGET: &str = "seiyaku Club { fn points(int coffees) -> int { coffees * 10 } view fn quote(int coffees) authorize(anyone) -> int { points(coffees: coffees) } }";
+    const TEST: &str = "module ClubTests {\n    koto_test { target: \"../contracts/club.ko\" }\n    #[test]\n    fn quotes() {\n        let points = test::invoke_kotoage(kotoage: \"quote\", arguments: {});\n        test::assert_eq(actual: points, expected: 0);\n    }\n}\n";
 
     fn snapshot() -> EditorSnapshot {
         EditorSnapshot::single_with_tests(

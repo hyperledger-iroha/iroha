@@ -120,6 +120,7 @@ pub(super) fn run_deploy(
         None
     };
     let build_args = BuildArgs {
+        profile: "production".into(),
         selection: args.selection.clone(),
         mode: GraphModeArgs {
             locked: args.locked || args.artifact.is_some(),
@@ -168,7 +169,7 @@ pub(super) fn run_deploy(
     let retained = prepare_or_resume_deployment(
         &service,
         &session,
-        DeploymentRequest {
+        &DeploymentRequest {
             artifact: artifact_bytes,
             alias,
             fee_payment,
@@ -319,7 +320,7 @@ pub(super) fn run_deploy(
 fn prepare_or_resume_deployment(
     service: &DeploymentService,
     session: &DeploymentSlot,
-    request: DeploymentRequest,
+    request: &DeploymentRequest,
     prepare_only: bool,
     progress: &mut dyn FnMut(&str),
 ) -> eyre::Result<RetainedDeployment> {
@@ -339,7 +340,7 @@ fn prepare_or_resume_deployment(
     )? {
         return Ok(retained);
     }
-    let prepared = service.prepare(&request)?;
+    let prepared = service.prepare(request)?;
     let journal = session.persist(service, &prepared)?;
     let receipt = if prepare_only {
         None
@@ -1180,7 +1181,9 @@ mod tests {
     fn fresh_package_retry_reuses_original_plan_after_preparing_or_active_crash() -> eyre::Result<()>
     {
         crate::deployment_runtime::resume_tests::assert_package_fresh_retry_preserves_original(
-            prepare_or_resume_deployment,
+            |service, session, request, prepare_only, progress| {
+                prepare_or_resume_deployment(service, session, &request, prepare_only, progress)
+            },
         )
     }
 
@@ -1245,21 +1248,21 @@ mod tests {
         let hook = |source: &str| lifecycle_hook(&compiled(source)).map(|hook| hook.name);
         assert_eq!(
             hook(
-                "seiyaku Counter { state int value; hajimari() { value = 0; } view fn current() -> int { return value; } }"
+                "seiyaku Counter { state int value; hajimari() { value = 0; } view fn current() authorize(anyone) -> int { return value; } }"
             )
             .as_deref(),
             Some("hajimari")
         );
         assert_eq!(
             hook(
-                "誓約 Counter { state int value; 始まり() { value = 1; } view fn current() -> int { return value; } }"
+                "誓約 Counter { state int value; 始まり() { value = 1; } view fn current() authorize(anyone) -> int { return value; } }"
             )
             .as_deref(),
             Some("hajimari")
         );
         assert_eq!(
             lifecycle_hook(&compiled(
-                "seiyaku Counter { state int value; 始まり(int start) { value = start; } view fn current() -> int { return value; } }"
+                "seiyaku Counter { state int value; 始まり(int start) { value = start; } view fn current() authorize(anyone) -> int { return value; } }"
             )),
             Some(LifecycleHook {
                 name: "hajimari".to_owned(),
@@ -1268,7 +1271,7 @@ mod tests {
         );
         assert_eq!(
             lifecycle_hook(&compiled(
-                "seiyaku Quote { view fn quote() -> int { return 30; } }"
+                "seiyaku Quote { view fn quote() authorize(anyone) -> int { return 30; } }"
             )),
             None
         );
@@ -1364,7 +1367,7 @@ mod tests {
     fn activation_arguments_are_checked_before_deployment() {
         let _profile = ChainDiscriminantGuard::enter(753);
         let artifact = compiled(
-            "seiyaku Counter { state int value; hajimari(int start) { value = start; } view fn current() -> int { return value; } }",
+            "seiyaku Counter { state int value; hajimari(int start) { value = start; } view fn current() authorize(anyone) -> int { return value; } }",
         );
         let hook = lifecycle_hook(&artifact).expect("declared hook");
         let start = norito::json!({"start": "5"});
@@ -1384,7 +1387,8 @@ mod tests {
         );
         let number = norito::json!({"start": 5});
         assert!(check_activation_arguments(&artifact, Some(&hook), Some(&number)).is_err());
-        let plain = compiled("seiyaku Quote { view fn quote() -> int { return 30; } }");
+        let plain =
+            compiled("seiyaku Quote { view fn quote() authorize(anyone) -> int { return 30; } }");
         assert!(check_activation_arguments(&plain, None, None).is_ok());
         assert!(check_activation_arguments(&plain, None, Some(&norito::json!({}))).is_ok());
         let unexpected = check_activation_arguments(&plain, None, Some(&start))
@@ -1445,25 +1449,17 @@ mod tests {
     #[test]
     fn prebuilt_artifacts_deploy_only_when_the_locked_build_reproduces_them() {
         let root = tempfile::tempdir().expect("artifact directory");
-        let original = compiled("seiyaku Quote { view fn quote() -> int { return 30; } }");
-        let other = compiled("seiyaku Quote { view fn quote() -> int { return 31; } }");
+        let original =
+            compiled("seiyaku Quote { view fn quote() authorize(anyone) -> int { return 30; } }");
+        let other =
+            compiled("seiyaku Quote { view fn quote() authorize(anyone) -> int { return 31; } }");
         let verified = ivm::verify_contract_artifact(&original).expect("admitted original");
         let artifact_path = root.path().join("quote.to");
         let manifest_path = root.path().join("quote.manifest.json");
         fs::write(&artifact_path, &original).expect("prebuilt artifact");
         let manifest_for = |artifact: &[u8]| {
             let verified = ivm::verify_contract_artifact(artifact).expect("admitted");
-            norito::json::to_string(&object([
-                (
-                    "code_hash",
-                    norito::json::to_value(&verified.code_hash).expect("code hash"),
-                ),
-                (
-                    "abi_hash",
-                    norito::json::to_value(&verified.abi_hash).expect("abi hash"),
-                ),
-            ]))
-            .expect("manifest")
+            norito::json::to_string(&verified.manifest).expect("compiler manifest")
         };
         fs::write(&manifest_path, manifest_for(&original)).expect("prebuilt manifest");
         let built = CompilerArtifactV1 {
@@ -1505,10 +1501,14 @@ mod tests {
         let root = tempfile::tempdir().expect("build directory");
         let compiler = kotodama_lang::compiler::Compiler::new();
         let original = compiler
-            .compile_source("seiyaku Quote { view fn quote() -> int { return 30; } }")
+            .compile_source(
+                "seiyaku Quote { view fn quote() authorize(anyone) -> int { return 30; } }",
+            )
             .expect("original contract");
         let replacement = compiler
-            .compile_source("seiyaku Quote { view fn quote() -> int { return 31; } }")
+            .compile_source(
+                "seiyaku Quote { view fn quote() authorize(anyone) -> int { return 31; } }",
+            )
             .expect("replacement contract");
         let verified = ivm::verify_contract_artifact(&original).expect("admitted original");
         let path = root.path().join("quote.to");

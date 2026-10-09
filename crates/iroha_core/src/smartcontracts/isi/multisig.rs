@@ -7389,12 +7389,12 @@ mod tests {
             })
             .compile_source_with_manifest(
                 r#"
-seiyaku TriggerDispatch {
-  kotoage fn main() authorize("Admin") {
+seiyaku TriggerDispatch { permission Admin;
+  kotoage fn main() authorize(Admin) {
     ledger::account::set_metadata(account: context::authority(), key: Name::parse("entrypoint"), value: Json::parse("1"));
   }
 
-  kotoage fn alternate() authorize("Admin") {
+  kotoage fn alternate() authorize(Admin) {
     ledger::account::set_metadata(account: context::authority(), key: Name::parse("entrypoint"), value: Json::parse("2"));
   }
 }
@@ -7940,7 +7940,7 @@ seiyaku TriggerDispatch {
         .expect("grant staged mint permission");
         let src = format!(
             r#"
-            seiyaku StagedMintRequest {{
+            seiyaku StagedMintRequest {{ permission staged_mint_request_run;
               // Runtime trigger authority: {multisig_id}
               error enum StagedMintError {{
                 DuplicateRequest = 1,
@@ -7986,7 +7986,7 @@ seiyaku TriggerDispatch {
                 Option::some(true)
               }}
 
-              kotoage fn run(Json ev) authorize("staged_mint_request_run") {{
+              kotoage fn run(Json ev) authorize(staged_mint_request_run) {{
                 require(run_impl(ev: ev).is_some(), StagedMintError::MissingOrInvalidField);
               }}
             }}

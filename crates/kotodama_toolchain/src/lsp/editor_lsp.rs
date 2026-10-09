@@ -20,7 +20,7 @@ const MAX_LSP_TEST_SCAN: usize = 512;
 pub(super) struct Workspace {
     snapshot: EditorSnapshot,
     uris: BTreeMap<SourceId, String>,
-    manifest: Option<kotodama_lang::driver::ProjectManifestSource>,
+    manifests: Vec<kotodama_lang::driver::ProjectManifestSource>,
     open_uris: HashSet<String>,
     versions: HashMap<String, i64>,
     rename_error: Option<String>,
@@ -145,11 +145,13 @@ fn test_target_span(source: &SourceFile) -> Option<SourceSpan> {
 }
 /// Diagnostics for one standalone test module, compiled in test mode against its target as
 /// `koto test` does. Diagnostics located in the target belong to the target's own check.
-fn test_module_diagnostics(
+pub(super) fn test_module_diagnostics(
     documents: &HashMap<String, String>,
     uri: &str,
     source: &str,
     zk_enabled: bool,
+    project: Option<&LoadedSourceProject>,
+    chain_discriminant: u16,
 ) -> DiagnosticBundle {
     let file = SourceFile::new(SourceId(0), uri, source);
     let Some(target) = declared_test_target(source) else {
@@ -193,21 +195,92 @@ fn test_module_diagnostics(
     let (Some(test_name), Some(target_name)) = (test_path.to_str(), target_path.to_str()) else {
         return DiagnosticBundle::new(Vec::new());
     };
-    let session = CompilerSession::new(CompilerOptions {
+    let project = project.filter(|project| matches!(project.graph, LoadedProjectGraph::Source(_)));
+    let project_root = project.and_then(|project| {
+        let key = ProjectSourceKey {
+            package_identity: None,
+            source_name: project.graph.as_source()?.root.source_name.clone(),
+        };
+        project
+            .source_paths
+            .get(&key)
+            .and_then(|path| physical_source_root(path, &key.source_name))
+    });
+    let logical_test_name = project_root
+        .as_ref()
+        .and_then(|root| logical_source_name(&test_path, root).ok());
+    let test_name = logical_test_name.as_deref().unwrap_or(test_name);
+    let options = CompilerOptions {
         force_zk: zk_enabled,
+        chain_discriminant,
         mode: kotodama_lang::compiler::CompilerMode::Test,
         ..CompilerOptions::default()
-    });
-    let Err(bundle) = session.build_test_sources(
-        &kotodama_lang::session::TestSourceUnit {
-            source_name: target_name.to_owned(),
-            source: target_source,
-        },
-        &[kotodama_lang::session::TestSourceUnit {
-            source_name: test_name.to_owned(),
-            source: source.to_owned(),
-        }],
-    ) else {
+    };
+    let result =
+        if let Some(project) = project {
+            match lsp_project_with_open_overlays(project, documents) {
+                Ok((LoadedProjectGraph::Source(mut graph), _, _, _)) => {
+                    let root_name = graph.root.source_name.clone();
+                    let test = SourceModuleUnit {
+                        source_name: test_name.to_owned(),
+                        source: source.to_owned(),
+                    };
+                    if let Some(root) = &project_root {
+                        let overlays = documents
+                            .iter()
+                            .filter_map(|(uri, text)| {
+                                lsp_file_uri_path(uri).map(|path| (path, text.clone()))
+                            })
+                            .collect();
+                        match kotodama_lang::driver::load_source_inventory(
+                            &[graph.root.clone(), test.clone()],
+                            root,
+                            &overlays,
+                        ) {
+                            Ok(inventory) => {
+                                graph.sources = inventory.sources;
+                                graph.artifacts = inventory.artifacts;
+                            }
+                            Err(error) => {
+                                return error.into_diagnostics().unwrap_or_else(|error| {
+                                    DiagnosticBundle::single(Diagnostic::error(
+                                        "E_SOURCE_NOT_FOUND",
+                                        DiagnosticPhase::Resolve,
+                                        error.to_string(),
+                                        None,
+                                    ))
+                                });
+                            }
+                        }
+                    }
+                    kotodama_lang::linker::ModuleBuildGraph::default()
+                        .build_test_project_with_sources(graph, &[test], options, &root_name)
+                }
+                Ok((LoadedProjectGraph::Package(_), _, _, _)) => {
+                    unreachable!("test target must be a source graph")
+                }
+                Err(error) => Err(error.into_diagnostics().unwrap_or_else(|error| {
+                    DiagnosticBundle::single(Diagnostic::error(
+                        "E_SOURCE_NOT_FOUND",
+                        DiagnosticPhase::Resolve,
+                        error.to_string(),
+                        None,
+                    ))
+                })),
+            }
+        } else {
+            CompilerSession::new(options).build_test_sources(
+                &kotodama_lang::session::TestSourceUnit {
+                    source_name: target_name.to_owned(),
+                    source: target_source,
+                },
+                &[kotodama_lang::session::TestSourceUnit {
+                    source_name: test_name.to_owned(),
+                    source: source.to_owned(),
+                }],
+            )
+        };
+    let Err(bundle) = result else {
         return DiagnosticBundle::new(Vec::new());
     };
     let diagnostics = bundle
@@ -259,7 +332,14 @@ pub(super) fn apply_test_module_diagnostics(
     for (uri, source) in tests {
         diagnostics.insert(
             uri.clone(),
-            test_module_diagnostics(documents, uri, source, zk_enabled),
+            test_module_diagnostics(
+                documents,
+                uri,
+                source,
+                zk_enabled,
+                None,
+                CompilerOptions::default().chain_discriminant,
+            ),
         );
     }
 }
@@ -291,7 +371,7 @@ impl Workspace {
         Self {
             snapshot,
             uris: BTreeMap::from([(SourceId(0), uri.to_owned())]),
-            manifest: None,
+            manifests: Vec::new(),
             open_uris: documents.keys().cloned().collect(),
             versions: HashMap::new(),
             rename_error: project
@@ -313,13 +393,15 @@ impl Workspace {
         uri: &str,
         zk: bool,
     ) -> Option<Self> {
-        let root_key = ProjectSourceKey {
-            package_identity: None,
-            source_name: project.graph.root.source_name.clone(),
-        };
         let tests = project
-            .source_paths
-            .get(&root_key)
+            .graph
+            .as_source()
+            .and_then(|graph| {
+                project.source_paths.get(&ProjectSourceKey {
+                    package_identity: None,
+                    source_name: graph.root.source_name.clone(),
+                })
+            })
             .map(|root| discover_test_modules(documents, root))
             .unwrap_or_default();
         Self::for_project_with_tests(documents, project, uri, &tests, zk)
@@ -367,7 +449,7 @@ impl Workspace {
         tests: &[(String, SourceModuleUnit)],
         zk: bool,
     ) -> Option<Self> {
-        let (graph, source_uris, _, manifest) =
+        let (graph, source_uris, _, manifests) =
             lsp_project_with_open_overlays(project, documents).ok()?;
         if !source_uris.values().any(|candidate| candidate == uri) {
             return None;
@@ -376,7 +458,12 @@ impl Workspace {
             .iter()
             .map(|(_, module)| module.clone())
             .collect::<Vec<_>>();
-        let snapshot = EditorSnapshot::project_with_tests(&graph, &modules, zk);
+        let snapshot = match &graph {
+            LoadedProjectGraph::Source(graph) => {
+                EditorSnapshot::project_with_tests(graph, &modules, zk)
+            }
+            LoadedProjectGraph::Package(graph) => EditorSnapshot::package(graph, zk),
+        };
         let mut uris = snapshot
             .sources()
             .filter_map(|source| {
@@ -393,7 +480,7 @@ impl Workspace {
         Some(Self {
             snapshot,
             uris,
-            manifest,
+            manifests,
             open_uris: documents.keys().cloned().collect(),
             versions: HashMap::new(),
             rename_error: None,
@@ -411,8 +498,11 @@ impl Workspace {
     pub(super) fn covered_uris(&self) -> impl Iterator<Item = &str> {
         self.uris.values().map(String::as_str)
     }
-    fn manifest_uri(&self) -> Option<String> {
-        let path = self.manifest.as_ref()?.path();
+    fn manifest_uri(
+        &self,
+        manifest: &kotodama_lang::driver::ProjectManifestSource,
+    ) -> Option<String> {
+        let path = manifest.path();
         self.open_uris
             .iter()
             .find(|uri| lsp_file_uri_path(uri).as_deref() == Some(path))
@@ -429,7 +519,7 @@ impl Workspace {
             return Err(error.clone());
         }
         let plan = self.snapshot.rename(source, offset, name)?;
-        if self.manifest.is_none()
+        if self.manifests.is_empty()
             && plan.sources.iter().any(|range| {
                 self.snapshot
                     .source(range.source)
@@ -438,12 +528,13 @@ impl Workspace {
         {
             return Err("Package rename requires an owned local export manifest; external locked dependencies are immutable.".into());
         }
-        if !plan.exports.is_empty() {
-            let manifest = self.manifest.as_ref().ok_or("Export rename requires an owned local export manifest; external locked dependencies are immutable.")?;
-            for export in &plan.exports {
+        for export in &plan.exports {
+            if !self.manifests.iter().any(|manifest| {
                 manifest
                     .export_range(&export.package, &export.old_name)
-                    .ok_or("Rename export is absent from the exact manifest snapshot.")?;
+                    .is_some()
+            }) {
+                return Err("Export rename requires an owned local export manifest; external locked dependencies are immutable.".into());
             }
         }
         // Open buffers are immutable/versioned in this workspace; unopened inputs must still
@@ -465,9 +556,9 @@ impl Workspace {
                 );
             }
         }
-        if let Some(manifest) = &self.manifest {
+        for manifest in &self.manifests {
             let uri = self
-                .manifest_uri()
+                .manifest_uri(manifest)
                 .ok_or("Rename manifest URI is unavailable.")?;
             if !self.open_uris.contains(&uri)
                 && read_source_file(manifest.path()).map_err(|error| error.to_string())?
@@ -771,10 +862,9 @@ impl Workspace {
                         .collect(),
                 )
             }
-            "textDocument/hover" => self
-                .snapshot
-                .hover(source, offset)
-                .map(|(detail, documentation)| {
+            "textDocument/hover" => self.snapshot.hover(source, offset).map_or(
+                norito::json::Value::Null,
+                |(detail, documentation)| {
                     json_object(vec![(
                         "contents",
                         json_object(vec![
@@ -785,12 +875,11 @@ impl Workspace {
                             ),
                         ]),
                     )])
-                })
-                .unwrap_or(norito::json::Value::Null),
-            "textDocument/signatureHelp" => self
-                .snapshot
-                .signature_help(source, offset)
-                .map(|(signature, active)| {
+                },
+            ),
+            "textDocument/signatureHelp" => self.snapshot.signature_help(source, offset).map_or(
+                norito::json::Value::Null,
+                |(signature, active)| {
                     let active = active.min(signature.parameters.len().saturating_sub(1));
                     json_object(vec![
                         (
@@ -830,8 +919,8 @@ impl Workspace {
                         ("activeSignature", 0_u64.into()),
                         ("activeParameter", (active as u64).into()),
                     ])
-                })
-                .unwrap_or(norito::json::Value::Null),
+                },
+            ),
             "textDocument/prepareRename" => {
                 let definition = self
                     .snapshot
@@ -885,15 +974,20 @@ impl Workspace {
                 }
                 for export in plan.exports {
                     let manifest = self
-                        .manifest
-                        .as_ref()
+                        .manifests
+                        .iter()
+                        .find(|manifest| {
+                            manifest
+                                .export_range(&export.package, &export.old_name)
+                                .is_some()
+                        })
                         .ok_or("Owned export manifest is unavailable.")?;
                     let range = manifest
                         .export_range(&export.package, &export.old_name)
                         .ok_or("Exact export token is unavailable.")?;
                     changes
                         .entry(
-                            self.manifest_uri()
+                            self.manifest_uri(manifest)
                                 .ok_or("Export manifest URI is unavailable.")?,
                         )
                         .or_default()
@@ -917,8 +1011,7 @@ impl Workspace {
                                     .versions
                                     .get(&uri)
                                     .copied()
-                                    .map(norito::json::Value::from)
-                                    .unwrap_or(norito::json::Value::Null);
+                                    .map_or(norito::json::Value::Null, norito::json::Value::from);
                                 json_object(vec![
                                     (
                                         "textDocument",
@@ -1086,24 +1179,31 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let app = root.join("金庫😀.ko");
         let module = root.join("values.ko");
-        let manifest = root.join("kotodama.project.json");
-        let app_text = "seiyaku App { /* 金庫😀 */ view fn run() -> int { value::value() } }";
+        let manifest = root.join("Musubi.toml");
+        let app_text = "seiyaku App { /* 金庫😀 */ view fn run() authorize(anyone) -> int { value::value() } }";
         let module_text =
             "module Values { export fn value() -> int { 7 } fn other() -> string { \"value\" } }";
-        let manifest_text = r#"{
-            "version": 1, "root": "金庫😀.ko",
-            "imports": [{"alias": "value", "package": "test/value@1"}],
-            "packages": [{"identity": "test/value@1", "modules": ["values.ko"],
-                "exports": ["v\u0061lue"], "imports": []}]
-        }"#;
+        let manifest_text = r#"# test/value@1
+[dependencies]
+value = { path = "." }
+[lib]
+exports = ["v\u0061lue"]
+"#;
         std::fs::write(&app, app_text).unwrap();
         std::fs::write(&module, module_text).unwrap();
         std::fs::write(&manifest, manifest_text).unwrap();
-        let project = load_source_project_manifest(&manifest).unwrap();
         let app_uri = lsp_path_file_uri(&app.canonicalize().unwrap()).unwrap();
         let module_uri = lsp_path_file_uri(&module.canonicalize().unwrap()).unwrap();
         let manifest_uri = lsp_path_file_uri(&manifest.canonicalize().unwrap()).unwrap();
-        let manifest_overlay = manifest_text.replace("\"exports\":", "\"exports\" :");
+        let manifest_overlay = manifest_text.replace("exports =", "exports  =");
+        let project = fixture_project(
+            &root,
+            "金庫😀.ko",
+            Some(("test/value@1", "value", "values.ko")),
+            &manifest,
+            &manifest_overlay,
+            "value",
+        );
         let documents = HashMap::from([
             (app_uri.clone(), app_text.to_owned()),
             (manifest_uri.clone(), manifest_overlay.clone()),
@@ -1176,10 +1276,82 @@ mod tests {
         }
         assert!(rewritten[&app_uri].contains("value::renamed()"));
         assert!(rewritten[&module_uri].contains("\"value\""));
-        assert!(rewritten[&manifest_uri].contains("\"alias\": \"value\""));
+        assert!(rewritten[&manifest_uri].contains("value = { path"));
         assert!(rewritten[&manifest_uri].contains("test/value@1"));
+        let mut library = project.clone();
+        let package = library.graph.as_source().unwrap().packages[0].clone();
+        library.graph =
+            LoadedProjectGraph::Package(kotodama_lang::linker::SourcePackageGraphRequest {
+                package,
+                dependencies: Vec::new(),
+            });
+        library
+            .source_paths
+            .retain(|key, _| key.package_identity.is_some());
+        let library_documents = HashMap::from([
+            (module_uri.clone(), module_text.to_owned()),
+            (manifest_uri.clone(), manifest_overlay.clone()),
+        ]);
+        let library_workspace =
+            Workspace::new(&library_documents, Some(&library), &module_uri, false);
+        let library_character = module_text.find("value()").unwrap();
+        let library_request = norito::json!({"params": {"textDocument": {"uri": (module_uri.clone())}, "position": {"line": 0, "character": library_character}, "newName": "renamed"}});
+        let result = library_workspace
+            .response("textDocument/rename", &library_request)
+            .unwrap();
+        let changes = result.get("documentChanges").unwrap().as_array().unwrap();
+        assert_eq!(
+            changes.len(),
+            2,
+            "library rename changes its source and owned manifest only"
+        );
+        assert!(changes.iter().any(|change| {
+            change
+                .pointer("/textDocument/uri")
+                .and_then(norito::json::Value::as_str)
+                == Some(manifest_uri.as_str())
+        }));
+        let mut snapshot = ProjectSnapshot {
+            targets: vec![
+                ProjectTarget {
+                    name: "app".into(),
+                    project: project.clone(),
+                    test_context: None,
+                },
+                ProjectTarget {
+                    name: "library".into(),
+                    project: library.clone(),
+                    test_context: None,
+                },
+            ],
+            selected_target: None,
+        };
+        assert!(matches!(
+            selected_project(&snapshot, &module_uri, &library_documents)
+                .unwrap()
+                .unwrap()
+                .graph,
+            LoadedProjectGraph::Package(_)
+        ));
+        snapshot.targets[1].project.source_paths = library
+            .source_paths
+            .iter()
+            .map(|(key, path)| {
+                (
+                    ProjectSourceKey {
+                        package_identity: Some("different/owner@1".into()),
+                        source_name: key.source_name.clone(),
+                    },
+                    path.clone(),
+                )
+            })
+            .collect();
+        assert!(
+            selected_project(&snapshot, &module_uri, &library_documents).is_err(),
+            "different nominal ownership requires explicit selection"
+        );
         let mut external = project.clone();
-        external.manifest = None;
+        external.manifests.clear();
         let external = Workspace::new(&documents, Some(&external), &app_uri, false);
         assert!(
             external
@@ -1217,12 +1389,18 @@ mod tests {
         );
         std::fs::write(&app, &rewritten[&app_uri]).unwrap();
         std::fs::write(&module, &rewritten[&module_uri]).unwrap();
-        let updated = kotodama_lang::driver::load_source_project_manifest_with_text(
+        let updated = fixture_project(
+            &root,
+            "金庫😀.ko",
+            Some(("test/value@1", "value", "values.ko")),
             &manifest,
             &rewritten[&manifest_uri],
-        )
-        .unwrap();
-        assert!(EditorSnapshot::project(&updated.graph, false).is_complete());
+            "renamed",
+        );
+        assert!(
+            EditorSnapshot::project(updated.graph.as_source().expect("source graph"), false)
+                .is_complete()
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -1264,7 +1442,7 @@ mod tests {
         let app = directory.uri("app.ko");
         let fragment = directory.uri("helpers.ko");
         let replacement = directory.uri("replacement.ko");
-        let text = r#"seiyaku App { include "./helpers.ko"; view fn run() -> int { answer() } }"#;
+        let text = r#"seiyaku App { include "./helpers.ko"; view fn run() authorize(anyone) -> int { answer() } }"#;
         std::fs::write(directory.0.join("app.ko"), text).unwrap();
         let mut documents = HashMap::from([
             (app.clone(), text.into()),
@@ -1318,14 +1496,22 @@ mod tests {
         std::fs::create_dir_all(directory.0.join("contracts")).unwrap();
         let app = directory.uri("contracts/app.ko");
         let fragment = directory.uri("parts.ko");
-        let text = r#"seiyaku App { include "../parts.ko"; view fn run() -> int { 1 } }"#;
+        let text = r#"seiyaku App { include "../parts.ko"; view fn run() authorize(anyone) -> int { 1 } }"#;
         let part = "// unsaved fragment\ninclude \"./missing.ko\";";
         let documents =
             HashMap::from([(app.clone(), text.into()), (fragment.clone(), part.into())]);
         let project =
             lsp_local_source_project_with_root(&documents, Some(&app), Some(&directory.0))
                 .expect("retain broken graph root");
-        assert_eq!(project.graph.root.source_name, "contracts/app.ko");
+        assert_eq!(
+            project
+                .graph
+                .as_source()
+                .expect("source graph")
+                .root
+                .source_name,
+            "contracts/app.ko"
+        );
         assert!(lsp_project_with_open_overlays(&project, &documents).is_err());
         let driver = BuildDriver::new(
             CompilerSession::new(CompilerOptions::default()),
@@ -1346,13 +1532,20 @@ mod tests {
     fn multifile_manifest_overlay_uses_unsaved_sources_before_loading_the_closure() {
         let directory = SourceDirectory::new();
         let app = directory.uri("app.ko");
-        let manifest = directory.0.join("kotodama.project.json");
-        let manifest_uri = directory.uri("kotodama.project.json");
-        let disk = "seiyaku App { view fn run() -> int { 1 } }";
-        let manifest_text = r#"{"version":1,"root":"app.ko","imports":[],"packages":[]}"#;
+        let manifest = directory.0.join("Musubi.toml");
+        let manifest_uri = directory.uri("Musubi.toml");
+        let disk = "seiyaku App { view fn run() authorize(anyone) -> int { 1 } }";
+        let manifest_text = "[[contract]]\nname = \"app\"\npath = \"app.ko\"\n";
         std::fs::write(directory.0.join("app.ko"), disk).unwrap();
         std::fs::write(&manifest, manifest_text).unwrap();
-        let project = load_source_project_manifest(&manifest).unwrap();
+        let project = fixture_project(
+            &directory.0,
+            "app.ko",
+            None,
+            &manifest,
+            &format!("{manifest_text}\n"),
+            "",
+        );
         std::fs::write(
             directory.0.join("app.ko"),
             r#"seiyaku App { include "./missing.ko"; }"#,
@@ -1361,7 +1554,7 @@ mod tests {
         let documents = HashMap::from([
             (
                 app.clone(),
-                r#"seiyaku App { include "./unsaved.ko"; view fn run() -> int { value() } }"#
+                r#"seiyaku App { include "./unsaved.ko"; view fn run() authorize(anyone) -> int { value() } }"#
                     .into(),
             ),
             (
@@ -1382,15 +1575,15 @@ mod tests {
         let files = [
             (
                 "counter.ko",
-                "seiyaku Counter {\n    import \"./math.ko\" as shared;\n    state int value;\n    hajimari() {\n        value = shared::one();\n    }\n    view fn read() -> int { value }\n}\n",
+                "seiyaku Counter {\n    import \"./math.ko\" as shared;\n    state int value;\n    hajimari() {\n        value = shared::one();\n    }\n    view fn read() authorize(anyone) -> int { value }\n}\n",
             ),
             (
                 "ledger.ko",
-                "誓約 Ledger {\n    import \"./math.ko\" as shared;\n    view fn read() -> int { shared::one() }\n}\n",
+                "誓約 Ledger {\n    import \"./math.ko\" as shared;\n    view fn read() authorize(anyone) -> int { shared::one() }\n}\n",
             ),
             (
                 "broken.ko",
-                "seiyaku Broken {\n    view fn read() -> int {\n        return missing;\n    }\n}\n",
+                "seiyaku Broken {\n    view fn read() authorize(anyone) -> int {\n        return missing;\n    }\n}\n",
             ),
             (
                 "math.ko",
@@ -1459,7 +1652,7 @@ mod tests {
     #[test]
     fn member_completion_works_mid_statement_and_lets_clients_filter() {
         let uri = "file:///scores.ko";
-        let prefix = "seiyaku Scoreboard {\n    state StateMap<int, int> Scores;\n    kotoage fn bump(int who) authorize(\"CanBump\") {\n        ";
+        let prefix = "seiyaku Scoreboard { permission CanBump; \n    state StateMap<int, int> Scores;\n    kotoage fn bump(int who) authorize(CanBump) {\n        ";
         for (statement, members) in [
             ("let x = Scores.", vec!["get", "contains"]),
             ("let x = Scores.g", vec!["get", "contains"]),
@@ -1515,7 +1708,7 @@ mod tests {
     #[test]
     fn completion_follows_position_and_offers_both_branded_spellings() {
         let uri = "file:///mixed.ko";
-        let text = "誓約 Mixed {\n    state int value;\n    始まり() {\n        value = 0;\n    }\n    \n    kotoage fn bump() authorize(\"CanBump\") {\n        value = 1;\n        \n    }\n}\n";
+        let text = "誓約 Mixed { permission CanBump; \n    state int value;\n    始まり() {\n        value = 0;\n    }\n    \n    kotoage fn bump() authorize(CanBump) {\n        value = 1;\n        \n    }\n}\n";
         let documents = HashMap::from([(uri.to_owned(), text.to_owned())]);
         let workspace = Workspace::new(&documents, None, uri, false);
         let item_position = workspace
@@ -1589,7 +1782,7 @@ mod tests {
     #[test]
     fn hover_explains_branded_keywords_and_echoes_declaration_spellings() {
         let uri = "file:///counter.ko";
-        let text = "誓約 Counter {\n    state int value;\n    始まり() {\n        value = 0;\n    }\n    言挙げ fn bump(int delta) -> int authorize(\"CanBump\") {\n        value = value + delta;\n        value\n    }\n    kotoage fn reset() authorize(\"CanReset\") {\n        value = 0;\n    }\n    view fn read() -> int { value }\n}\n";
+        let text = "誓約 Counter { permission CanBump; permission CanReset; \n    state int value;\n    始まり() {\n        value = 0;\n    }\n    言挙げ fn bump(int delta) authorize(CanBump) -> int {\n        value = value + delta;\n        value\n    }\n    kotoage fn reset() authorize(CanReset) {\n        value = 0;\n    }\n    view fn read() authorize(anyone) -> int { value }\n}\n";
         let documents = HashMap::from([(uri.to_owned(), text.to_owned())]);
         let workspace = Workspace::new(&documents, None, uri, false);
         let hover = |needle: &str, delta: usize| {
@@ -1613,10 +1806,10 @@ mod tests {
         );
         let bump = hover("bump", 0);
         assert!(
-            bump.contains("言挙げ fn bump(int delta) -> int authorize(\"CanBump\")"),
+            bump.contains("言挙げ fn bump(int delta) authorize(CanBump) -> int"),
             "{bump}"
         );
-        assert!(bump.contains("Authorization: callers need `CanBump`."));
+        assert!(bump.contains("Authorization: callers need the declared permission `CanBump`."));
         let reset = hover("reset", 0);
         assert!(reset.contains("kotoage fn reset()"), "{reset}");
         let hook = hover("始まり", 0);
@@ -1631,7 +1824,7 @@ mod tests {
     #[test]
     fn document_features_cover_outline_folding_tokens_highlights_and_lenses() {
         let uri = "file:///features.ko";
-        let text = "// Features.\n// Second line.\nseiyaku Features {\n    state int value;\n    hajimari() {\n        value = 0;\n    }\n    言挙げ fn set(int next) authorize(\"CanSet\") {\n        value = next;\n    }\n    #[test]\n    fn sets_value() {\n        test::assert(condition: true);\n    }\n}\n";
+        let text = "// Features.\n// Second line.\nseiyaku Features { permission CanSet; \n    state int value;\n    hajimari() {\n        value = 0;\n    }\n    言挙げ fn set(int next) authorize(CanSet) {\n        value = next;\n    }\n    #[test]\n    fn sets_value() {\n        test::assert(condition: true);\n    }\n}\n";
         let documents = HashMap::from([(uri.to_owned(), text.to_owned())]);
         let workspace = Workspace::new(&documents, None, uri, false);
         let symbols = workspace
@@ -1644,7 +1837,7 @@ mod tests {
         assert!(children.iter().any(|child| {
             child.get("name").and_then(norito::json::Value::as_str) == Some("set")
                 && child.get("detail").and_then(norito::json::Value::as_str)
-                    == Some("言挙げ fn authorize(\"CanSet\")")
+                    == Some("言挙げ fn authorize(CanSet)")
         }));
         let folds = workspace
             .response("textDocument/foldingRange", &document_request(uri))
@@ -1712,14 +1905,13 @@ mod tests {
                 .iter()
                 .filter_map(|symbol| symbol.get("name").and_then(norito::json::Value::as_str))
                 .collect::<Vec<_>>(),
-            vec!["set", "sets_value"]
+            vec!["CanSet", "set", "sets_value"]
         );
     }
     #[test]
     fn rename_refusals_name_the_blocking_diagnostic_and_ascii_rule() {
         let uri = "file:///blocked.ko";
-        let text =
-            "seiyaku Blocked {\n    state int value;\n    view fn read() -> int { value }\n}\n";
+        let text = "seiyaku Blocked {\n    state int value;\n    view fn read() authorize(anyone) -> int { value }\n}\n";
         let documents = HashMap::from([(uri.to_owned(), text.to_owned())]);
         let workspace = Workspace::new(&documents, None, uri, false);
         let mut request = request_at(uri, text, "read", 0);
@@ -1752,8 +1944,8 @@ mod tests {
         std::fs::create_dir_all(directory.0.join("contracts")).unwrap();
         std::fs::create_dir_all(directory.0.join("tests")).unwrap();
         std::fs::write(directory.0.join("Musubi.toml"), "manifest-version = 1\n").unwrap();
-        let contract_text = "seiyaku Club {\n    fn points(int coffees) -> int {\n        return coffees * 10;\n    }\n    view fn quote(int coffees) -> int {\n        return points(coffees: coffees);\n    }\n}\n";
-        let test_text = "module ClubTests {\n    koto_test {\n        target: \"../contracts/club.ko\"\n    }\n\n    #[test]\n    fn quotes_points() {\n        let quoted = test::invoke_kotoage(\n            kotoage: \"quote\",\n            arguments: Json::parse(\"{\\\"coffees\\\":\\\"1\\\"}\"),\n        );\n        test::assert_eq(actual: quoted, expected: 10);\n    }\n}\n";
+        let contract_text = "seiyaku Club {\n    fn points(int coffees) -> int {\n        return coffees * 10;\n    }\n    view fn quote(int coffees) authorize(anyone) -> int {\n        return points(coffees: coffees);\n    }\n}\n";
+        let test_text = "module ClubTests {\n    koto_test {\n        target: \"../contracts/club.ko\"\n    }\n\n    #[test]\n    fn quotes_points() {\n        let quoted = test::invoke_kotoage(\n            kotoage: \"quote\",\n            arguments: {coffees: 1},\n        );\n        test::assert_eq(actual: quoted, expected: 10);\n    }\n}\n";
         std::fs::write(directory.0.join("contracts/club.ko"), contract_text).unwrap();
         std::fs::write(directory.0.join("tests/club.test.ko"), test_text).unwrap();
         let contract = directory.uri("contracts/club.ko");

@@ -10,7 +10,9 @@ use iroha_data_model::events::data::prelude::{
     RwaEventSet, TriggerEventFilter, TriggerEventSet,
 };
 use iroha_data_model::smart_contract::manifest::{
-    ContractErrorMessage, ContractErrorTypeDescriptor, ContractErrorVariantDescriptor,
+    ContractEnumTypeDescriptorV1, ContractEnumVariantDescriptorV1, ContractErrorMessage,
+    ContractErrorTypeDescriptor, ContractErrorVariantDescriptor, ContractPermissionDescriptorV1,
+    ContractPermissionScopeV1,
 };
 use iroha_data_model::{
     account::AccountId,
@@ -41,8 +43,8 @@ use iroha_primitives::{
 };
 use kotodama_surface::builtins::{Builtin, BuiltinMode, BuiltinSurface, PointerConstructor};
 use kotodama_surface::source_policy::{
-    V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, V1_STATE_MAP_KEY_TYPE_NAMES,
-    is_reserved_source_declaration, is_reserved_source_type_declaration,
+    V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, is_reserved_source_declaration,
+    is_reserved_source_type_declaration,
 };
 use norito::json::{self, native::Number as JsonNumber};
 use std::{
@@ -61,6 +63,9 @@ pub const COLLECTION_ITERATION_LIMIT: i64 = 64;
 /// compiler allocate more expanded type nodes than a source could contain lexical tokens. Expansion
 /// is measured with saturating arithmetic before any recursive type materialization occurs.
 pub const MAX_EXPANDED_TYPE_NODES: usize = ivm_abi::call::MAX_CALL_SCHEMA_NODES_V1;
+mod call_target;
+pub(crate) mod contract_imports;
+use contract_imports::analyze_contract_call;
 mod effect_sites;
 mod id_literals;
 #[cfg(test)]
@@ -69,6 +74,7 @@ mod trigger_lowering;
 mod type_help;
 mod value_traits;
 
+pub use call_target::{CallTarget, CompilerIntrinsic, ContractMethod};
 use trigger_lowering::analyze_trigger;
 use value_traits::render_source_type_name;
 pub use value_traits::render_type_name;
@@ -76,6 +82,7 @@ pub(crate) use value_traits::type_name;
 
 /// Canonical nominal name for the structurally-specialized V1 query page.
 const QUERY_PAGE_TYPE_NAME: &str = "QueryPage";
+const QUERY_PAGE_NOMINAL_NAME: &str = "kotodama::QueryPage";
 const AGGREGATE_CAPTURE_PREFIX: &str = "\0aggregate_capture#";
 /// Identify only unspellable capture and projection names emitted by this module.
 /// A source name beginning with `__kotodama_` is still an ordinary user binding.
@@ -122,64 +129,8 @@ pub(crate) const QUANTITY_DIV_ROUND_INTRINSIC: &str = "__kotodama_quantity_div_r
 pub(crate) const QUANTITY_RATIO_ROUND_INTRINSIC: &str = "__kotodama_quantity_ratio_round";
 pub(crate) const DECIMAL_TO_INT_TRUNC_INTRINSIC: &str = "__kotodama_decimal_to_int_trunc";
 pub(crate) const DECIMAL_TO_INT_ROUND_INTRINSIC: &str = "__kotodama_decimal_to_int_round";
-fn is_list_intrinsic(name: &str) -> bool {
-    matches!(
-        name,
-        LIST_LEN_INTRINSIC
-            | LIST_GET_INTRINSIC
-            | LIST_SET_INTRINSIC
-            | LIST_PUSH_INTRINSIC
-            | LIST_TRY_SET_INTRINSIC
-            | LIST_TRY_PUSH_INTRINSIC
-            | LIST_POP_INTRINSIC
-            | LIST_CONTAINS_INTRINSIC
-            | LIST_TAKE_INTRINSIC
-            | LIST_ENUMERATE_INTRINSIC
-    )
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CompilerIntrinsicKind {
-    StateMap,
-    List,
-    Numeric,
-    Sum,
-}
-/// Classify calls owned by typed semantic lowering rather than by the source
-/// function graph or the public builtin surface.
-///
-/// Keeping this registry at the semantic boundary makes production projection
-/// validate the same internal call vocabulary that semantic analysis emits.
-/// It also prevents source declarations from shadowing compiler-owned calls.
-fn compiler_intrinsic_kind(name: &str) -> Option<CompilerIntrinsicKind> {
-    if matches!(
-        name,
-        STATE_MAP_GET_INTRINSIC | STATE_PAGE_INTRINSIC | STATE_TAKE_INTRINSIC
-    ) {
-        return Some(CompilerIntrinsicKind::StateMap);
-    }
-    if is_list_intrinsic(name) {
-        return Some(CompilerIntrinsicKind::List);
-    }
-    if matches!(
-        name,
-        DECIMAL_MUL_DIV_ROUND_INTRINSIC
-            | QUANTITY_MUL_DIV_ROUND_INTRINSIC
-            | DECIMAL_DIV_ROUND_INTRINSIC
-            | QUANTITY_DIV_ROUND_INTRINSIC
-            | QUANTITY_RATIO_ROUND_INTRINSIC
-            | DECIMAL_TO_INT_TRUNC_INTRINSIC
-            | DECIMAL_TO_INT_ROUND_INTRINSIC
-    ) {
-        return Some(CompilerIntrinsicKind::Numeric);
-    }
-    if matches!(
-        name,
-        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or" | "expect"
-    ) {
-        return Some(CompilerIntrinsicKind::Sum);
-    }
-    None
-}
+pub(crate) const OPTION_OK_OR_INTRINSIC: &str = "__kotodama_option_ok_or";
+pub(crate) const RESULT_OR_ERR_INTRINSIC: &str = "__kotodama_result_or_err";
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FunctionEffects {
     host_side_effects: bool,
@@ -232,6 +183,14 @@ pub struct FunctionSignature {
     pub modifiers: FunctionModifiers,
 }
 
+/// An authenticated compiled interface supplied by the owning source graph.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportedContractInterface {
+    /// Exact complete-artifact code identity checked by artifact admission.
+    pub code_hash: iroha_crypto::Hash,
+    /// Canonical signed public interface; source aliases never rewrite identities.
+    pub interface: Arc<ivm_abi::metadata::EmbeddedContractInterfaceV1>,
+}
 /// Complete typed interface exposed by a deployable target to local test modules.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TestTargetEnvironment {
@@ -241,10 +200,15 @@ pub(crate) struct TestTargetEnvironment {
     pub(crate) structs: HashMap<String, Vec<(String, Type)>>,
     pub(crate) states: IndexMap<String, Type>,
     pub(crate) consts: IndexMap<String, TypedExpr>,
-    pub(crate) error_codes: HashMap<String, u32>,
+    pub(crate) variant_codes: HashMap<String, u32>,
     pub(crate) error_types: BTreeMap<String, Arc<ContractErrorTypeDescriptor>>,
+    pub(crate) enum_types: BTreeMap<String, Arc<ContractEnumTypeDescriptorV1>>,
+    pub(crate) event_names: BTreeSet<String>,
+    pub(crate) contracts: BTreeMap<String, ImportedContractInterface>,
 }
 pub enum Type {
+    /// Opaque execution-local reference bound to an admitted compiled interface.
+    ContractRef(Arc<ImportedContractInterface>),
     /// Signed adaptive-width integer in `-2^511..=2^511-1`.
     Int,
     /// Exact bounded base-10 decimal.
@@ -277,6 +241,8 @@ pub enum Type {
     Unit,
     /// A closed nominal error type with an authenticated variant schema.
     ErrorEnum(Arc<ContractErrorTypeDescriptor>),
+    /// A closed nominal ordinary enum, distinct from raisable errors.
+    Enum(Arc<ContractEnumTypeDescriptorV1>),
     /// Execution-local confidential value available only to ZK contracts.
     Secret(Box<Type>),
     /// Durable key/value state addressed through the canonical StateMap API.
@@ -305,8 +271,8 @@ pub struct TypedExpr {
 }
 
 pub enum ExprKind {
-    /// Validated code of the nominal error type carried by the expression.
-    ErrorValue(u32),
+    /// Validated code of the nominal data or error enum carried by the expression.
+    VariantCode(u32),
     Binary {
         op: BinaryOp,
         left: Box<TypedExpr>,
@@ -372,7 +338,7 @@ pub enum ExprKind {
         value: Box<TypedExpr>,
     },
     Call {
-        name: String,
+        target: CallTarget,
         args: Vec<TypedExpr>,
     },
     /// A named call whose arguments remain stored in declaration order while
@@ -381,7 +347,7 @@ pub enum ExprKind {
     /// Lowering evaluates the recorded slots first and only permutes the resulting temporary
     /// references into ABI order. No runtime permutation instructions are required.
     NamedCall {
-        name: String,
+        target: CallTarget,
         args: Vec<TypedExpr>,
         evaluation_order: Vec<usize>,
     },
@@ -428,8 +394,8 @@ pub enum ExprKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedSumPattern {
     pub pattern: SumPattern,
-    /// Exact scalar code for a nominal error variant, otherwise absent.
-    pub error_code: Option<u32>,
+    /// Exact scalar code for a nominal enum variant, otherwise absent.
+    pub variant_code: Option<u32>,
     pub payload_type: Option<Type>,
 }
 /// One typed exhaustive match arm.
@@ -538,11 +504,17 @@ fn attach_pending_diagnostic(
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedProgram {
+    /// Required canonical native event declarations, sorted by name.
+    pub events: Vec<iroha_data_model::smart_contract::event::ContractEventDescriptorV1>,
     pub unit: SourceUnit,
     pub items: Vec<TypedItem>,
     pub states: Vec<TypedStateDecl>,
+    /// Canonical declarations authenticated by artifact metadata.
+    pub permissions: Vec<ContractPermissionDescriptorV1>,
     /// Canonical nominal errors advertised by this compilation.
     pub error_types: Vec<ContractErrorTypeDescriptor>,
+    /// Canonical ordinary enum declarations, including private state dependencies.
+    pub enum_types: Vec<ContractEnumTypeDescriptorV1>,
     /// Authenticated presentation text, independent of nominal error schemas.
     pub error_messages: Vec<ContractErrorMessage>,
     pub triggers: Vec<TypedTrigger>,
@@ -599,6 +571,7 @@ pub struct SemanticContext {
     consts: RefCell<IndexMap<String, TypedExpr>>,
     function_returns: RefCell<HashMap<String, Type>>,
     function_modifiers: RefCell<HashMap<String, FunctionModifiers>>,
+    permissions: RefCell<BTreeMap<String, ContractPermissionScopeV1>>,
     function_params: RefCell<HashMap<String, Vec<TypedParam>>>,
     function_summaries: RefCell<HashMap<String, FunctionSummary>>,
     global_declarations: RefCell<HashSet<String>>,
@@ -612,8 +585,11 @@ pub struct SemanticContext {
     /// The analyzed source is a standalone `koto_test` module: every function in it is test-only,
     /// so private helpers may call test builtins too.
     standalone_test_module: std::cell::Cell<bool>,
-    error_codes: RefCell<HashMap<String, u32>>,
+    variant_codes: RefCell<HashMap<String, u32>>,
     error_types: RefCell<BTreeMap<String, Arc<ContractErrorTypeDescriptor>>>,
+    enum_types: RefCell<BTreeMap<String, Arc<ContractEnumTypeDescriptorV1>>>,
+    event_names: RefCell<BTreeSet<String>>,
+    contracts: RefCell<BTreeMap<String, ImportedContractInterface>>,
     package_identity: RefCell<Option<String>>,
     external_functions: RefCell<BTreeMap<String, FunctionSignature>>,
     external_types: RefCell<BTreeMap<String, Type>>,
@@ -684,8 +660,11 @@ impl SemanticContext {
             .swap(&other.trigger_callback_functions);
         self.current_state_param_names
             .swap(&other.current_state_param_names);
-        self.error_codes.swap(&other.error_codes);
+        self.variant_codes.swap(&other.variant_codes);
         self.error_types.swap(&other.error_types);
+        self.enum_types.swap(&other.enum_types);
+        self.event_names.swap(&other.event_names);
+        self.contracts.swap(&other.contracts);
         self.package_identity.swap(&other.package_identity);
         self.external_functions.swap(&other.external_functions);
         self.external_types.swap(&other.external_types);
@@ -819,7 +798,8 @@ impl SemanticContext {
         imported_types: &BTreeMap<String, Type>,
     ) -> Result<BTreeMap<String, FunctionSignature>, SemanticError> {
         self.install_external_types(imported_types);
-        register_error_types(self, program)?;
+        register_enum_types(self, program)?;
+        register_event_names(self, program)?;
         let struct_names = validate_declaration_uniqueness(program)?;
         predeclare_integer_constants(self, program)?;
         let mut all_structs = self.structs.borrow().clone();
@@ -827,7 +807,7 @@ impl SemanticContext {
         self.structs.replace(all_structs);
         let mut structs = self.structs.borrow().clone();
         for item in &program.items {
-            let Item::Struct(definition) = item else {
+            let (Item::Struct(definition) | Item::Event(definition)) = item else {
                 continue;
             };
             let mut fields = Vec::with_capacity(definition.fields.len());
@@ -840,7 +820,7 @@ impl SemanticContext {
         validate_acyclic_value_structs(self, &struct_names)?;
         let resolution_plan = validate_struct_resolution_budget(self, &struct_names)
             .map_err(|failure| failure.error)?;
-        install_canonical_struct_types(self, resolution_plan);
+        install_canonical_struct_types(self, resolution_plan, program);
 
         let mut signatures = BTreeMap::new();
         for item in &program.items {
@@ -977,12 +957,26 @@ impl SemanticContext {
     ) -> TestTargetEnvironment {
         TestTargetEnvironment {
             functions,
-            types: self.external_types.borrow().clone(),
+            types: self
+                .external_types
+                .borrow()
+                .iter()
+                .map(|(name, ty)| (name.clone(), ty.clone()))
+                .chain(
+                    self.resolved_named_types
+                        .borrow()
+                        .iter()
+                        .map(|(name, ty)| (name.clone(), ty.clone())),
+                )
+                .collect(),
             structs: self.structs.borrow().clone(),
             states,
             consts: self.consts.borrow().clone(),
-            error_codes: self.error_codes.borrow().clone(),
+            variant_codes: self.variant_codes.borrow().clone(),
             error_types: self.error_types.borrow().clone(),
+            enum_types: self.enum_types.borrow().clone(),
+            event_names: self.event_names.borrow().clone(),
+            contracts: self.contracts.borrow().clone(),
         }
     }
     pub(crate) fn analyze_all(&self, program: &Program) -> Result<TypedProgram, SemanticFailures> {
@@ -1067,8 +1061,12 @@ impl SemanticContext {
         self.external_states.replace(environment.states.clone());
         self.structs.replace(environment.structs.clone());
         self.consts.replace(environment.consts.clone());
-        self.error_codes.replace(environment.error_codes.clone());
+        self.variant_codes
+            .replace(environment.variant_codes.clone());
         self.error_types.replace(environment.error_types.clone());
+        self.enum_types.replace(environment.enum_types.clone());
+        self.event_names.replace(environment.event_names.clone());
+        self.contracts.replace(environment.contracts.clone());
         self.install_external_types(&environment.types);
         let mut result = analyze_with_context(self, program.program());
         let pending = self.take_diagnostic();
@@ -1123,12 +1121,22 @@ impl SemanticContext {
                         .borrow_mut()
                         .insert(alias.clone(), fields.to_vec());
                 }
+                Type::Enum(descriptor) => {
+                    self.enum_types
+                        .borrow_mut()
+                        .insert(alias.clone(), Arc::clone(descriptor));
+                    for variant in &descriptor.variants {
+                        self.variant_codes
+                            .borrow_mut()
+                            .insert(format!("{alias}::{}", variant.name), variant.code);
+                    }
+                }
                 Type::ErrorEnum(descriptor) => {
                     self.error_types
                         .borrow_mut()
                         .insert(alias.clone(), Arc::clone(descriptor));
                     for variant in &descriptor.variants {
-                        self.error_codes
+                        self.variant_codes
                             .borrow_mut()
                             .insert(format!("{alias}::{}", variant.name), variant.code);
                     }
@@ -1153,18 +1161,14 @@ impl SemanticContext {
                         )?,
                     );
                 }
-                Item::ErrorEnum(definition) => {
-                    let descriptor = self
-                        .error_types
-                        .borrow()
-                        .get(&definition.name)
-                        .cloned()
-                        .ok_or_else(|| SemanticError {
+                Item::Enum(definition) => {
+                    let ty = declared_enum_type(self, &definition.name).ok_or_else(|| {
+                        SemanticError {
                             code: "E_INTERNAL_RESOLUTION",
-                            message: "resolved error declaration has no canonical descriptor"
-                                .into(),
-                        })?;
-                    types.insert(definition.name.clone(), Type::ErrorEnum(descriptor));
+                            message: "resolved enum declaration has no canonical descriptor".into(),
+                        }
+                    })?;
+                    types.insert(definition.name.clone(), ty);
                 }
                 _ => {}
             }
@@ -1359,8 +1363,8 @@ impl SemanticContext {
                 }
                 None
             }
-            ResolvedValueTarget::ErrorCode(_)
-            | ResolvedValueTarget::ImportedErrorVariant
+            ResolvedValueTarget::VariantCode(_)
+            | ResolvedValueTarget::ImportedVariant
             | ResolvedValueTarget::Intrinsic
             | ResolvedValueTarget::ExternalState
             | ResolvedValueTarget::ExternalConst => None,
@@ -1432,7 +1436,7 @@ impl SemanticContext {
                 }
             }
             ResolvedCallTarget::Builtin(builtin) => {
-                if Builtin::from_name(normalized_name) != Some(builtin) {
+                if normalized_name != builtin.name() {
                     return Err(SemanticError {
                         code: "E_INTERNAL_RESOLUTION",
                         message: format!(
@@ -1524,8 +1528,8 @@ impl SemanticContext {
             }
             ResolvedValueTarget::ExternalState => {}
             ResolvedValueTarget::ExternalConst
-            | ResolvedValueTarget::ErrorCode(_)
-            | ResolvedValueTarget::ImportedErrorVariant
+            | ResolvedValueTarget::VariantCode(_)
+            | ResolvedValueTarget::ImportedVariant
             | ResolvedValueTarget::Intrinsic => {
                 return Err(SemanticError {
                     code: "E_TYPE_ANNOTATION_MISMATCH",
@@ -1559,7 +1563,11 @@ impl SemanticContext {
                     code: "E_INTERNAL_RESOLUTION",
                     message: "struct literal references an unknown symbol".into(),
                 })?;
-                if symbol.kind != ResolvedSymbolKind::Struct || symbol.name != name {
+                if !matches!(
+                    symbol.kind,
+                    ResolvedSymbolKind::Struct | ResolvedSymbolKind::Event
+                ) || symbol.name != name
+                {
                     return Err(SemanticError {
                         code: "E_INTERNAL_RESOLUTION",
                         message: format!(
@@ -1596,6 +1604,14 @@ impl SemanticContext {
         name: &str,
     ) -> Result<(), SemanticError> {
         use crate::resolved::{ResolvedSymbolKind, ResolvedTarget, ResolvedTypeTarget};
+        if self.event_names.borrow().contains(name) {
+            return Err(SemanticError {
+                code: "E_EVENT_VALUE",
+                message: format!(
+                    "event `{name}` is an emission declaration, not a value type; use `emit {name} {{ ... }};`"
+                ),
+            });
+        }
         let Some(node) = node else {
             return Ok(());
         };
@@ -1618,9 +1634,9 @@ impl SemanticContext {
                     message: format!("type `{name}` is not in the canonical V1 builtin type table"),
                 });
             }
-            ResolvedTypeTarget::Struct(symbol) | ResolvedTypeTarget::ErrorEnum(symbol) => {
-                let expected_kind = if matches!(target, ResolvedTypeTarget::ErrorEnum(_)) {
-                    ResolvedSymbolKind::ErrorEnum
+            ResolvedTypeTarget::Struct(symbol) | ResolvedTypeTarget::Enum(symbol) => {
+                let expected_kind = if matches!(target, ResolvedTypeTarget::Enum(_)) {
+                    ResolvedSymbolKind::Enum
                 } else {
                     ResolvedSymbolKind::Struct
                 };
@@ -1644,6 +1660,8 @@ impl SemanticContext {
             ResolvedTypeTarget::ExternalStruct => {
                 if !self.structs.borrow().contains_key(name)
                     && !self.error_types.borrow().contains_key(name)
+                    && !self.enum_types.borrow().contains_key(name)
+                    && !self.external_types.borrow().contains_key(name)
                 {
                     return Err(SemanticError {
                         code: "E_INTERNAL_RESOLUTION",
@@ -1827,6 +1845,7 @@ impl SemanticContext {
         self.consts.borrow_mut().clear();
         self.function_returns.borrow_mut().clear();
         self.function_modifiers.borrow_mut().clear();
+        self.permissions.borrow_mut().clear();
         self.function_params.borrow_mut().clear();
         self.function_summaries.borrow_mut().clear();
         self.global_declarations.borrow_mut().clear();
@@ -1835,8 +1854,11 @@ impl SemanticContext {
         self.current_mutable_bindings.borrow_mut().clear();
         self.trigger_callback_functions.borrow_mut().clear();
         self.current_state_param_names.borrow_mut().clear();
-        self.error_codes.borrow_mut().clear();
+        self.variant_codes.borrow_mut().clear();
         self.error_types.borrow_mut().clear();
+        self.enum_types.borrow_mut().clear();
+        self.event_names.borrow_mut().clear();
+        self.contracts.borrow_mut().clear();
         self.external_functions.borrow_mut().clear();
         self.external_types.borrow_mut().clear();
         self.external_states.borrow_mut().clear();
@@ -1856,51 +1878,13 @@ impl SemanticContext {
         self.next_synthetic_binding.set(0);
     }
 }
-/// Reject a private `fn` whose name is a builtin lowering name.
-///
-/// Typed calls to private helpers and to builtins share one call namespace
-/// after semantic analysis, so only public selectors (kotoage, view and
-/// lifecycle declarations), which source never calls, may use these names.
-fn validate_private_helper_lowering_names(
-    context: &SemanticContext,
-    program: &Program,
-) -> Result<(), SemanticError> {
-    for item in &program.items {
-        let Item::Function(function) = item else {
-            continue;
-        };
-        if function.modifiers.kind != FunctionKind::Private {
-            continue;
-        }
-        let Some(builtin) =
-            kotodama_surface::source_policy::builtin_lowering_collision(&function.name)
-        else {
-            continue;
-        };
-        let kotoage = crate::glossary::by_spelling("kotoage")
-            .expect("kotoage is a branded keyword")
-            .label();
-        if let Some(diagnostic) = context.declaration_diagnostic(&function.name) {
-            context.capture_structured(diagnostic);
-        }
-        return Err(SemanticError {
-            code: "E_RESERVED_DECLARATION",
-            message: format!(
-                "private `fn {}` reuses the compiler lowering name of `{}`; rename the helper (a {kotoage} or `view fn` may use this name)",
-                function.name,
-                builtin.source_name()
-            ),
-        });
-    }
-    Ok(())
-}
 fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, SemanticError> {
     let mut functions = HashSet::new();
     let mut types = HashSet::new();
     let mut states = HashSet::new();
     let mut consts = HashSet::new();
     let mut triggers = HashSet::new();
-    if is_reserved_source_type_declaration(&program.unit.name) {
+    if program.unit.name == "kotodama" || is_reserved_source_type_declaration(&program.unit.name) {
         return Err(SemanticError {
             code: "E_RESERVED_DECLARATION",
             message: format!(
@@ -1935,6 +1919,20 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
         }
         Ok(())
     };
+    for directive in &program.directives {
+        match &directive.kind {
+            SourceDirectiveKind::ContractImport { alias, .. } => {
+                register_declaration(alias, "contract import", false, true)?;
+            }
+            SourceDirectiveKind::ContractTypeImport { alias, .. } => {
+                register_declaration(alias, "imported type", false, true)?;
+            }
+            _ => {}
+        }
+    }
+    for permission in &program.permissions {
+        register_declaration(&permission.name, "permission", false, false)?;
+    }
     for item in &program.items {
         match item {
             Item::Function(function) => {
@@ -1958,7 +1956,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                     }
                 }
             }
-            Item::Struct(definition) => {
+            Item::Struct(definition) | Item::Event(definition) => {
                 if !types.insert(definition.name.as_str()) {
                     return Err(SemanticError {
                         code: "K2001",
@@ -1980,7 +1978,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                 }
                 struct_names.push(definition.name.clone());
             }
-            Item::ErrorEnum(definition) => {
+            Item::Enum(definition) => {
                 if !types.insert(definition.name.as_str()) {
                     return Err(SemanticError {
                         code: "K2001",
@@ -1995,7 +1993,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                         return Err(SemanticError {
                             code: "K2001",
                             message: format!(
-                                "duplicate error variant `{}::{}`",
+                                "duplicate enum variant `{}::{}`",
                                 definition.name, variant.name
                             ),
                         });
@@ -2004,7 +2002,7 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
                         return Err(SemanticError {
                             code: "K2001",
                             message: format!(
-                                "duplicate error code {} in `{}`",
+                                "duplicate enum code {} in `{}`",
                                 variant.code, definition.name
                             ),
                         });
@@ -2068,7 +2066,8 @@ fn collect_struct_dependencies(
                 pending.push(ok);
             }
             Type::Tuple(items) => pending.extend(items.iter().rev()),
-            Type::Int
+            Type::ContractRef(_)
+            | Type::Int
             | Type::Decimal
             | Type::Quantity
             | Type::Bool
@@ -2089,6 +2088,7 @@ fn collect_struct_dependencies(
             | Type::Json
             | Type::Unit
             | Type::StateCursor(_)
+            | Type::Enum(_)
             | Type::ErrorEnum(_) => {}
         }
     }
@@ -2255,7 +2255,8 @@ fn measure_expanded_type(
                         .map(|(_, field)| (field, depth.saturating_add(1))),
                 );
             }
-            Type::Int
+            Type::ContractRef(_)
+            | Type::Int
             | Type::Decimal
             | Type::Quantity
             | Type::Bool
@@ -2276,6 +2277,7 @@ fn measure_expanded_type(
             | Type::Json
             | Type::Unit
             | Type::StateCursor(_)
+            | Type::Enum(_)
             | Type::ErrorEnum(_) => {
                 resources.nodes = capped_expanded_nodes(resources.nodes, 1);
                 resources.depth = resources.depth.max(depth);
@@ -2440,7 +2442,23 @@ fn canonicalize_named_type(ty: &Type, resolved: &HashMap<String, Type>) -> Type 
         _ => ty.clone(),
     }
 }
-fn install_canonical_struct_types(context: &SemanticContext, plan: StructResolutionPlan) {
+fn install_canonical_struct_types(
+    context: &SemanticContext,
+    plan: StructResolutionPlan,
+    program: &Program,
+) {
+    let own = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Struct(definition) | Item::Event(definition) => Some(definition.name.as_str()),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let prefix = match context.package_identity.borrow().as_deref() {
+        Some(package) => format!("{package}::{}", program.unit.name),
+        None => program.unit.name.clone(),
+    };
     let StructResolutionPlan { order, resources } = plan;
     let definitions = context.structs.borrow().clone();
     let mut resolved = HashMap::<String, Type>::new();
@@ -2454,7 +2472,19 @@ fn install_canonical_struct_types(context: &SemanticContext, plan: StructResolut
         resolved.insert(
             name.clone(),
             Type::Struct {
-                name,
+                name: if own.contains(name.as_str()) {
+                    format!("{prefix}::{name}")
+                } else {
+                    context
+                        .external_types
+                        .borrow()
+                        .get(&name)
+                        .and_then(|ty| match ty {
+                            Type::Struct { name, .. } => Some(name.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or(name)
+                },
                 fields: Arc::from(fields),
             },
         );
@@ -2665,6 +2695,8 @@ fn validate_linked_program_inline(
     program: &TypedProgram,
     zk_enabled: bool,
 ) -> Result<(), SemanticError> {
+    validate_enum_inventory(&program.enum_types)?;
+    validate_event_inventory(&program.events)?;
     let context = SemanticContext::with_zk_enabled(zk_enabled);
     context.states.replace(
         program
@@ -2891,8 +2923,11 @@ fn validate_production_projection_expr(
         validate_production_projection_expr(expression, owner, retained, removed, zk_enabled)
     };
     match expression.kind() {
-        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
-            if let Some(builtin) = Builtin::from_name(name) {
+        ExprKind::Call { target: name, args }
+        | ExprKind::NamedCall {
+            target: name, args, ..
+        } => {
+            if let Some(builtin) = name.builtin() {
                 match builtin.mode() {
                     BuiltinMode::TestOnly | BuiltinMode::TestFunctionOnly => {
                         return Err(SemanticError {
@@ -2914,14 +2949,17 @@ fn validate_production_projection_expr(
                     }
                     _ => {}
                 }
-            } else if removed.contains(name) {
+            } else if name.user_name().is_some_and(|name| removed.contains(name)) {
                 return Err(SemanticError {
                     code: "E_TEST_ONLY_PRODUCTION",
                     message: format!(
                         "`{owner}` belongs to the deployable seiyaku, so it cannot call test function `{name}`, which deployable builds omit"
                     ),
                 });
-            } else if !retained.contains(name) && compiler_intrinsic_kind(name).is_none() {
+            } else if name
+                .user_name()
+                .is_some_and(|name| !retained.contains(name))
+            {
                 return Err(SemanticError {
                     code: "K2002",
                     message: format!(
@@ -3024,7 +3062,7 @@ fn validate_production_projection_expr(
             }
             Ok(())
         }
-        ExprKind::ErrorValue(_)
+        ExprKind::VariantCode(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
@@ -3034,8 +3072,69 @@ fn validate_production_projection_expr(
         | ExprKind::Ident(_) => Ok(()),
     }
 }
-fn register_error_types(context: &SemanticContext, program: &Program) -> Result<(), SemanticError> {
-    let mut descriptors = context.error_types.borrow_mut();
+fn register_event_names(context: &SemanticContext, program: &Program) -> Result<(), SemanticError> {
+    let declared = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Event(event) => Some(event.name.clone()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    if !declared.is_empty() && program.unit.kind != SourceUnitKind::Seiyaku {
+        return Err(SemanticError {
+            code: "E_EVENT_DECLARATION",
+            message: "native events belong to their declaring seiyaku".into(),
+        });
+    }
+    context.event_names.borrow_mut().extend(declared);
+    Ok(())
+}
+fn declared_events(
+    context: &SemanticContext,
+) -> Result<Vec<iroha_data_model::smart_contract::event::ContractEventDescriptorV1>, SemanticError>
+{
+    let mut events = Vec::new();
+    for name in context.event_names.borrow().iter() {
+        let payload = resolve_struct_type_with_context(context, &Type::NamedStruct(name.clone()))?;
+        let payload_type = crate::ir::entrypoint_return_schema(name, Some(&payload))
+            .map_err(|message| SemanticError {
+                code: "E_EVENT_SCHEMA",
+                message,
+            })?
+            .expect("all public types have schemas");
+        let descriptor = iroha_data_model::smart_contract::event::ContractEventDescriptorV1 {
+            name: name.parse().map_err(|_| SemanticError {
+                code: "E_EVENT_SCHEMA",
+                message: format!("event `{name}` is not a canonical Name"),
+            })?,
+            payload_type,
+        };
+        if !descriptor.validate() {
+            return Err(SemanticError {
+                code: "E_EVENT_SCHEMA",
+                message: format!(
+                    "event `{name}` requires canonical public value fields; Json, StateCursor and private values cannot appear in its payload"
+                ),
+            });
+        }
+        events.push(descriptor);
+    }
+    validate_event_inventory(&events)?;
+    Ok(events)
+}
+fn validate_event_inventory(
+    events: &[iroha_data_model::smart_contract::event::ContractEventDescriptorV1],
+) -> Result<(), SemanticError> {
+    if !iroha_data_model::smart_contract::event::validate_contract_event_table(events) {
+        return Err(SemanticError { code: "E_EVENT_SCHEMA", message: "native event declarations must be canonical, sorted and unique, with at most 256 events and 65536 encoded bytes".into() });
+    }
+    Ok(())
+}
+
+fn register_enum_types(context: &SemanticContext, program: &Program) -> Result<(), SemanticError> {
+    let mut errors = context.error_types.borrow_mut();
+    let mut enums = context.enum_types.borrow_mut();
     for descriptor in [
         ivm_abi::error_types::list_error_type(),
         ivm_abi::error_types::numeric_error_type(),
@@ -3046,90 +3145,159 @@ fn register_error_types(context: &SemanticContext, program: &Program) -> Result<
             .next()
             .expect("builtin error name")
             .to_owned();
-        descriptors.insert(name, Arc::new(descriptor));
+        errors.insert(name, Arc::new(descriptor));
     }
     for item in &program.items {
-        let Item::ErrorEnum(definition) = item else {
+        let Item::Enum(definition) = item else {
             continue;
         };
-        if definition.variants.iter().any(|variant| {
-            variant
-                .message
-                .as_ref()
-                .is_some_and(|message| message.trim().is_empty() || message.len() > 4096)
-        }) {
-            return Err(SemanticError {
-                code: "E_ERROR_MESSAGE",
-                message: "error messages must contain nonblank text and at most 4096 UTF-8 bytes"
-                    .into(),
-            });
-        }
-        let mut variants = definition
-            .variants
-            .iter()
-            .map(|variant| ContractErrorVariantDescriptor {
-                name: variant.name.clone(),
-                code: variant.code,
-            })
-            .collect::<Vec<_>>();
-        variants.sort_by_key(|variant| variant.code);
-        let descriptor = ContractErrorTypeDescriptor {
-            identity: match context.package_identity.borrow().as_deref() {
-                Some(package) => format!("{package}::{}::{}", program.unit.name, definition.name),
-                None => format!("{}::{}", program.unit.name, definition.name),
-            },
-            variants,
+        let identity = match context.package_identity.borrow().as_deref() {
+            Some(package) => format!("{package}::{}::{}", program.unit.name, definition.name),
+            None => format!("{}::{}", program.unit.name, definition.name),
         };
-        if !descriptor.validate() {
-            return Err(SemanticError {
-                code: "E_ERROR_SCHEMA",
-                message: format!(
-                    "error enum `{}` requires unique names and nonzero u32 codes, with at most 256 variants",
-                    definition.name
-                ),
-            });
+        match definition.kind {
+            EnumKind::Data => {
+                if definition
+                    .variants
+                    .iter()
+                    .any(|variant| variant.message.is_some())
+                {
+                    return Err(sem_err(
+                        "E_ENUM_MESSAGE",
+                        "ordinary enum variants cannot declare error messages".into(),
+                    ));
+                }
+                let mut variants = definition
+                    .variants
+                    .iter()
+                    .map(|variant| ContractEnumVariantDescriptorV1 {
+                        name: variant.name.clone(),
+                        code: variant.code,
+                    })
+                    .collect::<Vec<_>>();
+                variants.sort_by_key(|variant| variant.code);
+                let descriptor = ContractEnumTypeDescriptorV1 { identity, variants };
+                if !descriptor.validate() {
+                    return Err(sem_err(
+                        "E_ENUM_SCHEMA",
+                        format!(
+                            "enum `{}` requires unique names and nonzero u32 codes, with at most 256 variants",
+                            definition.name
+                        ),
+                    ));
+                }
+                enums.insert(definition.name.clone(), Arc::new(descriptor));
+            }
+            EnumKind::Error => {
+                if definition.variants.iter().any(|variant| {
+                    variant
+                        .message
+                        .as_ref()
+                        .is_some_and(|message| message.trim().is_empty() || message.len() > 4096)
+                }) {
+                    return Err(sem_err(
+                        "E_ERROR_MESSAGE",
+                        "error messages must contain nonblank text and at most 4096 UTF-8 bytes"
+                            .into(),
+                    ));
+                }
+                let mut variants = definition
+                    .variants
+                    .iter()
+                    .map(|variant| ContractErrorVariantDescriptor {
+                        name: variant.name.clone(),
+                        code: variant.code,
+                    })
+                    .collect::<Vec<_>>();
+                variants.sort_by_key(|variant| variant.code);
+                let descriptor = ContractErrorTypeDescriptor { identity, variants };
+                if !descriptor.validate() {
+                    return Err(sem_err(
+                        "E_ERROR_SCHEMA",
+                        format!(
+                            "error enum `{}` requires unique names and nonzero u32 codes, with at most 256 variants",
+                            definition.name
+                        ),
+                    ));
+                }
+                errors.insert(definition.name.clone(), Arc::new(descriptor));
+            }
         }
-        descriptors.insert(definition.name.clone(), Arc::new(descriptor));
     }
-    let mut codes = context.error_codes.borrow_mut();
-    for (name, descriptor) in descriptors.iter() {
+    let mut codes = context.variant_codes.borrow_mut();
+    for (name, descriptor) in errors.iter() {
+        for variant in &descriptor.variants {
+            codes.insert(format!("{name}::{}", variant.name), variant.code);
+        }
+    }
+    for (name, descriptor) in enums.iter() {
         for variant in &descriptor.variants {
             codes.insert(format!("{name}::{}", variant.name), variant.code);
         }
     }
     Ok(())
 }
-
-fn typed_error_value(
+fn validate_enum_inventory(types: &[ContractEnumTypeDescriptorV1]) -> Result<(), SemanticError> {
+    if !iroha_data_model::smart_contract::manifest::validate_contract_enum_table(types) {
+        return Err(sem_err("E_ENUM_SCHEMA", "ordinary enum inventory must contain at most 256 unique sorted types and fit 65536 canonical bytes".into()));
+    }
+    Ok(())
+}
+fn declared_enum_type(context: &SemanticContext, name: &str) -> Option<Type> {
+    context
+        .enum_types
+        .borrow()
+        .get(name)
+        .map(|descriptor| Type::Enum(Arc::clone(descriptor)))
+        .or_else(|| {
+            context
+                .error_types
+                .borrow()
+                .get(name)
+                .map(|descriptor| Type::ErrorEnum(Arc::clone(descriptor)))
+        })
+}
+fn nominal_variant_code(ty: &Type, name: &str) -> Option<u32> {
+    match ty {
+        Type::Enum(descriptor) => descriptor
+            .variants
+            .iter()
+            .find(|variant| variant.name == name)
+            .map(|variant| variant.code),
+        Type::ErrorEnum(descriptor) => descriptor
+            .variants
+            .iter()
+            .find(|variant| variant.name == name)
+            .map(|variant| variant.code),
+        _ => None,
+    }
+}
+fn typed_variant_value(
     context: &SemanticContext,
     name: &str,
     code: u32,
 ) -> Result<TypedExpr, SemanticError> {
-    let namespace = name
-        .rsplit_once("::")
-        .map(|(namespace, _)| namespace)
-        .ok_or_else(|| SemanticError {
-            code: "E_INTERNAL_RESOLUTION",
-            message: format!("error variant `{name}` has no nominal namespace"),
-        })?;
-    let descriptor = context
-        .error_types
-        .borrow()
-        .get(namespace)
-        .cloned()
-        .ok_or_else(|| SemanticError {
-            code: "E_INTERNAL_RESOLUTION",
-            message: format!("error variant `{name}` has no resolved nominal type"),
-        })?;
-    if descriptor.variant(code).is_none() {
-        return Err(SemanticError {
-            code: "E_INTERNAL_RESOLUTION",
-            message: format!("error code {code} is absent from `{namespace}`"),
-        });
+    let (namespace, variant) = name.rsplit_once("::").ok_or_else(|| {
+        sem_err(
+            "E_INTERNAL_RESOLUTION",
+            format!("variant `{name}` has no nominal namespace"),
+        )
+    })?;
+    let ty = declared_enum_type(context, namespace).ok_or_else(|| {
+        sem_err(
+            "E_INTERNAL_RESOLUTION",
+            format!("variant `{name}` has no resolved nominal type"),
+        )
+    })?;
+    if nominal_variant_code(&ty, variant) != Some(code) {
+        return Err(sem_err(
+            "E_INTERNAL_RESOLUTION",
+            format!("variant code {code} is absent from `{namespace}`"),
+        ));
     }
     Ok(TypedExpr {
-        expr: ExprKind::ErrorValue(code),
-        ty: Type::ErrorEnum(descriptor),
+        expr: ExprKind::VariantCode(code),
+        ty,
     })
 }
 
@@ -3190,15 +3358,109 @@ fn evaluate_constant_declarations<'declaration>(
     }
     Ok(resolved_consts)
 }
+fn register_permissions(
+    context: &SemanticContext,
+    program: &Program,
+) -> Result<Vec<ContractPermissionDescriptorV1>, SemanticError> {
+    let mut permissions = BTreeMap::new();
+    for declaration in &program.permissions {
+        if program.unit.kind == SourceUnitKind::Module
+            || declaration.name == "anyone"
+            || !iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(
+                &declaration.name,
+            )
+        {
+            return Err(sem_err(
+                "E_PERMISSION_DECLARATION",
+                "permissions must be named declarations in a seiyaku".into(),
+            ));
+        }
+        let name = declaration.name.parse::<Name>().map_err(|error| {
+            sem_err(
+                "E_PERMISSION_DECLARATION",
+                format!("invalid permission name: {error}"),
+            )
+        })?;
+        let scope = match &declaration.chain_permission {
+            Some(chain) => ContractPermissionScopeV1::Chain {
+                permission_name: chain.parse::<Name>().map_err(|error| {
+                    sem_err(
+                        "E_PERMISSION_DECLARATION",
+                        format!("invalid chain permission name: {error}"),
+                    )
+                })?,
+            },
+            None => ContractPermissionScopeV1::Instance,
+        };
+        if permissions.insert(name, scope).is_some() {
+            return Err(sem_err(
+                "E_DUPLICATE_DECLARATION",
+                format!("duplicate permission `{}`", declaration.name),
+            ));
+        }
+    }
+    for item in &program.items {
+        let Item::Function(function) = item else {
+            continue;
+        };
+        if matches!(
+            function.modifiers.kind,
+            FunctionKind::Hajimari | FunctionKind::Kaizen
+        ) {
+            // Lifecycle policy is checked by analyze_function before caller
+            // authorization names are meaningful for this declaration.
+            continue;
+        }
+        if let Some(name) = function.modifiers.authorization.as_deref()
+            && name != "anyone"
+            && !name
+                .parse::<Name>()
+                .is_ok_and(|name| permissions.contains_key(&name))
+        {
+            return Err(sem_err(
+                "E_UNKNOWN_PERMISSION",
+                format!("authorization references undeclared permission `{name}`"),
+            ));
+        }
+    }
+    context.permissions.replace(
+        permissions
+            .iter()
+            .map(|(name, scope)| (name.to_string(), scope.clone()))
+            .collect(),
+    );
+    Ok(permissions
+        .into_iter()
+        .map(|(name, scope)| ContractPermissionDescriptorV1 { name, scope })
+        .collect())
+}
+
 fn analyze_with_context(
     context: &SemanticContext,
     program: &Program,
 ) -> Result<TypedProgram, SemanticFailures> {
     reject_test_surface_without_test_mode(context, program)?;
-    register_error_types(context, program)?;
+    let imported =
+        contract_imports::namespace_types(&context.contracts.borrow(), &program.directives)?;
+    let mut external = context.external_types.borrow().clone();
+    for (name, ty) in imported {
+        if external.get(&name).is_some_and(|previous| previous != &ty) {
+            return Err(sem_err(
+                "E_DUPLICATE_DECLARATION",
+                format!("imported type `{name}` has conflicting bindings"),
+            )
+            .into());
+        }
+        external.insert(name, ty);
+    }
+    context.install_external_types(&external);
+
+    register_enum_types(context, program)?;
+    register_event_names(context, program)?;
+    let permissions = register_permissions(context, program)?;
     let external_structs = context.structs.borrow().clone();
     let external_consts = context.consts.borrow().clone();
-    let external_error_codes = context.error_codes.borrow().clone();
+    let external_variant_codes = context.variant_codes.borrow().clone();
     // Collect definitions up front so source order does not affect name resolution.
     let mut structs = external_structs.clone();
     let mut state_decls: Vec<(String, TypeExpr)> = Vec::new();
@@ -3212,20 +3474,25 @@ fn analyze_with_context(
         .map(|(name, signature)| (name.clone(), signature.modifiers.clone()))
         .collect::<HashMap<_, _>>();
     let mut trigger_callbacks: HashSet<String> = HashSet::new();
-    let mut error_codes = external_error_codes;
+    let mut variant_codes = external_variant_codes;
     let struct_names = validate_declaration_uniqueness(program)?;
-    validate_private_helper_lowering_names(context, program)?;
     predeclare_integer_constants(context, program)?;
     let mut global_declarations = std::iter::once(program.unit.name.clone())
         .chain(program.items.iter().map(|item| match item {
             Item::Function(function) => function.name.clone(),
-            Item::Struct(definition) => definition.name.clone(),
-            Item::ErrorEnum(definition) => definition.name.clone(),
+            Item::Struct(definition) | Item::Event(definition) => definition.name.clone(),
+            Item::Enum(definition) => definition.name.clone(),
             Item::Const(constant) => constant.name.clone(),
             Item::State(state) => state.name.clone(),
             Item::Trigger(trigger) => trigger.name.clone(),
         }))
         .collect::<HashSet<_>>();
+    global_declarations.extend(
+        program
+            .permissions
+            .iter()
+            .map(|permission| permission.name.clone()),
+    );
     global_declarations.extend(context.external_functions.borrow().keys().cloned());
     global_declarations.extend(context.external_states.borrow().keys().cloned());
     global_declarations.extend(external_structs.keys().cloned());
@@ -3236,16 +3503,16 @@ fn analyze_with_context(
     context.structs.replace(known_structs);
     for item in &program.items {
         match item {
-            Item::Struct(def) => {
+            Item::Struct(def) | Item::Event(def) => {
                 let mut fields = Vec::new();
                 for (name, ty_expr) in &def.fields {
                     fields.push((name.clone(), convert_type_expr(context, ty_expr)?));
                 }
                 structs.insert(def.name.clone(), fields);
             }
-            Item::ErrorEnum(definition) => {
+            Item::Enum(definition) => {
                 for variant in &definition.variants {
-                    error_codes.insert(
+                    variant_codes.insert(
                         format!("{}::{}", definition.name, variant.name),
                         variant.code,
                     );
@@ -3267,18 +3534,17 @@ fn analyze_with_context(
                 fn_returns.insert(f.name.clone(), ret);
                 fn_modifiers.insert(f.name.clone(), f.modifiers.clone());
             }
-            Item::Trigger(trigger) if trigger.call.namespace.is_none() => {
+            Item::Trigger(trigger) => {
                 trigger_callbacks.insert(trigger.call.entrypoint.clone());
             }
-            Item::Trigger(_) => {}
         }
     }
     context.structs.replace(structs);
-    context.error_codes.replace(error_codes);
+    context.variant_codes.replace(variant_codes);
     if let Some(cycle) = value_struct_cycle(context, &struct_names) {
         if let [owner, dependency, ..] = cycle.as_slice()
             && let Some(ty) = program.items.iter().find_map(|item| {
-                let Item::Struct(definition) = item else {
+                let (Item::Struct(definition) | Item::Event(definition)) = item else {
                     return None;
                 };
                 (definition.name == *owner).then(|| {
@@ -3314,7 +3580,7 @@ fn analyze_with_context(
                     })
                     .or_else(|| {
                         program.items.iter().find_map(|item| {
-                            let Item::Struct(definition) = item else {
+                            let (Item::Struct(definition) | Item::Event(definition)) = item else {
                                 return None;
                             };
                             if definition.name == owner {
@@ -3330,7 +3596,8 @@ fn analyze_with_context(
             return Err(failure.error.into());
         }
     };
-    install_canonical_struct_types(context, resolution_plan);
+    install_canonical_struct_types(context, resolution_plan, program);
+    let events = declared_events(context)?;
 
     let mut fn_returns = fn_returns
         .into_iter()
@@ -3464,7 +3731,7 @@ fn analyze_with_context(
                     );
                     continue;
                 }
-                match analyze_trigger(trigger, &fn_modifiers) {
+                match analyze_trigger(context, trigger) {
                     Ok(trigger) => triggers.push(trigger),
                     Err(error) => record_semantic_failure(
                         &mut failures,
@@ -3472,12 +3739,14 @@ fn analyze_with_context(
                         SemanticFailure {
                             error,
                             location: Some(trigger.location),
-                            diagnostic: context.declaration_diagnostic(&trigger.name),
+                            diagnostic: context
+                                .take_diagnostic()
+                                .or_else(|| context.declaration_diagnostic(&trigger.name)),
                         },
                     ),
                 }
             }
-            Item::Struct(_) | Item::ErrorEnum(_) | Item::Const(_) | Item::State(_) => {}
+            Item::Struct(_) | Item::Event(_) | Item::Enum(_) | Item::Const(_) | Item::State(_) => {}
         }
     }
     if omitted_failures != 0 {
@@ -3535,12 +3804,22 @@ fn analyze_with_context(
     let typed_program = TypedProgram {
         unit: program.unit.clone(),
         items,
+        permissions,
+        events,
         states,
         error_types: context
             .error_types
             .borrow()
             .values()
             .map(|descriptor| descriptor.as_ref().clone())
+            .collect(),
+        enum_types: context
+            .enum_types
+            .borrow()
+            .values()
+            .map(|descriptor| (descriptor.identity.clone(), descriptor.as_ref().clone()))
+            .collect::<BTreeMap<_, _>>()
+            .into_values()
             .collect(),
         error_messages: declared_error_messages(context, program),
         triggers,
@@ -3549,6 +3828,8 @@ fn analyze_with_context(
         source_files: BTreeMap::new(),
         test_support_enabled: context.test_builtins_enabled,
     };
+    validate_enum_inventory(&typed_program.enum_types)?;
+    validate_event_inventory(&typed_program.events)?;
     crate::secret::validate_program(&typed_program, context.zk_enabled)?;
     effect_sites::enforce_permission_requirements(context, &typed_program.items)?;
     Ok(typed_program)
@@ -3561,7 +3842,7 @@ fn declared_error_messages(
     let descriptors = context.error_types.borrow();
     let mut messages = Vec::new();
     for item in &program.items {
-        let Item::ErrorEnum(definition) = item else {
+        let Item::Enum(definition) = item else {
             continue;
         };
         let Some(descriptor) = descriptors.get(&definition.name) else {
@@ -4401,19 +4682,22 @@ fn append_test_call_site(
     };
     let TypedExpr { expr, ty } = typed;
     let expr = match expr {
-        ExprKind::Call { name, mut args } => {
+        ExprKind::Call {
+            target: name,
+            mut args,
+        } => {
             args.push(site);
-            ExprKind::Call { name, args }
+            ExprKind::Call { target: name, args }
         }
         ExprKind::NamedCall {
-            name,
+            target: name,
             mut args,
             mut evaluation_order,
         } => {
             evaluation_order.push(args.len());
             args.push(site);
             ExprKind::NamedCall {
-                name,
+                target: name,
                 args,
                 evaluation_order,
             }
@@ -4428,11 +4712,13 @@ fn retain_named_call_evaluation_order(typed: TypedExpr, plan: &CallArgumentPlan)
     }
     let TypedExpr { expr, ty } = typed;
     let expr = match expr {
-        ExprKind::Call { name, args } if args.len() == plan.ordered.len() => ExprKind::NamedCall {
-            name,
-            args,
-            evaluation_order: plan.evaluation_order.clone(),
-        },
+        ExprKind::Call { target: name, args } if args.len() == plan.ordered.len() => {
+            ExprKind::NamedCall {
+                target: name,
+                args,
+                evaluation_order: plan.evaluation_order.clone(),
+            }
+        }
         // Some compiler-owned test intrinsics consume literal selector
         // arguments into the canonical callee name. Those total literals no
         // longer have runtime slots, so the source permutation cannot be
@@ -4533,7 +4819,7 @@ fn explicit_numeric_conversion(
             }
             Ok(TypedExpr {
                 expr: ExprKind::Call {
-                    name: DECIMAL_TO_INT_TRUNC_INTRINSIC.to_owned(),
+                    target: CallTarget::Intrinsic(CompilerIntrinsic::DecimalToIntTrunc),
                     args,
                 },
                 ty: Type::Int,
@@ -4594,9 +4880,13 @@ fn numeric_literal_is_zero(expr: &TypedExpr) -> bool {
 fn is_supported_durable_value_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         ty if is_numeric_type(&ty) => true,
-        Type::Unit | Type::ErrorEnum(_) | Type::Bool | Type::String | Type::Json | Type::Bytes => {
-            true
-        }
+        Type::Unit
+        | Type::Enum(_)
+        | Type::ErrorEnum(_)
+        | Type::Bool
+        | Type::String
+        | Type::Json
+        | Type::Bytes => true,
         other if is_pointer_type(&other) => true,
         Type::Struct { fields, .. } => fields
             .iter()
@@ -4696,7 +4986,10 @@ fn coerce_contextual_numeric_literals(
 }
 fn list_element_contains_resource_handle(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
-        Type::Secret(_) | Type::StateMap(_, _) | Type::AxtAnchoredSpendV1 => true,
+        Type::Secret(_)
+        | Type::StateMap(_, _)
+        | Type::AxtAnchoredSpendV1
+        | Type::ContractRef(_) => true,
         Type::List(element, _) | Type::Option(element) => {
             list_element_contains_resource_handle(&element)
         }
@@ -4752,6 +5045,21 @@ pub(crate) fn runtime_value_word_count_bounded(ty: &Type, limit: usize) -> Optio
     }
     count(ty, limit)
 }
+/// Encoding accepts public values but excludes execution-bound cursor capabilities.
+fn is_encodable_public_value(ty: &Type) -> bool {
+    match resolve_struct_type(ty) {
+        Type::StateCursor(_) => false,
+        Type::Struct { fields, .. } => fields
+            .iter()
+            .all(|(_, field)| is_encodable_public_value(field)),
+        Type::Tuple(items) => items.iter().all(is_encodable_public_value),
+        Type::Option(payload) | Type::List(payload, _) => is_encodable_public_value(&payload),
+        Type::Result(ok, error) => {
+            is_encodable_public_value(&ok) && is_encodable_public_value(&error)
+        }
+        other => is_supported_public_argument_type(&other),
+    }
+}
 fn is_supported_public_argument_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         Type::Int
@@ -4770,6 +5078,7 @@ fn is_supported_public_argument_type(ty: &Type) -> bool {
         | Type::DataSpaceId
         | Type::Unit
         | Type::StateCursor(_)
+        | Type::Enum(_)
         | Type::ErrorEnum(_) => true,
         Type::Struct { fields, .. } => fields
             .iter()
@@ -4787,20 +5096,23 @@ fn is_supported_public_argument_type(ty: &Type) -> bool {
         | Type::ProofBlob
         | Type::SoracloudRequest
         | Type::SoracloudResponse
-        | Type::NamedStruct(_) => false,
+        | Type::NamedStruct(_)
+        | Type::ContractRef(_) => false,
     }
 }
 pub(crate) fn is_supported_durable_key_type(ty: &Type) -> bool {
-    let resolved = resolve_struct_type(ty);
-    let canonical_name = type_name(&resolved);
-    V1_STATE_MAP_KEY_TYPE_NAMES.contains(&canonical_name.as_str())
+    crate::abi_schema::state_map_key_schema(&resolve_struct_type(ty)).is_some()
 }
 fn is_in_memory_map_word_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         ty if is_numeric_type(&ty) => true,
-        Type::Unit | Type::ErrorEnum(_) | Type::Bool | Type::String | Type::Bytes | Type::Json => {
-            true
-        }
+        Type::Unit
+        | Type::Enum(_)
+        | Type::ErrorEnum(_)
+        | Type::Bool
+        | Type::String
+        | Type::Bytes
+        | Type::Json => true,
         other if is_pointer_type(&other) => true,
         _ => false,
     }
@@ -4859,7 +5171,7 @@ fn validate_state_type_inner(ty: &Type, allow_map: bool) -> Result<(), SemanticE
                 return Err(SemanticError {
                     code: "E_STATE_MAP_KEY_TYPE",
                     message: format!(
-                        "StateMap key type `{}` is not supported for durable storage; use a scalar canonical-Norito type",
+                        "StateMap key type `{}` is not supported for durable storage; use canonical scalar leaves or tuples of those leaves",
                         type_name(&k)
                     ),
                 });
@@ -4945,6 +5257,7 @@ fn is_eq_comparable_type(ty: &Type) -> bool {
             | Type::Decimal
             | Type::Quantity
             | Type::Unit
+            | Type::Enum(_)
             | Type::ErrorEnum(_)
             | Type::Bool
             | Type::String
@@ -5153,7 +5466,7 @@ fn analyze_function(
     if matches!(
         func.modifiers.kind,
         FunctionKind::Hajimari | FunctionKind::Kaizen
-    ) && func.modifiers.permission.is_some()
+    ) && func.modifiers.authorization.is_some()
     {
         return Err(SemanticError {
             code: "E_LIFECYCLE_AUTHORIZATION",
@@ -5187,7 +5500,7 @@ fn analyze_function(
                 ),
             });
         }
-        if func.modifiers.permission.is_some() {
+        if func.modifiers.authorization.is_some() {
             return Err(SemanticError {
                 code: "K2004",
                 message: format!(
@@ -5266,7 +5579,10 @@ fn analyze_function(
         &mut vars,
         &mut mutable_bindings,
         expected_ret.as_ref(),
-        Some(expected_tail),
+        BlockTailContext {
+            expected: Some(expected_tail),
+            widen: true,
+        },
         0,
     );
     context.statement_recovery.set(recovery);
@@ -5413,113 +5729,81 @@ fn typed_string_literal(value: String) -> TypedExpr {
         ty: Type::String,
     }
 }
-/// Text of a `Json::parse("...")` literal argument, if the expression is one.
-fn json_parse_literal_text(expr: &Expr) -> Option<&str> {
-    match expr {
-        Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
-            json_parse_literal_text(expression)
-        }
-        Expr::Call { name, args, .. }
-            if args.len() == 1
-                && matches!(
-                    Builtin::from_name(&normalize_namespaced(name)),
-                    Some(Builtin::PointerConstructor(PointerConstructor::Json))
-                ) =>
-        {
-            match args[0].kind() {
-                Expr::String(text) => Some(text.as_str()),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-/// Check a literal argument record passed to `test::invoke_kotoage`/`_as` against the target's
-/// exact `EntrypointArgumentSchemaV1`, the same boundary schema Torii and the CLIs enforce.
-///
-/// Dynamic records are checked by the test runner when the call executes.
-/// Help for a literal argument record that does not match its target: the declared parameters
-/// and the canonical JSON encoding of the scalar types that most often go wrong.
-fn argument_record_help(target_name: &str, params: &[TypedParam]) -> String {
-    format!(
-        "`{target_name}` takes {}; write a JSON object keyed by parameter name, where `int`, `decimal`, and `quantity` values are canonical decimal strings (`\"30\"`) and `Option` values are `{{\"some\": value}}` or `{{\"none\": true}}`",
-        params
-            .iter()
-            .map(|param| format!("`{} {}`", render_type_name(&param.ty), param.name))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-}
-fn check_literal_argument_record(
+/// Analyze a closed source record against the exact public target's parameter types.
+fn analyze_test_arguments(
     context: &SemanticContext,
-    target_name: &str,
-    payload: &Expr,
-) -> Result<(), SemanticError> {
-    let Some(text) = json_parse_literal_text(payload) else {
-        return Ok(());
+    target: &str,
+    expression: &Expr,
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    let Expr::ArgumentRecord { fields } = expression.kind() else {
+        return Err(SemanticError {
+            code: "E_TEST_ARGUMENT_RECORD",
+            message: format!(
+                "arguments for `{target}` require a typed record such as `{{ count: 7 }}`; use `{{}}` when it has no parameters"
+            ),
+        });
     };
     let params = context
         .function_params
         .borrow()
-        .get(target_name)
+        .get(target)
         .cloned()
         .or_else(|| {
             context
                 .external_functions
                 .borrow()
-                .get(target_name)
+                .get(target)
                 .map(|signature| signature.params.clone())
-        });
-    let Some(params) = params else {
-        return Ok(());
-    };
-    let Ok(json) = Json::from_str_norito(text) else {
-        return Ok(());
-    };
-    let Ok(schema) = crate::ir::entrypoint_argument_schema(&params) else {
-        return Ok(());
-    };
-    let Some(schema) = schema else {
-        if json.get() == "{}" {
-            return Ok(());
-        }
-        return Err(SemanticError {
-            code: "K2003",
-            message: format!(
-                "`{target_name}` takes no arguments, so its argument record must be `Json::parse(\"{{}}\")`"
-            ),
-        });
-    };
-    ivm_abi::arguments::argument_record_from_json_detailed(&schema, &json)
-        .map(|_| ())
-        .map_err(|error| {
-            context.capture_help(
-                context.expression_source(payload),
-                argument_record_help(target_name, &params),
-            );
-            let mut message = format!("arguments for `{target_name}`: {error}");
-            if let Some(number) = error.found.strip_prefix("JSON number ")
-                && error.expected.contains("decimal")
-            {
-                message.push_str(&format!(
-                    "; int, decimal and quantity arguments are canonical strings, write \"{number}\""
-                ));
-            }
-            let declared = schema
-                .fields
-                .iter()
-                .map(|field| field.name.as_str())
-                .collect::<Vec<_>>();
-            if let Some(hint) = crate::testing::undeclared_argument_keys_hint(&declared, json.get())
-            {
-                message.push_str("; ");
-                message.push_str(&hint);
-            }
-            SemanticError {
-                code: "K2003",
-                message,
-            }
         })
+        .ok_or_else(|| SemanticError {
+            code: "K2002",
+            message: format!("unknown test target `{target}`"),
+        })?;
+    for field in fields {
+        if !params.iter().any(|param| param.name == field.name) {
+            let suggestion = crate::diagnostic::suggest::closest(
+                &field.name,
+                params
+                    .iter()
+                    .filter(|param| !fields.iter().any(|field| field.name == param.name))
+                    .map(|param| param.name.as_str()),
+            );
+            return Err(SemanticError {
+                code: "E_TEST_ARGUMENT_RECORD",
+                message: format!(
+                    "arguments for `{target}`: `{}` is not a parameter{}",
+                    field.name,
+                    suggestion.map_or_else(String::new, |name| format!("; did you mean `{name}`?"))
+                ),
+            });
+        }
+    }
+    let declared_fields = params
+        .into_iter()
+        .map(|param| (param.name, param.ty))
+        .collect();
+    let typed = analyze_record_fields(
+        context,
+        target,
+        format!("$arguments::{target}"),
+        fields,
+        declared_fields,
+        vars,
+    )
+    .map_err(|mut error| {
+        error.code = match error.code {
+            "E_UNKNOWN_STRUCT_FIELD"
+            | "E_MISSING_STRUCT_FIELD"
+            | "E_DUPLICATE_STRUCT_FIELD"
+            | "E_TYPE_ANNOTATION_MISMATCH" => "E_TEST_ARGUMENT_RECORD",
+            other => other,
+        };
+        error.message = format!("arguments for `{target}`: {}", error.message);
+        error
+    })?;
+    context.record_typed_hir_node(expression, &typed.ty)?;
+    Ok(typed)
 }
 fn analyze_invoke_entrypoint_call(
     context: &SemanticContext,
@@ -5536,7 +5820,8 @@ fn analyze_invoke_entrypoint_call(
     if args.len() != 2 {
         return Err(SemanticError {
             code: "K2003",
-            message: "test::invoke_kotoage expects (string|Name literal, Json)".into(),
+            message: "test::invoke_kotoage expects (string|Name literal, typed argument record)"
+                .into(),
         });
     }
     let target_name = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
@@ -5545,18 +5830,11 @@ fn analyze_invoke_entrypoint_call(
             "test::invoke_kotoage requires a literal public or lifecycle target such as \"run\" or Name::parse(\"run\")"
                 .into(),
     })?;
-    let payload = analyze_expr(context, &args[1], vars)?;
-    if payload.ty != Type::Json {
-        return Err(SemanticError {
-            code: "K2003",
-            message: "test::invoke_kotoage expects a Json payload as its second argument".into(),
-        });
-    }
     let ret_ty = test_call_target_return_type(context, &target_name, &args[0])?;
-    check_literal_argument_record(context, &target_name, &args[1])?;
+    let payload = analyze_test_arguments(context, &target_name, &args[1], vars)?;
     Ok(TypedExpr {
         expr: ExprKind::Call {
-            name: "invoke_entrypoint".to_owned(),
+            target: CallTarget::Builtin(Builtin::TestInvokeEntrypoint),
             args: vec![typed_string_literal(target_name), payload],
         },
         ty: ret_ty,
@@ -5698,7 +5976,7 @@ fn analyze_invoke_entrypoint_as_call(
     if args.len() != 3 {
         return Err(SemanticError {
             code: "K2003",
-            message: "test::invoke_kotoage_as expects (string|Name literal actor, string|Name literal kotoage, Json)".into(),
+            message: "test::invoke_kotoage_as expects (string|Name literal actor, string|Name literal kotoage, typed argument record)".into(),
         });
     }
     let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
@@ -5709,18 +5987,11 @@ fn analyze_invoke_entrypoint_as_call(
         code: "E_TEST_ENTRYPOINT_LITERAL",
         message: "test::invoke_kotoage_as requires a literal public or lifecycle target such as \"run\" or Name::parse(\"run\")".into(),
     })?;
-    let payload = analyze_expr(context, &args[2], vars)?;
-    if payload.ty != Type::Json {
-        return Err(SemanticError {
-            code: "K2003",
-            message: "test::invoke_kotoage_as expects a Json payload as its third argument".into(),
-        });
-    }
     let ret_ty = test_call_target_return_type(context, &target_name, &args[1])?;
-    check_literal_argument_record(context, &target_name, &args[2])?;
+    let payload = analyze_test_arguments(context, &target_name, &args[2], vars)?;
     Ok(TypedExpr {
         expr: ExprKind::Call {
-            name: "invoke_entrypoint_as".to_string(),
+            target: CallTarget::Builtin(Builtin::TestInvokeEntrypointAs),
             args: vec![
                 typed_string_literal(actor),
                 typed_string_literal(target_name),
@@ -5772,14 +6043,8 @@ fn analyze_rejection_expectation_call(
             "test::expect_reject_as requires a literal public or lifecycle target such as \"run\" or Name::parse(\"run\")"
                 .into(),
     })?;
-    let payload = analyze_expr(context, &args[2], vars)?;
-    if payload.ty != Type::Json {
-        return Err(SemanticError {
-            code: "K2003",
-            message: "test::expect_reject_as expects a Json payload as its third argument".into(),
-        });
-    }
     let _ = test_call_target_return_type(context, &target_name, &args[1])?;
+    let payload = analyze_test_arguments(context, &target_name, &args[2], vars)?;
     let expectation = if any {
         crate::testing::RejectionExpectation::Any
     } else if let Expr::Ident(name) = args[3].kind()
@@ -5789,7 +6054,7 @@ fn analyze_rejection_expectation_call(
     } else {
         let value = analyze_expr(context, &args[3], vars)?;
         match (&value.ty, value.kind()) {
-            (Type::ErrorEnum(descriptor), ExprKind::ErrorValue(code)) => {
+            (Type::ErrorEnum(descriptor), ExprKind::VariantCode(code)) => {
                 crate::testing::RejectionExpectation::Contract { descriptor: descriptor.as_ref().clone(), code: *code }
             }
             _ => return Err(SemanticError {
@@ -5805,12 +6070,11 @@ fn analyze_rejection_expectation_call(
         })?;
     Ok(TypedExpr {
         expr: ExprKind::Call {
-            name: if any {
-                "expect_any_reject_as"
+            target: CallTarget::Builtin(if any {
+                Builtin::TestExpectAnyRejectAs
             } else {
-                "expect_reject_as"
-            }
-            .to_string(),
+                Builtin::TestExpectRejectAs
+            }),
             args: vec![
                 typed_string_literal(actor),
                 typed_string_literal(target_name),
@@ -5848,7 +6112,7 @@ fn analyze_actor_account_call(
     })?;
     Ok(TypedExpr {
         expr: ExprKind::Call {
-            name: "actor_account".to_string(),
+            target: CallTarget::Builtin(Builtin::TestActorAccount),
             args: vec![typed_string_literal(actor)],
         },
         ty: Type::AccountId,
@@ -5879,7 +6143,7 @@ fn analyze_actor_public_key_call(
     })?;
     Ok(TypedExpr {
         expr: ExprKind::Call {
-            name: "actor_public_key".to_string(),
+            target: CallTarget::Builtin(Builtin::TestActorPublicKey),
             args: vec![typed_string_literal(actor)],
         },
         ty: Type::Bytes,
@@ -6002,7 +6266,7 @@ fn analyze_test_assertion_call(
         expr: ExprKind::Bytes(encoded),
         ty: Type::Bytes,
     });
-    Ok(typed_call(builtin.name(), typed, Type::Unit))
+    Ok(typed_builtin_call(builtin, typed, Type::Unit))
 }
 fn analyze_actor_sign_call(
     context: &SemanticContext,
@@ -6035,11 +6299,67 @@ fn analyze_actor_sign_call(
     }
     Ok(TypedExpr {
         expr: ExprKind::Call {
-            name: "actor_sign".to_string(),
+            target: CallTarget::Builtin(Builtin::TestActorSign),
             args: vec![typed_string_literal(actor), message],
         },
         ty: Type::Bytes,
     })
+}
+fn reject_provably_full_push(
+    statement: &Statement,
+    previous: Option<&TypedStatement>,
+) -> Result<(), SemanticError> {
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    let TypedStatement::Let {
+        name: binding,
+        value,
+    } = previous.kind()
+    else {
+        return Ok(());
+    };
+    let (ExprKind::List(values), Type::List(_, capacity)) =
+        (value.kind(), resolve_struct_type(&value.ty))
+    else {
+        return Ok(());
+    };
+    if values.len() != usize::from(capacity) {
+        return Ok(());
+    }
+    let Statement::Expr(expression) = statement.kind() else {
+        return Ok(());
+    };
+    let Expr::Call {
+        name,
+        args,
+        implicit_receiver: true,
+        ..
+    } = expression.kind()
+    else {
+        return Ok(());
+    };
+    if name != "push"
+        || args.len() != 2
+        || !matches!(args[0].kind(), Expr::Ident(name) if name == binding)
+        || !matches!(
+            args[1].kind(),
+            Expr::IntLiteral(_) | Expr::Bool(_) | Expr::String(_)
+        )
+    {
+        return Ok(());
+    }
+    Err(SemanticError {
+        code: "E_LIST_PROVABLY_FULL",
+        message: format!(
+            "`{binding}` is initialized with all {capacity} slots occupied; `push` would always raise ListError::CapacityExceeded; declare a larger List capacity or handle `try_push`"
+        ),
+    })
+}
+#[derive(Clone, Copy, Default)]
+struct BlockTailContext<'a> {
+    expected: Option<&'a Type>,
+    widen: bool,
 }
 fn analyze_block(
     context: &SemanticContext,
@@ -6047,9 +6367,13 @@ fn analyze_block(
     vars: &mut HashMap<String, Type>,
     mutable_bindings: &mut HashSet<String>,
     expected_ret: Option<&Type>,
-    expected_tail: Option<&Type>,
+    tail_context: BlockTailContext<'_>,
     loop_depth: usize,
 ) -> Result<TypedBlock, SemanticError> {
+    let BlockTailContext {
+        expected: expected_tail,
+        widen: widen_tail,
+    } = tail_context;
     let previous_mutable_bindings = context
         .current_mutable_bindings
         .replace(mutable_bindings.clone());
@@ -6058,14 +6382,16 @@ fn analyze_block(
         let mut statements = Vec::new();
         let mut statement_sources = Vec::new();
         for stmt in &block.statements {
-            let mut v = match analyze_statement(
-                context,
-                stmt,
-                vars,
-                mutable_bindings,
-                expected_ret,
-                loop_depth,
-            ) {
+            let mut v = match reject_provably_full_push(stmt, statements.last()).and_then(|()| {
+                analyze_statement(
+                    context,
+                    stmt,
+                    vars,
+                    mutable_bindings,
+                    expected_ret,
+                    loop_depth,
+                )
+            }) {
                 Ok(statements) => statements,
                 Err(error) => {
                     recover_statement_failure(context, stmt, error, vars, mutable_bindings)?;
@@ -6077,9 +6403,14 @@ fn analyze_block(
             statements.append(&mut v);
         }
         let tail = if let Some(expression) = &block.tail {
-            let mut typed = analyze_expr_expected(context, expression, vars, expected_tail)?;
+            let mut typed =
+                analyze_expr_in_context(context, expression, vars, expected_tail, widen_tail)?;
             if let Some(expected) = expected_tail
-                && let Err(mut error) = ensure_assignable_and_coerce(expected, &mut typed)
+                && let Err(mut error) = if widen_tail {
+                    ensure_boundary_assignable_and_coerce(expected, &mut typed)
+                } else {
+                    ensure_assignable_and_coerce(expected, &mut typed)
+                }
             {
                 context.capture_expression_diagnostic(expression, None);
                 error.code = "E_TAIL_TYPE_MISMATCH";
@@ -6308,7 +6639,7 @@ fn analyze_named_struct_binding(
         });
     };
     let expected_name = context
-        .external_types
+        .resolved_named_types
         .borrow()
         .get(name)
         .and_then(|ty| match ty {
@@ -6657,24 +6988,23 @@ fn analyze_statement_inner(
                     return Err(error);
                 }
             };
-            if let Some(dt) = &declared {
-                apply_map_new_type_hint(&mut expr, dt);
-                if let Err(mut error) = ensure_assignable_and_coerce(dt, &mut expr) {
-                    if error.code == "E_TYPE_ANNOTATION_MISMATCH" {
-                        error.message = format!("type annotation mismatch: {}", error.message);
-                    }
-                    if error.code == "E_QUERY_RESULT_TYPE"
-                        && let Some(annotation) = ty.as_ref()
-                    {
-                        context.replace_diagnostic(
-                            context.type_source(annotation),
-                            Some(crate::semantic_diagnostics::SemanticFix::Replace {
-                                replacement: render_source_type_name(&expr.ty),
-                            }),
-                        );
-                    }
-                    return Err(error);
+            if let Some(dt) = &declared
+                && let Err(mut error) = ensure_assignable_and_coerce(dt, &mut expr)
+            {
+                if error.code == "E_TYPE_ANNOTATION_MISMATCH" {
+                    error.message = format!("type annotation mismatch: {}", error.message);
                 }
+                if error.code == "E_QUERY_RESULT_TYPE"
+                    && let Some(annotation) = ty.as_ref()
+                {
+                    context.replace_diagnostic(
+                        context.type_source(annotation),
+                        Some(crate::semantic_diagnostics::SemanticFix::Replace {
+                            replacement: render_source_type_name(&expr.ty),
+                        }),
+                    );
+                }
+                return Err(error);
             }
             if is_state_map_expr(context, &expr) {
                 return Err(SemanticError {
@@ -6712,7 +7042,7 @@ fn analyze_statement_inner(
                         .into(),
                 });
             }
-            apply_map_new_type_hint(&mut expr, &expected);
+
             inferred_assignment(context, stmt, name, &expected, &mut expr)?;
             // Rebind SSA name to new value
             vars.insert(name.clone(), expr.ty.clone());
@@ -6901,7 +7231,7 @@ fn analyze_statement_inner(
                                     .into(),
                         });
                     }
-                    apply_map_new_type_hint(&mut expr, &expected);
+
                     if *op == AssignOp::Set {
                         inferred_assignment(context, stmt, name, &expected, &mut expr)?;
                         vars.insert(name.clone(), expr.ty.clone());
@@ -6996,10 +7326,42 @@ fn analyze_statement_inner(
                 }),
             }
         }
+        Statement::Emit(expression) => {
+            let payload = analyze_record_literal(context, expression, vars, true)?;
+            context.record_typed_hir_node(expression, &payload.ty)?;
+            let Expr::StructLiteral { name, .. } = expression.kind() else {
+                unreachable!("checked event record")
+            };
+            let ordinal = context
+                .event_names
+                .borrow()
+                .iter()
+                .position(|event| event == name)
+                .expect("checked declared event");
+            Ok(vec![TypedStatement::Expr(TypedExpr {
+                expr: ExprKind::Call {
+                    target: CallTarget::Intrinsic(CompilerIntrinsic::EmitEvent),
+                    args: vec![
+                        TypedExpr {
+                            expr: ExprKind::IntLiteral(BigInt::from(ordinal as u64)),
+                            ty: Type::Int,
+                        },
+                        payload,
+                    ],
+                },
+                ty: Type::Unit,
+            })])
+        }
         Statement::Expr(e) => Ok(vec![TypedStatement::Expr(analyze_expr(context, e, vars)?)]),
         Statement::Return(opt) => {
             let mut tv = if let Some(e) = opt {
-                Some(analyze_expr_expected(context, e, vars, expected_ret)?)
+                Some(analyze_expr_in_context(
+                    context,
+                    e,
+                    vars,
+                    expected_ret,
+                    true,
+                )?)
             } else {
                 None
             };
@@ -7021,8 +7383,7 @@ fn analyze_statement_inner(
                         }
                     }
                     Some(expr) => {
-                        apply_map_new_type_hint(expr, exp);
-                        if let Err(mut err) = ensure_assignable_and_coerce(exp, expr) {
+                        if let Err(mut err) = ensure_boundary_assignable_and_coerce(exp, expr) {
                             err.code = "E_RETURN_TYPE_MISMATCH";
                             err.message = format!("return type mismatch: {}", err.message);
                             if let Some(primary) = context.statement_source(stmt) {
@@ -7083,7 +7444,7 @@ fn analyze_statement_inner(
                 &mut vars.clone(),
                 &mut mutable_bindings.clone(),
                 expected_ret,
-                None,
+                BlockTailContext::default(),
                 loop_depth,
             )?;
             let else_block = if let Some(b) = else_branch {
@@ -7093,7 +7454,7 @@ fn analyze_statement_inner(
                     &mut vars.clone(),
                     &mut mutable_bindings.clone(),
                     expected_ret,
-                    None,
+                    BlockTailContext::default(),
                     loop_depth,
                 )?)
             } else {
@@ -7124,7 +7485,7 @@ fn analyze_statement_inner(
                 &mut then_vars,
                 &mut mutable_bindings.clone(),
                 expected_ret,
-                None,
+                BlockTailContext::default(),
                 loop_depth,
             )?;
             let else_branch = if let Some(block) = else_branch {
@@ -7134,7 +7495,7 @@ fn analyze_statement_inner(
                     &mut vars.clone(),
                     &mut mutable_bindings.clone(),
                     expected_ret,
-                    None,
+                    BlockTailContext::default(),
                     loop_depth,
                 )?)
             } else {
@@ -7230,7 +7591,7 @@ fn analyze_statement_inner(
                 &mut loop_env.clone(),
                 &mut local_mutable_bindings.clone(),
                 expected_ret,
-                None,
+                BlockTailContext::default(),
                 loop_depth + 1,
             )?;
             Ok(vec![TypedStatement::For {
@@ -7267,7 +7628,7 @@ fn analyze_statement_inner(
                 &mut local_vars,
                 &mut local_mutability,
                 expected_ret,
-                None,
+                BlockTailContext::default(),
                 loop_depth + 1,
             )?;
             body_t.prepend_unsourced(bindings);
@@ -7285,8 +7646,7 @@ fn query_helper_accepts_arg(builtin: Builtin, ty: &Type) -> bool {
         Builtin::QueryExecuteNorito
         | Builtin::QueryGetContractManifest
         | Builtin::ZkRootsGet
-        | Builtin::ZkVoteGetTally
-        | Builtin::VrfEpochSeed => is_blob_like(ty),
+        | Builtin::ZkVoteGetTally => is_blob_like(ty),
         Builtin::QueryGetAccount => matches!(ty, Type::AccountId),
         Builtin::QueryGetAsset => matches!(ty, Type::AssetId),
         Builtin::QueryGetAssetDefinition => matches!(ty, Type::AssetDefinitionId),
@@ -7303,7 +7663,7 @@ fn core_query_view_type(builtin: Builtin) -> Option<Type> {
             "AccountView",
             vec![("id", Type::AccountId), ("metadata", Type::Json)],
         ),
-        Builtin::QueryGetAsset | Builtin::QueryPageAssets => (
+        Builtin::QueryGetAsset | Builtin::QueryPageAssets | Builtin::QueryPageAssetsOf => (
             "AssetView",
             vec![("id", Type::AssetId), ("amount", Type::Quantity)],
         ),
@@ -7338,7 +7698,7 @@ fn core_query_view_type(builtin: Builtin) -> Option<Type> {
         _ => return None,
     };
     Some(Type::Struct {
-        name: name.to_owned(),
+        name: format!("kotodama::{name}"),
         fields: Arc::from(
             fields
                 .into_iter()
@@ -7355,7 +7715,7 @@ fn state_page_type(key: Type, value: Type, capacity: u8) -> Result<Type, Semanti
         });
     }
     let ty = Type::Struct {
-        name: "StatePage".into(),
+        name: "kotodama::StatePage".into(),
         fields: Arc::from(vec![
             (
                 "items".into(),
@@ -7374,7 +7734,7 @@ fn state_page_components(ty: &Type) -> Option<(&Type, &Type, u8)> {
     let Type::Struct { name, fields } = ty else {
         return None;
     };
-    if name != "StatePage" {
+    if name != "kotodama::StatePage" {
         return None;
     }
     let [
@@ -7498,7 +7858,7 @@ fn analyze_state_page_call(
             Ok(retain_named_call_evaluation_order(
                 TypedExpr {
                     expr: ExprKind::Call {
-                        name: STATE_PAGE_INTRINSIC.into(),
+                        target: CallTarget::Intrinsic(CompilerIntrinsic::StatePage),
                         args: vec![receiver, after, limit],
                     },
                     ty: page_ty,
@@ -7511,7 +7871,7 @@ fn analyze_state_page_call(
             };
             Ok(TypedExpr {
                 expr: ExprKind::Call {
-                    name: STATE_TAKE_INTRINSIC.into(),
+                    target: CallTarget::Intrinsic(CompilerIntrinsic::StateTake),
                     args: vec![receiver, after, limit],
                 },
                 ty: fields[0].1.clone(),
@@ -7531,7 +7891,11 @@ fn query_page_type(view: Type) -> Result<Type, SemanticError> {
     };
     if !matches!(
         view_name.as_str(),
-        "AccountView" | "AssetView" | "AssetDefinitionView" | "DomainView" | "NftView"
+        "kotodama::AccountView"
+            | "kotodama::AssetView"
+            | "kotodama::AssetDefinitionView"
+            | "kotodama::DomainView"
+            | "kotodama::NftView"
     ) {
         return Err(SemanticError {
             code: "E_QUERY_PAGE_VIEW",
@@ -7544,7 +7908,7 @@ fn query_page_type(view: Type) -> Result<Type, SemanticError> {
         // The projection specialization is encoded by the recursive List
         // child. Keeping the nominal name canonical avoids smuggling generic
         // syntax into an ABI identifier while preserving exact schema identity.
-        name: QUERY_PAGE_TYPE_NAME.to_owned(),
+        name: QUERY_PAGE_NOMINAL_NAME.to_owned(),
         fields: Arc::from(vec![
             ("items".to_owned(), Type::List(Box::new(view), 64)),
             ("next_offset".to_owned(), Type::Option(Box::new(Type::Int))),
@@ -7562,7 +7926,7 @@ fn query_page_view_type(ty: &Type) -> Option<&Type> {
     else {
         return None;
     };
-    (name == QUERY_PAGE_TYPE_NAME
+    (name == QUERY_PAGE_NOMINAL_NAME
         && items_name == "items"
         && *capacity == 64
         && next_name == "next_offset"
@@ -7635,10 +7999,10 @@ fn typed_expr(expr: ExprKind, ty: Type) -> TypedExpr {
     TypedExpr { expr, ty }
 }
 
-fn typed_call(name: &str, args: Vec<TypedExpr>, ty: Type) -> TypedExpr {
+fn typed_builtin_call(builtin: Builtin, args: Vec<TypedExpr>, ty: Type) -> TypedExpr {
     typed_expr(
         ExprKind::Call {
-            name: name.to_owned(),
+            target: CallTarget::Builtin(builtin),
             args,
         },
         ty,
@@ -7689,7 +8053,7 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
             "zk_vote_get_tally expects (bytes) pointer to NoritoBytes VoteGetTallyRequest",
         ),
         Builtin::VrfEpochSeed => {
-            M::Static("vrf_epoch_seed expects (bytes) pointer to NoritoBytes VrfEpochSeedRequest")
+            M::Static("crypto::vrf::epoch_seed expects (int epoch) and returns Option<bytes>")
         }
         Builtin::BuildSubmitBallotInline => M::Static(
             "build_submit_ballot_inline expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)",
@@ -7769,9 +8133,6 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         Builtin::RegisterAccount | Builtin::UnregisterAccount => {
             M::NameSuffix(" expects (AccountId)")
         }
-        Builtin::RegisterAsset => {
-            M::Static("register_asset expects (AssetDefinitionId, string, NumericSpec, Mintable)")
-        }
         Builtin::UnregisterAsset => M::Static("unregister_asset expects (AssetDefinitionId)"),
         Builtin::RegisterPeer | Builtin::UnregisterPeer | Builtin::RegisterTrigger => {
             M::NameSuffix(" expects (Json)")
@@ -7788,9 +8149,6 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         Builtin::GrantPermission | Builtin::RevokePermission => {
             M::NameSuffix(" expects (AccountId, Name|Json)")
         }
-        Builtin::GrantContractEntrypoint | Builtin::RevokeContractEntrypoint => {
-            M::NameSuffix(" expects (AccountId, string)")
-        }
         Builtin::Alloc => M::Static("alloc expects (int bytes)"),
         Builtin::ExecutionSummary => M::Static("execution_summary expects no arguments"),
         Builtin::GrowHeap => M::Static("grow_heap expects (int bytes)"),
@@ -7802,10 +8160,6 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
             M::Static("create_nfts_for_all_users expects no arguments")
         }
         Builtin::SetExecutionDepth => M::Static("set_execution_depth expects one int arg"),
-        Builtin::TransferV1BatchBegin | Builtin::TransferV1BatchEnd => M::NameSuffix(" expects ()"),
-        Builtin::TransferV1BatchApply => {
-            M::Static("transfer_v1_batch_apply expects (bytes) Norito TransferAssetBatch")
-        }
         Builtin::AxtBegin => M::Static("axt_begin expects (AxtDescriptor)"),
         Builtin::StageAnchoredSpend => {
             M::Static("axt_stage_anchored_spend expects (AxtAnchoredSpendV1)")
@@ -7828,10 +8182,17 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         Builtin::AddSignatory | Builtin::RemoveSignatory => {
             M::NameSuffix(" expects (AccountId, Json)")
         }
-        Builtin::Path => M::Static("path expects (Name, int|bytes)"),
+        Builtin::Path => {
+            M::Static("path expects a Name and a canonical scalar or tuple StateMap key")
+        }
         Builtin::NameDecode => M::Static("name_decode expects (bytes)"),
         Builtin::TlvEq => M::Static("tlv_eq expects (pointer-ABI, pointer-ABI)"),
         Builtin::BytesLen => M::Static("bytes::len expects exactly one bytes argument"),
+        Builtin::BytesConcat => M::Static("bytes::concat expects (bytes left, bytes right)"),
+        Builtin::StringConcat => M::Static("string::concat expects (string left, string right)"),
+        Builtin::StringLen => M::Static("string::len expects (string)"),
+        Builtin::StringAsBytes => M::Static("string::as_bytes expects (string)"),
+        Builtin::StringFromBytes => M::Static("string::from_bytes expects (bytes)"),
         Builtin::JsonObject => M::Static("json_object expects no arguments"),
         Builtin::JsonSetInt => M::Static("json_set_int expects (Json, Name, int)"),
         Builtin::JsonSetAccountId => {
@@ -7850,10 +8211,8 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         Builtin::WrappingAdd | Builtin::WrappingSub | Builtin::WrappingMul => {
             M::NameSuffix(" expects (int, int)")
         }
-        Builtin::Isqrt | Builtin::Abs => M::NameSuffix(" expects (int)"),
-        Builtin::Min | Builtin::Max | Builtin::DivCeil | Builtin::Gcd | Builtin::Mean => {
-            M::NameSuffix(" expects (int, int)")
-        }
+        Builtin::Isqrt => M::NameSuffix(" expects (int)"),
+        Builtin::DivCeil | Builtin::Gcd | Builtin::Mean => M::NameSuffix(" expects (int, int)"),
         Builtin::Poseidon2 => M::SourceNameSuffix(" expects two int arguments"),
         Builtin::Valcom => {
             M::SourceNameSuffix(" expects two typed Secret<int|decimal|quantity> arguments")
@@ -7917,7 +8276,7 @@ fn fixed_builtin_arg_accepts(builtin: Builtin, index: usize, descriptor: &str, t
             "bool" => ty == &Type::Bool,
             "bytes" => is_blob_like(ty),
             "int" => is_int_like(ty),
-            "int|bytes" => is_int_like(ty) || is_blob_like(ty),
+            "K" => is_supported_durable_key_type(ty),
             "pointer-ABI" => {
                 let ty = resolve_struct_type(ty);
                 is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json
@@ -7950,6 +8309,7 @@ fn fixed_builtin_result_type(descriptor: &str) -> Type {
         "Option<decimal>" => option(Type::Decimal),
         "Option<int>" => option(Type::Int),
         "Option<quantity>" => option(Type::Quantity),
+        "string" => Type::String,
         "SoracloudResponse" => Type::SoracloudResponse,
         "bool" => Type::Bool,
         "bytes" => Type::Bytes,
@@ -7983,20 +8343,14 @@ fn analyze_fixed_builtin_call(
     {
         return Err(sem_err("K2003", message.render(builtin)));
     }
-    let expression = typed_call(
-        builtin.name(),
+    let expression = typed_builtin_call(
+        builtin,
         args,
         fixed_builtin_result_type(signature.return_type),
     );
     if matches!(
         builtin,
-        Builtin::Isqrt
-            | Builtin::Abs
-            | Builtin::Min
-            | Builtin::Max
-            | Builtin::DivCeil
-            | Builtin::Gcd
-            | Builtin::Mean
+        Builtin::Isqrt | Builtin::DivCeil | Builtin::Gcd | Builtin::Mean
     ) {
         match crate::checked_arithmetic::evaluate(&expression) {
             Ok(Some(value)) => Ok(value.into_typed_expr()),
@@ -8064,89 +8418,25 @@ fn analyze_map_get_or_insert(
     ensure_assignable_and_coerce(&key, &mut args[1])?;
     ensure_in_memory_map_word_types(context, &args[0])?;
     ensure_assignable_and_coerce(&value, &mut args[2])?;
-    Ok(typed_call(name, args, value))
+    Ok(typed_builtin_call(builtin, args, value))
 }
 
-/// Check `ledger::seiyaku::grant_kotoage`/`revoke_kotoage`: the selector must be
-/// a string literal naming a kotoage (言挙げ) declared by the current seiyaku.
-fn analyze_kotoage_grant_call(
-    context: &SemanticContext,
+/// Grant operations accept only a compile-time instance permission declaration.
+fn analyze_permission_grant_call(
+    _context: &SemanticContext,
     builtin: Builtin,
     args: Vec<TypedExpr>,
 ) -> Result<TypedExpr, SemanticError> {
-    let kotoage = crate::glossary::by_spelling("kotoage")
-        .expect("kotoage is a branded keyword")
-        .label();
-    if args.len() != 2
-        || args[0].ty != Type::AccountId
-        || resolve_struct_type(&args[1].ty) != Type::String
-    {
+    if args.len() != 2 || args[0].ty != Type::AccountId || args[1].ty != Type::Name {
         return Err(sem_err(
             "K2003",
             format!(
-                "{} expects (account: AccountId, kotoage: \"selector\")",
+                "{} expects (account: AccountId, permission: DeclaredPermission)",
                 builtin.source_name()
             ),
         ));
     }
-    let ExprKind::String(selector) = args[1].kind() else {
-        return Err(sem_err(
-            "E_KOTOAGE_SELECTOR",
-            format!(
-                "{} takes its selector as a string literal naming a {kotoage} of this seiyaku",
-                builtin.source_name()
-            ),
-        ));
-    };
-    let modifiers = context.function_modifiers.borrow();
-    match modifiers
-        .get(selector.as_str())
-        .map(|modifiers| modifiers.kind)
-    {
-        Some(FunctionKind::Kotoage) => {}
-        Some(other) => {
-            let declared = match other {
-                FunctionKind::View => "a `view fn`",
-                FunctionKind::Private => "a private `fn`",
-                FunctionKind::Hajimari | FunctionKind::Kaizen => "a lifecycle hook",
-                FunctionKind::Kotoage => unreachable!("kotoage selectors are accepted above"),
-            };
-            return Err(sem_err(
-                "E_KOTOAGE_SELECTOR",
-                format!(
-                    "`{selector}` is {declared}; {} applies only to {kotoage} declarations",
-                    builtin.source_name()
-                ),
-            ));
-        }
-        None => {
-            let candidates = modifiers
-                .iter()
-                .filter(|(_, modifiers)| modifiers.kind == FunctionKind::Kotoage)
-                .map(|(name, _)| name.as_str())
-                .collect::<Vec<_>>();
-            if candidates.is_empty() {
-                // A reusable module declares no kotoage, so it cannot name the
-                // selectors of the seiyaku that will link it.
-                return Err(sem_err(
-                    "E_KOTOAGE_SELECTOR",
-                    format!(
-                        "this source unit declares no {kotoage}, so `{selector}` cannot be checked; call {} from the seiyaku that declares `{selector}`, because a reusable module cannot name a seiyaku's selectors",
-                        builtin.source_name()
-                    ),
-                ));
-            }
-            let suggestion = crate::diagnostic::suggest::closest(selector, candidates)
-                .map(|candidate| format!("; did you mean `{candidate}`?"))
-                .unwrap_or_default();
-            return Err(sem_err(
-                "E_KOTOAGE_SELECTOR",
-                format!("this seiyaku declares no {kotoage} named `{selector}`{suggestion}"),
-            ));
-        }
-    }
-    drop(modifiers);
-    Ok(typed_call(builtin.name(), args, Type::Unit))
+    Ok(typed_builtin_call(builtin, args, Type::Unit))
 }
 
 /// Check `ledger::asset::register` after its `spec:` and `mintable:` arguments
@@ -8174,7 +8464,7 @@ fn analyze_register_asset_call(
             format!("invalid `name:` display name for ledger::asset::register: {error}"),
         ));
     }
-    Ok(typed_call(builtin.name(), args, Type::Unit))
+    Ok(typed_builtin_call(builtin, args, Type::Unit))
 }
 
 /// Analyze builtin arguments whose meaning is fixed at compile time.
@@ -8186,13 +8476,46 @@ fn analyze_register_asset_call(
 /// analyzed as an ordinary expression.
 fn analyze_builtin_literal_argument(
     context: &SemanticContext,
-    name: &str,
+    builtin: Builtin,
     index: usize,
     argument: &Expr,
 ) -> Result<Option<TypedExpr>, SemanticError> {
-    let Some(builtin) = Builtin::from_name(name) else {
-        return Ok(None);
-    };
+    if matches!(
+        builtin,
+        Builtin::GrantContractPermission | Builtin::RevokeContractPermission
+    ) && index == 1
+    {
+        let Expr::Ident(name) = argument.kind() else {
+            return Err(sem_err(
+                "E_PERMISSION_ARGUMENT",
+                "permission grants require a declared instance permission identifier".into(),
+            ));
+        };
+        match context.permissions.borrow().get(name) {
+            Some(ContractPermissionScopeV1::Instance) => {}
+            Some(ContractPermissionScopeV1::Chain { .. }) => {
+                return Err(sem_err(
+                    "E_PERMISSION_ARGUMENT",
+                    format!(
+                        "`{name}` is an imported chain permission; seiyaku grant operations only manage instance permissions"
+                    ),
+                ));
+            }
+            None => {
+                return Err(sem_err(
+                    "E_UNKNOWN_PERMISSION",
+                    format!("undeclared instance permission `{name}`"),
+                ));
+            }
+        }
+        return Ok(Some(TypedExpr {
+            expr: ExprKind::Call {
+                target: CallTarget::Builtin(Builtin::PointerConstructor(PointerConstructor::Name)),
+                args: vec![typed_expr(ExprKind::String(name.clone()), Type::String)],
+            },
+            ty: Type::Name,
+        }));
+    }
     let Some(descriptor) = builtin.signature().parameters.get(index).copied() else {
         return Ok(None);
     };
@@ -8246,7 +8569,7 @@ fn analyze_builtin_literal_argument(
         }
         return Ok(Some(TypedExpr {
             expr: ExprKind::Call {
-                name: PointerConstructor::Name.name().to_owned(),
+                target: CallTarget::Builtin(Builtin::PointerConstructor(PointerConstructor::Name)),
                 args: vec![typed_expr(ExprKind::String(raw.clone()), Type::String)],
             },
             ty: Type::Name,
@@ -8507,42 +8830,75 @@ fn analyze_surface_builtin_call(
     coerce_builtin_exact_numeric_literals(builtin, &mut arg_typed)?;
     crate::secret::validate_builtin_call(builtin, &arg_typed)?;
     match builtin {
-        Builtin::ContractInvokeQuantity2 => {
-            if arg_typed.len() != 5
-                || resolve_struct_type(&arg_typed[0].ty) != Type::Bytes
-                || resolve_struct_type(&arg_typed[1].ty) != Type::String
-                || resolve_struct_type(&arg_typed[2].ty) != Type::String
-                || resolve_struct_type(&arg_typed[3].ty) != Type::Quantity
-                || resolve_struct_type(&arg_typed[4].ty) != Type::Quantity
+        Builtin::Min | Builtin::Max | Builtin::Abs => {
+            let arity = if builtin == Builtin::Abs { 1 } else { 2 };
+            let ty = arg_typed
+                .first()
+                .map(|argument| resolve_struct_type(&argument.ty));
+            if arg_typed.len() != arity
+                || !ty.as_ref().is_some_and(is_wide_numeric_type)
+                || arg_typed
+                    .iter()
+                    .any(|argument| Some(resolve_struct_type(&argument.ty)) != ty)
             {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "contract::invoke requires named `(contract: bytes, entrypoint: string, returns: \"quantity\", amount_in: quantity, min_out: quantity)` arguments"
-                        .into(),
-                });
-            }
-            let ExprKind::String(entrypoint) = arg_typed[1].kind() else {
                 return Err(sem_err(
-                    "E_CONTRACT_ENTRYPOINT_LITERAL",
-                    "contract::invoke requires a literal `entrypoint` selector".into(),
+                    "K2003",
+                    format!(
+                        "{} expects {arity} operands of one identical int, decimal, or quantity type",
+                        builtin.source_name()
+                    ),
                 ));
+            }
+            let expression =
+                typed_builtin_call(builtin, arg_typed, ty.expect("checked numeric operand"));
+            match crate::checked_arithmetic::evaluate(&expression) {
+                Ok(Some(value)) => Ok(value.into_typed_expr()),
+                Ok(None) => Ok(expression),
+                Err(error) => Err(sem_err(error.code(), error.to_string())),
+            }
+        }
+        Builtin::ValueEncode | Builtin::StringFrom => {
+            if arg_typed.len() != 1 {
+                return Err(sem_err(
+                    "K2003",
+                    format!("{} expects one value", builtin.source_name()),
+                ));
+            }
+            let ty = resolve_struct_type(&arg_typed[0].ty);
+            let supported = if builtin == Builtin::StringFrom {
+                matches!(
+                    ty,
+                    Type::Int
+                        | Type::Decimal
+                        | Type::Quantity
+                        | Type::Bool
+                        | Type::String
+                        | Type::Name
+                )
+            } else {
+                is_encodable_public_value(&ty)
             };
-            if !ivm_abi::entrypoint::is_canonical_kotodama_identifier(entrypoint) {
-                return Err(SemanticError {
-                    code: "E_CONTRACT_ENTRYPOINT_LITERAL",
-                    message: "contract::invoke entrypoint must be a canonical Kotodama identifier"
-                        .into(),
-                });
+            if !supported {
+                return Err(sem_err(
+                    "K2003",
+                    format!(
+                        "{} does not accept {}",
+                        builtin.source_name(),
+                        type_help::quoted(&ty)
+                    ),
+                ));
             }
-            if !matches!(arg_typed[2].kind(), ExprKind::String(value) if value == "quantity") {
-                return Err(SemanticError {
-                    code: "E_CONTRACT_RETURN_SCHEMA",
-                    message:
-                        "the first production contract::invoke profile requires literal `returns: \"quantity\"`"
-                            .into(),
-                });
-            }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Quantity))
+            crate::ir::entrypoint_return_schema(builtin.source_name(), Some(&ty))
+                .map_err(|message| sem_err("K2003", message))?;
+            Ok(typed_builtin_call(
+                builtin,
+                arg_typed,
+                if builtin == Builtin::ValueEncode {
+                    Type::Bytes
+                } else {
+                    Type::String
+                },
+            ))
         }
         Builtin::PointerConstructor(constructor) => {
             let name = constructor.name();
@@ -8574,7 +8930,7 @@ fn analyze_surface_builtin_call(
             }
             Ok(TypedExpr {
                 expr: ExprKind::Call {
-                    name: name.to_string(),
+                    target: CallTarget::Builtin(builtin),
                     args: arg_typed,
                 },
                 ty,
@@ -8591,7 +8947,7 @@ fn analyze_surface_builtin_call(
                 Type::StateMap(k, _v) => {
                     ensure_assignable_and_coerce(&k.clone(), &mut arg_typed[1])?;
                     ensure_in_memory_map_word_types(context, &arg_typed[0])?;
-                    Ok(typed_call(builtin.name(), arg_typed, Type::Bool))
+                    Ok(typed_builtin_call(builtin, arg_typed, Type::Bool))
                 }
                 other => Err(SemanticError {
                     code: "K2003",
@@ -8614,8 +8970,8 @@ fn analyze_surface_builtin_call(
             analyze_map_get_or_insert(context, builtin, arg_typed)
         }
         Builtin::RegisterAsset => analyze_register_asset_call(builtin, arg_typed),
-        Builtin::GrantContractEntrypoint | Builtin::RevokeContractEntrypoint => {
-            analyze_kotoage_grant_call(context, builtin, arg_typed)
+        Builtin::GrantContractPermission | Builtin::RevokeContractPermission => {
+            analyze_permission_grant_call(context, builtin, arg_typed)
         }
         builtin if builtin.is_compile_time_nominal() => Err(misplaced_nominal_value(builtin)),
         Builtin::StateMapRemove => {
@@ -8640,7 +8996,7 @@ fn analyze_surface_builtin_call(
             };
             debug_assert!(is_supported_durable_value_type(&value));
             ensure_assignable_and_coerce(&key, &mut arg_typed[1])?;
-            Ok(typed_call(builtin.name(), arg_typed, Type::Option(value)))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Option(value)))
         }
         Builtin::KeysTake2 | Builtin::ValuesTake2 => {
             let name = builtin.name();
@@ -8672,7 +9028,7 @@ fn analyze_surface_builtin_call(
                     format!("{name} expects (StateMap<int,int>, int, int)"),
                 ));
             }
-            Ok(typed_call(name, arg_typed, Type::Int))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Int))
         }
         Builtin::KeysValuesTake2 => {
             if arg_typed.len() != 3 {
@@ -8703,8 +9059,8 @@ fn analyze_surface_builtin_call(
                     "keys_values_take2 expects (StateMap<int,int>, int, int)".into(),
                 ));
             }
-            Ok(typed_call(
-                builtin.name(),
+            Ok(typed_builtin_call(
+                builtin,
                 arg_typed,
                 Type::Tuple(vec![Type::Int, Type::Int]),
             ))
@@ -8733,7 +9089,7 @@ fn analyze_surface_builtin_call(
             }
             Ok(TypedExpr {
                 expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
+                    target: CallTarget::Builtin(builtin),
                     args: arg_typed,
                 },
                 ty: Type::Option(Box::new(
@@ -8744,20 +9100,31 @@ fn analyze_surface_builtin_call(
         }
         Builtin::QueryPageAccounts
         | Builtin::QueryPageAssets
+        | Builtin::QueryPageAssetsOf
         | Builtin::QueryPageAssetDefinitions
         | Builtin::QueryPageDomains
         | Builtin::QueryPageNfts => {
-            if arg_typed.len() != 2 || arg_typed[0].ty != Type::Int || arg_typed[1].ty != Type::Int
+            let has_owner = builtin == Builtin::QueryPageAssetsOf;
+            let first = usize::from(has_owner);
+            if arg_typed.len() != first + 2
+                || (has_owner && arg_typed[0].ty != Type::AccountId)
+                || arg_typed[first].ty != Type::Int
+                || arg_typed[first + 1].ty != Type::Int
             {
                 return Err(SemanticError {
                     code: "E_QUERY_PAGE_ARGUMENTS",
                     message: format!(
-                        "`{}` expects named `offset: int` and `limit: int` arguments",
-                        builtin.source_name()
+                        "`{}` expects named {}offset: int and limit: int arguments",
+                        builtin.source_name(),
+                        if has_owner {
+                            "account: AccountId, "
+                        } else {
+                            ""
+                        }
                     ),
                 });
             }
-            if literal_int(&arg_typed[0]).is_some_and(|offset| {
+            if literal_int(&arg_typed[first]).is_some_and(|offset| {
                 offset
                     .try_to_i64()
                     .is_none_or(|offset| offset.is_negative())
@@ -8767,7 +9134,7 @@ fn analyze_surface_builtin_call(
                     message: "query page offset must be in 0..=i64::MAX".into(),
                 });
             }
-            if literal_int(&arg_typed[1]).is_some_and(|limit| {
+            if literal_int(&arg_typed[first + 1]).is_some_and(|limit| {
                 limit
                     .try_to_u64()
                     .is_none_or(|limit| !(1..=64).contains(&limit))
@@ -8778,8 +9145,8 @@ fn analyze_surface_builtin_call(
                 });
             }
             if let (Some(offset), Some(limit)) = (
-                literal_int(&arg_typed[0]).and_then(|offset| offset.try_to_i64()),
-                literal_int(&arg_typed[1]).and_then(|limit| limit.try_to_i64()),
+                literal_int(&arg_typed[first]).and_then(|offset| offset.try_to_i64()),
+                literal_int(&arg_typed[first + 1]).and_then(|limit| limit.try_to_i64()),
             ) && offset.checked_add(limit).is_none()
             {
                 return Err(SemanticError {
@@ -8789,7 +9156,7 @@ fn analyze_surface_builtin_call(
             }
             Ok(TypedExpr {
                 expr: ExprKind::Call {
-                    name: builtin.name().to_string(),
+                    target: CallTarget::Builtin(builtin),
                     args: arg_typed,
                 },
                 ty: core_query_page_type(builtin),
@@ -8813,7 +9180,7 @@ fn analyze_surface_builtin_call(
                     "sm2_verify optional distid must be provided as bytes pointer".into(),
                 ));
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Bool))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Bool))
         }
         Builtin::Sm4CcmSeal | Builtin::Sm4CcmOpen => {
             if arg_typed.len() != 4 && arg_typed.len() != 5 {
@@ -8845,7 +9212,7 @@ fn analyze_surface_builtin_call(
                     format!("{} optional tag length must be int", builtin.name()),
                 ));
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Bytes))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Bytes))
         }
         Builtin::Assert => {
             let ok = match arg_typed.len() {
@@ -8862,7 +9229,7 @@ fn analyze_surface_builtin_call(
                     "assert expects (bool) or (bool, string|int)".into(),
                 ));
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Unit))
         }
         Builtin::EscrowOpenOffer => {
             if !(arg_typed.len() == 3 || arg_typed.len() == 4)
@@ -8878,7 +9245,7 @@ fn analyze_surface_builtin_call(
                             .into(),
                 });
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Unit))
         }
         Builtin::EscrowOpenDispute => {
             if !(arg_typed.len() == 1 || arg_typed.len() == 2)
@@ -8890,7 +9257,7 @@ fn analyze_surface_builtin_call(
                     "escrow_open_dispute expects (Name[, bytes evidence_hashes])".into(),
                 ));
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Unit))
         }
         Builtin::EscrowResolveDispute => {
             if !(arg_typed.len() == 3 || arg_typed.len() == 4)
@@ -8905,7 +9272,7 @@ fn analyze_surface_builtin_call(
                         .into(),
                 });
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Unit))
         }
         Builtin::GetMerklePath => {
             let valid_arity = (2..=3).contains(&arg_typed.len());
@@ -8917,7 +9284,7 @@ fn analyze_surface_builtin_call(
                             .into(),
                 });
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Int))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Int))
         }
         Builtin::GetMerkleCompact | Builtin::GetRegisterMerkleCompact => {
             let valid_arity = (2..=4).contains(&arg_typed.len());
@@ -8930,7 +9297,7 @@ fn analyze_surface_builtin_call(
                     ),
                 });
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Int))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Int))
         }
         Builtin::GetPrivateInput => {
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
@@ -8975,15 +9342,15 @@ fn analyze_surface_builtin_call(
                     });
                 }
             };
-            Ok(typed_call(
-                builtin.name(),
+            Ok(typed_builtin_call(
+                builtin,
                 arg_typed,
                 Type::Secret(Box::new(payload)),
             ))
         }
         Builtin::TransferBatch => {
             ensure_transfer_batch_args(&arg_typed)?;
-            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Unit))
         }
         Builtin::AxtTouch => {
             if arg_typed.is_empty()
@@ -8996,7 +9363,7 @@ fn analyze_surface_builtin_call(
                     "axt_touch expects (DataSpaceId[, bytes manifest])".into(),
                 ));
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Unit))
         }
         Builtin::VerifyDsProof => {
             if arg_typed.is_empty()
@@ -9009,7 +9376,7 @@ fn analyze_surface_builtin_call(
                     "verify_ds_proof expects (DataSpaceId[, ProofBlob])".into(),
                 ));
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Unit))
         }
         Builtin::SetAccountQuorum => {
             if arg_typed.len() != 2
@@ -9030,7 +9397,7 @@ fn analyze_surface_builtin_call(
                     "account quorum must be in the protocol range 1..=65535".into(),
                 ));
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Unit))
         }
         Builtin::TlvLen => {
             if arg_typed.len() != 1 {
@@ -9043,7 +9410,7 @@ fn analyze_surface_builtin_call(
                     "tlv_len expects a pointer-ABI type, Json, or bytes argument".into(),
                 ));
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Int))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Int))
         }
         Builtin::PointerToNorito => {
             if arg_typed.len() != 1 {
@@ -9060,7 +9427,7 @@ fn analyze_surface_builtin_call(
                         .into(),
                 });
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Bytes))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Bytes))
         }
         Builtin::NumericNeg => {
             if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
@@ -9145,7 +9512,7 @@ fn analyze_surface_builtin_call(
                         .into(),
                 });
             }
-            Ok(typed_call(builtin.name(), arg_typed, result_ty))
+            Ok(typed_builtin_call(builtin, arg_typed, result_ty))
         }
         Builtin::NumericEq
         | Builtin::NumericNe
@@ -9189,7 +9556,7 @@ fn analyze_surface_builtin_call(
                         .into(),
                 });
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Bool))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Bool))
         }
         Builtin::TriggerEvent => {
             reject_public_trigger_event(context, builtin.name())?;
@@ -9199,7 +9566,7 @@ fn analyze_surface_builtin_call(
                     "trigger_event expects no arguments".into(),
                 ));
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Json))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Json))
         }
         Builtin::TestSetBlockHeight
         | Builtin::TestAdvanceBlocks
@@ -9214,7 +9581,7 @@ fn analyze_surface_builtin_call(
                     ),
                 });
             }
-            Ok(typed_call(builtin.name(), arg_typed, Type::Unit))
+            Ok(typed_builtin_call(builtin, arg_typed, Type::Unit))
         }
         Builtin::TestInvokeEntrypoint
         | Builtin::TestInvokeEntrypointAs
@@ -9303,6 +9670,7 @@ fn analyze_expression_block(
     block: &Block,
     vars: &mut HashMap<String, Type>,
     expected: Option<&Type>,
+    boundary: bool,
 ) -> Result<TypedBlock, SemanticError> {
     let return_type = enclosing_return_type(context);
     let mut mutable_bindings = context.current_mutable_bindings.borrow().clone();
@@ -9312,7 +9680,10 @@ fn analyze_expression_block(
         vars,
         &mut mutable_bindings,
         return_type.as_ref(),
-        expected,
+        BlockTailContext {
+            expected,
+            widen: boundary,
+        },
         0,
     )
 }
@@ -9353,6 +9724,7 @@ fn analyze_expression_branches(
     else_branch: &Block,
     vars: &HashMap<String, Type>,
     expected: Option<&Type>,
+    boundary: bool,
 ) -> Result<(TypedBlock, TypedBlock, Type), SemanticError> {
     analyze_expression_branches_with_envs(
         context,
@@ -9361,6 +9733,7 @@ fn analyze_expression_branches(
         &mut vars.clone(),
         &mut vars.clone(),
         expected,
+        boundary,
     )
 }
 fn analyze_expression_branches_with_envs(
@@ -9370,12 +9743,15 @@ fn analyze_expression_branches_with_envs(
     then_vars: &mut HashMap<String, Type>,
     else_vars: &mut HashMap<String, Type>,
     expected: Option<&Type>,
+    boundary: bool,
 ) -> Result<(TypedBlock, TypedBlock, Type), SemanticError> {
     if let Some(expected) = expected {
-        let then_typed = analyze_expression_block(context, then_branch, then_vars, Some(expected))
-            .map_err(|error| normalize_branch_error(error, expected))?;
-        let else_typed = analyze_expression_block(context, else_branch, else_vars, Some(expected))
-            .map_err(|error| normalize_branch_error(error, expected))?;
+        let then_typed =
+            analyze_expression_block(context, then_branch, then_vars, Some(expected), boundary)
+                .map_err(|error| normalize_branch_error(error, expected))?;
+        let else_typed =
+            analyze_expression_block(context, else_branch, else_vars, Some(expected), boundary)
+                .map_err(|error| normalize_branch_error(error, expected))?;
         if !typed_block_diverges(&then_typed) {
             require_exact_branch_type(expected, &typed_block_value_type(&then_typed))?;
         }
@@ -9384,10 +9760,11 @@ fn analyze_expression_branches_with_envs(
         }
         return Ok((then_typed, else_typed, expected.clone()));
     }
-    match analyze_expression_block(context, then_branch, &mut then_vars.clone(), None) {
+    match analyze_expression_block(context, then_branch, &mut then_vars.clone(), None, boundary) {
         Ok(then_typed) => {
             if typed_block_diverges(&then_typed) {
-                let else_typed = analyze_expression_block(context, else_branch, else_vars, None)?;
+                let else_typed =
+                    analyze_expression_block(context, else_branch, else_vars, None, boundary)?;
                 if typed_block_diverges(&else_typed) {
                     return Err(SemanticError {
                         code: "E_DIVERGING_EXPRESSION_CONTEXT",
@@ -9400,7 +9777,8 @@ fn analyze_expression_branches_with_envs(
                 return Ok((then_typed, else_typed, ty));
             }
             let ty = typed_block_value_type(&then_typed);
-            let else_typed = analyze_expression_block(context, else_branch, else_vars, Some(&ty))?;
+            let else_typed =
+                analyze_expression_block(context, else_branch, else_vars, Some(&ty), boundary)?;
             if !typed_block_diverges(&else_typed) {
                 require_exact_branch_type(&ty, &typed_block_value_type(&else_typed))?;
             }
@@ -9408,12 +9786,14 @@ fn analyze_expression_branches_with_envs(
         }
         Err(error) if error.code == "E_SUM_MISSING_CONTEXT" => {
             context.discard_diagnostic();
-            let else_typed = analyze_expression_block(context, else_branch, else_vars, None)?;
+            let else_typed =
+                analyze_expression_block(context, else_branch, else_vars, None, boundary)?;
             if typed_block_diverges(&else_typed) {
                 return Err(error);
             }
             let ty = typed_block_value_type(&else_typed);
-            let then_typed = analyze_expression_block(context, then_branch, then_vars, Some(&ty))?;
+            let then_typed =
+                analyze_expression_block(context, then_branch, then_vars, Some(&ty), boundary)?;
             if !typed_block_diverges(&then_typed) {
                 require_exact_branch_type(&ty, &typed_block_value_type(&then_typed))?;
             }
@@ -9428,37 +9808,28 @@ fn analyze_sum_pattern(
     value_type: &Type,
 ) -> Result<(TypedSumPattern, Option<(String, Type)>), SemanticError> {
     let value_type = resolve_struct_type(value_type);
-    let mut error_code = None;
+    let mut variant_code = None;
     let payload = match (&value_type, &pattern.variant) {
         (Type::Option(payload), SumVariant::OptionSome) => Some(payload.as_ref().clone()),
         (Type::Option(_), SumVariant::OptionNone) => None,
         (Type::Result(payload, _), SumVariant::ResultOk) => Some(payload.as_ref().clone()),
         (Type::Result(_, error), SumVariant::ResultErr) => Some(error.as_ref().clone()),
-        (Type::ErrorEnum(descriptor), SumVariant::Error { namespace, variant }) => {
-            let pattern_descriptor = context.error_types.borrow().get(namespace).cloned();
-            if !pattern_descriptor.as_ref().is_some_and(|expected| {
-                expected.identity == descriptor.identity
-                    && expected.schema_hash() == descriptor.schema_hash()
-            }) {
-                return Err(SemanticError {
-                    code: "E_PATTERN_FAMILY",
-                    message: format!(
+        (Type::Enum(_) | Type::ErrorEnum(_), SumVariant::Nominal { namespace, variant }) => {
+            if declared_enum_type(context, namespace).as_ref() != Some(&value_type) {
+                return Err(sem_err(
+                    "E_PATTERN_FAMILY",
+                    format!(
                         "pattern `{namespace}::{variant}` does not belong to `{}`",
-                        descriptor.identity
+                        type_name(&value_type)
                     ),
-                });
+                ));
             }
-            error_code = Some(
-                descriptor
-                    .variants
-                    .iter()
-                    .find(|item| item.name == *variant)
-                    .ok_or_else(|| SemanticError {
-                        code: "E_PATTERN_VARIANT",
-                        message: format!("unknown error variant `{namespace}::{variant}`"),
-                    })?
-                    .code,
-            );
+            variant_code = Some(nominal_variant_code(&value_type, variant).ok_or_else(|| {
+                sem_err(
+                    "E_PATTERN_VARIANT",
+                    format!("unknown enum variant `{namespace}::{variant}`"),
+                )
+            })?);
             None
         }
         (Type::Option(_), _) => {
@@ -9477,7 +9848,7 @@ fn analyze_sum_pattern(
             return Err(SemanticError {
                 code: "E_PATTERN_TYPE",
                 message: format!(
-                    "patterns require Option, Result, or a nominal error type, found `{}`",
+                    "patterns require Option, Result, or a nominal enum type, found `{}`",
                     type_name(other)
                 ),
             });
@@ -9502,7 +9873,7 @@ fn analyze_sum_pattern(
     Ok((
         TypedSumPattern {
             pattern: pattern.clone(),
-            error_code,
+            variant_code,
             payload_type: payload,
         },
         binding,
@@ -9514,6 +9885,7 @@ fn analyze_match_expression(
     arms: &[MatchArm],
     vars: &HashMap<String, Type>,
     expected: Option<&Type>,
+    boundary: bool,
 ) -> Result<TypedExpr, SemanticError> {
     if arms.is_empty() {
         return Err(SemanticError {
@@ -9522,9 +9894,15 @@ fn analyze_match_expression(
         });
     }
     let mut seen = HashSet::new();
+    let mut seen_codes = HashSet::new();
     let mut checked = Vec::with_capacity(arms.len());
     for arm in arms {
-        if !seen.insert(arm.pattern.variant.clone()) {
+        let (pattern, binding) = analyze_sum_pattern(context, &arm.pattern, &value.ty)?;
+        if !seen.insert(arm.pattern.variant.clone())
+            || pattern
+                .variant_code
+                .is_some_and(|code| !seen_codes.insert(code))
+        {
             return Err(SemanticError {
                 code: "E_MATCH_DUPLICATE_PATTERN",
                 message: format!(
@@ -9533,7 +9911,6 @@ fn analyze_match_expression(
                 ),
             });
         }
-        let (pattern, binding) = analyze_sum_pattern(context, &arm.pattern, &value.ty)?;
         checked.push((arm, pattern, binding));
     }
     let exhaustive = match resolve_struct_type(&value.ty) {
@@ -9543,6 +9920,7 @@ fn analyze_match_expression(
         Type::Result(_, _) => {
             seen.contains(&SumVariant::ResultOk) && seen.contains(&SumVariant::ResultErr)
         }
+        Type::Enum(descriptor) => checked.len() == descriptor.variants.len(),
         Type::ErrorEnum(descriptor) => checked.len() == descriptor.variants.len(),
         _ => false,
     };
@@ -9562,7 +9940,7 @@ fn analyze_match_expression(
             if let Some((name, ty)) = binding {
                 arm_vars.insert(name.clone(), ty.clone());
             }
-            match analyze_expression_block(context, &arm.body, &mut arm_vars, None) {
+            match analyze_expression_block(context, &arm.body, &mut arm_vars, None, boundary) {
                 Ok(block) => {
                     if !typed_block_diverges(&block) {
                         inferred = Some(typed_block_value_type(&block));
@@ -9590,7 +9968,8 @@ fn analyze_match_expression(
             ensure_new_local_binding(context, &name, &arm_vars)?;
             arm_vars.insert(name, ty);
         }
-        let body = analyze_expression_block(context, &arm.body, &mut arm_vars, Some(&inferred))?;
+        let body =
+            analyze_expression_block(context, &arm.body, &mut arm_vars, Some(&inferred), boundary)?;
         if !typed_block_diverges(&body) {
             require_exact_branch_type(&inferred, &typed_block_value_type(&body))?;
         }
@@ -9604,6 +9983,130 @@ fn analyze_match_expression(
         ty: inferred,
     })
 }
+fn analyze_record_literal(
+    context: &SemanticContext,
+    expr: &Expr,
+    vars: &mut HashMap<String, Type>,
+    event: bool,
+) -> Result<TypedExpr, SemanticError> {
+    let Expr::StructLiteral { name, fields } = expr.kind() else {
+        return Err(SemanticError {
+            code: "E_EVENT_PAYLOAD",
+            message: "emit requires a named event record".into(),
+        });
+    };
+    let declared_event = context.event_names.borrow().contains(name);
+    if event != declared_event {
+        return Err(SemanticError {
+            code: if event {
+                "E_UNKNOWN_EVENT"
+            } else {
+                "E_EVENT_VALUE"
+            },
+            message: if event {
+                format!("`{name}` is not a declared native event")
+            } else {
+                format!("event `{name}` can only be constructed by `emit {name} {{ ... }};`")
+            },
+        });
+    }
+    context.validate_struct_literal_target(expr, name)?;
+    let canonical_name = context
+        .resolved_named_types
+        .borrow()
+        .get(name)
+        .and_then(|ty| match ty {
+            Type::Struct { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| name.clone());
+    let Some(declared_fields) = context.structs.borrow().get(name).cloned() else {
+        return Err(SemanticError {
+            code: "E_UNKNOWN_STRUCT",
+            message: format!("unknown struct type `{name}`"),
+        });
+    };
+    analyze_record_fields(context, name, canonical_name, fields, declared_fields, vars)
+}
+fn analyze_record_fields(
+    context: &SemanticContext,
+    name: &str,
+    canonical_name: String,
+    fields: &[StructLiteralField],
+    declared_fields: Vec<(String, Type)>,
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    for (index, field) in fields.iter().enumerate() {
+        if fields[..index]
+            .iter()
+            .any(|previous| previous.name == field.name)
+        {
+            return Err(SemanticError {
+                code: "E_DUPLICATE_STRUCT_FIELD",
+                message: format!("struct field `{}` is supplied more than once", field.name),
+            });
+        }
+        if !declared_fields
+            .iter()
+            .any(|(declared, _)| declared == &field.name)
+        {
+            if let Some(suggestion) = crate::diagnostic::suggest::closest(
+                &field.name,
+                declared_fields
+                    .iter()
+                    .map(|(declared, _)| declared.as_str()),
+            ) {
+                context.capture_help(
+                    context.expression_source(&field.value),
+                    format!("did you mean `{suggestion}`?"),
+                );
+            }
+            return Err(SemanticError {
+                code: "E_UNKNOWN_STRUCT_FIELD",
+                message: format!("struct `{name}` has no field named `{}`", field.name),
+            });
+        }
+    }
+    for (declared_name, _) in &declared_fields {
+        if !fields.iter().any(|field| &field.name == declared_name) {
+            return Err(SemanticError {
+                code: "E_MISSING_STRUCT_FIELD",
+                message: format!("struct `{name}` literal is missing field `{declared_name}`"),
+            });
+        }
+    }
+    let mut typed_fields = Vec::with_capacity(declared_fields.len());
+    for field in fields {
+        let (declared_name, declared_ty) = declared_fields
+            .iter()
+            .find(|(declared, _)| declared == &field.name)
+            .expect("unknown struct fields were rejected above");
+        let mut value = analyze_expr_in_context(
+            context,
+            &field.value,
+            vars,
+            Some(declared_ty),
+            canonical_name.starts_with("$arguments::"),
+        )?;
+        if canonical_name.starts_with("$arguments::") {
+            ensure_boundary_assignable_and_coerce(declared_ty, &mut value)?;
+        } else {
+            ensure_assignable_and_coerce(declared_ty, &mut value)?;
+        }
+        typed_fields.push((declared_name.clone(), value));
+    }
+    Ok(TypedExpr {
+        expr: ExprKind::StructLiteral {
+            name: canonical_name.clone(),
+            fields: typed_fields,
+        },
+        ty: Type::Struct {
+            name: canonical_name,
+            fields: Arc::from(declared_fields),
+        },
+    })
+}
+
 fn analyze_expr(
     context: &SemanticContext,
     expr: &Expr,
@@ -9791,7 +10294,9 @@ fn is_native_json_value_type(ty: &Type) -> bool {
         | Type::Name
         | Type::Json
         | Type::Unit
-        | Type::ErrorEnum(_) => true,
+        | Type::Enum(_)
+        | Type::ErrorEnum(_)
+        | Type::StateCursor(_) => true,
         Type::Option(inner) | Type::List(inner, _) => is_native_json_value_type(&inner),
         Type::AxtDescriptor
         | Type::AxtAnchoredSpendV1
@@ -9801,10 +10306,10 @@ fn is_native_json_value_type(ty: &Type) -> bool {
         | Type::Secret(_)
         | Type::StateMap(_, _)
         | Type::Result(_, _)
-        | Type::StateCursor(_)
         | Type::Tuple(_)
         | Type::Struct { .. }
-        | Type::NamedStruct(_) => false,
+        | Type::NamedStruct(_)
+        | Type::ContractRef(_) => false,
     }
 }
 fn analyze_native_json_value(
@@ -9836,16 +10341,16 @@ fn analyze_list_method_call(
         return None;
     }
     let method = match source_name {
-        "len" => (LIST_LEN_INTRINSIC, &[][..]),
-        STATE_MAP_GET_INTRINSIC | "get" => (LIST_GET_INTRINSIC, &["index"][..]),
-        "set" => (LIST_SET_INTRINSIC, &["index", "value"][..]),
-        "push" => (LIST_PUSH_INTRINSIC, &["value"][..]),
-        "try_set" => (LIST_TRY_SET_INTRINSIC, &["index", "value"][..]),
-        "try_push" => (LIST_TRY_PUSH_INTRINSIC, &["value"][..]),
-        "pop" => (LIST_POP_INTRINSIC, &[][..]),
-        "contains" => (LIST_CONTAINS_INTRINSIC, &["value"][..]),
-        "take" => (LIST_TAKE_INTRINSIC, &["limit"][..]),
-        "enumerate" => (LIST_ENUMERATE_INTRINSIC, &[][..]),
+        "len" => (CompilerIntrinsic::ListLen, &[][..]),
+        STATE_MAP_GET_INTRINSIC | "get" => (CompilerIntrinsic::ListGet, &["index"][..]),
+        "set" => (CompilerIntrinsic::ListSet, &["index", "value"][..]),
+        "push" => (CompilerIntrinsic::ListPush, &["value"][..]),
+        "try_set" => (CompilerIntrinsic::ListTrySet, &["index", "value"][..]),
+        "try_push" => (CompilerIntrinsic::ListTryPush, &["value"][..]),
+        "pop" => (CompilerIntrinsic::ListPop, &[][..]),
+        "contains" => (CompilerIntrinsic::ListContains, &["value"][..]),
+        "take" => (CompilerIntrinsic::ListTake, &["limit"][..]),
+        "enumerate" => (CompilerIntrinsic::ListEnumerate, &[][..]),
         _ => return None,
     };
     let receiver = match analyze_expr(context, &args[0], vars) {
@@ -9857,22 +10362,28 @@ fn analyze_list_method_call(
     };
     if matches!(
         method.0,
-        LIST_SET_INTRINSIC
-            | LIST_PUSH_INTRINSIC
-            | LIST_TRY_SET_INTRINSIC
-            | LIST_TRY_PUSH_INTRINSIC
-            | LIST_POP_INTRINSIC
+        CompilerIntrinsic::ListSet
+            | CompilerIntrinsic::ListPush
+            | CompilerIntrinsic::ListTrySet
+            | CompilerIntrinsic::ListTryPush
+            | CompilerIntrinsic::ListPop
     ) {
-        let Some(Expr::Ident(receiver_name)) = args.first().map(Expr::kind) else {
+        // A member chain names one stable local place. Computed temporaries and
+        // durable roots require an explicit copy and write-back instead.
+        let mut receiver_root = &args[0];
+        while let Expr::Member { object, .. } = receiver_root.kind() {
+            receiver_root = object;
+        }
+        let Expr::Ident(receiver_name) = receiver_root.kind() else {
             return Some(Err(SemanticError {
                 code: "E_LIST_MUTABLE_RECEIVER",
                 message: format!(
-                    "List.{source_name} mutates its receiver; call it on a `var` list binding"
+                    "List.{source_name} mutates its receiver; call it on a `var` list binding or a field of a `var` product"
                 ),
             }));
         };
         let receiver_is_mutable =
-            match context.list_receiver_is_mutable(&args[0], receiver_name, vars) {
+            match context.list_receiver_is_mutable(receiver_root, receiver_name, vars) {
                 Ok(receiver_is_mutable) => receiver_is_mutable,
                 Err(error) => return Some(Err(error)),
             };
@@ -9924,7 +10435,7 @@ fn analyze_list_method_call(
     {
         let argument = &plan.ordered[index];
         let typed = match method.0 {
-            LIST_TAKE_INTRINSIC => match static_integer_constant(context, argument) {
+            CompilerIntrinsic::ListTake => match static_integer_constant(context, argument) {
                 Ok(value) => value,
                 Err(error) => {
                     return Some(Err(SemanticError {
@@ -9933,7 +10444,7 @@ fn analyze_list_method_call(
                     }));
                 }
             },
-            LIST_GET_INTRINSIC => {
+            CompilerIntrinsic::ListGet => {
                 let argument = match analyze_expr(context, argument, vars) {
                     Ok(argument) => argument,
                     Err(error) => return Some(Err(error)),
@@ -9946,7 +10457,7 @@ fn analyze_list_method_call(
                 }
                 argument
             }
-            LIST_SET_INTRINSIC | LIST_TRY_SET_INTRINSIC if index == 1 => {
+            CompilerIntrinsic::ListSet | CompilerIntrinsic::ListTrySet if index == 1 => {
                 let argument = match analyze_expr(context, argument, vars) {
                     Ok(argument) => argument,
                     Err(error) => return Some(Err(error)),
@@ -9959,11 +10470,11 @@ fn analyze_list_method_call(
                 }
                 argument
             }
-            LIST_SET_INTRINSIC
-            | LIST_PUSH_INTRINSIC
-            | LIST_TRY_SET_INTRINSIC
-            | LIST_TRY_PUSH_INTRINSIC
-            | LIST_CONTAINS_INTRINSIC => {
+            CompilerIntrinsic::ListSet
+            | CompilerIntrinsic::ListPush
+            | CompilerIntrinsic::ListTrySet
+            | CompilerIntrinsic::ListTryPush
+            | CompilerIntrinsic::ListContains => {
                 let mut argument =
                     match analyze_expr_expected(context, argument, vars, Some(&element)) {
                         Ok(argument) => argument,
@@ -9993,16 +10504,16 @@ fn analyze_list_method_call(
         Err(error) => return Some(Err(error)),
     };
     let result_type = match method.0 {
-        LIST_LEN_INTRINSIC => Type::Int,
-        LIST_GET_INTRINSIC | LIST_POP_INTRINSIC => Type::Option(element.clone()),
-        LIST_SET_INTRINSIC | LIST_PUSH_INTRINSIC => Type::Unit,
-        LIST_TRY_SET_INTRINSIC | LIST_TRY_PUSH_INTRINSIC => Type::Result(
+        CompilerIntrinsic::ListLen => Type::Int,
+        CompilerIntrinsic::ListGet | CompilerIntrinsic::ListPop => Type::Option(element.clone()),
+        CompilerIntrinsic::ListSet | CompilerIntrinsic::ListPush => Type::Unit,
+        CompilerIntrinsic::ListTrySet | CompilerIntrinsic::ListTryPush => Type::Result(
             Box::new(Type::Unit),
             Box::new(Type::ErrorEnum(Arc::new(
                 ivm_abi::error_types::list_error_type(),
             ))),
         ),
-        LIST_CONTAINS_INTRINSIC => {
+        CompilerIntrinsic::ListContains => {
             if !is_eq_comparable_type(&element) {
                 return Some(Err(SemanticError {
                     code: "E_LIST_CONTAINS_COMPARABILITY",
@@ -10014,7 +10525,7 @@ fn analyze_list_method_call(
             }
             Type::Bool
         }
-        LIST_TAKE_INTRINSIC => {
+        CompilerIntrinsic::ListTake => {
             let Some(limit) = typed.get(1).and_then(|argument| match argument.kind() {
                 ExprKind::IntLiteral(limit) => Some(limit),
                 _ => None,
@@ -10044,7 +10555,7 @@ fn analyze_list_method_call(
             // by the smallest valid static result capacity.
             Type::List(element.clone(), limit.max(1))
         }
-        LIST_ENUMERATE_INTRINSIC => Type::List(
+        CompilerIntrinsic::ListEnumerate => Type::List(
             Box::new(Type::Tuple(vec![Type::Int, (*element).clone()])),
             capacity,
         ),
@@ -10053,7 +10564,7 @@ fn analyze_list_method_call(
     Some(Ok(retain_named_call_evaluation_order(
         TypedExpr {
             expr: ExprKind::Call {
-                name: method.0.to_owned(),
+                target: CallTarget::Intrinsic(method.0),
                 args: typed,
             },
             ty: result_type,
@@ -10162,7 +10673,7 @@ fn analyze_decimal_to_int_round_call(
     Some(Ok(retain_named_call_evaluation_order(
         TypedExpr {
             expr: ExprKind::Call {
-                name: DECIMAL_TO_INT_ROUND_INTRINSIC.to_owned(),
+                target: CallTarget::Intrinsic(CompilerIntrinsic::DecimalToIntRound),
                 args: vec![value, mode],
             },
             ty: Type::Int,
@@ -10186,8 +10697,8 @@ fn analyze_numeric_mul_div_method_call(
         let receiver = analyze_expr(context, &args[0], vars)?;
         let result_type = resolve_struct_type(&receiver.ty);
         let intrinsic = match result_type {
-            Type::Decimal => DECIMAL_MUL_DIV_ROUND_INTRINSIC,
-            Type::Quantity => QUANTITY_MUL_DIV_ROUND_INTRINSIC,
+            Type::Decimal => CompilerIntrinsic::DecimalMulDivRound,
+            Type::Quantity => CompilerIntrinsic::QuantityMulDivRound,
             _ => {
                 return Err(sem_err(
                     "E_NUMERIC_ROUND_RECEIVER",
@@ -10302,7 +10813,7 @@ fn analyze_numeric_mul_div_method_call(
         Ok(retain_named_call_evaluation_order(
             TypedExpr {
                 expr: ExprKind::Call {
-                    name: intrinsic.into(),
+                    target: CallTarget::Intrinsic(intrinsic),
                     args: typed,
                 },
                 ty: result_type,
@@ -10332,19 +10843,19 @@ fn analyze_numeric_round_method_call(
         ("div_round", Type::Decimal) => (
             Type::Decimal,
             Type::Decimal,
-            DECIMAL_DIV_ROUND_INTRINSIC,
+            CompilerIntrinsic::DecimalDivRound,
             "decimal.div_round",
         ),
         ("div_round", Type::Quantity) => (
             Type::Decimal,
             Type::Quantity,
-            QUANTITY_DIV_ROUND_INTRINSIC,
+            CompilerIntrinsic::QuantityDivRound,
             "quantity.div_round",
         ),
         ("ratio_round", Type::Quantity) => (
             Type::Quantity,
             Type::Decimal,
-            QUANTITY_RATIO_ROUND_INTRINSIC,
+            CompilerIntrinsic::QuantityRatioRound,
             "quantity.ratio_round",
         ),
         _ => {
@@ -10494,21 +11005,21 @@ fn analyze_numeric_round_method_call(
         };
         let folded = match (intrinsic, lhs, rhs) {
             (
-                DECIMAL_DIV_ROUND_INTRINSIC,
+                CompilerIntrinsic::DecimalDivRound,
                 Some(ConstantNumeric::Decimal(lhs)),
                 Some(ConstantNumeric::Decimal(rhs)),
             ) => lhs
                 .try_decimal_div_round(&rhs, output_scale, rounding_mode)
                 .map(ConstantNumeric::Decimal),
             (
-                QUANTITY_DIV_ROUND_INTRINSIC,
+                CompilerIntrinsic::QuantityDivRound,
                 Some(ConstantNumeric::Quantity(lhs)),
                 Some(ConstantNumeric::Decimal(rhs)),
             ) => lhs
                 .try_div_decimal_round(&rhs, output_scale, rounding_mode)
                 .map(ConstantNumeric::Quantity),
             (
-                QUANTITY_RATIO_ROUND_INTRINSIC,
+                CompilerIntrinsic::QuantityRatioRound,
                 Some(ConstantNumeric::Quantity(lhs)),
                 Some(ConstantNumeric::Quantity(rhs)),
             ) => lhs
@@ -10518,7 +11029,7 @@ fn analyze_numeric_round_method_call(
                 return Some(Ok(retain_named_call_evaluation_order(
                     TypedExpr {
                         expr: ExprKind::Call {
-                            name: intrinsic.to_owned(),
+                            target: CallTarget::Intrinsic(intrinsic),
                             args: vec![receiver, divisor, scale, mode],
                         },
                         ty: result_type,
@@ -10559,7 +11070,7 @@ fn analyze_numeric_round_method_call(
     Some(Ok(retain_named_call_evaluation_order(
         TypedExpr {
             expr: ExprKind::Call {
-                name: intrinsic.to_owned(),
+                target: CallTarget::Intrinsic(intrinsic),
                 args: vec![receiver, divisor, scale, mode],
             },
             ty: result_type,
@@ -10573,9 +11084,18 @@ fn analyze_expr_expected(
     vars: &mut HashMap<String, Type>,
     expected: Option<&Type>,
 ) -> Result<TypedExpr, SemanticError> {
+    analyze_expr_in_context(context, expr, vars, expected, false)
+}
+fn analyze_expr_in_context(
+    context: &SemanticContext,
+    expr: &Expr,
+    vars: &mut HashMap<String, Type>,
+    expected: Option<&Type>,
+    boundary: bool,
+) -> Result<TypedExpr, SemanticError> {
     // Blocks nested in expressions are analyzed all-or-nothing.
     let recovery = context.statement_recovery.replace(false);
-    let result = analyze_expr_expected_inner(context, expr, vars, expected);
+    let result = analyze_expr_expected_inner(context, expr, vars, expected, boundary);
     context.statement_recovery.set(recovery);
     let result = result.and_then(|typed| {
         if matches!(
@@ -10601,6 +11121,7 @@ fn analyze_expr_expected_inner(
     expr: &Expr,
     vars: &mut HashMap<String, Type>,
     expected: Option<&Type>,
+    boundary: bool,
 ) -> Result<TypedExpr, SemanticError> {
     match expr.kind() {
         Expr::Source { .. } | Expr::Resolved { .. } => {
@@ -10823,7 +11344,7 @@ fn analyze_expr_expected_inner(
                 });
             };
             let (then_branch, else_branch, ty) =
-                analyze_expression_branches(context, then_branch, else_branch, vars, expected)?;
+                analyze_expression_branches(context, then_branch, else_branch, vars, expected, boundary)?;
             Ok(TypedExpr {
                 expr: ExprKind::If {
                     condition: Box::new(condition),
@@ -10859,6 +11380,7 @@ fn analyze_expr_expected_inner(
                 &mut then_vars,
                 &mut vars.clone(),
                 expected,
+                boundary,
             )?;
             Ok(TypedExpr {
                 expr: ExprKind::IfLet {
@@ -10872,7 +11394,7 @@ fn analyze_expr_expected_inner(
         }
         Expr::Match { value, arms } => {
             let value = analyze_expr(context, value, vars)?;
-            analyze_match_expression(context, value, arms, vars, expected)
+            analyze_match_expression(context, value, arms, vars, expected, boundary)
         }
         Expr::Conditional {
             cond,
@@ -10887,10 +11409,10 @@ fn analyze_expr_expected_inner(
                     message: "conditional expects a bool condition".into(),
                 });
             }
-            let mut t1 = analyze_expr_expected(context, then_expr, vars, expected)?;
+            let mut t1 = analyze_expr_in_context(context, then_expr, vars, expected, boundary)?;
             let branch_type = if let Some(expected) = expected {
                 let mut contextual = t1.clone();
-                match ensure_assignable_and_coerce(expected, &mut contextual) {
+                match if boundary { ensure_boundary_assignable_and_coerce(expected, &mut contextual) } else { ensure_assignable_and_coerce(expected, &mut contextual) } {
                     Ok(()) => {
                         t1 = contextual;
                         expected.clone()
@@ -10901,8 +11423,8 @@ fn analyze_expr_expected_inner(
             } else {
                 t1.ty.clone()
             };
-            let mut t2 = analyze_expr_expected(context, else_expr, vars, Some(&branch_type))?;
-            if let Err(error) = ensure_assignable_and_coerce(&branch_type, &mut t2) {
+            let mut t2 = analyze_expr_in_context(context, else_expr, vars, Some(&branch_type), boundary)?;
+            if let Err(error) = if boundary { ensure_boundary_assignable_and_coerce(&branch_type, &mut t2) } else { ensure_assignable_and_coerce(&branch_type, &mut t2) } {
                 if error.code != "E_TYPE_ANNOTATION_MISMATCH" {
                     return Err(error);
                 }
@@ -11078,14 +11600,14 @@ fn analyze_expr_expected_inner(
                                 "resolved const `{name}` is absent from the typed environment"
                             ),
                         }),
-                    ResolvedValueTarget::ImportedErrorVariant => {
-                        let code = context.error_codes.borrow().get(name).copied().ok_or_else(|| SemanticError {
-                            code: "E_UNKNOWN_ERROR_VARIANT", message: format!("error variant `{name}` is not exported by the locked type graph"),
+                    ResolvedValueTarget::ImportedVariant => {
+                        let code = context.variant_codes.borrow().get(name).copied().ok_or_else(|| SemanticError {
+                            code: "E_UNKNOWN_ENUM_VARIANT", message: format!("enum variant `{name}` is not exported by the locked type graph"),
                         })?;
-                        typed_error_value(context, name, code)
+                        typed_variant_value(context, name, code)
                     }
-                    ResolvedValueTarget::ErrorCode(resolved_code) => {
-                        let code = context.error_codes.borrow().get(name).copied().ok_or_else(|| {
+                    ResolvedValueTarget::VariantCode(resolved_code) => {
+                        let code = context.variant_codes.borrow().get(name).copied().ok_or_else(|| {
                             SemanticError {
                                 code: "E_INTERNAL_RESOLUTION",
                                 message: format!(
@@ -11099,7 +11621,7 @@ fn analyze_expr_expected_inner(
                                 message: format!("error code `{name}` changed after resolution"),
                             });
                         }
-                        typed_error_value(context, name, code)
+                        typed_variant_value(context, name, code)
                     }
                     ResolvedValueTarget::Intrinsic => Err(Builtin::nominal_value(name)
                         .map_or_else(
@@ -11122,8 +11644,8 @@ fn analyze_expr_expected_inner(
             if let Some(value) = context.consts.borrow().get(name).cloned() {
                 return Ok(value);
             }
-            if let Some(code) = context.error_codes.borrow().get(name).copied() {
-                return typed_error_value(context, name, code);
+            if let Some(code) = context.variant_codes.borrow().get(name).copied() {
+                return typed_variant_value(context, name, code);
             }
             Err(SemanticError {
                 code: "K2002",
@@ -11500,112 +12022,93 @@ fn analyze_expr_expected_inner(
                 }
             }
         }
-        Expr::StructLiteral { name, fields } => {
-            context.validate_struct_literal_target(expr, name)?;
-            let canonical_name = context
-                .external_types
-                .borrow()
-                .get(name)
-                .and_then(|ty| match ty {
-                    Type::Struct { name, .. } => Some(name.clone()),
-                    _ => None,
-                })
-                .unwrap_or_else(|| name.clone());
-            let Some(declared_fields) = context.structs.borrow().get(name).cloned() else {
-                return Err(SemanticError {
-                    code: "E_UNKNOWN_STRUCT",
-                    message: format!("unknown struct type `{name}`"),
-                });
-            };
-            for (index, field) in fields.iter().enumerate() {
-                if fields[..index]
-                    .iter()
-                    .any(|previous| previous.name == field.name)
-                {
-                    return Err(SemanticError {
-                        code: "E_DUPLICATE_STRUCT_FIELD",
-                        message: format!(
-                            "struct field `{}` is supplied more than once",
-                            field.name
-                        ),
-                    });
-                }
-                if !declared_fields
-                    .iter()
-                    .any(|(declared, _)| declared == &field.name)
-                {
-                    if let Some(suggestion) = crate::diagnostic::suggest::closest(
-                        &field.name,
-                        declared_fields
-                            .iter()
-                            .map(|(declared, _)| declared.as_str()),
-                    ) {
-                        context.capture_help(
-                            context.expression_source(&field.value),
-                            format!("did you mean `{suggestion}`?"),
-                        );
-                    }
-                    return Err(SemanticError {
-                        code: "E_UNKNOWN_STRUCT_FIELD",
-                        message: format!("struct `{name}` has no field named `{}`", field.name),
-                    });
-                }
-            }
-            for (declared_name, _) in &declared_fields {
-                if !fields.iter().any(|field| &field.name == declared_name) {
-                    return Err(SemanticError {
-                        code: "E_MISSING_STRUCT_FIELD",
-                        message: format!(
-                            "struct `{name}` literal is missing field `{declared_name}`"
-                        ),
-                    });
-                }
-            }
-            let mut typed_fields = Vec::with_capacity(declared_fields.len());
-            for field in fields {
-                let (declared_name, declared_ty) = declared_fields
-                    .iter()
-                    .find(|(declared, _)| declared == &field.name)
-                    .expect("unknown struct fields were rejected above");
-                let mut value =
-                    analyze_expr_expected(context, &field.value, vars, Some(declared_ty))?;
-                ensure_assignable_and_coerce(declared_ty, &mut value)?;
-                typed_fields.push((declared_name.clone(), value));
-            }
-            Ok(TypedExpr {
-                expr: ExprKind::StructLiteral {
-                    name: canonical_name.clone(),
-                    fields: typed_fields,
-                },
-                ty: Type::Struct {
-                    name: canonical_name,
-                    fields: Arc::from(declared_fields),
-                },
-            })
-        }
+        Expr::StructLiteral { .. } => analyze_record_literal(context, expr, vars, false),
+        Expr::ArgumentRecord { .. } => Err(SemanticError { code: "E_TEST_ARGUMENT_RECORD", message: "typed argument records are accepted only as the arguments of a test invocation helper".into() }),
         Expr::Call {
             name,
             args,
             argument_names,
             implicit_receiver,
         } => {
-            let source_name = name.clone();
-            let name = normalize_namespaced(name);
-            context.validate_call_target(expr, &source_name, &name, *implicit_receiver)?;
-            // A kotoage, view or lifecycle hook may reuse a builtin's internal
-            // lowering name (`view fn min`); a flat call to it is a runtime
-            // function call, never a non-canonical builtin spelling.
-            if !*implicit_receiver
-                && source_name == name
-                && Builtin::from_name(&name).is_some()
-                && context
-                    .function_modifiers
-                    .borrow()
-                    .get(&name)
-                    .is_some_and(|modifiers| modifiers.kind != FunctionKind::Private)
-            {
-                return Err(runtime_function_call_error(context, expr, &name));
+            if context.event_names.borrow().contains(name) {
+                return Err(SemanticError {
+                    code: "E_EVENT_VALUE",
+                    message: format!(
+                        "event `{name}` can only be emitted with `emit {name} {{ ... }};`"
+                    ),
+                });
             }
+            if let Some(result) = analyze_contract_call(context, name, args, argument_names.as_deref(), *implicit_receiver, vars) {
+                context.validate_call_target(expr, name, name, *implicit_receiver)?;
+                return result;
+            }
+            let source_name = name.clone();
+            let user_parameters = context.function_params.borrow().get(&source_name).cloned();
+            let mut user_receiver = None;
+            if *implicit_receiver
+                && let Some(parameter) = user_parameters.as_ref().and_then(|params| params.first())
+                && let Some(receiver) = args.first()
+                && context.function_modifiers.borrow().get(&source_name)
+                    .is_none_or(|modifiers| modifiers.kind == FunctionKind::Private)
+                && let Ok(mut typed) = analyze_expr(context, receiver, vars)
+                && user_receiver_accepts(&parameter.ty, &typed.ty)
+            {
+                ensure_boundary_assignable_and_coerce(&parameter.ty, &mut typed)?;
+                user_receiver = Some(typed);
+            }
+            let is_user_call = user_parameters.is_some()
+                && (!*implicit_receiver || user_receiver.is_some());
+            let source_builtin = if is_user_call {
+                None
+            } else if *implicit_receiver {
+                Builtin::from_name(&source_name).filter(|builtin| {
+                    matches!(
+                        builtin.surface(),
+                        BuiltinSurface::MethodOnly | BuiltinSurface::FunctionOrMethod
+                    )
+                })
+            } else {
+                Builtin::from_source_name(&source_name)
+            };
+            if !is_user_call
+                && !*implicit_receiver
+                && source_builtin.is_none()
+                && let Some(message) = crate::parser::removed_free_helper_message(&source_name)
+            {
+                return Err(SemanticError {
+                    code: "K2002",
+                    message: message.to_owned(),
+                });
+            }
+            if !is_user_call
+                && !*implicit_receiver
+                && source_builtin.is_none()
+                && let Some(builtin) = Builtin::from_name(&source_name)
+            {
+                if builtin.mode() == BuiltinMode::CompilerInternal {
+                    validate_builtin_mode(context, builtin)?;
+                }
+                return Err(SemanticError {
+                    code: "E_NON_CANONICAL_BUILTIN",
+                    message: format!(
+                        "legacy or non-canonical builtin spelling `{source_name}` is not supported; use `{}`",
+                        builtin.source_name()
+                    ),
+                });
+            }
+            let name = if is_user_call {
+                source_name.clone()
+            } else if *implicit_receiver {
+                match name.as_str() {
+                    "ok_or" => OPTION_OK_OR_INTRINSIC.to_owned(),
+                    "or_err" => RESULT_OR_ERR_INTRINSIC.to_owned(),
+                    _ => normalize_namespaced(name),
+                }
+            } else {
+                normalize_namespaced(name)
+            };
+            context.validate_call_target(expr, &source_name, &name, *implicit_receiver)?;
+            if !is_user_call {
             if let Some(result) = analyze_state_page_call(
                 context,
                 &name,
@@ -11656,6 +12159,7 @@ fn analyze_expr_expected_inner(
             ) {
                 return result;
             }
+            }
             if context.structs.borrow().contains_key(&name) {
                 let fields = context
                     .structs
@@ -11693,7 +12197,7 @@ fn analyze_expr_expected_inner(
                 evaluation_order: (0..args.len()).collect(),
                 is_named: false,
             };
-            if let Some(builtin) = Builtin::from_name(&name) {
+            if let Some(builtin) = source_builtin {
                 let canonical_function_call = source_name == builtin.source_name()
                     && matches!(
                         builtin.surface(),
@@ -11798,7 +12302,9 @@ fn analyze_expr_expected_inner(
                         &parameter_names,
                     );
                 })?;
-            } else if let Some(signature) = context.function_params.borrow().get(&name).cloned() {
+            } else if is_user_call
+                && let Some(signature) = context.function_params.borrow().get(&name).cloned()
+            {
                 let receiver_count = usize::from(*implicit_receiver);
                 if argument_names
                     .as_ref()
@@ -11873,7 +12379,7 @@ fn analyze_expr_expected_inner(
                     | "decimal::from_quantity" => &["value"],
                     "result::err" => &["error"],
                     "unwrap_or" | "unwrap_err_or" => &["default"],
-                    "expect" => &["error"],
+                    "expect" | OPTION_OK_OR_INTRINSIC | RESULT_OR_ERR_INTRINSIC => &["error"],
                     _ => &[],
                 };
                 if !intrinsic_names.is_empty() {
@@ -11893,7 +12399,7 @@ fn analyze_expr_expected_inner(
             }
             let args = argument_plan.ordered.as_slice();
             if matches!(
-                Builtin::from_name(&name),
+                source_builtin,
                 Some(Builtin::PointerConstructor(PointerConstructor::Json))
             ) && args.len() == 1
                 && !matches!(args[0].kind(), Expr::String(_))
@@ -11903,7 +12409,7 @@ fn analyze_expr_expected_inner(
                     message: JSON_LITERAL_REQUIRED_MESSAGE.into(),
                 });
             }
-            if name == "invoke_entrypoint" {
+            if !is_user_call && name == "invoke_entrypoint" {
                 return canonicalize_builtin_result(
                     Builtin::TestInvokeEntrypoint,
                     analyze_invoke_entrypoint_call(context, args, vars),
@@ -11911,7 +12417,7 @@ fn analyze_expr_expected_inner(
                 .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
                 .and_then(|typed| append_test_call_site(context, expr, typed));
             }
-            if name == "invoke_entrypoint_as" {
+            if !is_user_call && name == "invoke_entrypoint_as" {
                 return canonicalize_builtin_result(
                     Builtin::TestInvokeEntrypointAs,
                     analyze_invoke_entrypoint_as_call(context, args, vars),
@@ -11919,7 +12425,7 @@ fn analyze_expr_expected_inner(
                 .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
                 .and_then(|typed| append_test_call_site(context, expr, typed));
             }
-            if name == "expect_reject_as" {
+            if !is_user_call && name == "expect_reject_as" {
                 return canonicalize_builtin_result(
                     Builtin::TestExpectRejectAs,
                     analyze_expect_reject_as_call(context, args, vars),
@@ -11927,7 +12433,7 @@ fn analyze_expr_expected_inner(
                 .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
                 .and_then(|typed| append_test_call_site(context, expr, typed));
             }
-            if name == "expect_any_reject_as" {
+            if !is_user_call && name == "expect_any_reject_as" {
                 return canonicalize_builtin_result(
                     Builtin::TestExpectAnyRejectAs,
                     analyze_rejection_expectation_call(context, args, vars, true),
@@ -11935,7 +12441,7 @@ fn analyze_expr_expected_inner(
                 .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
                 .and_then(|typed| append_test_call_site(context, expr, typed));
             }
-            if name == "actor_account" {
+            if !is_user_call && name == "actor_account" {
                 return canonicalize_builtin_result(
                     Builtin::TestActorAccount,
                     analyze_actor_account_call(context, args),
@@ -11943,7 +12449,7 @@ fn analyze_expr_expected_inner(
                 .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
                 .and_then(|typed| append_test_call_site(context, expr, typed));
             }
-            if name == "actor_public_key" {
+            if !is_user_call && name == "actor_public_key" {
                 return canonicalize_builtin_result(
                     Builtin::TestActorPublicKey,
                     analyze_actor_public_key_call(context, args),
@@ -11951,7 +12457,7 @@ fn analyze_expr_expected_inner(
                 .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
                 .and_then(|typed| append_test_call_site(context, expr, typed));
             }
-            if name == "actor_sign" {
+            if !is_user_call && name == "actor_sign" {
                 return canonicalize_builtin_result(
                     Builtin::TestActorSign,
                     analyze_actor_sign_call(context, args, vars),
@@ -11959,7 +12465,7 @@ fn analyze_expr_expected_inner(
                 .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan))
                 .and_then(|typed| append_test_call_site(context, expr, typed));
             }
-            if matches!(name.as_str(), "assert" | "assert_eq") {
+            if !is_user_call && matches!(name.as_str(), "assert" | "assert_eq") {
                 let builtin = if name == "assert" {
                     Builtin::Assert
                 } else {
@@ -11972,13 +12478,23 @@ fn analyze_expr_expected_inner(
             }
             // analyze builtin calls
             let mut typed_slots = (0..args.len()).map(|_| None).collect::<Vec<_>>();
-            let expected_parameters = context.function_params.borrow().get(&name).cloned();
+            if let Some(receiver) = user_receiver {
+                typed_slots[0] = Some(receiver);
+            }
+            let expected_parameters = if is_user_call {
+                context.function_params.borrow().get(&name).cloned()
+            } else {
+                None
+            };
             for index in argument_plan.evaluation_order.iter().copied() {
+                if typed_slots[index].is_some() {
+                    continue;
+                }
                 let argument = &args[index];
                 // The batch's one list literal has an exact tuple context before
                 // item analysis, so unsuffixed numeric literals become quantities.
                 // Saved lists retain their declared element type and capacity.
-                let batch_literal_context = if name == "transfer_batch"
+                let batch_literal_context = if source_builtin == Some(Builtin::TransferBatch)
                     && let Expr::List(elements) = argument.kind()
                 {
                     let capacity = u8::try_from(elements.len().max(1))
@@ -11995,20 +12511,33 @@ fn analyze_expr_expected_inner(
                 } else {
                     None
                 };
-                let expected = batch_literal_context.as_ref().or_else(|| {
-                    expected_parameters
-                        .as_ref()
-                        .and_then(|parameters| parameters.get(index))
-                        .map(|parameter| &parameter.ty)
-                });
-                if let Some(typed) =
-                    analyze_builtin_literal_argument(context, &name, index, argument)?
+                let bridge_receiver_context =
+                    if index == 0 && *implicit_receiver && name == OPTION_OK_OR_INTRINSIC {
+                        expected.and_then(|ty| match resolve_struct_type(ty) {
+                            Type::Result(value, _) => Some(Type::Option(value)),
+                            _ => None,
+                        })
+                    } else {
+                        None
+                    };
+                let expected = bridge_receiver_context
+                    .as_ref()
+                    .or(batch_literal_context.as_ref())
+                    .or_else(|| {
+                        expected_parameters
+                            .as_ref()
+                            .and_then(|parameters| parameters.get(index))
+                            .map(|parameter| &parameter.ty)
+                    });
+                if let Some(builtin) = source_builtin
+                    && let Some(typed) =
+                        analyze_builtin_literal_argument(context, builtin, index, argument)?
                 {
                     typed_slots[index] = Some(typed);
                     continue;
                 }
                 typed_slots[index] =
-                    Some(analyze_expr_expected(context, argument, vars, expected)?);
+                    Some(analyze_expr_in_context(context, argument, vars, expected, is_user_call)?);
             }
             let mut arg_typed = typed_slots
                 .into_iter()
@@ -12022,15 +12551,19 @@ fn analyze_expr_expected_inner(
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            if let Some(result) = explicit_numeric_conversion(&name, arg_typed.clone()) {
+            if !is_user_call
+                && let Some(result) = explicit_numeric_conversion(&name, arg_typed.clone())
+            {
                 return result
                     .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
-            if let Some(result) = analyze_sum_type_call(context, &name, arg_typed.clone()) {
+            if !is_user_call
+                && let Some(result) = analyze_sum_type_call(context, &name, arg_typed.clone())
+            {
                 return result
                     .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
-            if let Some(builtin) = Builtin::from_name(&name) {
+            if let Some(builtin) = source_builtin {
                 let argument_types = arg_typed
                     .iter()
                     .map(|argument| argument.ty.clone())
@@ -12125,7 +12658,7 @@ fn analyze_expr_expected_inner(
                                         .into(),
                             });
                         }
-                        if let Err(mut error) = ensure_assignable_and_coerce(&param.ty, arg) {
+                        if let Err(mut error) = ensure_boundary_assignable_and_coerce(&param.ty, arg) {
                             if error.code == "E_TYPE_ANNOTATION_MISMATCH" {
                                 error.code = "K2003";
                                 error.message = format!(
@@ -12153,7 +12686,7 @@ fn analyze_expr_expected_inner(
                         .expect("declared function parameters and returns are collected together");
                     Ok(retain_named_call_evaluation_order(TypedExpr {
                         expr: ExprKind::Call {
-                            name: name.clone(),
+                            target: CallTarget::User(name.clone()),
                             args: arg_typed,
                         },
                         ty: ret_ty,
@@ -12168,10 +12701,10 @@ fn analyze_sum_type_call(
     name: &str,
     mut args: Vec<TypedExpr>,
 ) -> Option<Result<TypedExpr, SemanticError>> {
-    let call = |name: &str, args: Vec<TypedExpr>, ty: Type| {
+    let call = |intrinsic: CompilerIntrinsic, args: Vec<TypedExpr>, ty: Type| {
         Ok(TypedExpr {
             expr: ExprKind::Call {
-                name: name.to_owned(),
+                target: CallTarget::Intrinsic(intrinsic),
                 args,
             },
             ty,
@@ -12200,7 +12733,7 @@ fn analyze_sum_type_call(
             if let Err(err) = ensure_assignable_and_coerce(&key, &mut args[1]) {
                 return Some(Err(err));
             }
-            call(STATE_MAP_GET_INTRINSIC, args, Type::Option(value))
+            call(CompilerIntrinsic::StateMapGet, args, Type::Option(value))
         }
         "option::some" | "option::none" | "result::ok" | "result::err" => Err(SemanticError {
             code: "E_LEGACY_SUM_CONSTRUCTOR",
@@ -12210,13 +12743,13 @@ fn analyze_sum_type_call(
             if args.len() != 1 || !matches!(resolve_struct_type(&args[0].ty), Type::Option(_)) {
                 return Some(error(&format!("{name} expects Option<T>")));
             }
-            call(name, args, Type::Bool)
+            call(if name == "is_some" { CompilerIntrinsic::IsSome } else { CompilerIntrinsic::IsNone }, args, Type::Bool)
         }
         "is_ok" | "is_err" => {
             if args.len() != 1 || !matches!(resolve_struct_type(&args[0].ty), Type::Result(_, _)) {
                 return Some(error(&format!("{name} expects Result<T, E>")));
             }
-            call(name, args, Type::Bool)
+            call(if name == "is_ok" { CompilerIntrinsic::IsOk } else { CompilerIntrinsic::IsErr }, args, Type::Bool)
         }
         "unwrap_or" => {
             if args.len() != 2 {
@@ -12233,7 +12766,7 @@ fn analyze_sum_type_call(
             if let Err(err) = ensure_assignable_and_coerce(&value_ty, &mut args[1]) {
                 return Some(Err(err));
             }
-            call("unwrap_or", args, value_ty)
+            call(CompilerIntrinsic::UnwrapOr, args, value_ty)
         }
         "unwrap_err_or" => {
             if args.len() != 2 {
@@ -12245,19 +12778,38 @@ fn analyze_sum_type_call(
             if let Err(err) = ensure_assignable_and_coerce(&error_ty, &mut args[1]) {
                 return Some(Err(err));
             }
-            call("unwrap_err_or", args, *error_ty)
+            call(CompilerIntrinsic::UnwrapErrOr, args, *error_ty)
         }
-        "expect" => {
+        "expect" | OPTION_OK_OR_INTRINSIC | RESULT_OR_ERR_INTRINSIC => {
+            let intrinsic = match name {
+                OPTION_OK_OR_INTRINSIC => CompilerIntrinsic::OptionOkOr,
+                RESULT_OR_ERR_INTRINSIC => CompilerIntrinsic::ResultOrErr,
+                _ => CompilerIntrinsic::Expect,
+            };
+            let method = match name {
+                OPTION_OK_OR_INTRINSIC => "ok_or",
+                RESULT_OR_ERR_INTRINSIC => "or_err",
+                _ => name,
+            };
             if args.len() != 2 {
-                return Some(error("Option.expect expects one nominal error argument"));
+                return Some(error(&format!("{method} expects one nominal error argument")));
             }
-            let Type::Option(value_ty) = resolve_struct_type(&args[0].ty) else {
-                return Some(error("Option.expect receiver must be Option<T>"));
+            let value_ty = match (method, resolve_struct_type(&args[0].ty)) {
+                ("expect" | "ok_or", Type::Option(value))
+                | ("expect" | "or_err", Type::Result(value, _)) => value,
+                ("ok_or", _) => return Some(error("ok_or receiver must be Option<T>")),
+                ("or_err", _) => return Some(error("or_err receiver must be Result<T, E>")),
+                _ => return Some(error("expect receiver must be Option<T> or Result<T, E>")),
             };
             if !matches!(resolve_struct_type(&args[1].ty), Type::ErrorEnum(_)) {
-                return Some(error("Option.expect requires a nominal error enum value"));
+                return Some(error(&format!("{method} requires a nominal error enum value")));
             }
-            call("expect", args, *value_ty)
+            if name == "expect" {
+                call(intrinsic, args, *value_ty)
+            } else {
+                let error_ty = args[1].ty.clone();
+                call(intrinsic, args, Type::Result(value_ty, Box::new(error_ty)))
+            }
         }
         _ => return None,
     })
@@ -12323,7 +12875,7 @@ fn analyze_const_expr_inner(
             expr: ExprKind::Bytes(value.clone()),
             ty: Type::Bytes,
         }),
-        Expr::Ident(name) if context.error_codes.borrow().contains_key(name) => {
+        Expr::Ident(name) if context.variant_codes.borrow().contains_key(name) => {
             analyze_expr_expected(context, expr, &mut HashMap::new(), expected)
         }
         Expr::Ident(name) => {
@@ -12522,6 +13074,39 @@ fn parse_declared_param_type(
     param: &Param,
     modifiers: &FunctionModifiers,
 ) -> Result<TypedParam, SemanticError> {
+    if modifiers.kind != FunctionKind::Private
+        && !iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(
+            &param.name,
+        )
+    {
+        let type_source = param.ty.as_ref().and_then(|ty| context.type_source(ty));
+        let name_source = type_source.and_then(|ty| {
+            context
+                .resolved_arenas
+                .borrow()
+                .get(&ty.source)
+                .and_then(|arena| {
+                    arena
+                        .bindings()
+                        .filter(|binding| {
+                            binding.name == param.name
+                                && binding.kind == crate::resolved::ResolvedBindingKind::Parameter
+                        })
+                        .filter_map(|binding| binding.source)
+                        .filter(|name| name.range.start >= ty.range.end)
+                        .min_by_key(|name| name.range.start)
+                })
+        });
+        context.capture_help(name_source.or(type_source),
+            "Use an ordinary canonical identifier for a public parameter, such as `permission_token`; keyword spellings are not valid ABI field names.".into());
+        return Err(sem_err(
+            "E_PUBLIC_PARAMETER_IDENTIFIER",
+            format!(
+                "public parameter `{}` must be a canonical Kotodama identifier",
+                param.name
+            ),
+        ));
+    }
     let ty = convert_type_expr(
         context,
         param.ty.as_ref().ok_or_else(|| SemanticError {
@@ -12654,8 +13239,8 @@ fn convert_type_expr_inner(
                 "int" => Type::Int,
                 "decimal" => Type::Decimal,
                 "quantity" => Type::Quantity,
-                name if context.error_types.borrow().contains_key(name) => {
-                    Type::ErrorEnum(Arc::clone(&context.error_types.borrow()[name]))
+                name if declared_enum_type(context, name).is_some() => {
+                    declared_enum_type(context, name).expect("declared enum type")
                 }
                 "bool" => Type::Bool,
                 "string" => Type::String,
@@ -12833,17 +13418,6 @@ fn convert_type_expr_inner(
         }
     })
 }
-fn apply_map_new_type_hint(expr: &mut TypedExpr, hint: &Type) {
-    let hint = resolve_struct_type(hint);
-    if !matches!(hint, Type::StateMap(_, _)) {
-        return;
-    }
-    if let ExprKind::Call { name, .. } | ExprKind::NamedCall { name, .. } = expr.kind()
-        && name == "Map::new"
-    {
-        expr.ty = hint;
-    }
-}
 fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError> {
     let expected = resolve_struct_type(expected);
     let actual = resolve_struct_type(actual);
@@ -12899,6 +13473,40 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
         }),
     }
 }
+/// A private helper's first parameter selects receiver syntax before native methods.
+/// Only exact types and the ordinary outer-list boundary widening participate.
+pub(crate) fn user_receiver_accepts(expected: &Type, actual: &Type) -> bool {
+    let expected = resolve_struct_type(expected);
+    let actual = resolve_struct_type(actual);
+    expected == actual
+        || matches!((&expected, &actual),
+        (Type::List(expected_element, expected_capacity), Type::List(actual_element, actual_capacity))
+        if expected_element == actual_element && actual_capacity < expected_capacity)
+}
+/// Call and return boundaries may copy an exactly typed List into larger outer storage.
+fn ensure_boundary_assignable_and_coerce(
+    expected: &Type,
+    expr: &mut TypedExpr,
+) -> Result<(), SemanticError> {
+    if let (
+        Type::List(expected_element, expected_capacity),
+        Type::List(actual_element, actual_capacity),
+    ) = (resolve_struct_type(expected), resolve_struct_type(&expr.ty))
+        && expected_element == actual_element
+        && actual_capacity < expected_capacity
+    {
+        let source = expr.clone();
+        *expr = TypedExpr {
+            expr: ExprKind::Call {
+                target: CallTarget::Intrinsic(CompilerIntrinsic::ListWiden),
+                args: vec![source],
+            },
+            ty: resolve_struct_type(expected),
+        };
+        return Ok(());
+    }
+    ensure_assignable_and_coerce(expected, expr)
+}
 fn ensure_assignable_and_coerce(
     expected: &Type,
     expr: &mut TypedExpr,
@@ -12938,8 +13546,9 @@ fn ensure_assignable_and_coerce(
             *expr = fold_numeric_literal_cast(converted)?;
             return Ok(());
         }
-        if let ExprKind::Call { name, .. } | ExprKind::NamedCall { name, .. } = expr.kind()
-            && let Some(builtin) = Builtin::from_name(name)
+        if let ExprKind::Call { target: name, .. } | ExprKind::NamedCall { target: name, .. } =
+            expr.kind()
+            && let Some(builtin) = name.builtin()
             && core_query_view_type(builtin).is_some()
         {
             let query_result = match &expr.ty {
@@ -13075,7 +13684,11 @@ fn resolve_struct_type_with_context(
         });
     }
     validate_use_site_type_resolution_budget(context, ty)?;
-    Ok(materialize_struct_type_with_context(context, ty))
+    let resolved = materialize_struct_type_with_context(context, ty);
+    if !context.contracts.borrow().is_empty() {
+        contract_imports::validate_reference_containers(&resolved)?;
+    }
+    Ok(resolved)
 }
 fn validate_use_site_type_resolution_budget(
     context: &SemanticContext,
@@ -13200,10 +13813,10 @@ pub struct TypedBlock {
     pub statements: Vec<TypedStatement>,
     /// Final expression without a semicolon.
     pub tail: Option<Box<TypedExpr>>,
-    /// Source ranges of the statements and tail, used only for diagnostics.
+    /// Source ranges of the statements and tail, used for diagnostics and debug sidecars.
     ///
-    /// Provenance never participates in typed-HIR equality, lowering, or
-    /// artifact identity.
+    /// Provenance never participates in typed-HIR equality or artifact identity.
+    /// Lowering transports it separately from executable operations.
     pub(crate) provenance: TypedBlockProvenance,
 }
 impl TypedBlock {
@@ -13245,7 +13858,7 @@ impl PartialEq for TypedBlock {
         self.statements == other.statements && self.tail == other.tail
     }
 }
-/// Diagnostic-only source provenance retained beside one typed block.
+/// Non-executable source provenance retained beside one typed block.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TypedBlockProvenance {
     /// One entry per typed statement; desugared statements share their AST source.
@@ -13328,7 +13941,7 @@ impl TypedStatement {
 ///
 /// Active-only sums use dedicated expression nodes, so ordinary calls always
 /// evaluate every argument in source order.
-fn evaluated_call_args<'a>(_name: &str, args: &'a [TypedExpr]) -> &'a [TypedExpr] {
+fn evaluated_call_args<'a>(_target: &CallTarget, args: &'a [TypedExpr]) -> &'a [TypedExpr] {
     args
 }
 fn block_effects(context: &SemanticContext, block: &TypedBlock) -> FunctionEffects {
@@ -13422,9 +14035,16 @@ fn statement_effects(context: &SemanticContext, statement: &TypedStatement) -> F
 
 fn expr_effects(context: &SemanticContext, expression: &TypedExpr) -> FunctionEffects {
     match expression.kind() {
-        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
-            let mut effects = FunctionEffects::default();
-            if let Some(builtin) = Builtin::from_name(name) {
+        ExprKind::Call { target: name, args }
+        | ExprKind::NamedCall {
+            target: name, args, ..
+        } => {
+            let mut effects = FunctionEffects {
+                host_side_effects: name.intrinsic() == Some(CompilerIntrinsic::EmitEvent)
+                    || matches!(name, CallTarget::Contract(method) if method.descriptor().kind == iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage),
+                ..FunctionEffects::default()
+            };
+            if let Some(builtin) = name.builtin() {
                 let builtin_effects = builtin.spec().effects;
                 effects.host_side_effects = builtin_effects.host_side_effects;
                 effects.emits_instructions = builtin_effects.emits_instructions;
@@ -13523,7 +14143,7 @@ fn expr_effects(context: &SemanticContext, expression: &TypedExpr) -> FunctionEf
             effects.merge_from(expr_effects(context, index));
             effects
         }
-        ExprKind::ErrorValue(_)
+        ExprKind::VariantCode(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
@@ -13739,9 +14359,12 @@ fn collect_state_accesses_expr(
             collect_state_accesses_expr(state_names, target, reads, writes);
             collect_state_accesses_expr(state_names, index, reads, writes);
         }
-        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
+        ExprKind::Call { target: name, args }
+        | ExprKind::NamedCall {
+            target: name, args, ..
+        } => {
             if matches!(
-                Builtin::from_name(name),
+                name.builtin(),
                 Some(Builtin::GetOrInsert | Builtin::StateMapRemove)
             ) && let Some(map_name) = args.first().and_then(|argument| match argument.kind() {
                 ExprKind::Ident(map_name) => Some(map_name),
@@ -13754,7 +14377,7 @@ fn collect_state_accesses_expr(
             }
         }
         ExprKind::Bool(_)
-        | ExprKind::ErrorValue(_)
+        | ExprKind::VariantCode(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
@@ -13871,9 +14494,12 @@ fn collect_calls_in_expr(
     calls: &mut IndexSet<String>,
 ) {
     match expr.kind() {
-        ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
-            if is_user_defined_function(context, name) {
-                calls.insert(name.clone());
+        ExprKind::Call { target: name, args }
+        | ExprKind::NamedCall {
+            target: name, args, ..
+        } => {
+            if let Some(name) = name.user_name() {
+                calls.insert(name.to_owned());
             }
             for arg in evaluated_call_args(name, args) {
                 collect_calls_in_expr(context, arg, calls);
@@ -13962,7 +14588,7 @@ fn collect_calls_in_expr(
             collect_calls_in_expr(context, index, calls);
         }
         ExprKind::Bool(_)
-        | ExprKind::ErrorValue(_)
+        | ExprKind::VariantCode(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
@@ -14051,9 +14677,6 @@ fn is_state_handle_expr(context: &SemanticContext, expr: &TypedExpr) -> bool {
 }
 fn typed_map_expr_is_state(context: &SemanticContext, expr: &TypedExpr) -> bool {
     is_state_handle_expr(context, expr)
-}
-fn is_user_defined_function(context: &SemanticContext, name: &str) -> bool {
-    context.function_returns.borrow().contains_key(name)
 }
 fn compute_transitive_effects(
     summaries: &HashMap<String, FunctionSummary>,
@@ -14352,7 +14975,26 @@ fn analyze_definite_init_expr(
             merge_exit(&mut flow.continues, branches.continues);
             flow
         }
-        ExprKind::Call { name, args } => {
+        ExprKind::Call { target, args } | ExprKind::NamedCall { target, args, .. }
+            if target.is_lazy_sum_error() =>
+        {
+            let mut flow = analyze_definite_init_expr(&args[0], initialized, required, summaries);
+            let Some(after_receiver) = flow.continuing.take() else {
+                return flow;
+            };
+            let failure =
+                analyze_definite_init_expr(&args[1], after_receiver.clone(), required, summaries);
+            flow.continuing = if target.intrinsic() == Some(CompilerIntrinsic::Expect) {
+                Some(after_receiver)
+            } else {
+                merge_alternative_continuations(Some(after_receiver), failure.continuing)
+            };
+            merge_exit(&mut flow.returns, failure.returns);
+            merge_exit(&mut flow.breaks, failure.breaks);
+            merge_exit(&mut flow.continues, failure.continues);
+            flow
+        }
+        ExprKind::Call { target: name, args } => {
             // Arguments are evaluated eagerly in source order. The call itself
             // contributes exactly the callee's must-write summary; unknown or
             // external bodies contribute nothing and therefore fail closed.
@@ -14360,15 +15002,16 @@ fn analyze_definite_init_expr(
             for arg in args {
                 flow = continue_definite_init_expr(flow, arg, required, summaries);
             }
-            if let (Some(initialized), Some(callee_writes)) =
-                (flow.continuing.as_mut(), summaries.get(name))
-            {
+            if let (Some(initialized), Some(callee_writes)) = (
+                flow.continuing.as_mut(),
+                name.user_name().and_then(|name| summaries.get(name)),
+            ) {
                 initialized.extend(callee_writes.iter().cloned());
             }
             flow
         }
         ExprKind::NamedCall {
-            name,
+            target: name,
             args,
             evaluation_order,
         } => {
@@ -14376,9 +15019,10 @@ fn analyze_definite_init_expr(
             for index in evaluation_order {
                 flow = continue_definite_init_expr(flow, &args[*index], required, summaries);
             }
-            if let (Some(initialized), Some(callee_writes)) =
-                (flow.continuing.as_mut(), summaries.get(name))
-            {
+            if let (Some(initialized), Some(callee_writes)) = (
+                flow.continuing.as_mut(),
+                name.user_name().and_then(|name| summaries.get(name)),
+            ) {
                 initialized.extend(callee_writes.iter().cloned());
             }
             flow
@@ -14471,7 +15115,7 @@ fn analyze_definite_init_expr(
             let flow = analyze_definite_init_expr(target, initialized, required, summaries);
             continue_definite_init_expr(flow, index, required, summaries)
         }
-        ExprKind::ErrorValue(_)
+        ExprKind::VariantCode(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
@@ -14915,6 +15559,7 @@ mod tests {
         drop(cloned_items);
 
         let program = TypedProgram {
+            permissions: Vec::new(),
             unit: SourceUnit {
                 kind: SourceUnitKind::Module,
                 name: "Wide".to_owned(),
@@ -14922,6 +15567,8 @@ mod tests {
             items,
             states: Vec::new(),
             error_types: Vec::new(),
+            enum_types: Vec::new(),
+            events: Vec::new(),
             error_messages: Vec::new(),
             triggers: Vec::new(),
             message_entries: Vec::new(),
@@ -15248,44 +15895,70 @@ mod tests {
         );
     }
     #[test]
+    fn builtin_nominal_namespace_cannot_be_declared_as_a_source_unit() {
+        for source in [
+            "seiyaku kotodama { struct Payload { int value; } }",
+            "module kotodama { enum Status { Active = 1 } }",
+            "module kotodama { error enum Failure { Missing = 1 } }",
+        ] {
+            let error = analyze_error(source);
+            assert_eq!(error.code, "E_RESERVED_DECLARATION", "{source}");
+            assert!(error.message.contains("source unit `kotodama`"));
+        }
+    }
+
+    #[test]
+    fn root_struct_identities_are_nominal_and_test_environments_preserve_them() {
+        let context = SemanticContext::new();
+        let first = parse("seiyaku First { struct Payload { int value; } view fn echo(Payload value) authorize(anyone) -> Payload { value } }").unwrap();
+        let typed = context.analyze(&first).unwrap();
+        let environment = context.test_target_environment(BTreeMap::new(), IndexMap::new());
+        let expected = environment.types.get("Payload").unwrap();
+        assert!(matches!(expected, Type::Struct { name, .. } if name == "First::Payload"));
+        let TypedItem::Function(function) = &typed.items[0];
+        assert_eq!(function.ret_ty.as_ref(), Some(expected));
+        let second = parse("seiyaku Second { struct Payload { int value; } view fn echo(Payload value) authorize(anyone) -> Payload { value } }").unwrap();
+        let second = analyze(&second).unwrap();
+        let TypedItem::Function(other) = &second.items[0];
+        assert_ne!(function.ret_ty, other.ret_ty);
+    }
+
+    #[test]
     fn production_projection_accepts_registered_intrinsics_and_rejects_fabricated_calls() {
         let retained = HashSet::new();
         let removed = HashSet::new();
         let registered = [
-            STATE_MAP_GET_INTRINSIC,
-            LIST_LEN_INTRINSIC,
-            LIST_GET_INTRINSIC,
-            LIST_TRY_SET_INTRINSIC,
-            LIST_TRY_PUSH_INTRINSIC,
-            LIST_POP_INTRINSIC,
-            LIST_CONTAINS_INTRINSIC,
-            LIST_TAKE_INTRINSIC,
-            LIST_ENUMERATE_INTRINSIC,
-            DECIMAL_DIV_ROUND_INTRINSIC,
-            QUANTITY_DIV_ROUND_INTRINSIC,
-            QUANTITY_RATIO_ROUND_INTRINSIC,
-            DECIMAL_TO_INT_TRUNC_INTRINSIC,
-            DECIMAL_TO_INT_ROUND_INTRINSIC,
-            "is_some",
-            "is_none",
-            "is_ok",
-            "is_err",
-            "unwrap_or",
-            "unwrap_err_or",
-            "expect",
+            CompilerIntrinsic::ContractAt,
+            CompilerIntrinsic::StateMapGet,
+            CompilerIntrinsic::ListLen,
+            CompilerIntrinsic::ListGet,
+            CompilerIntrinsic::ListTrySet,
+            CompilerIntrinsic::ListTryPush,
+            CompilerIntrinsic::ListPop,
+            CompilerIntrinsic::ListContains,
+            CompilerIntrinsic::ListTake,
+            CompilerIntrinsic::ListEnumerate,
+            CompilerIntrinsic::ListWiden,
+            CompilerIntrinsic::DecimalDivRound,
+            CompilerIntrinsic::QuantityDivRound,
+            CompilerIntrinsic::QuantityRatioRound,
+            CompilerIntrinsic::DecimalToIntTrunc,
+            CompilerIntrinsic::DecimalToIntRound,
+            CompilerIntrinsic::IsSome,
+            CompilerIntrinsic::IsNone,
+            CompilerIntrinsic::IsOk,
+            CompilerIntrinsic::IsErr,
+            CompilerIntrinsic::UnwrapOr,
+            CompilerIntrinsic::UnwrapErrOr,
+            CompilerIntrinsic::Expect,
+            CompilerIntrinsic::OptionOkOr,
+            CompilerIntrinsic::ResultOrErr,
         ];
-        for name in registered {
-            assert!(
-                compiler_intrinsic_kind(name).is_some(),
-                "missing compiler intrinsic registry entry for {name}"
-            );
-            assert!(
-                is_reserved_source_declaration(name, true),
-                "compiler intrinsic {name} must not be shadowable by a source function"
-            );
+        for intrinsic in registered {
+            let name = intrinsic.name();
             let expression = TypedExpr {
                 expr: ExprKind::Call {
-                    name: name.to_owned(),
+                    target: CallTarget::Intrinsic(intrinsic),
                     args: Vec::new(),
                 },
                 ty: Type::Int,
@@ -15301,12 +15974,11 @@ mod tests {
         }
         let fabricated = TypedExpr {
             expr: ExprKind::Call {
-                name: "__fabricated_projection_escape".to_owned(),
+                target: CallTarget::User("__fabricated_projection_escape".into()),
                 args: Vec::new(),
             },
             ty: Type::Int,
         };
-        assert!(compiler_intrinsic_kind("__fabricated_projection_escape").is_none());
         assert!(!is_reserved_source_declaration(
             "__fabricated_projection_escape",
             true
@@ -15328,7 +16000,7 @@ mod tests {
         let removed = HashSet::from(["is_some".to_owned()]);
         let expression = TypedExpr {
             expr: ExprKind::Call {
-                name: "is_some".to_owned(),
+                target: CallTarget::User("is_some".into()),
                 args: Vec::new(),
             },
             ty: Type::Bool,
@@ -15351,7 +16023,7 @@ mod tests {
         );
         let test_builtin = TypedExpr {
             expr: ExprKind::Call {
-                name: "assert".to_owned(),
+                target: CallTarget::Builtin(Builtin::Assert),
                 args: Vec::new(),
             },
             ty: Type::Unit,
@@ -15445,6 +16117,88 @@ mod tests {
         *function.body.tail.expect("function tail expression")
     }
     #[test]
+    fn ordinary_enum_values_are_nominal_exhaustive_and_not_rejection_catalogues() {
+        let source = r#"module Data {
+            enum Status { Active = 1, Paused = 2 }
+            error enum Failure { Missing = 3 }
+            fn selected(Status value) -> bool { value == Status::Active }
+            fn label(Status value) -> int { match value { Status::Active => 1, Status::Paused => 2 } }
+            fn branch(Status value) -> int { if let Status::Active = value { 1 } else { 2 } }
+            fn pending() -> Result<int, Status> { Result::err(Status::Paused) }
+            fn arrays() -> List<Status, 2> { [Status::Active, Status::Paused] }
+            fn json_value(Status value) -> Json { json { status: value } }
+        }"#;
+        let typed =
+            analyze(&parse(source).expect("data enum source")).expect("ordinary enum values");
+        assert!(
+            typed
+                .error_types
+                .iter()
+                .all(|descriptor| !descriptor.identity.ends_with("::Status"))
+        );
+        assert!(
+            typed
+                .error_types
+                .iter()
+                .any(|descriptor| descriptor.identity.ends_with("::Failure"))
+        );
+        assert!(typed.error_messages.is_empty());
+        let cloned = typed.clone();
+        assert_eq!(
+            typed, cloned,
+            "typed trait walkers retain ordinary nominal identity"
+        );
+    }
+    #[test]
+    fn ordinary_enum_inventory_has_a_single_canonical_resource_bound() {
+        let declarations = (0..257)
+            .map(|index| format!("enum E{index:03} {{ Active = 1 }}"))
+            .collect::<Vec<_>>();
+        let accepted = format!("module Data {{ {} }}", declarations[..256].join(" "));
+        assert_eq!(
+            analyze(&parse(&accepted).unwrap())
+                .unwrap()
+                .enum_types
+                .len(),
+            256
+        );
+        let rejected = format!("module Data {{ {} }}", declarations.join(" "));
+        assert_eq!(analyze_error(&rejected).code, "E_ENUM_SCHEMA");
+    }
+    #[test]
+    fn ordinary_enum_patterns_and_rejection_boundaries_are_strict() {
+        for (body, expected) in [
+            (
+                "fn f(Status value) -> int { match value { Status::Active => 1 } }",
+                "E_MATCH_NON_EXHAUSTIVE",
+            ),
+            (
+                "fn f(Status value) -> int { match value { Status::Active => 1, Status::Active => 2, Status::Paused => 3 } }",
+                "E_MATCH_DUPLICATE_PATTERN",
+            ),
+            (
+                "fn f(Status value) -> int { match value { Other::Active => 1, Status::Paused => 2 } }",
+                "E_PATTERN_FAMILY",
+            ),
+            (
+                "fn f() { let Status value = Other::Active; }",
+                "E_TYPE_ANNOTATION_MISMATCH",
+            ),
+            ("fn f() { require(true, Status::Active); }", "K2003"),
+            (
+                "fn f(Option<int> value) -> int { value.expect(Status::Active) }",
+                "K2003",
+            ),
+        ] {
+            let source = format!(
+                "module Data {{ enum Status {{ Active = 1, Paused = 2 }} enum Other {{ Active = 1 }} {body} }}"
+            );
+            let error = analyze_error(&source);
+            assert_eq!(error.code, expected, "{body}: {error:?}");
+        }
+        assert!(parse("module Data { enum Status { Active = 1 } fn f(Status value) -> int { match value { _ => 1 } } }").is_err());
+    }
+    #[test]
     fn list_literals_infer_exact_or_contextual_capacity() {
         let exact = function_tail("fn exact() -> List<int, 2> { [1, 2] }");
         assert_eq!(exact.ty, Type::List(Box::new(Type::Int), 2));
@@ -15496,7 +16250,7 @@ mod tests {
             sum_handle.ty,
             Type::List(
                 Box::new(Type::Option(Box::new(Type::Struct {
-                    name: "Empty".into(),
+                    name: "TestContract::Empty".into(),
                     fields: Arc::from(Vec::new()),
                 }))),
                 1,
@@ -15680,11 +16434,80 @@ mod tests {
         }
     }
     #[test]
+    fn list_mutators_accept_stable_fields_of_mutable_local_products() {
+        let declarations = "struct Item { int value; } struct Holder { List<Item, 3> items; }";
+        for body in [
+            "var holder = Holder { items: [Item { value: 1 }] }; holder.items.push(Item { value: 2 }); holder.items.set(0, Item { value: 3 }); let _ = holder.items.pop();",
+            "var pair = (0, Holder { items: [] }); let _ = pair.1.items.try_push(Item { value: 2 });",
+        ] {
+            let text = format!("module Lists {{ {declarations} fn run() {{ {body} }} }}");
+            analyze(&parse(&text).unwrap()).unwrap_or_else(|error| panic!("{text}: {error:?}"));
+            let source =
+                crate::source::SourceFile::new(crate::source::SourceId(72), "list-fields.ko", text);
+            let (spanned, _) =
+                crate::parser::parse_source_spanned(&source, crate::source::FrontendBudget::v1())
+                    .unwrap();
+            let resolved = crate::resolved::resolve(spanned, &source).unwrap();
+            SemanticContext::new()
+                .analyze_resolved(&resolved)
+                .expect("resolved root retains mutable binding identity");
+        }
+        for body in [
+            "let holder = Holder { items: [] }; holder.items.push(Item { value: 1 });",
+            "Holder { items: [] }.items.push(Item { value: 1 });",
+            "if flag { var holder = Holder { items: [] }; } else { let holder = Holder { items: [] }; holder.items.push(Item { value: 1 }); }",
+        ] {
+            let text = format!("module Lists {{ {declarations} fn run(bool flag) {{ {body} }} }}");
+            assert_eq!(
+                analyze(&parse(&text).unwrap()).unwrap_err().code,
+                "E_LIST_MUTABLE_RECEIVER",
+                "{body}"
+            );
+        }
+    }
+    #[test]
+    fn list_capacity_widens_only_at_user_arguments_and_returns() {
+        for source in [
+            "fn consume(List<int, 4> values) -> int { values.len() } fn run() -> int { let values = [1, 2]; consume(values) }",
+            "fn run() -> List<int, 4> { let values = [1, 2]; values }",
+            "fn run() -> List<int, 4> { let values = [1, 2]; return values; }",
+            "fn run(bool flag) -> List<int, 4> { let values = [1, 2]; if flag { values } else { [] } }",
+            "fn run(Option<int> flag) -> List<int, 4> { let values = [1, 2]; match flag { Option::some(_) => { values }, Option::none => { [] } } }",
+            "fn consume(List<int, 4> values) -> int { values.len() } fn run(bool flag) -> int { let values = [1, 2]; consume(if flag { values } else { [] }) }",
+        ] {
+            analyze(&parse(source).unwrap()).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        }
+        for source in [
+            "fn run() { let values = [1, 2]; let List<int, 4> other = values; }",
+            "fn run() -> List<int, 1> { let values = [1, 2]; values }",
+            "fn consume(List<int, 1> values) {} fn run() { let values = [1, 2]; consume(values); }",
+            "fn consume(List<List<int, 3>, 2> values) {} fn run() { let List<List<int, 2>, 1> values = [[1]]; consume(values); }",
+            "seiyaku Lists { state List<int, 4> saved; kotoage fn run() authorize(anyone) { let values = [1, 2]; saved = values; } }",
+            "struct Holder { List<int, 4> values; } fn run() { let values = [1, 2]; let holder = Holder { values: values }; }",
+            "fn run(bool flag) -> List<int, 4> { let values = [1, 2]; let List<int, 4> invalid = if flag { values } else { [] }; invalid }",
+        ] {
+            analyze(&parse(source).unwrap()).expect_err(source);
+        }
+    }
+    #[test]
+    fn definitely_full_push_is_rejected_without_guessing_mutable_aliases() {
+        let error = analyze_error("fn run() { var values = [1, 2]; values.push(3); }");
+        assert_eq!(error.code, "E_LIST_PROVABLY_FULL");
+        for source in [
+            "fn run() { var values = [1, 2]; let _ = values.try_push(3); }",
+            "fn run() { var values = [1, 2]; let _ = values.pop(); values.push(3); }",
+            "fn run(int next) { var values = [1, 2]; values.push(next); }",
+            "fn run() { var List<int, 3> values = [1, 2]; values.push(3); }",
+        ] {
+            analyze(&parse(source).unwrap()).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        }
+    }
+    #[test]
     fn sourced_mutable_list_receiver_retains_its_binding_identity() {
         let source = crate::source::SourceFile::new(
             crate::source::SourceId(41),
             "mutable-list.ko",
-            "seiyaku Lists { view fn main() { var List<int, 2> values = [1]; let _ = values.try_push(2); } }",
+            "seiyaku Lists { view fn main() authorize(anyone) { var List<int, 2> values = [1]; let _ = values.try_push(2); } }",
         );
         let (spanned, _) =
             crate::parser::parse_source_spanned(&source, crate::source::FrontendBudget::v1())
@@ -15700,7 +16523,7 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let text = format!("seiyaku Lists {{ view fn main(bool flag) {{ {body} }} }}");
+            let text = format!("seiyaku Lists {{ view fn main(bool flag) authorize(anyone) {{ {body} }} }}");
             let raw = parse(&text).expect("parse raw sibling List bindings");
             let raw_error =
                 analyze(&raw).expect_err("raw-AST fallback must preserve lexical mutability");
@@ -15758,7 +16581,7 @@ mod tests {
         ));
         assert_eq!(expression.ty, Type::Bool);
         assert!(
-            matches!(expression.expr, ExprKind::Call { ref name, .. } if name == LIST_CONTAINS_INTRINSIC)
+            matches!(expression.expr, ExprKind::Call { target: ref name, .. } if name.intrinsic() == Some(CompilerIntrinsic::ListContains))
         );
     }
     #[test]
@@ -16079,11 +16902,13 @@ mod tests {
         let expr = returned_expr(
             "struct Transfer { int source, string destination, quantity amount } fn build() -> Transfer { return Transfer { amount: 10, destination: \"sink\", source: 7 }; }",
         );
-        assert!(matches!(expr.ty, Type::Struct { ref name, .. } if name == "Transfer"));
+        assert!(
+            matches!(expr.ty, Type::Struct { ref name, .. } if name == "TestContract::Transfer")
+        );
         let ExprKind::StructLiteral { name, fields } = expr.expr else {
             panic!("expected typed struct literal");
         };
-        assert_eq!(name, "Transfer");
+        assert_eq!(name, "TestContract::Transfer");
         assert_eq!(
             fields
                 .iter()
@@ -16238,63 +17063,107 @@ mod tests {
     }
     analyze_error_code_cases! {
         declared_call_labels_are_independent_of_effects:
-        privileged = "kotoage fn publish(int first, string second, bool third) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }" => "K2004";
+        privileged = "permission Publish; kotoage fn publish(int first, string second, bool third) authorize(Publish) {} fn main() { publish(1, \"two\", true); }" => "K2004";
         effectful = "fn main(AccountId holder, Name key, Json value) { ledger::account::set_metadata(holder, key, value); }" => "E_NAMED_ARGUMENTS_REQUIRED";
         transitive = "fn sink(AccountId account, Name key, Json value) { ledger::account::set_metadata(account: account, key: key, value: value); } fn wrapper(AccountId account, Name key, Json value) { sink(account: account, key: key, value: value); } fn main(AccountId account, Name key, Json value) { wrapper(account, key); }" => "E_MISSING_NAMED_ARGUMENT";
     }
     analyze_ok_tests! { named_method_arguments_do_not_mix_with_the_receiver: "state StateMap<int, int> values; fn lookup(int key) -> int { return values.get_or_insert(default: 0, key: key); }" => "parse named method call", "implicit receiver must not count as a positional argument"; }
     #[test]
-    fn kotoage_grants_name_a_declared_kotoage_selector() {
-        let source = |selector: &str| {
+    fn sum_error_bridges_preserve_nominal_types_and_private_helper_names() {
+        let source = r#"module Bridges {
+            error enum Previous { Denied = 1 }
+            error enum Failure { Missing = 7 }
+            fn convert(Option<int> value) -> Result<int, Failure> {
+                Result::ok(value.ok_or(error: Failure::Missing)?)
+            }
+            fn absent() -> Result<int, Failure> { Option::none.ok_or(Failure::Missing) }
+            fn replace(Result<int, Previous> value) -> Result<int, Failure> {
+                value.or_err(error: Failure::Missing)
+            }
+            fn extract(Result<(int, bool), Previous> value) -> (int, bool) {
+                value.expect(error: Failure::Missing)
+            }
+            fn ok_or(int value) -> int { value }
+            fn or_err(int value) -> int { value }
+            fn helpers() -> int { ok_or(1) + or_err(2) }
+        }"#;
+        let typed = analyze(&parse(source).expect("parse nominal error bridges"))
+            .expect("bridges preserve payload types and private method-name helpers");
+        crate::ir::lower(&typed).expect("bridges lower with compiler-owned call identities");
+        for body in [
+            "fn bad(Option<int> value) -> Result<int, Failure> { value.ok_or(1) }",
+            "fn bad(Result<int, Previous> value) -> Result<int, Failure> { value.or_err(\"no\") }",
+            "fn bad(Option<int> value) -> Result<int, Failure> { value.or_err(Failure::Missing) }",
+            "fn bad(Result<int, Previous> value) -> Result<int, Failure> { value.ok_or(Failure::Missing) }",
+            "fn bad(int value) -> int { value.expect(Failure::Missing) }",
+        ] {
+            let source = format!(
+                "module Invalid {{ error enum Previous {{ Denied = 1 }} error enum Failure {{ Missing = 7 }} {body} }}"
+            );
+            assert_eq!(analyze_error(&source).code, "K2003", "{source}");
+        }
+        let mismatched = "module Invalid { error enum Previous { Denied = 1 } error enum Failure { Missing = 7 } fn convert(Option<int> value) -> Result<int, Previous> { Result::ok(value.ok_or(Failure::Missing)?) } }";
+        assert_eq!(analyze_error(mismatched).code, "E_PROPAGATE_ERROR_TYPE");
+    }
+    #[test]
+    fn public_parameters_reject_keyword_fields_before_abi_lowering() {
+        let source = "seiyaku Boundary { view fn read(Name permission) authorize(anyone) -> Name { permission } }";
+        let diagnostics = crate::session::CompilerSession::default()
+            .check(crate::session::CompileRequest {
+                source,
+                source_name: Some("boundary.ko"),
+            })
+            .expect_err("keyword parameter has no canonical ABI field");
+        let diagnostic = &diagnostics.diagnostics[0];
+        assert_eq!(
+            diagnostic.code,
+            "E_PUBLIC_PARAMETER_IDENTIFIER",
+            "{}",
+            diagnostics.render_human()
+        );
+        let range = diagnostic
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.byte_range)
+            .expect("exact public parameter token");
+        assert_eq!(
+            &source[range.start as usize..range.end as usize],
+            "permission"
+        );
+        analyze(
+            &parse("fn private_parameter(Name permission) -> Name { permission }")
+                .expect("contextual private parameter parses"),
+        )
+        .expect("private parameters do not cross the public ABI identifier boundary");
+        analyze(
+            &parse(
+                "seiyaku Boundary { view fn read(int anyone) authorize(anyone) -> int { anyone } }",
+            )
+            .unwrap(),
+        )
+        .expect("anyone is contextual to authorization, not a general keyword");
+    }
+    #[test]
+    fn permission_grants_require_a_declared_instance_name() {
+        let source = |argument: &str| {
             format!(
-                "seiyaku Grants {{ kotoage fn pay() authorize(\"Pay\") {{}} view fn peek() -> int {{ 0 }} \
-                 kotoage fn grant(AccountId account) authorize(\"Admin\") {{ \
-                 ledger::seiyaku::grant_kotoage(account, kotoage: {selector}); }} }}"
+                r#"seiyaku Grants {{
+            permission Admin; permission Pay; import permission "CanSetParameters" as ChainAdmin;
+            kotoage fn grant(AccountId account) authorize(Admin) {{ ledger::seiyaku::grant_permission(account: account, permission: {argument}); }}
+        }}"#
             )
         };
-        analyze(&parse(&source("\"pay\"")).expect("parse grant")).expect("a declared kotoage");
-        for (selector, fragment) in [
-            ("\"pya\"", "declares no kotoage (言挙げ) named `pya`"),
-            ("\"peek\"", "`peek` is a `view fn`"),
-        ] {
-            let error = analyze(&parse(&source(selector)).expect("parse grant"))
-                .expect_err("invalid grant selector");
-            assert_eq!(error.code, "E_KOTOAGE_SELECTOR", "{selector}");
-            assert!(error.message.contains(fragment), "{}", error.message);
+        analyze(&parse(&source("Pay")).expect("parse instance grant"))
+            .expect("declared instance grant");
+        for argument in ["\"Pay\"", "Name::parse(\"Pay\")", "ChainAdmin"] {
+            let error = analyze(&parse(&source(argument)).expect("parse invalid grant"))
+                .expect_err("grants require instance declaration identifiers");
+            assert_eq!(error.code, "E_PERMISSION_ARGUMENT", "{}", error.message);
         }
-        let dynamic = analyze_error(
-            "seiyaku Grants { kotoage fn grant(AccountId account, string selector) authorize(\"Admin\") { \
-             ledger::seiyaku::grant_kotoage(account, kotoage: selector); } }",
-        );
-        assert_eq!(dynamic.code, "E_KOTOAGE_SELECTOR");
-        assert!(
-            dynamic.message.contains("string literal"),
-            "{}",
-            dynamic.message
-        );
-        let error = analyze(
-            &parse(&source("\"gran\"").replace("pay()", "payout()"))
-                .expect("parse misspelled grant"),
-        )
-        .expect_err("unknown selector");
-        assert!(
-            error.message.contains("did you mean `grant`"),
-            "{}",
-            error.message
-        );
-        // A reusable module declares no kotoage, so it cannot name selectors.
         let module = analyze_error(
-            "module Helpers { export fn allow(AccountId account) { \
-             ledger::seiyaku::grant_kotoage(account, kotoage: \"pay\"); } }",
+            r#"module Helpers { export fn allow(AccountId account) { ledger::seiyaku::grant_permission(account: account, permission: "Pay"); } }"#,
         );
-        assert_eq!(module.code, "E_KOTOAGE_SELECTOR");
-        assert!(
-            module.message.contains(
-                "call ledger::seiyaku::grant_kotoage from the seiyaku that declares `pay`"
-            ),
-            "{}",
-            module.message
-        );
+        assert_eq!(module.code, "E_PERMISSION_ARGUMENT");
     }
     #[test]
     fn asset_registration_takes_compile_time_spec_and_mintability() {
@@ -16477,7 +17346,7 @@ mod tests {
             ),
         ] {
             let source = format!(
-                "seiyaku Probe {{ kotoage fn probe(AssetDefinitionId asset, int mode) authorize(\"Probe\") {{ {call}; }} }}"
+                "seiyaku Probe {{ permission ProbeAccess;  kotoage fn probe(AssetDefinitionId asset, int mode) authorize(ProbeAccess) {{ {call}; }} }}"
             );
             let (message, help, primary) = first_checked_diagnostic(&source);
             assert!(message.contains(descriptor), "{message}");
@@ -16495,8 +17364,7 @@ mod tests {
     }
     #[test]
     fn invalid_json_key_literals_point_at_the_key_with_name_help() {
-        let source = "seiyaku Probe { view fn v() -> int { return read(json { a: \"1\" }); } \
-                      fn read(Json value) -> int { return value.get_int(\"a b\").unwrap_or(0); } }";
+        let source = "seiyaku Probe { view fn v() authorize(anyone) -> int { return read(json { a: \"1\" }); } fn read(Json value) -> int { return value.get_int(\"a b\").unwrap_or(0); } }";
         let (message, help, primary) = first_checked_diagnostic(source);
         assert!(
             message.starts_with("JSON key invalid Name literal"),
@@ -16512,9 +17380,7 @@ mod tests {
     }
     #[test]
     fn invalid_asset_display_name_literals_point_at_the_name() {
-        let source = "seiyaku Probe { kotoage fn r(AssetDefinitionId asset) authorize(\"Probe\") { \
-                      ledger::asset::register(asset_definition: asset, name: \"ro@se\", \
-                      spec: NumericSpec::integer(), mintable: Mintable::Once); } }";
+        let source = "seiyaku Probe { permission ProbeAccess;  kotoage fn r(AssetDefinitionId asset) authorize(ProbeAccess) { ledger::asset::register(asset_definition: asset, name: \"ro@se\", spec: NumericSpec::integer(), mintable: Mintable::Once); } }";
         let (message, help, primary) = first_checked_diagnostic(source);
         assert_eq!(
             message,
@@ -16551,16 +17417,16 @@ mod tests {
     fn runtime_functions_reusing_lowering_names_keep_the_runtime_call_rule() {
         for (declaration, call) in [
             (
-                "view fn min(int a, int b) -> int { return a; }",
-                "view fn probe() -> int { return min(1, 2); }",
+                "view fn min(int a, int b) authorize(anyone) -> int { return a; }",
+                "view fn probe() authorize(anyone) -> int { return min(1, 2); }",
             ),
             (
-                "view fn block_height() -> int { return 4; }",
-                "view fn probe() -> int { return block_height(); }",
+                "view fn block_height() authorize(anyone) -> int { return 4; }",
+                "view fn probe() authorize(anyone) -> int { return block_height(); }",
             ),
             (
-                "kotoage fn mint_asset() authorize(\"Mint\") { }",
-                "kotoage fn probe() authorize(\"Mint\") { mint_asset(); }",
+                "permission Mint; kotoage fn mint_asset() authorize(Mint) { }",
+                "kotoage fn probe() authorize(Mint) { mint_asset(); }",
             ),
         ] {
             let error = analyze_error(&format!("seiyaku Probe {{ {declaration} {call} }}"));
@@ -16575,8 +17441,7 @@ mod tests {
         // lowering name.
         analyze(
             &parse(
-                "seiyaku Probe { view fn min(int a, int b) -> int { return a; } \
-                 view fn probe() -> int { return math::min(1, 2); } }",
+                "seiyaku Probe { view fn min(int a, int b) authorize(anyone) -> int { return a; } view fn probe() authorize(anyone) -> int { return math::min(1, 2); } }",
             )
             .expect("parse"),
         )
@@ -16592,7 +17457,7 @@ mod tests {
             ("keys", "`StateMap` methods are `get`, `contains`"),
         ] {
             let source = format!(
-                "seiyaku Probe {{ state StateMap<int, int> M; view fn probe() -> int {{ let _x = M.{method}(1, 0); return 0; }} }}"
+                "seiyaku Probe {{ state StateMap<int, int> M; view fn probe() authorize(anyone) -> int {{ let _x = M.{method}(1, 0); return 0; }} }}"
             );
             let (message, help, primary) = first_checked_diagnostic(&source);
             assert_eq!(message, format!("`StateMap` has no method `{method}`"));
@@ -16745,13 +17610,12 @@ mod tests {
     #[test]
     fn kotoage_and_views_may_use_builtin_lowering_names() {
         analyze(
-            &parse("seiyaku Names { kotoage fn mint_asset() authorize(\"Mint\") {} view fn chain_id() -> int { 1 } view fn authority() -> int { 2 } }")
+            &parse("seiyaku Names { permission Mint;  kotoage fn mint_asset() authorize(Mint) {} view fn chain_id() authorize(anyone) -> int { 1 } view fn authority() authorize(anyone) -> int { 2 } }")
                 .expect("parse public selectors"),
         )
         .expect("public selectors may reuse lowering names");
-        let error = analyze_error("fn min(int a, int b) -> int { a }");
-        assert_eq!(error.code, "E_RESERVED_DECLARATION");
-        assert!(error.message.contains("`math::min`"), "{}", error.message);
+        analyze(&parse("fn min(int a, int b) -> int { a }").expect("private declaration parses"))
+            .expect("private helpers also have independent call identities");
     }
     analyze_ok_tests! { label_punning_satisfies_required_builtin_labels: "fn main(AccountId account, Name key, Json value) { ledger::account::set_metadata(account, key, value); }" => "parse punned call", "identifiers spelled like the labels are labelled arguments"; }
     analyze_ok_tests! { declared_builtin_labels_are_always_accepted: "fn main(int amount) -> int { return math::min(left: math::abs(value: amount), right: 3); }" => "parse labelled pure helpers", "a label equal to the declared name is accepted"; }
@@ -16791,11 +17655,14 @@ mod tests {
     fn state_path_method_rejects_wrong_receiver_and_segment_types() {
         for source in [
             "fn invalid(string base) { let _path = base.path(1); }",
-            "fn invalid(Name base) { let _path = base.path(true); }",
+            "fn invalid(Name base) { let _path = base.path(json { bad: true }); }",
         ] {
             let error = analyze_error(source);
             assert_eq!(error.code, "K2003", "{source}");
-            assert_eq!(error.message, "path expects (Name, int|bytes)", "{source}");
+            assert_eq!(
+                error.message, "path expects a Name and a canonical scalar or tuple StateMap key",
+                "{source}"
+            );
         }
     }
     #[test]
@@ -16828,10 +17695,6 @@ mod tests {
     fn compiler_owned_declaration_names_are_rejected() {
         for (source, expected) in [
             (
-                "fn account_id(string value) -> int { return 1; }",
-                "private `fn account_id` reuses the compiler lowering name of `AccountId::parse`; rename the helper (a kotoage (言挙げ) or `view fn` may use this name)",
-            ),
-            (
                 "fn __kotodama_link_private() {}",
                 "function `__kotodama_link_private` uses a compiler-reserved name",
             ),
@@ -16859,7 +17722,7 @@ mod tests {
         assert_eq!(err.message, "duplicate field `value` in type `Repeated`");
     }
     #[test]
-    fn error_codes_are_enum_local_and_require_is_typed() {
+    fn variant_codes_are_enum_local_and_require_is_typed() {
         let duplicates = parse(
             "error enum Payment { Unauthorized = 1001 } \
              error enum Settlement { Expired = 1001 }",
@@ -16965,12 +17828,12 @@ mod tests {
         .expect("private helper types parse");
         analyze(&helpers).expect("private helpers accept Option/Result parameters");
         let public = parse(
-            "seiyaku Demo { kotoage fn call(Option<int> value, Result<int, bool> outcome) authorize(\"Call\") { let _ = outcome; } }",
+            "seiyaku Demo { permission Call;  kotoage fn call(Option<int> value, Result<int, bool> outcome) authorize(Call) { let _ = outcome; } }",
         )
         .expect("public sum parameters parse");
         analyze(&public).expect("one-shot V1 argument records support Option and Result");
         let unsupported = analyze_error(
-            "seiyaku Demo { kotoage fn call(StateMap<int, int> value) authorize(\"Call\") {} }",
+            "seiyaku Demo { permission Call;  kotoage fn call(StateMap<int, int> value) authorize(Call) {} }",
         );
         assert!(
             unsupported
@@ -17528,7 +18391,7 @@ mod tests {
         assert_eq!(err.code, "E_MISSING_STRUCT_PATTERN_FIELD");
     }
     #[test]
-    fn assert_eq_compares_any_equality_type_and_checks_literal_argument_records() {
+    fn assert_eq_compares_any_equality_type_and_accepts_typed_argument_records() {
         let accepted = parse(
             r#"seiyaku S {
                 struct P { int a, string b }
@@ -17556,33 +18419,59 @@ mod tests {
             err.message
         );
         let record = parse(
-            r#"seiyaku S {
-                kotoage fn run(int count) authorize("Run") {}
+            r#"seiyaku S { permission Run;
+                kotoage fn run(int count) authorize(Run) {}
                 #[test] fn t() {
-                    test::invoke_kotoage(kotoage: "run", arguments: Json::parse("{\"count\":3}"));
+                    test::invoke_kotoage(kotoage: "run", arguments: {count: 3});
                 }
             }"#,
         )
         .expect("parse literal record");
-        let err = SemanticContext::with_capabilities(false, true)
+        SemanticContext::with_capabilities(false, true)
             .analyze(&record)
-            .expect_err("a JSON number for an int argument is rejected at compile time");
-        assert!(
-            err.message
-                .contains("arguments for `run`: argument `count`")
-                && err.message.ends_with("write \"3\""),
-            "{}",
-            err.message
-        );
+            .expect("native int expressions are typed against the target parameter");
+    }
+    #[test]
+    fn typed_test_argument_records_preserve_exact_nominal_parameter_types() {
+        let source = |record: &str| {
+            format!(
+                r#"seiyaku Typed {{
+            enum Status {{ Active = 1 }}
+            enum Other {{ Active = 1 }}
+            struct Record {{ Status status; }}
+            view fn echo(Record value, Option<Status> previous) authorize(anyone) -> Record {{ value }}
+            #[test] fn t() {{ test::invoke_kotoage(kotoage: "echo", arguments: {record}); }}
+        }}"#
+            )
+        };
+        let valid = parse(&source(
+            "{ previous: Option::none, value: Record { status: Status::Active } }",
+        ))
+        .unwrap();
+        SemanticContext::with_capabilities(false, true)
+            .analyze(&valid)
+            .expect("exact nominal source values");
+        for record in [
+            "{ previous: Option::none, value: Record { status: Other::Active } }",
+            "{ value: Record { status: Status::Active } }",
+            "{ previous: Option::none, value: Record { status: Status::Active }, extra: 1 }",
+            "Json::parse(\"{}\")",
+        ] {
+            let program = parse(&source(record)).unwrap();
+            let error = SemanticContext::with_capabilities(false, true)
+                .analyze(&program)
+                .unwrap_err();
+            assert_eq!(error.code, "E_TEST_ARGUMENT_RECORD", "{record}: {error:?}");
+        }
     }
     #[test]
     fn unknown_invocation_targets_and_argument_keys_get_spelling_hints() {
         let analyze = |test_body: &str| {
             let source = format!(
-                r#"seiyaku S {{
+                r#"seiyaku S {{ permission Teller;
                     state int value;
                     始まり(int start) {{ value = start; }}
-                    kotoage fn withdraw(int amount) authorize("Teller") {{ value = value - amount; }}
+                    kotoage fn withdraw(int amount) authorize(Teller) {{ value = value - amount; }}
                     #[test] fn t() {{ {test_body} }}
                 }}"#
             );
@@ -17592,27 +18481,22 @@ mod tests {
                 .expect_err("invalid invocation")
         };
         // A lifecycle keyword written as a selector, in either script, names the selector.
-        let err = analyze(
-            r#"test::invoke_kotoage(kotoage: "始まり", arguments: Json::parse("{\"start\":\"1\"}"));"#,
-        );
+        let err = analyze(r#"test::invoke_kotoage(kotoage: "始まり", arguments: {start: 1});"#);
         assert_eq!(err.code, "K2002");
         assert_eq!(
             err.message,
             "`始まり` is a lifecycle keyword, not a selector; the `始まり` declaration is selected as \"hajimari\""
         );
-        let err =
-            analyze(r#"test::invoke_kotoage(kotoage: "withdrw", arguments: Json::parse("{}"));"#);
+        let err = analyze(r#"test::invoke_kotoage(kotoage: "withdrw", arguments: {});"#);
         assert!(
             err.message.ends_with("; did you mean \"withdraw\"?"),
             "{}",
             err.message
         );
-        let err = analyze(
-            r#"test::invoke_kotoage(kotoage: "hajimari", arguments: Json::parse("{\"strat\":\"1\"}"));"#,
-        );
+        let err = analyze(r#"test::invoke_kotoage(kotoage: "hajimari", arguments: {strat: 1});"#);
         assert!(
             err.message
-                .ends_with("; `strat` is not a parameter; did you mean `start`?"),
+                .ends_with("`strat` is not a parameter; did you mean `start`?"),
             "{}",
             err.message
         );
@@ -17633,7 +18517,7 @@ mod tests {
         };
         let named = TypedExpr {
             expr: ExprKind::NamedCall {
-                name: "invoke_entrypoint".to_owned(),
+                target: CallTarget::Builtin(Builtin::TestInvokeEntrypoint),
                 args: vec![literal("run"), literal("{}")],
                 evaluation_order: vec![1, 0],
             },
@@ -17659,7 +18543,11 @@ mod tests {
                 byte_end: 0,
             }
         );
-        let positional = typed_call("actor_account", vec![literal("alice")], Type::AccountId);
+        let positional = typed_builtin_call(
+            Builtin::TestActorAccount,
+            vec![literal("alice")],
+            Type::AccountId,
+        );
         let appended =
             append_test_call_site(&context, &Expr::String("call".to_owned()), positional)
                 .expect("append call site");
@@ -17742,7 +18630,7 @@ mod tests {
             Type::DomainId,
             Type::Name,
         ];
-        let expected_names = V1_STATE_MAP_KEY_TYPE_NAMES
+        let expected_names = kotodama_surface::source_policy::V1_STATE_MAP_KEY_TYPE_NAMES
             .iter()
             .map(|name| (*name).to_owned())
             .collect::<Vec<_>>();
@@ -17770,8 +18658,9 @@ mod tests {
     analyze_ok_tests! { info_accepts_int: "fn f() { debug::info(42); }" => "parse info", "info should accept int"; }
     #[test]
     fn view_entrypoints_accept_diagnostic_logging() {
-        let program = parse("seiyaku Demo { view fn inspect() { debug::info(42); } }")
-            .expect("parse debug logging in a view");
+        let program =
+            parse("seiyaku Demo { view fn inspect() authorize(anyone) { debug::info(42); } }")
+                .expect("parse debug logging in a view");
         analyze(&program).expect("debug::info is diagnostics-only and allowed in views");
     }
     #[test]
@@ -17786,10 +18675,22 @@ mod tests {
         );
     }
     analyze_ok_tests! { trigger_event_accepts_no_args: "fn f() { let ev = context::trigger_event(); let _kind = ev.get_name(Name::parse(\"kind\")); }" => "parse trigger_event", "trigger_event should type-check"; }
-    analyze_reject_contains_diagnostic_tests! { public_entrypoints_reject_trigger_event: "seiyaku Demo { kotoage fn f() authorize(\"InspectTrigger\") { let _ev = context::trigger_event(); } }" => "parse public trigger_event", err = "public trigger_event should fail", "cannot use `context::trigger_event` here", "unexpected error message: {}"; }
+    analyze_reject_contains_diagnostic_tests! { public_entrypoints_reject_trigger_event: "seiyaku Demo { permission InspectTrigger;  kotoage fn f() authorize(InspectTrigger) { let _ev = context::trigger_event(); } }" => "parse public trigger_event", err = "public trigger_event should fail", "cannot use `context::trigger_event` here", "unexpected error message: {}"; }
     analyze_ok_tests! { trigger_callbacks_accept_trigger_event_payload_helpers: include_str!( "semantic/test_sources/trigger_callbacks_accept_trigger_event_payload_helpers_1.ko" ) => "parse trigger callback trigger_event", "trigger callback trigger_event should type-check"; }
-    analyze_ok_tests! { namespaced_trigger_callback_does_not_require_local_entrypoint: include_str!("semantic/test_sources/namespaced_trigger_callback_does_not_require_local_entrypoint_1.ko") => "parse namespaced trigger callback", "namespaced trigger callback target is resolved at activation"; }
-    analyze_reject_contains_diagnostic_tests! { namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback: include_str!("semantic/test_sources/namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback_1.ko") => "parse namespaced trigger callback", err = "remote trigger callback must not permit local trigger_event access", "cannot use `context::trigger_event` here", "unexpected error message: {}"; }
+    #[test]
+    fn namespaced_trigger_callbacks_are_rejected_before_semantic_analysis() {
+        for source in [
+            include_str!(
+                "semantic/test_sources/namespaced_trigger_callback_does_not_require_local_entrypoint_1.ko"
+            ),
+            include_str!(
+                "semantic/test_sources/namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback_1.ko"
+            ),
+        ] {
+            let error = parse(source).expect_err("remote callback must not compile");
+            assert!(error.contains("E_TRIGGER_TARGET_NAMESPACE"), "{error}");
+        }
+    }
     analyze_test_ok_tests! { invoke_entrypoint_accepts_test_functions: include_str!( "semantic/test_sources/invoke_entrypoint_accepts_test_functions_1.ko" ) => "parse invoke_entrypoint", "invoke_entrypoint in tests should type-check"; }
     analyze_test_reject_contains_tests! { invoke_entrypoint_rejects_non_test_functions: include_str!( "semantic/test_sources/invoke_entrypoint_rejects_non_test_functions_1.ko" ) => "parse non-test invoke_entrypoint", err = "non-test invoke_entrypoint should fail", "available only in #[test] functions"; }
     analyze_test_ok_tests! { invoke_entrypoint_accepts_name_literal_target: include_str!( "semantic/test_sources/invoke_entrypoint_accepts_name_literal_target_1.ko" ) => "parse name literal invoke_entrypoint", "name literal invoke_entrypoint should type-check"; }
@@ -17805,7 +18706,7 @@ mod tests {
                 .contains("requires a literal public or lifecycle target")
         );
     }
-    analyze_test_reject_contains_tests! { invoke_entrypoint_rejects_non_json_payload: include_str!( "semantic/test_sources/invoke_entrypoint_rejects_non_json_payload_1.ko" ) => "parse non-json payload invoke_entrypoint", err = "non-json payload should fail", "expects a Json payload"; }
+    analyze_test_reject_contains_tests! { invoke_entrypoint_requires_typed_argument_record: include_str!( "semantic/test_sources/invoke_entrypoint_rejects_non_json_payload_1.ko" ) => "parse non-record test arguments", err = "non-record arguments should fail", "require a typed record"; }
     #[test]
     fn invoke_entrypoint_rejects_internal_target() {
         let program = parse(include_str!(
@@ -17852,19 +18753,14 @@ mod tests {
         assert_eq!(error.code(), "K2004");
     }
     analyze_test_reject_contains_tests! { actor_helpers_reject_non_test_functions: include_str!( "semantic/test_sources/actor_helpers_reject_non_test_functions_1.ko" ) => "parse non-test actor helper", err = "actor helper outside test should fail", "available only in #[test] functions"; }
-    analyze_ok_tests! { view_entrypoints_accept_explicit_json_getter_on_typed_json_parameter: "seiyaku Demo { view fn f(Json ev) -> Option<int> { return ev.get_int(Name::parse(\"n\")); } }" => "parse view get_int", "typed Json parameters may use explicit JSON getters"; }
-    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_get_or_insert: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.get_or_insert(7, 9); } }" => "parse get_or_insert", err = "view get_or_insert should fail", "`view fn` functions cannot use the state-writing map helper `get_or_insert`", "unexpected error message: {}"; }
-    analyze_ok_tests! { view_entrypoints_read_with_get_and_unwrap_or: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.get(7).unwrap_or(9); } }" => "parse get", "view get with unwrap_or should type-check"; }
-    analyze_ok_tests! { views_may_log_with_debug_info: "seiyaku Demo { view fn f() -> int { debug::info(\"quote\"); helper() } fn helper() -> int { debug::info(1); 1 } }" => "parse debug info", "debug::info is diagnostics-only and allowed in views"; }
+    analyze_ok_tests! { view_entrypoints_accept_explicit_json_getter_on_typed_json_parameter: "seiyaku Demo { view fn f(Json ev) authorize(anyone) -> Option<int> { return ev.get_int(Name::parse(\"n\")); } }" => "parse view get_int", "typed Json parameters may use explicit JSON getters"; }
+    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_get_or_insert: "seiyaku Demo { state StateMap<int, int> balances; view fn f() authorize(anyone) -> int { return balances.get_or_insert(7, 9); } }" => "parse get_or_insert", err = "view get_or_insert should fail", "`view fn` functions cannot use the state-writing map helper `get_or_insert`", "unexpected error message: {}"; }
+    analyze_ok_tests! { view_entrypoints_read_with_get_and_unwrap_or: "seiyaku Demo { state StateMap<int, int> balances; view fn f() authorize(anyone) -> int { return balances.get(7).unwrap_or(9); } }" => "parse get", "view get with unwrap_or should type-check"; }
+    analyze_ok_tests! { views_may_log_with_debug_info: "seiyaku Demo { view fn f() authorize(anyone) -> int { debug::info(\"quote\"); helper() } fn helper() -> int { debug::info(1); 1 } }" => "parse debug info", "debug::info is diagnostics-only and allowed in views"; }
     #[test]
     fn state_map_get_returns_option_without_intercepting_user_get_function() {
         let program = parse(
-            "seiyaku Demo { \
-                state StateMap<int, int> balances; \
-                fn get(int _ value) -> int { return value; } \
-                view fn lookup(int key) -> Option<int> { return balances.get(key); } \
-                view fn echo(int value) -> int { return get(value); } \
-            }",
+            "seiyaku Demo { state StateMap<int, int> balances; fn get(int _ value) -> int { return value; } view fn lookup(int key) authorize(anyone) -> Option<int> { return balances.get(key); } view fn echo(int value) authorize(anyone) -> int { return get(value); } }",
         )
         .expect("parse canonical and user-defined get calls");
         let typed = analyze(&program).expect("both get call forms should resolve unambiguously");
@@ -17885,15 +18781,15 @@ mod tests {
     fn state_map_reads_require_explicit_option_handling() {
         for (source, expected) in [
             (
-                "seiyaku Demo { state StateMap<int, int> balances; view fn read() -> int { return balances[1]; } }",
+                "seiyaku Demo { state StateMap<int, int> balances; view fn read() authorize(anyone) -> int { return balances[1]; } }",
                 "E_STATE_MAP_OPTIONAL_READ",
             ),
             (
-                "seiyaku Demo { state StateMap<int, int> balances; kotoage fn add() authorize(\"Write\") { balances[1] += 1; } }",
+                "seiyaku Demo { permission Write;  state StateMap<int, int> balances; kotoage fn add() authorize(Write) { balances[1] += 1; } }",
                 "E_STATE_MAP_OPTIONAL_READ",
             ),
             (
-                "seiyaku Demo { state StateMap<int, int> balances; view fn read() -> Option<int> { return get(balances, 1); } }",
+                "seiyaku Demo { state StateMap<int, int> balances; view fn read() authorize(anyone) -> Option<int> { return get(balances, 1); } }",
                 "unknown function or builtin `get`",
             ),
         ] {
@@ -17913,7 +18809,7 @@ mod tests {
             }
         }
         let write = parse(
-            "seiyaku Demo { state StateMap<int, int> balances; kotoage fn set(int key, int value) authorize(\"Write\") { balances[key] = value; } }",
+            "seiyaku Demo { permission Write;  state StateMap<int, int> balances; kotoage fn set(int key, int value) authorize(Write) { balances[key] = value; } }",
         )
         .expect("parse indexed StateMap write");
         analyze(&write).expect("simple indexed StateMap assignment must remain valid");
@@ -17921,7 +18817,7 @@ mod tests {
     #[test]
     fn state_map_remove_returns_option_for_scalar_values() {
         let program = parse(
-            "seiyaku Demo { state StateMap<Name, int> balances; kotoage fn f(Name key) -> Option<int> authorize(\"WriteState\") { return balances.remove(key); } }",
+            "seiyaku Demo { permission WriteState;  state StateMap<Name, int> balances; kotoage fn f(Name key) authorize(WriteState) -> Option<int> { return balances.remove(key); } }",
         )
         .expect("parse StateMap.remove");
         let typed = analyze(&program).expect("scalar StateMap.remove should type-check");
@@ -17937,10 +18833,10 @@ mod tests {
         assert!(reads.contains("state:balances"));
         assert!(writes.contains("state:balances"));
     }
-    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_state_map_remove: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> Option<int> { return balances.remove(7); } }" => "parse StateMap.remove in view", err = "view remove must fail", "view function `f` cannot perform durable state mutation", "unexpected error message: {}"; }
-    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_direct_durable_state_assignment: "seiyaku Demo { state int counter; hajimari() { counter = 0; } view fn f() -> int { counter = 1; return counter; } }" => "parse direct durable state assignment", err = "view durable state assignment should fail", "view function `f` cannot perform durable state mutation", "unexpected error message: {}"; }
-    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_state_map_mutation: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { balances[7] = 9; return 1; } }" => "parse state map mutation", err = "view state map mutation should fail", "view function `f` cannot perform durable state mutation", "unexpected error message: {}"; }
-    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_transitive_durable_state_mutation: "seiyaku Demo { state int counter; hajimari() { counter = 0; } fn helper() { counter = counter + 1; } view fn f() -> int { helper(); return counter; } }" => "parse transitive durable state mutation", err = "view transitive durable mutation should fail", "view function `f` cannot call `helper` because `helper` performs durable state mutation", "unexpected error message: {}"; }
+    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_state_map_remove: "seiyaku Demo { state StateMap<int, int> balances; view fn f() authorize(anyone) -> Option<int> { return balances.remove(7); } }" => "parse StateMap.remove in view", err = "view remove must fail", "view function `f` cannot perform durable state mutation", "unexpected error message: {}"; }
+    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_direct_durable_state_assignment: "seiyaku Demo { state int counter; hajimari() { counter = 0; } view fn f() authorize(anyone) -> int { counter = 1; return counter; } }" => "parse direct durable state assignment", err = "view durable state assignment should fail", "view function `f` cannot perform durable state mutation", "unexpected error message: {}"; }
+    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_state_map_mutation: "seiyaku Demo { state StateMap<int, int> balances; view fn f() authorize(anyone) -> int { balances[7] = 9; return 1; } }" => "parse state map mutation", err = "view state map mutation should fail", "view function `f` cannot perform durable state mutation", "unexpected error message: {}"; }
+    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_transitive_durable_state_mutation: "seiyaku Demo { state int counter; hajimari() { counter = 0; } fn helper() { counter = counter + 1; } view fn f() authorize(anyone) -> int { helper(); return counter; } }" => "parse transitive durable state mutation", err = "view transitive durable mutation should fail", "view function `f` cannot call `helper` because `helper` performs durable state mutation", "unexpected error message: {}"; }
     #[test]
     fn compiler_internal_builtins_are_rejected_from_source() {
         for name in [
@@ -18082,14 +18978,14 @@ mod tests {
                 "query_get_contract_instance",
             ),
             (
-                "fn f() { ledger::seiyaku::grant_kotoage(1); }",
-                "ledger::seiyaku::grant_kotoage",
-                "grant_contract_entrypoint",
+                "fn f() { ledger::seiyaku::grant_permission(1); }",
+                "ledger::seiyaku::grant_permission",
+                "grant_contract_permission",
             ),
             (
-                "fn f() { ledger::seiyaku::revoke_kotoage(1); }",
-                "ledger::seiyaku::revoke_kotoage",
-                "revoke_contract_entrypoint",
+                "fn f() { ledger::seiyaku::revoke_permission(1); }",
+                "ledger::seiyaku::revoke_permission",
+                "revoke_contract_permission",
             ),
             (
                 "fn f() { context::seiyaku_subject(1); }",
@@ -18151,9 +19047,9 @@ mod tests {
             }
         }
         for source in [
-            "module M { kotoage fn run() authorize(\"Run\") {} }",
-            "module M { view fn read() {} }",
-            "seiyaku S { fn helper() authorize(\"Run\") {} }",
+            "module M { kotoage fn run() authorize(anyone) {} }",
+            "module M { view fn read() authorize(anyone) {} }",
+            "seiyaku S { fn helper() authorize(Run) {} }",
         ] {
             let message = crate::parser::parse(source)
                 .expect_err("invalid declaration must produce a parser diagnostic");
@@ -18161,10 +19057,10 @@ mod tests {
         }
         for source in [
             "seiyaku S { trigger wake -> missing { on time pre_commit; } }",
-            "seiyaku S { view fn read() {} trigger wake -> read { on time pre_commit; } }",
+            "seiyaku S { view fn read() authorize(anyone) {} trigger wake -> read { on time pre_commit; } }",
             "seiyaku S { fn helper() {} trigger wake -> helper { on time pre_commit; } }",
-            "seiyaku S { state StateMap<int, int> values; view fn read() -> int { return values.ensure(1, 2); } }",
-            "seiyaku S { kotoage fn admin() authorize(\"Admin\") {} kotoage fn run() authorize(\"Run\") { admin(); } }",
+            "seiyaku S { state StateMap<int, int> values; view fn read() authorize(anyone) -> int { return values.ensure(1, 2); } }",
+            "seiyaku S { permission Admin; permission Run;  kotoage fn admin() authorize(Admin) {} kotoage fn run() authorize(Run) { admin(); } }",
             "seiyaku S { state int first; state int second; hajimari() { first = 0; } }",
         ] {
             let program = parse(source).expect("semantic diagnostic fixture must parse");
@@ -18205,7 +19101,7 @@ mod tests {
     #[test]
     fn public_entrypoints_reject_zk_verify_without_permission() {
         let mut program = parse(
-            "seiyaku Demo { kotoage fn verify(bytes payload) authorize(\"Verify\") { crypto::zk::verify_batch(request: payload); } }",
+            "seiyaku Demo { permission Verify;  kotoage fn verify(bytes payload) authorize(Verify) { crypto::zk::verify_batch(request: payload); } }",
         )
         .expect("parse public zk verify");
         let function = program
@@ -18216,13 +19112,13 @@ mod tests {
                 _ => None,
             })
             .expect("verify function");
-        function.modifiers.permission = None;
+        function.modifiers.authorization = None;
         let err = SemanticContext::with_zk_enabled(true)
             .analyze(&program)
             .expect_err("a fabricated public zk verifier AST should require permission");
         assert!(
             err.message
-                .contains("kotoage function `verify` requires `authorize(\"Permission\")`"),
+                .contains("public function `verify` requires an explicit `authorize(...)` policy"),
             "unexpected error message: {}",
             err.message
         );
@@ -18230,11 +19126,14 @@ mod tests {
     #[test]
     fn runtime_entrypoints_cannot_be_direct_call_targets() {
         for (target_declaration, target_name) in [
-            ("kotoage fn admin() authorize(\"Admin\") {}", "admin"),
-            ("view fn inspect() {}", "inspect"),
+            (
+                "permission Admin; kotoage fn admin() authorize(Admin) {}",
+                "admin",
+            ),
+            ("view fn inspect() authorize(anyone) {}", "inspect"),
         ] {
             let source = format!(
-                "seiyaku Demo {{ {target_declaration} kotoage fn run() authorize(\"Run\") {{ {target_name}(); }} }}"
+                "seiyaku Demo {{ permission Run;  {target_declaration} kotoage fn run() authorize(Run) {{ {target_name}(); }} }}"
             );
             let error = analyze_error(&source);
             assert!(
@@ -18287,7 +19186,7 @@ mod tests {
     #[test]
     fn public_entrypoints_reject_state_mutation_without_permission() {
         let mut program = parse(
-            "seiyaku Demo { state int counter; hajimari() { counter = 0; } kotoage fn set() authorize(\"Set\") { counter = 1; } }",
+            "seiyaku Demo { permission Set;  state int counter; hajimari() { counter = 0; } kotoage fn set() authorize(Set) { counter = 1; } }",
         )
         .expect("parse public state mutation");
         let function = program
@@ -18298,12 +19197,12 @@ mod tests {
                 _ => None,
             })
             .expect("set function");
-        function.modifiers.permission = None;
+        function.modifiers.authorization = None;
         let err = analyze(&program)
             .expect_err("a fabricated public state-mutation AST should require permission");
         assert!(
             err.message
-                .contains("kotoage function `set` requires `authorize(\"Permission\")`"),
+                .contains("public function `set` requires an explicit `authorize(...)` policy"),
             "unexpected error message: {}",
             err.message
         );
@@ -18327,7 +19226,7 @@ mod tests {
     #[test]
     fn view_entrypoints_reject_transitive_zk_verify() {
         let program = parse(
-            "seiyaku Demo { fn helper(bytes payload) { crypto::zk::verify_batch(request: payload); } view fn f(bytes payload) -> int { helper(payload: payload); return 1; } }",
+            "seiyaku Demo { fn helper(bytes payload) { crypto::zk::verify_batch(request: payload); } view fn f(bytes payload) authorize(anyone) -> int { helper(payload: payload); return 1; } }",
         )
         .expect("parse transitive zk verify");
         let err = SemanticContext::with_zk_enabled(true)
@@ -18529,7 +19428,7 @@ mod tests {
     fn typed_asset_definition_scale_drives_dynamic_quantity_rounding() {
         let program = parse(
             r#"seiyaku Precision {
-            view fn round(AssetDefinitionId asset, quantity amount) -> quantity {
+            view fn round(AssetDefinitionId asset, quantity amount) authorize(anyone) -> quantity {
                 return match ledger::query::asset_definition(asset) {
                     Option::some(value) => amount.div_round(divisor: 1.0,
                         scale: value.numeric_scale.unwrap_or(28), mode: Rounding::floor),
@@ -18562,7 +19461,7 @@ mod tests {
         assert!(matches!(
             account.ret_ty,
             Some(Type::Option(ref view))
-                if matches!(view.as_ref(), Type::Struct { name, .. } if name == "AccountView")
+                if matches!(view.as_ref(), Type::Struct { name, .. } if name == "kotodama::AccountView")
         ));
         let accounts = functions
             .iter()
@@ -18571,7 +19470,7 @@ mod tests {
         let Some(Type::Struct { name, fields }) = &accounts.ret_ty else {
             panic!("plural query must return QueryPage<AccountView>")
         };
-        assert_eq!(name, QUERY_PAGE_TYPE_NAME);
+        assert_eq!(name, QUERY_PAGE_NOMINAL_NAME);
         assert_eq!(
             render_type_name(accounts.ret_ty.as_ref().unwrap()),
             "QueryPage<AccountView>"
@@ -18581,7 +19480,7 @@ mod tests {
             [(items, Type::List(view, 64)), (next, Type::Option(offset))]
                 if items == "items"
                     && next == "next_offset"
-                    && matches!(view.as_ref(), Type::Struct { name, .. } if name == "AccountView")
+                    && matches!(view.as_ref(), Type::Struct { name, .. } if name == "kotodama::AccountView")
                     && offset.as_ref() == &Type::Int
         ));
     }
@@ -18646,4 +19545,8 @@ mod tests {
     analyze_reject_code_tests! { wholly_divergent_expression_without_a_type_context_fails_closed: include_str!("semantic/test_sources/wholly_divergent_expression_without_a_type_context_fails_closed_1.ko") => "parse context-free divergent expression", error = "bottom-like expressions require a concrete context", "E_DIVERGING_EXPRESSION_CONTEXT"; }
     include!("semantic_sum_tests.rs");
     include!("semantic/tests/call_labels_and_patterns.rs");
+    include!("semantic/tests/call_identity.rs");
 }
+
+#[cfg(test)]
+mod event_tests;

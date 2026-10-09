@@ -61,7 +61,7 @@ fn accepted_quote(fee: &FeePaymentIntent, transaction: &SignedTransaction) -> Fe
 pub fn fixture() -> Result<(Config, PlanRecord)> {
     let config = fixture_config()?;
     let artifact = kotodama_lang::compiler::Compiler::new()
-        .compile_source("seiyaku Coffee { view fn points(int cups) -> int { return cups * 10; } }")
+        .compile_source("seiyaku Coffee { view fn points(int cups) authorize(anyone) -> int { return cups * 10; } }")
         .map_err(|error| eyre!(error))?;
     let verified = ivm_artifact_admission::verify_contract_artifact(&artifact)?;
     let fee = FeePaymentIntent::authority(Vec::new(), Some(NonZeroU64::new(1_000_000).unwrap()));

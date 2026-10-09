@@ -18,7 +18,7 @@ KOTODAMA_MANIFEST = (
 )
 ISO_MANIFEST = ROOT / "crates/ivm/src/assets/iso20022_schema_v1/manifest.json"
 REGISTRY_PROVIDER_SHA256 = (
-    "27cc0cc9f5bc2afe391e59ea22ab07b209a5dc3f2eb0bd8fbdc39b58a53a088a"
+    "271d94e13fd7e983489121d0b1cae601e04ce60dcb2f3a0dd44e5bdb1fc452f2"
 )
 
 
@@ -437,19 +437,24 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
             type_name = re.sub(r"\s+", "", match.group(2))
             mode = match.group(4) or "register_slice"
             rows.append((scope, type_name, mode, match.group(3)))
-        self.assertEqual(len(rows), 394)
+        self.assertEqual(len(rows), 395)
         self.assertEqual(len({row[1] for row in rows}), len(rows))
         self.assertEqual(len({row[3] for row in rows}), len(rows))
         self.assertEqual(
             collections.Counter(row[2] for row in rows),
             {
-                "register_slice": 358,
+                "register_slice": 359,
                 "register": 36,
             },
         )
         self.assertIn(
             ("base", "crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1",
              "register", "iroha.kagemusha.wallet.ledger.v1"),
+            rows,
+        )
+        self.assertIn(
+            ("base", "crate::isi::register_dataspace_asset_definition::RegisterDataspaceAssetDefinition",
+             "register_slice", "iroha.asset_definition.dataspace.register.v1"),
             rows,
         )
         for retired in (

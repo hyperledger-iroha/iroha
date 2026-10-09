@@ -3,7 +3,7 @@ use super::*;
 use iroha_primitives::json::Json;
 fn fixture() -> (Vec<u8>, ContractAddress) {
     let artifact = kotodama_lang::compiler::Compiler::new().compile_source(
-        "seiyaku Example { kotoage fn write(int value) authorize(\"CanInvokeContractEntrypoint\") {} kotoage fn ping() authorize(\"CanInvokeContractEntrypoint\") {} view fn read() -> int { return 1; } }",
+        "seiyaku Example { permission Update;  kotoage fn write(int value) authorize(Update) {} kotoage fn ping() authorize(Update) {} view fn read() authorize(anyone) -> int { return 1; } }",
     ).expect("compile current artifact");
     let key = iroha::crypto::KeyPair::random();
     let authority = iroha_data_model::account::AccountId::new(key.public_key().clone());

@@ -9,10 +9,10 @@ seiyaku Wrapping {
         }
         return chosen;
     }
-    view fn mirror(Name position_id) -> (int, int, quantity, decimal, decimal, quantity, quantity, int, int) {
+    view fn mirror(Name position_id) authorize(anyone) -> (int, int, quantity, decimal, decimal, quantity, quantity, int, int) {
         return (1, 2, credit_value(position_id), 1.5, 2.5, credit_value(position_id), credit_value(position_id), 3, 4);
     }
-    view fn chain(Name position_id) -> quantity {
+    view fn chain(Name position_id) authorize(anyone) -> quantity {
         return Credit.get(position_id).unwrap_or_default().checked_add(credit_value(position_id)).unwrap_or(0);
     }
     fn short_tuple() -> (int, int) { return (1, 2); }

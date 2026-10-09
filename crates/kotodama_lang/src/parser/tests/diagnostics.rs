@@ -79,8 +79,8 @@ fn expected_token_errors_use_source_spellings_and_insertion_points() {
     for (text, expected) in [
         ("seiyaku S { fn f(int a { } }", "expected `)`, found `{`"),
         (
-            "seiyaku S { kotoage fn run() authorize(\"A\") ok {} }",
-            "expected `authorize(\"Permission\")` or the function body `{`, found identifier `ok`",
+            "seiyaku S { permission A;  kotoage fn run() authorize(A) ok {} }",
+            "expected `authorize(Admin)`, a return type, or the function body `{`, found identifier `ok`",
         ),
         (
             "seiyaku S { fn f() { let x = 1 as int; } }",
@@ -119,9 +119,9 @@ fn casts_are_explained_as_named_conversions() {
 fn parse_messages_never_leak_token_debug_names_or_templates() {
     for text in [
         "seiyaku S { fn f() { let x = 1 } }",
-        "seiyaku S { #[message(\"x\")] view fn f() {} }",
-        "seiyaku S { #[authorize] view fn f() {} }",
-        "module M { kotoage fn run() authorize(\"R\") {} }",
+        "seiyaku S { #[message(\"x\")] view fn f() authorize(anyone) {} }",
+        "seiyaku S { #[authorize] view fn f() authorize(anyone) {} }",
+        "module M { kotoage fn run() authorize(anyone) {} }",
         "seiyaku S { error enum E { A = 1, B = 1 } }",
         "seiyaku S { kotoage fn run() authorize(\"\") {} }",
         "seiyaku S { fn f() { while true {} } }",
@@ -187,7 +187,7 @@ fn english_declaration_words_suggest_both_branded_spellings() {
             vec!["view", "kotoage", "言挙げ"],
         ),
         (
-            "seiyaku S { entry fn one() authorize(\"A\") {} }",
+            "seiyaku S { entry fn one() authorize(anyone) {} }",
             vec!["kotoage", "言挙げ", "view"],
         ),
     ] {
@@ -200,8 +200,7 @@ fn english_declaration_words_suggest_both_branded_spellings() {
     for text in [
         "seiyaku S { state int v; init() { v = 0; } }",
         "seiyaku S { upgrade() {} }",
-        "seiyaku S { entry fn one() authorize(\"A\") {} }",
-        "seiyaku S { pub fn one() -> int { return 1; } }",
+        "seiyaku S { entry fn one() authorize(anyone) {} }",
     ] {
         let diagnostic = only_diagnostic(text);
         assert!(syntax_diagnostics(&apply(text, diagnostic.fix.as_ref().expect("fix"))).is_empty());
@@ -226,7 +225,7 @@ fn keyword_typos_get_bounded_deterministic_suggestions() {
             vec!["seiyaku", "誓約"],
         ),
         (
-            "seiyaku S { kotoge fn run() authorize(\"A\") {} }",
+            "seiyaku S { kotoge fn run() authorize(anyone) {} }",
             "unknown keyword `kotoge`; did you mean `kotoage`/`言挙げ`?",
             vec!["kotoage", "言挙げ"],
         ),
@@ -236,7 +235,7 @@ fn keyword_typos_get_bounded_deterministic_suggestions() {
             vec!["hajimari", "始まり"],
         ),
         (
-            "seiyaku S { kotoage fn run() autorize(\"A\") {} }",
+            "seiyaku S { kotoage fn run() autorize(anyone) {} }",
             "unknown keyword `autorize`; did you mean `authorize`?",
             vec!["authorize"],
         ),
@@ -247,7 +246,7 @@ fn keyword_typos_get_bounded_deterministic_suggestions() {
         assert_eq!(replacements(&diagnostic), expected);
         assert_fixes_repair(text, &diagnostic);
     }
-    let text = "seiyaku S { view fn f() -> int { retrun 1; } }";
+    let text = "seiyaku S { view fn f() authorize(anyone) -> int { retrun 1; } }";
     let diagnostic = only_diagnostic(text);
     assert_eq!(diagnostic.code, "E_KEYWORD_TYPO");
     assert_eq!(replacements(&diagnostic), ["return"]);
@@ -273,15 +272,15 @@ fn branded_declaration_shapes_get_one_token_fixes_that_echo_the_spelling() {
             "`改善` is itself the declaration: write `改善() { ... }` without `fn` or a name",
         ),
         (
-            "seiyaku S { kotoage bump() authorize(\"A\") {} }",
+            "seiyaku S { kotoage bump() authorize(anyone) {} }",
             "`kotoage` modifies a function declaration: write `kotoage fn bump(...)`",
         ),
         (
-            "誓約 S { 言挙げ bump() authorize(\"A\") {} }",
+            "誓約 S { 言挙げ bump() authorize(anyone) {} }",
             "`言挙げ` modifies a function declaration: write `言挙げ fn bump(...)`",
         ),
         (
-            "seiyaku S { view one() -> int { return 1; } }",
+            "seiyaku S { view one() authorize(anyone) -> int { return 1; } }",
             "`view` modifies a function declaration: write `view fn one(...)`",
         ),
     ] {
@@ -291,7 +290,7 @@ fn branded_declaration_shapes_get_one_token_fixes_that_echo_the_spelling() {
         assert_site_help(&diagnostic);
         assert_fixes_repair(text, &diagnostic);
     }
-    let text = "seiyaku S { kotoage view fn one() -> int { return 1; } }";
+    let text = "seiyaku S { kotoage view fn one() authorize(anyone) -> int { return 1; } }";
     let diagnostic = only_diagnostic(text);
     assert_eq!(diagnostic.code, "E_DECLARATION_SHAPE");
     assert_eq!(diagnostic.fixes().count(), 2);
@@ -303,30 +302,35 @@ fn branded_declaration_shapes_get_one_token_fixes_that_echo_the_spelling() {
 }
 #[test]
 fn authorize_position_and_requirements_are_targeted() {
-    let text = "seiyaku S { kotoage fn bump(int d) authorize(\"CanBump\") -> int { return d; } }";
+    let text = "seiyaku S { permission CanBump;  kotoage fn bump(int d) -> int authorize(CanBump) { return d; } }";
     let diagnostic = only_diagnostic(text);
     assert_eq!(diagnostic.code, "E_AUTHORIZE_POSITION");
     assert_eq!(
         diagnostic.message,
-        "the return type comes before `authorize(...)`: write `-> int authorize(\"CanBump\")`"
+        "`authorize(...)` comes before the return type"
     );
     assert_fixes_repair(text, &diagnostic);
+
+    let commented = "seiyaku S { permission Admin; kotoage fn run() -> int /* result policy */ authorize(Admin) { 1 } }";
+    let diagnostic = only_diagnostic(commented);
+    assert_eq!(diagnostic.code, "E_AUTHORIZE_POSITION");
+    let repaired = apply(commented, diagnostic.fix.as_ref().expect("order fix"));
+    assert!(repaired.contains("authorize(Admin) /* result policy */ -> int"));
+    assert_fixes_repair(commented, &diagnostic);
 
     let diagnostic = only_diagnostic("誓約 S { 言挙げ fn run() {} }");
     assert_eq!(diagnostic.code, "E_KOTOAGE_AUTHORIZATION_MISSING");
     assert_eq!(
         diagnostic.message,
-        "言挙げ function `run` requires `authorize(\"Permission\")` before its body"
+        "言挙げ function `run` requires an explicit `authorize(...)` policy"
     );
     assert!(
         diagnostic.fix.is_none(),
         "a permission name cannot be guessed"
     );
-    assert!(
-        diagnostic.help.as_deref().is_some_and(
-            |help| help.contains("`authorize(\"CanRun\")`") && help.contains("view fn")
-        )
-    );
+    assert!(diagnostic.help.as_deref().is_some_and(
+        |help| help.contains("`authorize(Admin)`") && help.contains("`authorize(anyone)`")
+    ));
 
     for text in [
         "seiyaku S { 改善() authorize(\"Admin\") {} }",
@@ -347,43 +351,43 @@ fn authorize_position_and_requirements_are_targeted() {
 fn reflexes_from_other_languages_get_exact_fixes() {
     for (text, code) in [
         (
-            "seiyaku S { view fn f() -> int { let mut total = 0; total += 1; return total; } }",
+            "seiyaku S { view fn f() authorize(anyone) -> int { let mut total = 0; total += 1; return total; } }",
             "E_LET_MUT",
         ),
         (
-            "seiyaku S { view fn f() -> int { var total = 0; for i in 0..10 { total += i; } return total; } }",
+            "seiyaku S { view fn f() authorize(anyone) -> int { var total = 0; for i in 0..10 { total += i; } return total; } }",
             "E_RANGE_SYNTAX",
         ),
         (
-            "seiyaku S { view fn f() -> Option<int> { return Some(1); } }",
+            "seiyaku S { view fn f() authorize(anyone) -> Option<int> { return Some(1); } }",
             "E_LEGACY_SUM_CONSTRUCTOR",
         ),
         (
-            "seiyaku S { view fn f() -> Option<int> { return None; } }",
+            "seiyaku S { view fn f() authorize(anyone) -> Option<int> { return None; } }",
             "E_LEGACY_SUM_CONSTRUCTOR",
         ),
         (
-            "seiyaku S { view fn f() -> Result<int, string> { return Err(\"no\"); } }",
+            "seiyaku S { view fn f() authorize(anyone) -> Result<int, string> { return Err(\"no\"); } }",
             "E_LEGACY_SUM_CONSTRUCTOR",
         ),
         (
-            "seiyaku S { view fn f() -> Option<int> { return Option::Some(1); } }",
+            "seiyaku S { view fn f() authorize(anyone) -> Option<int> { return Option::Some(1); } }",
             "E_LEGACY_SUM_CONSTRUCTOR",
         ),
         (
-            "seiyaku S { view fn f(Option<int> v) -> int { match v { Option::Some(x) => x, Option::none => 0 } } }",
+            "seiyaku S { view fn f(Option<int> v) authorize(anyone) -> int { match v { Option::Some(x) => x, Option::none => 0 } } }",
             "E_LEGACY_SUM_CONSTRUCTOR",
         ),
         (
-            "seiyaku S { view fn f(Option<int> v) -> int { match v { Some(x) => x, Option::none => 0 } } }",
+            "seiyaku S { view fn f(Option<int> v) authorize(anyone) -> int { match v { Some(x) => x, Option::none => 0 } } }",
             "E_LEGACY_SUM_CONSTRUCTOR",
         ),
         (
-            "seiyaku S { view fn f() -> int { var t = 0; for (i in range(3)) { t += i; } return t; } }",
+            "seiyaku S { view fn f() authorize(anyone) -> int { var t = 0; for (i in range(3)) { t += i; } return t; } }",
             "K1001",
         ),
         (
-            "seiyaku S { view fn f(Option<int> v) -> int { match v { Option::some(x) => { x } Option::none => { 0 } } } }",
+            "seiyaku S { view fn f(Option<int> v) authorize(anyone) -> int { match v { Option::some(x) => { x } Option::none => { 0 } } } }",
             "K1001",
         ),
     ] {
@@ -393,7 +397,7 @@ fn reflexes_from_other_languages_get_exact_fixes() {
         assert_fixes_repair(text, &diagnostic);
     }
     let diagnostic = only_diagnostic(
-        "seiyaku S { view fn f() -> int { var t = 0; for i in 1..10 { t += i; } return t; } }",
+        "seiyaku S { view fn f() authorize(anyone) -> int { var t = 0; for i in 1..10 { t += i; } return t; } }",
     );
     assert_eq!(diagnostic.code, "E_RANGE_SYNTAX");
     assert!(diagnostic.fix.is_none(), "range(N) counts from zero only");
@@ -404,8 +408,8 @@ fn reflexes_from_other_languages_get_exact_fixes() {
             .is_some_and(|help| help.contains("range(10 - 1)"))
     );
     for text in [
-        "seiyaku S { view fn f() -> int { var i = 0; while i < 3 { i += 1; } return i; } }",
-        "seiyaku S { view fn f() -> int { loop { break; } return 1; } }",
+        "seiyaku S { view fn f() authorize(anyone) -> int { var i = 0; while i < 3 { i += 1; } return i; } }",
+        "seiyaku S { view fn f() authorize(anyone) -> int { loop { break; } return 1; } }",
     ] {
         let diagnostic = only_diagnostic(text);
         assert_eq!(diagnostic.code, "E_UNSUPPORTED_LOOP", "{text}");
@@ -414,7 +418,7 @@ fn reflexes_from_other_languages_get_exact_fixes() {
     // Lowercase helpers named `some`/`ok` remain ordinary functions.
     assert!(
         syntax_diagnostics(
-            "seiyaku S { fn some(int v) -> Option<int> { Option::some(v) } view fn f() -> Option<int> { some(1) } }"
+            "seiyaku S { fn some(int v) -> Option<int> { Option::some(v) } view fn f() authorize(anyone) -> Option<int> { some(1) } }"
         )
         .is_empty()
     );
@@ -423,7 +427,7 @@ fn reflexes_from_other_languages_get_exact_fixes() {
 fn name_colon_type_reports_once_with_the_users_names() {
     for (text, message, replacement) in [
         (
-            "seiyaku V { kotoage fn add(amount: int) authorize(\"A\") {} }",
+            "seiyaku V { permission A;  kotoage fn add(amount: int) authorize(A) {} }",
             "parameters are type-first: write `int amount`, not `amount: int`",
             "int amount",
         ),
@@ -453,11 +457,11 @@ fn name_colon_type_reports_once_with_the_users_names() {
         assert_eq!(diagnostic.message, message);
         assert_eq!(replacements(&diagnostic), [replacement]);
     }
-    let text = "seiyaku V { kotoage fn add(amount: int) authorize(\"A\") {} }";
+    let text = "seiyaku V { permission A;  kotoage fn add(amount: int) authorize(A) {} }";
     assert_fixes_repair(text, &only_diagnostic(text));
     for (text, message) in [
         (
-            "seiyaku V { view fn run(value) {} }",
+            "seiyaku V { view fn run(value) authorize(anyone) {} }",
             "parameter `value` needs a type before its name, for example `int value`",
         ),
         (
@@ -473,10 +477,10 @@ fn name_colon_type_reports_once_with_the_users_names() {
 #[test]
 fn recovery_does_not_cascade_after_match_loop_or_brace_errors() {
     for text in [
-        "seiyaku S {\n    view fn f(Option<int> v) -> int {\n        match v {\n            Option::some(x) => x,\n            _ => 0,\n        }\n    }\n}\n",
-        "seiyaku S {\n    view fn f(Option<Option<int>> v) -> int {\n        match v {\n            Option::some(Option::some(x)) => x,\n            Option::some(inner) => 0,\n            Option::none => 0,\n        }\n    }\n}\n",
-        "seiyaku S {\n    view fn f(bool b) -> int {\n        match b {\n            true => 1,\n            false => 0,\n        }\n    }\n}\n",
-        "seiyaku S {\n    view fn f() -> int {\n        let f = x;\n        while x { }\n        return 1;\n    }\n}\n",
+        "seiyaku S {\n    view fn f(Option<int> v) authorize(anyone) -> int {\n        match v {\n            Option::some(x) => x,\n            _ => 0,\n        }\n    }\n}\n",
+        "seiyaku S {\n    view fn f(Option<Option<int>> v) authorize(anyone) -> int {\n        match v {\n            Option::some(Option::some(x)) => x,\n            Option::some(inner) => 0,\n            Option::none => 0,\n        }\n    }\n}\n",
+        "seiyaku S {\n    view fn f(bool b) authorize(anyone) -> int {\n        match b {\n            true => 1,\n            false => 0,\n        }\n    }\n}\n",
+        "seiyaku S {\n    view fn f() authorize(anyone) -> int {\n        let f = x;\n        while x { }\n        return 1;\n    }\n}\n",
     ] {
         // Every reported error is the arm's own mistake, never a cascade.
         let diagnostics = syntax_diagnostics(text);
@@ -489,7 +493,7 @@ fn recovery_does_not_cascade_after_match_loop_or_brace_errors() {
             summarize(&diagnostics)
         );
     }
-    let text = "seiyaku S {\n    state int count;\n    hajimari() {\n        count = 0;\n\n    kotoage fn bump() authorize(\"B\") {\n        count += 1;\n    }\n}\n";
+    let text = "seiyaku S { permission B; \n    state int count;\n    hajimari() {\n        count = 0;\n\n    kotoage fn bump() authorize(B) {\n        count += 1;\n    }\n}\n";
     let diagnostic = only_diagnostic(text);
     assert_eq!(
         diagnostic.message,
@@ -502,7 +506,7 @@ fn recovery_does_not_cascade_after_match_loop_or_brace_errors() {
     // An identifier named `json` before a loop body is an ordinary local.
     assert!(
         syntax_diagnostics(
-            "seiyaku S { view fn f(List<int, 4> json) -> int { var t = 0; for x in json { t += x; } return t; } }"
+            "seiyaku S { view fn f(List<int, 4> json) authorize(anyone) -> int { var t = 0; for x in json { t += x; } return t; } }"
         )
         .is_empty()
     );
@@ -520,7 +524,7 @@ fn trailing_text_after_the_unit_is_reported_once() {
 fn every_name_colon_type_declaration_is_reported_and_parsing_continues() {
     for (text, count) in [
         (
-            "seiyaku V { kotoage fn send(to: AccountId, amount: int) authorize(\"A\") {} }",
+            "seiyaku V { permission A;  kotoage fn send(to: AccountId, amount: int) authorize(A) {} }",
             2,
         ),
         (
@@ -558,8 +562,9 @@ fn every_name_colon_type_declaration_is_reported_and_parsing_continues() {
         );
     }
     // A later, unrelated error in the same function is still found.
-    let diagnostics =
-        syntax_diagnostics("seiyaku V { view fn f(amount: int) -> int { let x = 1 return x; } }");
+    let diagnostics = syntax_diagnostics(
+        "seiyaku V { view fn f(amount: int) authorize(anyone) -> int { let x = 1 return x; } }",
+    );
     assert_eq!(
         diagnostics
             .iter()
@@ -601,8 +606,8 @@ fn english_words_in_modules_and_nested_units_get_context_aware_fixes() {
 #[test]
 fn ranges_none_calls_and_same_line_statements_get_targeted_errors() {
     for text in [
-        "seiyaku S { view fn f() -> int { let r = 0..10; return 1; } }",
-        "seiyaku S { view fn f(List<int, 4> xs) -> int { return xs[1..3]; } }",
+        "seiyaku S { view fn f() authorize(anyone) -> int { let r = 0..10; return 1; } }",
+        "seiyaku S { view fn f(List<int, 4> xs) authorize(anyone) -> int { return xs[1..3]; } }",
     ] {
         let diagnostic = only_diagnostic(text);
         assert_eq!(diagnostic.code, "E_RANGE_SYNTAX", "{text}");
@@ -610,23 +615,29 @@ fn ranges_none_calls_and_same_line_statements_get_targeted_errors() {
         assert_site_help(&diagnostic);
     }
     assert_eq!(
-        only_diagnostic("seiyaku S { view fn f() -> int { let r = 0..=9; return 1; } }").message,
+        only_diagnostic(
+            "seiyaku S { view fn f() authorize(anyone) -> int { let r = 0..=9; return 1; } }"
+        )
+        .message,
         "Kotodama has no `..=` range operator"
     );
-    let text = "seiyaku S { view fn f() -> Option<int> { return None(); } }";
+    let text = "seiyaku S { view fn f() authorize(anyone) -> Option<int> { return None(); } }";
     let diagnostic = only_diagnostic(text);
     assert_eq!(diagnostic.code, "E_LEGACY_SUM_CONSTRUCTOR");
     assert_eq!(replacements(&diagnostic), ["Option::none"]);
     assert_fixes_repair(text, &diagnostic);
     // `None(x)` has no exact repair.
     assert!(
-        only_diagnostic("seiyaku S { view fn f() -> Option<int> { return None(1); } }")
-            .fix
-            .is_none()
+        only_diagnostic(
+            "seiyaku S { view fn f() authorize(anyone) -> Option<int> { return None(1); } }"
+        )
+        .fix
+        .is_none()
     );
     // A `;` omitted before a statement keyword on the same line is inserted
     // right after the previous token.
-    let text = "seiyaku S { view fn f() -> int { let x = 1 let y = 2; return x + y; } }";
+    let text =
+        "seiyaku S { view fn f() authorize(anyone) -> int { let x = 1 let y = 2; return x + y; } }";
     let diagnostic = only_diagnostic(text);
     assert_eq!(diagnostic.message, "expected `;`, found keyword `let`");
     let span = diagnostic.primary_span.as_ref().expect("span");
@@ -639,7 +650,7 @@ fn ranges_none_calls_and_same_line_statements_get_targeted_errors() {
 }
 #[test]
 fn item_recovery_still_reports_a_later_misspelled_declaration_head() {
-    let text = "seiyaku S {\n    strcut A { int a; }\n    kaizan() { }\n    view fn f() -> int { return 1; }\n}\n";
+    let text = "seiyaku S {\n    strcut A { int a; }\n    kaizan() { }\n    view fn f() authorize(anyone) -> int { return 1; }\n}\n";
     let diagnostics = syntax_diagnostics(text);
     assert_eq!(
         diagnostics
@@ -656,7 +667,7 @@ fn item_recovery_still_reports_a_later_misspelled_declaration_head() {
 }
 #[test]
 fn missing_closing_brace_fix_keeps_the_opener_indentation() {
-    let text = "seiyaku S {\n    state int v;\n    hajimari() {\n        v = 0;\n\n    view fn get() -> int {\n        return v;\n    }\n}\n";
+    let text = "seiyaku S {\n    state int v;\n    hajimari() {\n        v = 0;\n\n    view fn get() authorize(anyone) -> int {\n        return v;\n    }\n}\n";
     let diagnostic = only_diagnostic(text);
     assert_eq!(replacements(&diagnostic), ["\n    }"]);
     assert_fixes_repair(text, &diagnostic);
@@ -664,13 +675,13 @@ fn missing_closing_brace_fix_keeps_the_opener_indentation() {
 #[test]
 fn unambiguous_same_line_omissions_get_insertion_fixes() {
     // `;` cannot appear inside parentheses, so the `)` was omitted.
-    let text = "seiyaku S { view fn f() -> int { let total = g(1, 2; return total; } fn g(int a, int b) -> int { a + b } }";
+    let text = "seiyaku S { view fn f() authorize(anyone) -> int { let total = g(1, 2; return total; } fn g(int a, int b) -> int { a + b } }";
     let diagnostic = only_diagnostic(text);
     assert_eq!(diagnostic.message, "expected `)`, found `;`");
     assert_eq!(replacements(&diagnostic), [")"]);
     assert_fixes_repair(text, &diagnostic);
     // A namespaced pattern after an expression body starts the next arm.
-    let text = "seiyaku S { view fn f(Option<int> v) -> int { match v { Option::some(x) => x Option::none => 0 } } }";
+    let text = "seiyaku S { view fn f(Option<int> v) authorize(anyone) -> int { match v { Option::some(x) => x Option::none => 0 } } }";
     let diagnostic = only_diagnostic(text);
     assert_eq!(replacements(&diagnostic), [","]);
     assert_fixes_repair(text, &diagnostic);
@@ -686,7 +697,7 @@ fn three_clause_for_loops_get_a_counted_range_fix() {
         ("(int i = 0; i < 2 * 3; i += 1)", "i in range(2 * 3)"),
     ] {
         let text = format!(
-            "seiyaku S {{ const int LIMIT = 3; view fn f() -> int {{ var t = 0; for {header} {{ t += i; }} return t; }} }}"
+            "seiyaku S {{ const int LIMIT = 3; view fn f() authorize(anyone) -> int {{ var t = 0; for {header} {{ t += i; }} return t; }} }}"
         );
         let diagnostic = only_diagnostic(&text);
         assert_eq!(diagnostic.code, "E_UNSUPPORTED_LOOP", "{text}");
@@ -700,7 +711,9 @@ fn three_clause_for_loops_get_a_counted_range_fix() {
         "(i = 0; i < n && ok; i += 1)",
         "(i = 0; i < 10; i += 2)",
     ] {
-        let text = format!("seiyaku S {{ view fn f() -> int {{ for {header} {{ }} return 0; }} }}");
+        let text = format!(
+            "seiyaku S {{ view fn f() authorize(anyone) -> int {{ for {header} {{ }} return 0; }} }}"
+        );
         let diagnostic = only_diagnostic(&text);
         assert_eq!(diagnostic.code, "E_UNSUPPORTED_LOOP", "{text}");
         assert!(diagnostic.fix.is_none(), "{text}");

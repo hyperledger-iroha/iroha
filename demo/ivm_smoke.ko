@@ -1,5 +1,6 @@
 seiyaku SmokeTransfer {
-    kotoage fn main() authorize("Admin") {
+    permission Admin;
+    kotoage fn main() authorize(Admin) {
         ledger::asset::transfer(
             source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),

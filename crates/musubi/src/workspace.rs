@@ -182,6 +182,7 @@ pub struct Workspace {
     members: BTreeMap<PortablePath, WorkspaceMember>,
     default_members: BTreeSet<PortablePath>,
     synthetic: bool,
+    manifest_overlays: BTreeMap<PathBuf, String>,
 }
 impl Workspace {
     /// Return the canonical workspace root directory.
@@ -348,7 +349,7 @@ impl Workspace {
                 ),
             ));
         }
-        let manifest = read_manifest(&expected_manifest)?;
+        let manifest = read_manifest_overlay(&expected_manifest, None, &self.manifest_overlays)?;
         if manifest.workspace.is_some() {
             return Err(WorkspaceError::new(
                 WorkspaceErrorKind::Membership,
@@ -380,6 +381,7 @@ impl Workspace {
             &local_packages,
             &resolved_packages,
             None,
+            &self.manifest_overlays,
         )?;
         let dev_dependencies = resolve_dependencies(
             &self.root,
@@ -391,6 +393,7 @@ impl Workspace {
             &local_packages,
             &resolved_packages,
             None,
+            &self.manifest_overlays,
         )?;
         let relative = package_root.strip_prefix(&self.root).map_err(|_| {
             WorkspaceError::new(
@@ -491,12 +494,13 @@ pub fn discover_manifest(start: &Path) -> Result<PathBuf, WorkspaceError> {
 /// Returns an error for discovery, strict manifest parsing, unsafe member
 /// paths, or an unlisted package nested beneath a workspace root.
 pub fn discover_workspace_manifest(start: &Path) -> Result<PathBuf, WorkspaceError> {
-    discover_workspace_manifest_selected(start, None)
+    discover_workspace_manifest_selected(start, None, &BTreeMap::new())
 }
 
 fn discover_workspace_manifest_selected(
     start: &Path,
     selected: Option<&iroha_fs::SelectedRegularFile>,
+    overlays: &BTreeMap<PathBuf, String>,
 ) -> Result<PathBuf, WorkspaceError> {
     let nearest = discover_manifest(start)?;
     require_selected_manifest_path(&nearest, selected)?;
@@ -504,7 +508,7 @@ fn discover_workspace_manifest_selected(
         .parent()
         .expect("a manifest path has a parent")
         .to_path_buf();
-    let nearest_manifest = read_manifest_selected(&nearest, selected)?;
+    let nearest_manifest = read_manifest_overlay(&nearest, selected, overlays)?;
     if nearest_manifest.workspace.is_some() {
         return Ok(nearest);
     }
@@ -522,7 +526,7 @@ fn discover_workspace_manifest_selected(
                             "ancestor manifest must be a regular non-symlink file",
                         ));
                     }
-                    let candidate_manifest = read_manifest_selected(&candidate, selected)?;
+                    let candidate_manifest = read_manifest_overlay(&candidate, selected, overlays)?;
                     if let Some(workspace) = &candidate_manifest.workspace {
                         let relative = nearest_root.strip_prefix(&directory).map_err(|_| {
                             WorkspaceError::new(
@@ -573,7 +577,7 @@ fn discover_workspace_manifest_selected(
 /// Returns an error for discovery, strict parsing, missing/default membership, path escape,
 /// symlinks, package collisions, or mismatched path-dependency identity/ranges.
 pub fn load_workspace(start: &Path) -> Result<Workspace, WorkspaceError> {
-    load_workspace_selected(start, None)
+    load_workspace_selected(start, None, &BTreeMap::new())
 }
 
 /// Load the original selected manifest through its native descriptor, preserving every
@@ -586,7 +590,7 @@ pub(crate) fn load_workspace_from_selected(
     selected
         .revalidate()
         .map_err(|error| WorkspaceError::io("retain selected manifest", selected.path(), &error))?;
-    let workspace = load_workspace_selected(selected.path(), Some(selected))?;
+    let workspace = load_workspace_selected(selected.path(), Some(selected), &BTreeMap::new())?;
     selected.revalidate().map_err(|error| {
         WorkspaceError::io(
             "retain selected workspace manifest",
@@ -600,15 +604,16 @@ pub(crate) fn load_workspace_from_selected(
 fn load_workspace_selected(
     start: &Path,
     selected: Option<&iroha_fs::SelectedRegularFile>,
+    overlays: &BTreeMap<PathBuf, String>,
 ) -> Result<Workspace, WorkspaceError> {
     let nearest_manifest_path = discover_manifest(start)?;
     require_selected_manifest_path(&nearest_manifest_path, selected)?;
-    let root_manifest_path = discover_workspace_manifest_selected(start, selected)?;
+    let root_manifest_path = discover_workspace_manifest_selected(start, selected, overlays)?;
     let root = root_manifest_path
         .parent()
         .expect("manifest path has parent")
         .to_path_buf();
-    let root_manifest = read_manifest_selected(&root_manifest_path, selected)?;
+    let root_manifest = read_manifest_overlay(&root_manifest_path, selected, overlays)?;
     let synthetic = root_manifest.workspace.is_none();
     let workspace_declaration = root_manifest.workspace.as_ref();
     let seeds = collect_member_seeds(
@@ -617,6 +622,7 @@ fn load_workspace_selected(
         &root_manifest,
         workspace_declaration,
         selected,
+        overlays,
     )?;
     validate_nearest_member(&nearest_manifest_path, &root_manifest_path, &seeds)?;
     let package_defaults = workspace_declaration.map(|workspace| &workspace.package);
@@ -631,6 +637,7 @@ fn load_workspace_selected(
         &resolved_packages,
         &workspace_dependencies,
         selected,
+        overlays,
     )?;
     let default_members = default_member_set(workspace_declaration, &members, &root_manifest_path)?;
     Ok(Workspace {
@@ -640,6 +647,7 @@ fn load_workspace_selected(
         members,
         default_members,
         synthetic,
+        manifest_overlays: overlays.clone(),
     })
 }
 fn collect_member_seeds(
@@ -648,6 +656,7 @@ fn collect_member_seeds(
     root_manifest: &Manifest,
     workspace: Option<&WorkspaceManifest>,
     selected: Option<&iroha_fs::SelectedRegularFile>,
+    overlays: &BTreeMap<PathBuf, String>,
 ) -> Result<BTreeMap<PortablePath, MemberSeed>, WorkspaceError> {
     let mut seeds = BTreeMap::new();
     if root_manifest.package.is_some() {
@@ -694,7 +703,7 @@ fn collect_member_seeds(
             }
             let member_root = confined_directory(root, root, &member_path.to_path_buf())?;
             let member_manifest_path = member_root.join(MANIFEST_FILE_NAME);
-            let member_manifest = read_manifest_selected(&member_manifest_path, selected)?;
+            let member_manifest = read_manifest_overlay(&member_manifest_path, selected, overlays)?;
             if member_manifest.package.is_none() {
                 return Err(WorkspaceError::new(
                     WorkspaceErrorKind::Membership,
@@ -772,6 +781,7 @@ fn materialize_members(
     resolved_packages: &BTreeMap<PortablePath, ResolvedPackageManifest>,
     workspace_dependencies: &BTreeMap<Name, ConcreteDependency>,
     selected: Option<&iroha_fs::SelectedRegularFile>,
+    overlays: &BTreeMap<PathBuf, String>,
 ) -> Result<BTreeMap<PortablePath, WorkspaceMember>, WorkspaceError> {
     let local_packages = seeds
         .iter()
@@ -793,6 +803,7 @@ fn materialize_members(
             &local_packages,
             resolved_packages,
             selected,
+            overlays,
         )?;
         let dev_dependencies = resolve_dependencies(
             root,
@@ -804,6 +815,7 @@ fn materialize_members(
             &local_packages,
             resolved_packages,
             selected,
+            overlays,
         )?;
         members.insert(
             path.clone(),
@@ -831,6 +843,7 @@ fn resolve_dependencies(
     local_packages: &BTreeMap<PathBuf, PortablePath>,
     resolved_packages: &BTreeMap<PortablePath, ResolvedPackageManifest>,
     selected: Option<&iroha_fs::SelectedRegularFile>,
+    overlays: &BTreeMap<PathBuf, String>,
 ) -> Result<BTreeMap<Name, EffectiveDependency>, WorkspaceError> {
     let mut result = BTreeMap::new();
     for (alias, dependency) in dependencies {
@@ -859,7 +872,7 @@ fn resolve_dependencies(
                 let dependency_root = resolve_dependency_root(workspace_root, &defined_in, path)?;
                 let dependency_manifest_path = dependency_root.join(MANIFEST_FILE_NAME);
                 let dependency_manifest =
-                    read_manifest_selected(&dependency_manifest_path, selected)?;
+                    read_manifest_overlay(&dependency_manifest_path, selected, overlays)?;
                 if dependency_manifest.package.is_none() {
                     return Err(WorkspaceError::new(
                         WorkspaceErrorKind::Dependency,
@@ -993,6 +1006,40 @@ fn dependency_metadata(dependency: &EffectiveDependency) -> DependencyMetadata {
         },
     }
 }
+/// Load the canonical workspace contract with bounded unsaved manifest text.
+///
+/// Filesystem identity, containment, dependency resolution and strict TOML validation are
+/// identical to ordinary builds. Overlays never create an alternate on-disk manifest.
+///
+/// # Errors
+/// Returns an error for unsafe filesystem identities, unreadable files, oversized
+/// overlays, invalid manifests, or inconsistent workspace and dependency bindings.
+pub fn load_workspace_with_overlays(
+    start: &Path,
+    overlays: &BTreeMap<PathBuf, String>,
+) -> Result<Workspace, WorkspaceError> {
+    load_workspace_selected(start, None, overlays)
+}
+fn read_manifest_overlay(
+    path: &Path,
+    selected: Option<&iroha_fs::SelectedRegularFile>,
+    overlays: &BTreeMap<PathBuf, String>,
+) -> Result<Manifest, WorkspaceError> {
+    overlays.get(path).map_or_else(
+        || read_manifest_selected(path, selected),
+        |text| {
+            read_manifest_with_reader(path, |_, maximum| {
+                if text.len() as u64 > maximum {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "manifest overlay exceeds its byte limit",
+                    ));
+                }
+                Ok(text.as_bytes().to_vec())
+            })
+        },
+    )
+}
 fn read_manifest(path: &Path) -> Result<Manifest, WorkspaceError> {
     read_manifest_with_reader(path, read_bounded_single_link_regular_file_v1)
 }
@@ -1017,19 +1064,22 @@ pub(crate) fn read_manifest_selected(
     path: &Path,
     selected: Option<&iroha_fs::SelectedRegularFile>,
 ) -> Result<Manifest, WorkspaceError> {
-    if let Some(selected) = selected.filter(|selected| selected.path() == path) {
-        read_manifest_with_reader(path, |_, maximum| {
-            let maximum = usize::try_from(maximum).map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "manifest byte limit exceeds this host",
-                )
-            })?;
-            selected.read(maximum)
-        })
-    } else {
-        read_manifest(path)
-    }
+    selected
+        .filter(|selected| selected.path() == path)
+        .map_or_else(
+            || read_manifest(path),
+            |selected| {
+                read_manifest_with_reader(path, |_, maximum| {
+                    let maximum = usize::try_from(maximum).map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "manifest byte limit exceeds this host",
+                        )
+                    })?;
+                    selected.read(maximum)
+                })
+            },
+        )
 }
 fn read_manifest_with_reader<F>(path: &Path, read_file: F) -> Result<Manifest, WorkspaceError>
 where

@@ -306,9 +306,9 @@ fn signed_private_registry_lookup_does_not_publish_refusal_as_absence() {
     let (bytes, manifest) = kotodama_lang::compiler::Compiler::new()
         .compile_source_with_manifest(
             r#"
-seiyaku OriginalRegistry {
+seiyaku OriginalRegistry { permission CanReadRegistry;
   hajimari() {}
-  kotoage fn main() authorize("CanReadRegistry") {}
+  kotoage fn main() authorize(CanReadRegistry) {}
 }
 "#,
         )

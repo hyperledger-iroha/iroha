@@ -37,7 +37,7 @@ fn run_main_body_with_gas(result_type: &str, body: &str) -> (IVM, u64) {
     run_with_gas(&format!(
         r#"
         seiyaku ListGasContract {{
-            view fn main() -> {result_type} {{
+            view fn main() authorize(anyone) -> {result_type} {{
                 {body}
             }}
         }}
@@ -190,7 +190,7 @@ fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
         let source = format!(
             r#"
             seiyaku ListGas {{
-                view fn main() -> int {{
+                view fn main() authorize(anyone) -> int {{
                     let List<int, 8> source = [{elements}];
                     let List<int, 8> copied = [value for value in source if value > 0];
                     if copied.contains(99) {{ return -1; }}

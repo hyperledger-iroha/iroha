@@ -3730,7 +3730,7 @@ def local_arguments(raw, qualification_scope):
         ("--onboarding-token", 1),
     ) + ((("--inrou-stage-dir", 1),) if qualification_scope == "full_inrou" else ()) + (
         ("--validator-unit", 4),
-        ("--edge-unit", 1),
+        ("--native-edge-capability", 1),
         ("--known-hosts", 1),
     )
     require(

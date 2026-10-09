@@ -11038,7 +11038,7 @@ pub mod query {
             );
         }
         #[test]
-        fn transfer_restricted_asset_uses_definition_home_dataspace_from_universal_route() {
+        fn transfer_restricted_asset_requires_definition_home_route_and_bucket() {
             let home_dataspace = DataSpaceId::new(7);
             let domain_id = DomainId::try_new("wonderland", "paynet").expect("home domain");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
@@ -11100,7 +11100,20 @@ pub mod query {
                 BOB_ID.clone(),
             )
             .execute(&ALICE_ID, &mut stx)
-            .expect("bare restricted transfer uses definition home dataspace");
+            .expect_err("a confined asset cannot transfer through the universal route");
+            assert_eq!(
+                stx.world.asset(&source_asset_id).unwrap().value().as_ref(),
+                &Quantity::from(10_u32),
+            );
+            stx.current_dataspace_id = Some(home_dataspace);
+            stx.world.current_dataspace_id = Some(home_dataspace);
+            Transfer::asset_quantity(
+                AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
+                3_u32,
+                BOB_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("bare restricted transfer succeeds on its definition home route");
             let destination_asset_id = AssetId::with_scope(
                 asset_def_id.clone(),
                 BOB_ID.clone(),

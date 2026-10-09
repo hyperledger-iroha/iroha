@@ -426,7 +426,8 @@ mod tests {
         let inbox = Inbox::new();
         inbox.read_from(&mut std::io::Cursor::new(input));
         let mut output = Vec::new();
-        language_server_dispatch(&inbox, &mut output, None, None, false, None).expect("dispatch");
+        language_server_dispatch(&inbox, &mut output, None, &ServerOptions::default())
+            .expect("dispatch");
         let output = messages(output);
         assert_eq!(output.len(), 2);
         assert_eq!(
@@ -515,7 +516,8 @@ mod tests {
         let inbox = Inbox::new();
         inbox.read_from(&mut std::io::Cursor::new(input));
         let mut output = Vec::new();
-        language_server_dispatch(&inbox, &mut output, None, None, false, None).expect("shutdown");
+        language_server_dispatch(&inbox, &mut output, None, &ServerOptions::default())
+            .expect("shutdown");
         inbox.close();
         let output = messages(output);
         assert_eq!(output.len(), 2);
@@ -557,7 +559,8 @@ mod tests {
         let inbox = Inbox::new();
         inbox.read_from(&mut std::io::Cursor::new(input));
         let mut output = Vec::new();
-        language_server_dispatch(&inbox, &mut output, None, None, false, None).expect("dispatch");
+        language_server_dispatch(&inbox, &mut output, None, &ServerOptions::default())
+            .expect("dispatch");
         let output = messages(output);
         let old = output
             .iter()
@@ -795,10 +798,17 @@ mod tests {
             &mut output,
             &driver,
             &HashMap::new(),
-            None,
+            ProjectDiagnosticContext {
+                snapshot: &ProjectSnapshot::default(),
+                options: &ServerOptions {
+                    source_root: None,
+                    zk_enabled: false,
+                    chain_discriminant: CompilerOptions::default().chain_discriminant,
+                },
+                error: None,
+            },
             &HashMap::new(),
             &previous,
-            false,
         )
         .expect("clear diagnostics");
         assert!(current.is_empty());

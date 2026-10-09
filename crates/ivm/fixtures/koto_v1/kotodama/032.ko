@@ -1,6 +1,6 @@
 
-        seiyaku PointerConstructors {
-          kotoage fn main() authorize("PointerConstructors") {
+        seiyaku PointerConstructors { permission FixtureAccess;
+          kotoage fn main() authorize(FixtureAccess) {
             let did = "wonderland.universal";
             let aid = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
             let key = "cursor";

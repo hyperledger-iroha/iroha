@@ -6381,6 +6381,7 @@ dependencies = [
  "sha2",
  "sha3",
  "signature",
+ "thiserror 2.0.18",
  "tiny-keccak",
 ]
 
@@ -6674,6 +6675,7 @@ dependencies = [
  "iroha_model_base",
  "iroha_primitives",
  "ivm_abi",
+ "ivm_artifact_admission",
  "kotodama_surface",
  "norito",
 ]
@@ -7221,6 +7223,7 @@ dependencies = [
  "sorafs_manifest",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
+ "toml_edit",
  "url",
  "zeroize",
 ]

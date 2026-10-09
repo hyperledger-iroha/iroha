@@ -13,7 +13,8 @@ use kotodama_lang::{parser, semantic::SemanticContext};
 use std::{collections::BTreeMap, sync::Arc};
 const LITERAL_BENCH_SIZE: usize = 512;
 fn kotodama_program() -> Vec<u8> {
-    let src = "seiyaku Add { view fn add(int a, int b) -> int { return a + b; } }";
+    let src =
+        "seiyaku Add { view fn add(int a, int b) authorize(anyone) -> int { return a + b; } }";
     Compiler::new().compile_source(src).expect("compile failed")
 }
 fn entrypoint_pc(program: &[u8], name: &str) -> u64 {
@@ -250,7 +251,9 @@ fn bench_asm(c: &mut Criterion) {
     });
 }
 fn literal_heavy_source(count: usize) -> String {
-    let mut src = String::from("seiyaku Literals {\n  kotoage fn main() authorize(\"Bench\") {\n");
+    let mut src = String::from(
+        "seiyaku Literals { permission Bench; \n  kotoage fn main() authorize(Bench) {\n",
+    );
     for i in 0..count {
         src.push_str(&format!(
             "    ledger::account::set_metadata(account: context::authority(), key: Name::parse(\"literal{i}\"), value: Json::parse(\"{{\\\"value\\\":{i}}}\"));\n"
@@ -450,11 +453,7 @@ fn bounded_list_runtime_source(manual: bool) -> String {
         "let List<int, 64> mapped = [value + 1 for value in source];"
     };
     format!(
-        "seiyaku BoundedListRuntime {{ view fn main() -> int {{ \
-            let List<int, 64> source = [{values}]; \
-            {body} \
-            match mapped.get(63) {{ Option::some(value) => value, Option::none => -1 }} \
-        }} }}"
+        "seiyaku BoundedListRuntime {{ view fn main() authorize(anyone) -> int {{ let List<int, 64> source = [{values}]; {body} match mapped.get(63) {{ Option::some(value) => value, Option::none => -1 }} }} }}"
     )
 }
 fn warm_list_runtime(source: &str) -> (IVM, ivm::RuntimeTemplate) {

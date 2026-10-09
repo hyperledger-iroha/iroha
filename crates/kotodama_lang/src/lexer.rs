@@ -41,12 +41,18 @@ pub enum TokenKind {
     Continue,
     State,
     Struct,
+    /// Contract-owned native event declaration.
+    Event,
+    /// Typed native event emission statement.
+    Emit,
     /// Stable seiyaku error declaration (`error enum Name`).
     Error,
     /// Enumeration keyword used after `error`.
     Enum,
-    /// Caller-authorization modifier (`authorize("Permission")`).
+    /// Caller-authorization modifier (`authorize(Admin)`).
     Authorize,
+    /// A declared seiyaku permission or explicit chain permission import.
+    Permission,
     /// Seiyaku-level trigger declaration (`trigger name -> callback { ... }`).
     Trigger,
     If,
@@ -347,7 +353,10 @@ fn lexical_diagnostic(
 }
 fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, String> {
     let lowered = match kind {
-        SyntaxKind::Whitespace | SyntaxKind::LineComment | SyntaxKind::BlockComment => {
+        SyntaxKind::Whitespace
+        | SyntaxKind::LineComment
+        | SyntaxKind::DocComment
+        | SyntaxKind::BlockComment => {
             return Ok(None);
         }
         SyntaxKind::Ident => TokenKind::Ident(text.to_owned()),
@@ -371,9 +380,12 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         SyntaxKind::KwContinue => TokenKind::Continue,
         SyntaxKind::KwState => TokenKind::State,
         SyntaxKind::KwStruct => TokenKind::Struct,
+        SyntaxKind::KwEvent => TokenKind::Event,
+        SyntaxKind::KwEmit => TokenKind::Emit,
         SyntaxKind::KwError => TokenKind::Error,
         SyntaxKind::KwEnum => TokenKind::Enum,
         SyntaxKind::KwAuthorize => TokenKind::Authorize,
+        SyntaxKind::KwPermission => TokenKind::Permission,
         SyntaxKind::KwTrigger => TokenKind::Trigger,
         SyntaxKind::KwIf => TokenKind::If,
         SyntaxKind::KwMatch => TokenKind::Match,
@@ -436,9 +448,11 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         | SyntaxKind::ItemList
         | SyntaxKind::IncludeItem
         | SyntaxKind::ImportItem
+        | SyntaxKind::PermissionItem
         | SyntaxKind::FunctionItem
         | SyntaxKind::StructItem
-        | SyntaxKind::ErrorEnumItem
+        | SyntaxKind::EventItem
+        | SyntaxKind::EnumItem
         | SyntaxKind::ConstItem
         | SyntaxKind::StateItem
         | SyntaxKind::TriggerItem
@@ -448,6 +462,7 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         | SyntaxKind::ParamList
         | SyntaxKind::ArgumentList
         | SyntaxKind::NamedArgument
+        | SyntaxKind::ArgumentRecord
         | SyntaxKind::StructLiteral
         | SyntaxKind::StructLiteralField
         | SyntaxKind::StructPattern
@@ -691,14 +706,7 @@ mod tests {
             assert_eq!(&tokens[0].kind, expected, "keyword `{spelling}`");
         }
         for rejected in [
-            "contract",
-            "entry",
-            "init",
-            "meta",
-            "permission",
-            "this",
-            "upgrade",
-            "while",
+            "contract", "entry", "init", "meta", "this", "upgrade", "while",
         ] {
             assert!(
                 !V1_KEYWORDS.contains(&rejected),
@@ -954,8 +962,8 @@ mod tests {
     }
     #[test]
     fn semantic_tokens_reuse_lossless_token_boundaries() {
-        let text = r##"seiyaku Demo { // trivia
-            kotoage fn run(int value) authorize("Run") {
+        let text = r##"seiyaku Demo { permission Run;  // trivia
+            kotoage fn run(int value) authorize(Run) {
                 let string raw = r#"日本語"#;
                 let bytes data = br"a\n";
             }
