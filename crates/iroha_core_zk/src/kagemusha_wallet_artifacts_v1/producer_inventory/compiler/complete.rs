@@ -37,9 +37,7 @@ impl OfflineCompilerV1<'_> {
     /// Absent or ambiguous source class, any source or
     /// original failure, nonuniform/over-capacity terminal catalog, changed final
     /// descriptor, or failure to close any of the complete logical routes.
-    pub fn wallet(
-        &mut self,
-    ) -> Result<ProducerInventoryV1, CompilationErrorV1> {
+    pub fn wallet(&mut self) -> Result<ProducerInventoryV1, CompilationErrorV1> {
         let sigmas = self.sigmas()?;
         let mut programs = Vec::new();
         let mut selectors = Vec::new();
@@ -119,11 +117,7 @@ impl OfflineCompilerV1<'_> {
         let omega = self.omega(&terminals)?;
         let mut closed = Vec::with_capacity(operations.len());
         for (operation, index) in operations.iter().zip(program_indices) {
-            closed.push(self.close_operation(
-                operation,
-                &programs[index],
-                &omega,
-            )?);
+            closed.push(self.close_operation(operation, &programs[index], &omega)?);
         }
         self.inventory(&sigmas, &closed, &omega)
     }

@@ -7,13 +7,11 @@
 
 use std::{collections::BTreeMap, io, io::Read, io::Write, path::Path, str::FromStr};
 
-use iroha_core_zk::{
-    kagemusha_wallet_artifacts_v1::{
-        InstallationV1, InstalledVerifierPackV1,
-        producer_inventory::{
-            BlobV1, DirectoryOriginalsV1, OfflineCompilerV1, OriginalSourceV1,
-            PROVING_KEY_MAX_BYTES_V1, SourceScopeV1, WalletArtifactDraftV1,
-        },
+use iroha_core_zk::kagemusha_wallet_artifacts_v1::{
+    InstallationV1, InstalledVerifierPackV1,
+    producer_inventory::{
+        BlobV1, DirectoryOriginalsV1, OfflineCompilerV1, OriginalSourceV1,
+        PROVING_KEY_MAX_BYTES_V1, SourceScopeV1, WalletArtifactDraftV1,
     },
 };
 use iroha_crypto::{Algorithm, PublicKey};
@@ -499,12 +497,7 @@ fn finish(
         wallet_blobs: &wallet_blobs,
     };
     let qualified = authenticated
-        .qualify_wallet(
-            &installed,
-            native,
-            &mut combined,
-            config,
-        )
+        .qualify_wallet(&installed, native, &mut combined, config)
         .map_err(io::Error::other)?;
     if qualified.installation() != (installation.scheme_id, installation.manifest_digest) {
         return Err(invalid(
@@ -568,14 +561,7 @@ fn run(path: &str) -> io::Result<()> {
         "unsigned-producer-inventory.norito",
         draft.producer_inventory(),
     )?;
-    finish(
-        &request,
-        draft,
-        &output,
-        &wallet,
-        &native,
-        config,
-    )?;
+    finish(&request, draft, &output, &wallet, &native, config)?;
     request_original.recheck()?;
     genesis.recheck()?;
     output.sync()?;

@@ -367,6 +367,13 @@ exact body's immutable Original already checked by the enclosing snapshot entry 
 Persistent source failure at exit supersedes any ordinary inner result; a change restored
 entirely between observations may be unseen. Parser-local and wallet callback checks retain
 their fresh Original reads, as do active budgets, unmatched snapshots and standalone bodies.
+The same graph-only borrow shares native ancestry for scope evidence. Root inventory and body
+suffix checks remain fresh, with complete root and immutable snapshot checks at both outer
+boundaries. Exact native handle ownership determines prefix sharing; reopening the same path
+does not qualify. All identity, semantic, predecessor and fee comparisons remain independent.
+Persistent source failures still supersede ordinary inner results; a prefix change restored
+between observations can be unseen. Active budgets and parser-local checks retain their
+independent ancestry checks.
 Completing an already-reserved successor that expired during downtime consumes that turn's one
 replacement claim; attempting another body in the same turn returns `ReplacementLimit`. A later
 fresh invocation may advance that unused body. Missing anchored local material refuses without

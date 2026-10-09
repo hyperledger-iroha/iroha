@@ -225,7 +225,7 @@ fn original_key_bounds_reject_empty_oversized_and_excess_domain() {
 }
 
 #[test]
-fn fifth_checkpoint_is_terminal_and_out_of_range_source_is_rejected() {
+fn fourth_checkpoint_is_terminal_and_out_of_range_source_is_rejected() {
     assert_eq!(A_STAGE_COUNT, 4);
     assert_eq!(
         crate::a_relation::schedule::compiled::OperationSchedule::for_variant(Variant::Load)

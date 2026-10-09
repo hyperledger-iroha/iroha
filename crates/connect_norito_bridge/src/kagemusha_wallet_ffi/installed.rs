@@ -9,9 +9,7 @@ use iroha_core_zk::kagemusha_wallet_artifacts_v1::{
     },
 };
 use iroha_pasta::msm::MemoryBudget;
-use iroha_plonk::{
-    keys::{CosetCachePolicy, pk::artifact::ReadConfig},
-};
+use iroha_plonk::keys::{CosetCachePolicy, pk::artifact::ReadConfig};
 
 mod attempt;
 mod exports;
@@ -221,12 +219,7 @@ impl PreparedInstallation {
             base,
         )?;
         let sources = inventory
-            .qualify_wallet(
-                &installed,
-                &selected.genesis,
-                &mut originals,
-                read_config(),
-            )
+            .qualify_wallet(&installed, &selected.genesis, &mut originals, read_config())
             .map_err(|error| {
                 Failure::code(if error.is_unavailable() {
                     ARTIFACTS_UNAVAILABLE

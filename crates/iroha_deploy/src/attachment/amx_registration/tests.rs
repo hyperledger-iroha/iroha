@@ -293,3 +293,251 @@ fn administrative_amx_requires_fresh_original_parent_before_signing_and_cancella
         ))
     ));
 }
+
+#[test]
+fn administrative_amx_replay_evidence_refuses_missing_journal_before_parent_observation() {
+    let fixture = Fixture::new();
+    let root = tempfile::tempdir().unwrap();
+    let config = configuration(&fixture);
+    let options = options();
+    let utc = native_operation::now_ms().unwrap() + 60_000;
+    let bootstrap = bootstrap(&fixture, &root.path().join("release"));
+    let mut parent = ParentFinalityStore::open(&root.path().join("parent"), &bootstrap).unwrap();
+    let original =
+        encode_bounded(&origin(&fixture, &config, utc, &options), MAX_RECORD_BYTES).unwrap();
+    // The genuine initial checkpoint is only retained material here, never a claimed carrier.
+    let checkpoint = fixture.parent.checkpoint().encode_canonical().unwrap();
+    for proof_name in ["replay.nrt", "carrier.nrt"] {
+        let mut store =
+            AttachmentStore::open(&root.path().join(proof_name), fixture.identity.clone()).unwrap();
+        let saved = store
+            .directory
+            .publish_private_child(
+                DIRECTORY,
+                &[
+                    (ORIGIN, original.as_slice()),
+                    (proof_name, checkpoint.as_slice()),
+                ],
+            )
+            .unwrap();
+        let source = Offline(Cell::new(0));
+        let error = store
+            .advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            AttachmentError::Invalid("AMX replay evidence has no original signed transaction")
+        ));
+        assert_eq!(source.0.get(), 0, "no parent read before source refusal");
+        assert!(!saved.path().join("transaction").exists());
+        assert_eq!(saved.read(ORIGIN, MAX_RECORD_BYTES).unwrap(), original);
+        assert_eq!(
+            saved.read(proof_name, MAX_RECORD_BYTES).unwrap(),
+            checkpoint
+        );
+    }
+    let mut unsigned =
+        AttachmentStore::open(&root.path().join("original-only"), fixture.identity.clone())
+            .unwrap();
+    let saved = unsigned
+        .directory
+        .publish_private_child(DIRECTORY, &[(ORIGIN, original.as_slice())])
+        .unwrap();
+    let source = Offline(Cell::new(0));
+    assert!(
+        unsigned
+            .advance_amx_registration(&config, &bootstrap, &mut parent, &source, utc, &options,)
+            .is_err()
+    );
+    assert!(
+        source.0.get() > 0,
+        "unsigned original without proof reaches the fresh parent read"
+    );
+    assert!(!saved.path().join("transaction").exists());
+    assert_eq!(saved.read(ORIGIN, MAX_RECORD_BYTES).unwrap(), original);
+}
+
+#[test]
+fn administrative_amx_replay_requires_genuine_signed_prefix_and_preserves_unsigned_recovery() {
+    crate::managed::native_operation::test_support::with_signed_amx_preparation(
+        |config, request, original_path| {
+            let source = PrivateDirectory::open_exact(original_path).unwrap();
+            let request_bytes = source.read("preparation.json", MAX_RECORD_BYTES).unwrap();
+            let payload_bytes = source.read("payload.json", MAX_RECORD_BYTES).unwrap();
+            let signed_bytes = source.read("operation.json", MAX_RECORD_BYTES).unwrap();
+            let wallet = AccountService::new(config.clone()).unwrap();
+            let root = tempfile::tempdir().unwrap();
+            for (index, phase) in [
+                NativePreparationPhase::Missing,
+                NativePreparationPhase::RequestOnly,
+                NativePreparationPhase::PayloadRetained,
+                NativePreparationPhase::Signed,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let directory =
+                    PrivateDirectory::open_or_create(root.path().join(index.to_string())).unwrap();
+                let journal = directory.path().join("transaction");
+                if phase != NativePreparationPhase::Missing {
+                    // Exactly the real producer's request/payload/operation prefix. No DTO or
+                    // signed transaction is reconstructed and no parent inclusion is asserted.
+                    let mut records = vec![
+                        ("lock", &[][..]),
+                        ("preparation.json", request_bytes.as_slice()),
+                    ];
+                    if phase != NativePreparationPhase::RequestOnly {
+                        records.push(("payload.json", payload_bytes.as_slice()));
+                    }
+                    if phase == NativePreparationPhase::Signed {
+                        records.push(("operation.json", signed_bytes.as_slice()));
+                    }
+                    drop(
+                        directory
+                            .publish_private_child("transaction", &records)
+                            .unwrap(),
+                    );
+                }
+                let preparation = wallet
+                    .inspect_amx_dataspace_registration_preparation(&journal, request)
+                    .unwrap();
+                assert_eq!(preparation.phase(), phase);
+                assert!(
+                    require_signed_replay_source(&directory, &preparation).is_ok(),
+                    "absence of replay evidence retains the ordinary recovery recipe"
+                );
+                let before = directory.entries(4).unwrap();
+                for proof_name in ["replay.nrt", "carrier.nrt"] {
+                    // Presence is the refusal signal; these bytes deliberately claim no proof.
+                    directory
+                        .write_atomic(
+                            proof_name,
+                            b"untrusted retained evidence",
+                            PublishMode::CreateNew,
+                        )
+                        .unwrap();
+                    let retained = wallet
+                        .inspect_amx_dataspace_registration_preparation(&journal, request)
+                        .unwrap();
+                    assert_eq!(retained.phase(), phase);
+                    let outcome = require_signed_replay_source(&directory, &retained);
+                    assert_eq!(outcome.is_ok(), phase == NativePreparationPhase::Signed);
+                    if phase != NativePreparationPhase::Signed {
+                        assert!(matches!(
+                            outcome.unwrap_err(),
+                            AttachmentError::Invalid(
+                                "AMX replay evidence has no original signed transaction"
+                            )
+                        ));
+                    }
+                    // The guard never upgrades arbitrary retained bytes into finality.
+                    if phase == NativePreparationPhase::Signed && proof_name == "carrier.nrt" {
+                        assert!(
+                            native_operation::retained_carrier_execution(
+                                &directory,
+                                config.network_id,
+                                config.chain.as_str(),
+                                retained.signed_transaction().unwrap(),
+                            )
+                            .is_err()
+                        );
+                    }
+                    assert_eq!(
+                        directory
+                            .read(proof_name, MAX_RECORD_BYTES)
+                            .unwrap()
+                            .as_slice(),
+                        b"untrusted retained evidence"
+                    );
+                    std::fs::remove_file(directory.path().join(proof_name)).unwrap();
+                    assert_eq!(directory.entries(4).unwrap(), before);
+                }
+                if phase != NativePreparationPhase::Missing {
+                    let saved = PrivateDirectory::open_exact(&journal).unwrap();
+                    assert_eq!(
+                        saved.read("preparation.json", MAX_RECORD_BYTES).unwrap(),
+                        request_bytes
+                    );
+                    assert_eq!(
+                        saved
+                            .read_optional("payload.json", MAX_RECORD_BYTES)
+                            .unwrap()
+                            .is_some(),
+                        phase != NativePreparationPhase::RequestOnly
+                    );
+                    if phase != NativePreparationPhase::RequestOnly {
+                        assert_eq!(
+                            saved.read("payload.json", MAX_RECORD_BYTES).unwrap(),
+                            payload_bytes
+                        );
+                    }
+                    assert_eq!(
+                        saved
+                            .read_optional("operation.json", MAX_RECORD_BYTES)
+                            .unwrap()
+                            .is_some(),
+                        phase == NativePreparationPhase::Signed
+                    );
+                    if phase == NativePreparationPhase::Signed {
+                        assert_eq!(
+                            saved.read("operation.json", MAX_RECORD_BYTES).unwrap(),
+                            signed_bytes
+                        );
+                    }
+                    assert!(
+                        saved
+                            .read_optional("submission.json", MAX_RECORD_BYTES)
+                            .unwrap()
+                            .is_none()
+                    );
+                } else {
+                    assert!(!journal.exists());
+                }
+                if phase == NativePreparationPhase::PayloadRetained {
+                    // With no replay evidence, the existing producer can finish its exact
+                    // payload without another quote, parent read or replacement transaction.
+                    wallet
+                        .prepare_amx_dataspace_registration(request, &journal)
+                        .unwrap();
+                    let restored = PrivateDirectory::open_exact(&journal).unwrap();
+                    assert_eq!(
+                        restored.read("preparation.json", MAX_RECORD_BYTES).unwrap(),
+                        request_bytes
+                    );
+                    assert_eq!(
+                        restored.read("payload.json", MAX_RECORD_BYTES).unwrap(),
+                        payload_bytes
+                    );
+                    assert_eq!(
+                        restored.read("operation.json", MAX_RECORD_BYTES).unwrap(),
+                        signed_bytes
+                    );
+                    assert!(
+                        restored
+                            .read_optional("submission.json", MAX_RECORD_BYTES)
+                            .unwrap()
+                            .is_none()
+                    );
+                }
+            }
+            assert_eq!(
+                source.read("preparation.json", MAX_RECORD_BYTES).unwrap(),
+                request_bytes
+            );
+            assert_eq!(
+                source.read("payload.json", MAX_RECORD_BYTES).unwrap(),
+                payload_bytes
+            );
+            assert_eq!(
+                source.read("operation.json", MAX_RECORD_BYTES).unwrap(),
+                signed_bytes
+            );
+            assert!(
+                source
+                    .read_optional("submission.json", MAX_RECORD_BYTES)
+                    .unwrap()
+                    .is_none()
+            );
+        },
+    );
+}

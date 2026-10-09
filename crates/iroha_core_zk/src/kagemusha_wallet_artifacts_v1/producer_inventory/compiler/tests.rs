@@ -196,35 +196,25 @@ fn real_bootstrap_offline_construction_needs_no_signed_placeholder_or_qualified_
     let q = compiler.q(Variant::Bootstrap, &[0], &[], &sigmas).unwrap();
     assert_eq!(q.keys().len(), 2);
     let route = compiled_routes()[0];
-    let operation = compiler.operation(route, &q, None, None).unwrap();
+    let operation = compiler.operation(route, &q, None).unwrap();
     assert_eq!(operation.stages(), 2);
     let omega = compiler.omega(&[operation.terminal()]).unwrap();
-    let closed = compiler
-        .close_operation(&operation, &q, &omega, None)
-        .unwrap();
+    let closed = compiler.close_operation(&operation, &q, &omega).unwrap();
     assert_eq!(closed.context, operation.context);
     assert_eq!(closed.terminal().original, operation.terminal().original);
     let mut changed = operation.clone();
     changed.context[0][0] ^= 1;
-    assert!(
-        compiler
-            .close_operation(&changed, &q, &omega, None)
-            .is_err()
-    );
+    assert!(compiler.close_operation(&changed, &q, &omega).is_err());
     let mut changed = operation.clone();
     changed.w.clear();
-    assert!(
-        compiler
-            .close_operation(&changed, &q, &omega, None)
-            .is_err()
-    );
+    assert!(compiler.close_operation(&changed, &q, &omega).is_err());
     let retiring_q = compiler.q(Variant::Retiring, &[15], &[], &sigmas).unwrap();
     let retiring_route = compiled_routes()
         .into_iter()
         .find(|route| route.variant == Variant::Retiring)
         .unwrap();
     let retiring = compiler
-        .operation(retiring_route, &retiring_q, Some(omega.key()), None)
+        .operation(retiring_route, &retiring_q, Some(omega.key()))
         .unwrap();
     assert_eq!(retiring.stages(), 4);
     let final_omega = compiler
@@ -236,7 +226,7 @@ fn real_bootstrap_offline_construction_needs_no_signed_placeholder_or_qualified_
     );
     assert!(!equal(&omega.key.metadata, &final_omega.key.metadata));
     let closed_retiring = compiler
-        .close_operation(&retiring, &retiring_q, &final_omega, None)
+        .close_operation(&retiring, &retiring_q, &final_omega)
         .unwrap();
     assert!(equal(
         closed_retiring.predecessor.as_ref().unwrap(),
@@ -254,23 +244,15 @@ fn real_bootstrap_offline_construction_needs_no_signed_placeholder_or_qualified_
         assert!(equal(&old.metadata, &new.metadata));
     }
     let closed_bootstrap = compiler
-        .close_operation(&operation, &q, &final_omega, None)
+        .close_operation(&operation, &q, &final_omega)
         .unwrap();
     assert!(closed_bootstrap.predecessor.is_none());
     eprintln!(
         "OFFLINE_FINAL_OMEGA_REBIND terminals=2 RetiringA=4 RetiringW=3 exact_originals=true changed_omega_key=true context_unchanged=true complete_catalog=false"
     );
-    let finality = FinalityV1 {
-        network: [1; 32],
-        instance: [2; 32],
-        initial_context: [3; 32],
-        initial_epoch: 0,
-        parameters: [1; 6],
-        originals: Vec::new(),
-    };
     assert!(
         compiler
-            .inventory(&sigmas, std::slice::from_ref(&operation), &omega, finality)
+            .inventory(&sigmas, std::slice::from_ref(&operation), &omega)
             .is_err(),
         "one genuine route cannot become the complete unsigned catalog"
     );
@@ -281,10 +263,10 @@ fn real_bootstrap_offline_construction_needs_no_signed_placeholder_or_qualified_
     );
     let mut foreign = q;
     foreign.scope = SourceScopeV1::new([2, 3], Affine::GENERATOR).unwrap();
-    assert!(compiler.operation(route, &foreign, None, None).is_err());
+    assert!(compiler.operation(route, &foreign, None).is_err());
     assert!(
         compiler
-            .operation(route, &foreign, Some(omega.key()), None)
+            .operation(route, &foreign, Some(omega.key()))
             .is_err()
     );
     eprintln!(

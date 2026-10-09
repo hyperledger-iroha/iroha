@@ -18,7 +18,7 @@ use super::{
 };
 
 /// A retained existing private directory of immutable content-addressed originals.
-/// Wallet and finality producer directories contain exact descriptor/VK/PK bytes.
+/// Wallet producer directories contain exact descriptor/VK/PK bytes.
 /// The authenticated inventory selects the required roles; verifier-only consumers
 /// may read descriptor/VK originals without granting a complete producer graph.
 /// Every read retains actual no-follow native ancestry and a sealed original file.

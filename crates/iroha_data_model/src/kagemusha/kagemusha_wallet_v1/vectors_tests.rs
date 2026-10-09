@@ -2709,17 +2709,32 @@ fn object_pins(w: &VectorWorld) -> Vec<ObjectPin> {
         {
             let evidence = KagemushaWalletLoadFinalityV1 {
                 version: 1,
-                anchor_digest: field_value(0x95),
                 receipt_digest: w.load_receipt.receipt_digest().unwrap(),
-                proof: vec![0x5a; 9_856],
-                pallas_claim: [0; 544],
-                vesta_claim: [0; 544],
+                certificate: crate::sumeragi_finality::SumeragiCommitCertificateV1 {
+                    consensus_header: vec![0x5a; 32],
+                    commit_qc: vec![0x5b; 32],
+                    result_preimage: vec![0x5c; 32],
+                },
+                event_proof: {
+                    let event = crate::events::EventBox::Data(
+                        crate::events::data::DataEvent::KagemushaLoadCommitted(
+                            crate::events::data::kagemusha::KagemushaLoadCommittedV1::from_receipt(
+                                &w.load_receipt,
+                            )
+                            .unwrap(),
+                        )
+                        .into(),
+                    );
+                    let tree: iroha_crypto::MerkleTree<crate::events::EventBox> =
+                        [iroha_crypto::HashOf::new(&event)].into_iter().collect();
+                    tree.get_proof(0).unwrap()
+                },
             };
             let frame = evidence.to_canonical_bytes().unwrap();
             let decoded = KagemushaWalletLoadFinalityV1::decode_canonical(&frame).unwrap();
             object_pin(
                 "KagemushaWalletLoadFinalityV1",
-                "shape-only proof stand-in",
+                "shape-only native certificate",
                 &evidence,
                 frame,
                 &decoded,

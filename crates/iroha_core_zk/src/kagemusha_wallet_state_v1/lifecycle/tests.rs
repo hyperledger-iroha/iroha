@@ -299,6 +299,7 @@ fn source_rotation_does_not_rebase_a_durable_plan_or_repeat_proving() {
         None,
         manifest.issued_requests,
         manifest.direct_anchors,
+        manifest.finality_epochs,
     )
     .unwrap();
     let plan = wallet

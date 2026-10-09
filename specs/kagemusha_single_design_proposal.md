@@ -489,16 +489,13 @@ its monetary prover; proving runs in the native wallet core. Enrollment
 evidence verification is an issuer task.
 
 The wallet artifact bundle carries every exact descriptor, verifying key and
-proving key used by its sigma, Q, A, W and Ω source owners. Its ordinary-finality
-portion carries the complete descriptor/verifying-key graph required to
-reconstruct and authenticate the receipt verifier. Ordinary-finality server
-proving keys remain server artifacts: their exact lengths and content hashes
-stay committed in the signed producer inventory, but wallet transport and
-installation neither require nor read their bytes. Missing or changed wallet
-proving keys or required finality verifier originals prevent export or complete
-source qualification; reinstallable artifact unavailability is not custody loss.
-Directory contents cannot substitute for the compiler's closed original list;
-signed genesis and the complete source qualification remain separate checks.
+proving key used by its sigma, Q, A, W and Ω source owners. Load finality uses
+native BLS verification against the independently authenticated signed genesis
+and certified epoch transitions; it has no circuit, proving key, verifier-key
+catalog or server proof service. Missing or changed monetary proving artifacts
+prevent complete source qualification; reinstallable artifact unavailability is
+not custody loss. Directory contents cannot substitute for the compiler's closed
+original list. Signed-genesis trust is selected independently of those artifacts.
 
 Every transition enforces the following. The tag says where and when each
 check runs.
@@ -1009,31 +1006,49 @@ transaction and height. The query's serialized receipt alone is not finality
 proof. `Load` must absorb only its exact next ordinal and cannot credit a
 duplicate.
 
-The offline Load relation now consumes the exact ordinary receipt and an original
-terminal finality proof under an independently installed source key and complete
-global-genesis anchor. It verifies the proof and retains both carried curve
-claims. The model has no Load issuer certificate role, voucher signing domain
-or fallback decoder. A receipt or native-verification verdict alone cannot
-supply this proof authority.
+The native wallet verifies the receipt block's ordinary BLS CommitQC and counted
+successful-Load event inclusion before signing its Load Advance. The selected
+signed genesis fixes the first ordered validator roster and proofs of possession.
+Each outgoing committee's boundary certificate authorizes the next epoch and its
+exact height interval. A certificate outside that interval, a missing transition,
+a foreign network or substituted receipt fails. Ordinary intermediate blocks
+need no recursive proof or full-history replay.
 
-The finality source binds the exact native CommitQC, ordered normal committee,
-aggregate signer selection, complete signed result, epoch schedule from genesis
-and counted successful-Load event membership. Under the ordinary consensus
-assumption (at most `f` faulty committee members and honest validators signing
-only after normal block and execution validation), the quorum certifies those
-execution terms. The source does not reexecute the VM or replace the native
-provider's full original-envelope and custody checks. Fixed byte-scan schedules
-and a two-source recursive history catalog permit a finite installed key set.
-The native producer mounts that complete fixed graph, imports original proving
-tables per active node, advances each history height and re-verifies terminal
-receipt evidence before local custody. Its Core adapter preserves native block
-and event originals and derives the anchor from explicitly signed genesis parameters.
+Epoch synchronization requests one bounded original boundary certificate at a
+time. Only native BLS verification under the already selected incumbent can
+authorize its successor; the wallet durably publishes that authority through its
+protected manifest before advancing the cursor. Restart restores the locally
+selected checkpoint against the independently installed genesis. Older epoch
+records remain in the authenticated archive for delayed receipts and folding.
+A peer-supplied checkpoint or roster cannot replace this process. Receipt evidence
+contains only its own certificate and counted event path, independently of the
+chain's age; transport and durable-custody qualification are tracked in NF6.
 
-TODO(G3/G5): qualify the complete producer from original source artifacts,
-through genesis-rooted finality, Load, subsequent Receive/Unload and the common
-terminal catalog. Rebuild original keys after source changes and measure genuine
-complete Payment envelopes against 10,000 bytes. Component constraints, internal
-wrapper sizes and structural fixture bytes do not establish that release gate.
+The offline Load relation binds the exact receipt transcript, monetary effect,
+ordinal, recovery-map insertion and credential-bound own Advance signature.
+Its four A stages and three W continuations retain monetary proof obligations
+without a finality proof or carried finality accumulators. The existing selected
+trust model (§2.1) requires the released app on a stock uncompromised OS to perform
+native verification before requesting that signature. Consequently, offline
+funding lineage relies on that application/provider assumption; PLONK does not
+independently prove the BLS finality check. A caller verdict never substitutes for
+the mandatory native pre-signing check.
+
+The native certificate reader authenticates consensus execution under at most
+`f` faulty committee members. Honest validators validate normal block execution
+and the lag-two schedule before signing. Light verification does not reexecute
+the VM, establish possession of the full block, or replace native storage custody.
+Fresh Load preparation authenticates its exact retained receipt evidence before
+Advance selection. An unsigned Selected restart may sign only that already
+authenticated capsule; it does not accept new evidence or credit another Load.
+A completed retry returns the exact retained output. Receipt evidence is not part
+of the 10,000-byte offline Payment envelope.
+
+TODO(G3/G5): complete the [native finality goals](kagemusha_native_finality_goals.md),
+rebuild affected A/W/Omega keys, and qualify Load, subsequent Receive/Unload and
+the common terminal catalog. Measure real complete Payment envelopes against
+10,000 bytes and native verification on physical phones. Historical recursive
+finality runs and structural fixtures do not establish those gates.
 
 `Unload` subtracts a chosen positive amount, increments `next_redeem` and creates
 a ledger-directed claim with a domain-separated nullifier derived from scheme,

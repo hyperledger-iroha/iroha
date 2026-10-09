@@ -129,42 +129,6 @@ fn cancelled_original_import_does_not_open_custody() {
     assert_eq!(source.opens, 3);
 }
 
-fn finality_record() -> ArtifactRecord {
-    use iroha_kagemusha_proof::finality::{
-        catalog::{ArtifactSink, DirectoryCatalog},
-        continuity::tree::OriginalBytes,
-        native::{ArtifactId, ImportLimits, NodeId},
-    };
-    let directory = tempfile::tempdir().unwrap();
-    let limits = ImportLimits {
-        key: iroha_plonk::keys::pk::artifact::ReadConfig {
-            maximum_bytes: 16,
-            maximum_rows: 1 << 16,
-            coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
-            msm_budget: iroha_pasta::msm::MemoryBudget::DEFAULT,
-        },
-        maximum_artifacts: 16,
-        maximum_original_bytes: 1024,
-    };
-    let mut catalog = DirectoryCatalog::create(directory.path().join("originals"), limits).unwrap();
-    // Actual canonical identity and integrity encoding, deliberately invalid proof bytes.
-    catalog
-        .store(
-            &ArtifactId::Source(NodeId::Genesis),
-            &OriginalBytes {
-                descriptor: vec![1],
-                verifying_key: vec![2],
-                proving_key: vec![3],
-            },
-        )
-        .unwrap();
-    let bytes = catalog.inventory().unwrap();
-    let mut records: Vec<ArtifactRecord> =
-        norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
-            .unwrap();
-    records.remove(0)
-}
-
 fn structural_inventory() -> ProducerInventoryV1 {
     let routes = compiled_routes();
     let operations = Variant::ALL
@@ -214,15 +178,6 @@ fn structural_inventory() -> ProducerInventoryV1 {
             .collect(),
         terminals: vec![0],
         omega: 0,
-        finality: FinalityV1 {
-            network: [1; 32],
-            instance: [2; 32],
-            initial_context: [3; 32],
-            initial_epoch: 0,
-            parameters: [1; 6],
-            // One named fake original cannot mount the complete finality graph.
-            originals: vec![finality_record()],
-        },
     }
 }
 
@@ -278,15 +233,6 @@ fn canonical_inventory_covers_all_routes_and_rejects_missing_or_foreign_members(
     assert_eq!(changed.validate(), Err(Error::Inventory));
     let mut changed = source.clone();
     changed.terminals.push(0);
-    assert_eq!(changed.validate(), Err(Error::Inventory));
-    let mut changed = source.clone();
-    changed
-        .finality
-        .originals
-        .push(source.finality.originals[0].clone());
-    assert_eq!(changed.validate(), Err(Error::Inventory));
-    let mut changed = source.clone();
-    changed.finality.originals[0].name.push(0);
     assert_eq!(changed.validate(), Err(Error::Inventory));
     let mut changed = source;
     changed.native_profile[0] ^= 1;
@@ -368,7 +314,6 @@ fn one_original_reader_checks_caps_before_open_and_every_exact_content_hash() {
 fn signed_inventory_authenticates_exact_producer_preimage_without_source_admission() {
     let (pack, installation, bytes) = engineering_fixture::signed_inventory_with_catalog(|pack| {
         let mut inventory = structural_inventory();
-        inventory.finality.network = [0x51; 32];
         inventory.originals = pack
             .steps
             .iter()
@@ -401,7 +346,7 @@ fn signed_inventory_authenticates_exact_producer_preimage_without_source_admissi
     changed.push(0);
     assert!(installed.authenticate_producer_inventory(&changed).is_err());
     let mut changed = authenticated.inventory().clone();
-    changed.finality.initial_epoch += 1;
+    changed.originals[0].proving_key = BlobV1::of(b"different original");
     assert!(
         installed
             .authenticate_producer_inventory(&changed.to_canonical_bytes().unwrap())
@@ -416,65 +361,6 @@ fn signed_inventory_authenticates_exact_producer_preimage_without_source_admissi
     // Authentication is not a source import: these dummy PK bytes are still not valid keys.
     let mut source = memory();
     assert!(authenticated.read_original(0, &mut source, 3).is_err());
-    // Even a freshly signed catalog cannot select another network's finality.
-    let (foreign, installation, bytes) = engineering_fixture::signed_inventory_with_catalog(|_| {
-        let mut changed = authenticated.inventory().clone();
-        changed.finality.network = [0x52; 32];
-        Some(changed.to_canonical_bytes().unwrap())
-    });
-    let installed =
-        InstalledVerifierPackV1::load(&foreign.to_canonical_bytes().unwrap(), installation)
-            .unwrap();
-    assert!(
-        installed
-            .authenticate_producer_inventory(&bytes.unwrap())
-            .is_err()
-    );
-}
-
-#[test]
-fn finality_qualification_requires_native_anchor_and_complete_source_inventory() {
-    use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
-    use iroha_kagemusha_proof::finality::{catalog::VerifierLimits, native::Parameters};
-    use iroha_plonk::pcs::ipa::PinnedParams;
-    let fixture = NativeFinalityFixture::new_with_explicit_parameters();
-    let verifier = fixture.verifier();
-    let anchor = crate::kagemusha_wallet_finality_v1::derive_history_anchor(&verifier).unwrap();
-    let mut inventory = structural_inventory();
-    inventory.finality = FinalityV1 {
-        network: anchor.network,
-        instance: anchor.instance,
-        initial_context: anchor.initial_context,
-        initial_epoch: anchor.initial_epoch,
-        parameters: anchor.parameters,
-        originals: Vec::new(),
-    };
-    // Test-only metadata wrapper: deliberately incomplete, and never accepted.
-    let mut authenticated = AuthenticatedProducerInventoryV1 {
-        inventory,
-        scheme_id: [1; 32],
-        manifest_digest: [2; 32],
-    };
-    let params = Parameters {
-        pallas: PinnedParams::derive(16).unwrap(),
-        vesta: PinnedParams::derive(16).unwrap(),
-    };
-    let limits = VerifierLimits {
-        maximum_artifacts: 16,
-        maximum_verifier_bytes: 1 << 20,
-        msm_budget: iroha_pasta::msm::MemoryBudget::DEFAULT,
-    };
-    let mut source = memory();
-    assert!(matches!(
-        authenticated.qualify_finality(&verifier, &mut source, params.clone(), limits),
-        Err(FinalityQualificationErrorV1::Source(_))
-    ));
-    authenticated.inventory.finality.parameters[5] ^= 1;
-    assert!(matches!(
-        authenticated.qualify_finality(&verifier, &mut source, params, limits),
-        Err(FinalityQualificationErrorV1::AnchorMismatch)
-    ));
-    assert_eq!(source.opens, 0);
 }
 
 #[path = "stream_tests.rs"]

@@ -10,11 +10,15 @@ public struct KagemushaWalletLoadOriginalV1: Sendable {
   public let networkID: NetworkId
   /// Exact payer literal retained from the signed original read.
   public let payerAccountID: String
+  /// Canonical receipt height DATA, used only to bound native epoch synchronization.
+  public let blockHeight: UInt64
+  /// Exact authenticated-read selectors; never a native authority capability.
+  public let selection: ToriiKagemushaWalletLoadSelectionV1
   /// Exact original request selector bound to the canonical receipt DATA.
   public var requestID: Data { input.requestID }
   /// Whole original canonical receipt; never reconstructed from a managed projection.
   public var receiptOriginal: Data { input.receipt }
-  /// Whole compact finality DATA. Proof authentication remains Native Load's obligation.
+  /// Whole native BLS evidence. Authentication remains Native Load's obligation.
   public var finalityOriginal: Data { input.finality }
 
   /// Decode through the maintained Native canonical types and retain the exact input frames.
@@ -26,13 +30,15 @@ public struct KagemushaWalletLoadOriginalV1: Sendable {
     typealias Revision = @convention(c) () -> UInt32
     typealias Validate = @convention(c) (
       UnsafePointer<UInt8>?, UnsafePointer<UInt8>?, UnsafePointer<UInt8>?,
-      UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int
+      UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int,
+      UnsafeMutablePointer<UInt64>?
     ) -> Int32
     guard let revision = NoritoNativeBridge.shared.resolveNativeSymbol(
       "connect_norito_kagemusha_wallet_revision_v1", as: Revision.self), revision() == 1,
       let validate = NoritoNativeBridge.shared.resolveNativeSymbol(
         "connect_norito_kagemusha_wallet_load_original_validate_v1", as: Validate.self)
     else { throw KagemushaWalletErrorV1.bridgeUnavailable }
+    var height: UInt64 = 0
     let status = input.schemeID.withUnsafeBytes { scheme in
       input.walletID.withUnsafeBytes { wallet in
         input.requestID.withUnsafeBytes { request in
@@ -44,7 +50,7 @@ public struct KagemushaWalletLoadOriginalV1: Sendable {
                   request.bindMemory(to: UInt8.self).baseAddress,
                   payer.bindMemory(to: UInt8.self).baseAddress, payer.count,
                   receipt.bindMemory(to: UInt8.self).baseAddress, receipt.count,
-                  finality.bindMemory(to: UInt8.self).baseAddress, finality.count)
+                  finality.bindMemory(to: UInt8.self).baseAddress, finality.count, &height)
               }
             }
           }
@@ -52,8 +58,9 @@ public struct KagemushaWalletLoadOriginalV1: Sendable {
       }
     }
     if status < 0 { throw KagemushaWalletErrorV1.native(status: status, reason: -1, platformCode: 0) }
-    guard status == 0 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
-    return Self(input: input, networkID: issuance.networkID, payerAccountID: issuance.payerAccountID)
+    guard status == 0, height > 0 else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    return Self(input: input, networkID: issuance.networkID, payerAccountID: issuance.payerAccountID,
+      blockHeight: height, selection: issuance.selection)
   }
 }
 
@@ -68,7 +75,7 @@ struct KagemushaWalletLoadOriginalInputV1: Sendable {
   init(selection: ToriiKagemushaWalletLoadSelectionV1, payer: String, receipt: Data, finality: Data) throws {
     let account = Data(payer.utf8)
     guard !account.isEmpty, account.count <= 1024, account.allSatisfy({ (33...126).contains($0) }),
-      !receipt.isEmpty, receipt.count <= 512, !finality.isEmpty, finality.count <= 16384
+      !receipt.isEmpty, receipt.count <= 512, !finality.isEmpty, finality.count <= 256 * 1024
     else { throw KagemushaWalletErrorV1.invalidInput }
     self.schemeID = Data(selection.schemeID)
     self.walletID = Data(selection.walletID)

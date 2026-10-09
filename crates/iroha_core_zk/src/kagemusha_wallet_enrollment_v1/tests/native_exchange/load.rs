@@ -1,38 +1,22 @@
-//! Actual funded Load proof from the signed server graph, with explicit cache/journal recovery.
-//! TODO: Execute with genuine signed catalog and StateExecutor H1..H5 capture before qualification.
+//! Native BLS evidence for an actual funded Load with exact retained-output recovery.
+//! TODO: Run the pinned StateExecutor capture and installed-wallet qualification.
 use super::*;
-use crate::{
-    kagemusha_wallet_artifacts_v1::{
-        VERIFIER_PACK_MAX_BYTES_V1,
-        producer_inventory::{
-            CATALOG_MAX_BYTES_V1, QualifiedReceiptSourceV1,
-            open_pinned_engineering_finality_sources,
-        },
-    },
-    kagemusha_wallet_finality_v1::server::{
-        ServerFinalityCancellationV1, ServerFinalityLimitsV1, ServerFinalityStorageV1,
-        ServerFinalityV1,
-    },
+use crate::kagemusha_wallet_artifacts_v1::producer_inventory::{
+    QualifiedReceiptSourceV1, open_pinned_engineering_finality_sources,
 };
-use ff::{Field as _, PrimeField as _};
 use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof};
 use iroha_data_model::{
     events::EventBox,
     isi::kagemusha_wallet::load_finality::verify_finalized_kagemusha_wallet_load_event_v1,
-    sumeragi_finality::{SumeragiFinalityProof, VerifiedSumeragiBlock},
+    sumeragi_finality::{
+        SumeragiCommitCertificateV1, SumeragiFinalityProof, VerifiedSumeragiBlock,
+    },
 };
 use iroha_fs::{PrivateDirectory, PublishMode};
-use iroha_kagemusha_proof::finality::{
-    continuity::SourceNodeEvidence,
-    receipt_finality::{CONTEXT_DOMAIN, PROGRAM_ID},
-};
-use iroha_pasta::{Ep, Eq, Fp, poseidon::hash_with_domain};
-use iroha_plonk_recursion::AccumulatorT;
 use std::collections::{BTreeMap, BTreeSet};
 
 const CAPTURE_MAX: usize = 16 << 20;
 const ORIGINAL_MAX: usize = 16 << 20;
-const RESIDENT_KEYS: usize = 512 << 20;
 
 fn fixed<const N: usize>(value: &norito::json::Value) -> [u8; N] {
     let original = value.as_str().unwrap();
@@ -204,19 +188,14 @@ fn inputs(genesis: &SumeragiFinalityVerifier, installation: InstallationV1) -> I
     );
     assert_eq!(
         sha(&setup_originals["capture.json"]),
-        env_pin("KAGEMUSHA_FINALITY_FIXTURE_SHA256")
+        env_pin("KAGEMUSHA_SIGNED_GENESIS_FIXTURE_SHA256")
     );
     let source: norito::json::Value =
         norito::json::from_slice(&setup_originals["capture.json"]).unwrap();
     let initial: [SumeragiFinalityProof; 2] = decode(&setup_originals["registration-proof.norito"]);
     let (capture_path, capture_bytes, capture) =
         selected_json("KAGEMUSHA_EXECUTED_LOAD_CAPTURE", CAPTURE_MAX);
-    for field in [
-        "version",
-        "chain_id",
-        "signed_genesis_wire_hex",
-        "history_anchor",
-    ] {
+    for field in ["version", "chain_id", "signed_genesis_wire_hex"] {
         assert_eq!(capture[field], source[field], "{field}");
     }
     assert_eq!(
@@ -465,25 +444,7 @@ fn verify_output(
 ) {
     let retained = KagemushaWalletLoadFinalityV1::decode_canonical(bytes).unwrap();
     assert_eq!(retained.receipt_digest, receipt.receipt_digest().unwrap());
-    assert_eq!(retained.anchor_digest, graph.anchor().digest().to_repr());
-    let digest = Option::<Fp>::from(Fp::from_repr(retained.receipt_digest)).unwrap();
-    let context = hash_with_domain(CONTEXT_DOMAIN, &[graph.anchor().digest(), digest]);
-    let evidence = SourceNodeEvidence {
-        endpoints: [
-            Fp::from(PROGRAM_ID),
-            context,
-            Fp::ZERO,
-            Fp::ONE,
-            Fp::ZERO,
-            context,
-        ],
-        proof: retained.proof,
-        pallas: AccumulatorT::<Ep>::from_bytes(&retained.pallas_claim).unwrap(),
-        vesta: AccumulatorT::<Eq>::from_bytes(&retained.vesta_claim).unwrap(),
-    };
-    graph
-        .verify_receipt_evidence(digest, &evidence, MemoryBudget::DEFAULT)
-        .unwrap();
+    retained.verify(graph.verifier(), receipt).unwrap();
 }
 fn put_exact(directory: &PrivateDirectory, name: &str, bytes: &[u8], maximum: usize) {
     assert!(!bytes.is_empty() && bytes.len() <= maximum);
@@ -499,73 +460,25 @@ fn put_exact(directory: &PrivateDirectory, name: &str, bytes: &[u8], maximum: us
     }
 }
 fn run(resume: bool) {
-    let output_path = selected_path("KAGEMUSHA_NATIVE_LOAD_PROOF_OUTPUT");
+    let output_path = selected_path("KAGEMUSHA_NATIVE_LOAD_EVIDENCE_OUTPUT");
     if !resume {
         private_dir(&output_path);
     }
     let output = PrivateDirectory::open_exact(&output_path).unwrap();
-    // Each invocation has independent fresh verifier-only transport; only existing proof
-    // and regenerable-key custody may resume. No active compiler store or wallet PK read.
+    // Every invocation independently authenticates the selected native trust root.
     let admission = selected_path("KAGEMUSHA_NATIVE_LOAD_ADMISSION_OUTPUT");
-    let (installed, graph, genesis, verifier_originals) =
+    let (_installed, graph, genesis, _originals) =
         open_pinned_engineering_finality_sources(&admission);
     let installation = InstallationV1 {
         scheme_id: graph.installation().0,
         manifest_digest: graph.installation().1,
     };
     let input = inputs(&genesis, installation);
-    let catalog = selected_path("KAGEMUSHA_WALLET_SIGNED_CATALOG");
-    let pack = pinned(
-        &catalog.join("engineering-verifier-pack.norito"),
-        VERIFIER_PACK_MAX_BYTES_V1,
-        &env_pin("KAGEMUSHA_WALLET_CATALOG_PACK_SHA256"),
-    );
-    let inventory = pinned(
-        &catalog.join("producer-inventory.norito"),
-        CATALOG_MAX_BYTES_V1,
-        &env_pin("KAGEMUSHA_WALLET_CATALOG_INVENTORY_SHA256"),
-    );
-    let authenticated = installed
-        .authenticate_producer_inventory(&inventory)
-        .unwrap();
-    assert_eq!(authenticated.installation(), graph.installation());
-    let records = &authenticated.inventory().finality.originals;
-    let aggregate = records
-        .iter()
-        .flat_map(|record| record.lengths)
-        .try_fold(0u64, |sum, value| sum.checked_add(value))
-        .unwrap();
-    assert!(
-        aggregate > 0 && aggregate <= 1u64 << 40,
-        "finite engineering logical inventory bound"
-    );
-    let largest = usize::try_from(
-        records
-            .iter()
-            .map(|record| record.lengths[2])
-            .max()
-            .unwrap(),
-    )
-    .unwrap();
-    assert!(
-        largest > 0 && largest <= RESIDENT_KEYS,
-        "one signed key must fit resident bound"
-    );
-    let limits = ServerFinalityLimitsV1 {
-        maximum_key_bytes: largest,
-        maximum_resident_proving_key_bytes: RESIDENT_KEYS,
-        maximum_original_bytes: usize::try_from(aggregate).unwrap(),
-        maximum_artifacts: records.len(),
-        msm_bytes: 64 << 20,
-        maximum_journal_entries: 100_000,
-        maximum_journal_bytes: 512 << 20,
-    };
     let selection = norito::json::to_vec(&norito::json!({
         "schema": "iroha.kagemusha.selected-native-load-production.v1",
         "capture_sha256": (input.capture_sha256), "target_sha256": (input.target_sha256),
         "setup_sha256": (input.setup_sha256), "receipt_sha256": (sha(&input.receipt_bytes)),
-        "source_pins": (source_pins()), "server_resident_key_limit_bytes": RESIDENT_KEYS,
-        "server_msm_limit_bytes": (64 << 20),
+        "source_pins": (source_pins()),
     }))
     .unwrap();
     if resume {
@@ -582,88 +495,17 @@ fn run(resume: bool) {
             .write_atomic("selection.json", &selection, PublishMode::CreateNew)
             .unwrap();
     }
-    let cache = if resume {
-        PrivateDirectory::open_exact(output.path().join("proving-cache")).unwrap()
-    } else {
-        output.create_child("proving-cache").unwrap()
-    };
-    let journal = if resume {
-        PrivateDirectory::open_exact(output.path().join("proof-journal")).unwrap()
-    } else {
-        output.create_child("proof-journal").unwrap()
-    };
-    let storage = || ServerFinalityStorageV1 {
-        verifier_originals: verifier_originals.root().unwrap(),
-        proving_cache: cache.path(),
-        journal: journal.path(),
-    };
-    let mut producer = if resume {
-        ServerFinalityV1::open(
-            &genesis,
-            installation,
-            &pack,
-            &inventory,
-            storage(),
-            limits,
-            ServerFinalityCancellationV1::default(),
-        )
-        .unwrap()
-    } else {
-        ServerFinalityV1::initialize(
-            &genesis,
-            installation,
-            &pack,
-            &inventory,
-            storage(),
-            limits,
-            ServerFinalityCancellationV1::default(),
-        )
-        .unwrap()
-    };
-    let mut prefix = producer.genesis().unwrap();
-    assert_eq!(prefix.state().next_height, 2);
-    for block in &input.blocks {
-        assert_eq!(prefix.state().next_height, block.height());
-        prefix = producer.append(&prefix, block).unwrap();
-        assert_eq!(prefix.state().next_height, block.height() + 1);
-        eprintln!(
-            "GENUINE_LOAD_HISTORY height={} native_verified=true",
-            block.height()
-        );
-    }
     let terminal = input.blocks.last().unwrap();
     assert_eq!(terminal.height(), 5);
-    let proof = producer
-        .prove(&prefix, terminal, &input.receipt, &input.event)
-        .unwrap();
-    assert!(!proof.is_empty() && proof.len() <= KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1);
+    assert_eq!(terminal.height(), input.receipt.block_height);
+    let evidence = KagemushaWalletLoadFinalityV1 {
+        version: 1,
+        receipt_digest: input.receipt.receipt_digest().unwrap(),
+        certificate: SumeragiCommitCertificateV1::from_verified(terminal).unwrap(),
+        event_proof: input.event,
+    };
+    let proof = evidence.to_canonical_bytes().unwrap();
     verify_output(&graph, &input.receipt, &proof);
-    assert_eq!(
-        producer.retained(&input.receipt).unwrap(),
-        Some(proof.clone())
-    );
-    drop(producer);
-    // Always exercise existing-only reopen and exact terminal recovery after actual proof.
-    let mut reopened = ServerFinalityV1::open(
-        &genesis,
-        installation,
-        &pack,
-        &inventory,
-        storage(),
-        limits,
-        ServerFinalityCancellationV1::default(),
-    )
-    .unwrap();
-    assert_eq!(
-        reopened.retained(&input.receipt).unwrap(),
-        Some(proof.clone())
-    );
-    assert_eq!(
-        reopened
-            .prove(&prefix, terminal, &input.receipt, &input.event)
-            .unwrap(),
-        proof
-    );
     put_exact(
         &output,
         "receipt.norito",
@@ -678,12 +520,11 @@ fn run(resume: bool) {
     );
     let result = norito::json!({
         "schema":"iroha.kagemusha.generated-native-load-finality.v1",
-        "scope":"Actual H1..H5 native certificates and funded Load event, signed complete D/V graph, per-use strict PK imports and original proof recovery. Explicit simulated wallet hardware; no ABC, settlement, deployment or phone qualification.",
+        "scope":"Actual H1..H5 native certificates and funded Load event, direct BLS receipt admission and exact evidence recovery. Explicit simulated wallet hardware; no ABC, settlement, deployment or phone qualification.",
         "capture_sha256":(input.capture_sha256),"target_sha256":(input.target_sha256),"setup_sha256":(input.setup_sha256),
         "receipt_sha256":(sha(&input.receipt_bytes)),"receipt_bytes":(input.receipt_bytes.len()),
         "finality_sha256":(sha(&proof)),"finality_bytes":(proof.len()),"source_pins":(source_pins()),
-        "receipt_height":5,"genuine_load_proof":true,"existing_only_recovery":true,
-        "server_resident_key_limit_bytes":RESIDENT_KEYS,"server_msm_limit_bytes":(64<<20),
+        "receipt_height":5,"native_bls_finality":true,"existing_only_recovery":true,
     });
     // Deterministic completion bytes also survive replay; any existing discrepancy refuses.
     put_exact(
@@ -702,12 +543,12 @@ fn run(resume: bool) {
 
 #[test]
 #[ignore = "requires actual signed catalog and independently pinned StateExecutor funded Load capture"]
-fn generate_genuine_load_finality_from_executed_history() {
+fn export_native_load_finality_from_executed_history() {
     run(false);
 }
 #[test]
-#[ignore = "requires same pinned capture and existing selected server cache/journal; never initializes missing custody"]
-fn resume_genuine_load_finality_from_executed_history() {
+#[ignore = "requires same pinned capture and existing selected evidence custody"]
+fn resume_native_load_finality_from_executed_history() {
     run(true);
 }
 

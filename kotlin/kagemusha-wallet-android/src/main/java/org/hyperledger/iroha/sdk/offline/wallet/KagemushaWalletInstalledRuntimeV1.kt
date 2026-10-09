@@ -13,8 +13,8 @@ import java.util.concurrent.Executors
  * The independent application trust key is compiled into Native and cannot be supplied here.
  *
  * [originalsRoot] is the exact UTF-8 absolute path to the retained private financial directory:
- * verifier-pack.norito, producer-inventory.norito, transport.json, wallet-originals/ and
- * finality-originals/. Native opens the original files without following links and verifies the
+ * verifier-pack.norito, producer-inventory.norito, transport.json, financial-originals.json and
+ * wallet-originals/. Native opens the original files without following links and verifies the
  * complete authenticated catalog. This constructor neither reads nor creates that directory.
  *
  * [registrationSource] is canonical asset registration transport DATA. Generic app release

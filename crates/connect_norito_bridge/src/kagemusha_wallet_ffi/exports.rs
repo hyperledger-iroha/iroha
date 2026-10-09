@@ -530,6 +530,17 @@ mod setup_boundary_tests {
                     panic!("separate terminal fixture")
                 }
                 setup::Setup::FinishTime { .. } => panic!("unexpected unsigned time fixture"),
+                setup::Setup::EpochStatus => {
+                    (57, 0, [1u64.to_le_bytes(), 3u64.to_le_bytes()].concat())
+                }
+                setup::Setup::EpochBoundary { epoch, original } => {
+                    assert!(!original.is_empty());
+                    (
+                        57,
+                        u128::from(epoch + 1),
+                        [4u64.to_le_bytes(), 6u64.to_le_bytes()].concat(),
+                    )
+                }
                 setup::Setup::RequestFeeSelection => (12, 0, vec![0xf3; 64]),
                 setup::Setup::ValidateRequestFeePolicy { .. } => {
                     panic!("unexpected fee validation fixture")

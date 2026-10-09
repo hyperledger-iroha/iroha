@@ -11,7 +11,7 @@ import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
 
 /**
- * Exact canonical receipt and compact finality originals bound to the signed read's selectors
+ * Exact canonical receipt and native BLS evidence bound to the signed read's selectors
  * and payer. Decoding grants no verified finality, wallet admission, balance or Load permission.
  * The existing native wallet [KagemushaWalletV1.load] independently verifies its actual proof,
  * installed history/source, enrolled account, current ordinal, policy and durable operation.
@@ -22,12 +22,16 @@ class KagemushaWalletLoadOriginalV1 private constructor(
     @JvmField val networkId: NetworkId,
     /** Exact canonical payer literal retained from the authenticated read. */
     @JvmField val payerAccountId: String,
+    /** Canonical receipt height DATA, never authenticated finality by itself. */
+    @JvmField val blockHeight: java.math.BigInteger,
+    /** Exact authenticated-read route selectors. */
+    @JvmField val selection: ToriiKagemushaWalletLoadSelectionV1,
 ) {
     /** Exact retained request selector, already bound to the canonical receipt data. */
     fun requestId(): ByteArray = input.requestId()
     /** Whole original receipt, never reconstructed from a managed projection. */
     fun receiptOriginal(): ByteArray = input.receipt()
-    /** Whole original compact finality DATA; no proof verdict has been conferred. */
+    /** Whole original native BLS evidence; no finality verdict has been conferred. */
     fun finalityOriginal(): ByteArray = input.finality()
     override fun toString(): String = "KagemushaWalletLoadOriginalV1(originals=[REDACTED])"
 
@@ -41,18 +45,20 @@ class KagemushaWalletLoadOriginalV1 private constructor(
             if (!PrivacyNativeBridge.isNativeAvailable()) {
                 throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
             }
+            val height = LongArray(1)
             val status = try {
                 if (KagemushaWalletNativeV1.revision() != 1) {
                     throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
                 }
                 KagemushaWalletLoadOriginalNativeV1.validate(input.schemeId(), input.walletId(),
-                    input.requestId(), input.payer(), input.receipt(), input.finality())
+                    input.requestId(), input.payer(), input.receipt(), input.finality(), height)
             } catch (_: LinkageError) {
                 throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.BRIDGE_UNAVAILABLE)
             }
             if (status < 0) throw KagemushaWalletExceptionV1(status)
-            if (status != 0) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
-            return KagemushaWalletLoadOriginalV1(input, issuance.networkId, issuance.payerAccountId)
+            if (status != 0 || height[0] == 0L) throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
+            return KagemushaWalletLoadOriginalV1(input, issuance.networkId, issuance.payerAccountId,
+                java.math.BigInteger(java.lang.Long.toUnsignedString(height[0])), issuance.selection)
         }
     }
 }
@@ -84,7 +90,7 @@ internal class KagemushaWalletLoadOriginalInputV1(
         require(encodedPayer.remaining() <= 1024) { "payer exceeds its UTF-8 byte bound" }
         account = ByteArray(encodedPayer.remaining()).also { encodedPayer.get(it) }
         require(receipt.isNotEmpty() && receipt.size <= 512) { "canonical receipt bound exceeded" }
-        require(finality.isNotEmpty() && finality.size <= 16384) { "canonical finality bound exceeded" }
+        require(finality.isNotEmpty() && finality.size <= 256 * 1024) { "canonical finality bound exceeded" }
         retainedReceipt = receipt.copyOf()
         retainedFinality = finality.copyOf()
     }
@@ -100,5 +106,5 @@ internal class KagemushaWalletLoadOriginalInputV1(
 /** Calls the sole Native DATA decoder, without raw wallet handles or proof providers. */
 internal object KagemushaWalletLoadOriginalNativeV1 {
     @JvmStatic external fun validate(scheme: ByteArray, wallet: ByteArray, request: ByteArray,
-        payer: ByteArray, receipt: ByteArray, finality: ByteArray): Int
+        payer: ByteArray, receipt: ByteArray, finality: ByteArray, outHeight: LongArray): Int
 }

@@ -174,7 +174,6 @@ fn signed_sixteen_sigmas_qualify_exact_sources_and_reject_substitutions() {
     let (pack, installation, catalog) =
         engineering_fixture::signed_inventory_with_sources(steps, |pack| {
             let mut inventory = structural_inventory();
-            inventory.finality.network = [0x51; 32];
             inventory.originals = originals;
             // Explicit framing-only Omega and operation graph, never granted source admission.
             inventory.originals.push(OriginalV1 {
@@ -203,15 +202,6 @@ fn signed_sixteen_sigmas_qualify_exact_sources_and_reject_substitutions() {
     // Real source-qualified sigmas cannot upgrade framing-only operations or
     // a foreign native genesis into the complete wallet capability.
     let native = iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture::new_with_explicit_parameters();
-    let params = iroha_kagemusha_proof::finality::native::Parameters {
-        pallas: PinnedParams::derive(16).unwrap(),
-        vesta: PinnedParams::derive(16).unwrap(),
-    };
-    let finality_limits = iroha_kagemusha_proof::finality::catalog::VerifierLimits {
-        maximum_artifacts: 4_096,
-        maximum_verifier_bytes: 16 << 20,
-        msm_budget: MemoryBudget::DEFAULT,
-    };
     let mut foreign = AuthenticatedProducerInventoryV1 {
         inventory: authenticated.inventory.clone(),
         scheme_id: authenticated.scheme_id,
@@ -219,26 +209,12 @@ fn signed_sixteen_sigmas_qualify_exact_sources_and_reject_substitutions() {
     };
     foreign.manifest_digest[0] ^= 1;
     assert!(matches!(
-        foreign.qualify_wallet(
-            &installed,
-            &native.verifier(),
-            &mut disk,
-            config(),
-            params.clone(),
-            finality_limits,
-        ),
+        foreign.qualify_wallet(&installed, &native.verifier(), &mut disk, config(),),
         Err(WalletSourcesErrorV1::Original(Error::Authority))
     ));
     assert_eq!(disk.opens, 48, "installation mismatch must precede reads");
     assert!(matches!(
-        authenticated.qualify_wallet(
-            &installed,
-            &native.verifier(),
-            &mut disk,
-            config(),
-            params,
-            finality_limits,
-        ),
+        authenticated.qualify_wallet(&installed, &native.verifier(), &mut disk, config(),),
         Err(WalletSourcesErrorV1::Finality(
             FinalityQualificationErrorV1::AnchorMismatch
         ))
@@ -257,7 +233,6 @@ fn signed_sources(
     let (pack, installation, catalog) =
         engineering_fixture::signed_inventory_with_sources(steps, |pack| {
             let mut inventory = structural_inventory();
-            inventory.finality.network = [0x51; 32];
             inventory.originals = originals;
             inventory.originals.push(OriginalV1 {
                 descriptor: BlobV1::of(&pack.lineage.descriptor),
@@ -635,7 +610,7 @@ fn signed_bootstrap_program_qualifies_whole_context_and_all_original_stages() {
     );
     assert_eq!(disk.opens, before);
     let route = authenticated2
-        .qualify_operation_route(&installed2, &q, 0, None, &mut disk, read)
+        .qualify_operation_route(&installed2, &q, 0, &mut disk, read)
         .unwrap();
     assert_eq!(route.identity(), (authenticated2.installation(), 0, 0));
     assert!(matches!(
@@ -723,7 +698,6 @@ fn signed_retiring_route_imports_each_stage_and_keeps_candidate_omega_unqualifie
         SourceScopeV1::from_scheme(installed.verifier().scheme()).unwrap(),
         qualified_q.recipe(),
         &omega,
-        None,
     )
     .unwrap() else {
         panic!("Retiring uses the shared consuming source");
@@ -804,14 +778,7 @@ fn signed_retiring_route_imports_each_stage_and_keeps_candidate_omega_unqualifie
     let before = disk.opens;
     assert!(
         authenticated2
-            .qualify_operation_route(
-                &installed2,
-                &qualified_q,
-                route_index,
-                None,
-                &mut disk,
-                read
-            )
+            .qualify_operation_route(&installed2, &qualified_q, route_index, &mut disk, read)
             .is_err()
     );
     assert_eq!(disk.opens, before);
@@ -821,7 +788,7 @@ fn signed_retiring_route_imports_each_stage_and_keeps_candidate_omega_unqualifie
         .unwrap();
     let before = disk.opens;
     let qualified = authenticated2
-        .qualify_operation_route(&installed2, &q, route_index, None, &mut disk, read)
+        .qualify_operation_route(&installed2, &q, route_index, &mut disk, read)
         .unwrap();
     assert_eq!(
         qualified.identity(),
@@ -851,7 +818,7 @@ fn signed_retiring_route_imports_each_stage_and_keeps_candidate_omega_unqualifie
         authenticated2.inventory.operations[program].context[index][0] ^= 1;
         assert!(
             authenticated2
-                .qualify_operation_route(&installed2, &q, route_index, None, &mut disk, read)
+                .qualify_operation_route(&installed2, &q, route_index, &mut disk, read)
                 .is_err()
         );
         authenticated2.inventory.operations[program].context[index][0] ^= 1;

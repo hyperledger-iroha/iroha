@@ -1112,8 +1112,19 @@ impl History {
         retained_graph::record_native_tree_visit(tree.is_some());
         // The original identity-aware handles remain live. Re-read their bounded canonical
         // records one at a time instead of retaining another complete directory graph.
-        self.scope
-            .validate_local(&self.operation, self.purpose, self.semantic, pass)?;
+        // Only the callback-free complete graph lends this bracket to scope evidence.
+        // Parser-local and standalone censuses retain their independent source recipe.
+        self.scope.validate_local(
+            &self.operation,
+            self.purpose,
+            self.semantic,
+            pass,
+            if originals.is_some() {
+                tree.as_deref_mut()
+            } else {
+                None
+            },
+        )?;
         // The inventory begins and ends with fresh native directory checks.
         let operation_names = self.require_operation_entry(tree.as_deref_mut(), originals)?;
         match &self.root {
@@ -1198,8 +1209,13 @@ impl History {
             ));
         }
         revalidate_directory_in_tree(&self.operation, tree.as_deref_mut())?;
-        self.scope
-            .validate_local(&self.operation, self.purpose, self.semantic, pass)
+        self.scope.validate_local(
+            &self.operation,
+            self.purpose,
+            self.semantic,
+            pass,
+            if originals.is_some() { tree } else { None },
+        )
     }
 
     // Keep original native owners live through the sole fresh parser; retain shares their

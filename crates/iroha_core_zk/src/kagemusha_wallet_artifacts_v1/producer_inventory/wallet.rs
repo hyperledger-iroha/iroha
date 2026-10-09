@@ -23,7 +23,7 @@ pub enum WalletSourcesErrorV1 {
     /// One of the sixteen compiled sigma sources did not qualify.
     #[error(transparent)]
     Sigma(#[from] SigmaQualificationErrorV1),
-    /// The complete ordinary receipt graph differs from native genesis or its sources.
+    /// The native signed genesis does not authorize this wallet installation.
     #[error(transparent)]
     Finality(#[from] FinalityQualificationErrorV1),
     /// A Q source or exact signature policy did not qualify.
@@ -96,7 +96,7 @@ impl WalletSourcesErrorV1 {
 }
 
 /// Complete source-qualified wallet graph under one authenticated installation.
-/// This owns every exact sigma, receipt, Q, logical operation and final Omega
+/// This owns every exact sigma, native receipt verifier, Q, logical operation and final Omega
 /// source. No original PK or proving polynomial is retained between imports.
 /// Custody admission and durable wallet orchestration remain separate owners.
 pub struct QualifiedWalletSourcesV1 {
@@ -160,8 +160,7 @@ impl AuthenticatedProducerInventoryV1 {
         ];
         let q_parameters = Arc::clone(installed.verifier().pallas_parameters());
         // Native genesis binding happens before any source-original read.
-        let finality =
-            self.qualify_finality(installed, native_finality)?;
+        let finality = self.qualify_finality(installed, native_finality)?;
         let sigmas = self.qualify_sigmas(originals, config)?;
         let mut q = Vec::with_capacity(self.inventory.operations.len());
         for program in 0..self.inventory.operations.len() {

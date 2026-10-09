@@ -16,9 +16,9 @@ public struct KagemushaWalletCallV1: Sendable {
   /// ledgerInstruction40, confirmedUnload42, confirmedActivation44, activationProgress45,
   /// activationNotStarted46, creditProjection47, unloadClaimTransport48, activationRejected49;
   /// collectionIdle50, collectionProgress51, collected52, deletionReview53, deleted54,
-  /// deletionReviewDiscarded55, notDeleted56. Retired kinds41/43 are rejected.
+  /// deletionReviewDiscarded55, notDeleted56, epochProgress57. Retired kinds41/43 are rejected.
   /// Enrollment18...28 is projected by the separate enrollment owner.
-  static let statusRange: ClosedRange<Int32> = 0...56
+  static let statusRange: ClosedRange<Int32> = 0...57
   public let status: Int32
   public let sequenceLow: UInt64
   public let sequenceHigh: UInt64
@@ -30,7 +30,7 @@ public struct KagemushaWalletCallV1: Sendable {
   init(status: Int32, sequenceLow: UInt64, sequenceHigh: UInt64, detail: UInt32, bytes: Data) throws
   {
     guard Self.statusRange.contains(status), ![41, 43].contains(status), bytes.count <= kagemushaWalletOutputBoundV1(status),
-      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36, 37, 38, 40, 42, 44, 45, 47, 48, 49, 53, 54].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
+      [1, 10, 12, 13, 15, 17, 18, 19, 23, 24, 25, 27, 28, 30, 31, 33, 36, 37, 38, 40, 42, 44, 45, 47, 48, 49, 53, 54, 57].contains(status) ? !bytes.isEmpty : bytes.isEmpty,
       ![12, 14, 17, 30, 31, 32, 34, 35, 36, 40, 46, 47, 48, 50, 54, 55, 56].contains(status) || (sequenceLow == 0 && sequenceHigh == 0 && detail == 0),
       !([13, 15, 16, 53].contains(status) || (18...28).contains(status) || (37...39).contains(status))
         || (sequenceLow > 0 && sequenceLow <= UInt64(Int64.max) && sequenceHigh == 0 && detail == 0),
@@ -40,6 +40,7 @@ public struct KagemushaWalletCallV1: Sendable {
       status != 19 || bytes.count == 161,
       status != 53 || bytes.count == 254,
       status != 54 || (bytes.count == 32 && bytes.contains(where: { $0 != 0 })),
+      status != 57 || (sequenceHigh == 0 && detail == 0 && bytes.count == 16),
       ![42, 44, 49].contains(status) || sequenceLow > 1,
       ![33, 42, 44, 45, 49].contains(status) || (sequenceLow != 0 && sequenceHigh == 0 && detail == 0 && bytes.count == 32 && bytes.contains(where: { $0 != 0 }))
     else { throw KagemushaWalletErrorV1.invalidNativeOutput }
@@ -184,6 +185,14 @@ public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @uncheck
   public func ingestLedgerFinality(_ original: Data) throws -> KagemushaWalletLedgerProgressV1 {
     try .init(setup(.init(selector: 23, first: original)))
   }
+  /// Read durably retained native Load epoch authority, never an HTTP cursor.
+  public func epochProgress() throws -> KagemushaWalletEpochProgressV1 {
+    try .init(setup(.init(selector: 52)))
+  }
+  /// Verify one exact incumbent boundary and atomically retain its successor committee.
+  public func ingestEpochBoundary(expectedEpoch: UInt64, original: Data) throws -> KagemushaWalletEpochProgressV1 {
+    try .init(setup(.init(selector: 53, amount: .init(low: expectedEpoch, high: 0), first: original)))
+  }
   /// Read the selected native prefix; nil means no progress has been durably selected.
   public func ledgerProgress() throws -> KagemushaWalletLedgerProgressV1? {
     let result = try setup(.init(selector: 24))
@@ -249,7 +258,7 @@ public final class KagemushaWalletV1: KagemushaWalletCleanupResourceV1, @uncheck
   public func original(_ kind: KagemushaWalletTransportKindV1, envelope: Data) throws -> Data {
     try setup(.init(selector: 10 + kind.rawValue, first: envelope)).original()
   }
-  /// Load exact ordinary-ledger receipt and compact finality originals.
+  /// Load exact ordinary-ledger receipt and native BLS finality originals.
   public func load(requestId: Data, receipt: Data, finality: Data) throws -> KagemushaWalletCallV1 {
     try execute(KagemushaWalletOperationInputV1(requestId: requestId, selector: 0, first: receipt, second: finality))
   }
@@ -426,7 +435,7 @@ struct KagemushaWalletOperationInputV1 {
        first: Data = Data(), second: Data = Data(), third: Data = Data()) throws {
     let limits: [Int]
     switch selector {
-    case 0: limits = [512, 16_384, 0]
+    case 0: limits = [512, 256 * 1024, 0]
     case 2: limits = [10_000, 1_024, 10_000]
     case 3, 4: limits = [1_024, 10_000, 0]
     case 5: limits = [65_536 * 34 + 512, 10_000, 0]
@@ -747,6 +756,7 @@ func kagemushaWalletOutputBoundV1(_ status: Int32) -> Int {
   case 53: return 254
   case 54: return 32
   case 55, 56: return 0
+  case 57: return 16
   default: return 10_000
   }
 }

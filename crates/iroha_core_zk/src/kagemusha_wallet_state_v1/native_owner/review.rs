@@ -264,6 +264,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             None,
             manifest.issued_requests,
             manifest.direct_anchors,
+            manifest.finality_epochs,
         )?;
         let credential = custody
             .original(PreparationOriginalV1::CurrentCredential)?

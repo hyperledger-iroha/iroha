@@ -7,7 +7,7 @@ use crate::{
     managed::{
         LocalnetPorts,
         native_operation::{
-            checkpoint_bytes, now_ms, retain_carrier_execution_progress,
+            now_ms, retain_carrier_execution_progress, retain_carrier_progress,
             retained_carrier_execution, verify_carrier,
         },
         service_authority::{NetworkPurpose, ProviderPurpose, ServiceAuthority},
@@ -25,7 +25,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, error::TransactionRejectionReason},
 };
 use iroha_executor_data_model::permission::parameter::CanSetParameters;
-use iroha_fs::{PrivateDirectory, PublishMode};
+use iroha_fs::PrivateDirectory;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use iroha_wallet::operations::{
@@ -96,6 +96,29 @@ fn fixture() -> (
     (root, prepared, authority, native)
 }
 
+/// Lend genuine wallet-produced bytes to attachment custody controls without inventing a proof.
+pub(crate) fn with_signed_amx_preparation(
+    inspect: impl FnOnce(&iroha::config::Config, &AmxDataspaceRegistrationRequest, &std::path::Path),
+) {
+    let _resources = crate::managed::native_test_guard();
+    let (root, _prepared, authority, native) = fixture();
+    let request = request(&authority.config);
+    let journal = root.path().join("original-admin-prefix");
+    let wallet = AccountService::new(authority.config.clone()).unwrap();
+    let mut http =
+        NativeReadHttp::start_config(&authority.config, Arc::clone(native.chain.state()));
+    wallet
+        .prepare_amx_dataspace_registration(&request, &journal)
+        .unwrap();
+    wallet
+        .verify_amx_dataspace_registration_journal(&journal, &request)
+        .unwrap()
+        .verify_signature()
+        .unwrap();
+    http.finish();
+    inspect(&authority.config, &request, &journal);
+}
+
 #[test]
 fn administrative_amx_native_paid_original_wire_is_registered_and_carrier_reopens_without_replacement()
  {
@@ -145,6 +168,28 @@ fn administrative_amx_native_paid_original_wire_is_registered_and_carrier_reopen
     drop(view);
     let observed = native.observe(&authority);
     let expected = verify_carrier(&observed, &signed).unwrap();
+    let immediate = PrivateDirectory::open_or_create(root.path().join("observed-receipt")).unwrap();
+    let mut observed_start = original.clone();
+    assert_eq!(
+        super::super::retain_observed_carrier(
+            &immediate,
+            &signed,
+            &mut observed_start,
+            &observed,
+            request.options.deadline,
+        )
+        .unwrap(),
+        Some(expected)
+    );
+    assert_eq!(
+        immediate
+            .read("carrier.nrt", super::super::MAX_CHECKPOINT_BYTES)
+            .unwrap()
+            .as_slice(),
+        super::super::checkpoint_bytes(&observed)
+            .unwrap()
+            .as_slice()
+    );
     let receipt = PrivateDirectory::open_or_create(root.path().join("native-receipt")).unwrap();
     let mut replay = original;
     let admitted = retain_carrier_execution_progress(
@@ -219,6 +264,7 @@ fn administrative_amx_native_missing_permission_is_authenticated_failure_after_l
         .unwrap();
     let wire = signed.encode_wire_v1().unwrap();
     http.finish();
+    let before_commit = native.observe(&authority);
     assert_eq!(native.chain.commit(vec![signed.clone()]), vec![false]);
     let failed = native.observe(&authority);
     assert!(verify_carrier(&failed, &signed).is_err());
@@ -249,14 +295,67 @@ fn administrative_amx_native_missing_permission_is_authenticated_failure_after_l
             .dataspace(request.registration.scope.dataspace_id())
             .is_none()
     );
-    let receipt = PrivateDirectory::open_or_create(root.path().join("failed-receipt")).unwrap();
-    receipt
-        .write_atomic(
-            "carrier.nrt",
-            &checkpoint_bytes(&failed).unwrap(),
-            PublishMode::CreateNew,
+    // Ordinary provisioning still requires Applied; an authenticated rejected carrier
+    // must not publish successful finality. Administrative history explicitly retains it.
+    let immediate =
+        PrivateDirectory::open_or_create(root.path().join("rejected-observed-receipt")).unwrap();
+    let mut observed_start = before_commit.clone();
+    assert!(
+        super::super::retain_observed_carrier(
+            &immediate,
+            &signed,
+            &mut observed_start,
+            &failed,
+            request.options.deadline,
         )
-        .unwrap();
+        .is_err()
+    );
+    assert!(
+        immediate
+            .read_optional("carrier.nrt", super::super::MAX_CHECKPOINT_BYTES)
+            .unwrap()
+            .is_none()
+    );
+    let strict = PrivateDirectory::open_or_create(root.path().join("strict-receipt")).unwrap();
+    let mut strict_replay = before_commit.clone();
+    assert!(
+        retain_carrier_progress(
+            &strict,
+            &signed,
+            &mut strict_replay,
+            failed.checkpoint().height(),
+            &native,
+        )
+        .is_err()
+    );
+    assert!(
+        strict
+            .read_optional("carrier.nrt", super::super::MAX_CHECKPOINT_BYTES)
+            .unwrap()
+            .is_none()
+    );
+    let receipt = PrivateDirectory::open_or_create(root.path().join("failed-receipt")).unwrap();
+    let mut replay = before_commit;
+    let retained = retain_carrier_execution_progress(
+        &receipt,
+        &signed,
+        &mut replay,
+        failed.checkpoint().height(),
+        &native,
+        false,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(!retained.applied);
+    assert_eq!(retained.finality.height, failed.checkpoint().height());
+    assert_eq!(
+        receipt
+            .read("carrier.nrt", super::super::MAX_CHECKPOINT_BYTES)
+            .unwrap()
+            .as_slice(),
+        super::super::checkpoint_bytes(&failed).unwrap().as_slice(),
+        "retention publishes the independently verified rejected checkpoint"
+    );
     let original = retained_carrier_execution(
         &receipt,
         selected.network_id,
@@ -265,6 +364,7 @@ fn administrative_amx_native_missing_permission_is_authenticated_failure_after_l
     )
     .unwrap()
     .unwrap();
+    assert_eq!(original, retained);
     assert!(!original.applied);
     assert_eq!(original.finality.transaction_hash, signed.hash());
     assert_eq!(

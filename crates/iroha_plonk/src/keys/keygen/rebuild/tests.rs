@@ -450,8 +450,8 @@ fn seal_borrow<C: PastaCurve>() {
     assert_eq!(core::mem::size_of::<SourceAdmissionSealV2<C>>(), 96);
     let probe = CommitmentProbe::start();
     let view = seal.bind(&binding, &verifier, None).unwrap();
-    assert!(core::ptr::eq(view.binding(), &binding));
-    assert!(core::ptr::eq(view.verifying_key(), &verifier));
+    assert!(core::ptr::eq(view.binding(), &raw const binding));
+    assert!(core::ptr::eq(view.verifying_key(), &raw const verifier));
     let copied = view;
     let rebuilt =
         keygen_pk_from_vk_v2(&params, &source, &copied, CosetCachePolicy::OnDemand).unwrap();

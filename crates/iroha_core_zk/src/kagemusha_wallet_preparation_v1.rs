@@ -120,22 +120,14 @@ fn retained_original(
 fn retained_load_source(
     inputs: &[KagemushaWalletRetainedInputV1],
     digest: [u8; 32],
-) -> Result<
-    (
-        KagemushaWalletLoadReceiptV1,
-        KagemushaWalletLoadFinalityV1,
-    ),
-    Error,
-> {
+) -> Result<(KagemushaWalletLoadReceiptV1, KagemushaWalletLoadFinalityV1), Error> {
     let ordinary = authority(KagemushaWalletLoadReceiptV1::decode_canonical(
         retained_original(inputs, KagemushaWalletRetainedInputRoleV1::LoadReceipt)?,
     ))?;
     let original = authority(KagemushaWalletLoadFinalityV1::decode_canonical(
         retained_original(inputs, KagemushaWalletRetainedInputRoleV1::LoadFinality)?,
     ))?;
-    if authority(ordinary.receipt_digest())? != digest
-        || original.receipt_digest != digest
-    {
+    if authority(ordinary.receipt_digest())? != digest || original.receipt_digest != digest {
         return Err(Error::Authority);
     }
     Ok((ordinary, original))
@@ -248,7 +240,6 @@ pub(crate) struct LoadFieldsV1 {
     pub(crate) receipt: [u8; 282],
     /// Own Advance receipt, Enrollment certificate and current credential.
     pub(crate) objects: [Vec<u8>; 3],
-    /// Original retained finality wrapper and both claims; native Plan re-verifies all three.
 }
 
 /// Typed post-Advance Unload/Retiring fields for their actual consuming sigma relation.

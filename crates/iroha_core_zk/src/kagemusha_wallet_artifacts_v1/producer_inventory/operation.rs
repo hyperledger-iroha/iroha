@@ -25,7 +25,7 @@ pub enum OperationQualificationErrorV1 {
     /// Installation, route, inventory or bounded original mismatch.
     #[error(transparent)]
     Original(#[from] Error),
-    /// The canonical native source, complete context or finality dependency differs.
+    /// The canonical native source or complete context differs.
     #[error("invalid compiled operation source or context")]
     Source,
     /// An exact Bootstrap source failed qualification.
@@ -211,12 +211,7 @@ pub(super) fn plan(
         Variant::Load => {
             let signatures = source(recipe.signatures().to_vec().try_into())?;
             Plan::Load(source(load::Plan::new(
-                operation,
-                policy,
-                signatures,
-                key,
-                pallas,
-                vesta,
+                operation, policy, signatures, key, pallas, vesta,
             ))?)
         }
         Variant::Send => {

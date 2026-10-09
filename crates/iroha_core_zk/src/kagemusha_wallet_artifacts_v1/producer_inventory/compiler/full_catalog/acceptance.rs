@@ -218,14 +218,7 @@ fn qualify(
     assert_eq!(inventory.routes.len(), compiled_routes().len());
     let installed = InstalledVerifierPackV1::load(pack_bytes, installation).unwrap();
     let authenticated = installed.authenticate_producer_inventory(producer).unwrap();
-    qualify_authenticated(
-        output,
-        installed,
-        authenticated,
-        source,
-        native,
-        config,
-    )
+    qualify_authenticated(output, installed, authenticated, source, native, config)
 }
 
 fn qualify_authenticated(
@@ -242,12 +235,7 @@ fn qualify_authenticated(
     };
     let mut originals = Counted { source, reads: 0 };
     let qualified = authenticated
-        .qualify_wallet(
-            &installed,
-            native,
-            &mut originals,
-            config,
-        )
+        .qualify_wallet(&installed, native, &mut originals, config)
         .unwrap();
     assert_eq!(
         qualified.installation(),
@@ -470,21 +458,25 @@ pub(crate) type EngineeringFinalitySources = (
 pub(crate) fn open_pinned_engineering_finality_sources(
     output: &Path,
 ) -> EngineeringFinalitySources {
-    let PinnedEngineeringInputs { installed, authenticated, native, .. } =
-        pinned_engineering_inputs(output);
+    let PinnedEngineeringInputs {
+        installed,
+        authenticated,
+        native,
+        ..
+    } = pinned_engineering_inputs(output);
     let qualified = authenticated.qualify_finality(&installed, &native).unwrap();
     assert_eq!(qualified.verifier().initial_epoch(), native.initial_epoch());
     let private = iroha_fs::PrivateDirectory::open_or_create(output.join("originals")).unwrap();
-    let sealed = DirectoryOriginalsV1::open_existing(
-        private.path(), PROVING_KEY_MAX_BYTES_V1,
-    ).unwrap();
+    let sealed =
+        DirectoryOriginalsV1::open_existing(private.path(), PROVING_KEY_MAX_BYTES_V1).unwrap();
     (std::sync::Arc::new(installed), qualified, native, sealed)
 }
 
 #[test]
 #[ignore = "independently pinned signed catalog and native genesis"]
 fn qualify_native_finality_without_proof_artifacts() {
-    let output = PathBuf::from(std::env::var_os("KAGEMUSHA_FINALITY_ACCEPTANCE_OUTPUT").unwrap());
+    let output =
+        PathBuf::from(std::env::var_os("KAGEMUSHA_NATIVE_FINALITY_ACCEPTANCE_OUTPUT").unwrap());
     let (_, qualified, native, _) = open_pinned_engineering_finality_sources(&output);
     assert_eq!(qualified.verifier().initial_epoch(), native.initial_epoch());
 }

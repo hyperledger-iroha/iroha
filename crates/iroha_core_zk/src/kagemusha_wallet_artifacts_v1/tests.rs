@@ -281,7 +281,6 @@ fn native_profile_contains_fixed_typed_policies_and_all_decision_codes() {
     for expected in [
         iroha_kagemusha_proof::a_relation::schedule::compiled::compiled_schedule_transcript()
             .unwrap(),
-        iroha_kagemusha_proof::finality::native::compiled_leaf_schedule_transcript().unwrap(),
         producer_inventory::compiled_sigma_policy().unwrap(),
         iroha_kagemusha_proof::omega::native::compiled_policy_transcript().unwrap(),
     ] {
@@ -373,7 +372,6 @@ fn native_profile_matches_complete_compiled_encoder_preimage() {
     for policy in [
         iroha_kagemusha_proof::a_relation::schedule::compiled::compiled_schedule_transcript()
             .unwrap(),
-        iroha_kagemusha_proof::finality::native::compiled_leaf_schedule_transcript().unwrap(),
         producer_inventory::compiled_sigma_policy().unwrap(),
         iroha_kagemusha_proof::omega::native::compiled_policy_transcript().unwrap(),
     ] {

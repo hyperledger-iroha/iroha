@@ -111,7 +111,7 @@ impl<'view, 'state> CommittedLoadReceipts<'view, 'state> {
 
     /// Read bounded original counted event-path DATA for the payer's committed Load.
     /// The returned path carries no finality authority. A consumer must independently
-    /// verify the original block and event commitment before producing a recursive receipt.
+    /// verify the native certificate and event commitment before accepting Load evidence.
     /// # Errors
     /// Wrong payer/scope, missing or changed retained path, mismatched height or decode limits.
     pub fn event_path_for(

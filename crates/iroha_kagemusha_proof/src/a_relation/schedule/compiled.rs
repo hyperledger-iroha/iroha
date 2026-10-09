@@ -342,7 +342,7 @@ mod tests {
     use super::*;
     #[test]
     fn complete_schedule_has_every_q_and_mandatory_owner_once() {
-        let expected = [2, 5, 5, 10, 10, 10, 10, 4, 4, 4, 4, 4, 7, 4];
+        let expected = [2, 4, 5, 10, 10, 10, 10, 4, 4, 4, 4, 4, 7, 4];
         for (variant, count) in Variant::ALL.into_iter().zip(expected) {
             let schedule = OperationSchedule::for_variant(variant);
             assert_eq!(schedule.stage_count(), count);

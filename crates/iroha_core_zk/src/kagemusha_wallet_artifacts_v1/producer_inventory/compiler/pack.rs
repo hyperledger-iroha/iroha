@@ -49,8 +49,6 @@ impl WalletArtifactOriginalsV1 {
     pub fn wallet_originals(&self) -> &[BlobV1] {
         &self.wallet_originals
     }
-
- 
 }
 
 fn closed_blobs(

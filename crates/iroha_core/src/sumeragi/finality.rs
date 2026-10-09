@@ -1,6 +1,10 @@
 //! Portable finality and challenged node statements from the current certified chain.
 
+mod compact_source;
 mod cursor;
+pub use compact_source::{
+    NativeCommitCertificateDataV1, NativeCommitCertificateReadErrorV1, read_commit_certificate,
+};
 pub use cursor::{
     NativeCurrentFinalityV1, NativeFinalityAtHeightV1, NativeFinalityCursorErrorV1,
     NativeFinalityCursorV1,

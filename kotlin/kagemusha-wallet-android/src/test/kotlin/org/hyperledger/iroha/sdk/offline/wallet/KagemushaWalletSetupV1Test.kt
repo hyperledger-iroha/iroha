@@ -55,7 +55,7 @@ class KagemushaWalletSetupV1Test {
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(47, first = byteArrayOf(1)) }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(47, second = byteArrayOf(1)) }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(47, third = byteArrayOf(1)) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(52) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(54) }
         assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(50, -1, 0, 1, 0, 0, byteArrayOf()) }
         assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(53, -1, 0, 0, 0, 0, byteArrayOf()) }
         val progress = KagemushaWalletCallV1(51, -1, 0, 1, 0, 0, byteArrayOf())

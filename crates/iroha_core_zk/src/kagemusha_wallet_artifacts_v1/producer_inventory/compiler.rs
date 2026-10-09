@@ -483,7 +483,7 @@ impl<'a> OfflineCompilerV1<'a> {
     /// Compile one exact logical route under a raw candidate Omega dependency.
     /// Source compilation does not authorize that candidate; final closure must compare it.
     /// # Errors
-    /// Foreign scope/class, missing receipt source or any stage source/import failure.
+    /// Foreign scope/class or any stage source/import failure.
     pub fn operation(
         &mut self,
         route: OperationRoute,
@@ -524,10 +524,8 @@ impl<'a> OfflineCompilerV1<'a> {
         } else {
             Some(omega.key())
         };
-        let closed =
-            self.operation_source(operation.route, q, predecessor, Some(operation))?;
-        if closed.context != operation.context
-        {
+        let closed = self.operation_source(operation.route, q, predecessor, Some(operation))?;
+        if closed.context != operation.context {
             return Err(CompilationErrorV1::Closure);
         }
         Ok(closed)
@@ -540,9 +538,7 @@ impl<'a> OfflineCompilerV1<'a> {
         omega: Option<&CompiledKeyV1<Ep>>,
         originals: Option<&CompiledOperationV1>,
     ) -> Result<CompiledOperationV1, CompilationErrorV1> {
-        if q.scope != self.scope
-            || q.variant != route.variant
-        {
+        if q.scope != self.scope || q.variant != route.variant {
             return Err(CompilationErrorV1::Closure);
         }
         let template = OperationV1 {

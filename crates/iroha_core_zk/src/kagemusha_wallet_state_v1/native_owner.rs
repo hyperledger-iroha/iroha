@@ -5,6 +5,8 @@ mod activation;
 pub use activation::ActivationFinalityProgressV1;
 mod close_loads;
 mod deletion;
+pub(super) mod epochs;
+pub use epochs::NativeEpochProgressV1;
 mod ledger;
 mod ledger_producer;
 mod unload;

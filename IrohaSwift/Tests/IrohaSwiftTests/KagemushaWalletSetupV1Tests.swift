@@ -30,7 +30,7 @@ final class KagemushaWalletSetupV1Tests: XCTestCase {
     XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 47, first: Data([1])))
     XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 47, second: Data([1])))
     XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 47, third: Data([1])))
-    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 52))
+    XCTAssertThrowsError(try KagemushaWalletSetupInputV1(selector: 54))
     XCTAssertThrowsError(try KagemushaWalletCallV1(status: 50, sequenceLow: 1, sequenceHigh: 0, detail: 0, bytes: Data()))
     let progress = try KagemushaWalletCallV1(status: 51, sequenceLow: 1, sequenceHigh: 0, detail: 0, bytes: Data())
     XCTAssertThrowsError(try KagemushaWalletCollectionStatusV1(progress, expectedSequence: .init(low: 2, high: 0)))

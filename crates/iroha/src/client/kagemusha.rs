@@ -2,6 +2,7 @@
 
 mod enrollment;
 mod event_proof;
+mod finality;
 pub use iroha_torii_shared::kagemusha_enrollment::{
     EnrollmentServiceActionV1, EnrollmentServiceRequestV1, EnrollmentServiceResponseV1,
 };

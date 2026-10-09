@@ -102,7 +102,7 @@ eligibility; a scheme operator supplies its selected policy without a mandatory
 Parliament gate. These implemented boundaries still require complete Linux launch,
 real platform evidence, shutdown and network qualification.
 
-The compact offline Load relation and ordinary-finality adapters are implemented.
+The offline Load relation binds the receipt and credential-bound Advance signature. Native BLS certificate and authenticated epoch verification must succeed before the Advance is signed; the recursive finality prover and its artifact catalogs are retired. The selected released-app/uncompromised-OS assumption supplies this pre-signing trust boundary. See [native finality goals](../../../../specs/kagemusha_native_finality_goals.md).
 TODO(G3/G6): qualify their complete installed producer artifacts and the real
 end-to-end device/network flow. The online receipt alone grants no foreign wallet-open
 or proof-acceptance capability.

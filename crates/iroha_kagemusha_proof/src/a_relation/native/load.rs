@@ -1340,16 +1340,16 @@ impl Circuit<Fp> for ContinuationCircuit {
                 }
                 let fold = first.carrier(&mut chip, &mut bytes, &mut region, &self.fold)?;
                 let closed = crate::a_relation::split::close_stage(
-                        &mut chip,
-                        &mut region,
-                        &self.plan,
-                        &resumed,
-                        None,
-                        None,
-                        None,
-                        &verified,
-                        &fold,
-                    )?;
+                    &mut chip,
+                    &mut region,
+                    &self.plan,
+                    &resumed,
+                    None,
+                    None,
+                    None,
+                    &verified,
+                    &fold,
+                )?;
                 if self.plan.is_terminal() {
                     closed.words(&mut chip, &mut region, &next_public)
                 } else {
@@ -1696,7 +1696,7 @@ impl Prover {
     }
     /// Exact installed descriptors in actual A1/W0/A2/W1/A3/W2/A4 checkpoint order.
     #[must_use]
-    pub fn descriptors(&self) -> [&DescriptorBinding; 9] {
+    pub fn descriptors(&self) -> [&DescriptorBinding; A_STAGE_COUNT + W_STAGE_COUNT] {
         [
             self.a[0].binding(),
             self.w[0].binding(),
@@ -1705,8 +1705,6 @@ impl Prover {
             self.a[2].binding(),
             self.w[2].binding(),
             self.a[3].binding(),
-            self.w[3].binding(),
-            self.a[4].binding(),
         ]
     }
 }
@@ -2645,10 +2643,7 @@ fn trivial_vesta_words() -> Result<Vec<Fp>, Error> {
         FoldInput::<Eq>::from_normalized(g, 16, [Fp::ONE; K]).map_err(|_| Error::Artifact)?;
     vesta_words(&claim)
 }
-fn internal_public(
-    digest: Fp,
-    part: &FoldInput<Eq>,
-) -> Result<Vec<Fp>, Error> {
+fn internal_public(digest: Fp, part: &FoldInput<Eq>) -> Result<Vec<Fp>, Error> {
     let mut words = vec![digest, Fp::from(u64::from(part.source_k()))];
     words.extend(vesta_words(part)?);
     let trivial = trivial_vesta_words()?;

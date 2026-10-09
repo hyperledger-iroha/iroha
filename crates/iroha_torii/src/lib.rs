@@ -37695,7 +37695,8 @@ impl Torii {
             KAGEMUSHA_LOAD_ISSUANCE_GET => limited_canonical_account_get(kagemusha_wallet::handler, app_state, 0, 0);
             KAGEMUSHA_ENROLLMENT_POST => limited_canonical_signature_post(kagemusha_enrollment::handler, iroha_torii_shared::kagemusha_enrollment::ENROLLMENT_SERVICE_REQUEST_MAX_BYTES_V1);
             KAGEMUSHA_LOAD_EVENT_PROOF_GET => limited_canonical_account_get(kagemusha_wallet::event_handler, app_state, 0, 0);
-            KAGEMUSHA_LOAD_FINALITY_PROOF_GET => limited_canonical_account_get(kagemusha_wallet::finality_handler, app_state, 0, 0);
+            KAGEMUSHA_LOAD_FINALITY_GET => limited_canonical_account_get(kagemusha_wallet::finality_handler, app_state, 0, 0);
+            KAGEMUSHA_LOAD_EPOCH_GET => limited_canonical_account_get(kagemusha_wallet::epoch_handler, app_state, 0, 0);
             SORAFS_RESERVE_PROVIDERS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers);
             SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider);
             SORAFS_RESERVE_TOP_UP_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up, contracts_body_limit);

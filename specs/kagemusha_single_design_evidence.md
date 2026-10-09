@@ -150,24 +150,22 @@ disposition. Deleted code remains in Git history; later goals rebuild from the
   deleted. Ordinary Load uses the global chain's native finality and ordered BLS
   validator roster, with no KAGEMUSHA-specific consensus signer or mint seal.
   Deployment and fixture consumers use that same consensus model.
-- **Offline Load source and integration:** the ordinary receipt, local finality
-  evidence model and five-A/four-W Load relation replace the dedicated issuer
-  construction. The original receipt is unsigned and binds the successful
-  transaction, height, payer digest and complete approved terms. The installed
-  Load plan pins a complete authenticated global-genesis anchor and original
-  terminal source key. Its hard verifier retains both accumulated curve claims;
-  neither the receipt codec nor a native boolean grants offline authority.
-  The source includes the native BLS quorum, ordered aggregation, fixed complete
-  result/context scans, schedule continuity, finite-catalog history recursion
-  and counted Load event membership. The native graph owner composes these
-  sources, verifies restored history, advances each block and produces terminal
-  receipt evidence; Core adapters preserve verified native originals. This
-  implementation is not evidence of a complete original-key finality proof or
-  qualified wallet.
-  TODO(G3/G5): qualify the complete artifact producer, genesis-rooted proof,
-  Load and downstream lineage/catalog composition, then measure genuine complete
-  10,000-byte envelopes. Native envelope and execution checks remain separate
-  obligations of the online evidence provider.
+- **Offline Load source and integration:** the native wallet authenticates the
+  receipt block's exact BLS CommitQC and counted Load-event inclusion against
+  signed genesis and authenticated epoch changes before requesting Advance.
+  The receipt is unsigned and binds the successful transaction, height, payer
+  digest and complete approved terms. The four-A/three-W monetary Load relation
+  binds those exact terms, replay insertion and the credential-bound Advance
+  signature; it does not prove BLS verification inside PLONK. The finality
+  circuits, recursive history prover and finality key inventories are deleted.
+  Funding assurance relies on the selected released-application/stock-OS trust
+  profile, not on a caller-supplied verification boolean. Current implementation
+  and qualification criteria are tracked in
+  [NF1-NF6](kagemusha_native_finality_goals.md).
+  TODO(G3/G5): qualify the regenerated complete monetary catalog, genuine Load
+  and downstream lineage, complete 10,000-byte payment envelopes, four-validator
+  execution and physical-phone performance on the current candidate. Historical
+  recursive-finality captures do not qualify this replacement.
 
 ## 3. Disposition of the inspected implementation
 

@@ -11,8 +11,8 @@ use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip}
 
 use super::{
     SigmaBindingCells, SignatureProofCells,
-    load_receipt::LoadReceiptCells,
     context::{ContextObjectCells, ContextObjectSpec},
+    load_receipt::LoadReceiptCells,
     own::{CurrentAuthorization, OwnPolicy, authenticate_current},
 };
 use crate::{

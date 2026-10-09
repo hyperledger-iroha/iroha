@@ -661,8 +661,8 @@ class HttpClientTransport private constructor(
      * JSON fallback or monetary decoding. The expected payer and network remain immutable; server
      * authentication owns canonical controller/signer admission. Before wallet admission, the
      * consumer must bind the canonical receipt to the expected request/payer/scheme/wallet and
-     * independently authenticate the original successful transaction, ordinary chain finality and
-     * the complete recursive Load proof. This transport supplies no wallet admission or balance
+     * independently authenticate the successful receipt event and its native BLS Commit certificate
+     * before signing Advance. This transport supplies no wallet admission or balance
      * change. A nonempty malformed binary response remains unverified transport data.
      */
     fun getKagemushaWalletLoadIssuanceOriginalV1(
@@ -739,9 +739,8 @@ class HttpClientTransport private constructor(
         return readKagemushaWalletLedgerOriginalV1(request, requireCurrentOwner)
     }
 
-    /** The exact Load's compact terminal proof, never an ordinary block-finality substitute.
-     * The response is unverified DATA. Native authenticates its installed source/global anchor,
-     * exact receipt binding and both carried claims before any offline credit is possible. */
+    /** One native BLS certificate and exact Load event inclusion. The response remains DATA
+     * until Native verifies the signed genesis, epoch transitions and receipt binding. */
     fun getKagemushaWalletLoadFinalityOriginalV1(
         selection: ToriiKagemushaWalletLoadSelectionV1,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -749,7 +748,25 @@ class HttpClientTransport private constructor(
     ): CompletableFuture<ByteArray> {
         requireCurrentOwner.run()
         config.requireLocalSigningContext()
-        val request = buildKagemushaWalletLedgerOriginalRequestV1(selection.path + "/finality-proof", 16_384, canonicalAuth)
+        val request = buildKagemushaWalletLedgerOriginalRequestV1(selection.path + "/finality", 256 * 1024, canonicalAuth)
+        return readKagemushaWalletLedgerOriginalV1(request, requireCurrentOwner)
+    }
+
+    /** One boundary selected by Native's authenticated epoch progress. Only Native's
+     * incumbent BLS verification may accept its successor; this response is DATA. */
+    fun getKagemushaWalletLoadEpochOriginalV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        boundaryHeight: BigInteger,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        requireCurrentOwner: Runnable,
+    ): CompletableFuture<ByteArray> {
+        requireCurrentOwner.run()
+        require(boundaryHeight >= BigInteger.valueOf(2) && boundaryHeight.bitLength() <= 64) {
+            "u64 epoch boundary must follow genesis"
+        }
+        config.requireLocalSigningContext()
+        val request = buildKagemushaWalletLedgerOriginalRequestV1(
+            selection.path + "/epochs/$boundaryHeight", 256 * 1024, canonicalAuth)
         return readKagemushaWalletLedgerOriginalV1(request, requireCurrentOwner)
     }
 

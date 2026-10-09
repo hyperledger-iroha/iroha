@@ -4,10 +4,17 @@ use iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadReceiptV1;
 
 use super::*;
 
-/// Largest signed blacklist plus a certificate-set frame and fixed request metadata.
-/// This is an administrative intake bound; the Payment transport limit remains10,000 bytes.
-pub const REQUEST_MAX_BYTES: usize =
-    KAGEMUSHA_WALLET_BLACKLIST_MAX_BYTES_V1 + KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + 1024;
+/// Largest online finality or administrative original plus companion and request metadata.
+/// This local intake bound leaves the 10,000-byte peer Payment limit unchanged.
+pub const REQUEST_MAX_BYTES: usize = {
+    let original =
+        if KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1 > KAGEMUSHA_WALLET_BLACKLIST_MAX_BYTES_V1 {
+            KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1
+        } else {
+            KAGEMUSHA_WALLET_BLACKLIST_MAX_BYTES_V1
+        };
+    original + KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + 1024
+};
 
 /// Exact signed online-charge originals; the caller cannot supply an accepted charge value.
 #[derive(Debug, Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]

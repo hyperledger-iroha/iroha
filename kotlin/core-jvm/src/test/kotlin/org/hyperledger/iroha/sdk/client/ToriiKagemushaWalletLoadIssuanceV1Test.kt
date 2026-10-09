@@ -3,6 +3,7 @@
 
 package org.hyperledger.iroha.sdk.client
 
+import java.math.BigInteger
 import java.net.URI
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
@@ -218,8 +219,8 @@ class ToriiKagemushaWalletLoadIssuanceV1Test {
         val proof = client(executor).getKagemushaWalletLoadFinalityOriginalV1(selection(), auth(), Runnable {}).join()
         assertContentEquals(byteArrayOf(0, -1, 7), proof)
         val request = executor.requests.single()
-        assertEquals(selection().path + "/finality-proof", request.uri.path.removePrefix("/torii"))
-        assertEquals(16_384L, request.maximumResponseBytes)
+        assertEquals(selection().path + "/finality", request.uri.path.removePrefix("/torii"))
+        assertEquals(256L * 1024, request.maximumResponseBytes)
         assertEquals(RequestReplayPolicy.ONE_SHOT, request.replayPolicy)
         assertEquals("GET", request.method)
         assertTrue(request.body.isEmpty())
@@ -234,20 +235,91 @@ class ToriiKagemushaWalletLoadIssuanceV1Test {
 
     @Test
     fun compactFinalityRejectsOversizeWrongTransportAndUnavailableWithoutFallback() {
-        for (failure in 0..5) {
+        for (failure in 0..6) for (epoch in listOf(false, true)) {
             val executor = RecordingExecutor()
             executor.response = { request -> CompletableFuture.completedFuture(TransportResponse(
-                if (failure == 0) 503 else 200,
-                if (failure == 1) ByteArray(16_385) else byteArrayOf(1), "",
+                if (failure == 0) 503 else if (failure == 6) 202 else 200,
+                if (failure == 1) ByteArray(256 * 1024 + 1) else byteArrayOf(1), "",
                 mapOf("Content-Type" to listOf(if (failure == 2) "application/json" else "application/x-norito")) +
                     if (failure == 3) mapOf("Content-Encoding" to listOf("gzip")) else emptyMap(),
                 if (failure == 4) URI.create("https://other.test/") else request.uri, failure == 5)) }
             assertFailsWith<CompletionException> {
-                client(executor).getKagemushaWalletLoadFinalityOriginalV1(selection(), auth(), Runnable {}).join()
+                if (epoch) {
+                    client(executor).getKagemushaWalletLoadEpochOriginalV1(
+                        selection(), BigInteger.TEN, auth(), Runnable {}).join()
+                } else {
+                    client(executor).getKagemushaWalletLoadFinalityOriginalV1(selection(), auth(), Runnable {}).join()
+                }
             }
             assertEquals(1, executor.requests.size)
-            assertTrue(executor.requests.single().uri.path.endsWith("/finality-proof"))
+            assertTrue(executor.requests.single().uri.path.endsWith(if (epoch) "/epochs/10" else "/finality"))
         }
+    }
+
+    @Test
+    fun epochReadSignsExactBoundaryAndUsesBoundedOneShotTransport() {
+        val executor = RecordingExecutor()
+        val data = client(executor).getKagemushaWalletLoadEpochOriginalV1(
+            selection(), BigInteger.TEN, auth(), Runnable {}).join()
+        assertContentEquals(byteArrayOf(0, -1, 7), data)
+        val request = executor.requests.single()
+        assertEquals(selection().path + "/epochs/10", request.uri.path.removePrefix("/torii"))
+        assertEquals(256L * 1024, request.maximumResponseBytes)
+        assertEquals(RequestReplayPolicy.ONE_SHOT, request.replayPolicy)
+        assertEquals("GET", request.method)
+        assertTrue(request.body.isEmpty())
+        val timestamp = request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS]!!.single().toLong()
+        val nonce = request.headers[CanonicalRequestSigner.HEADER_NONCE]!!.single()
+        val signature = java.util.Base64.getDecoder().decode(request.headers[CanonicalRequestSigner.HEADER_SIGNATURE]!!.single())
+        for (height in listOf(10, 11)) {
+            val uri = URI.create(request.uri.toASCIIString().replace("/epochs/10", "/epochs/$height"))
+            val message = CanonicalRequestSigner.canonicalRequestSignatureMessage(network, "GET", uri, request.body, timestamp, nonce)
+            assertEquals(height == 10, Ed25519Signer().run {
+                init(false, Ed25519PublicKeyParameters(publicKey, 0))
+                update(message, 0, message.size)
+                verifySignature(signature)
+            })
+        }
+    }
+
+    @Test
+    fun epochReadRejectsInvalidU64BoundaryBeforeSigning() {
+        val executor = RecordingExecutor()
+        val signer = ToriiCanonicalRequestAuth(payer, RequestSigner { error("must not sign") })
+        for (height in listOf(BigInteger.valueOf(-1), BigInteger.ZERO, BigInteger.ONE, BigInteger.ONE.shiftLeft(64))) {
+            assertFailsWith<IllegalArgumentException> {
+                client(executor).getKagemushaWalletLoadEpochOriginalV1(selection(), height, signer, Runnable {})
+            }
+        }
+        assertTrue(executor.requests.isEmpty())
+        val largest = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+        client(executor).getKagemushaWalletLoadEpochOriginalV1(selection(), largest, auth(), Runnable {}).join()
+        assertTrue(executor.requests.single().uri.path.endsWith("/epochs/18446744073709551615"))
+    }
+
+    @Test
+    fun epochReadRechecksOwnerAndPropagatesCancellation() {
+        val executor = RecordingExecutor()
+        assertFailsWith<IllegalStateException> {
+            client(executor).getKagemushaWalletLoadEpochOriginalV1(selection(), BigInteger.TEN,
+                ToriiCanonicalRequestAuth(payer, RequestSigner { error("must not sign") }), Runnable { error("retired") })
+        }
+        assertTrue(executor.requests.isEmpty())
+        var current = true
+        val pending = CompletableFuture<TransportResponse>()
+        executor.response = { pending }
+        val result = client(executor).getKagemushaWalletLoadEpochOriginalV1(
+            selection(), BigInteger.TEN, auth(), Runnable { check(current) })
+        current = false
+        pending.complete(TransportResponse(200, byteArrayOf(1), "", mapOf("Content-Type" to listOf("application/x-norito")),
+            executor.requests.single().uri, false))
+        assertFailsWith<CompletionException> { result.join() }
+        val cancelled = CompletableFuture<TransportResponse>()
+        executor.response = { cancelled }
+        val cancelling = client(executor).getKagemushaWalletLoadEpochOriginalV1(
+            selection(), BigInteger.TEN, auth(), Runnable {})
+        cancelling.cancel(false)
+        assertTrue(cancelled.isCancelled)
     }
 
     @Test

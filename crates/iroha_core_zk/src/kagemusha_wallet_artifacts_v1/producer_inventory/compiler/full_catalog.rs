@@ -80,7 +80,12 @@ fn pinned_genesis_fixture() -> Vec<u8> {
     let path = PathBuf::from(
         std::env::var_os("KAGEMUSHA_SIGNED_GENESIS_FIXTURE").expect("selected genesis fixture"),
     );
-    pinned_file(&path, 1 << 20, pin("KAGEMUSHA_SIGNED_GENESIS_FIXTURE_SHA256")).unwrap()
+    pinned_file(
+        &path,
+        1 << 20,
+        pin("KAGEMUSHA_SIGNED_GENESIS_FIXTURE_SHA256"),
+    )
+    .unwrap()
 }
 fn native_finality(fixture: &[u8]) -> SumeragiFinalityVerifier {
     let capture: norito::json::Value = norito::json::from_slice(fixture).unwrap();
@@ -280,13 +285,8 @@ fn complete_wallet_catalog_from_pinned_genesis() {
         inventory.originals.len(),
         originals.bytes
     );
-    let (_installed, _qualified) = acceptance::accept(
-        &output,
-        draft,
-        &mut originals,
-        &native,
-        config,
-    );
+    let (_installed, _qualified) =
+        acceptance::accept(&output, draft, &mut originals, &native, config);
 }
 
 #[test]

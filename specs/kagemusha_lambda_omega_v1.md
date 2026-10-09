@@ -575,7 +575,7 @@ instance and feeds its 32-byte canonical encoding to SHA-256.
 | Operation | P-256 V / F | SHA blocks | σ verified | Ω verified in A | Bytes linked in A |
 |---|---|---:|---:|---:|---|
 | Bootstrap | 2 / 1 (τ, credential; certificate) | 3 | 1 | 0 | σ (3.3 KB) |
-| Load | 2 / 1 (own receipt, credential; Enrollment certificate) | 3 | 1 | 1 + ordinary finality | σ; original receipt/finality |
+| Load | 2 / 1 (own receipt, credential; Enrollment certificate) | 3 | 1 | 1 | σ; exact receipt and native-authorized Advance signature |
 | Send, Unload, Retiring | 2 / 1 | 3 | 1 | 1 | Ω(pred) ‖ σ (8.4 KB) |
 | Receive | 4 / 1 (τ_recv, credential, τ_send, Request; certificate) | 5 | 2 | 2 | σ_recv; Ω_in ‖ σ_send |
 | Receive (renewed receiver credential) | 5 / 2 | 7 | 2 | 2 | as Receive |

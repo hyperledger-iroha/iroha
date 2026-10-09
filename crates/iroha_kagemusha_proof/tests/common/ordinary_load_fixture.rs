@@ -1,14 +1,12 @@
-//! Genuine ordinary-finality Load inputs and sequential offline source artifacts.
-//! The exact captured receipt is never relabeled; native Load rechecks all evidence.
+//! Genuine monetary Load inputs following direct native receipt authentication.
+//! The exact receipt is never relabeled; Load binds its terms and signed Advance.
 
-use super::{
-    bootstrap, bootstrap_objects, common, driver::FinalizedReceipt, load_chain, load_objects,
-};
+use super::{bootstrap, bootstrap_objects, common, load_chain, load_objects};
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::{
     a_relation::{
         AProofPlan, QProofPlan,
-        native::load::{A_STAGE_COUNT, FinalityPolicy, Inputs, Plan, PredecessorInput, QInput},
+        native::load::{A_STAGE_COUNT, Inputs, Plan, PredecessorInput, QInput},
         schedule::sigma_selector,
         split::WKey,
     },
@@ -80,11 +78,11 @@ fn monetary(
     )
 }
 
-/// Build only from a real rooted predecessor and the full driver's verified
-/// receipt. All resulting inputs are checked again by the production native owner.
+/// Build from a real rooted predecessor and a natively authenticated receipt.
+/// The monetary relation verifies receipt binding, authorization and the state transition.
 pub fn build(
     rooted: &load_chain::bootstrap_outer::RootedBootstrapOmega,
-    finalized: &FinalizedReceipt,
+    receipt: &[u8; 282],
     directory: &Path,
 ) -> load_chain::InstalledLoad {
     match fs::symlink_metadata(directory) {
@@ -94,7 +92,7 @@ pub fn build(
         }
         Err(error) => panic!("unavailable Load original directory: {error}"),
     }
-    let (state, insertion) = monetary(&rooted.source.state, &finalized.receipt);
+    let (state, insertion) = monetary(&rooted.source.state, receipt);
     let pallas = PinnedParams::<Ep>::derive(16).unwrap();
     let vesta = PinnedParams::<Eq>::derive(16).unwrap();
     let sigma_params = PinnedParams::<Eq>::derive(12).unwrap();
@@ -214,7 +212,6 @@ pub fn build(
         load_objects::policy(),
         signature_plans,
         rooted.key.clone(),
-        FinalityPolicy::new(finalized.source.clone(), finalized.anchor),
         pallas.clone(),
         vesta.clone(),
     )
@@ -222,9 +219,8 @@ pub fn build(
     let inputs = Inputs {
         state,
         sigma: sigma_proof.proof,
-        receipt: finalized.receipt,
+        receipt: *receipt,
         objects: [own.bytes, certificate.bytes, credential.bytes],
-        finality: finalized.evidence.clone(),
         insertion,
         q: q_inputs.try_into().unwrap(),
         predecessor: PredecessorInput {
@@ -264,7 +260,7 @@ pub fn build(
             previous = Some(fixed);
         }
         eprintln!(
-            "ORDINARY_LOAD_ARTIFACT stage={} complete5A4W=false",
+            "ORDINARY_LOAD_ARTIFACT stage={} complete4A3W=false",
             stage + 1
         );
     }

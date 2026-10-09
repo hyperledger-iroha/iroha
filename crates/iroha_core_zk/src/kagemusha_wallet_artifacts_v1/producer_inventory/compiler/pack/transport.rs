@@ -206,8 +206,7 @@ impl WalletArtifactOriginalsV1 {
         let transport = self.transport_json()?;
         let financial = self.financial_originals_json()?;
         let directory = PrivateDirectory::open_exact(root)?;
-        if wallet.root()? != directory.path().join("wallet-originals")
-        {
+        if wallet.root()? != directory.path().join("wallet-originals") {
             return Err(invalid(
                 "original graph does not belong to exact bundle roots",
             ));
@@ -268,18 +267,14 @@ mod tests {
     #[test]
     fn identical_export_keeps_sealed_metadata_inodes_and_exact_originals() {
         let (_temp, root, wallet, originals) = fixture();
-        originals
-            .write_bundle_metadata(&root, &wallet)
-            .unwrap();
+        originals.write_bundle_metadata(&root, &wallet).unwrap();
         let directory = PrivateDirectory::open_exact(&root).unwrap();
         let before = directory
             .open_retained_read_only("verifier-pack.norito", PACK_MAX_BYTES)
             .unwrap()
             .identity()
             .unwrap();
-        originals
-            .write_bundle_metadata(&root, &wallet)
-            .unwrap();
+        originals.write_bundle_metadata(&root, &wallet).unwrap();
         let after = directory
             .open_retained_read_only("verifier-pack.norito", PACK_MAX_BYTES)
             .unwrap()
@@ -323,11 +318,7 @@ mod tests {
     fn absent_actual_original_prevents_metadata_publication() {
         let (_temp, root, wallet, mut originals) = fixture();
         originals.wallet_originals[0] = BlobV1::of(b"missing authentic original");
-        assert!(
-            originals
-                .write_bundle_metadata(&root, &wallet)
-                .is_err()
-        );
+        assert!(originals.write_bundle_metadata(&root, &wallet).is_err());
         assert!(!root.join("verifier-pack.norito").exists());
         assert!(!root.join("transport.json").exists());
     }
@@ -335,7 +326,8 @@ mod tests {
     #[test]
     fn transport_contains_only_wallet_circuits_and_refuses_missing_originals() {
         let (_temp, root, wallet, originals) = fixture();
-        let json: norito::json::Value = norito::json::from_slice(&originals.transport_json().unwrap()).unwrap();
+        let json: norito::json::Value =
+            norito::json::from_slice(&originals.transport_json().unwrap()).unwrap();
         assert!(json.as_object().unwrap().get("finalityOriginals").is_none());
         originals.write_bundle_metadata(&root, &wallet).unwrap();
         let blob = originals.wallet_originals[0];
@@ -347,9 +339,7 @@ mod tests {
     fn changed_required_verifier_original_refuses_before_metadata_publication() {
         let (_temp, root, wallet, originals) = fixture();
         let blob = BlobV1::of(b"actual wallet original");
-        let path = root
-            .join("wallet-originals")
-            .join(hex::encode(blob.sha256));
+        let path = root.join("wallet-originals").join(hex::encode(blob.sha256));
         std::fs::remove_file(&path).unwrap();
         // Equal extent and private permissions cannot authorize a changed preimage.
         let directory = PrivateDirectory::open_exact(root.join("wallet-originals")).unwrap();
@@ -358,11 +348,7 @@ mod tests {
             .unwrap();
         writer.write_all(&vec![0; blob.bytes as usize]).unwrap();
         writer.seal_read_only().unwrap();
-        assert!(
-            originals
-                .write_bundle_metadata(&root, &wallet)
-                .is_err()
-        );
+        assert!(originals.write_bundle_metadata(&root, &wallet).is_err());
         assert!(!root.join("verifier-pack.norito").exists());
     }
 
@@ -399,11 +385,7 @@ mod tests {
         writer.write_all(b"conflict").unwrap();
         let sealed = writer.seal_read_only().unwrap();
         let before = sealed.identity().unwrap();
-        assert!(
-            originals
-                .write_bundle_metadata(&root, &wallet)
-                .is_err()
-        );
+        assert!(originals.write_bundle_metadata(&root, &wallet).is_err());
         assert!(root.join("verifier-pack.norito").exists());
         assert!(!root.join("transport.json").exists());
         let existing = directory
@@ -455,11 +437,7 @@ mod tests {
         let (_temp, root, wallet, mut originals) = fixture();
         originals.producer_inventory[0] ^= 1;
         assert!(originals.financial_originals_json().is_err());
-        assert!(
-            originals
-                .write_bundle_metadata(&root, &wallet)
-                .is_err()
-        );
+        assert!(originals.write_bundle_metadata(&root, &wallet).is_err());
         assert!(!root.join("financial-originals.json").exists());
         assert!(!root.join("verifier-pack.norito").exists());
     }
@@ -473,11 +451,7 @@ mod tests {
         writer.write_all(b"conflict").unwrap();
         let sealed = writer.seal_read_only().unwrap();
         let before = sealed.identity().unwrap();
-        assert!(
-            originals
-                .write_bundle_metadata(&root, &wallet)
-                .is_err()
-        );
+        assert!(originals.write_bundle_metadata(&root, &wallet).is_err());
         let existing = directory
             .open_retained_read_only("financial-originals.json", 8)
             .unwrap();

@@ -49,6 +49,10 @@ fn counted<T>(original: bool, read: impl FnOnce() -> T) -> (T, [usize; 2]) {
     let result = recipe(original, read);
     (result, COUNTS.get().unwrap())
 }
+// Observe the shipping graph coverage without changing its read-selection recipe.
+pub(super) fn observe_reads<T>(read: impl FnOnce() -> T) -> (T, [usize; 2]) {
+    counted(false, read)
+}
 fn limits(allocation: usize) -> norito::DecodeLimits {
     norito::DecodeLimits::new(
         MAX_BODY_BYTES,

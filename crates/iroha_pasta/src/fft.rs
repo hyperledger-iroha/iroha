@@ -50,6 +50,13 @@ pub enum FftError {
         /// The input length.
         actual: usize,
     },
+    /// The source and destination batches have different column counts.
+    WrongColumnCount {
+        /// The number of destination columns.
+        expected: usize,
+        /// The number of source columns.
+        actual: usize,
+    },
     /// A coset shift of zero (not a coset; the inverse transform would need
     /// `0^-1`).
     ZeroShift,
@@ -62,6 +69,9 @@ impl core::fmt::Display for FftError {
             Self::UnsupportedSize { k } => write!(f, "unsupported FFT size 2^{k}"),
             Self::WrongLength { expected, actual } => {
                 write!(f, "FFT input has {actual} elements, expected {expected}")
+            }
+            Self::WrongColumnCount { expected, actual } => {
+                write!(f, "FFT has {actual} source columns, expected {expected}")
             }
             Self::ZeroShift => write!(f, "FFT coset shift is zero"),
         }
@@ -130,6 +140,70 @@ impl<F: PastaField> CosetFftPlan<'_, '_, F> {
                 dif::<_, false>(column, &self.domain.forward, shift, cancellation);
                 bit_reverse_scale::<_, false>(column, self.domain.k, None, cancellation);
             });
+        }
+        CancellationToken::checkpoint(cancellation)?;
+        Ok(())
+    }
+
+    /// Evaluates immutable coefficient columns into caller-owned output columns.
+    ///
+    /// The first butterfly pass reads the coefficients directly, avoiding a
+    /// separate copy into the output. Later passes reuse that output in place.
+    /// Each source is borrowed exactly once and retained as slice metadata before
+    /// validation. Powers and coefficients remain unchanged; no field scratch
+    /// is allocated.
+    /// All Rayon tasks join before cancellation is reported. A cancelled output
+    /// is incomplete and must be discarded or reinitialized by its owner.
+    ///
+    /// # Errors
+    ///
+    /// Checks cancellation, then column count, then every source/destination
+    /// length before writing any output. A mismatch returns
+    /// [`FftError::WrongColumnCount`] or [`FftError::WrongLength`].
+    pub fn fft_many_from_cancellable(
+        &self,
+        coefficients: &[impl AsRef<[F]> + Sync],
+        columns: &mut [&mut [F]],
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<(), FftError> {
+        CancellationToken::checkpoint(cancellation)?;
+        if coefficients.len() != columns.len() {
+            return Err(FftError::WrongColumnCount {
+                expected: columns.len(),
+                actual: coefficients.len(),
+            });
+        }
+        // AsRef need not return the same slice on a later call. Freeze its first
+        // result so the exact views checked below also supply the butterflies.
+        let sources: Vec<&[F]> = coefficients.iter().map(AsRef::as_ref).collect();
+        for (source, output) in sources.iter().zip(columns.iter()) {
+            self.domain.check(source)?;
+            self.domain.check(output)?;
+        }
+        CancellationToken::checkpoint(cancellation)?;
+        if let [column] = columns {
+            dif_from::<_, true>(
+                sources[0],
+                column,
+                &self.domain.forward,
+                self.powers,
+                cancellation,
+            );
+            bit_reverse_scale::<_, true>(column, self.domain.k, None, cancellation);
+        } else {
+            columns
+                .par_iter_mut()
+                .zip(sources.par_iter())
+                .for_each(|(column, source)| {
+                    dif_from::<_, false>(
+                        source,
+                        column,
+                        &self.domain.forward,
+                        self.powers,
+                        cancellation,
+                    );
+                    bit_reverse_scale::<_, false>(column, self.domain.k, None, cancellation);
+                });
         }
         CancellationToken::checkpoint(cancellation)?;
         Ok(())
@@ -503,8 +577,18 @@ fn dif<F: PastaField, const PARALLEL: bool>(
         // A single coefficient is its own evaluation; shift^0 = 1.
         return;
     }
-    let k = tw.len();
-    let mut s = k; // stages are applied for half sizes 2^(s-1) down to 1
+    dif_stages::<_, PARALLEL>(a, tw, shift, tw.len(), cancellation);
+}
+
+/// Finish a transform after any already-completed outer stages.
+fn dif_stages<F: PastaField, const PARALLEL: bool>(
+    a: &mut [F],
+    tw: &[Vec<F>],
+    shift: Option<CosetShift<'_, F>>,
+    mut s: usize,
+    cancellation: Option<&CancellationToken>,
+) {
+    let n = a.len();
     let mut first = true;
     while s >= 2 {
         if CancellationToken::checkpoint(cancellation).is_err() {
@@ -544,6 +628,106 @@ fn dif<F: PastaField, const PARALLEL: bool>(
             body(a);
         }
     }
+}
+
+/// Shared two-stage butterfly; preserves the exact in-place operation order.
+#[inline]
+fn dif_butterfly4<F: PastaField>(
+    [a0, a1, a2, a3]: [F; 4],
+    m: usize,
+    outer: &[F],
+    inner: &[F],
+    j: usize,
+) -> [F; 4] {
+    let y0 = a0 + a2;
+    let y1 = a1 + a3;
+    let (y2, y3) = if j == 0 {
+        (a0 - a2, (a1 - a3) * outer[m])
+    } else {
+        ((a0 - a2) * outer[j], (a1 - a3) * outer[j + m])
+    };
+    let r0 = y0 + y1;
+    let r2 = y2 + y3;
+    let (r1, r3) = if j == 0 {
+        (y0 - y1, y2 - y3)
+    } else {
+        let w = inner[j];
+        ((y0 - y1) * w, (y2 - y3) * w)
+    };
+    [r0, r1, r2, r3]
+}
+
+/// Reads the first pass directly from immutable coefficients into its output.
+fn dif_from<F: PastaField, const PARALLEL: bool>(
+    coefficients: &[F],
+    output: &mut [F],
+    tw: &[Vec<F>],
+    powers: &[F],
+    cancellation: Option<&CancellationToken>,
+) {
+    if CancellationToken::checkpoint(cancellation).is_err() {
+        return;
+    }
+    let n = output.len();
+    if n == 1 {
+        output[0] = coefficients[0];
+        return;
+    }
+    if n == 2 {
+        let x = coefficients[0];
+        let y = coefficients[1] * powers[1];
+        output[0] = x + y;
+        output[1] = x - y;
+        return;
+    }
+    let k = tw.len();
+    let m = n / 4;
+    let outer = &tw[k - 1];
+    let inner = &tw[k - 2];
+    let butterfly = |q0: &mut [F], q1: &mut [F], q2: &mut [F], q3: &mut [F], j0: usize| {
+        for (off, (((x0, x1), x2), x3)) in q0
+            .iter_mut()
+            .zip(q1.iter_mut())
+            .zip(q2.iter_mut())
+            .zip(q3.iter_mut())
+            .enumerate()
+        {
+            if off % 1024 == 0 && CancellationToken::checkpoint(cancellation).is_err() {
+                return;
+            }
+            let j = j0 + off;
+            let a = [
+                coefficients[j] * powers[j],
+                coefficients[j + m] * powers[j + m],
+                coefficients[j + 2 * m] * powers[j + 2 * m],
+                coefficients[j + 3 * m] * powers[j + 3 * m],
+            ];
+            let [r0, r1, r2, r3] = dif_butterfly4(a, m, outer, inner, j);
+            *x0 = r0;
+            *x1 = r1;
+            *x2 = r2;
+            *x3 = r3;
+        }
+    };
+    let (q0, rest) = output.split_at_mut(m);
+    let (q1, rest) = rest.split_at_mut(m);
+    let (q2, q3) = rest.split_at_mut(m);
+    if PARALLEL && n >= PARALLEL_MIN {
+        // Same scheduling as the single large block of the in-place first pass.
+        let chunk = (m / (rayon::current_num_threads() * 2))
+            .max(256)
+            .min(m)
+            .max(1);
+        q0.par_chunks_mut(chunk)
+            .zip(q1.par_chunks_mut(chunk))
+            .zip(q2.par_chunks_mut(chunk))
+            .zip(q3.par_chunks_mut(chunk))
+            .enumerate()
+            .for_each(|(c, (((c0, c1), c2), c3))| butterfly(c0, c1, c2, c3, c * chunk));
+    } else {
+        butterfly(q0, q1, q2, q3, 0);
+    }
+    dif_stages::<_, PARALLEL>(output, tw, None, k - 2, cancellation);
 }
 
 /// One fused DIF pass over blocks of `4m`.
@@ -598,25 +782,11 @@ fn dif_pass4<F: PastaField, const PARALLEL: bool>(
                 a2 *= powers[j + 2 * m];
                 a3 *= powers[j + 3 * m];
             }
-            // Outer stage (half 2m): pairs (j, j+2m) and (j+m, j+3m).
-            let y0 = a0 + a2;
-            let y1 = a1 + a3;
-            let (y2, y3) = if j == 0 {
-                (a0 - a2, (a1 - a3) * outer[m])
-            } else {
-                ((a0 - a2) * outer[j], (a1 - a3) * outer[j + m])
-            };
-            // Inner stage (half m): pairs (j, j+m) and (j+2m, j+3m).
-            *x0 = y0 + y1;
-            *x2 = y2 + y3;
-            if j == 0 {
-                *x1 = y0 - y1;
-                *x3 = y2 - y3;
-            } else {
-                let w = inner[j];
-                *x1 = (y0 - y1) * w;
-                *x3 = (y2 - y3) * w;
-            }
+            let [r0, r1, r2, r3] = dif_butterfly4([a0, a1, a2, a3], m, outer, inner, j);
+            *x0 = r0;
+            *x1 = r1;
+            *x2 = r2;
+            *x3 = r3;
         }
     };
     let blocks = n / block;

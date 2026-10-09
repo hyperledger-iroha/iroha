@@ -48,6 +48,7 @@ macro_rules! schema_types {
             // Current Torii finality responses and challenge-bound node statements.
             iroha_data_model::sumeragi_finality::SumeragiFinalityProof,
             iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint,
+            iroha_data_model::sumeragi_finality::SumeragiCommitCheckpointV1,
             iroha_data_model::sumeragi_finality::SumeragiFinalityBundle,
             iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation,
             // Independent private roots and body-free parent anchoring.

@@ -5,7 +5,7 @@ None has passed until its actual source/receipt dependencies have qualified. The
 host-custody test covers only persistence of the explicit software hardware fixture.
 
 The export test first authenticates the complete signed producer catalog and independent
-native genesis through `open_pinned_engineering_wallet_sources`. Its existing ten source
+native genesis through `open_pinned_engineering_wallet_sources`. Its seven source
 pins and path inputs are mandatory. `KAGEMUSHA_NATIVE_SOURCE_SHA256` records the independently
 captured test candidate. All new paths must be absolute, inside this checkout's
 `target/qualification`; output directories must not exist.
@@ -33,13 +33,14 @@ asset incarnation or old genesis fixture.
    `KagemushaWalletLedgerV1::IssueLoad`: A's actual scheme/wallet/asset, ordinal 0, request
    `[201;32]`, net amount 100, no online charge. The exact account, credential, certificate
    set, asset, Bootstrap and Activate originals accompany it. The manifest also binds all
-   ten source pins, executed-setup manifest pin, native chain/instance/initial epoch and
+   seven source pins, executed-setup manifest pin, native chain/instance/initial epoch and
    candidate binary/source hashes.
    This is **target DATA**, with no receipt, proof or settlement verdict. A missing valid
    Activate or foreign genesis must be refused by the producer.
 3. The actual producer must execute/finalize that exact target, then export the canonical
    `KagemushaWalletLoadReceiptV1` (maximum 512 bytes) and
-   `KagemushaWalletLoadFinalityV1` (maximum 16,384 bytes). The historical ordinary firstLoad
+   `KagemushaWalletLoadFinalityV1` (maximum 262,144 bytes, one receipt certificate and event path).
+   The historical ordinary firstLoad
    fixture targets a different wallet/asset and is not a substitute.
 4. Run `actual_native_a_to_b_to_c_then_unload_with_restart_and_replay` with a fresh
    `KAGEMUSHA_NATIVE_EXCHANGE_OUTPUT`, the existing `KAGEMUSHA_NATIVE_LOAD_TARGET` manifest
@@ -70,21 +71,23 @@ never a substitute for the native verifier's source capability.
 | --- | --- | --- |
 | A target | `export_actual_a_load_target_with_retained_native_custody` | Fresh target output, as above. Keep `wallet-a` private. |
 | Fund A | Core `funding::execute_actual_a_registration_activation_and_load` | Exact target path/pin and `KAGEMUSHA_NATIVE_VERIFIER_PACK`/`_SHA256`. `KAGEMUSHA_EXECUTED_LOAD_OUTPUT` is fresh; it receives `capture.json`, H1–H5 canonical blocks/native proofs and exact `receipt.norito`. The test executes Register/install, Activate and IssueLoad against real StateExecutor, then checks duplicate debit refusal. |
-| Prove Load | `load::generate_genuine_load_finality_from_executed_history` | Ten source pins, catalog/setup/target inputs above, `KAGEMUSHA_EXECUTED_LOAD_CAPTURE`/`_SHA256`, and `KAGEMUSHA_EXECUTED_LOAD_RECEIPT_SHA256`. Fresh `KAGEMUSHA_NATIVE_LOAD_PROOF_OUTPUT` and a separate fresh `KAGEMUSHA_NATIVE_LOAD_ADMISSION_OUTPUT`. |
-| Exchange | `actual_native_a_to_b_to_c_then_unload_with_restart_and_replay` | Exact funded receipt plus genuine Load proof; reopen the same A. Outputs include the claim and retained C custody; no ledger settlement is claimed. |
+| Certify Load | `load::export_native_load_finality_from_executed_history` | Seven source pins, catalog/setup/target inputs above, `KAGEMUSHA_EXECUTED_LOAD_CAPTURE`/`_SHA256`, and `KAGEMUSHA_EXECUTED_LOAD_RECEIPT_SHA256`. Fresh `KAGEMUSHA_NATIVE_LOAD_EVIDENCE_OUTPUT` and a separate fresh `KAGEMUSHA_NATIVE_LOAD_ADMISSION_OUTPUT`. |
+| Exchange | `actual_native_a_to_b_to_c_then_unload_with_restart_and_replay` | Exact funded receipt plus native BLS certificate and event inclusion; reopen the same A. Outputs include the claim and retained C custody; no ledger settlement is claimed. |
 | Settle C | Core `funding::settlement::execute_actual_c_unload_with_conservation_and_permanent_replay` | Same target/pack/receipt and `KAGEMUSHA_NATIVE_UNLOAD_CLAIM`/`_SHA256`. Fresh `KAGEMUSHA_EXECUTED_UNLOAD_OUTPUT` receives `settlement.json` and 13 originals, including H6 canonical SignedBlockWire, its exact signed transaction, instruction and claim. |
 | Confirm C | `settlement::actual_c_confirms_executed_unload_after_process_restart` | Same catalog/setup/target/receipt pins; `KAGEMUSHA_NATIVE_EXCHANGE_RESULT`/`_SHA256` and `KAGEMUSHA_EXECUTED_UNLOAD_SETTLEMENT`/`_SHA256`. Fresh `KAGEMUSHA_NATIVE_SETTLEMENT_CONFIRMATION_OUTPUT`; reopen the retained C key and four public originals in place. |
 
-The Load producer authenticates the signed verifier graph and every ordinary H1–H5
-certificate and counted event opening. It then uses the current `ServerFinalityV1`
-producer's opaque source recipes, bounded per-use proving-key cache and strict
-original imports. It exports `receipt.norito`, `load-finality.norito` and
-`generated.json`. A recovered verifier metadata snapshot does not imply a complete
-proving-key directory or a `source-complete.json`; this path creates neither claim.
-Use the separate `load::resume_genuine_load_finality_from_executed_history` test
-only with the same selected output and all exact input pins. It requires the
-existing selection/cache/journal and a new admission-output directory. Missing
-selected state is refused; it never initializes a replacement on resume.
+The Load evidence exporter authenticates the installed wallet identity, independently
+pinned signed genesis and every ordinary H1–H5 certificate and counted event opening.
+It retains only certified epoch boundaries and the receipt-block certificate in
+`load-finality.norito`, alongside `receipt.norito` and `generated.json`. The native
+verifier rechecks this envelope directly with BLS. There is no finality circuit,
+proving-key cache, proof journal or finality source catalog. The seven source pins
+include `KAGEMUSHA_SIGNED_GENESIS_FIXTURE_SHA256` and the six wallet catalog/identity
+pins; they do not include a finality producer or inventory.
+Use `load::resume_native_load_finality_from_executed_history` only with the same
+selected output and all exact input pins. It requires the existing selection and
+a new admission-output directory. Missing selected state is refused; it never
+initializes a replacement on resume.
 
 The settlement test requires a separately captured **Core lib-test executable**;
 compiling Core as a bridge dependency does not produce this test harness. It
@@ -98,7 +101,7 @@ after confirmation, and asserts zero new payment signatures. Its confirmation
 original is a test result projection, not a new public protocol.
 
 Engineering orchestration may reuse only completed stages whose inputs, binary,
-log and output originals still match. A failed/interrupted Load proof can use the
+log and output originals still match. An interrupted native evidence export can use the
 explicit existing-store resume action; deterministic funding/settlement tests can
 be repeated in a fresh State and fresh output directory. Interrupted A creation,
 A→B→C exchange or C confirmation requires explicit native custody reconciliation;

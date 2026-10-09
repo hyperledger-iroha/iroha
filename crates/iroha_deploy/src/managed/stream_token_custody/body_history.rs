@@ -298,6 +298,16 @@ impl Snapshot {
         Ok(())
     }
 }
+const SCOPE_ROOT_NAMES: [&str; 4] = ["original.nrt", "anchor.nrt", "bodies", "epochs"];
+
+fn reuse_scope_ancestry() -> bool {
+    #[cfg(test)]
+    if scope_ancestry_tests::original_recipe() {
+        return false;
+    }
+    !norito::core::decode_limits_active()
+}
+
 /// Only BodyHistory constructs this sealed evidence after its complete bounded outer census.
 pub(in crate::managed) struct ScopeEvidence {
     root: Arc<PrivateDirectory>,
@@ -344,18 +354,50 @@ impl EnrollmentScopeEvidence for ScopeEvidence {
         &self,
         pass: Option<&SnapshotReadPass<'_>>,
     ) -> Result<()> {
+        #[cfg(test)]
+        scope_ancestry_tests::record(scope_ancestry_tests::Point::Full);
         self.root.revalidate()?;
-        check_names(
-            &self.root,
-            &["original.nrt", "anchor.nrt", "bodies", "epochs"],
-            4,
-        )?;
+        check_names(&self.root, &SCOPE_ROOT_NAMES, 4)?;
+        #[cfg(test)]
+        scope_ancestry_tests::record(scope_ancestry_tests::Point::Inventory);
         self.body.revalidate()?;
         if pass.is_some_and(|pass| pass.covers(&self.snapshots)) {
             Ok(())
         } else {
             self.snapshots.revalidate()
         }
+    }
+    fn revalidate_in_tree(
+        &self,
+        pass: Option<&SnapshotReadPass<'_>>,
+        tree: &mut iroha_fs::PrivateReadTreeScope<'_>,
+    ) -> Result<()> {
+        if !reuse_scope_ancestry() || !pass.is_some_and(|pass| pass.covers(&self.snapshots)) {
+            return self.revalidate_with_snapshot_read_pass(pass);
+        }
+        #[cfg(test)]
+        scope_ancestry_tests::record(scope_ancestry_tests::Point::Tree);
+        // The anchor still receives full native entry/exit checks. Only its adjacent
+        // repeated entry is consolidated; the actual inventory and its comparison stay fresh.
+        let names = tree.read_scope(&self.root, |reader| {
+            let names = reader.entries(4)?;
+            #[cfg(test)]
+            {
+                scope_ancestry_tests::record(scope_ancestry_tests::Point::Inventory);
+                scope_ancestry_tests::hit(scope_ancestry_tests::Boundary::InventoryRead)?;
+            }
+            Ok::<_, crate::managed::Error>(names)
+        })?;
+        require_allowed_names(&names, &SCOPE_ROOT_NAMES)?;
+        #[cfg(test)]
+        scope_ancestry_tests::hit(scope_ancestry_tests::Boundary::RootClosed)?;
+        // Strict descendants share only the exact native prefix; nonshared owners retain
+        // full checks. The enclosing graph closes the original anchor on every ordinary
+        // result. Interior prefix changes restored before those fences may be unseen.
+        tree.revalidate_directory(&self.body)?;
+        #[cfg(test)]
+        scope_ancestry_tests::hit(scope_ancestry_tests::Boundary::BodyClosed)?;
+        Ok(())
     }
     fn covers_semantic_original(&self, pass: &SnapshotReadPass<'_>, semantic: [u8; 32]) -> bool {
         if !pass.covers(&self.snapshots) || self.binding.semantic != semantic {
@@ -591,13 +633,17 @@ fn checked_names(
     bound: usize,
 ) -> Result<Vec<std::ffi::OsString>> {
     let names = directory.entries(bound)?;
+    require_allowed_names(&names, allowed)?;
+    Ok(names)
+}
+fn require_allowed_names(names: &[std::ffi::OsString], allowed: &[&str]) -> Result<()> {
     if names
         .iter()
         .any(|name| !allowed.iter().any(|allowed| name == OsStr::new(allowed)))
     {
         return Err(invalid("enrollment body contains unknown material"));
     }
-    Ok(names)
+    Ok(())
 }
 fn check_names(directory: &PrivateDirectory, allowed: &[&str], bound: usize) -> Result<()> {
     checked_names(directory, allowed, bound).map(|_| ())
@@ -2511,3 +2557,5 @@ pub(in crate::managed) mod operation_scope_tests;
 #[cfg(test)]
 #[path = "body_history/graph_original_tests.rs"]
 pub(in crate::managed) mod graph_original_tests;
+#[cfg(test)]
+mod scope_ancestry_tests;

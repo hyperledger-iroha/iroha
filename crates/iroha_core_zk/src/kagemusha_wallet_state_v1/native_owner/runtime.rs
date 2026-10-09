@@ -513,12 +513,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             let authenticated =
                 proof(installed.authenticate_producer_inventory(producer_inventory))?;
             let sources = authenticated
-                .qualify_wallet(
-                    &installed,
-                    &config.genesis,
-                    &mut originals,
-                    config.read,
-                )
+                .qualify_wallet(&installed, &config.genesis, &mut originals, config.read)
                 .map_err(|error| {
                     if error.is_unavailable() {
                         Error::ArtifactsUnavailable("native startup original source")

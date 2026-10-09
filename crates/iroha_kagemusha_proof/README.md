@@ -66,8 +66,8 @@ constraints remain separate from final recursive artifact qualification.
 `QSigmaSource::source_circuit` reconstructs the fixed two-bus unknown source;
 `QSignaturePlan::source_circuit` reconstructs the exact signature roles and root.
 Offline construction and strict original-key intake share these factories. The
-captured seven-case component selection passes source-layout parity, selector and
-signature-key rejection, the monetary recipe and finality verifier-only checks
+captured component selection passes source-layout parity, selector and
+signature-key rejection and the monetary recipe checks
 (`target/qualification/native-q-source-factories`). These checks grant no wallet
 or full-catalog authority.
 
@@ -134,142 +134,28 @@ The ordinary receipt digest, scheme, asset, wallet, ordinal, amount and online
 charge are bound to the same operation and state fields. Request, quote,
 transaction, height and payer account digest remain bound by the exact receipt transcript.
 
-The fixed native schedule has five Tagged3 A stages and four W continuations:
-predecessor/recovery, Q_sigma, ordinary consensus finality, own Advance receipt,
-and current credential/Enrollment. The finality stage hard-verifies the installed
-`ReceiptFinalityCircuit` wrapper at its complete singleton endpoints under the
-independently selected genesis anchor. Its Pallas fold retains prior carry,
-prior W opening, finality carry and finality wrapper opening. Its next W folds
-prior Vesta, the A-stage opening and finality Vesta with an explicit trivial filler.
-Neither carried source obligation can be replaced by the wrapper opening alone.
-The two signature Q leaves retain the own receipt and current credential plus
-fixed-root Enrollment certificate; there is no separate Load issuer signature.
+The fixed native schedule has four Tagged3 A stages and three W continuations:
+predecessor/recovery with receipt binding, Q_sigma, own Advance receipt, and
+current credential/Enrollment. The native wallet verifies the ordinary BLS
+certificate and counted receipt event against authenticated signed genesis and
+epoch transitions before requesting the Advance signature. Under the selected
+released-app/uncompromised-OS profile, that credential-bound signature authorizes
+the exact Load effect. The monetary circuit does not verify BLS itself.
 
-`a_relation::native::load::Prover::from_artifacts` retains only the nine
-exact descriptor/VK identities. `import_a` and `import_w` reconstruct each
-compiled unknown source and strictly import one original PK for the caller to
-borrow during that proof and release afterward. Public source factories reuse
-those same compiled layouts for offline catalog construction. Each W binds its
-preceding installed A key, and each continued A binds its preceding installed W.
-Canonical PIPAPK01 source/copy/selector/commitment checks and exact installed-VK
-equality bind original proving tables without another signing format. Runtime
-preparation verifies the predecessor, three Q proofs, finality wrapper and all
-original carried claims. Checkpoint restoration retains their exact source chain.
-The terminal still exports its Pallas, current Vesta, predecessor Vesta and
-terminal-A opening to the final Omega owner; it grants no monetary head.
+`a_relation::native::load::Prover::from_artifacts` retains seven descriptor/VK
+identities. Imports reconstruct the fixed monetary source and authenticate each
+original key. Runtime preparation verifies the predecessor, three Q proofs and
+all monetary carried claims. Each wrapper binds its previous stage. Checkpoint
+restoration preserves this chain, and the terminal exports its obligations to
+Omega; it grants no monetary head alone.
 
-All five A and four W original source layouts pass exact original import at k16,
-including rejection of foreign-stage keys and a changed genesis anchor. The
-captured metadata/borrowed-key suite passes six unit tests and the actual nine-key
-import regression (117.29 s); A rows are 53,354, 61,436, 60,868, 55,352 and 56,016.
-The formerly rejected fifth terminal checkpoint now has explicit stage-bound
-coverage. Captured sources and binary are in
-`target/qualification/native-load-borrowed`. This witnessless source-key
-qualification and receipt/signature component tests do not establish funding
-acceptance. TODO: produce a genuine complete genesis-to-receipt finality proof
-through this Load chain. The recursive integration fixture requires the installed
-native Plan, original five A/four W artifacts and genuine finalized Inputs for
-each exact predecessor. Old issuer-funded diagnostic entrypoints are retired;
-their compact-catalog, corrected-claim and subsequent-operation assertions remain
-explicit fixture-taking helpers until the full source owner supplies those
-originals. They are not counted as replacement positive chain coverage. The
-authenticated producer catalog, native wallet intake, common Omega transport bound
-and physical-device execution remain release gates.
-
-`finality::catalog::compile` is an explicit offline source compiler. It emits
-originals for the exact six fixed programs, ordered interval merges, semantic
-compositions and finite Genesis/Append catalog, then mounts the complete graph
-through the import-only runtime boundary. Keys are generated and released one
-source at a time. `DirectoryCatalog` bounds reads and total inventory bytes,
-checks canonical identities, exact lengths and integrity hashes, and refuses
-changed replacement files. Its integrity inventory and caller-recorded source
-provenance grant no installation authority or live-finality claim.
-
-The actual Genesis source/wrapper import and proof test passes, including
-changed-source-table and endpoint rejection. Four inventory tests and the
-shared-class layout samples pass. The initial six-profile survey first stopped
-at Result0's 165,677,622-byte original PK because its diagnostic file cap was
-128 MiB. The separately labelled 256 MiB offline survey passes all six actual
-initial source/wrapper imports (twelve original keys), with combined source
-originals up to 182,501,145 bytes. These caps bound original-file reads and do
-not establish process-memory compliance. That historical unbatched source
-passed synthesis for 1,139 distinct classes, including every BLS cursor. The
-current paired sources have 598 distinct classes, all fitting k16 (15.57 s).
-Context has 1,281 installed leaves with semantic endpoint 2,561; BLS has 542
-exact pairs ending at 1,084; Result has 258 batches ending at 515. Actual
-source/wrapper/import cases pass for three Context classes (273.62 s), four
-BLS classes (234.52 s) and three Result classes (208.18 s); the complete BLS
-strict trace passes (829.15 s). The complete Result short/maximum trace passes (763.33 s), covering all
-258 batches and 515 original semantics. Current captures are in `target/qualification/finality-context-batches`,
-`finality-bls-pairs` and `finality-result-pairs`; historical captures remain in
-`target/qualification/finality-offline-catalog`. Complete program/composition
-original import and proof closure remain separate checks.
-
-The resumable driver passes a genuine Genesis checkpoint regression (57.30 s),
-including all six endpoint words and proof/P/V mutations. Its bounded offline
-streaming catalog preserves exact original hashes and D/VK bytes through
-128 MiB PK eviction, regeneration, strict reimport, proof verification and
-restart recompilation (84.22 s). Captures are in
-`target/qualification/finality-resumable-driver` and
-`target/qualification/finality-streaming-genuine`. These are constructor-anchor
-component checks; full finality and ordinary Load still require complete proof closure.
-
-The current bounded full-run driver captures the exact signed ordinal-zero,
-100-unit fixture before proving. Its fixture/storage checks and all five A/four W
-Load original imports pass (108.15 s for the imports). The immutable run in
-`target/qualification/ordinary-first-load-full` is executing all 8,944 finality
-proof invocations, followed by the native Load chain. It keeps at most 512 MiB
-of finality PK payloads on disk, regenerates only driver-owned originals against
-retained exact commitments, holds exclusive directory custody, and checkpoints
-only proofs whose source identity, endpoints and both claims verify. The signed
-fixture has synthetic execution results and a real four-validator test QC; it
-does not establish funded-ledger execution or full-wallet catalog admission.
-The run remains unqualified until the complete proof chain passes.
-
-The `ordinary_finality` source-only entry point accepts a separately pinned
-`iroha.kagemusha.executed-ledger-setup.v1` setup. It checks all nine exact originals,
-validates the canonical signed genesis against its raw manifest, verifies the fixed
-H1/H2 native proof array contiguously, and derives the Global history anchor from
-that same signed root. The setup's accounts and asset registration must occur in
-the signed instructions. The external execution receipt remains responsible for
-funding and incarnation provenance; this compiler does not execute ledger state.
-`canonical_executed_setup_admits_only_exact_source_inputs` performs intake alone;
-`canonical_executed_setup_compiles_complete_finality_sources_without_load` writes
-a complete source graph into a fresh exclusive output. Its completion record is
-published only after the graph's strict original imports succeed. Neither entry
-point manufactures a Load, creates a finality proof, or grants wallet installation
-authority. Both require explicit setup and source pins. The genuine canonical
-setup intake and seven semantic mutations pass; complete source compilation is
-still running. These are engineering component results, not release qualification.
-
-The separate executed-Load entry point selects independently pinned setup, native
-wallet target, execution capture and receipt originals. It verifies the complete
-native H1–H5 prefix and compares each captured Result/CommitQC/committee field,
-then authenticates the exact counted Load event with its recorded index and path.
-It reconstructs the completed source-only catalog under exclusive custody and
-feeds every H2–H5 block to the same recursive history prover. Only a fully verified
-terminal receipt with both decided claims can publish `finality.norito` and its
-completion record. No historical fixture fallback exists. The actual funded Load
-runtime remains pending the matching canonical catalog and native A target.
-
-A separate bounded receipt loader pins the producer binary, source manifest,
-original fixture and completed inventory, then reconstructs the receipt verifier
-using descriptor/VK originals only. It derives the six expected endpoints from
-the independent anchor and exact receipt and rechecks the original checkpoint
-proof and both claims. Seven default custody/storage/parser tests pass (3.95 s),
-covering rejection of correctly pinned malformed captures and requests for proving keys;
-source/executable provenance is retained in
-`target/qualification/finality-receipt-restore/current`. Its complete receipt
-restore test remains pending the full run and grants no production admission.
-
-`finality::catalog::qualify_receipt` reconstructs the same fixed graph using
-VK-only derivation and bounded exact descriptor/VK reads. Its opaque sealed-source
-entries and pinned wrappers avoid downloading server PKs into a wallet. Every
-record must be consumed, and history's derived wrapper must equal the layout
-bound by Append. Its actual Genesis and shared Genesis/Append wrapper identity checks pass2/2
-in55.50 s against strict original-PK import, with zero PK reads and exact
-metadata/original/anchor mutations (`target/qualification/finality-verifier-only`).
-Complete graph execution and authenticated wallet installation remain unqualified.
+The recursive finality circuits, source catalog, block-history prover, proving
+cache, proof journal and finality artifact compiler are deleted. Direct BLS
+verification needs no finality proving artifacts. Tests retain the exact captured
+receipt, native certificate checks, monetary term binding and a genuine Load
+composition harness. Changed A/W/Omega artifacts and real funded wallet exchange
+require current-candidate qualification; see
+[`kagemusha_native_finality_goals.md`](../../specs/kagemusha_native_finality_goals.md).
 
 The Core artifact inventory also qualifies all sixteen sigma originals against
 fixed compiled sources, one original PK at a time. Quota-enabled Send uses the
@@ -286,7 +172,7 @@ final-Omega catalogs. Retiring retains an explicitly unqualified candidate Omega
 The artifact namespace passes17 cases with6explicit expensive ignores (3.44 s),
 including the independent14,513-byte native-profile preimage. The loader now
 reconstructs each logical operation route, including fixed Send masks and the
-qualified ordinary-finality dependency for Load, then checks every A/W original.
+native-authorized receipt binding for Load, then checks every A/W original.
 Final Omega intake requires all52 qualified routes, exact terminal D/VK deduplication
 in signed program order, common predecessor identity and the canonical compact
 source. Its compiled placement recipe is part of the sole native profile. Complete
@@ -310,14 +196,6 @@ ignored; the initial all-ignored Bootstrap invocation is retained separately.
 Shared fixture bodies preserve all current builders and keep test registration
 in their own harnesses. All proof test targets compile and pass scoped strict lint.
 This single-terminal check establishes no full-catalog, latency or memory pass.
-
-Within a block session, identical current/authorized context-hash inputs reuse
-the complete proved context scan only after native verification of its installed
-source proof and both carried claims. Every input field and all six endpoint
-words must match; both schedule compositions still bind their parser and context
-evidence. Two selection/mutation tests pass, and independent source review found
-no binding gap. Genuine reused-proof composition, the complete artifact graph and
-the ordinary-finality recursive Load fixture remain unqualified.
 
 ## Send composition
 
@@ -850,8 +728,8 @@ current-cap and three-original streaming checks. Standalone producer owners stil
 own their public metadata; there is one canonical borrowed reconstruction path.
 Seals are not persisted or decoded, so each fresh installation repeats strict
 source qualification. No per-acquisition plan/catalog or D/V graph is cloned.
-Checkpoint restores do not acquire sources or rebuild keys. Sigma and finality proving remain
-separate owners. Complete wallet memory and performance qualification remain
+Checkpoint restores do not acquire sources or rebuild keys. Sigma proving remains
+a separate owner; Load finality uses native BLS verification. Complete wallet memory and performance qualification remain
 open; existing genuine family differentials and both-curve helper controls retain
 proof/opening/checkpoint parity and pre/post-reconstruction cancellation coverage.
 

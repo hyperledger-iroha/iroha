@@ -450,7 +450,9 @@ fn retain_observed_carrier(
         transaction,
         original,
         original.checkpoint().height(),
+        true,
     )
+    .map(|outcome| outcome.map(|outcome| outcome.finality))
 }
 
 /// Retain a bounded verified replay from the sole finality-source abstraction. Test sources
@@ -493,7 +495,7 @@ pub(crate) fn retain_carrier_execution_progress<S: FinalitySource + ?Sized>(
             NonZeroU64::new(target).ok_or_else(|| invalid("zero native operation carrier"))?,
         )
         .map_err(|_| invalid("original native operation carrier replay unavailable"))?;
-    retain_verified_carrier(directory, transaction, verifier, height)
+    retain_verified_carrier(directory, transaction, verifier, height, require_success)
 }
 
 // Preserve one publication order for independently replayed and already observed carriers.
@@ -502,7 +504,8 @@ fn retain_verified_carrier(
     transaction: &SignedTransaction,
     verifier: &FinalityVerifier,
     height: u64,
-) -> Result<Option<ManagedTransactionFinality>> {
+    require_success: bool,
+) -> Result<Option<NativeTransactionExecution>> {
     let bytes = checkpoint_bytes(verifier)?;
     directory.write_atomic("replay.nrt", &bytes, PublishMode::Replace)?;
     if verifier.checkpoint().height() != height {

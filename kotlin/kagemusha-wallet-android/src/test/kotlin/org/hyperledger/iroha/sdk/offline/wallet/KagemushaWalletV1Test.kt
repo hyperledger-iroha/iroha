@@ -103,7 +103,7 @@ class KagemushaWalletV1Test {
         val id = ByteArray(32) { 1 }
         for (selector in (0..10).filter { it != 1 && it != 8 }) {
             val limits = when (selector) {
-                0 -> intArrayOf(512, 16_384, 0)
+                0 -> intArrayOf(512, 256 * 1024, 0)
                 2 -> intArrayOf(10_000, 1_024, 10_000)
                 5 -> intArrayOf(65_536 * 34 + 512, 10_000, 0)
                 6 -> intArrayOf(512, 10_000, 0)

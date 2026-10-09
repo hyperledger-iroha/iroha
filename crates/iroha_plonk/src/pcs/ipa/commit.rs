@@ -60,14 +60,17 @@ use rayon::prelude::*;
 // process-wide test counter or any shipping configuration.
 #[cfg(test)]
 pub(crate) mod test_observation {
-    use std::{cell::Cell, marker::PhantomData, rc::Rc};
+    use std::{cell::Cell, marker::PhantomData, rc::Rc, thread::LocalKey};
 
     thread_local! {
         static CALLS: Cell<Option<usize>> = const { Cell::new(None) };
     }
 
     /// An unwind-safe observation confined to its originating test thread.
-    pub(crate) struct CommitmentProbe(PhantomData<Rc<()>>);
+    pub struct CommitmentProbe {
+        calls: &'static LocalKey<Cell<Option<usize>>>,
+        _not_send: PhantomData<Rc<()>>,
+    }
 
     impl CommitmentProbe {
         /// Begin a non-nested observation of actual commitment entries.
@@ -76,18 +79,22 @@ pub(crate) mod test_observation {
                 assert!(calls.get().is_none(), "nested commitment probe");
                 calls.set(Some(0));
             });
-            Self(PhantomData)
+            Self {
+                calls: &CALLS,
+                _not_send: PhantomData,
+            }
         }
 
         /// Number of calls through the shared commitment entry on this thread.
         pub(crate) fn calls(&self) -> usize {
-            CALLS.with(|calls| calls.get().expect("active commitment probe"))
+            self.calls
+                .with(|calls| calls.get().expect("active commitment probe"))
         }
     }
 
     impl Drop for CommitmentProbe {
         fn drop(&mut self) {
-            CALLS.with(|calls| calls.set(None));
+            self.calls.with(|calls| calls.set(None));
         }
     }
 

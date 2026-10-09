@@ -43,6 +43,11 @@ pub(in crate::managed) trait EnrollmentScopeEvidence:
     ) -> Result<()>;
     fn revalidate_with_snapshot_read_pass(&self, pass: Option<&SnapshotReadPass<'_>>)
     -> Result<()>;
+    fn revalidate_in_tree(
+        &self,
+        pass: Option<&SnapshotReadPass<'_>>,
+        tree: &mut iroha_fs::PrivateReadTreeScope<'_>,
+    ) -> Result<()>;
     // Pure membership only; the graph caller retains fresh operation/scope validation.
     fn covers_semantic_original(&self, pass: &SnapshotReadPass<'_>, semantic: [u8; 32]) -> bool;
     fn require_active(&self) -> Result<()>;
@@ -151,8 +156,18 @@ impl BodyDispatchScope {
     // Does not descend through another History. The graph owner validates every retained
     // predecessor separately while preserving this exact evidence and native handle graph.
     fn revalidate_local(&self, pass: Option<&SnapshotReadPass<'_>>) -> Result<()> {
+        self.revalidate_local_in_tree(pass, None)
+    }
+    fn revalidate_local_in_tree(
+        &self,
+        pass: Option<&SnapshotReadPass<'_>>,
+        tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+    ) -> Result<()> {
         let value = &self.state;
-        value.evidence.revalidate_with_snapshot_read_pass(pass)?;
+        match tree {
+            Some(tree) => value.evidence.revalidate_in_tree(pass, tree)?,
+            None => value.evidence.revalidate_with_snapshot_read_pass(pass)?,
+        }
         if value.evidence.root().identity()? != value.root_identity
             || value.evidence.operation().identity()? != value.operation_identity
         {
@@ -229,10 +244,13 @@ impl HistoryScope {
         purpose: Purpose,
         semantic: [u8; 32],
         pass: Option<&SnapshotReadPass<'_>>,
+        tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
     ) -> Result<()> {
         match self {
             Self::FixedBody if !is_enrollment(purpose) => {}
-            Self::Enrollment(value) if is_enrollment(purpose) => value.revalidate_local(pass)?,
+            Self::Enrollment(value) if is_enrollment(purpose) => {
+                value.revalidate_local_in_tree(pass, tree)?
+            }
             _ => {
                 return Err(invalid(
                     "dispatch purpose requires its exact closed body scope",

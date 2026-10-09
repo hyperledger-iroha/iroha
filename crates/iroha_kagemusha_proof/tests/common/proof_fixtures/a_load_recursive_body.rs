@@ -1,5 +1,4 @@
 // Shared genuine builder items. Registered tests remain in the integration harness.
-use ff::Field;
 use iroha_kagemusha_proof::{
     a_relation::native::{
         artifact::KeyArtifact,
@@ -113,9 +112,9 @@ impl Original {
 pub struct InstalledLoad {
     /// Installed source plan with fixed genesis anchor and finality source catalog.
     pub plan: Plan,
-    /// All five actual A source artifacts.
+    /// All four actual A source artifacts.
     pub a: [Original; A_STAGE_COUNT],
-    /// All four mandatory W source artifacts.
+    /// All three mandatory W source artifacts.
     pub w: [Original; A_STAGE_COUNT - 1],
     /// Exact receipt, genuine finality source and predecessor/Q originals.
     pub inputs: Inputs,
@@ -129,15 +128,15 @@ pub type LoadFixture = Arc<dyn Fn(&bootstrap_outer::RootedBootstrapOmega) -> Ins
 /// Actual terminal artifacts for the outer and subsequent-operation assertions.
 #[derive(Clone)]
 pub struct AuthenticatedLoad {
-    /// Actual A5 key and descriptor.
+    /// Actual A4 key and descriptor.
     pub key: VerifyingKey<Eq>,
-    /// Actual A5 descriptor.
+    /// Actual A4 descriptor.
     pub binding: DescriptorBinding,
-    /// Original A5 proof.
+    /// Original A4 proof.
     pub proof: Vec<u8>,
     /// Exact terminal frame.
     pub instances: Vec<Fp>,
-    /// Derived original A5 opening.
+    /// Derived original A4 opening.
     pub opening: FoldInput<Eq>,
     /// Fully verified carried Pallas obligation.
     pub pallas: AccumulatorT<Ep>,
@@ -149,8 +148,8 @@ pub struct AuthenticatedLoad {
     pub state: StateWitness,
 }
 
-/// Import the required originals, prove all five A/four W stages and replay every
-/// checkpoint from canonical original bytes. The fixture cannot bypass finality.
+/// Import the required originals, prove all four A/three W stages and replay every
+/// checkpoint from canonical original bytes. The signed Advance binds the native-authorized receipt.
 pub fn authenticated_load(
     rooted: &bootstrap_outer::RootedBootstrapOmega,
     fixture: &LoadFixture,
@@ -179,20 +178,10 @@ pub fn authenticated_load(
     for substitution in 0..6 {
         let mut bad = source.inputs.clone();
         match substitution {
-            0 => bad.finality.endpoints[1] += Fp::ONE,
-            1 => bad.finality.proof.push(0),
-            2 => {
-                let mut challenges = *bad.finality.pallas.challenges();
-                challenges[0] += Fq::ONE;
-                bad.finality.pallas =
-                    AccumulatorT::new(*bad.finality.pallas.g(), challenges).unwrap();
-            }
-            3 => {
-                let mut challenges = *bad.finality.vesta.challenges();
-                challenges[0] += Fp::ONE;
-                bad.finality.vesta =
-                    AccumulatorT::new(*bad.finality.vesta.g(), challenges).unwrap();
-            }
+            0 => bad.receipt[2] ^= 1,
+            1 => bad.receipt[66] ^= 1,
+            2 => bad.receipt[130] ^= 1,
+            3 => bad.receipt[146] ^= 1,
             4 => bad.receipt[0] ^= 1,
             _ => bad.q[1].proof.push(0),
         }
@@ -208,8 +197,8 @@ pub fn authenticated_load(
         core::array::from_fn(|i| source.w[i].metadata()),
     )
     .expect("all original Load sources must match the installed plan");
-    let binding = prover.descriptors()[8].clone();
-    let key = VerifyingKey::read(&source.a[4].verifying_key, &binding).unwrap();
+    let binding = prover.descriptors()[2 * (A_STAGE_COUNT - 1)].clone();
+    let key = VerifyingKey::read(&source.a[A_STAGE_COUNT - 1].verifying_key, &binding).unwrap();
     let session = prover
         .prepare(source.inputs, MemoryBudget::DEFAULT)
         .expect("genuine finality, predecessor and Q originals are mandatory");

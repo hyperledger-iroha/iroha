@@ -22,6 +22,7 @@ struct PredecessorLayout;
 impl Circuit<Fq> for PredecessorLayout {
     type Config = [Column<Instance>; 3];
     type FloorPlanner = SimpleFloorPlanner;
+    type Params = ();
     fn without_witnesses(&self) -> Self {
         self.clone()
     }
@@ -258,7 +259,24 @@ fn four_a_three_w_original_sources_qualify_at_k16() {
         core::array::from_fn(|i| w[i].metadata()),
     )
     .unwrap();
-    assert_eq!(imported.descriptors().len(), 7);
+    let descriptors = imported.descriptors();
+    assert_eq!(descriptors.len(), 7);
+    // The exported order must retain each exact installed owner, including stages whose
+    // descriptors have equal bytes, and finish at A4 without a trailing wrapper.
+    for (stage, original) in a.iter().enumerate() {
+        assert!(core::ptr::eq(
+            descriptors[2 * stage],
+            imported.a[stage].binding(),
+        ));
+        assert_eq!(descriptors[2 * stage].encoded(), original.d.as_slice());
+        if let Some(wrapper) = w.get(stage) {
+            assert!(core::ptr::eq(
+                descriptors[2 * stage + 1],
+                imported.w[stage].binding(),
+            ));
+            assert_eq!(descriptors[2 * stage + 1].encoded(), wrapper.d.as_slice());
+        }
+    }
     assert_eq!(imported.plan().context().schema(), plan.context().schema());
     for stage in 0..A_STAGE_COUNT {
         let key_seal = imported.import_a(stage, &a[stage].p, config).unwrap();

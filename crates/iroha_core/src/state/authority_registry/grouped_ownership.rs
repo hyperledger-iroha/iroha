@@ -154,7 +154,3 @@ pub(in crate::state) use nfts_rwas::{validate_original_nfts, validate_original_r
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-pub(in crate::state) fn probe_capture_asset_definitions(world: &World) -> Result<(), GroupedOwnershipError> {
-    CheckedAssetDefinitions::capture(world, 16_777_216).map(|_| ())
-}

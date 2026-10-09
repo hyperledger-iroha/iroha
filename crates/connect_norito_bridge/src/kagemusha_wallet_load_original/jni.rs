@@ -3,7 +3,7 @@
 use super::*;
 use ::jni::{
     JNIEnv,
-    objects::{JByteArray, JClass},
+    objects::{JByteArray, JClass, JLongArray},
     sys::jint,
 };
 
@@ -19,8 +19,18 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     payer: JByteArray<'_>,
     receipt: JByteArray<'_>,
     finality: JByteArray<'_>,
+    out_height: JLongArray<'_>,
 ) -> jint {
     wallet::run(|| {
+        if env
+            .get_array_length(&out_height)
+            .map_err(|_| Failure::code(INVALID))?
+            != 1
+        {
+            return Err(Failure::code(INVALID));
+        }
+        env.set_long_array_region(&out_height, 0, &[0])
+            .map_err(|_| Failure::code(INVALID))?;
         let inputs = [&scheme, &wallet_id, &request, &payer, &receipt, &finality];
         let bounds = [
             32,
@@ -45,14 +55,16 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
                     .map_err(|_| Failure::code(INVALID))?,
             );
         }
-        validate(
+        let height = validate(
             &originals[0],
             &originals[1],
             &originals[2],
             &originals[3],
             &originals[4],
             &originals[5],
-        )
+        )?;
+        env.set_long_array_region(&out_height, 0, &[height as i64])
+            .map_err(|_| Failure::code(INVALID))
     })
     .err()
     .map_or(0, |error| error.status)

@@ -19,7 +19,7 @@ final class KagemushaWalletLoadOriginalV1Tests: XCTestCase {
     for bad in [Data(), Data(repeating: 0, count: 513)] {
       XCTAssertThrowsError(try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: "x", receipt: bad, finality: Data([1])))
     }
-    for bad in [Data(), Data(repeating: 0, count: 16385)] {
+    for bad in [Data(), Data(repeating: 0, count: 256 * 1024 + 1)] {
       XCTAssertThrowsError(try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: "x", receipt: Data([1]), finality: bad))
     }
   }
@@ -30,8 +30,8 @@ final class KagemushaWalletLoadOriginalV1Tests: XCTestCase {
     XCTAssertEqual(try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: String(repeating: "x", count: 1024), receipt: Data([1]), finality: Data([1])).payer.count, 1024)
   }
   func testIndependentRouteSelectorsAndMaximumFramesRemainExactData() throws {
-    let input = try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: "x", receipt: Data(repeating: 7, count: 512), finality: Data(repeating: 8, count: 16384))
+    let input = try KagemushaWalletLoadOriginalInputV1(selection: selection(), payer: "x", receipt: Data(repeating: 7, count: 512), finality: Data(repeating: 8, count: 256 * 1024))
     XCTAssertEqual(input.schemeID, Data(repeating: 1, count: 32)); XCTAssertEqual(input.walletID, Data(repeating: 2, count: 32))
-    XCTAssertEqual(input.requestID, Data(repeating: 3, count: 32)); XCTAssertEqual(input.receipt.count, 512); XCTAssertEqual(input.finality.count, 16384)
+    XCTAssertEqual(input.requestID, Data(repeating: 3, count: 32)); XCTAssertEqual(input.receipt.count, 512); XCTAssertEqual(input.finality.count, 256 * 1024)
   }
 }

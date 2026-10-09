@@ -166,6 +166,60 @@ fn native_event_inclusion_authenticates_the_same_receipt_as_full_transaction() {
 }
 
 #[test]
+fn direct_bls_load_evidence_binds_receipt_and_counted_event_without_prover() {
+    use crate::{
+        kagemusha::KagemushaWalletLoadFinalityV1,
+        sumeragi_finality::{
+            SumeragiCommitCertificateV1, SumeragiCommitVerifierV1, SumeragiFinalityVerifier,
+        },
+    };
+    let mut fixture = NativeFinalityFixture::start("direct-load-finality");
+    let selected = SumeragiFinalityVerifier::new(
+        fixture.genesis(),
+        fixture.chain_id(),
+        fixture.genesis_proof().committee.clone(),
+    )
+    .unwrap();
+    let (block, _, receipt, events) = certify_event(&mut fixture);
+    let evidence = KagemushaWalletLoadFinalityV1 {
+        version: 1,
+        receipt_digest: receipt.receipt_digest().unwrap(),
+        certificate: SumeragiCommitCertificateV1::from_verified(&block).unwrap(),
+        event_proof: events.get_proof(1).unwrap(),
+    };
+    evidence.verify(&selected, &receipt).unwrap();
+    let bytes = evidence.to_canonical_bytes().unwrap();
+    KagemushaWalletLoadFinalityV1::decode_canonical(&bytes)
+        .unwrap()
+        .verify(&selected, &receipt)
+        .unwrap();
+    let mut cached = SumeragiCommitVerifierV1::new(&selected).unwrap();
+    evidence.verify_with(&mut cached, &receipt).unwrap();
+    assert!(
+        bytes.len() < 16_384,
+        "same-epoch native evidence must remain small"
+    );
+
+    let mut changed = receipt;
+    changed.amount += 1;
+    let mut substituted = evidence.clone();
+    substituted.receipt_digest = changed.receipt_digest().unwrap();
+    assert!(evidence.verify(&selected, &changed).is_err());
+    assert!(substituted.verify(&selected, &changed).is_err());
+    substituted = evidence.clone();
+    substituted.event_proof = events.get_proof(0).unwrap();
+    assert!(substituted.verify(&selected, &receipt).is_err());
+    substituted = evidence.clone();
+    substituted.certificate.commit_qc[0] ^= 1;
+    assert!(substituted.verify(&selected, &receipt).is_err());
+    changed = receipt;
+    changed.block_height += 1;
+    substituted = evidence.clone();
+    substituted.receipt_digest = changed.receipt_digest().unwrap();
+    assert!(substituted.verify(&selected, &changed).is_err());
+}
+
+#[test]
 fn native_event_inclusion_rejects_every_substituted_receipt_term_and_bad_geometry() {
     let mut fixture = NativeFinalityFixture::start("load-event-negative");
     let (verified, _, receipt, tree) = certify_event(&mut fixture);

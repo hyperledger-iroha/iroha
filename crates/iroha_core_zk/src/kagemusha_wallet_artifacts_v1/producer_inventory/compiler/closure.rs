@@ -18,10 +18,10 @@ fn intern(originals: &mut Vec<OriginalV1>, item: OriginalV1) -> Result<u32, Comp
 impl OfflineCompilerV1<'_> {
     /// Assemble the complete unsigned inventory only after every logical route
     /// closes under the exact newly compiled Omega key and ordered terminal catalog.
-    /// Signing, independent genesis authentication, complete finality qualification,
+    /// Signing, independent genesis authentication, direct receipt verification,
     /// measured proof bounds and authenticated installation remain separate.
     /// # Errors
-    /// Missing/reordered route, another scope/dependency, changed finality anchor,
+    /// Missing/reordered route, another scope/dependency,
     /// nonuniform terminal catalog or invalid/over-capacity canonical metadata.
     pub fn inventory(
         &self,
@@ -126,4 +126,3 @@ impl OfflineCompilerV1<'_> {
         Ok(inventory)
     }
 }
-

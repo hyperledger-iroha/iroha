@@ -1,6 +1,6 @@
-//! Explicit long-running native-capture ordinary finality followed by genuine Load.
-//! Synthetic ledger execution identities remain component-only; every finality
-//! source/proof and every native Load stage is real and independently verified.
+//! Direct BLS admission of a captured receipt followed by genuine monetary Load.
+//! Synthetic ledger execution identities remain component-only; the certificate
+//! and every native Load stage are independently verified.
 
 #![allow(clippy::duplicate_mod)] // The shared Bootstrap chain retains its exact source types.
 
@@ -10,10 +10,7 @@ mod bootstrap;
 #[allow(dead_code)]
 mod bootstrap_objects;
 mod common;
-#[path = "common/finality_driver.rs"]
-#[allow(dead_code)]
-mod driver;
-/// The same native Load five-A/four-W producer used by subsequent chain fixtures.
+/// The same native Load four-A/three-W producer used by subsequent chain fixtures.
 #[path = "a_load_recursive.rs"]
 pub mod load_chain;
 #[path = "common/ordinary_load_fixture.rs"]
@@ -23,6 +20,10 @@ mod load_fixture;
 mod load_objects;
 
 use ff::Field;
+use iroha_data_model::sumeragi_finality::{
+    FinalityValidator, SumeragiCommitCertificateV1, SumeragiCommitVerifierV1,
+    SumeragiFinalityVerifier, genesis_epoch,
+};
 use iroha_pasta::Fp;
 use std::{fs, path::PathBuf, sync::Arc};
 
@@ -42,32 +43,84 @@ fn exact_first_load_capture_matches_bootstrap_identity_without_relabeling() {
     load_fixture::check_first_capture(&first_capture());
 }
 
+fn verified_receipt(capture: &str) -> [u8; 282] {
+    let json: norito::json::Value = norito::json::from_str(capture).unwrap();
+    let raw = |name: &str| {
+        let text = json[name].as_str().unwrap();
+        (0..text.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let genesis =
+        iroha_data_model::block::decode_framed_signed_block(&raw("signed_genesis_wire_hex"))
+            .unwrap();
+    let epoch = genesis_epoch(&genesis).unwrap();
+    let roster = epoch
+        .committee
+        .iter()
+        .map(|member| FinalityValidator {
+            public_key: member.validator.public_key().clone(),
+            proof_of_possession: member.proof_of_possession.clone(),
+        })
+        .collect();
+    let native =
+        SumeragiFinalityVerifier::new(&genesis, json["chain_id"].as_str().unwrap(), roster)
+            .unwrap();
+    let certificate = SumeragiCommitCertificateV1 {
+        consensus_header: raw("consensus_header_frame_hex"),
+        commit_qc: raw("commit_qc_frame_hex"),
+        result_preimage: raw("result_preimage_hex"),
+    };
+    let mut verifier = SumeragiCommitVerifierV1::new(&native).unwrap();
+    let verified = verifier.verify(&certificate).unwrap();
+    assert_eq!(verified.height(), 2);
+    let receipt =
+        iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadReceiptV1::decode_canonical(
+            &raw("receipt_frame_hex"),
+        )
+        .unwrap();
+    let event =
+        iroha_data_model::events::data::kagemusha::KagemushaLoadCommittedV1::from_receipt(&receipt)
+            .unwrap();
+    let boxed = iroha_data_model::events::EventBox::Data(
+        iroha_data_model::events::data::DataEvent::KagemushaLoadCommitted(event).into(),
+    );
+    let path = iroha_crypto::MerkleProof::from_audit_path(0, vec![]);
+    assert!(path.verify(
+        &iroha_crypto::HashOf::new(&boxed),
+        verified.execution().event_commitment.as_ref().unwrap()
+    ));
+    let transcript = receipt.transcript().unwrap();
+    assert_eq!(transcript.as_slice(), raw("receipt_transcript_hex"));
+    assert_eq!(receipt.block_height, verified.height());
+    transcript
+}
+
 #[test]
-#[ignore = "explicit resumable ordinary-finality8944-proof execution, then genuine5A4W Load"]
-fn exact_first_load_finality_then_native_load() {
-    let output = std::env::var_os("KAGEMUSHA_FINALITY_OUTPUT")
-        .expect("select an exclusive driver-owned output directory");
-    let manifest = std::env::var("KAGEMUSHA_FINALITY_SOURCE_SHA256")
-        .expect("record the captured executable's canonical source manifest SHA256");
-    let output = PathBuf::from(output);
-    let capture = first_capture();
-    driver::run_capture(&output, &manifest, &capture, |receipt| {
-        eprintln!("FINALITY_PHASE genuine_Load_fixture");
-        let rooted = load_chain::bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap();
-        let originals = output.join("load-originals");
-        let fixture: load_chain::LoadFixture =
-            Arc::new(move |rooted| load_fixture::build(rooted, &receipt, &originals));
-        let terminal = load_chain::authenticated_load(&rooted, &fixture);
-        assert_eq!(
-            terminal.state.core[iroha_kagemusha_proof::witness::core_index::BALANCE],
-            Fp::from(100)
-        );
-        assert_eq!(
-            terminal.state.core[iroha_kagemusha_proof::witness::core_index::NEXT_LOAD],
-            Fp::ONE
-        );
-        eprintln!(
-            "ORDINARY_FIRST_LOAD complete_finality=true all5A4W=true exact_ordinal0_amount100_charge0=true synthetic_execution_capture=true Load_terminal_Omega=false full_wallet_catalog=false"
-        );
-    });
+fn first_load_certificate_and_receipt_verify_without_proving_keys() {
+    let receipt = verified_receipt(&first_capture());
+    assert_eq!(receipt.len(), 282);
+}
+
+#[test]
+#[ignore = "explicit genuine four-A/three-W Load proof construction after direct BLS admission"]
+fn exact_first_load_native_finality_then_native_load() {
+    let output = PathBuf::from(
+        std::env::var_os("KAGEMUSHA_LOAD_OUTPUT")
+            .expect("exclusive native Load artifact output directory"),
+    );
+    let receipt = verified_receipt(&first_capture());
+    let rooted = load_chain::bootstrap_outer::compact_bootstrap::rooted_compact_bootstrap();
+    let fixture: load_chain::LoadFixture =
+        Arc::new(move |rooted| load_fixture::build(rooted, &receipt, &output));
+    let terminal = load_chain::authenticated_load(&rooted, &fixture);
+    assert_eq!(
+        terminal.state.core[iroha_kagemusha_proof::witness::core_index::BALANCE],
+        Fp::from(100)
+    );
+    assert_eq!(
+        terminal.state.core[iroha_kagemusha_proof::witness::core_index::NEXT_LOAD],
+        Fp::ONE
+    );
 }

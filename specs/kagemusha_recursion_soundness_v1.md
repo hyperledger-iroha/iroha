@@ -532,7 +532,7 @@ record. Already signed or retained objects cannot be patched. A source audit
 now enumerates all fourteen operation roles and the six successor native
 owners. Their original-input preparation consumes the accepted replacement
 proof and its actual opening without requiring the discarded Omega witness.
-It preserves Load's separate finality claims and Receive/Archive's immutable
+Load finality is native BLS verification before the credential-bound Advance signature under the selected released-app/uncompromised-OS assumption; it contributes no separate PLONK claims. This construction preserves Receive/Archive's immutable
 incoming evidence. Fresh consuming capsules, receipts and downstream map
 bindings must be reconstructed normally; stale capsules and checkpoints fail.
 This establishes only a conditional input-construction argument. Completeness
@@ -945,7 +945,7 @@ independent review SHA
 `85335ca5f993552edaed63180c5ebe74da46a59b287b90ce6dd73f0f3b720466`).
 No new execution or C12 qualification follows from this local result.
 
-The fresh Load suffix has five P and five V folds, each with a full-k16 slot.
+The historical fresh Load suffix below has five P and five V folds, each with a full-k16 slot. The current direct-BLS Load removes the finality stage; its four-A/three-W catalog must be re-keyed and requalified under [NF1–NF6](kagemusha_native_finality_goals.md).
 Its source-reviewed local laws include the exact ideal advice-commitment and
 identity-stop distribution, the explicit 512-bit modular-reduction bias, lookup
 membership preservation under compression, and the generic admitted-descriptor
@@ -1489,7 +1489,7 @@ qualify another compiled source.
 
 The captured distinct payer-Load/receiver-Bootstrap shared-key source fixture is
 component evidence under the superseded Load voucher trust construction. Current
-native and recursive Load producers consume ordinary transaction finality, and
+native Load admission verifies ordinary BLS transaction finality before signing Advance, and
 the integration helpers require explicit genuine finality evidence and original
 proving artifacts. The retired issuer fixture is removed. Installing the current
 fixture and rebuilding the source/catalog remain prerequisites for release

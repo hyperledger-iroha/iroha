@@ -23,6 +23,33 @@ impl AccountClient {
 }
 
 impl Kagemusha<'_> {
+    /// Retrieve direct BLS evidence for an exact receipt, without granting balance authority.
+    ///
+    /// Verify against independently authenticated genesis-rooted epoch authority.
+    /// # Errors
+    /// Returns the asynchronous read failure or a blocking-runtime rejection.
+    pub fn load_finality(
+        &self,
+        receipt: &KagemushaWalletLoadReceiptV1,
+    ) -> Result<iroha_data_model::kagemusha::KagemushaWalletLoadFinalityV1> {
+        self.runtime.block_on(self.inner.load_finality(receipt))?
+    }
+
+    /// Retrieve one boundary certificate without granting epoch authority.
+    ///
+    /// Select the boundary from authenticated native progress and verify its CommitQC
+    /// before accepting the successor committee.
+    /// # Errors
+    /// Returns the asynchronous read failure or a blocking-runtime rejection.
+    pub fn load_epoch(
+        &self,
+        receipt: &KagemushaWalletLoadReceiptV1,
+        boundary_height: u64,
+    ) -> Result<iroha_data_model::sumeragi_finality::SumeragiCommitCertificateV1> {
+        self.runtime
+            .block_on(self.inner.load_epoch(receipt, boundary_height))?
+    }
+
     /// Send one exact enrollment operation, preserving native originals for durable recovery.
     ///
     /// Returned originals require the native wallet owner's verification and durable admission.

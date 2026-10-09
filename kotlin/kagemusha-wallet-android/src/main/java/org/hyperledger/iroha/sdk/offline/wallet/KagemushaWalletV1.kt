@@ -32,12 +32,13 @@ class KagemushaWalletCallV1 internal constructor(
     bytes: ByteArray,
 ) {
     init {
-        val carriesBytes = status == DELETION_REVIEW || status == DELETED || status == CREDIT_PROJECTION || status == UNLOAD_CLAIM || status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status == CLOSE_LOADS || status == 31 || status == 33 || status == 36 || status == LEDGER_INSTRUCTION || status == UNLOAD_CONFIRMATION || status == ACTIVATION_CONFIRMATION || status == ACTIVATION_PROGRESS || status == ACTIVATION_REJECTED || status in listOf(18, 19, 23, 24, 25, 27, 28, 37, 38)
-        if (status in listOf(41, 43) || (status >= 0 && status !in UNKNOWN..NOT_DELETED) || bytes.size > when (status) { DELETION_REVIEW -> 254; DELETED -> 32; DELETION_REVIEW_DISCARDED, NOT_DELETED -> 0; CREDIT_PROJECTION -> 10_092; ACTIVATION, ENROLLMENT_DISPATCH, CLOSE_LOADS, 36, UNLOAD_CLAIM -> 16_384; LEDGER_INSTRUCTION -> 65_536; 24 -> KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES; 25 -> 262_144; 28 -> 1024; 37 -> 1028; 38 -> 73_740; 31 -> 21_024; 33, UNLOAD_CONFIRMATION, ACTIVATION_CONFIRMATION, ACTIVATION_PROGRESS, ACTIVATION_REJECTED -> 32; else -> 10_000 } ||
+        val carriesBytes = status == EPOCH_PROGRESS || status == DELETION_REVIEW || status == DELETED || status == CREDIT_PROJECTION || status == UNLOAD_CLAIM || status == COMPLETE || status == CREDIT_STATUS || status == SETUP || status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE || status == ACTIVATION || status == CLOSE_LOADS || status == 31 || status == 33 || status == 36 || status == LEDGER_INSTRUCTION || status == UNLOAD_CONFIRMATION || status == ACTIVATION_CONFIRMATION || status == ACTIVATION_PROGRESS || status == ACTIVATION_REJECTED || status in listOf(18, 19, 23, 24, 25, 27, 28, 37, 38)
+        if (status in listOf(41, 43) || (status >= 0 && status !in UNKNOWN..EPOCH_PROGRESS) || bytes.size > when (status) { EPOCH_PROGRESS -> 16; DELETION_REVIEW -> 254; DELETED -> 32; DELETION_REVIEW_DISCARDED, NOT_DELETED -> 0; CREDIT_PROJECTION -> 10_092; ACTIVATION, ENROLLMENT_DISPATCH, CLOSE_LOADS, 36, UNLOAD_CLAIM -> 16_384; LEDGER_INSTRUCTION -> 65_536; 24 -> KagemushaWalletEnrollmentV1.REQUEST_MAX_BYTES; 25 -> 262_144; 28 -> 1024; 37 -> 1028; 38 -> 73_740; 31 -> 21_024; 33, UNLOAD_CONFIRMATION, ACTIVATION_CONFIRMATION, ACTIVATION_PROGRESS, ACTIVATION_REJECTED -> 32; else -> 10_000 } ||
             (if (carriesBytes) bytes.isEmpty() else bytes.isNotEmpty()) ||
             ((status == TIME_CHALLENGE || status == ACCOUNT_CHALLENGE) && (bytes.size != 32 || sequenceLow <= 0 || sequenceHigh != 0L)) ||
             (status in listOf(ACTIVATION, CLOSE_LOADS, 31, 32, 34, 35, 36, ACTIVATION_NOT_STARTED, LEDGER_INSTRUCTION, UNLOAD_CLAIM, COLLECTION_IDLE, DELETED, DELETION_REVIEW_DISCARDED, NOT_DELETED) && (sequenceLow != 0L || sequenceHigh != 0L || detail != 0)) ||
             (status in COLLECTION_IDLE..COLLECTED && detail != 0) ||
+            (status == EPOCH_PROGRESS && (sequenceHigh != 0L || detail != 0 || bytes.size != 16)) ||
             (status == DELETION_REVIEW && (sequenceLow <= 0 || sequenceHigh != 0L || detail != 0 || bytes.size != 254)) ||
             (status == DELETED && (bytes.size != 32 || bytes.all { it == 0.toByte() })) ||
             (status == OPENED && (sequenceLow <= 0 || sequenceHigh != 0L)) ||
@@ -91,6 +92,7 @@ class KagemushaWalletCallV1 internal constructor(
     }
     override fun toString(): String = "KagemushaWalletCallV1(status=$status, bytes=[REDACTED])"
     companion object {
+        const val EPOCH_PROGRESS = 57
         const val UNKNOWN = 0
         const val COMPLETE = 1
         const val PENDING = 2
@@ -303,6 +305,28 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
     /** Verify one bounded next native Sumeragi proof and durably select its prefix. */
     fun ingestLedgerFinality(original: ByteArray): KagemushaWalletLedgerProgressV1 =
         KagemushaWalletLedgerProgressV1(setup(KagemushaWalletSetupInputV1(23, first = original)))
+    /** Protected native Load epoch, retaining older committees for delayed receipts. */
+    fun epochProgress(): KagemushaWalletEpochProgressV1 =
+        KagemushaWalletEpochProgressV1(setup(KagemushaWalletSetupInputV1(52)))
+    /** Verify one exact incumbent boundary and durably retain its successor. */
+    fun ingestEpochBoundary(expectedEpoch: java.math.BigInteger, original: ByteArray): KagemushaWalletEpochProgressV1 {
+        require(expectedEpoch.signum() >= 0 && expectedEpoch.bitLength() <= 64) { "u64 epoch required" }
+        return KagemushaWalletEpochProgressV1(setup(KagemushaWalletSetupInputV1(53,
+            amount = KagemushaWalletUInt128V1(expectedEpoch.toLong(), 0), first = original)))
+    }
+    /** Synchronize at most 64 durable epoch boundaries for the exact receipt, without crediting value.
+     * Cancellation and limits preserve progress. Repeat while boundaryHeight is below the receipt
+     * height; ordinary load independently verifies and refuses a missing epoch afterward. */
+    fun synchronizeLoadEpochs(original: KagemushaWalletLoadOriginalV1,
+        transport: org.hyperledger.iroha.sdk.client.HttpClientTransport,
+        canonicalAuth: org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth,
+        requireCurrentOwner: Runnable, maximumBoundaries: Int = 64,
+    ): java.util.concurrent.CompletableFuture<KagemushaWalletEpochProgressV1> =
+        synchronizeKagemushaEpochsV1(original.blockHeight, maximumBoundaries, requireCurrentOwner,
+            { epochProgress() },
+            { height -> transport.getKagemushaWalletLoadEpochOriginalV1(original.selection, height,
+                canonicalAuth, requireCurrentOwner) },
+            { epoch, bytes -> ingestEpochBoundary(epoch, bytes) })
     /** Selected native progress, or null before any checkpoint has been selected. */
     fun ledgerProgress(): KagemushaWalletLedgerProgressV1? {
         val result = setup(KagemushaWalletSetupInputV1(24))
@@ -384,7 +408,7 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
     /** Extract an expected original kind under this native wallet's scheme, without accepting value. */
     fun original(kind: KagemushaWalletTransportKindV1, envelope: ByteArray): ByteArray =
         setup(KagemushaWalletSetupInputV1(10 + kind.tag, first = envelope)).original()
-    /** Load the exact ordinary-ledger receipt and compact finality evidence. */
+    /** Load the exact ordinary-ledger receipt and native BLS finality evidence. */
     fun load(requestId: ByteArray, receipt: ByteArray, finality: ByteArray): KagemushaWalletCallV1 =
         execute(KagemushaWalletOperationInputV1(requestId, 0, first = receipt, second = finality))
     /** Authenticate Send and its fully folded source before fresh hardware UI confirmation. */
@@ -558,7 +582,7 @@ internal class KagemushaWalletOperationInputV1(
     private val originals: List<ByteArray>
     init {
         val limits = when (selector) {
-            0 -> intArrayOf(512, 16_384, 0)
+            0 -> intArrayOf(512, 256 * 1024, 0)
             2 -> intArrayOf(10_000, 1_024, 10_000)
             3, 4 -> intArrayOf(1_024, 10_000, 0)
             5 -> intArrayOf(65_536 * 34 + 512, 10_000, 0)

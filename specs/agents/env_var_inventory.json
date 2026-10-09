@@ -2,8 +2,8 @@
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
   "generated_at": "2026-10-08T09:50:02Z",
   "root": "iroha",
-  "total_refs": 1006,
-  "unique_vars": 242,
+  "total_refs": 975,
+  "unique_vars": 235,
   "variables": {
     "ADVICE_SCHEDULE": {
       "counts": {
@@ -540,8 +540,8 @@
         "build": 4,
         "debug": 1,
         "example": 1,
-        "prod": 45,
-        "test": 476,
+        "prod": 44,
+        "test": 462,
         "tool": 6
       },
       "paths": [
@@ -867,12 +867,6 @@
           "context": "env!(\"CARGO_MANIFEST_DIR\"),",
           "line": 8,
           "path": "crates/iroha_config/src/parameters/user/kagemusha_enrollment/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests/fixtures/base.toml\"),",
-          "line": 47,
-          "path": "crates/iroha_config/src/parameters/user/kagemusha_load_finality/tests.rs",
           "scope": "test"
         },
         {
@@ -1428,24 +1422,6 @@
           "scope": "test"
         },
         {
-          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 157,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_finality_v1.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let parent = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 16,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_finality_v1/server/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let scratch = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../target/qualification\");",
-          "line": 77,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_registration_v1/compact/genuine.rs",
-          "scope": "prod"
-        },
-        {
           "context": "env!(\"CARGO_MANIFEST_DIR\"),",
           "line": 128,
           "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/request_fee.rs",
@@ -1573,7 +1549,7 @@
         },
         {
           "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 548,
+          "line": 604,
           "path": "crates/iroha_data_model/src/isi/kagemusha_wallet/load_finality/tests.rs",
           "scope": "test"
         },
@@ -2232,66 +2208,6 @@
           "scope": "test"
         },
         {
-          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 49,
-          "path": "crates/iroha_kagemusha_proof/src/finality/certificate/circuit/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 228,
-          "path": "crates/iroha_kagemusha_proof/src/finality/certificate/circuit/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 89,
-          "path": "crates/iroha_kagemusha_proof/src/finality/event/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 261,
-          "path": "crates/iroha_kagemusha_proof/src/finality/receipt/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 455,
-          "path": "crates/iroha_kagemusha_proof/src/finality/result/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let p = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 6,
-          "path": "crates/iroha_kagemusha_proof/src/finality/schedule/complete/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 19,
-          "path": "crates/iroha_kagemusha_proof/src/finality/schedule/context_hash/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let path = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 132,
-          "path": "crates/iroha_kagemusha_proof/src/finality/schedule/context_hash/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let p = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 19,
-          "path": "crates/iroha_kagemusha_proof/src/finality/schedule/source/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let p = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
-          "line": 194,
-          "path": "crates/iroha_kagemusha_proof/src/finality/schedule/tests.rs",
-          "scope": "test"
-        },
-        {
           "context": "let export = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
           "line": 1676,
           "path": "crates/iroha_kagemusha_proof/tests/a_consuming_recursive.rs",
@@ -2305,7 +2221,7 @@
         },
         {
           "context": "env!(\"CARGO_MANIFEST_DIR\"),",
-          "line": 30,
+          "line": 31,
           "path": "crates/iroha_kagemusha_proof/tests/ordinary_load_finality.rs",
           "scope": "test"
         },
@@ -2547,12 +2463,6 @@
           "context": "let root = std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\"))",
           "line": 5,
           "path": "crates/iroha_torii/src/kagemusha_enrollment/worker/tests.rs",
-          "scope": "test"
-        },
-        {
-          "context": "std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../target/qualification\");",
-          "line": 149,
-          "path": "crates/iroha_torii/src/kagemusha_wallet_finality/worker/tests.rs",
           "scope": "test"
         },
         {
@@ -6057,19 +5967,6 @@
         }
       ]
     },
-    "KAGEMUSHA_CANONICAL_FINALITY_SOURCES": {
-      "counts": {
-        "test": 1
-      },
-      "paths": [
-        {
-          "context": "let sources = std::env::var_os(\"KAGEMUSHA_CANONICAL_FINALITY_SOURCES\")",
-          "line": 138,
-          "path": "crates/iroha_kagemusha_proof/tests/ordinary_finality.rs",
-          "scope": "test"
-        }
-      ]
-    },
     "KAGEMUSHA_CAPACITY_INPUT": {
       "counts": {
         "prod": 1
@@ -6092,19 +5989,6 @@
           "context": "let output = std::env::var(\"KAGEMUSHA_CAPACITY_OUTPUT\").unwrap();",
           "line": 160,
           "path": "crates/iroha_kagemusha_proof/src/a_relation/native/receive/original/source_capacity.rs",
-          "scope": "prod"
-        }
-      ]
-    },
-    "KAGEMUSHA_COMPACT_REGISTER_OUTPUT": {
-      "counts": {
-        "prod": 1
-      },
-      "paths": [
-        {
-          "context": "std::env::var_os(\"KAGEMUSHA_COMPACT_REGISTER_OUTPUT\").expect(\"fresh private proof output\"),",
-          "line": 277,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_registration_v1/compact/generator.rs",
           "scope": "prod"
         }
       ]
@@ -6141,25 +6025,6 @@
         }
       ]
     },
-    "KAGEMUSHA_EXECUTED_LEDGER_SETUP": {
-      "counts": {
-        "test": 2
-      },
-      "paths": [
-        {
-          "context": "std::env::var_os(\"KAGEMUSHA_EXECUTED_LEDGER_SETUP\").expect(\"pinned setup directory\");",
-          "line": 78,
-          "path": "crates/iroha_kagemusha_proof/tests/ordinary_finality.rs",
-          "scope": "test"
-        },
-        {
-          "context": "std::env::var_os(\"KAGEMUSHA_EXECUTED_LEDGER_SETUP\").expect(\"pinned setup directory\");",
-          "line": 89,
-          "path": "crates/iroha_kagemusha_proof/tests/ordinary_finality.rs",
-          "scope": "test"
-        }
-      ]
-    },
     "KAGEMUSHA_EXECUTED_LEDGER_SETUP_OUTPUT": {
       "counts": {
         "prod": 1
@@ -6170,100 +6035,6 @@
           "line": 476,
           "path": "crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup.rs",
           "scope": "prod"
-        }
-      ]
-    },
-    "KAGEMUSHA_FINALITY_ACCEPTANCE_OUTPUT": {
-      "counts": {
-        "prod": 1
-      },
-      "paths": [
-        {
-          "context": "let output = PathBuf::from(std::env::var_os(\"KAGEMUSHA_FINALITY_ACCEPTANCE_OUTPUT\").unwrap());",
-          "line": 598,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/compiler/full_catalog/acceptance.rs",
-          "scope": "prod"
-        }
-      ]
-    },
-    "KAGEMUSHA_FINALITY_METADATA_SNAPSHOT": {
-      "counts": {
-        "prod": 3
-      },
-      "paths": [
-        {
-          "context": "std::env::var_os(\"KAGEMUSHA_FINALITY_METADATA_SNAPSHOT\")",
-          "line": 334,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/compiler/full_catalog.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "std::env::var_os(\"KAGEMUSHA_FINALITY_METADATA_SNAPSHOT\")",
-          "line": 603,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/compiler/full_catalog.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "let snapshot = PathBuf::from(std::env::var_os(\"KAGEMUSHA_FINALITY_METADATA_SNAPSHOT\").unwrap());",
-          "line": 355,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/compiler/full_catalog/acceptance.rs",
-          "scope": "prod"
-        }
-      ]
-    },
-    "KAGEMUSHA_FINALITY_OUTPUT": {
-      "counts": {
-        "test": 5
-      },
-      "paths": [
-        {
-          "context": "let output = std::env::var_os(\"KAGEMUSHA_FINALITY_OUTPUT\")",
-          "line": 24,
-          "path": "crates/iroha_kagemusha_proof/tests/ordinary_finality.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let root = std::env::var_os(\"KAGEMUSHA_FINALITY_OUTPUT\").expect(\"completed capture output\");",
-          "line": 40,
-          "path": "crates/iroha_kagemusha_proof/tests/ordinary_finality.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let output = std::env::var_os(\"KAGEMUSHA_FINALITY_OUTPUT\").expect(\"fresh exclusive output\");",
-          "line": 90,
-          "path": "crates/iroha_kagemusha_proof/tests/ordinary_finality.rs",
-          "scope": "test"
-        },
-        {
-          "context": "std::env::var_os(\"KAGEMUSHA_FINALITY_OUTPUT\").expect(\"exclusive proof/checkpoint output\");",
-          "line": 137,
-          "path": "crates/iroha_kagemusha_proof/tests/ordinary_finality.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let output = std::env::var_os(\"KAGEMUSHA_FINALITY_OUTPUT\")",
-          "line": 48,
-          "path": "crates/iroha_kagemusha_proof/tests/ordinary_load_finality.rs",
-          "scope": "test"
-        }
-      ]
-    },
-    "KAGEMUSHA_FINALITY_SOURCE_SHA256": {
-      "counts": {
-        "test": 2
-      },
-      "paths": [
-        {
-          "context": "let manifest = std::env::var(\"KAGEMUSHA_FINALITY_SOURCE_SHA256\")",
-          "line": 26,
-          "path": "crates/iroha_kagemusha_proof/tests/ordinary_finality.rs",
-          "scope": "test"
-        },
-        {
-          "context": "let manifest = std::env::var(\"KAGEMUSHA_FINALITY_SOURCE_SHA256\")",
-          "line": 50,
-          "path": "crates/iroha_kagemusha_proof/tests/ordinary_load_finality.rs",
-          "scope": "test"
         }
       ]
     },
@@ -6289,6 +6060,19 @@
           "context": "std::env::var_os(\"KAGEMUSHA_KOTLIN_ISSUE_LOAD_FIXTURE\")",
           "line": 77,
           "path": "crates/iroha_data_model/tests/kagemusha_issue_load_sdk.rs",
+          "scope": "test"
+        }
+      ]
+    },
+    "KAGEMUSHA_LOAD_OUTPUT": {
+      "counts": {
+        "test": 1
+      },
+      "paths": [
+        {
+          "context": "std::env::var_os(\"KAGEMUSHA_LOAD_OUTPUT\")",
+          "line": 110,
+          "path": "crates/iroha_kagemusha_proof/tests/ordinary_load_finality.rs",
           "scope": "test"
         }
       ]
@@ -6319,6 +6103,19 @@
         }
       ]
     },
+    "KAGEMUSHA_NATIVE_FINALITY_ACCEPTANCE_OUTPUT": {
+      "counts": {
+        "prod": 1
+      },
+      "paths": [
+        {
+          "context": "PathBuf::from(std::env::var_os(\"KAGEMUSHA_NATIVE_FINALITY_ACCEPTANCE_OUTPUT\").unwrap());",
+          "line": 479,
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/compiler/full_catalog/acceptance.rs",
+          "scope": "prod"
+        }
+      ]
+    },
     "KAGEMUSHA_REAL_NETWORK_CAMPAIGN": {
       "counts": {
         "test": 1
@@ -6342,19 +6139,6 @@
           "line": 395,
           "path": "integration_tests/tests/kagemusha_network_setup.rs",
           "scope": "test"
-        }
-      ]
-    },
-    "KAGEMUSHA_REGISTER_CAPTURE": {
-      "counts": {
-        "prod": 1
-      },
-      "paths": [
-        {
-          "context": "std::env::var_os(\"KAGEMUSHA_REGISTER_CAPTURE\")",
-          "line": 265,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_registration_v1/compact/generator.rs",
-          "scope": "prod"
         }
       ]
     },
@@ -6384,28 +6168,15 @@
         }
       ]
     },
-    "KAGEMUSHA_REGISTER_SELECTION_OUTPUT": {
+    "KAGEMUSHA_SIGNED_GENESIS_FIXTURE": {
       "counts": {
         "prod": 1
       },
       "paths": [
         {
-          "context": "std::env::var_os(\"KAGEMUSHA_REGISTER_SELECTION_OUTPUT\")",
-          "line": 168,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_registration_v1/compact/generator.rs",
-          "scope": "prod"
-        }
-      ]
-    },
-    "KAGEMUSHA_REGISTRATION_DIFFERENTIAL_ORIGINALS": {
-      "counts": {
-        "prod": 1
-      },
-      "paths": [
-        {
-          "context": "std::env::var_os(\"KAGEMUSHA_REGISTRATION_DIFFERENTIAL_ORIGINALS\")",
-          "line": 43,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_registration_v1/compact/genuine.rs",
+          "context": "std::env::var_os(\"KAGEMUSHA_SIGNED_GENESIS_FIXTURE\").expect(\"selected genesis fixture\"),",
+          "line": 81,
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/compiler/full_catalog.rs",
           "scope": "prod"
         }
       ]
@@ -6417,7 +6188,7 @@
       "paths": [
         {
           "context": "let output = PathBuf::from(std::env::var_os(\"KAGEMUSHA_WALLET_ACCEPTANCE_OUTPUT\").unwrap());",
-          "line": 329,
+          "line": 292,
           "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/compiler/full_catalog/acceptance.rs",
           "scope": "prod"
         }
@@ -6430,7 +6201,7 @@
       "paths": [
         {
           "context": "std::env::var_os(\"KAGEMUSHA_WALLET_CATALOG_OUTPUT\")",
-          "line": 338,
+          "line": 210,
           "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/compiler/full_catalog.rs",
           "scope": "prod"
         }
@@ -6477,19 +6248,13 @@
     },
     "KAGEMUSHA_WALLET_SIGNED_CATALOG": {
       "counts": {
-        "prod": 2
+        "prod": 1
       },
       "paths": [
         {
           "context": "let catalog = PathBuf::from(std::env::var_os(\"KAGEMUSHA_WALLET_SIGNED_CATALOG\").unwrap());",
-          "line": 363,
+          "line": 317,
           "path": "crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/compiler/full_catalog/acceptance.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "let catalog = PathBuf::from(std::env::var_os(\"KAGEMUSHA_WALLET_SIGNED_CATALOG\").unwrap());",
-          "line": 125,
-          "path": "crates/iroha_core_zk/src/kagemusha_wallet_registration_v1/compact/generator.rs",
           "scope": "prod"
         }
       ]
