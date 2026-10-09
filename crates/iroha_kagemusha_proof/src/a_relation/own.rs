@@ -18,15 +18,18 @@ use crate::{
             SignedObjectCells,
             credential::{CredentialAuthorization, CredentialCells},
         },
+        state::StateCells,
         statement::StatementCells,
     },
     q_signature::SignatureKey,
 };
 
-/// Circuit-fixed scheme, provider contract and canonical scheme-root key.
+/// Circuit-fixed provider contract and canonical scheme-root key.
+///
+/// The scheme identity depends on the finished artifact inventory. It is carried
+/// by the constrained state and signed objects, never fixed into their keys.
 #[derive(Clone, Copy, Debug)]
 pub struct OwnPolicy {
-    pub(super) scheme: [u128; 2],
     pub(super) provider: [u128; 2],
     pub(super) root: Affine,
 }
@@ -35,40 +38,48 @@ pub(super) struct OwnScope {
     pub(super) provider: [Word<Fp>; 2],
 }
 impl OwnPolicy {
-    /// Check nonzero fixed identities and a finite canonical root point.
+    /// Check a nonzero fixed provider and a finite canonical root point.
     /// # Errors
-    /// A zero identity or invalid P-256 point.
-    pub fn new(scheme: [u128; 2], provider: [u128; 2], root: Affine) -> Result<Self, Error> {
-        if scheme == [0; 2] || provider == [0; 2] || !root.is_valid() {
+    /// A zero provider or invalid P-256 point.
+    pub fn new(provider: [u128; 2], root: Affine) -> Result<Self, Error> {
+        if provider == [0; 2] || !root.is_valid() {
             return Err(Error::Synthesis);
         }
-        Ok(Self {
-            scheme,
-            provider,
-            root,
-        })
+        Ok(Self { provider, root })
     }
+    // Copy the already constrained own-state limbs, rather than allocate a
+    // second claimed scheme. The owning stage binds that state to its hard
+    // predecessor/public frame; native consumers pin the installed Scheme.
     pub(super) fn scope(
         self,
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
+        current: &StateCells,
     ) -> Result<OwnScope, Error> {
-        let mut words = |values: [u128; 2]| -> Result<[Word<Fp>; 2], Error> {
-            values
-                .map(|v| {
-                    chip.uint()
-                        .constant::<128>(region, v)
-                        .map(|v| v.word().clone())
-                })
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()?
-                .try_into()
-                .map_err(|_| Error::Synthesis)
-        };
         Ok(OwnScope {
-            scheme: words(self.scheme)?,
-            provider: words(self.provider)?,
+            scheme: core::array::from_fn(|i| {
+                current.core()[crate::witness::core_index::SCHEME + i].clone()
+            }),
+            provider: self.provider(chip, region)?,
         })
+    }
+
+    // Provider-only consumers need no independent scheme proposal.
+    pub(super) fn provider(
+        self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+    ) -> Result<[Word<Fp>; 2], Error> {
+        self.provider
+            .map(|v| {
+                chip.uint()
+                    .constant::<128>(region, v)
+                    .map(|v| v.word().clone())
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .map_err(|_| Error::Synthesis)
     }
 }
 
@@ -105,7 +116,7 @@ pub fn authenticate_current(
     if input.certificate_proof.key_policy() != SignatureKey::Fixed(policy.root) {
         return Err(Error::Synthesis);
     }
-    let OwnScope { scheme, provider } = policy.scope(chip, region)?;
+    let OwnScope { scheme, provider } = policy.scope(chip, region, input.current.state)?;
     let mut uint = chip.uint();
     input
         .current
@@ -459,3 +470,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "own/scope_tests.rs"]
+mod scope_tests;

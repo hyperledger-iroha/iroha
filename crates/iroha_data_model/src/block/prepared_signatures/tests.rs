@@ -9,7 +9,7 @@ fn fixture(count: usize) -> SignedBlock {
             BlockSignature::new(
                 index as u64,
                 SignatureOf::from_signature(
-                    Signature::try_from_bytes(&vec![index as u8 + 1; 64]).unwrap(),
+                    Signature::try_from_bytes(&[u8::try_from(index).unwrap() + 1; 64]).unwrap(),
                 ),
             )
         }))

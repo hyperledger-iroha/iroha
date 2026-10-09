@@ -1,9 +1,5 @@
 # Compiled network profile `sora-nexus-v1-qual`: `sora-nexus-v1` for qualification runs.
 #
-# The mandatory KAGEMUSHA publisher and its finite typed defaults are inherited
-# unchanged. Only its two private custody-file paths belong to the node file;
-# data_dir completes omitted paths under secrets/ without creating custody bytes.
-#
 # It overrides only the genesis cadence and epoch length (so a short run crosses a mandatory
 # beacon pulse and an epoch boundary), the snapshot interval, and the storage budget (so four
 # local nodes fit a CI runner). Everything else comes from the base profile.

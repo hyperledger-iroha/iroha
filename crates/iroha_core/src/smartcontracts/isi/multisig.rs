@@ -1,5 +1,14 @@
 //! Built-in handling for multisig instructions without requiring an executor upgrade.
+#[path = "multisig_fee_proposal.rs"]
+mod fee_proposal;
 mod parliament_rekey;
+pub(crate) use fee_proposal::{
+    fee_proposal_key_is_unused, read_pending_fee_proposal, read_registered_account_state,
+    read_settled_fee_proposal,
+};
+
+#[cfg(test)]
+pub(crate) use fee_proposal::install_executed_fee_proposal_fixture;
 
 use crate::{
     execution_attempt::{
@@ -1776,6 +1785,7 @@ fn execute_register(
         account: multisig_account_id,
         home_domain,
         spec,
+        uaid,
     } = instruction;
     validate_registration(state_transaction, &multisig_account_id, &spec)?;
     if account_exists(state_transaction, &multisig_account_id)? {
@@ -1785,6 +1795,17 @@ fn execute_register(
         if expected_account != multisig_account_id {
             return Err(ValidationFail::NotPermitted(format!(
                 "multisig account `{multisig_account_id}` already exists and cannot be rekeyed to `{expected_account}` by registration"
+            )));
+        }
+        let existing_uaid = state_transaction
+            .world
+            .account(&multisig_account_id)
+            .map_err(|error| ValidationFail::InstructionFailed(error.into()))?
+            .uaid()
+            .copied();
+        if existing_uaid != uaid {
+            return Err(ValidationFail::NotPermitted(format!(
+                "multisig account `{multisig_account_id}` already exists with a different immutable universal identity"
             )));
         }
         let previous_state = load_multisig_account_state_optional(
@@ -1818,7 +1839,8 @@ fn execute_register(
         )?;
         return Ok(());
     }
-    let register_account = iroha_data_model::account::NewAccount::new(multisig_account_id.clone());
+    let register_account =
+        iroha_data_model::account::NewAccount::new(multisig_account_id.clone()).with_uaid(uaid);
     Register::account(register_account)
         .execute(authority, state_transaction)
         .map_err(ValidationFail::InstructionFailed)?;
@@ -2983,70 +3005,8 @@ fn load_multisig_account_state_optional(
     multisig_account: &AccountId,
 ) -> Result<Option<MultisigAccountState>, ValidationFail> {
     let resolved_account = resolve_signatory_account(state_transaction, multisig_account)?;
-    let key = multisig_account_state_key(&resolved_account);
-    let Some(bytes) = state_transaction.world.smart_contract_state.get(&key) else {
-        return Ok(None);
-    };
-    let state = norito::decode_from_bytes::<MultisigAccountState>(bytes).map_err(|error| {
-        retain_multisig_read_attempt(state_transaction, multisig_decode_attempt(error))
-    })?;
-    if state.account_id != resolved_account {
-        return Err(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
-            format!(
-                "native multisig account state is bound to `{}`, not `{resolved_account}`",
-                state.account_id
-            ),
-        )));
-    }
-    ensure_quorum_reachable(&state.spec)?;
-    ensure_signatories_are_single(&state.spec)?;
-    let expected_account = AccountId::new_multisig(
-        multisig_policy_from_spec(&state.spec).map_err(ValidationFail::InstructionFailed)?,
-    );
-    if expected_account != resolved_account {
-        return Err(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
-            format!(
-                "native multisig account state policy derives `{expected_account}`, not `{resolved_account}`"
-            ),
-        )));
-    }
-    let account = state_transaction
-        .world
-        .account(&resolved_account)
-        .map_err(map_find_error)?;
-    if let Some(metadata_spec) = account.metadata().get(&spec_key()).cloned() {
-        let metadata_spec = metadata_spec
-            .try_into_any_norito::<MultisigSpec>()
-            .map_err(|err| {
-                ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
-                    "invalid multisig/spec metadata for `{resolved_account}`: {err}"
-                )))
-            })?;
-        if metadata_spec != state.spec {
-            return Err(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
-                format!(
-                    "multisig/spec metadata disagrees with canonical native account state for `{resolved_account}`"
-                ),
-            )));
-        }
-    }
-    if let Some(metadata_home_domain) = account.metadata().get(&home_domain_key()).cloned() {
-        let metadata_home_domain = metadata_home_domain
-            .try_into_any_norito::<Option<iroha_model_base::domain::DomainId>>()
-            .map_err(|err| {
-                ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
-                    "invalid multisig home-domain metadata for `{resolved_account}`: {err}"
-                )))
-            })?;
-        if metadata_home_domain != state.home_domain {
-            return Err(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
-                format!(
-                    "multisig home-domain metadata disagrees with canonical native account state for `{resolved_account}`"
-                ),
-            )));
-        }
-    }
-    Ok(Some(state))
+    read_registered_account_state(&state_transaction.world, &resolved_account)
+        .map_err(|error| retain_multisig_read_attempt(state_transaction, error))
 }
 fn load_multisig_account_state(
     state_transaction: &StateTransaction<'_, '_>,
@@ -6778,6 +6738,116 @@ mod tests {
         assert_eq!(register.home_domain.as_ref(), Some(&source_domain));
         assert_eq!(signer_in_spec.controller(), signer.controller());
     }
+    #[test]
+    fn multisig_register_uaid_rekeys_index_and_rejects_identity_changes_or_adoption() {
+        use iroha_data_model::nexus::UniversalAccountId;
+        tx!(state, block, tx, World::new(), "multisig-uaid-registration");
+        let domain_id = DomainId::try_new("bsp", "cbsi").expect("domain");
+        let owner = new_account_id(&checked_keypair());
+        domain!(tx, owner, domain_id, "domain registration");
+        account!(tx, owner, domain_id, owner, "owner registration");
+        let signer = new_account_id(&checked_keypair());
+        account!(tx, owner, domain_id, signer, "signer registration");
+        let spec = spec(BTreeMap::from([(signer.clone(), 1)]), 1);
+        let seed = new_account_id(&checked_keypair());
+        let canonical = AccountId::new_multisig(multisig_policy_from_spec(&spec).unwrap());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"native-multisig-uaid"));
+        execute_register(
+            &mut tx,
+            &owner,
+            MultisigRegister::with_account(seed.clone(), domain_id.clone(), spec.clone())
+                .with_uaid(Some(uaid)),
+        )
+        .expect("fresh bound registration");
+        assert!(tx.world.accounts.get(&seed).is_none());
+        assert_eq!(tx.world.account(&canonical).unwrap().uaid(), Some(&uaid));
+        assert_eq!(tx.world.uaid_accounts.get(&uaid), Some(&canonical));
+        let before = load_multisig_account_state_optional(&tx, &canonical)
+            .unwrap()
+            .unwrap();
+        execute_register(
+            &mut tx,
+            &owner,
+            MultisigRegister::with_account(canonical.clone(), domain_id.clone(), spec.clone())
+                .with_uaid(Some(uaid)),
+        )
+        .expect("same identity retry");
+        for different in [
+            None,
+            Some(UniversalAccountId::from_hash(Hash::new(
+                b"different-multisig-uaid",
+            ))),
+        ] {
+            let error = execute_register(
+                &mut tx,
+                &owner,
+                MultisigRegister::with_account(canonical.clone(), domain_id.clone(), spec.clone())
+                    .with_uaid(different),
+            )
+            .expect_err("immutable identity mismatch");
+            assert!(error.to_string().contains("immutable universal identity"));
+            assert_eq!(tx.world.account(&canonical).unwrap().uaid(), Some(&uaid));
+            assert_eq!(tx.world.uaid_accounts.get(&uaid), Some(&canonical));
+            assert_eq!(
+                load_multisig_account_state_optional(&tx, &canonical)
+                    .unwrap()
+                    .unwrap(),
+                before
+            );
+        }
+        let other_signer = new_account_id(&checked_keypair());
+        account!(
+            tx,
+            owner,
+            domain_id,
+            other_signer,
+            "other signer registration"
+        );
+        let mut other_spec = spec.clone();
+        other_spec.signatories = BTreeMap::from([(other_signer, 1)]);
+        let unbound = AccountId::new_multisig(multisig_policy_from_spec(&other_spec).unwrap());
+        execute_register(
+            &mut tx,
+            &owner,
+            MultisigRegister::with_account(unbound.clone(), domain_id.clone(), other_spec.clone()),
+        )
+        .expect("registration without UAID remains supported");
+        let error = execute_register(
+            &mut tx,
+            &owner,
+            MultisigRegister::with_account(unbound.clone(), domain_id.clone(), other_spec)
+                .with_uaid(Some(UniversalAccountId::from_hash(Hash::new(
+                    b"retroactive-multisig-uaid",
+                )))),
+        )
+        .expect_err("cannot retrofit an existing immutable identity");
+        assert!(error.to_string().contains("immutable universal identity"));
+        assert_eq!(tx.world.account(&unbound).unwrap().uaid(), None);
+        // Removing canonical native state does not make an already registered
+        // account adoptable, even when its immutable identity exactly matches.
+        tx.world
+            .smart_contract_state
+            .remove(multisig_account_state_key(&canonical));
+        let error = execute_register(
+            &mut tx,
+            &owner,
+            MultisigRegister::with_account(canonical.clone(), domain_id, spec)
+                .with_uaid(Some(uaid)),
+        )
+        .expect_err("no native state adoption");
+        assert!(
+            error
+                .to_string()
+                .contains("without canonical native account state")
+        );
+        assert!(
+            load_multisig_account_state_optional(&tx, &canonical)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(tx.world.account(&canonical).unwrap().uaid(), Some(&uaid));
+    }
+
     #[test]
     fn multisig_metadata_cannot_reconstruct_missing_native_account_state() {
         tx!(

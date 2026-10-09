@@ -59,7 +59,17 @@ authenticated current alias and artifact readback. Changed input cannot replace 
 work. Slot and journal locks serialize concurrent writers; recovery binds the journal location
 to its authenticated target and exact commit. Both fresh deployment and recovery require the
 caller's scope and fee review before execution. Execution failures show their public cause and
-exact recovery journal together, while preserving the native error type for callers.
+exact recovery journal together, while preserving the native error type for callers. The shared
+slot publishes a bounded `Empty` / `Preparing { candidate, previous }` / `Active` record.
+`Preparing` is durable before the native service atomically publishes the complete lock and signed
+plan; `Active` is durable before dispatch. A retry reconciles this exact cutover before preparing
+another plan. A truly absent candidate restores its recorded predecessor; partial or malformed
+custody is retained and refused. Historical completed recovery never moves the active slot backward.
+Existing slots require their original named lock and publication record; retired pointer layouts
+are rejected. Fallible native progress observers recheck the original slot and journal locks
+after user callbacks and before submission. Managed and package commands share the same original-plan retry admission. A package
+`--prepare` retry returns the retained preflight and journal without dispatch; ordinary retry resumes
+the same signed transactions. Package-command recovery holds the original package slot lock.
 
 Focused validation: `cargo test -p musubi --lib deployment_runtime`.
 

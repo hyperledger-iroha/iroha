@@ -116,6 +116,9 @@ internal enum class KagemushaWalletAndroidKeyProfileV1(@JvmField val tag: Int) {
 
     /** StrongBox when present, otherwise the TEE; a fresh-only attempt never retries its alias. */
     SECURE_ELEMENT_OR_TEE(2),
+
+    /** Exact TEE-only issuer policy, even on devices that also have StrongBox. */
+    ANDROID_TEE(3),
     ;
 
     companion object {

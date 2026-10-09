@@ -17,15 +17,38 @@ What exists so far:
   `SignedNetworkCheckpoint`, and atomically prepares `checkpoint.nrt` and `network-profiles.nrt`
   for an explicitly selected release authority and HTTPS publication location. The schema in its
   public receipt binds the compiled candidate; preparation does not qualify a live network,
-  publish the endpoint, or authenticate a bundle installation. Release packaging consumes the
-  profile through `cargo xtask kagami-bundle --network-profiles` for the matching client/worker/daemon CLI
-  package, or `cargo xtask mochi-bundle --network-profiles` for the desktop application.
+  publish the endpoint, or authenticate a bundle installation. Release packaging selects the exact
+  committed `defaults/developer/network-profiles.nrt` image automatically: use
+  `cargo xtask kagami-bundle --profile release --out <fresh-directory>` for the matching
+  client/worker/daemon CLI package, or `cargo xtask mochi-bundle --profile release --out <fresh-directory>`
+  for the desktop application. `--network-profiles` is an override for development bundles only.
 - `managed`: workspace-scoped private contexts, four-validator process ownership,
   authenticated native control IPC, durable stop/restart/reset and signed readiness.
   `ManagedStore::up` retains the same generation and signer across starts; readiness
   requires one signed transaction to be applied by every validator. Kagami and
   Mochi call this owner directly. Explicit deployment/recovery targets preserve the
   workspace selection; ordinary startup and default auto-creation select their environment.
+  Startup transfers the original runtime lock through inherited stdin, preserving ownership
+  through worker loading and into its validator children. Unix retains the shared native file
+  lock; Windows relies on the trusted inherited handle's writer exclusion.
+  Binary verification, worker loading, activation and Ready publication share the original
+  startup budget. A same-boot continuous deadline includes suspend across the handoff;
+  clock failures refuse startup. Later renewal and maintenance turns have separate budgets.
+  Within worker admission, the current executable reuses the retained launcher's content hash
+  only after a fresh native open rejoins its exact path, identity and unchanged snapshot.
+  Both opened files are revalidated; different paths still receive full content admission.
+  Readiness submission reuses peer zero's transport after checking its endpoint against the
+  selected client configuration. The rebuilt submission context performs fresh compatibility
+  checks and retains the original deadline, signer, fee limits and four-validator proof checks.
+  After ownership and generation admission, failures before IPC publish Failed with zero
+  children. Rejected IPC clients do not terminate the listener. Later supervisor errors
+  cancel work and stop owned children before retaining a closed failure; cleanup and
+  status-publication errors remain explicit. `down` waits for native ownership to close;
+  missing IPC while ownership remains
+  does not prove stopped. An unavailable endpoint is reconciled only against its unchanged
+  admitted session, the original generation and explicit terminal zero-peer status.
+  A new start retires the stale session and endpoint while holding both environment locks.
+  These changes still require matching installed-runtime and native-platform validation.
   Unix sockets stay under the private managed store when the complete pathname fits the
   native limit; longer paths use the short owner-bound namespace. Reset removes a validated
   stale socket only while holding both environment locks. Windows uses owner-restricted native named pipes;
@@ -46,8 +69,10 @@ What exists so far:
   independently installed authority, with private durable release/clock rollback
   protection and explicit network reset identity. `ParentFinalityStore` retains
   the advancing native prefix separately and publishes before returning fresh
-  readiness; reopening an older release never rewinds it. Official Taira release-key
-  installation, artifact publication and combined parent-provisioning qualification remain outstanding.
+  readiness; reopening an older release never rewinds it. The Taira installation profile is
+  bundled from its committed image, and the published checkpoint has passed native verification.
+  Authenticated bundle distribution, recurring signed checkpoint publication and combined
+  parent-provisioning qualification remain outstanding.
   Native installation profiles and bounded unsigned HTTPS retrieval select the release
   independently. Signed account profiles, committee endpoints and optional faucet
   allowances feed exact parent SDK contexts without forwarding child credentials.
@@ -157,6 +182,26 @@ plan commitment, retains the original finite interval and exact empty external-f
 revalidates all sidecars on reopen. Original trust does not establish a promoted catalog, current
 operator permission, acknowledgements, runtime admission or serving readiness. Standard profiles
 have no generated compliance plan.
+Bootstrap recovery, child inventories, runtime custody selection and gateway plan lookups reuse
+the parent's immutable decoded profile. Gateway projections refuse another prepared generation.
+Runtime selection and startup polling reopen only existing bootstrap custody; explicit startup
+initialization owns its creation. Polling uses the retained renderer's exact generation and closes
+its original profile checks on successful and failed child admission. Missing bootstrap state is
+refused without reconstruction.
+Each existing child acquires its own operation lock and rechecks the retained files and native
+paths; the constructor also rechecks the parent before returning. Active Norito decode budgets, and
+parents opened under those budgets, retain the complete profile-capture path.
+Each read-only bootstrap traversal and child census owns a separate cache of up to three
+immutable checkpoint imports, keyed by their complete bytes, network and chain. Fresh custody
+and transaction checks still run for every child. Each cache ends with its traversal; active
+decode budgets always perform the original import and do not reuse cached results.
+Each traversal also retains at most two complete validated epoch contexts for reuse by that
+same importer. This separate bounded workspace supplies no source or current-state verdict.
+Recovery rechecks the caller's deadline after its final inventory read. Startup also rechecks
+cancellation before publishing original intent and validates each newly issued authorization
+before returning it. Shared live-authorization checks close cancellation after the original
+and epoch reads, while preserving custody and expiry errors. Failed attempts retain their
+original intent and epoch history for retry.
 The ordinary CLI and Mochi global creation paths share this default; their private-root request
 constructors select `Standard`. Restart preserves the exact retained profile. Profile changes
 require a new context, and private roots reject the global service profile. Explicit unmanaged
@@ -266,8 +311,15 @@ policy and registration, funding, distinct-key ingest authority, gateway configu
 original wallet and authenticated carrier. Recovery verifies explicit wallet preparation stages;
 partial request/payload history is read-only until an explicit advance rechecks the native
 prerequisite and finishes that same original. Recovery compares every original selection before
-network access and requires strictly ordered successful carriers; a newer I/O deadline cannot renew
-the original signing deadline. Complete reports describe historical execution. The worker now
+network access and requires the reserve carrier before every provider, strict prerequisites within
+each provider, and reputation after every gateway. Independent providers may share a certified block;
+every original transaction remains in the all-peer barrier. A fresh closed name census permits at most
+three scoped provider workers outside active decode budgets; existing purposes and resumed histories
+use serial dispatch. That census selects scheduling only: raced material still goes through ordinary
+native admission and the one shared epoch/replacement fence. Every spawned worker is joined before
+census or returning a report, with the same original deadline and cancellation. A provider failure may
+leave another provider's exact resumable work; it never grants readiness. A newer I/O deadline cannot
+renew the original signing deadline. Complete reports describe historical execution. The worker now
 composes those owners, promotes the original signed catalog and restarts only its owned peers
 with the derived token configuration. It rechecks the same paid readiness receipt, exact Applied
 carrier on all four peers, promoted catalog and fresh native discovery before reporting Ready.

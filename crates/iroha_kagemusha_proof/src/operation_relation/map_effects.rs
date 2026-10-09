@@ -30,7 +30,7 @@ pub const FEE_DOMAIN: u64 = u64::from_le_bytes(*b"kgwfee_1");
 pub const CONSUMED_DOMAIN: u64 = u64::from_le_bytes(*b"kgwccrd1");
 /// Domain of the permanent `(credit, Payment digest, burned)` record.
 pub const CREDIT_DOMAIN: u64 = u64::from_le_bytes(*b"kgwcdig1");
-/// Domain of `(ordinal, voucher digest, amount)` load recovery entries.
+/// Domain of `(ordinal, ordinary receipt digest, amount)` load recovery entries.
 pub const LOAD_DOMAIN: u64 = u64::from_le_bytes(*b"kgwload1");
 /// Domain of `(ordinal, nullifier, amount, charge)` redeem recovery entries.
 pub const REDEEM_DOMAIN: u64 = u64::from_le_bytes(*b"kgwrdm_1");
@@ -229,7 +229,7 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
     /// Constrain Load/Unload arithmetic and the exact insert-only recovery
     /// entry, with distinct `kind * 2^128 + ordinal` keys in one shared map.
     ///
-    /// The owning A still authenticates finalized voucher/quote inputs.
+    /// The owning A authenticates ordinary receipt finality or the Unload quote.
     /// Duplicate ordinals, kind substitution and nullifier or charge changes
     /// cannot replace a prior entry or alter the committed successor root.
     ///
@@ -455,9 +455,25 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
         witness: &ReceiveMapWitness<D>,
         valid: &Bit<Fp>,
     ) -> Result<(), Error> {
+        self.receive_consumed(region, transition, witness, valid)?;
+        self.receive_credit(region, transition, witness, valid)?;
+        self.receive_burn_and_preserve(region, transition, valid)
+    }
+
+    /// Authenticate only the exact OQ-3 consumed-root update. A complete Receive
+    /// must also constrain the credit record and burn/preserved-state effects
+    /// under the identical transition and complete incoming verdict.
+    /// # Errors
+    /// Wrong variant, invalid insertion route, missing accepting insert or wrong root.
+    pub fn receive_consumed<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        witness: &ReceiveMapWitness<D>,
+        valid: &Bit<Fp>,
+    ) -> Result<(), Error> {
         require_receive(transition.statement)?;
         self.bind(region, transition)?;
-        self.glue.assert_nonzero(region, &witness.payment_digest)?;
         let fields = transition.statement.fields();
         let credit = &fields[17];
         let amount = &fields[20];
@@ -478,6 +494,29 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
             &witness.consumed.slot,
             &witness.insert,
         )?;
+        GlueChip::assert_equal(
+            region,
+            &consumed_root,
+            &transition.successor.state.core()[core::CONSUMED_CREDIT_ROOT],
+        )
+    }
+
+    /// Authenticate the first exact Payment/burn credit record, preserving an
+    /// already present record. Compose with both other Receive effect owners.
+    /// # Errors
+    /// Wrong variant, zero Payment digest, forged route or wrong successor root.
+    pub fn receive_credit<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        witness: &ReceiveMapWitness<D>,
+        valid: &Bit<Fp>,
+    ) -> Result<(), Error> {
+        require_receive(transition.statement)?;
+        self.bind(region, transition)?;
+        self.glue.assert_nonzero(region, &witness.payment_digest)?;
+        let fields = transition.statement.fields();
+        let credit = &fields[17];
         let burned = self.glue.not(region, valid)?;
         let credit_value = self.sponge.hash_words(
             region,
@@ -496,6 +535,28 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
             &witness.credit.low,
             &witness.credit.slot,
         )?;
+        GlueChip::assert_equal(
+            region,
+            record.root(),
+            transition.successor.lineage.credit_root(),
+        )
+    }
+
+    /// Apply the exact adjusted-burn iff rule and preserve unrelated roots.
+    /// The consumed-root and credit-root owners are separate mandatory inputs
+    /// to a complete Receive; this method alone does not authenticate them.
+    /// # Errors
+    /// Wrong variant, u128 overflow, discretionary burn or changed preserved state.
+    pub fn receive_burn_and_preserve(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        valid: &Bit<Fp>,
+    ) -> Result<(), Error> {
+        require_receive(transition.statement)?;
+        self.bind(region, transition)?;
+        let burned = self.glue.not(region, valid)?;
+        let amount = &transition.statement.fields()[20];
         let delta = self.glue.mul(region, burned.word(), amount)?;
         let mut uint = UintChip::new(self.glue, self.range);
         let previous_burn =
@@ -509,21 +570,11 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
         )?;
         GlueChip::assert_equal(
             region,
-            record.root(),
-            transition.successor.lineage.credit_root(),
-        )?;
-        GlueChip::assert_equal(
-            region,
             transition.predecessor.lineage.pending_root(),
             transition.successor.lineage.pending_root(),
         )?;
         let previous = transition.predecessor.state.core();
         let successor = transition.successor.state.core();
-        GlueChip::assert_equal(
-            region,
-            &consumed_root,
-            &successor[core::CONSUMED_CREDIT_ROOT],
-        )?;
         for index in [
             core::BURNED_TOTAL,
             core::PENDING_OUTGOING_ROOT,
@@ -535,24 +586,85 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
         Ok(())
     }
 
-    /// Remove the retained descriptor from the committed core, and from
-    /// adjusted lineage only when the complete incoming verdict is valid.
+    /// Authenticate and remove Archive's retained descriptor from the committed core.
     ///
-    /// Both path pairs and the descriptor are hard-authenticated even on
-    /// no-op. Invalid evidence preserves the adjusted pending leaf and all
-    /// other value. A later lineage-consuming step resynchronizes the core,
-    /// permitting a new Archive with fresh evidence. This method never
-    /// authorizes deletion of the retained Payment before durable folding.
+    /// This hard owner binds the original statement/state pair and checks the
+    /// exact successor core root. The separate adjusted-lineage owner remains
+    /// mandatory; this method alone does not establish the complete transition.
     ///
     /// # Errors
-    /// Wrong fixed variant or layout failure; substituted descriptors,
-    /// uncleared core leaves and monetary changes are unsatisfiable.
-    pub fn archive<const D: usize>(
+    /// Wrong Archive variant or layout failure; descriptor, path, credit or
+    /// committed successor-root substitution is unsatisfiable.
+    pub fn archive_core_pending<const D: usize>(
         &mut self,
         region: &mut Region<'_, Fp>,
         transition: &MapTransition<'_>,
-        witness: &ArchiveMapWitness<D>,
+        descriptor: &[Word<Fp>; 7],
+        removal: &RemoveCells<D>,
+    ) -> Result<(), Error> {
+        self.archive_descriptor(region, transition, descriptor, removal)?;
+        self.bind(region, transition)?;
+        let root = ImtChip::new(self.glue, self.range, self.sponge).remove(
+            region,
+            &transition.predecessor.state.core()[core::PENDING_OUTGOING_ROOT],
+            &removal.predecessor,
+            &removal.removed,
+        )?;
+        GlueChip::assert_equal(
+            region,
+            &root,
+            &transition.successor.state.core()[core::PENDING_OUTGOING_ROOT],
+        )
+    }
+
+    /// Authenticate Archive's adjusted pending removal and exact no-op branch.
+    ///
+    /// The path executes even when evidence is invalid. All unrelated state and
+    /// held policy remain unchanged. The separate unconditional committed-core
+    /// owner is mandatory; no intermediate root is proposed by either owner.
+    ///
+    /// # Errors
+    /// Wrong Archive variant or layout failure; substituted descriptors, paths,
+    /// adjusted roots or unrelated state changes are unsatisfiable.
+    pub fn archive_lineage_pending<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        descriptor: &[Word<Fp>; 7],
+        removal: &RemoveCells<D>,
         valid_evidence: &Bit<Fp>,
+    ) -> Result<(), Error> {
+        super::administrative::archive(
+            &mut UintChip::new(self.glue, self.range),
+            region,
+            transition,
+        )?;
+        self.archive_descriptor(region, transition, descriptor, removal)?;
+        let root = ImtChip::new(self.glue, self.range, self.sponge).remove(
+            region,
+            transition.predecessor.lineage.pending_root(),
+            &removal.predecessor,
+            &removal.removed,
+        )?;
+        let selected = self.glue.select(
+            region,
+            valid_evidence,
+            &root,
+            transition.predecessor.lineage.pending_root(),
+        )?;
+        GlueChip::assert_equal(
+            region,
+            &selected,
+            transition.successor.lineage.pending_root(),
+        )
+    }
+
+    fn archive_descriptor<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        descriptor: &[Word<Fp>; 7],
+        removal: &RemoveCells<D>,
     ) -> Result<(), Error> {
         if !matches!(
             transition.statement.variant(),
@@ -560,67 +672,36 @@ impl<'a, H: WordHasher<Fp>> MapEffectsChip<'a, H> {
         ) {
             return Err(Error::Synthesis);
         }
-        self.bind(region, transition)?;
         let credit = &transition.statement.fields()[17];
-        GlueChip::assert_equal(region, &witness.descriptor[0], credit)?;
-        let value = self
-            .sponge
-            .hash_words(region, PENDING_DOMAIN, &witness.descriptor)?;
-        for removal in [&witness.core, &witness.lineage] {
-            GlueChip::assert_equal(region, removal.removed.leaf.key(), credit)?;
-            GlueChip::assert_equal(region, removal.removed.leaf.value(), &value)?;
-        }
-        let core_root = ImtChip::new(self.glue, self.range, self.sponge).remove(
+        GlueChip::assert_equal(region, &descriptor[0], credit)?;
+        let value = self.sponge.hash_words(region, PENDING_DOMAIN, descriptor)?;
+        GlueChip::assert_equal(region, removal.removed.leaf.key(), credit)?;
+        GlueChip::assert_equal(region, removal.removed.leaf.value(), &value)
+    }
+
+    /// Compose both mandatory Archive pending-root owners.
+    ///
+    /// Both paths and the descriptor are hard-authenticated even on no-op.
+    /// Invalid evidence preserves the adjusted pending leaf and unrelated state;
+    /// the core removal is unconditional. This composition never authorizes
+    /// deletion of the retained Payment before durable folding.
+    ///
+    /// # Errors
+    /// Any failure of either exact map owner or the preserved-state relation.
+    pub fn archive<const D: usize>(
+        &mut self,
+        region: &mut Region<'_, Fp>,
+        transition: &MapTransition<'_>,
+        witness: &ArchiveMapWitness<D>,
+        valid_evidence: &Bit<Fp>,
+    ) -> Result<(), Error> {
+        self.archive_core_pending(region, transition, &witness.descriptor, &witness.core)?;
+        self.archive_lineage_pending(
             region,
-            &transition.predecessor.state.core()[core::PENDING_OUTGOING_ROOT],
-            &witness.core.predecessor,
-            &witness.core.removed,
-        )?;
-        let lineage_root = ImtChip::new(self.glue, self.range, self.sponge).remove(
-            region,
-            transition.predecessor.lineage.pending_root(),
-            &witness.lineage.predecessor,
-            &witness.lineage.removed,
-        )?;
-        let selected = self.glue.select(
-            region,
+            transition,
+            &witness.descriptor,
+            &witness.lineage,
             valid_evidence,
-            &lineage_root,
-            transition.predecessor.lineage.pending_root(),
-        )?;
-        GlueChip::assert_equal(
-            region,
-            &selected,
-            transition.successor.lineage.pending_root(),
-        )?;
-        GlueChip::assert_equal(
-            region,
-            &core_root,
-            &transition.successor.state.core()[core::PENDING_OUTGOING_ROOT],
-        )?;
-        for index in [
-            core::BALANCE,
-            core::BURNED_TOTAL,
-            core::CONSUMED_CREDIT_ROOT,
-            core::LOAD_REDEEM_ROOT,
-            core::FEE_CLAIM_ROOT,
-            core::QUOTA_USAGE_ROOT,
-        ] {
-            GlueChip::assert_equal(
-                region,
-                &transition.predecessor.state.core()[index],
-                &transition.successor.state.core()[index],
-            )?;
-        }
-        GlueChip::assert_equal(
-            region,
-            transition.predecessor.lineage.burned_total(),
-            transition.successor.lineage.burned_total(),
-        )?;
-        GlueChip::assert_equal(
-            region,
-            transition.predecessor.lineage.credit_root(),
-            transition.successor.lineage.credit_root(),
         )
     }
 }

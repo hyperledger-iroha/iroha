@@ -12,7 +12,7 @@
 //!   [`ProofRelation`] it needs and returns actionable verification errors.
 //! - Stable proof/verifying-key hash helpers (`hash_proof`, `hash_vk`).
 //! - Batch-local de-duplication cache (`DedupCache`) and a light pre-verifier.
-//! - Closed dispatch for supported Halo2 IPA and STARK relations. A backend
+//! - Closed dispatch for supported native PIPA-R and STARK relations. A backend
 //!   label is not a privacy or execution-correctness guarantee. Incomplete IVM
 //!   execution relations are not admitted through generic verification.
 //! - A unified ZK envelope (`ZK1 | TLV*`) reader/writer helpers for tests and
@@ -89,8 +89,17 @@ pub(crate) mod frame_test_support;
 pub mod kagemusha_wallet_advance_v1;
 /// Complete installed wallet verifier inventory and native artifact identity owner.
 pub mod kagemusha_wallet_artifacts_v1;
+/// Actual enrolled custody, issuer/account originals and fresh existing-account admission.
+pub mod kagemusha_wallet_enrollment_v1;
+/// Native authenticated global genesis policy for ordinary Load history.
+pub mod kagemusha_wallet_finality_v1;
+pub mod kagemusha_wallet_intake_v1;
+/// Canonical G1 preparation and typed real native sigma/A/W inputs.
+pub mod kagemusha_wallet_preparation_v1;
 /// Authenticated native wallet proof artifacts and full sigma/Omega verification.
 pub mod kagemusha_wallet_proofs_v1;
+/// Immutable arbitrary-asset registration transport verified against installed native genesis.
+pub mod kagemusha_wallet_registration_v1;
 pub mod kagemusha_wallet_state_v1;
 /// Exact native PIPA-R built-in relations and their canonical proof containers.
 pub mod native_pipa_r;
@@ -689,38 +698,6 @@ fn verifying_key_content_uri_is_portable_v1(uri: &str) -> bool {
     })
 }
 include!("strict_verifying_key_preparation_tests.rs");
-#[cfg(test)]
-mod vk_cache_observer_tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::*;
-
-    static HITS: AtomicUsize = AtomicUsize::new(0);
-    static MISSES: AtomicUsize = AtomicUsize::new(0);
-
-    fn count_vk_cache_event(cache: &'static str, event: &'static str) {
-        match (cache, event) {
-            ("vk", "hit") => HITS.fetch_add(1, Ordering::SeqCst),
-            ("vk", "miss") => MISSES.fetch_add(1, Ordering::SeqCst),
-            _ => 0,
-        };
-    }
-
-    #[test]
-    fn installed_observer_sees_vk_cache_hit_and_miss() {
-        assert!(install_vk_cache_event_observer(count_vk_cache_event));
-        assert!(
-            !install_vk_cache_event_observer(count_vk_cache_event),
-            "only the first observer installation wins"
-        );
-        let (hits, misses) = (HITS.load(Ordering::SeqCst), MISSES.load(Ordering::SeqCst));
-        record_vk_cache_event("vk", "miss");
-        record_vk_cache_event("vk", "hit");
-        // Other tests share the process-wide cache, so counters only grow.
-        assert!(MISSES.load(Ordering::SeqCst) > misses);
-        assert!(HITS.load(Ordering::SeqCst) > hits);
-    }
-}
 /// Borrow the exact profile-qualified generic OpenVerify circuit identifier.
 /// Bare native-protocol identifiers have their own typed consumer and are not
 /// alternate spellings of a generic OpenVerify circuit.
@@ -1460,26 +1437,6 @@ pub mod test_utils {
         }
     }
 }
-/// Process-wide observer for verifier-key cache events (`cache`, `event` labels).
-static VK_CACHE_EVENT_OBSERVER: std::sync::OnceLock<fn(&'static str, &'static str)> =
-    std::sync::OnceLock::new();
-#[inline]
-fn record_vk_cache_event(cache: &'static str, event: &'static str) {
-    if let Some(observer) = VK_CACHE_EVENT_OBSERVER.get() {
-        observer(cache, event);
-    }
-}
-/// Install the process-wide observer for verifier-key cache hits and misses.
-///
-/// The node daemon installs a callback that feeds
-/// `zk_verifier_cache_events_total`; the verifier itself stays independent of
-/// the telemetry registry. Only the first installation wins.
-///
-/// Returns `true` when `observer` was installed and `false` when an observer
-/// was already present.
-pub fn install_vk_cache_event_observer(observer: fn(&'static str, &'static str)) -> bool {
-    VK_CACHE_EVENT_OBSERVER.set(observer).is_ok()
-}
 /// Batch-local deduplication cache keyed by proof hash.
 #[derive(Clone, Default)]
 pub struct DedupCache {
@@ -1620,8 +1577,6 @@ pub enum PreverifyResult {
     Duplicate,
     /// Backend tag is empty or not recognized by the pre-verifier.
     UnsupportedBackend,
-    /// Backend curve is not allowed by node configuration/policy.
-    CurveNotAllowed,
     /// Proof payload exceeds the locally accepted maximum size for pre-verify.
     ProofTooBig,
     /// Malformed proof payload (e.g., empty bytes or structurally invalid header for the backend).
@@ -2508,7 +2463,10 @@ mod stark_backend_tag_tests {
                 format!("generic/namespace/{label}"),
             ] {
                 assert!(
-                    !pipa_r_open_verify_circuit_id_matches_backend(ZK_BACKEND_NATIVE_PIPA_R, &circuit_id),
+                    !pipa_r_open_verify_circuit_id_matches_backend(
+                        ZK_BACKEND_NATIVE_PIPA_R,
+                        &circuit_id
+                    ),
                     "Halo2 generic admission must reject privacy circuit id {circuit_id:?}"
                 );
                 assert!(

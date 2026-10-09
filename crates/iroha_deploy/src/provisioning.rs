@@ -8,6 +8,10 @@
 use std::{
     fs::File,
     path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -84,6 +88,9 @@ pub enum ProvisioningError {
     /// The caller's existing finite operation budget elapsed without establishing completion.
     #[error("private provisioning: operation deadline elapsed")]
     Deadline,
+    /// The original supervisor cancelled new preparation and dispatch.
+    #[error("private provisioning: operation cancelled")]
+    Cancelled,
 }
 
 type Result<T> = std::result::Result<T, ProvisioningError>;
@@ -160,6 +167,7 @@ pub struct RemoteProvisioning {
     finality: ParentFinalityStore,
     attachment: Option<AttachmentStore>,
     publication_uncertain: bool,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 impl RemoteProvisioning {
@@ -355,9 +363,43 @@ impl RemoteProvisioning {
             finality,
             attachment,
             publication_uncertain: false,
+            cancellation: None,
         };
         result.revalidate()?;
         Ok(result)
+    }
+
+    /// Bind the original supervisor's monotonic cancellation signal to every paid operation.
+    /// Reopening under a new owner preserves all retained journals; never reset a live signal.
+    ///
+    /// # Errors
+    /// Refuses replacing an already bound signal with a different owner.
+    pub fn with_cancellation(mut self, cancellation: Arc<AtomicBool>) -> Result<Self> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|original| !Arc::ptr_eq(original, &cancellation))
+        {
+            return Err(ProvisioningError::Invalid(
+                "provisioning cancellation owner changed",
+            ));
+        }
+        if let Some(attachment) = self.attachment.as_mut() {
+            attachment.bind_cancellation(Arc::clone(&cancellation))?;
+        }
+        self.cancellation = Some(cancellation);
+        Ok(self)
+    }
+
+    fn require_active(&self) -> Result<()> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|signal| signal.load(Ordering::Acquire))
+        {
+            return Err(ProvisioningError::Cancelled);
+        }
+        Ok(())
     }
 
     /// Read retained progress without claiming current network liveness.
@@ -399,7 +441,10 @@ impl RemoteProvisioning {
             .map_err(|_| {
                 ProvisioningError::Invalid("cannot construct approved parent observation clients")
             })?;
-        self.provision_with(bootstrap, deadline, &source, &NativeOperations)
+        let operations = NativeOperations {
+            cancellation: self.cancellation.clone(),
+        };
+        self.provision_with(bootstrap, deadline, &source, &operations)
     }
 
     fn provision_with<S: FinalitySource + ?Sized, B: ProvisioningOperations>(
@@ -424,10 +469,14 @@ impl RemoteProvisioning {
                 .torii_root
                 .parse()
                 .map_err(|_| ProvisioningError::Invalid("retained faucet endpoint"))?;
+            let faucet_journal = operations.path().join("faucet");
+            if !path_exists(&faucet_journal)? {
+                self.require_active()?;
+            }
             let status = backend.fund(
                 &config,
                 &self.record.binding.faucet_request(),
-                &operations.path().join("faucet"),
+                &faucet_journal,
                 deadline,
             )?;
             if !status.is_complete() {
@@ -442,6 +491,7 @@ impl RemoteProvisioning {
         }
         let journal = operations.path().join("namespace");
         if self.record.namespace.is_none() {
+            self.require_active()?;
             if path_exists(&journal)? {
                 return Err(ProvisioningError::Invalid(
                     "namespace journal has no retained request",
@@ -468,6 +518,9 @@ impl RemoteProvisioning {
             .ok_or(ProvisioningError::Invalid(
                 "namespace journal has no retained request",
             ))?;
+        if !path_exists(&journal)? {
+            self.require_active()?;
+        }
         let status = backend.reserve(
             &self.parent,
             request,
@@ -513,12 +566,16 @@ impl RemoteProvisioning {
         let mut record = self.record.clone();
         record.lease_generation = Some(generation);
         self.publish(record)?;
-        self.attachment = Some(AttachmentStore::open(
+        let mut attachment = AttachmentStore::open(
             &self.directory.path().join("attachment"),
             self.record
                 .binding
                 .attachment_identity(bootstrap, generation)?,
-        )?);
+        )?;
+        if let Some(signal) = &self.cancellation {
+            attachment.bind_cancellation(Arc::clone(signal))?;
+        }
+        self.attachment = Some(attachment);
         Ok(ProvisioningProgress {
             wallet_status: Some(status),
             ..self.progress()

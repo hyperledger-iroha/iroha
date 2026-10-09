@@ -6,9 +6,10 @@
 //! inputs. The signed manifest must equal the independently installed manifest digest and
 //! the inventory recomputed from the actual mounted bytes.
 //!
-//! This admits a verifier inventory only. TODO(G3/G4): import the genuine proving-key
-//! inventory, bind every complete Q/A/W/terminal schedule to the same native profile, and
-//! connect the native preparation/fold owner. This type grants no wallet-open capability;
+//! The one signed identity includes the complete producer-catalog commitment; a
+//! verifier-only view need not hold that catalog's original proving tables.
+//! TODO(G3/G4): qualify every original against its complete Q/A/W/terminal source
+//! and connect the native preparation/fold owner. This type grants no wallet-open capability;
 //! there is no boolean or argument that upgrades verifier-only admission to producer readiness.
 
 use ff::PrimeField;
@@ -35,6 +36,10 @@ use crate::kagemusha_wallet_proofs_v1::{
 #[cfg(any(test, feature = "test-utils"))]
 #[path = "kagemusha_wallet_artifacts_v1/engineering_fixture.rs"]
 pub mod engineering_fixture;
+
+/// Authenticated producer inventory and bounded original reads, without source admission.
+#[path = "kagemusha_wallet_artifacts_v1/producer_inventory.rs"]
+pub mod producer_inventory;
 
 #[cfg(test)]
 #[path = "kagemusha_wallet_artifacts_v1/tests.rs"]
@@ -109,6 +114,10 @@ pub struct VerifierPackV1 {
     pub steps: Vec<StepOriginalV1>,
     /// Original Omega descriptor and key.
     pub lineage: ArtifactOriginalV1,
+    /// Mandatory commitment to the complete canonical producer inventory.
+    /// Verifier-only installation authenticates this commitment without claiming
+    /// possession or source qualification of the corresponding proving artifacts.
+    pub producer_catalog_digest: [u8; 32],
 }
 
 /// Authority provisioned independently by the native installation/configuration.
@@ -175,7 +184,7 @@ fn policy(lineage: bool) -> DescriptorPolicyV1 {
     }
 }
 
-// This uses the wallet's existing H framing for the four newly frozen artifact roles.
+// This uses the wallet's existing H framing for its domain-separated artifact roles.
 // Exact role/preimage definitions are in wire §3.1; no relation recomputes these SHA values.
 fn artifact_digest(role: &[u8], body: &[u8]) -> [u8; 32] {
     let mut h = Sha256::new();
@@ -267,14 +276,12 @@ pub fn ep_protocol_transcript_v1() -> Result<Vec<u8>, Error> {
     native_protocol_transcript(CurveV1::Pallas)
 }
 
-/// Exact fixed native verifier-profile preimage; it is not a producer qualification.
+/// Exact sole native artifact-profile preimage; it is not a producer qualification.
 /// # Errors
 /// Rejects failure to encode the fixed typed descriptor policies.
 pub fn native_profile_transcript_v1() -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&KAGEMUSHA_WALLET_VERSION_V1.to_le_bytes());
-    // Profile family1 is the complete native sigma/Omega verifier, not a producer.
-    bytes.push(1);
     put_u32(&mut bytes, SIGMA_CATALOG_V1.len())?;
     for (kind, mask) in SIGMA_CATALOG_V1 {
         bytes.push(kind);
@@ -301,6 +308,22 @@ pub fn native_profile_transcript_v1() -> Result<Vec<u8>, Error> {
     // transported Pallas claim; transported Vesta claim. These are fixed protocol
     // codes, not caller-provided proof-verdict booleans.
     bytes.extend_from_slice(&[1, 2, 3, 4]);
+    put_frame(
+        &mut bytes,
+        &iroha_kagemusha_proof::a_relation::schedule::compiled::compiled_schedule_transcript()
+            .map_err(|_| Error::Profile)?,
+    )?;
+    put_frame(
+        &mut bytes,
+        &iroha_kagemusha_proof::finality::native::compiled_leaf_schedule_transcript()
+            .map_err(|_| Error::Profile)?,
+    )?;
+    put_frame(&mut bytes, &producer_inventory::compiled_sigma_policy()?)?;
+    put_frame(
+        &mut bytes,
+        &iroha_kagemusha_proof::omega::native::compiled_policy_transcript()
+            .map_err(|_| Error::Profile)?,
+    )?;
     Ok(bytes)
 }
 
@@ -330,7 +353,9 @@ fn authority<T>(result: Result<T, KagemushaWalletValidationErrorV1>) -> Result<T
 
 impl VerifierPackV1 {
     fn inventory_bounds(&self) -> Result<(), Error> {
-        if self.version != KAGEMUSHA_WALLET_VERSION_V1 || self.steps.len() != SIGMA_CATALOG_V1.len()
+        if self.version != KAGEMUSHA_WALLET_VERSION_V1
+            || self.steps.len() != SIGMA_CATALOG_V1.len()
+            || self.producer_catalog_digest == [0; 32]
         {
             return Err(Error::Inventory);
         }
@@ -438,6 +463,7 @@ impl VerifierPackV1 {
         inventory.extend_from_slice(&[2, 0]);
         inventory.extend_from_slice(&0_u32.to_le_bytes());
         omega.append(&mut inventory)?;
+        inventory.extend_from_slice(&self.producer_catalog_digest);
         Ok(inventory)
     }
 

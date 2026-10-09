@@ -45,7 +45,34 @@ fn credential() -> KagemushaWalletCredentialV1 {
     fixture("KagemushaWalletCredentialV1")
 }
 
-fn signer(credential: &KagemushaWalletCredentialV1) -> SigningKey {
+pub(super) fn enrollment_issuer(
+    credential: &KagemushaWalletCredentialV1,
+) -> KagemushaWalletSignerCertificateV1 {
+    // The standalone certificate vector exercises a different signer role. Recover the
+    // actual enrollment original from the authenticated session that carries this wallet.
+    for row in vectors()["envelopes"].as_array().expect("envelopes") {
+        let envelope: KagemushaWalletEnvelopeV1 = archive::decode(
+            &hex::decode(row["canonical_hex"].as_str().expect("hex")).expect("hex"),
+        )
+        .expect("envelope");
+        let certificates = match envelope.message {
+            KagemushaWalletMessageV1::Offer { offer } => offer.certificates,
+            KagemushaWalletMessageV1::Request { request } => request.certificates,
+            _ => continue,
+        };
+        if let Some(certificate) = certificates.certificates.iter().find(|certificate| {
+            certificate.certificate_digest() == credential.body.issuer_certificate
+        }) {
+            credential
+                .verify(&fixture("KagemushaWalletSchemeV1"), certificate)
+                .expect("actual enrollment issuer");
+            return *certificate;
+        }
+    }
+    panic!("fixture enrollment issuer")
+}
+
+pub(super) fn signer(credential: &KagemushaWalletCredentialV1) -> SigningKey {
     for key in vectors()["keys"].as_array().expect("keys") {
         let signing = SigningKey::from_slice(
             &hex::decode(key["scalar_hex"].as_str().expect("scalar")).expect("hex"),
@@ -62,7 +89,7 @@ fn signer(credential: &KagemushaWalletCredentialV1) -> SigningKey {
     panic!("fixture payment key")
 }
 
-fn field(value: u8) -> [u8; 32] {
+pub(super) fn field(value: u8) -> [u8; 32] {
     let mut out = [0; 32];
     out[0] = value;
     out
@@ -123,7 +150,7 @@ fn enrollment() -> KagemushaWalletMarkerV1 {
     fixture("KagemushaWalletMarkerV1")
 }
 
-fn frozen(
+pub(super) fn frozen(
     previous: Option<&FrozenTransition>,
     effect: KagemushaWalletEffectV1,
 ) -> FrozenTransition {
@@ -181,6 +208,13 @@ fn frozen(
     } else {
         [0; 32]
     };
+    // The vector is a Receive with an already populated consumed map. It supplies signed
+    // object fixtures, never the initial local map descriptor. Mock steps carry their actual
+    // selected predecessor fields; Bootstrap starts with the protocol's empty local stores.
+    c.successor_state = previous.map_or_else(
+        || KagemushaWalletStateV1::bootstrap(&credential, field(92)).expect("empty state"),
+        |previous| previous.capsule.successor_state,
+    );
     let state = &mut c.successor_state;
     state.core.scheme_id = c.scheme_id;
     state.core.wallet_id = c.wallet_id;
@@ -209,7 +243,11 @@ fn frozen(
             KagemushaWalletRetainedInputRoleV1::Credential,
         ],
         KagemushaWalletOperationKindV1::Load => vec![
-            KagemushaWalletRetainedInputRoleV1::LoadVoucher,
+            KagemushaWalletRetainedInputRoleV1::LoadReceipt,
+            KagemushaWalletRetainedInputRoleV1::LoadFinality,
+        ],
+        KagemushaWalletOperationKindV1::RefreshPolicy => vec![
+            KagemushaWalletRetainedInputRoleV1::PolicyUpdate,
             KagemushaWalletRetainedInputRoleV1::CertificateSet,
         ],
         _ => Vec::new(),
@@ -237,7 +275,7 @@ fn frozen(
     result
 }
 
-fn bootstrap() -> FrozenTransition {
+pub(super) fn bootstrap() -> FrozenTransition {
     frozen(
         None,
         KagemushaWalletEffectV1::Bootstrap {
@@ -317,6 +355,7 @@ pub(super) struct MemoryArchive {
     records: Arc<Mutex<BTreeMap<ArchiveKey, Vec<u8>>>>,
     reads: Arc<AtomicUsize>,
     pub(super) fail_remove: bool,
+    capsule_writes: Arc<AtomicUsize>,
 }
 impl MemoryArchive {
     pub(super) fn new() -> Self {
@@ -327,6 +366,7 @@ impl MemoryArchive {
             records: Arc::default(),
             reads: Arc::default(),
             fail_remove: false,
+            capsule_writes: Arc::default(),
         }
     }
 }
@@ -372,6 +412,9 @@ impl ArchiveStore for MemoryArchive {
             return Err(Error::WitnessLost("immutable conflict"));
         }
         records.insert(key, bytes.to_vec());
+        if matches!(key, ArchiveKey::Capsule(_)) {
+            self.capsule_writes.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(())
     }
 }
@@ -383,7 +426,7 @@ pub(super) struct TestCustody {
     tombstones: BTreeMap<[u8; 32], crate::kagemusha_wallet_advance_v1::KagemushaWalletTombstoneV1>,
     pending: Option<AdvanceRequest<KagemushaWalletRecoveryCapsuleV1>>,
     pause: bool,
-    signatures: usize,
+    pub(super) signatures: usize,
     unavailable: bool,
     delivery_lost: bool,
     pub(super) fail_publication: Option<bool>,
@@ -613,9 +656,51 @@ pub(super) struct TestProofs {
     reject: bool,
     burn: bool,
     checkpoint_bytes: u32,
+    checkpoint_stages: u8,
     ledger_scope: Option<(KagemushaWalletSchemeV1, String)>,
+    preparations: Arc<AtomicUsize>,
+    preparation_proofs: Arc<AtomicUsize>,
+    fail_preparation_proof: bool,
+    advance_checks: Arc<AtomicUsize>,
+    capsule_writes: Option<Arc<AtomicUsize>>,
+    expire_during_publication: bool,
+    fold_pause: Option<Arc<folding_preemption_tests::Pause>>,
 }
+
+mod folding_preemption_tests;
+
+#[path = "lifecycle/delivery_tests.rs"]
+mod bound_delivery;
+#[path = "lifecycle/projection_tests.rs"]
+mod credit_projection;
+#[path = "lifecycle/tests.rs"]
+mod lifecycle;
+#[path = "transition_custody/tests.rs"]
+mod transition_custody_tests;
 impl NativeProofs for TestProofs {
+    type AdvanceCheck = usize;
+    fn verify_credited(
+        &self,
+        credited: &KagemushaWalletCreditedV1,
+        request: &KagemushaWalletRequestV1,
+        payment: &KagemushaWalletPaymentV1,
+    ) -> Result<(), Error> {
+        // Explicit host probe only; never installed monetary proof authority.
+        if self.reject {
+            return Err(Error::Proof("mock Credited proof refusal"));
+        }
+        valid(credited.verify_for(&self.ledger_scope()?.0, request, payment)).map(|_| ())
+    }
+    fn enrollment_certificates(
+        &self,
+        credential: &KagemushaWalletCredentialV1,
+    ) -> Result<Vec<u8>, Error> {
+        let certificate = enrollment_issuer(credential);
+        if certificate.certificate_digest() != credential.body.issuer_certificate {
+            return Err(Error::Invalid("test enrollment issuer"));
+        }
+        archive::encode(&KagemushaWalletCertificateSetV1::new(vec![certificate]).unwrap())
+    }
     fn ledger_scope(&self) -> Result<(KagemushaWalletSchemeV1, String), Error> {
         Ok(self.ledger_scope.clone().unwrap_or_else(|| {
             (
@@ -629,35 +714,65 @@ impl NativeProofs for TestProofs {
         &self,
         _witness: &ReleasedStep,
         _predecessor: Option<&KagemushaWalletFoldRecordV1>,
+        _custody: Option<&mut FoldCustodyV1<'_>>,
     ) -> Result<Vec<CheckpointLayout>, Error> {
-        Ok(vec![CheckpointLayout {
-            artifact_digest: field(99),
-            payload_bytes: if self.checkpoint_bytes == 0 {
-                3
-            } else {
-                self.checkpoint_bytes
-            },
-        }])
+        Ok((0..self.checkpoint_stages.max(1))
+            .map(|stage| CheckpointLayout {
+                artifact_digest: field(99 + stage),
+                payload_bytes: if self.checkpoint_bytes == 0 {
+                    3
+                } else {
+                    self.checkpoint_bytes
+                },
+            })
+            .collect())
     }
 
     fn verify_transition(
         &self,
         next: &FrozenTransition,
-        previous: Option<&FrozenTransition>,
+        previous: Option<&ReleasedStep>,
         _folded: Option<&KagemushaWalletFoldRecordV1>,
-    ) -> Result<(), Error> {
+        _custody: &mut TransitionCustodyV1<'_>,
+    ) -> Result<Self::AdvanceCheck, Error> {
         if self.reject {
             return Err(Error::Proof("test rejection"));
         }
         if let Some(previous) = previous {
             assert_eq!(
                 next.capsule.statement.predecessor,
-                previous.capsule.statement.successor
+                previous.frozen.capsule.statement.successor
             );
+        }
+        Ok(self
+            .capsule_writes
+            .as_ref()
+            .map_or(0, |count| count.load(Ordering::SeqCst)))
+    }
+    fn check_advance(&self, before: Self::AdvanceCheck) -> Result<(), Error> {
+        self.advance_checks.fetch_add(1, Ordering::SeqCst);
+        if self.expire_during_publication {
+            let now = self
+                .capsule_writes
+                .as_ref()
+                .expect("test clock")
+                .load(Ordering::SeqCst);
+            assert!(
+                now > before,
+                "freshness must follow the final durable capsule write"
+            );
+            return Err(Error::Invalid("test controls expired during publication"));
         }
         Ok(())
     }
-    fn verify_lineage(&self, lineage: &KagemushaWalletLineageV1) -> Result<(), Error> {
+    fn verify_lineage(
+        &self,
+        lineage: &KagemushaWalletLineageV1,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<(), Error> {
+        if let Some(token) = cancellation {
+            token.check()?;
+        }
         self.verifies.fetch_add(1, Ordering::SeqCst);
         if self.reject || lineage.proof != [1, 2, 3] {
             return Err(Error::Proof("mock proof identity"));
@@ -668,20 +783,34 @@ impl NativeProofs for TestProofs {
         &self,
         witness: &ReleasedStep,
         predecessor: Option<&KagemushaWalletFoldRecordV1>,
-        checkpoint: Option<&[u8]>,
+        checkpoints: &[Vec<u8>],
+        _custody: Option<&mut FoldCustodyV1<'_>>,
         cancellation: &Cancellation,
     ) -> Result<FoldProgress, Error> {
         cancellation.check()?;
         self.folds.fetch_add(1, Ordering::SeqCst);
-        let expected = if self.checkpoint_bytes == 0 {
-            vec![9, 8, 7]
-        } else {
-            vec![9; usize::try_from(self.checkpoint_bytes).expect("layout")]
-        };
-        if checkpoint.is_none() {
-            return Ok(FoldProgress::Checkpoint(expected));
+        if let Some(pause) = &self.fold_pause {
+            pause.run(checkpoints, cancellation)?;
         }
-        assert_eq!(checkpoint, Some(expected.as_slice()));
+        let original = |stage: usize| {
+            if self.checkpoint_bytes == 0 {
+                vec![9, 8, 7 - u8::try_from(stage).expect("test stage")]
+            } else {
+                vec![9; usize::try_from(self.checkpoint_bytes).expect("layout")]
+            }
+        };
+        let stages = usize::from(self.checkpoint_stages.max(1));
+        assert!(checkpoints.len() <= stages);
+        for (stage, original_bytes) in checkpoints.iter().enumerate() {
+            assert_eq!(
+                original_bytes,
+                &original(stage),
+                "all original source checkpoints"
+            );
+        }
+        if checkpoints.len() < stages {
+            return Ok(FoldProgress::Checkpoint(original(checkpoints.len())));
+        }
         let c = &witness.frozen.capsule;
         let mut tree = KagemushaWalletIndexedTreeV1::new();
         if let KagemushaWalletEffectV1::Receive { credit_id, .. } = c.statement.effect {
@@ -723,7 +852,7 @@ impl NativeProofs for TestProofs {
     }
 }
 
-type Wallet = Coordinator<TestCustody, MemoryArchive, TestProofs>;
+pub(super) type Wallet = Coordinator<TestCustody, MemoryArchive, TestProofs>;
 /// Synthetic already-indexed head for testing payout metadata publication, not a monetary
 /// transition or a native lineage proof. Finality is verified independently by the caller.
 pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: String) -> Wallet {
@@ -742,8 +871,26 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         capsule: custody.status.marker().unwrap().head().unwrap().2,
         steps: IndexRoot::default(),
         credits: IndexRoot::default(),
+        outgoing: IndexRoot::default(),
         folds: IndexRoot::default(),
         claims: IndexRoot::default(),
+        preparations: IndexRoot::default(),
+        blacklists: IndexRoot::default(),
+        capsule_plans: IndexRoot::default(),
+        capsule_sources: IndexRoot::default(),
+        issued_requests: IndexRoot::default(),
+        sessions: IndexRoot::default(),
+        activation: None,
+        close_loads: IndexRoot::default(),
+        ledger_checkpoint: None,
+        ledger_retired: None,
+        ledger_load_plans: IndexRoot::default(),
+        ledger_load_ordinals: IndexRoot::default(),
+        ledger_unload_confirmations: IndexRoot::default(),
+        ledger_unload_proofs: IndexRoot::default(),
+        ledger_unload_retired: None,
+        direct_anchors: IndexRoot::default(),
+        fold_pending: IndexRoot::default(),
         folded: None,
         checkpoint_count: 0,
         checkpoint_digest: [0; 32],
@@ -765,7 +912,7 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
     )
     .unwrap()
 }
-fn wallet() -> Wallet {
+pub(super) fn wallet() -> Wallet {
     let c = credential();
     Coordinator::new(
         TestCustody::new(),
@@ -937,6 +1084,30 @@ fn missing_marker_bound_witness_is_loss_and_archive_cannot_invent_completion() {
             .expect("exact authority"),
         Some(Completion::Complete(_))
     ));
+}
+
+#[test]
+fn cancelled_fold_restoration_never_populates_the_verification_cache() {
+    let mut w = wallet();
+    w.commit(bootstrap()).expect("commit");
+    let scheduler = w.scheduler();
+    scheduler.set_activity(true, false);
+    w.fold_once().expect("checkpoint");
+    w.fold_once().expect("fold");
+    let step = w.released_steps().expect("steps").remove(0);
+    w.verified_folds.clear();
+    let before = w.proofs.verifies.load(Ordering::SeqCst);
+    let running = scheduler.start().expect("background permit");
+    scheduler.set_activity(false, false);
+    assert!(matches!(
+        w.read_fold_cancellable(&step, Some(&running.token)),
+        Err(Error::Cancelled)
+    ));
+    assert!(w.verified_folds.is_empty());
+    assert_eq!(w.proofs.verifies.load(Ordering::SeqCst), before);
+    drop(running);
+    assert!(w.read_fold(&step).expect("fresh read").is_some());
+    assert_eq!(w.proofs.verifies.load(Ordering::SeqCst), before + 1);
 }
 
 #[test]
@@ -1241,13 +1412,39 @@ fn send_requires_recorded_predecessor_and_owner_assembles_canonical_payment() {
     let mut oversized = c.clone();
     oversized.retained_inputs[0]
         .bytes
-        .resize(KAGEMUSHA_WALLET_SESSION_MAX_BYTES_V1 + 1, 0);
+        .resize(KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + 1, 0);
     assert!(
         owner
             .receipt_body(&oversized, &oversized.capsule_digest().expect("digest"))
             .is_err(),
-        "Request session bound must be enforced before signing, not during fee indexing"
+        "Request message bound must be enforced before signing, not during fee indexing"
     );
+}
+
+#[test]
+fn native_fold_receives_all_source_checkpoints_in_order_after_restart() {
+    // Scheduler/custody contract only: the test owner never stands in for native proofs.
+    let mut w = wallet();
+    w.proofs.checkpoint_stages = 3;
+    w.commit(bootstrap()).expect("commit");
+    w.scheduler().set_activity(true, false);
+    for ordinal in 0..3 {
+        assert_eq!(
+            w.fold_once().expect("one stage"),
+            FoldStatus::Checkpoint {
+                sequence: 0,
+                ordinal
+            }
+        );
+        // Drop the complete coordinator between every stage, so no in-memory source history
+        // can replace the actual source-selected durable checkpoint chain.
+        let (custody, archive, proofs, scheme, wallet) =
+            (w.custody, w.archive, w.proofs, w.scheme_id, w.wallet_id);
+        w = Coordinator::new(custody, archive, proofs, scheme, wallet).expect("restart");
+        w.scheduler().set_activity(true, false);
+    }
+    assert_eq!(w.fold_once().expect("final fold"), FoldStatus::Folded(0));
+    assert_eq!(w.proofs.folds.load(Ordering::SeqCst), 4);
 }
 
 #[test]
@@ -1381,7 +1578,7 @@ fn collection_is_source_selected_bounded_restartable_and_keeps_credit_replay() {
     w.commit(boot.clone()).unwrap();
     w.fold_once().unwrap();
     w.fold_once().unwrap();
-    let receive = frozen(
+    let mut receive = frozen(
         Some(&boot),
         KagemushaWalletEffectV1::Receive {
             credit_id: received_credit(),
@@ -1392,15 +1589,72 @@ fn collection_is_source_selected_bounded_restartable_and_keeps_credit_replay() {
                 .amount,
         },
     );
+    // Dispatcher intake also decodes credential/certificates. Replace the general
+    // simulator's [1] placeholders with the genuine same-payer Offer originals.
+    let payer = vectors()["envelopes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|row| {
+            let envelope: KagemushaWalletEnvelopeV1 =
+                archive::decode(&hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap())
+                    .unwrap();
+            match envelope.message {
+                KagemushaWalletMessageV1::Offer { offer } => Some(offer),
+                _ => None,
+            }
+        })
+        .unwrap();
+    let payment: KagemushaWalletPaymentV1 = fixture("KagemushaWalletPaymentV1");
+    assert_eq!(
+        payer.payer_credential.credential_digest(),
+        payment.send.statement.credential_digest
+    );
+    payer.verify(&fixture("KagemushaWalletSchemeV1")).unwrap();
+    for input in &mut receive.capsule.retained_inputs {
+        match input.role {
+            KagemushaWalletRetainedInputRoleV1::Credential => {
+                input.bytes = payer.payer_credential.to_canonical_bytes().unwrap()
+            }
+            KagemushaWalletRetainedInputRoleV1::CertificateSet => {
+                input.bytes = archive::encode(&payer.certificates).unwrap()
+            }
+            _ => {}
+        }
+    }
     w.commit(receive.clone()).unwrap();
+    let input = |role| {
+        receive
+            .capsule
+            .retained_inputs
+            .iter()
+            .find(|input| input.role == role)
+            .unwrap()
+            .bytes
+            .clone()
+    };
+    let replay = OperationRequestV1 {
+        request_id: [0x9b; 32],
+        action: OperationActionV1::Receive {
+            payment: input(KagemushaWalletRetainedInputRoleV1::Payment),
+            payer_credential: input(KagemushaWalletRetainedInputRoleV1::Credential),
+            certificates: input(KagemushaWalletRetainedInputRoleV1::CertificateSet),
+        },
+    };
+    w.retain_collected_receive_test_request(replay.clone(), &receive)
+        .unwrap();
+
     w.fold_once().unwrap();
     w.fold_once().unwrap();
-    assert!(matches!(w.collect_step(1, None), Err(Error::FoldRequired)));
+    assert!(matches!(
+        w.collect_retained_step(1),
+        Err(Error::FoldRequired)
+    ));
     let next = frozen(
         Some(&receive),
         KagemushaWalletEffectV1::Load {
             load_ordinal: 0,
-            voucher: field(99),
+            receipt_digest: field(99),
             amount: 1,
             online_charge: 0,
         },
@@ -1409,13 +1663,36 @@ fn collection_is_source_selected_bounded_restartable_and_keeps_credit_replay() {
     w.fold_once().unwrap();
     w.fold_once().unwrap();
     let signatures = w.custody.signatures;
+    w.scheduler().set_activity(false, false);
+    assert_eq!(w.collect_retained_step(1).unwrap(), CollectionStatus::Idle);
+    w.scheduler().set_activity(true, false);
+    let payment = w.scheduler().payment();
+    assert_eq!(w.collect_retained_step(1).unwrap(), CollectionStatus::Idle);
+    drop(payment);
+    assert!(matches!(
+        w.collect_retained_step(2),
+        Err(Error::FoldRequired)
+    ));
+    let covering = ArchiveKey::Fold(2);
+    let exact_fold = w.archive.get(covering, 100_000).unwrap().unwrap();
+    w.archive.remove(covering).unwrap();
+    assert!(w.collect_retained_step(1).is_err(), "missing covering fold");
+    let mut forged_fold = exact_fold.clone();
+    forged_fold[0] ^= 1;
+    w.archive.put(covering, &forged_fold).unwrap();
+    assert!(w.collect_retained_step(1).is_err(), "forged covering fold");
+    w.archive.remove(covering).unwrap();
+    w.archive.put(covering, &exact_fold).unwrap();
+    let (_, unchanged) = w.manifest().unwrap();
+    assert!(unchanged.collection.is_none());
+    assert!(!w.step_entry(&unchanged, 1).unwrap().collected);
     w.custody.fail_publication = Some(false);
-    assert!(w.collect_step(1, None).is_err());
+    assert!(w.collect_retained_step(1).is_err());
     let (_, manifest) = w.manifest().unwrap();
     assert!(!w.step_entry(&manifest, 1).unwrap().collected);
     assert!(manifest.collection.is_none());
     w.custody.fail_publication = Some(true);
-    assert!(w.collect_step(1, None).is_err());
+    assert!(w.collect_retained_step(1).is_err());
     let (_, manifest) = w.manifest().unwrap();
     assert!(w.step_entry(&manifest, 1).unwrap().collected);
     assert!(manifest.collection.is_some());
@@ -1429,6 +1706,12 @@ fn collection_is_source_selected_bounded_restartable_and_keeps_credit_replay() {
             .is_some(),
         "intent precedes deletion"
     );
+    w.archive.fail_remove = true;
+    assert!(
+        w.resume_collection().is_err(),
+        "removal failure keeps the selected intent"
+    );
+    assert!(w.manifest().unwrap().1.collection.is_some());
     for _ in 0..10 {
         let (custody, archive, proofs, scheme, wallet) =
             (w.custody, w.archive, w.proofs, w.scheme_id, w.wallet_id);
@@ -1442,13 +1725,35 @@ fn collection_is_source_selected_bounded_restartable_and_keeps_credit_replay() {
     }
     assert!(w.resume_collection().unwrap().is_none());
     assert_eq!(
-        w.collect_step(1, None).unwrap(),
+        w.collect_retained_step(1).unwrap(),
         CollectionStatus::Collected(1)
     );
     assert!(matches!(w.released_steps(), Err(Error::Collected)));
     assert!(matches!(
         w.retry(&receive.capsule.operation_id).unwrap(),
         Some(Completion::Archived)
+    ));
+    let Completion::CreditStatus(replayed) = w.execute(replay.clone()).unwrap() else {
+        panic!("same Receive request must return permanent CreditStatus after collection")
+    };
+    let status: KagemushaWalletCreditStatusV1 = archive::decode(&replayed).unwrap();
+    assert_eq!(status.opening.payment_digest, received_payment());
+    assert_eq!(
+        w.retry_request(&replay.request_id).unwrap(),
+        RequestStatusV1::Outcome(Completion::CreditStatus(replayed.clone()))
+    );
+    assert_eq!(
+        w.execute(replay.clone()).unwrap(),
+        Completion::CreditStatus(replayed)
+    );
+    assert_eq!(w.custody.signatures, signatures);
+    assert_eq!(w.proofs.preparations.load(Ordering::SeqCst), 0);
+    assert_eq!(w.proofs.preparation_proofs.load(Ordering::SeqCst), 0);
+    let mut changed_request = replay;
+    changed_request.action = OperationActionV1::Retire;
+    assert!(matches!(
+        w.execute(changed_request),
+        Err(Error::OperationConflict)
     ));
     let duplicate = frozen(
         Some(&next),
@@ -1608,6 +1913,21 @@ fn every_archive_collection_crash_resumes_only_the_selected_object() {
 
 #[test]
 fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
+    fn retain_map(w: &mut Wallet, pending: &map_tree::PersistentMapV1) {
+        // The explicit mock proof owner does not persist real fold map descriptors. Publish
+        // actual persistent-map DATA into its selected manifest for this boundary regression.
+        let (old, mut manifest) = w.manifest().unwrap();
+        let sequence = manifest.folded.unwrap();
+        let address = w
+            .archive
+            .write_object(&archive::encode(pending).unwrap(), 2048)
+            .unwrap();
+        manifest.fold_pending = manifest
+            .fold_pending
+            .set(&mut w.archive, manifest::sequence_key(sequence), &address)
+            .unwrap();
+        w.publish_manifest(old, &manifest).unwrap();
+    }
     fn rebind(value: &mut FrozenTransition) {
         let c = &mut value.capsule;
         c.statement.successor = c.successor_state.commitment().unwrap();
@@ -1623,19 +1943,33 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
     let mut w = wallet();
     w.scheduler().set_activity(true, false);
     let template: KagemushaWalletPaymentV1 = fixture("KagemushaWalletPaymentV1");
-    let mut boot = bootstrap();
-    boot.capsule.successor_state.core.policy_epoch = template.request.body.policy_epoch;
-    boot.capsule.successor_state.rest.scheme_policy = template.request.body.scheme_policy;
-    rebind(&mut boot);
+    let boot = bootstrap();
     w.commit(boot.clone()).unwrap();
     w.fold_once().unwrap();
     w.fold_once().unwrap();
-    let step = w.released_steps().unwrap().remove(0);
+    // Bootstrap holds no policy. This explicit mock Refresh creates the test's selected
+    // policy head; the test still does not claim a real policy or recursive proof.
+    let mut policy = frozen(
+        Some(&boot),
+        KagemushaWalletEffectV1::RefreshPolicy {
+            update_kind: KagemushaWalletPolicyUpdateKindV1::SchemePolicy,
+            update: template.request.body.scheme_policy,
+            accepted_time_floor_ms: boot.capsule.successor_state.core.accepted_time_floor_ms,
+        },
+    );
+    policy.capsule.successor_state.core.policy_epoch = template.request.body.policy_epoch;
+    policy.capsule.successor_state.rest.scheme_policy = template.request.body.scheme_policy;
+    rebind(&mut policy);
+    w.commit(policy.clone()).unwrap();
+    w.fold_once().unwrap();
+    w.fold_once().unwrap();
+    let step = w.released_steps().unwrap().pop().unwrap();
     let fold = w.read_fold(&step).unwrap().unwrap();
     let credit = template.digests().unwrap().credit_id;
     let mut pending = KagemushaWalletIndexedTreeV1::new();
     pending.insert(credit, field(42)).unwrap();
-    let mut send = frozen(Some(&boot), template.send.statement.effect);
+    let mut send = frozen(Some(&policy), template.send.statement.effect);
+    let send_sequence = send.capsule.statement.sequence;
     send.capsule.predecessor_lineage = KagemushaWalletLineageSlotV1::Present {
         lineage: fold.record.lineage.clone(),
     };
@@ -1654,7 +1988,7 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
     let mut after = frozen(
         Some(&send),
         KagemushaWalletEffectV1::Load {
-            voucher: field(98),
+            receipt_digest: field(98),
             load_ordinal: 0,
             amount: 1,
             online_charge: 0,
@@ -1666,13 +2000,29 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
     w.fold_once().unwrap();
     w.fold_once().unwrap();
     let empty = KagemushaWalletIndexedTreeV1::new();
-    let (low, opening) = empty.non_membership(&credit).unwrap();
-    let gap = OutgoingAbsent { low, opening };
-    assert!(w.collect_step(1, None).is_err());
     assert!(
-        w.collect_step(1, Some(&gap)).is_err(),
-        "generic absence under another root is not delivery evidence"
+        w.collect_retained_step(send_sequence).is_err(),
+        "missing selected map"
     );
+    let native_empty = map_tree::PersistentMapV1::default();
+    retain_map(&mut w, &native_empty);
+    assert!(
+        w.collect_retained_step(send_sequence).is_err(),
+        "map under another root"
+    );
+    let mut native_pending = native_empty.clone();
+    native_pending
+        .insert(&mut w.archive, credit, field(42))
+        .unwrap();
+    assert_eq!(native_pending.root(), pending.root());
+    retain_map(&mut w, &native_pending);
+    assert!(
+        w.collect_retained_step(send_sequence).is_err(),
+        "undelivered Send is present"
+    );
+    let (_, retained) = w.manifest().unwrap();
+    assert!(retained.collection.is_none());
+    assert!(!w.step_entry(&retained, send_sequence).unwrap().collected);
     assert_eq!(
         w.retry(&send.capsule.operation_id).unwrap(),
         Some(Completion::Complete(payment.clone()))
@@ -1683,7 +2033,7 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
     let mut cleared = frozen(
         Some(&after),
         KagemushaWalletEffectV1::Load {
-            voucher: field(97),
+            receipt_digest: field(97),
             load_ordinal: 1,
             amount: 1,
             online_charge: 0,
@@ -1694,12 +2044,17 @@ fn send_collection_requires_latest_pending_root_absence_and_keeps_unpaid_fee() {
     w.commit(cleared).unwrap();
     w.fold_once().unwrap();
     w.fold_once().unwrap();
+    assert!(
+        w.collect_retained_step(send_sequence).is_err(),
+        "prior map cannot cover a later fold"
+    );
+    retain_map(&mut w, &native_empty);
     assert_eq!(
-        w.collect_step(1, Some(&gap)).unwrap(),
-        CollectionStatus::Progress(1)
+        w.collect_retained_step(send_sequence).unwrap(),
+        CollectionStatus::Progress(send_sequence)
     );
     for _ in 0..10 {
-        if w.resume_collection().unwrap() == Some(CollectionStatus::Collected(1)) {
+        if w.resume_collection().unwrap() == Some(CollectionStatus::Collected(send_sequence)) {
             break;
         }
     }
@@ -1842,7 +2197,7 @@ fn snapshot_p4_burns_adjust_owned_value_even_when_the_retained_core_is_stale() {
     let load = frozen(
         Some(&receive),
         KagemushaWalletEffectV1::Load {
-            voucher: field(80),
+            receipt_digest: field(80),
             load_ordinal: 0,
             amount: 1,
             online_charge: 0,
@@ -2041,7 +2396,7 @@ fn snapshot_fold_burns_cannot_regress_below_the_selected_core() {
     let mut load = frozen(
         Some(&boot),
         KagemushaWalletEffectV1::Load {
-            voucher: field(80),
+            receipt_digest: field(80),
             load_ordinal: 0,
             amount: 1,
             online_charge: 0,
@@ -2078,4 +2433,46 @@ fn snapshot_source_manifest_cannot_name_a_future_fold_as_an_ancestor() {
         w.snapshot(),
         Err(Error::WitnessLost("archive manifest binding"))
     ));
+}
+
+#[test]
+fn source_reads_preserve_exact_released_head_without_signing() {
+    let mut wallet = wallet();
+    assert!(matches!(
+        wallet.status().unwrap(),
+        SlotStatus::Enrollment(_)
+    ));
+    assert!(wallet.released_steps().unwrap().is_empty());
+    assert!(matches!(wallet.snapshot(), Err(Error::NoHead)));
+    let frozen = bootstrap();
+    wallet.commit(frozen.clone()).unwrap();
+    let signatures = wallet.custody.signatures;
+    let snapshot = wallet.snapshot().unwrap();
+    assert_eq!(snapshot.head, frozen.capsule.statement.successor.value);
+    assert!(snapshot.verified_fold.is_none());
+    let step = wallet.released_steps().unwrap().pop().unwrap();
+    assert_eq!(step.frozen.capsule, frozen.capsule);
+    assert_eq!(
+        wallet.retry(&frozen.capsule.operation_id).unwrap(),
+        Some(Completion::Complete(step.retained.record.output.clone()))
+    );
+    assert_eq!(wallet.custody.signatures, signatures);
+    snapshot_test_fold(&mut wallet);
+    let snapshot = wallet.snapshot().unwrap();
+    let current = wallet.released_steps().unwrap().pop().unwrap();
+    assert_eq!(current.retained.frame, step.retained.frame);
+    assert_eq!(
+        wallet
+            .read_fold(&current)
+            .unwrap()
+            .unwrap()
+            .record
+            .capsule_digest,
+        frozen.capsule.capsule_digest().unwrap()
+    );
+    assert_eq!(
+        snapshot.verified_fold.unwrap().head,
+        frozen.capsule.statement.successor.value
+    );
+    assert_eq!(wallet.custody.signatures, signatures);
 }

@@ -17,6 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(super) mod cold_start_smoke;
 mod context_smoke;
 mod publication_smoke;
 
@@ -258,7 +259,49 @@ impl Harness {
     }
 
     fn exercise(&mut self, prepared_bytecode: &[u8]) -> Result<(), Box<dyn Error>> {
-        // The first call must both provision the network and deploy from raw source.
+        // Public input mistakes must fail before a managed store or worker can exist. These
+        // use the same installed executable, bounded command owner and empty PATH as deploy.
+        let invalid_artifact = self.workspace.join("invalid.to");
+        let invalid_package = self.workspace.join("invalid-package");
+        let invalid_manifest = invalid_package.join("Musubi.toml");
+        fs::write(&invalid_artifact, b"not an IVM artifact")?;
+        fs::create_dir(&invalid_package)?;
+        fs::write(&invalid_manifest, b"[broken")?;
+        for (input, expected_error) in [
+            ("invalid.to", "invalid contract artifact"),
+            ("invalid-package/Musubi.toml", "invalid or duplicate TOML"),
+            ("invalid-package", "invalid or duplicate TOML"),
+        ] {
+            match fs::symlink_metadata(&self.state) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                _ => return Err("invalid-input smoke requires an absent managed store".into()),
+            }
+            let observation = self.observe_command(&["contract", "deploy", input]);
+            if !matches!(observation.outcome, super::latency::Outcome::CommandFailed) {
+                return Err(format!(
+                    "invalid {input} was not rejected by the installed CLI: {}",
+                    observation.outcome.as_str()
+                )
+                .into());
+            }
+            // A crash, argument error or unrelated runtime failure is not input admission.
+            // Read only the already closed bounded diagnostic owned by this command.
+            let mut diagnostic = String::new();
+            File::open(self.root.path().join(format!("{}.stderr", self.sequence)))?
+                .take(MAX_OUTPUT + 1)
+                .read_to_string(&mut diagnostic)?;
+            if diagnostic.len() as u64 > MAX_OUTPUT || !diagnostic.contains(expected_error) {
+                return Err(format!("invalid {input} did not report its local input error").into());
+            }
+            match fs::symlink_metadata(&self.state) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                _ => return Err(format!("invalid {input} created managed state").into()),
+            }
+        }
+        fs::remove_file(invalid_artifact)?;
+        fs::remove_file(invalid_manifest)?;
+        fs::remove_dir(invalid_package)?;
+        // The first valid call must both provision the network and deploy from raw source.
         let first = self.command(&["contract", "deploy", "hello.ko"])?;
         require_deployment(&first)?;
         let initial = self.command(&["localnet", "status"])?;
@@ -276,13 +319,9 @@ impl Harness {
         // Deploy the independently hash-checked, distinct setup artifact through the bytecode
         // entry point. No compiler or external build tool is used by the installed workflow.
         fs::write(self.workspace.join("hello.to"), prepared_bytecode)?;
-        let bytecode_args = [
-            "contract",
-            "deploy",
-            "hello.to",
-            "--alias",
-            "BundleBytecode::universal",
-        ];
+        // The embedded artifact name selects its alias, as on the source/package paths.
+        // Explicit-alias installed coverage remains in the separate ready-latency fixture.
+        let bytecode_args = ["contract", "deploy", "hello.to"];
         let bytecode = self.command(&bytecode_args)?;
         require_deployment(&bytecode)?;
         self.execute_on_every_peer(&bytecode, "60")?;

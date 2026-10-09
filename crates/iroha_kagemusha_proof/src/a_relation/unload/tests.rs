@@ -127,7 +127,7 @@ fn tasks(variant: Variant) -> Vec<Vec<OperationTask>> {
 
 #[test]
 fn unload_and_retiring_require_exact_own_authorization_and_proof_owners() {
-    let policy = OwnPolicy::new([1, 2], [3, 4], Affine::GENERATOR).unwrap();
+    let policy = OwnPolicy::new([3, 4], Affine::GENERATOR).unwrap();
     let schema = UnloadStagePlan::signature_schema(policy).unwrap();
     assert_eq!(schema.slots().len(), 3);
     assert_eq!(schema.slots()[0].key, SignatureKey::Variable);

@@ -466,8 +466,8 @@ fn snapshot_capture_refuses_active_publisher_without_waiting() {
                 .dataspace_catalog,
             original_nexus.dataspace_catalog
         );
-        // Manifest refresh owns another publication guard while checking its
-        // catalog binding, including rejection of an unbound registry.
+        // Manifest refresh authenticates its catalog binding under the State writer;
+        // rejecting an unbound registry publishes no replacement State generation.
         assert!(
             !state.install_lane_manifests_if_consensus_compatible(&Arc::new(
                 LaneManifestRegistry::default()

@@ -1,4 +1,4 @@
-//! Signature public inputs extracted only from a hard-verified, admitted Q.
+//! Signature exports from a hard-verified Q or its exact separately verified context projection.
 
 use ff::{Field, PrimeField};
 use iroha_pasta::{Ep, Fp};
@@ -145,11 +145,98 @@ pub fn bind_signature_q(
             .kagemusha_digest(fixed.verifier().binding())
             .map_err(|_| Error::Synthesis)?,
     )?;
+    let out = signature_slots(chip, region, schema, &verified.instances)?;
+    Ok(SignatureQCells {
+        verified: verified.clone(),
+        slots: out,
+    })
+}
+
+/// Typed Q public projection for a fixed consumer whose context separately
+/// hard-verifies the Q exactly once. It carries no pending opening and cannot
+/// replace `VerifiedQCells` in an accumulation ledger.
+#[derive(Clone, Debug)]
+pub(super) struct SignatureQProjection {
+    index: usize,
+    key_digest: Fp,
+    instances: Vec<Vec<iroha_plonk_recursion::codec::ScalarCells<Ep>>>,
+    slots: Vec<SignatureProofCells>,
+}
+impl SignatureQProjection {
+    pub(super) fn slots(&self) -> &[SignatureProofCells] {
+        &self.slots
+    }
+    pub(super) fn bind_context(
+        &self,
+        region: &mut Region<'_, Fp>,
+        operation: &AProofPlan,
+        index: usize,
+        instances: &[Vec<iroha_plonk_recursion::codec::ScalarCells<Ep>>],
+    ) -> Result<(), Error> {
+        let fixed = operation.q(index).ok_or(Error::Synthesis)?;
+        if self.index != index
+            || self.key_digest
+                != fixed
+                    .key
+                    .kagemusha_digest(fixed.verifier().binding())
+                    .map_err(|_| Error::Synthesis)?
+            || self.instances.len() != instances.len()
+        {
+            return Err(Error::Synthesis);
+        }
+        for (actual, expected) in self.instances.iter().zip(instances) {
+            if actual.len() != expected.len() {
+                return Err(Error::Synthesis);
+            }
+            for (a, b) in actual.iter().zip(expected) {
+                GlueChip::assert_equal(region, a.lo().word(), b.lo().word())?;
+                GlueChip::assert_equal(region, a.hi().word(), b.hi().word())?;
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn project_signature_q(
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    operation: &AProofPlan,
+    index: usize,
+    schema: &QSignaturePlan,
+    instances: &[Vec<iroha_plonk_recursion::codec::ScalarCells<Ep>>],
+) -> Result<SignatureQProjection, Error> {
+    let fixed = operation.q(index).ok_or(Error::Synthesis)?;
+    let descriptor = fixed.verifier().binding().descriptor();
+    if descriptor.instance_lengths
+        != [u32::try_from(schema.instance_length()).map_err(|_| Error::BoundsFailure)?]
+        || descriptor.instance_types.as_deref() != Some(&QSignaturePlan::instance_types())
+        || instances.len() != 1
+        || instances[0].len() != schema.instance_length()
+    {
+        return Err(Error::Synthesis);
+    }
+    Ok(SignatureQProjection {
+        index,
+        key_digest: fixed
+            .key
+            .kagemusha_digest(fixed.verifier().binding())
+            .map_err(|_| Error::Synthesis)?,
+        instances: instances.to_vec(),
+        slots: signature_slots(chip, region, schema, instances)?,
+    })
+}
+
+fn signature_slots(
+    chip: &mut VerifierChip<Ep>,
+    region: &mut Region<'_, Fp>,
+    schema: &QSignaturePlan,
+    instances: &[Vec<iroha_plonk_recursion::codec::ScalarCells<Ep>>],
+) -> Result<Vec<SignatureProofCells>, Error> {
     let mut out = Vec::with_capacity(schema.slots().len());
     for (slot, values) in schema
         .slots()
         .iter()
-        .zip(verified.instances[0].chunks_exact(SLOT_WORDS))
+        .zip(instances[0].chunks_exact(SLOT_WORDS))
     {
         let words = values
             .iter()
@@ -182,8 +269,5 @@ pub fn bind_signature_q(
             mode: slot.mode,
         });
     }
-    Ok(SignatureQCells {
-        verified: verified.clone(),
-        slots: out,
-    })
+    Ok(out)
 }

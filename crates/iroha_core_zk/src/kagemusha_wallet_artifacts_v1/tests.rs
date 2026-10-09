@@ -44,6 +44,17 @@ fn genuine_signed_complete_inventory_mounts_and_rejects_substituted_originals() 
             "substituted authority/native original {changed_member}"
         );
     }
+    let mut changed = pack.clone();
+    changed.producer_catalog_digest[0] ^= 1;
+    assert!(
+        InstalledVerifierPackV1::load(&changed.to_canonical_bytes().unwrap(), installation)
+            .is_err()
+    );
+    assert!(
+        installed
+            .authenticate_producer_inventory(b"engineering-verifier-only")
+            .is_err()
+    );
 }
 
 fn kind(tag: u8) -> KagemushaWalletOperationKindV1 {
@@ -77,6 +88,7 @@ fn structural_pack() -> VerifierPackV1 {
             descriptor: vec![17],
             verifying_key: vec![18],
         },
+        producer_catalog_digest: [19; 32],
     }
 }
 
@@ -91,6 +103,9 @@ fn canonical_carrier_retains_every_original_and_rejects_trailing_bytes() {
     let mut changed_version = pack.clone();
     changed_version.version = 2;
     assert!(changed_version.to_canonical_bytes().is_err());
+    let mut missing_producers = pack.clone();
+    missing_producers.producer_catalog_digest = [0; 32];
+    assert!(missing_producers.to_canonical_bytes().is_err());
     assert_eq!(
         InstalledVerifierPackV1::load(
             &original,
@@ -250,14 +265,31 @@ fn native_profile_contains_fixed_typed_policies_and_all_decision_codes() {
         ]
     );
     let profile = native_profile_transcript_v1().unwrap();
-    assert_eq!(&profile[..3], &[1, 0, 1]);
-    assert!(profile.ends_with(b"kgwomg_1\x01\x02\x03\x04"));
-    let (_, counts) = profile.split_at(profile.len() - 12 - 32);
+    assert_eq!(&profile[..6], &[1, 0, 16, 0, 0, 0]);
+    let marker = b"kgwomg_1\x01\x02\x03\x04";
+    let offset = profile
+        .windows(marker.len())
+        .position(|bytes| bytes == marker)
+        .unwrap();
+    let counts = &profile[offset - 32..offset];
     let expected: Vec<_> = [33_u32, 8, 26, 18, 52, 16, 544, 1088]
         .into_iter()
         .flat_map(u32::to_le_bytes)
         .collect();
-    assert_eq!(&counts[..32], expected);
+    assert_eq!(counts, expected);
+    let mut suffix = &profile[offset + marker.len()..];
+    for expected in [
+        iroha_kagemusha_proof::a_relation::schedule::compiled::compiled_schedule_transcript()
+            .unwrap(),
+        iroha_kagemusha_proof::finality::native::compiled_leaf_schedule_transcript().unwrap(),
+        producer_inventory::compiled_sigma_policy().unwrap(),
+        iroha_kagemusha_proof::omega::native::compiled_policy_transcript().unwrap(),
+    ] {
+        let length = usize::try_from(u32::from_le_bytes(suffix[..4].try_into().unwrap())).unwrap();
+        assert_eq!(&suffix[4..4 + length], expected);
+        suffix = &suffix[4 + length..];
+    }
+    assert!(suffix.is_empty());
 }
 
 #[test]
@@ -325,29 +357,45 @@ fn frozen_protocol_digest_matches_independently_framed_native_originals() {
 }
 
 #[test]
-fn native_verifier_profile_matches_the_full_native_encoder_golden() {
-    // Captured from the actual Native encoder; this freezes verifier family1 only.
-    // Complete producer schedules and proving artifacts require their own final profile.
-    let original = hex::decode(concat!(
-        "010001100000000100000000020000000003000000000301000000030200000003030000000304000000030500000003",
-        "0600000003070000000400000000040100000005000000000600000000070000000008000000005f0000004e52543000",
-        "001c14315baa201047a077821817683104003700000000000000587ed1b1434089fd020201000401000000010c011004",
-        "02000000040100000004010000000d010000000000000004010000000d01000000000000000401000000730000004e52",
-        "543000001c14315baa201047a077821817683104004b000000000000000dea5f0df63cb40b0202010004000000000110",
-        "011004020000000401000000040100000017030000000000000004010000000402000000041000000017030000000000",
-        "000004010000000400000000040100000021000000080000001a00000012000000340000001000000020020000400400",
-        "006b67776f6d675f3101020304",
-    ))
-    .unwrap();
+fn native_profile_matches_complete_compiled_encoder_preimage() {
+    // Exact native descriptor-policy prefix, followed by both complete compiled
+    // source inventories. This does not freeze or qualify any actual producer keys.
+    let mut original = hex::decode(concat!(
+        "010010000000010000000002000000000300000000030100000003020000000303000000030400000003050000000306",
+        "00000003070000000400000000040100000005000000000600000000070000000008000000005f0000004e5254300000",
+        "1c14315baa201047a077821817683104003700000000000000587ed1b1434089fd020201000401000000010c01100402",
+        "000000040100000004010000000d010000000000000004010000000d01000000000000000401000000730000004e5254",
+        "3000001c14315baa201047a077821817683104004b000000000000000dea5f0df63cb40b020201000400000000011001",
+        "100402000000040100000004010000001703000000000000000401000000040200000004100000001703000000000000",
+        "0004010000000400000000040100000021000000080000001a0000001200000034000000100000002002000040040000",
+        "6b67776f6d675f3101020304",
+    )).unwrap();
+    for policy in [
+        iroha_kagemusha_proof::a_relation::schedule::compiled::compiled_schedule_transcript()
+            .unwrap(),
+        iroha_kagemusha_proof::finality::native::compiled_leaf_schedule_transcript().unwrap(),
+        producer_inventory::compiled_sigma_policy().unwrap(),
+        iroha_kagemusha_proof::omega::native::compiled_policy_transcript().unwrap(),
+    ] {
+        original.extend_from_slice(&u32::try_from(policy.len()).unwrap().to_le_bytes());
+        original.extend_from_slice(&policy);
+    }
     let body = native_profile_transcript_v1().unwrap();
     assert_eq!(body, original);
-    assert_eq!(body.len(), 349);
+    assert_eq!(body.len(), 14_513);
+    // Renewed Receive assigns CreditEffects to A7; plain Receive keeps A0.
     assert_eq!(
         hex::encode(Sha256::digest(&body)),
-        "0f2385154950ff4e227a7bb5cac9aea258411b855f4c46913f88d8e13c01f6ca"
+        "fd9870ada870783ff31e4f544e90ee667f5fe0c2db790ec7b754108dad5170ed"
     );
     assert_eq!(
         hex::encode(artifact_digest(b"native-profile", &body)),
-        "97f358afb29091461322d243c4e2fa01e1a9d8c7b47f202e7fc00c5062f32b26"
+        "c7539c5c1bc5e36046014908cfa3c06ccbb9eb9f691623c65acf9893ffc7c6da"
+    );
+    eprintln!(
+        "NATIVE_PROFILE bytes={} sha256={} digest={}",
+        body.len(),
+        hex::encode(Sha256::digest(&body)),
+        hex::encode(artifact_digest(b"native-profile", &body))
     );
 }

@@ -78,7 +78,7 @@ def collect_tools(root: Path):
     return cargo, rustc, {str(path): unit.tool_digest(path) for path in paths}
 
 
-def build_environment(rustc: Path, target: Path, jobs: int | None):
+def build_environment(rustc: Path, target: Path, jobs: int | None, temporary: Path):
     """Use the repository's captured Cargo configuration without inherited build overrides."""
     forbidden = [key for key in os.environ if key.startswith(("CARGO_ENCODED_", "CARGO_PROFILE_",
                   "CARGO_TARGET_", "RUSTFLAGS", "RUSTDOCFLAGS", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS",
@@ -86,8 +86,12 @@ def build_environment(rustc: Path, target: Path, jobs: int | None):
                  or key in {"RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTFLAGS",
                             "CARGO_BUILD_TARGET", "CARGO_BUILD_JOBS", "CC", "CXX", "AR", "RANLIB", "LD"}]
     unit.require(not forbidden, "unreviewed inherited compiler overrides: " + ", ".join(sorted(forbidden)))
+    custody.original_directory(temporary)
+    metadata = temporary.stat()
+    unit.require(metadata.st_uid == os.geteuid() and stat.S_IMODE(metadata.st_mode) == 0o700,
+                 "compiler scratch must be owned canonical mode0700")
     environment = os.environ.copy()
-    environment.update(RUSTC=str(rustc), CARGO_TARGET_DIR=str(target))
+    environment.update(RUSTC=str(rustc), CARGO_TARGET_DIR=str(target), TMPDIR=str(temporary))
     if jobs is not None:
         environment["CARGO_BUILD_JOBS"] = str(jobs)
     return environment
@@ -137,9 +141,11 @@ def host_build(root: Path, output: Path, target: Path, jobs: int | None):
     unit.require(sys.platform == "darwin" and platform.machine() in unit.TARGETS,
                  "guarded host emitter requires a supported macOS host")
     custody.original_directory(root)
-    unit.external_root(root, output)
+    unit.artifact_root(root, output)
     unit.require(target.is_absolute() and target.resolve() == target
                  and target.is_relative_to(root / "target"), "target must be a canonical worktree target directory")
+    unit.require(not output.is_relative_to(target) and not target.is_relative_to(output),
+                 "retained artifacts and the warm Cargo lane must be disjoint")
     with warm_target_custody(target) as assert_custody:
         pins = _host_build_locked(root, output, target, jobs, assert_custody)
     # Context exit must pass before publishing or announcing admissible receipt pins.
@@ -158,12 +164,14 @@ def admit_under_custody(root: Path, pins: dict, assert_custody):
 def _host_build_locked(root: Path, output: Path, target: Path, jobs: int | None, assert_custody):
     """Emit and admit only actual outputs while holding the stable target lane."""
     output.mkdir(mode=0o700)
+    temporary = output / "temporary"
+    temporary.mkdir(mode=0o700)
     cargo, rustc, tools_before = collect_tools(root)
     compiler_version = run_text([str(rustc), "-vV"], root=root)
     unit.require("host: " + unit.TARGETS[platform.machine()] in compiler_version.splitlines(),
                  "selected compiler is not the native host toolchain")
     tool_ids_before = tool_identities(tools_before)
-    environment = build_environment(rustc, target, jobs)
+    environment = build_environment(rustc, target, jobs, temporary)
     metadata_raw = run_text([str(cargo), "metadata", "--locked", "--format-version=1",
                              "--features", "connect_norito_bridge/privacy-production-enabled"],
                             root=root, environment=environment)
@@ -180,6 +188,7 @@ def _host_build_locked(root: Path, output: Path, target: Path, jobs: int | None,
     with (output / "artifacts.jsonl").open("x") as stdout, (output / "cargo.stderr.log").open("x") as stderr:
         result = subprocess.run(command, cwd=root, env=environment, stdout=stdout, stderr=stderr, check=False)
     record = {"scope": "host-local-component-observations", "command": command, "compiler_version": compiler_version,
+              "compiler_temporary_directory": str(temporary),
               "natural_exit": result.returncode, "capture_errors": [], "source_changes": [],
               "dep_info_errors": [], "collector_toolchain_changes": [], "dep_info": [], "emitted": [],
               "source_before": before, "collector_toolchain_before": tools_before,
@@ -254,11 +263,11 @@ def _host_build_locked(root: Path, output: Path, target: Path, jobs: int | None,
     native.validate_privacy_c_exports(exports, require_exact=True)
     unit.require(set(policy["required"]) <= set(exports), "current required native exports are missing")
     abi = native.probe_c_abi(snapshot, policy["required"], forbidden_symbols=policy["forbidden"])
-    unit.require(abi == 25, "actual native library is not ABI25")
+    unit.require(abi == 27, "actual native library is not ABI27")
     inventory = output / "exports.json"
     unit.save(inventory, sorted(set(exports)))
     component = {"emitter_path": str(emitter), "emitter_sha256": emitter_sha, "qualified": True,
-                 "scope": "host-ABI25-and-symbols-only", "observed_abi_version": abi,
+                 "scope": "host-ABI27-and-symbols-only", "observed_abi_version": abi,
                  "artifact_path": str(snapshot), "artifact_sha256": unit.digest(snapshot),
                  "source_before": before, "source_after": custody.capture(metadata, root, unit.digest),
                  "toolchain_before": tools_before, "toolchain_after": collect_tools(root)[2],

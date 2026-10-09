@@ -19,32 +19,14 @@ use iroha_plonk::{
     cs::{Advice, Column, ConstraintSystem, Fixed, Rotation, Selector},
     frontend::Value,
 };
-use poseidon_primitives::poseidon::primitives::Spec;
 use std::sync::OnceLock;
 
 /// Scalar field used by the Kaigi native prover circuits (Pasta Fp).
 pub type Scalar = Fp;
 const POSEIDON_WIDTH: usize = 3;
-const POSEIDON_RATE: usize = 2;
 const POSEIDON_FULL_ROUNDS: usize = 8;
 const POSEIDON_PARTIAL_ROUNDS: usize = 56;
 const POSEIDON_ROUNDS: usize = POSEIDON_FULL_ROUNDS + POSEIDON_PARTIAL_ROUNDS;
-#[derive(Debug)]
-struct KaigiPoseidonSpec;
-impl Spec<Scalar, POSEIDON_WIDTH, POSEIDON_RATE> for KaigiPoseidonSpec {
-    fn full_rounds() -> usize {
-        POSEIDON_FULL_ROUNDS
-    }
-    fn partial_rounds() -> usize {
-        POSEIDON_PARTIAL_ROUNDS
-    }
-    fn sbox(value: Scalar) -> Scalar {
-        value.pow_vartime([5])
-    }
-    fn secure_mds() -> usize {
-        0
-    }
-}
 struct PoseidonConstants {
     round_constants: Vec<[Scalar; POSEIDON_WIDTH]>,
     mds: [[Scalar; POSEIDON_WIDTH]; POSEIDON_WIDTH],
@@ -52,8 +34,10 @@ struct PoseidonConstants {
 fn poseidon_constants() -> &'static PoseidonConstants {
     static CONSTANTS: OnceLock<PoseidonConstants> = OnceLock::new();
     CONSTANTS.get_or_init(|| {
-        let (round_constants, mds, _) =
-            <KaigiPoseidonSpec as Spec<Scalar, POSEIDON_WIDTH, POSEIDON_RATE>>::constants();
+        let (round_constants, mds) = iroha_pasta::poseidon::grain::generate_constants::<
+            Scalar,
+            POSEIDON_WIDTH,
+        >(POSEIDON_FULL_ROUNDS, POSEIDON_PARTIAL_ROUNDS, 0);
         assert_eq!(round_constants.len(), POSEIDON_ROUNDS);
         PoseidonConstants {
             round_constants,

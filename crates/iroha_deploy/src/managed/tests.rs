@@ -587,8 +587,14 @@ fn foreground_expiry_uses_failed_startup_action_and_rejects_late_ready_or_other_
             late_observation.clone(),
             expired_start,
             timeout,
+            0,
             true,
         ),
+        Err(Error::Timeout(value)) if value == timeout
+    ));
+    assert!(matches!(
+        store::observe_startup_status(&directory, &prepared.context, late_observation.clone(),
+            std::time::Instant::now(), timeout, 0, true),
         Err(Error::Timeout(value)) if value == timeout
     ));
     // The same late proof during this invocation's actual startup must cancel that
@@ -598,8 +604,9 @@ fn foreground_expiry_uses_failed_startup_action_and_rejects_late_ready_or_other_
             &directory,
             &prepared.context,
             late_observation,
-            expired_start,
+            std::time::Instant::now(),
             timeout,
+            0,
             false,
         )
         .unwrap(),
@@ -838,4 +845,21 @@ fn retained_standard_profile_requires_original_signed_genesis_and_identity() {
         .write_atomic("genesis.signed.nrt", &genesis, PublishMode::CreateNew)
         .unwrap();
     assert!(prepared.stream_token_authorities().unwrap().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn optional_store_selection_refuses_lost_parent_and_restores_original_absence() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("managed");
+    let store = ManagedStore::open(&path).unwrap();
+    assert!(matches!(store.context(None), Err(Error::NoSelection)));
+    let displaced = temporary.path().join("original-managed");
+    std::fs::rename(&path, &displaced).unwrap();
+    assert!(
+        matches!(store.context(None), Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+    );
+    std::fs::rename(&displaced, &path).unwrap();
+    assert!(matches!(store.context(None), Err(Error::NoSelection)));
+    assert!(!path.join("active.json").exists());
 }

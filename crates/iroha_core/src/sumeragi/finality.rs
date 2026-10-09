@@ -1,7 +1,10 @@
 //! Portable finality and challenged node statements from the current certified chain.
 
 mod cursor;
-pub use cursor::{NativeCurrentFinalityV1, NativeFinalityCursorErrorV1, NativeFinalityCursorV1};
+pub use cursor::{
+    NativeCurrentFinalityV1, NativeFinalityAtHeightV1, NativeFinalityCursorErrorV1,
+    NativeFinalityCursorV1,
+};
 
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
@@ -16,7 +19,8 @@ use norito::codec::Encode as _;
 
 use super::{
     certified_chain::{
-        CertifiedChain, ChainReadError, QcVerification, proof_source_append, proof_source_start,
+        CertifiedBlock, CertifiedChain, ChainReadError, QcVerification, proof_source_append,
+        proof_source_start,
     },
     node::NodeIdentity,
 };
@@ -37,6 +41,9 @@ pub enum ProofError {
     /// The portable verifier rejected the produced proof.
     #[error(transparent)]
     Portable(#[from] FinalityError),
+    /// The captured original execution source refused a current-tip certificate.
+    #[error(transparent)]
+    NativeExecution(iroha_data_model::query::error::QueryExecutionFail),
     /// Original local history acquisition has not completed.
     #[error(transparent)]
     Deferred(crate::execution_attempt::ExecutionDeferred),
@@ -209,7 +216,13 @@ fn proof_from_chain<V: StateReadOnly>(
     chain: &CertifiedChain<'_, V>,
     height: u64,
 ) -> Result<SumeragiFinalityProof, ProofError> {
-    let certified = chain.certified(height)?;
+    proof_from_certified(chain.certified(height)?, height)
+}
+
+fn proof_from_certified(
+    certified: CertifiedBlock,
+    height: u64,
+) -> Result<SumeragiFinalityProof, ProofError> {
     if !matches!(
         (height, certified.verification()),
         (1, QcVerification::Genesis) | (2.., QcVerification::Verified)
@@ -356,6 +369,12 @@ pub fn status_is_consistent(status: &SumeragiStatus) -> bool {
 
 /// Sign an exact durable-tip capture using the installed current node identity.
 ///
+/// Past H2, ordinary State-backed captures join the current certificate to the
+/// genesis successor through the original execution ancestry. Every native frame
+/// remains required, while intervening local quorum witnesses need no independent
+/// re-verification. Standalone exports and active Norito callers retain their
+/// full-prefix verification contract.
+///
 /// # Errors
 /// Missing proofs, mismatched heights/identity/instance, halted state or invalid signing.
 pub fn build_attestation(
@@ -396,26 +415,130 @@ pub fn build_attestation(
             committed,
         });
     }
-    // Both proof reads borrow this same immutable State cut. Retain the bounded native
-    // prefix only across genesis -> tip, while every original QC, availability relation and
-    // independent portable proof check remains mandatory. Drop it before the fresh fence.
+    // The active caller keeps its original full-prefix recipe and cumulative charges.
+    // Ordinary current captures use this same State generation's original execution tip.
+    // One reverse source walk joins the target to H2 and genesis, checking both
+    // selected QCs/availability and the exact separately projected genesis result.
+    // No producer cursor, source verdict or challenge is retained across calls.
     let (genesis_finality_proof, finality_proof) = {
         let proof_chain =
             CertifiedChain::new(view).map_err(|error| Error::GenesisFinalityProof(error.into()))?;
-        let genesis = proof_from_chain(&proof_chain, 1).map_err(Error::GenesisFinalityProof)?;
+        let native_genesis = proof_chain
+            .certified(1)
+            .map_err(|error| Error::GenesisFinalityProof(error.into()))?;
+        let genesis_decision = GenesisDecision {
+            block_hash: native_genesis.block_hash(),
+            core_hash: native_genesis.core_hash(),
+            result: native_genesis.result(),
+        };
+        let genesis =
+            proof_from_certified(native_genesis, 1).map_err(Error::GenesisFinalityProof)?;
         let tip = if height == 1 {
             genesis.clone()
+        } else if height > 2 && !norito::core::decode_limits_active() {
+            current_execution_proof(&proof_chain, height, genesis_decision)
+                .map_err(Error::FinalityProof)?
         } else {
             proof_from_chain(&proof_chain, height).map_err(Error::FinalityProof)?
         };
         (genesis, tip)
     };
+    finish_attestation(
+        view,
+        status,
+        identity,
+        build_fingerprint,
+        challenge,
+        signer,
+        AttestationProofs {
+            committed,
+            genesis_block_hash,
+            genesis: genesis_finality_proof,
+            tip: finality_proof,
+        },
+    )
+}
+
+// Coordinates of the exact native receipt projected into the returned genesis proof.
+// A signed genesis proposal alone never authenticates its attached execution R.
+struct GenesisDecision {
+    block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+    core_hash: iroha_sumeragi::types::Hash32,
+    result: iroha_sumeragi::types::Hash32,
+}
+
+// Current statements retain every native ancestry read, but need not independently
+// reverify each intervening local QC after that execution was published into State.
+// Generic proof, checkpoint and sequential export keep their full-prefix contracts.
+fn current_execution_proof<V: StateReadOnly>(
+    chain: &CertifiedChain<'_, V>,
+    height: u64,
+    genesis: GenesisDecision,
+) -> Result<SumeragiFinalityProof, ProofError> {
+    let target = usize::try_from(height)
+        .ok()
+        .and_then(std::num::NonZeroUsize::new)
+        .ok_or(ChainReadError::NotInView { height })?;
+    // The existing single reverse walk retains bounded receipts and uses the original
+    // State allocation pool. No codec scope, allowance or imported trust is installed.
+    let (tip, anchor) = chain
+        .certified_with_ancestor_from_execution(
+            target,
+            |_, _| Ok(()),
+            |_| Ok(std::num::NonZeroUsize::new(2)),
+        )
+        .map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                ProofError::NativeExecution(error)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(local) => {
+                ProofError::Deferred(local)
+            }
+        })?;
+    let anchor = anchor.ok_or(ProofError::UnverifiedCommittee(2))?;
+    if anchor.height() != 2
+        || anchor.block().header().prev_block_hash() != Some(genesis.block_hash)
+        || !anchor.header().is_some_and(|header| {
+            header.parent_hash == genesis.core_hash && header.parent_result == genesis.result
+        })
+    {
+        return Err(ChainReadError::Discontinuous { height: 2 }.into());
+    }
+    drop(anchor);
+    // Clients still receive and independently verify the same complete portable proof.
+    proof_from_certified(tip, height)
+}
+
+// Only the two genuinely produced portable proofs and Copy source projections leave
+// the producer phase. No native prefix, authority or source guard crosses this seam.
+struct AttestationProofs {
+    committed: u64,
+    genesis_block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+    // Match the original local proof drop order on an early tail refusal.
+    tip: SumeragiFinalityProof,
+    genesis: SumeragiFinalityProof,
+}
+
+// The fresh source/instance fence and its native owner retain their original lifetime
+// through body validation, signing and final verification. Their stack slots do not
+// exist while the independent proof producer is decoding its certificates.
+#[inline(never)]
+fn finish_attestation(
+    view: &impl StateReadOnly,
+    status: SumeragiStatus,
+    identity: &NodeIdentity,
+    build_fingerprint: Hash,
+    challenge: [u8; 32],
+    signer: &KeyPair,
+    proofs: AttestationProofs,
+) -> Result<SumeragiFinalityAttestation, AttestationBuildError> {
+    use AttestationBuildError as Error;
     let chain = CertifiedChain::new(view).map_err(|error| Error::FinalityProof(error.into()))?;
     if status.instance != chain.instance().0 {
         return Err(Error::InvalidStatus);
     }
     // Only a height mismatch after successful proof and identity validation is retryable.
-    if status.applied_height != committed || status.committed_height != committed {
+    if status.applied_height != proofs.committed || status.committed_height != proofs.committed {
         return Err(Error::StatusHeightMismatch);
     }
     let observed_at_unix_ms = std::time::SystemTime::now()
@@ -432,16 +555,30 @@ pub fn build_attestation(
         node_fingerprint: Hash::new(identity.node_id.encode()),
         build_fingerprint,
         config_fingerprint: identity.config_fingerprint,
-        genesis_block_hash,
-        genesis_finality_proof,
+        genesis_block_hash: proofs.genesis_block_hash,
+        genesis_finality_proof: proofs.genesis,
         status,
-        finality_proof,
+        finality_proof: proofs.tip,
     };
     body.validate_consistency().map_err(Error::InvalidBody)?;
     let signature = SignatureOf::try_from_hash(signer.private_key(), body.signing_hash())
         .map_err(|error| Error::Signing(error.to_string()))?;
     let attestation = SumeragiFinalityAttestation { body, signature };
-    attestation.verify().map_err(Error::InvalidBody)?;
+    if norito::core::decode_limits_active() {
+        // An enclosing owner retains the original second body decode and its charges/refusals.
+        attestation.verify().map_err(Error::InvalidBody)?;
+    } else {
+        // This exact immutable body already passed complete consistency checks above. Its
+        // move into the statement changes no proof or binding; verify the fresh signature
+        // without repeating both independent native proof decodes in this same invocation.
+        attestation
+            .signature
+            .verify_hash(
+                attestation.body.node_id.public_key(),
+                attestation.body.signing_hash(),
+            )
+            .map_err(|error| Error::InvalidBody(FinalityError(error.to_string())))?;
+    }
     Ok(attestation)
 }
 
@@ -751,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    fn portable_builder_verifies_original_unflagged_boundary_quorum() {
+    fn portable_builder_verifies_original_boundary_commit_quorum() {
         let mut chain = CertifiedTestChain::npos_boundary_fixture();
         chain.commit(Vec::new());
         let proof = build_proof(&chain.state().view(), 10).unwrap();

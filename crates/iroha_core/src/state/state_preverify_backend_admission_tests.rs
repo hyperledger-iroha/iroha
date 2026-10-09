@@ -52,11 +52,15 @@ fn unsupported_retired_and_claimed_backends_fail_state_admission() {
         "pipa-r/pasta/unreviewed",
     ] {
         let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
-        assert_eq!(
-            transaction.preverify_proof(&proof, None, 0, None, None, false),
-            PreverifyResult::UnsupportedBackend,
-            "backend admission must precede key activity: {backend}"
-        );
+        for active in [false, true] {
+            assert_eq!(
+                transaction.preverify_proof(&proof, None, 0, None, None, active),
+                PreverifyResult::UnsupportedBackend,
+                "backend admission must precede key activity: {backend}, active={active}"
+            );
+            let mut observed = transaction.zk_dedup.clone();
+            assert!(observed.check_and_insert_with_commitment(&proof, None));
+        }
     }
 }
 
@@ -423,4 +427,91 @@ fn genuine_stark_originals_preserve_independent_admission_and_key_activity() {
         ),
         PreverifyResult::VerifyingKeyInactive
     );
+}
+
+#[test]
+fn retired_ipa_profile_labels_refuse_even_native_envelope() {
+    let state = test_state();
+    let mut block = state.block(header());
+    let mut transaction = block.transaction();
+    let (original, key) = native_originals();
+    let commitment = crate::zk::hash_vk(&key);
+    let proof = ProofBox::new("halo2/ipa:ivm-replay-binding-v1".into(), original.bytes);
+    for active in [false, true] {
+        assert_eq!(
+            transaction.preverify_proof(
+                &proof,
+                None,
+                0,
+                Some(commitment),
+                Some(commitment),
+                active
+            ),
+            PreverifyResult::UnsupportedBackend,
+            "an exact native envelope cannot authorize a retired backend alias"
+        );
+        assert_unseen(&transaction, &proof, commitment);
+    }
+}
+
+#[test]
+fn native_and_stark_key_refusals_preserve_original_dedup_for_retry() {
+    let state = test_state();
+    let mut block = state.block(header());
+    let mut transaction = block.transaction();
+    for backend in [
+        crate::zk::ZK_BACKEND_NATIVE_PIPA_R,
+        crate::zk::ZK_BACKEND_STARK_FRI_V1,
+    ] {
+        // Deliberately malformed originals test refusal ordering, not verifier success.
+        let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+        let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
+        let commitment = crate::zk::hash_vk(&vk);
+        assert_eq!(
+            transaction.preverify_proof(&proof, None, 0, None, None, true),
+            PreverifyResult::VerifyingKeyMissing,
+        );
+        assert_unseen(&transaction, &proof, commitment);
+        assert_eq!(
+            transaction.preverify_proof(
+                &proof,
+                Some(&vk),
+                0,
+                Some(commitment),
+                Some(commitment),
+                false
+            ),
+            PreverifyResult::VerifyingKeyInactive,
+        );
+        assert_unseen(&transaction, &proof, commitment);
+        let mut foreign_commitment = commitment;
+        foreign_commitment[0] ^= 1;
+        assert_eq!(
+            transaction.preverify_proof(
+                &proof,
+                Some(&vk),
+                0,
+                Some(commitment),
+                Some(foreign_commitment),
+                true
+            ),
+            PreverifyResult::VerifyingKeyMismatch,
+        );
+        assert_unseen(&transaction, &proof, commitment);
+        for _ in 0..2 {
+            assert_eq!(
+                transaction.preverify_proof(
+                    &proof,
+                    Some(&vk),
+                    0,
+                    Some(commitment),
+                    Some(commitment),
+                    true
+                ),
+                PreverifyResult::MalformedProof,
+                "{backend} must recheck the unchanged original envelope on retry",
+            );
+            assert_unseen(&transaction, &proof, commitment);
+        }
+    }
 }

@@ -36,9 +36,13 @@ built daemon.
 Release packaging requires `defaults/developer/network-profiles.nrt` from the authenticated
 release source, containing the independently approved Taira release key, rollback floor and
 checkpoint URL. The packager requires its exact committed image and refuses an override,
-missing file or absent Taira entry before building or replacing a bundle. The approved public
-artifact and its production checkpoint publisher remain release-owner prerequisites; the
-packager generates no authority. Developers using an installed official bundle supply no file.
+missing file or absent Taira entry before building or replacing a bundle. The preset is sourced
+from the approved [Taira publication](https://taira.sora.org/bootstrap/network-profiles.nrt)
+and selects `https://taira.sora.org/bootstrap/checkpoint.nrt`. Its SHA-256 is
+`29a9d26dfb40293280bbfcde7b30f2d5f3f635c5e18bbc4e1a8878efd9acd18f`;
+the release owner must commit those exact bytes. Checkpoints remain fetched artifacts with
+bounded signed validity; recurring publication is an operator responsibility. The packager
+generates no authority. Developers using an installed official bundle supply no file.
 Debug/development bundles may omit profiles or use explicit fixture installation input.
 The same xtask selection owner gates the CLI-only `kagami-bundle` release path, which
 installs the identical original preset beside Kagami and the daemon and records its
@@ -116,6 +120,21 @@ context, with only one network running at a time. It checks context list/show/us
 `contract deploy --context` without changing workspace selection, and original-journal recovery
 after restarting the intended network. Both deployments are read and executed on all four
 validators; cleanup covers both named environments.
+
+After that workflow passes, separate fresh stores exercise `.to` and local-package
+inputs as the first deployment command. Each must start four validators, execute
+the contract on every peer and return the original receipt on repetition, without
+supplied runtime configuration or build tools on `PATH`.
+
+Stock managed Global localnets and private roots use an explicit SoraNet admission
+cost profile only when every generated P2P/Torii listener, advertised peer and
+telemetry endpoint is numeric loopback: Argon2id uses 4,096 KiB, one iteration,
+one lane and difficulty 6. This deliberately lowers local denial-of-service work
+cost; it is not the public deployment cost profile. The mandatory puzzle,
+transport/transcript binding, replay protection and ticket lifetimes remain in
+force. Exported localnets, public chain identities, hostnames and non-loopback
+managed endpoints retain the standard admission defaults (65,536 KiB, two
+iterations, one lane, difficulty 6). Consensus and signed genesis are unchanged.
 
 Cleanup uses authenticated localnet control; failures retain the private runtime
 directory and diagnostics. The combined installed publication regression has not

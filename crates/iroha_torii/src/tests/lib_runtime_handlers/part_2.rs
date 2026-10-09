@@ -2675,6 +2675,9 @@ fn delegated_account_assets_recheck_exact_grant_and_reject_sibling_and_scope_mis
     let sibling = checked_torii_test_account_id(0xa2, "delegated assets sibling");
     let caller = checked_torii_test_account_id(0xa3, "delegated assets caller");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"delegated-account-assets-subject"));
+    let sibling_uaid =
+        UniversalAccountId::from_hash(Hash::new(b"delegated-account-assets-sibling"));
+    assert_ne!(uaid, sibling_uaid);
     let restricted_dataspace = DataSpaceId::new(10);
     let domain =
         Domain::new(DomainId::try_new("wonderland", "universal").expect("domain")).build(&target);
@@ -2685,13 +2688,14 @@ fn delegated_account_assets_recheck_exact_grant_and_reject_sibling_and_scope_mis
                 .with_uaid(Some(uaid))
                 .build(&target),
             Account::new(sibling.clone())
-                .with_uaid(Some(uaid))
+                .with_uaid(Some(sibling_uaid))
                 .build(&sibling),
             Account::new(caller.clone()).build(&caller),
         ],
         [],
     );
     bind_uaid_to_dataspace_manifest_for_test(&mut world, uaid, restricted_dataspace);
+    bind_uaid_to_dataspace_manifest_for_test(&mut world, sibling_uaid, restricted_dataspace);
     let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
         world,
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
@@ -2715,7 +2719,7 @@ fn delegated_account_assets_recheck_exact_grant_and_reject_sibling_and_scope_mis
         .expect("target has private route");
     assert_eq!(
         super::torii_account_assets_read_routes(app.as_ref(), &sibling, Some(&caller))
-            .expect_err("same-subject sibling requires its own grant")
+            .expect_err("same-dataspace sibling requires its own grant")
             .status(),
         StatusCode::FORBIDDEN,
     );
@@ -3990,5 +3994,85 @@ async fn account_assets_reject_invalid_queries_before_routing() {
     assert_eq!(
         torii_response_header(&response, "x-iroha-reject-code"),
         Some("invalid_filter")
+    );
+}
+
+#[tokio::test]
+async fn dpn_domain_enrollment_routes_only_exact_identity_and_permission_queries() {
+    use iroha_data_model::{
+        nexus::UniversalAccountId,
+        query::{QueryRequest, account::prelude::FindAccountById},
+    };
+    use iroha_executor_data_model::permission::dpn::CanGrantDpnUserForAccountDomain;
+    let authority = checked_torii_test_account_id(0x51, "DPN enrollment registrar");
+    let customer = checked_torii_test_account_id(0x52, "DPN enrollment customer");
+    let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"dpn-route-enrollment"));
+    let mut world = World::with(
+        [],
+        [
+            Account::new(authority.clone()).build(&authority),
+            Account::new(customer.clone())
+                .with_uaid(Some(uaid))
+                .build(&customer),
+        ],
+        [],
+    );
+    world.account_permissions_mut_for_testing().insert(
+        authority.clone(),
+        std::collections::BTreeSet::from([Permission::from(CanGrantDpnUserForAccountDomain {
+            domain: iroha_model_base::domain::DomainId::try_new("nevo", "universal").unwrap(),
+        })]),
+    );
+    let mut app =
+        mk_app_state_for_tests_with_world_and_nexus(world, private_ingress_nexus_for_test());
+    configure_private_ingress_routes_for_test(&mut app);
+    // Install authoritative binding, reverse index, rekey record and active SNS lease together.
+    bind_account_alias_for_test(&app, &customer, "customer@nevo.universal");
+    let routes = super::torii_all_dataspace_routes(app.as_ref());
+    let scope = super::SignedQueryScope::TargetAccount(customer.clone());
+    for query in [
+        QueryRequest::Singular(FindAccountById::new(customer.clone()).into()),
+        QueryRequest::Start(build_find_permissions_by_account_query_for_test(
+            customer.clone(),
+        )),
+    ] {
+        let request = request_for_test(&authority, query);
+        assert_eq!(
+            super::torii_authorize_signed_query_routes(
+                app.as_ref(),
+                &request,
+                &scope,
+                routes.clone()
+            )
+            .unwrap()
+            .len(),
+            routes.len()
+        );
+    }
+    let role_request = request_for_test(
+        &authority,
+        QueryRequest::Start(build_find_roles_by_account_query_for_test(customer)),
+    );
+    assert!(
+        super::torii_authorize_signed_query_routes(
+            app.as_ref(),
+            &role_request,
+            &scope,
+            routes.clone()
+        )
+        .is_err()
+    );
+    let broad = request_for_test(
+        &authority,
+        QueryRequest::Start(build_find_account_ids_query_for_test()),
+    );
+    assert!(
+        super::torii_authorize_signed_query_routes(
+            app.as_ref(),
+            &broad,
+            &super::SignedQueryScope::CrossDataspaceFanout,
+            routes
+        )
+        .is_err()
     );
 }

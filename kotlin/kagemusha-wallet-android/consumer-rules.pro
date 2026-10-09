@@ -29,3 +29,16 @@
 
 # Rust constructs the typed snapshot holder by its literal name and constructor descriptor.
 -keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletSnapshotReplyV1 { *; }
+
+# Rust constructs the distinct reviewed-operation result holder by its literal class name.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletReviewReplyV1 { *; }
+
+# Native Load transport decoding; DATA binding only, no wallet or monetary permission.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletLoadOriginalNativeV1 { *; }
+
+# Original installation loader; Native authenticates its immutable application trust root.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletInstalledRuntimeNativeV1 { *; }
+
+# Rust constructs bounded observation DATA through its dedicated JNI reply domain.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletObservationNativeV1 { *; }
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletObservationReplyV1 { *; }

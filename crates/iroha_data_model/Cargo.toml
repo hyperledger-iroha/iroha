@@ -13,6 +13,8 @@ license.workspace = true
 workspace = true
 
 [features]
+# Model-owned spec §13.4 switches; rejected in every non-test library build.
+mutation-testing = []
 default = ["application-model"]
 dev-tools = ["dep:tempfile", "dep:rustix"]
 # Public application model; node-only additions are requested by node crates.
@@ -39,6 +41,7 @@ governance = []
 pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
 
 [dependencies]
+zeroize = { workspace = true }
 iroha_allocation = { workspace = true }
 # Protocol JSON is mandatory: custom parameters and retained ledger metadata use it.
 iroha_data_model_derive = { path = "../iroha_data_model_derive" }
@@ -89,7 +92,6 @@ mv = { workspace = true }
 criterion = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "sm", "bfv-test-fixtures"] }
 hex-literal = { workspace = true }
-ivm_abi = { path = "../ivm_abi" }
 
 tempfile = { workspace = true }
 
@@ -172,6 +174,16 @@ path = "tests/sccp_v1_governance.rs"
 name = "sccp_v1_roundtrip"
 path = "tests/sccp_v1_roundtrip.rs"
 
+# Public Activate SDK wire parity, separate from the large internal unit harness.
+[[test]]
+name = "kagemusha_activate_sdk"
+path = "tests/kagemusha_activate_sdk.rs"
+
+# Public IssueLoad SDK wire parity, separate from the large internal unit harness.
+[[test]]
+name = "kagemusha_issue_load_sdk"
+path = "tests/kagemusha_issue_load_sdk.rs"
+
 # Public manual frame contracts compile separately from the large internal unit suite.
 [[test]]
 name = "manual_frame_identity"
@@ -200,3 +212,8 @@ path = "tests/resource_contract_v1.rs"
 [[test]]
 name = "fastpq_quantity_units_allocations"
 path = "tests/fastpq_quantity_units_allocations.rs"
+
+# Observe canonical AMX identity, borrowed Begin matching and monetary-effects allocations.
+[[test]]
+name = "amx_prepare_streaming_allocations"
+path = "tests/amx_prepare_streaming_allocations.rs"

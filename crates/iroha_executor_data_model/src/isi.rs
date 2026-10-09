@@ -237,6 +237,9 @@ pub mod multisig {
         pub home_domain: Option<DomainId>,
         /// Specification of the multisig account
         pub spec: MultisigSpec,
+        /// Immutable universal identity established with the new account.
+        /// Explicit `None` registers an account without a universal identity.
+        pub uaid: Option<iroha_data_model::nexus::UniversalAccountId>,
     }
     impl MultisigRegister {
         /// Construct a multisig registration.
@@ -249,7 +252,19 @@ pub mod multisig {
                 account,
                 home_domain: home_domain.into(),
                 spec,
+                uaid: None,
             }
+        }
+        /// Bind the immutable universal identity to fresh registration.
+        /// Existing accounts must already have this exact value; this never
+        /// assigns or changes an existing account's universal identity.
+        #[must_use]
+        pub fn with_uaid(
+            mut self,
+            uaid: Option<iroha_data_model::nexus::UniversalAccountId>,
+        ) -> Self {
+            self.uaid = uaid;
+            self
         }
         /// Construct a multisig registration using an explicit account id.
         pub fn with_account(
@@ -281,6 +296,7 @@ pub mod multisig {
             let mut account: Option<AccountId> = None;
             let mut home_domain: Option<Option<DomainId>> = None;
             let mut spec: Option<MultisigSpec> = None;
+            let mut uaid: Option<Option<iroha_data_model::nexus::UniversalAccountId>> = None;
             while let Some(key) = visitor.next_key()? {
                 match key.as_str() {
                     "account" => {
@@ -290,6 +306,16 @@ pub mod multisig {
                     "home_domain" => {
                         let value = visitor.parse_value::<Option<DomainId>>()?;
                         home_domain = Some(value);
+                    }
+                    "uaid" => {
+                        if uaid.is_some() {
+                            return Err(json::Error::duplicate_field("uaid"));
+                        }
+                        uaid = Some(
+                            visitor
+                                .parse_value::<Option<iroha_data_model::nexus::UniversalAccountId>>(
+                                )?,
+                        );
                     }
                     "spec" => {
                         let value = visitor.parse_value::<MultisigSpec>()?;
@@ -307,6 +333,7 @@ pub mod multisig {
                 account,
                 home_domain: home_domain.unwrap_or(None),
                 spec,
+                uaid: uaid.ok_or_else(|| json::Error::missing_field("uaid"))?,
             })
         }
     }
@@ -1098,6 +1125,39 @@ pub mod multisig {
             );
         }
         #[test]
+        fn multisig_register_uaid_is_explicit_and_roundtrips_exact_native_frames() {
+            use iroha_data_model::nexus::UniversalAccountId;
+            let uaid =
+                UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"multisig-register-uaid"));
+            for uaid in [None, Some(uaid)] {
+                let register =
+                    MultisigRegister::with_account(fixture_account(47), None, sample_spec())
+                        .with_uaid(uaid);
+                let encoded = norito::to_bytes(&register).expect("typed wire");
+                let decoded: MultisigRegister = norito::decode_from_bytes(&encoded).unwrap();
+                assert_eq!(decoded, register);
+                let json = norito::json::to_json(&register).unwrap();
+                assert!(json.contains("\"uaid\":"));
+                assert_eq!(
+                    norito::json::from_str::<MultisigRegister>(&json).unwrap(),
+                    register
+                );
+                let outer = InstructionBox::from(register.clone());
+                assert_eq!(
+                    MultisigInstructionBox::try_from(&outer).unwrap(),
+                    MultisigInstructionBox::Register(register.clone())
+                );
+                let duplicate = format!("{{\"uaid\":null,{}", &json[1..]);
+                assert!(norito::json::from_str::<MultisigRegister>(&duplicate).is_err());
+                let missing = norito::json!({
+                    "account": (register.account.clone()),
+                    "home_domain": null,
+                    "spec": (register.spec.clone())
+                });
+                assert!(norito::json::from_value::<MultisigRegister>(missing).is_err());
+            }
+        }
+        #[test]
         fn multisig_register_json_requires_account_field() {
             let spec = sample_spec();
             let spec_json = norito::json::to_json(&spec).expect("spec should serialize");
@@ -1135,7 +1195,8 @@ pub mod multisig {
             let account_json = norito::json::to_json(&account).expect("account json");
             let spec = sample_spec();
             let spec_json = norito::json::to_json(&spec).expect("spec json");
-            let payload = format!(r#"{{"account": {account_json}, "spec": {spec_json}}}"#);
+            let payload =
+                format!(r#"{{"account": {account_json}, "spec": {spec_json}, "uaid": null}}"#);
             let register = norito::json::from_str::<MultisigRegister>(&payload)
                 .expect("missing home_domain should default to none");
             assert_eq!(register.home_domain, None);

@@ -396,3 +396,263 @@ fn prepared_quantity_planning_cannot_replenish_nested_scope_and_fill_retains_ref
     drop(value);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[test]
+fn one_pass_quantity_matches_canonical_values_rejections_and_exact_original_digits() {
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        for mantissa in [
+            BigInt::zero(),
+            BigInt::one(),
+            BigInt::from(10_u32),
+            BigInt::from(-1_i32),
+            BigInt::from_inner((UnboundedBigInt::one() << 511_usize) - 1_u8).unwrap(),
+            BigInt::from_inner(UnboundedBigInt::one() << 511_usize).unwrap(),
+        ] {
+            for scale in [0, 1, 28, 29, u32::MAX] {
+                let bytes = payload(mantissa.clone(), scale);
+                let original = (bytes.as_ptr(), bytes.len());
+                let ordinary = Quantity::decode_from_slice(&bytes);
+                let budget = AllocationBudget::new(crate::bigint::MAX_ENCODED_BYTES);
+                let result = PreparedQuantityDecode::try_decode_payload(&bytes, &budget);
+                match (ordinary, result) {
+                    (Ok((ordinary, used)), Ok(owner)) => {
+                        assert_eq!(used, bytes.len());
+                        assert_eq!(owner.get(), &ordinary);
+                        let digits = ordinary.mantissa().inner().magnitude().native_digits();
+                        let exact = Layout::array::<NativeBigDigit>(digits.len()).unwrap();
+                        assert_eq!(budget.reserved_bytes(), exact.size());
+                        assert!(owner.belongs_to(&budget));
+                        assert_eq!(
+                            owner.get().mantissa().inner().magnitude().native_digits(),
+                            digits
+                        );
+                        let mut encoded = Vec::new();
+                        serialize_to_buffer(owner.get(), &mut encoded).unwrap();
+                        assert_eq!(encoded, bytes);
+                        budget.set_limit_bytes(0);
+                        drop(owner);
+                    }
+                    (Err(ordinary), Err(QuantityDecodeAdmissionError::Codec(actual))) => {
+                        assert_eq!(actual.to_string(), ordinary.to_string());
+                    }
+                    _ => panic!("one-pass Quantity changed canonical scalar behavior"),
+                }
+                assert_eq!((bytes.as_ptr(), bytes.len()), original);
+                assert_eq!(budget.reserved_bytes(), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn one_pass_quantity_preserves_mantissa_quota_before_late_scale_and_cumulative_retry() {
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let small = payload(BigInt::one(), 0);
+        let wide = payload(BigInt::from(1_u128 << 127), 0);
+        let late = payload(BigInt::from(1_u128 << 127), MAX_DECIMAL_SCALE + 1);
+        let original = (late.as_ptr(), late.len());
+        let oracle_pool = AllocationBudget::new(1024);
+        let mut ordinary_small = destination(&small, &oracle_pool);
+        let mut ordinary_wide = destination(&wide, &oracle_pool);
+        let small_work = ordinary_small.digits.capacity() * UNBOUNDED_BIGINT_DIGIT_BYTES;
+        let wide_work = ordinary_wide.digits.capacity() * UNBOUNDED_BIGINT_DIGIT_BYTES;
+        let limit = small_work + wide_work - 1;
+        let limits = norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, limit, 32);
+        // The existing prepared field path is the logical-work oracle. An owning
+        // archived decoder additionally charges real alignment copies avoided
+        // by both safe borrowed walkers; those are not fabricated here.
+        let ordinary = norito::core::DecodeBudgetContext::new(limits);
+        ordinary
+            .with(|| ordinary_small.decode_payload(&small))
+            .unwrap();
+        let expected = ordinary
+            .with(|| ordinary_wide.decode_payload(&late))
+            .unwrap_err();
+        let QuantityDestinationError::Codec(expected) = expected else {
+            panic!("original mantissa quota must precede late scale")
+        };
+        assert!(expected.is_decode_resource_limit());
+        let context = norito::core::DecodeBudgetContext::new(limits);
+        let shared = context.clone();
+        let pool = AllocationBudget::new(1024);
+        let first = context
+            .with(|| PreparedQuantityDecode::try_decode_payload(&small, &pool))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let failure = shared
+            .with(|| PreparedQuantityDecode::try_decode_payload(&late, &pool))
+            .err()
+            .expect("original cumulative mantissa quota must refuse");
+        let QuantityDecodeAdmissionError::Codec(actual) = failure else {
+            panic!("late scale must not bypass cumulative work")
+        };
+        assert_eq!(
+            actual.decode_resource_error(),
+            expected.decode_resource_error()
+        );
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            u64::try_from(small_work).unwrap()
+        );
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            ordinary.consumed_allocated_bytes()
+        );
+        assert_eq!(pool.reserved_bytes(), small_work);
+        let expected = ordinary
+            .with(|| ordinary_wide.decode_payload(&wide))
+            .unwrap_err();
+        let QuantityDestinationError::Codec(expected) = expected else {
+            panic!("same quota")
+        };
+        let failure = shared
+            .with(|| PreparedQuantityDecode::try_decode_payload(&wide, &pool))
+            .err()
+            .expect("failed prefix cannot replenish retry credit");
+        let QuantityDecodeAdmissionError::Codec(actual) = failure else {
+            panic!("same quota")
+        };
+        assert_eq!(
+            actual.decode_resource_error(),
+            expected.decode_resource_error()
+        );
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            ordinary.consumed_allocated_bytes()
+        );
+        drop(first);
+        assert_eq!(pool.reserved_bytes(), 0);
+
+        let unlimited =
+            norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 32);
+        let ordinary = norito::core::DecodeBudgetContext::new(unlimited);
+        let context = norito::core::DecodeBudgetContext::new(unlimited);
+        ordinary
+            .with(|| ordinary_small.decode_payload(&small))
+            .unwrap();
+        let first = context
+            .with(|| PreparedQuantityDecode::try_decode_payload(&small, &pool))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let expected = ordinary
+            .with(|| ordinary_wide.decode_payload(&late))
+            .unwrap_err();
+        let QuantityDestinationError::Codec(expected) = expected else {
+            panic!("late scale")
+        };
+        let failure = context
+            .with(|| PreparedQuantityDecode::try_decode_payload(&late, &pool))
+            .err()
+            .expect("invalid scale must refuse after mantissa admission");
+        let QuantityDecodeAdmissionError::Codec(actual) = failure else {
+            panic!("late scale")
+        };
+        assert_eq!(actual.to_string(), expected.to_string());
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            u64::try_from(small_work + wide_work).unwrap()
+        );
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            ordinary.consumed_allocated_bytes()
+        );
+        assert_eq!(
+            pool.reserved_bytes(),
+            small_work,
+            "invalid value refunds physical digits only"
+        );
+        ordinary
+            .with(|| ordinary_wide.decode_payload(&wide))
+            .unwrap();
+        let retry = context
+            .with(|| PreparedQuantityDecode::try_decode_payload(&wide, &pool))
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(retry.get(), &Quantity::decode_from_slice(&wide).unwrap().0);
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            ordinary.consumed_allocated_bytes()
+        );
+        assert_eq!(pool.reserved_bytes(), small_work + wide_work);
+        assert_eq!((late.as_ptr(), late.len()), original);
+        drop((retry, first, ordinary_small, ordinary_wide));
+        assert_eq!(pool.reserved_bytes(), 0);
+        assert_eq!(oracle_pool.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn one_pass_quantity_capacity_precedes_late_scalar_and_refunds_only_physical_credit() {
+    let _flags = DecodeFlagsGuard::enter(0);
+    let valid = payload(BigInt::one(), 0);
+    let late = payload(BigInt::one(), MAX_DECIMAL_SCALE + 1);
+    let original = (late.as_ptr(), late.len());
+    let work = core::mem::size_of::<NativeBigDigit>();
+    let layout = Layout::array::<NativeBigDigit>(1).unwrap();
+    let pool = AllocationBudget::new(work);
+    let limits =
+        norito::core::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 32);
+    let context = norito::core::DecodeBudgetContext::new(limits);
+    let first = context
+        .with(|| PreparedQuantityDecode::try_decode_payload(&valid, &pool))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let expected = pool.try_reserve(layout).unwrap_err();
+    let failure = context
+        .with(|| PreparedQuantityDecode::try_decode_payload(&late, &pool))
+        .err()
+        .expect("live original digits occupy the pool");
+    let QuantityDecodeAdmissionError::Allocation(ChargedBufferError::Admission(actual)) = failure
+    else {
+        panic!("physical admission must precede late scalar rejection")
+    };
+    assert_eq!(actual, expected);
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        u64::try_from(2 * work).unwrap()
+    );
+    assert_eq!(pool.reserved_bytes(), work);
+    drop(first);
+    assert_eq!(pool.reserved_bytes(), 0);
+    let expected = Quantity::decode_from_slice(&late).unwrap_err();
+    let failure = context
+        .with(|| PreparedQuantityDecode::try_decode_payload(&late, &pool))
+        .err()
+        .expect("late scale is still rejected");
+    let QuantityDecodeAdmissionError::Codec(actual) = failure else {
+        panic!("late scale")
+    };
+    assert_eq!(actual.to_string(), expected.to_string());
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        u64::try_from(3 * work).unwrap()
+    );
+    assert_eq!(
+        pool.reserved_bytes(),
+        0,
+        "digits are gone while original diagnostic still lives"
+    );
+    let retry = context
+        .with(|| PreparedQuantityDecode::try_decode_payload(&valid, &pool))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(retry.belongs_to(&pool));
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        u64::try_from(4 * work).unwrap()
+    );
+    assert_eq!((late.as_ptr(), late.len()), original);
+    drop(retry);
+    assert_eq!(pool.reserved_bytes(), 0);
+    let zero_pool = AllocationBudget::new(0);
+    let zero = payload(BigInt::zero(), 0);
+    let owner = context
+        .with(|| PreparedQuantityDecode::try_decode_payload(&zero, &zero_pool))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(owner.get().is_zero());
+    assert!(owner.belongs_to(&zero_pool));
+    assert_eq!(zero_pool.reserved_bytes(), 0);
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        u64::try_from(4 * work).unwrap()
+    );
+    drop(owner);
+    assert_eq!(zero_pool.reserved_bytes(), 0);
+}

@@ -1692,6 +1692,34 @@ impl RawGenesisTransaction {
     pub fn transactions(&self) -> &[RawGenesisTx] {
         &self.transactions
     }
+    /// Append one instruction-only transaction without rebuilding any original transaction.
+    ///
+    /// Authored parameters, topology, triggers, policies and transaction boundaries retain
+    /// their exact original values and order. This unsigned assembly operation confers no
+    /// instruction authority; the original genesis signer and Core staging still admit it.
+    ///
+    /// # Errors
+    /// Refuses `SetParameter`, which must remain in the structured parameter snapshot.
+    pub fn append_instruction_transaction(
+        mut self,
+        instruction: impl Into<InstructionBox>,
+    ) -> Result<Self> {
+        let instruction = instruction.into();
+        if instruction
+            .as_any()
+            .downcast_ref::<SetParameter>()
+            .is_some()
+        {
+            return Err(eyre!(
+                "instruction-only genesis append refuses SetParameter; use the structured parameter snapshot"
+            ));
+        }
+        self.transactions.push(RawGenesisTx {
+            instructions: vec![instruction],
+            ..RawGenesisTx::default()
+        });
+        Ok(self)
+    }
     /// Validate that the canonical validator topology which will enter genesis is an exact
     /// supported committee. Its ordered BLS roster is validator generation zero.
     ///
@@ -2917,6 +2945,72 @@ impl TryFrom<GenesisIvmAction> for Action {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn instruction_transaction_append_preserves_every_original_manifest_field() -> Result<()> {
+        init_instruction_registry();
+        let mut original = GenesisBuilder::new_without_executor(
+            ChainId::from("instruction-append"),
+            PathBuf::from("."),
+        )
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+        .build_raw()?;
+        original = original.with_chain_discriminant(1337);
+        let before = norito::json::to_value(&original)?;
+        let appended = original.append_instruction_transaction(Log::new(
+            iroha_data_model::level::Level::INFO,
+            "explicit appended transaction".into(),
+        ))?;
+        let mut after = norito::json::to_value(&appended)?;
+        let transactions = after
+            .as_object_mut()
+            .unwrap()
+            .get_mut("transactions")
+            .unwrap();
+        let transactions = transactions.as_array_mut().unwrap();
+        let new = transactions.pop().unwrap();
+        assert_eq!(
+            transactions.len(),
+            before
+                .get("transactions")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len()
+        );
+        assert_eq!(after, before, "only the appended transaction may differ");
+        assert!(new.get("parameters").is_none());
+        assert_eq!(new.get("topology").unwrap().as_array().unwrap().len(), 0);
+        assert_eq!(
+            new.get("ivm_triggers").unwrap().as_array().unwrap().len(),
+            0
+        );
+        assert_eq!(
+            new.get("instructions").unwrap().as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(appended.chain_discriminant(), 1337);
+        Ok(())
+    }
+
+    #[test]
+    fn instruction_transaction_append_refuses_parameter_layout_migration() -> Result<()> {
+        let original = GenesisBuilder::new_without_executor(
+            ChainId::from("instruction-append"),
+            PathBuf::from("."),
+        )
+        .with_sumeragi_context_parameters(SumeragiGenesisContextParameters::recommended())
+        .build_raw()?;
+        let error = original
+            .append_instruction_transaction(SetParameter::new(Parameter::Block(
+                iroha_data_model::parameter::BlockParameter::MaxTransactions(
+                    core::num::NonZeroU64::new(99).unwrap(),
+                ),
+            )))
+            .unwrap_err();
+        assert!(error.to_string().contains("structured parameter snapshot"));
+        Ok(())
+    }
+
     use super::*;
     use eyre::Result;
     use iroha_data_model::{
@@ -3110,7 +3204,13 @@ mod tests {
     fn source_template_materialization_requires_explicit_xor_selection() -> Result<()> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../defaults/genesis.template.json");
-        assert!(RawGenesisTransaction::from_path(&path).is_err());
+        let unbound = RawGenesisTransaction::from_path(&path)?;
+        assert_eq!(unbound.consensus_fingerprint(), None);
+        assert!(
+            unbound
+                .validate_mode_specific_consensus_parameters()
+                .is_err()
+        );
         let template = GenesisSourceTemplate::from_path(&path)?;
         let is_npos = template
             .value

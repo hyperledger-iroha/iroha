@@ -5,7 +5,9 @@ use crate::managed::native_operation::{
     authorization::{self, DispatchAuthorization, Lease, Scope},
     require_retained_material,
 };
+use crate::managed::service_authority::CheckpointImports;
 use iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyRecordV1;
+use iroha_data_model::sumeragi_finality::EpochValidationScope;
 use std::sync::{Arc, atomic::AtomicBool};
 
 /// Closed I/O boundary only; successful inputs still come from the sole native proof owners.
@@ -114,6 +116,31 @@ impl GeneratedRenewalTurn {
         deadline: Instant,
         cancelled: Arc<AtomicBool>,
     ) -> Result<Self> {
+        let mut validation = EpochValidationScope::new();
+        let mut imports = CheckpointImports::new(&owner.authority, Some(&mut validation));
+        let result = Self::begin_with_imports(
+            owner,
+            policy,
+            fees,
+            floor,
+            deadline,
+            cancelled,
+            &mut imports,
+        );
+        drop(imports);
+        drop(validation);
+        result
+    }
+
+    fn begin_with_imports(
+        owner: &ManagedStreamTokenCustody,
+        policy: &SignerCustodyPolicyV1,
+        fees: Fees,
+        floor: ManagedTransactionFinality,
+        deadline: Instant,
+        cancelled: Arc<AtomicBool>,
+        imports: &mut CheckpointImports<'_, '_>,
+    ) -> Result<Self> {
         #[cfg(test)]
         crate::managed::native_operation::deadline_diagnostics::begin_phase(
             crate::managed::native_operation::deadline_diagnostics::BeginPhase::Entry,
@@ -126,7 +153,7 @@ impl GeneratedRenewalTurn {
         crate::managed::native_operation::deadline_diagnostics::begin_phase(
             crate::managed::native_operation::deadline_diagnostics::BeginPhase::Configure,
         );
-        let (configured, _) = owner.retained_configuration(deadline)?;
+        let (configured, _) = owner.retained_configuration_with_imports(deadline, imports)?;
         if configured != *policy || floor.height < 2 || *floor.block_hash.as_ref() == [0; 32] {
             return Err(invalid(
                 "renewal turn differs from original configured policy or carrier",
@@ -137,7 +164,9 @@ impl GeneratedRenewalTurn {
         crate::managed::native_operation::deadline_diagnostics::begin_phase(
             crate::managed::native_operation::deadline_diagnostics::BeginPhase::Inventory,
         );
-        require_retained_material(owner.validate_renewal_selection_inventory(&fees, deadline))?;
+        require_retained_material(
+            owner.validate_renewal_selection_inventory_with_imports(&fees, deadline, imports),
+        )?;
         Ok(Self {
             prepared: owner.authority.prepared.clone(),
             provider: owner.authority.provider_id()?,
@@ -216,8 +245,10 @@ impl GeneratedRenewalTurn {
                     .checked_mul(1000)
                     .ok_or_else(|| invalid("provider interval overflow"))?,
             );
+            #[cfg(test)]
+            begin_scope_tests::before_lease_root_selection();
             let lease = Lease::issue(
-                PrivateDirectory::open_exact(history.root().path())?,
+                history.root().retain()?,
                 history.outer_bytes()?,
                 &self.fees,
                 Scope::Renewal { provider, sequence },
@@ -236,7 +267,12 @@ impl GeneratedRenewalTurn {
     }
 }
 impl ManagedStreamTokenCustody {
-    fn validate_renewal_selection_inventory(&self, fees: &Fees, deadline: Instant) -> Result<()> {
+    fn validate_renewal_selection_inventory_with_imports(
+        &self,
+        fees: &Fees,
+        deadline: Instant,
+        imports: &mut CheckpointImports<'_, '_>,
+    ) -> Result<()> {
         // Bounded full reference census, never a native sequence selector.
         for sequence in 2..=64 {
             #[cfg(test)]
@@ -250,7 +286,9 @@ impl ManagedStreamTokenCustody {
                 sequence,
                 crate::managed::native_operation::deadline_diagnostics::InventoryPhase::Open,
             );
-            if let Some(history) = BodyHistory::open(self, CustodyPurpose::Renewal(sequence))? {
+            if let Some(history) =
+                BodyHistory::open_with_imports(self, CustodyPurpose::Renewal(sequence), imports)?
+            {
                 if history.fees() != fees {
                     return Err(invalid("renewal original fees changed"));
                 }
@@ -259,9 +297,7 @@ impl ManagedStreamTokenCustody {
                     sequence,
                     crate::managed::native_operation::deadline_diagnostics::InventoryPhase::Context,
                 );
-                history.validate_renewal_context(self, deadline, || {
-                    self.retained_initial_prerequisite(deadline)
-                })?;
+                history.validate_renewal_context_with_imports(self, deadline, imports)?;
             }
         }
         Ok(())
@@ -621,3 +657,7 @@ impl ManagedStreamTokenCustody {
         Ok(Reconciliation::Pending(result))
     }
 }
+
+#[cfg(test)]
+#[path = "generated_begin_scope_tests.rs"]
+mod begin_scope_tests;

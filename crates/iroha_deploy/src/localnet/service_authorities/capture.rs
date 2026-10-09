@@ -2,8 +2,11 @@
 
 use super::*;
 use iroha_config_base::file_source::{ConfigFileAccess, ConfigFileRequest, ConfigFileSource};
-use iroha_fs::PrivateDirectory;
-use std::{ffi::OsString, io};
+use iroha_fs::{PrivateDirectory, PrivateFileComparison, PrivateReadTreeScope};
+use std::{
+    ffi::{OsStr, OsString},
+    io,
+};
 
 const MAX_CONFIG: usize = 1024 * 1024;
 const MAX_IDENTITY: usize = 512;
@@ -95,14 +98,72 @@ impl CapturedDirectory {
         }
     }
 
-    // The sole caller brackets the complete image with native custody and closed-name checks.
-    // Each canonical read below still revalidates its retained directory before and after I/O.
+    // The root and standalone fixtures retain the same closed canonical file policy.
     fn compare_inputs(&self) -> crate::managed::Result<()> {
-        for input in &self.inputs {
-            let current = self.directory.read(input.name, input.maximum)?;
-            if current != input.bytes {
-                return Err(invalid());
+        self.compare_inputs_with(|inputs| self.directory.compare_files(inputs))
+    }
+
+    fn revalidate_in_tree(
+        &self,
+        tree: &mut PrivateReadTreeScope<'_>,
+    ) -> crate::managed::Result<()> {
+        // Keep the native census and complete-name comparison in one fresh suffix bracket.
+        // Its exit closes even empty inventories and overrides ordinary comparison errors.
+        tree.read_scope(&self.directory, |reader| match &self.inventory {
+            Some(expected) => {
+                let expected = expected.iter().cloned().collect::<BTreeSet<_>>();
+                if reader
+                    .entries(expected.len())?
+                    .into_iter()
+                    .collect::<BTreeSet<_>>()
+                    != expected
+                {
+                    return Err(Error::Invalid(
+                        "original service directory inventory differs".into(),
+                    ));
+                }
+                Ok(())
             }
+            None => Ok(()),
+        })
+    }
+
+    fn compare_inputs_in_tree(
+        &self,
+        tree: &mut PrivateReadTreeScope<'_>,
+    ) -> crate::managed::Result<()> {
+        self.compare_inputs_with(|inputs| {
+            tree.read_scope(&self.directory, |reader| reader.compare_files(inputs))
+        })
+    }
+
+    // Borrow the same fixed bounded metadata for both callers. The canonical private leaf
+    // reader owns its single zeroized buffer; exact equality is lazy and stops at the first
+    // mismatch. Empty directories remain owned solely by the surrounding inventory passes.
+    fn compare_inputs_with(
+        &self,
+        compare: impl FnOnce(&[PrivateFileComparison<'_>]) -> io::Result<bool>,
+    ) -> crate::managed::Result<()> {
+        if self.inputs.is_empty() {
+            return Ok(());
+        }
+        let mut comparisons = [PrivateFileComparison {
+            name: OsStr::new(""),
+            maximum: 0,
+            expected: &[],
+        }; INPUT_COUNT];
+        let selected = comparisons
+            .get_mut(..self.inputs.len())
+            .ok_or_else(invalid)?;
+        for (comparison, input) in selected.iter_mut().zip(&self.inputs) {
+            *comparison = PrivateFileComparison {
+                name: OsStr::new(input.name),
+                maximum: input.maximum,
+                expected: input.bytes.as_slice(),
+            };
+        }
+        if !compare(selected)? {
+            return Err(invalid());
         }
         Ok(())
     }
@@ -303,14 +364,43 @@ impl CapturedProfile {
     }
 
     pub(super) fn revalidate(&self) -> crate::managed::Result<()> {
-        for directory in &self.directories {
-            directory.revalidate()?;
+        let generation = self.directories.first().ok_or_else(invalid)?;
+        // One fresh complete profile pass, never a shared verdict across callers. The
+        // retained generation closes full ancestry on every ordinary result; descendants
+        // share only the complete identical native prefix and otherwise use full checks.
+        // Intermediate prefix observations consolidate: fully restored changes inside this
+        // readonly pass may go unobserved. This is not an atomic snapshot or unwind guard.
+        generation
+            .directory
+            .read_tree_scope(|tree| self.revalidate_in_tree(tree))
+    }
+
+    fn revalidate_in_tree(
+        &self,
+        tree: &mut PrivateReadTreeScope<'_>,
+    ) -> crate::managed::Result<()> {
+        // Keep the generation's original full checks without wrapping it in another
+        // full-fallback directory view. Only genuine descendants can share its prefix.
+        for (index, directory) in self.directories.iter().enumerate() {
+            if index == GENERATION {
+                directory.revalidate()?;
+            } else {
+                directory.revalidate_in_tree(tree)?;
+            }
         }
-        for directory in &self.directories {
-            directory.compare_inputs()?;
+        for (index, directory) in self.directories.iter().enumerate() {
+            if index == GENERATION {
+                directory.compare_inputs()?;
+            } else {
+                directory.compare_inputs_in_tree(tree)?;
+            }
         }
-        for directory in self.directories.iter().rev() {
-            directory.revalidate()?;
+        for (index, directory) in self.directories.iter().enumerate().rev() {
+            if index == GENERATION {
+                directory.revalidate()?;
+            } else {
+                directory.revalidate_in_tree(tree)?;
+            }
         }
         Ok(())
     }
@@ -417,3 +507,11 @@ pub(super) fn count_semantic_validations<T>(action: impl FnOnce() -> T) -> (T, u
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "capture/batch_comparison_tests.rs"]
+mod batch_comparison_tests;
+
+#[cfg(test)]
+#[path = "capture/tree_comparison_tests.rs"]
+mod tree_comparison_tests;

@@ -42,6 +42,19 @@ impl Fixture {
         validity_ms: u64,
         renewal_validity_ms: u64,
     ) -> Self {
+        Self::enrolled_with_policy_lifetime(
+            validity_ms,
+            renewal_validity_ms,
+            Duration::from_secs(600),
+        )
+    }
+    // The deep-history campaign selects its original finite policy before native Configure;
+    // ordinary renewal and short-expiry fixtures keep the existing ten-minute policy above.
+    pub(super) fn enrolled_with_policy_lifetime(
+        validity_ms: u64,
+        renewal_validity_ms: u64,
+        policy_lifetime: Duration,
+    ) -> Self {
         let temporary = tempfile::tempdir().unwrap();
         let ports = crate::managed::LocalnetPorts::reserve().unwrap();
         let prepared = crate::localnet::prepare_localnet_at(
@@ -58,7 +71,10 @@ impl Fixture {
         )
         .unwrap();
         let mut policy = super::transport_tests::policy(&owner);
-        policy.active_until_unix_ms = now_ms().unwrap() + 600_000;
+        policy.active_until_unix_ms = now_ms()
+            .unwrap()
+            .checked_add(u64::try_from(policy_lifetime.as_millis()).unwrap())
+            .unwrap();
         policy.max_validity_ms = renewal_validity_ms;
         policy.max_anchor_age_ms = 120_000;
         let mut native = NativeFixture::from_generated(&prepared, &owner.authority);
@@ -129,25 +145,32 @@ impl Fixture {
         (checkpoint, current)
     }
     fn select(&self, sequence: u64) -> BodyHistory {
-        self.select_with_deadline(sequence, now_ms().unwrap() + 60_000)
-    }
-    fn select_with_deadline(&self, sequence: u64, utc: u64) -> BodyHistory {
+        let utc = now_ms().unwrap() + 60_000;
         let (checkpoint, current) = self.current();
+        self.select_with_deadline(sequence, utc, &checkpoint, &current)
+    }
+    fn select_with_deadline(
+        &self,
+        sequence: u64,
+        utc: u64,
+        checkpoint: &FinalityVerifier,
+        current: &VerifiedStreamTokenCustodyStateV1,
+    ) -> BodyHistory {
         let terms = Terms::new(utc, &self.options).unwrap();
         let unsigned = self
             .owner
             .select_renewal_unsigned(
                 sequence,
                 &self.policy,
-                &current,
-                &checkpoint,
+                current,
+                checkpoint,
                 &terms,
                 self.options.deadline,
             )
             .unwrap();
         self.owner.bootstrap_native_body(
             &self.native,
-            &current,
+            current,
             CustodyPurpose::Renewal(sequence),
             unsigned,
             utc,
@@ -969,8 +992,10 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
         fixture.initial.issued_at_unix_ms + 4_000,
         Duration::from_secs(6),
     );
+    // Select the short absolute interval only after the genuine current proof is available.
+    let (checkpoint, current) = fixture.current();
     let utc = now_ms().unwrap() + 2_000;
-    let history = fixture.select_with_deadline(2, utc);
+    let history = fixture.select_with_deadline(2, utc, &checkpoint, &current);
     let (directory, original, scope) = history.dispatch().unwrap();
     let directory = PrivateDirectory::open_exact(directory.path()).unwrap();
     let account = AccountService::new(fixture.owner.authority.config.clone()).unwrap();
@@ -1066,22 +1091,25 @@ impl Fixture {
 
     // Only transport is replaced by an actually executed NativeFixture. The fresh predecessor
     // predicate, sealed live authorization, attempt transition and canonical wallet stay shared.
+    // Match production by carrying the authorization already issued for this turn through
+    // body completion and request retention, without repeating its issuance preflight.
     pub(super) fn retain_generated_attempt(
         &self,
-        turn: &mut renewal::GeneratedRenewalTurn,
+        authorization: &renewal::GeneratedRenewalAuthorization,
         history: &BodyHistory,
         historical: &VerifiedStreamTokenCustodyStateV1,
     ) -> Result<Selected<Original>> {
         use crate::managed::native_operation::authorization::DispatchAuthorization;
+        let proof_started = Instant::now();
         let (_, current) = self.current();
+        let retention_started = Instant::now();
         let deadline = self.options.deadline;
-        let authorization = turn.authorize_retained(&self.owner, history, deadline)?;
         let (directory, original, scope) = history.dispatch()?;
         let account = authorization.bind_account(self.owner.wallet()?)?;
         let Action::Enroll { validity, .. } = &original.action else {
             unreachable!()
         };
-        attempts::generated(
+        let retained = attempts::generated(
             directory,
             original.dispatch_purpose()?,
             original.digest()?,
@@ -1116,8 +1144,18 @@ impl Fixture {
                 let now = now_ms()?;
                 Ok(observed <= now && now - observed <= self.policy.max_anchor_age_ms)
             },
-        )?;
-        history.retained_selected(&self.owner)
+        )
+        .and_then(|()| history.retained_selected(&self.owner));
+        if retained.is_err() {
+            let failed_at = Instant::now();
+            eprintln!(
+                "generated request retention timing: fresh_proof_us={}, native_attempt_us={}, helper_total_us={}",
+                retention_started.duration_since(proof_started).as_micros(),
+                failed_at.duration_since(retention_started).as_micros(),
+                failed_at.duration_since(proof_started).as_micros(),
+            );
+        }
+        retained
     }
 }
 
@@ -1166,7 +1204,7 @@ impl crate::verify::finality::FinalitySource for NativeRenewalSource<'_> {
         &self,
         peer: &iroha_model_base::peer::PeerId,
         challenge: &[u8; 32],
-    ) -> std::io::Result<iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation> {
+    ) -> std::io::Result<crate::verify::finality::FinalityAttestation> {
         if let Some(trace) = self.trace {
             trace.borrow_mut().challenges.push(*challenge);
         }
@@ -1175,6 +1213,59 @@ impl crate::verify::finality::FinalitySource for NativeRenewalSource<'_> {
             peer,
             self.replay_challenge.as_ref().unwrap_or(challenge),
         )
+    }
+    fn latest_attestations(
+        &self,
+        peers: &[iroha_model_base::peer::PeerId],
+        challenge: &[u8; 32],
+    ) -> Vec<std::io::Result<crate::verify::finality::FinalityAttestation>> {
+        if norito::core::decode_limits_active() {
+            // In-process native producers retain the caller's original cumulative charges.
+            return peers
+                .iter()
+                .map(|peer| self.latest_attestation(peer, challenge))
+                .collect();
+        }
+        if let Some(trace) = self.trace {
+            trace
+                .borrow_mut()
+                .challenges
+                .extend(peers.iter().map(|_| *challenge));
+        }
+        // Match HttpFinalitySource's bounded independent peer reads. Borrow the native
+        // fixture itself, not this source's caller-only RefCell trace. Each worker produces
+        // a fresh Core attestation; Raw results retain every independent verifier check.
+        let native = self.native;
+        let challenge = *self.replay_challenge.as_ref().unwrap_or(challenge);
+        let mut results = Vec::with_capacity(peers.len());
+        for batch in peers.chunks(8) {
+            results.extend(std::thread::scope(|scope| {
+                let handles = batch
+                    .iter()
+                    .map(|peer| {
+                        std::thread::Builder::new()
+                            .name("native-renewal-read".into())
+                            .spawn_scoped(scope, move || {
+                                crate::verify::finality::FinalitySource::latest_attestation(
+                                    native, peer, &challenge,
+                                )
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                handles
+                    .into_iter()
+                    .map(|handle| match handle {
+                        Ok(handle) => handle.join().unwrap_or_else(|_| {
+                            Err(std::io::Error::other(
+                                "native renewal attestation worker panicked",
+                            ))
+                        }),
+                        Err(error) => Err(error),
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+        results
     }
 }
 
@@ -1299,8 +1390,11 @@ fn expired_unsigned_renewal_uses_new_closed_epoch_same_body_and_recovers_exact_n
     assert_eq!(progress.transaction_status, OperationStatus::Expired);
     assert!(!request_path.join("payload.json").exists());
     let mut turn = fixture.renewal_turn();
+    let authorization = turn
+        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .unwrap();
     let selected = fixture
-        .retain_generated_attempt(&mut turn, &history, &historical)
+        .retain_generated_attempt(authorization, &history, &historical)
         .unwrap();
     assert!(selected.terms.requested_deadline_unix_ms > old_utc);
     assert_ne!(selected.directory().path(), old.directory().path());
@@ -1337,7 +1431,7 @@ fn expired_unsigned_renewal_uses_new_closed_epoch_same_body_and_recovers_exact_n
             .is_err()
     );
     fixture
-        .retain_generated_attempt(&mut turn, &history, &historical)
+        .retain_generated_attempt(authorization, &history, &historical)
         .unwrap();
     assert_eq!(epochs.entries(128).unwrap().len(), 2);
     assert!(peers.requests.lock().unwrap().is_empty());
@@ -1585,8 +1679,10 @@ fn expired_original_attester_body_is_terminal_without_epoch_or_wallet_replacemen
         fixture.initial.issued_at_unix_ms + 2_000,
         Duration::from_secs(4),
     );
+    // Select the short absolute interval only after the genuine current proof is available.
+    let (checkpoint, current) = fixture.current();
     let utc = now_ms().unwrap() + 2_000;
-    let history = fixture.select_with_deadline(2, utc);
+    let history = fixture.select_with_deadline(2, utc, &checkpoint, &current);
     let (directory, original, scope) = history.dispatch().unwrap();
     let directory = PrivateDirectory::open_exact(directory.path()).unwrap();
     let Action::Enroll { validity, .. } = &original.action else {
@@ -1967,3 +2063,6 @@ fn generated_pending_signed_body_requires_fresh_quorum_before_dispatch_and_prese
         wire
     );
 }
+
+#[path = "renewal_tests/batch_tests.rs"]
+mod batch_tests;

@@ -5,6 +5,9 @@
 //! Blacklist history insertion and quota-array rebuilding are separate hard
 //! relations; their changed roots are not accepted solely by this module.
 
+/// Fixed-layout effects for the single five-kind RefreshPolicy sigma source.
+pub mod selected;
+
 use ff::Field;
 use iroha_pasta::Fp;
 use iroha_plonk::frontend::{Error, Region};
@@ -321,7 +324,7 @@ fn increasing(
     uint.assert_lt(region, &old, &new)
 }
 
-fn mask(
+pub(crate) fn mask(
     uint: &mut UintChip<'_, Fp>,
     region: &mut Region<'_, Fp>,
     word: &Word<Fp>,

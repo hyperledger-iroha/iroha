@@ -4,14 +4,12 @@ use ff::{Field, PrimeField};
 use group::prime::PrimeCurveAffine;
 use iroha_pasta::{
     PastaCurve,
-    fold::fold_generators_vartime,
-    msm::{MemoryBudget, SharedMemoryBudget, msm_public_with_shared_budget},
+    fold::fold_generators_cancellable,
+    msm::{MemoryBudget, SharedMemoryBudget, msm_public_cancellable},
     poseidon::PoseidonField,
 };
 use iroha_plonk::{
-    pcs::ipa::{
-        PinnedParams, commit::msm_complete_with_shared_budget, fold_evaluation, fold_scalars,
-    },
+    pcs::ipa::{PinnedParams, commit::msm_complete_cancellable, fold_evaluation, fold_scalars},
     transcript::{
         BasePoseidonHash, Transcript, TranscriptRead, TranscriptReader, TranscriptWrite,
         TranscriptWriter, decode_point, decode_scalar,
@@ -30,6 +28,8 @@ pub struct FoldConfig {
     pub kernel_budget: MemoryBudget,
     /// Shared admission for concurrently live kernel scratch.
     pub shared_budget: SharedMemoryBudget,
+    /// One-way signal shared with the wallet scheduler for this operation.
+    pub cancellation: Option<iroha_pasta::CancellationToken>,
 }
 
 impl Default for FoldConfig {
@@ -37,6 +37,7 @@ impl Default for FoldConfig {
         Self {
             kernel_budget: MemoryBudget::new(64 << 20),
             shared_budget: SharedMemoryBudget::process_default(),
+            cancellation: None,
         }
     }
 }
@@ -191,6 +192,7 @@ pub fn create_fold<C: PastaCurve>(
 where
     C::Base: PoseidonField,
 {
+    iroha_pasta::CancellationToken::checkpoint(config.cancellation.as_ref())?;
     params.require_k(K_U32).map_err(Error::Parameters)?;
     let salt_value = decode_scalar::<C::Base>(&salt)?;
     let mut transcript = TranscriptWriter::<C, _>::new(BasePoseidonHash::with_domain(*b"pipa-as1"));
@@ -198,6 +200,7 @@ where
     let mut coefficients = vec![C::ScalarExt::ZERO; GENERATORS];
     let mut weight = C::ScalarExt::ONE;
     for input in inputs {
+        iroha_pasta::CancellationToken::checkpoint(config.cancellation.as_ref())?;
         let source = &input.challenges()[K - input.source_k() as usize..];
         let values = fold_scalars(source, weight);
         for (coefficient, value) in coefficients.iter_mut().zip(values) {
@@ -217,25 +220,28 @@ where
     let auxiliary = params.params().u().to_curve();
     let mut challenges = [C::ScalarExt::ZERO; K];
     for (round, challenge) in challenges.iter_mut().enumerate() {
+        iroha_pasta::CancellationToken::checkpoint(config.cancellation.as_ref())?;
         let half = coefficients.len() / 2;
         let left_value = inner_product(&coefficients[half..], &powers[..half]);
         let right_value = inner_product(&coefficients[..half], &powers[half..]);
-        let left = (msm_public_with_shared_budget::<C>(
+        let left = (msm_public_cancellable::<C>(
             &coefficients[half..],
             &generators[..half],
             config.kernel_budget,
             &config.shared_budget,
+            config.cancellation.as_ref(),
         )
-        .map_err(|_| Error::FoldEquation)?
+        .map_err(Error::from)?
             + auxiliary * (left_value * zeta))
             .to_affine();
-        let right = (msm_public_with_shared_budget::<C>(
+        let right = (msm_public_cancellable::<C>(
             &coefficients[..half],
             &generators[half..],
             config.kernel_budget,
             &config.shared_budget,
+            config.cancellation.as_ref(),
         )
-        .map_err(|_| Error::FoldEquation)?
+        .map_err(Error::from)?
             + auxiliary * (right_value * zeta))
             .to_affine();
         transcript.write_point(&left)?;
@@ -251,7 +257,7 @@ where
         }
         coefficients.truncate(half);
         powers.truncate(half);
-        fold_generators::<C>(&mut generators, *challenge, config);
+        fold_generators::<C>(&mut generators, *challenge, config)?;
         generators.truncate(half);
     }
     transcript.write_scalar(&coefficients[0]);
@@ -283,6 +289,7 @@ pub fn verify_fold<C: PastaCurve>(
 where
     C::Base: PoseidonField,
 {
+    iroha_pasta::CancellationToken::checkpoint(config.cancellation.as_ref())?;
     params.require_k(K_U32).map_err(Error::Parameters)?;
     let mut transcript =
         TranscriptReader::<C, _>::new(BasePoseidonHash::with_domain(*b"pipa-as1"), &witness.body);
@@ -291,6 +298,7 @@ where
     let mut scalars = Vec::with_capacity(2 * K + 3);
     let mut challenges = [C::ScalarExt::ZERO; K];
     for (round, challenge) in challenges.iter_mut().enumerate() {
+        iroha_pasta::CancellationToken::checkpoint(config.cancellation.as_ref())?;
         let left = transcript.read_point()?;
         let right = transcript.read_point()?;
         *challenge = transcript.squeeze_challenge();
@@ -309,12 +317,13 @@ where
         -final_coefficient,
     ]);
     let equation = combined_commitment(inputs, alpha)
-        + msm_complete_with_shared_budget::<C>(
+        + msm_complete_cancellable::<C>(
             &scalars,
             &points,
             config.kernel_budget,
             &config.shared_budget,
-        );
+            config.cancellation.as_ref(),
+        )?;
     if !bool::from(equation.is_identity()) {
         return Err(Error::FoldEquation);
     }
@@ -330,29 +339,38 @@ fn inner_product<F: Field>(left: &[F], right: &[F]) -> F {
 /// At most 2048 pairs enter the existing accelerated Pasta fold at a time.
 /// Its 32 field-array lanes plus the copied affine pairs, vector headers and
 /// two wNAF recodings fit within 3 MiB, independent of Rayon worker count.
+///
+/// # Errors
+/// Returns cancellation only after the active chunk and all its workers join.
 pub fn fold_generators<C: PastaCurve>(
     generators: &mut [C::AffineExt],
     challenge: C::ScalarExt,
     config: &FoldConfig,
-) {
+) -> Result<(), Error> {
     const SCRATCH: usize = 3 << 20;
+    iroha_pasta::CancellationToken::checkpoint(config.cancellation.as_ref())?;
     let reservation = (config.kernel_budget.bytes() >= SCRATCH)
         .then(|| config.shared_budget.try_reserve(SCRATCH))
         .flatten();
     let half = generators.len() / 2;
     let (low, high) = generators.split_at_mut(half);
     if reservation.is_none() {
-        for (low, high) in low.iter_mut().zip(high) {
+        for (index, (low, high)) in low.iter_mut().zip(high).enumerate() {
+            if index % 256 == 0 {
+                iroha_pasta::CancellationToken::checkpoint(config.cancellation.as_ref())?;
+            }
             *low = (low.to_curve() + high.to_curve() * challenge).to_affine();
         }
-        return;
+        return Ok(());
     }
     let mut chunk = Vec::with_capacity(2 * half.min(2048));
     for (low, high) in low.chunks_mut(2048).zip(high.chunks(2048)) {
         chunk.clear();
         chunk.extend_from_slice(low);
         chunk.extend_from_slice(high);
-        fold_generators_vartime::<C>(&mut chunk, &challenge);
+        fold_generators_cancellable::<C>(&mut chunk, &challenge, config.cancellation.as_ref())?;
         low.copy_from_slice(&chunk[..low.len()]);
     }
+    iroha_pasta::CancellationToken::checkpoint(config.cancellation.as_ref())?;
+    Ok(())
 }

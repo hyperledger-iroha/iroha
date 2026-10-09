@@ -186,7 +186,7 @@ enum KagemushaWalletAppleKeyGenerationV1: Equatable {
   case generated(publicKey: Data)
   /// A key already exists; it is never replaced.
   case alreadyPresent
-  /// Unknown; the provider probes again before acting.
+  /// Unknown; original-return recovery and the independent key probe remain fallible.
   case unavailable(KagemushaWalletAppleUnavailableV1)
 }
 
@@ -268,6 +268,19 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   let system: KagemushaWalletAppleSystemV1
   let appAttest: any KagemushaWalletAppAttestServiceV1
   private let generationLock = NSLock()
+  // Only actual successful SecKeyCreateRandomKey returns enter this map. A Keychain
+  // lookup never reconstructs an original, and this same platform object owns its lifetime.
+  private final class GeneratedOriginal {
+    let key: SecKey
+    let request: KagemushaWalletAppleKeyGenerationRequestV1
+    var publicKey: Data?
+
+    init(key: SecKey, request: KagemushaWalletAppleKeyGenerationRequestV1) {
+      self.key = key
+      self.request = request
+    }
+  }
+  private var generationReplies: [KagemushaWalletAppleSlotV1: GeneratedOriginal] = [:]
   private let rootStateLock = NSLock()
   private var rootVerified = false
 
@@ -276,7 +289,7 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   ///
   /// - Parameters:
   ///   - appAttest: App Attest service of enrollment step E5
-  ///     (``attestEnrollment(slot:paymentPublicKey:challengeDigest:)``); key generation is
+  ///     (``KagemushaWalletEnrollmentV1/collectAppleEvidence(platform:target:requireCurrent:)``); key generation is
   ///     refused where it is unsupported.
   ///   - applicationIdentifierPrefix: the app's App ID prefix (normally its Team ID); with the
   ///     main bundle identifier it names the app's own keychain access group.
@@ -503,12 +516,15 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
   /// Generate the slot's payment key (Rust `key_generate`). The provider calls it only after a
   /// definitive absent probe; the adapter probes again under its lock and never replaces a
   /// key. Generation is refused without a Secure Enclave, App Attest support or a device
-  /// passcode. Any unknown outcome is unavailable, so the provider probes again before acting.
+  /// passcode. Unknown readback remains unavailable; recovery never replaces a returned key.
   func keyGenerate(
     _ slot: KagemushaWalletAppleSlotV1, _ request: KagemushaWalletAppleKeyGenerationRequestV1
   ) -> KagemushaWalletAppleKeyGenerationV1 {
     generationLock.lock()
     defer { generationLock.unlock() }
+    // A successful vendor return consumes this slot even if later readback is unknown.
+    // Only the readback-only recovery operation can finish its original result.
+    if generationReplies[slot] != nil { return .alreadyPresent }
     switch keyProbe(slot) {
     case .present: return .alreadyPresent
     case .unavailable(let reason): return .unavailable(reason)
@@ -535,12 +551,41 @@ public final class KagemushaWalletApplePlatformV1: @unchecked Sendable {
       if failure.osStatus == errSecDuplicateItem { return .alreadyPresent }
       return .unavailable(securityFailure("payment key generation failed", slot: slot, failure))
     }
-    guard let publicKey = Self.x963PublicKey(of: created) else {
-      diagnose("generated payment key public key cannot be exported", slot: slot)
-      return .unavailable(.keyUnusable)
+    // Retain the actual SecKey before public export, protected-data or Keychain reads.
+    let original = GeneratedOriginal(key: created, request: request)
+    generationReplies[slot] = original
+    return readBackGenerated(slot, original)
+  }
+
+  /// Retry readback of this platform object's actual successful generation return.
+  /// Nil means no successful return was retained, not that a key is absent. This method
+  /// never creates, signs with, deletes, replaces or reconstructs a key.
+  func recoverGenerationReply(
+    _ slot: KagemushaWalletAppleSlotV1, _ request: KagemushaWalletAppleKeyGenerationRequestV1
+  ) -> KagemushaWalletAppleKeyGenerationV1? {
+    generationLock.lock()
+    defer { generationLock.unlock() }
+    guard let original = generationReplies[slot] else { return nil }
+    guard original.request == request else { return .some(.unavailable(.keyUnusable)) }
+    return readBackGenerated(slot, original)
+  }
+
+  /// Called only while holding generationLock, from a retained actual SecKey return.
+  private func readBackGenerated(
+    _ slot: KagemushaWalletAppleSlotV1, _ original: GeneratedOriginal
+  ) -> KagemushaWalletAppleKeyGenerationV1 {
+    if case .failure(let reason) = storageState() { return .unavailable(reason) }
+    if original.publicKey == nil {
+      guard let publicKey = Self.x963PublicKey(of: original.key) else {
+        diagnose("generated payment key public key cannot be exported", slot: slot)
+        return .unavailable(.keyUnusable)
+      }
+      // Keep the original public bytes before the subsequent Keychain read can fail.
+      original.publicKey = publicKey
     }
-    switch keyProbe(slot) {
-    case .present(let stored) where stored == publicKey:
+    guard let publicKey = original.publicKey else { return .unavailable(.keyUnusable) }
+    switch bracketed({ lookupPaymentKey(slot) }) {
+    case .present(let stored) where stored.publicKey == publicKey && stored.label == original.request.label:
       return .generated(publicKey: publicKey)
     case .present:
       diagnose("generated payment key differs from the stored key", slot: slot)

@@ -102,11 +102,11 @@ pub mod endorsement;
 pub mod governance;
 /// Ministry agenda intake instructions.
 pub mod ministry;
-/// Owned trait-object wrapper for any [`crate::isi::Instruction`].
+/// Canonical registered instruction storage.
 ///
-/// This newtype wraps `Box<dyn Instruction>` to allow implementing blanket traits
-/// (e.g., `Send`/`Sync`) and to provide a stable, crate-owned type across the
-/// codebase while preserving existing ergonomics via `Deref` to `dyn Instruction`.
+/// Ordinary instructions own their trait object. Native AMX proof instructions can instead
+/// retain an exact physically charged shared graph; both storage choices borrow the same
+/// registered instruction, encode the same Norito tuple and execute the same native host.
 ///
 /// # Examples
 /// ```rust
@@ -116,7 +116,20 @@ pub mod ministry;
 ///     InstructionBox::from(Log::new(Level::INFO, "trait objects".into()));
 /// ```
 #[repr(transparent)]
-pub struct InstructionBox(Box<dyn Instruction>);
+pub struct InstructionBox(InstructionStorage);
+
+mod amx_owner;
+pub use amx_owner::{AmxInstructionAdmissionErrorV1, PendingAmxInstructionV1};
+
+enum InstructionStorage {
+    Boxed(Box<dyn Instruction>),
+    Amx(amx_owner::SharedAmxInstruction),
+}
+impl InstructionBox {
+    fn from_boxed(instruction: Box<dyn Instruction>) -> Self {
+        Self(InstructionStorage::Boxed(instruction))
+    }
+}
 impl norito::NoritoSchema for InstructionBox {
     fn nominal_name() -> String {
         "iroha_data_model::isi::InstructionBox".to_owned()
@@ -130,7 +143,10 @@ impl norito::NoritoSchema for InstructionBox {
 impl core::ops::Deref for InstructionBox {
     type Target = dyn Instruction;
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        match &self.0 {
+            InstructionStorage::Boxed(instruction) => &**instruction,
+            InstructionStorage::Amx(owner) => owner.registered(),
+        }
     }
 }
 impl core::fmt::Display for InstructionBox {
@@ -147,8 +163,19 @@ impl core::fmt::Debug for InstructionBox {
 }
 impl Clone for InstructionBox {
     fn clone(&self) -> Self {
-        // Use the object-safe clone-on-trait mechanism.
-        self.0.dyn_box_clone()
+        match &self.0 {
+            InstructionStorage::Boxed(instruction) => instruction.dyn_box_clone(),
+            InstructionStorage::Amx(owner) => {
+                #[cfg(all(test, sumeragi_model_mutation = "DM1"))]
+                {
+                    owner.registered().dyn_box_clone()
+                }
+                #[cfg(not(all(test, sumeragi_model_mutation = "DM1")))]
+                {
+                    Self(InstructionStorage::Amx(owner.clone()))
+                }
+            }
+        }
     }
 }
 impl PartialEq for InstructionBox {
@@ -178,7 +205,7 @@ macro_rules! impl_direct_instruction_box {
         $(
             impl From<$instruction> for InstructionBox {
                 fn from(instruction: $instruction) -> Self {
-                    InstructionBox(Box::new(instruction))
+                    InstructionBox::from_boxed(Box::new(instruction))
                 }
             }
         )+
@@ -273,7 +300,7 @@ macro_rules! impl_nexus_program_instruction_box {
         $(
             impl From<crate::isi::nexus::$ty> for InstructionBox {
                 fn from(i: crate::isi::nexus::$ty) -> Self {
-                    InstructionBox(Box::new(i))
+                    InstructionBox::from_boxed(Box::new(i))
                 }
             }
         )+
@@ -353,6 +380,9 @@ impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
 impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);
 // Allow direct boxing of consensus key lifecycle instructions.
 impl_direct_instruction_box!(crate::isi::register::RegisterCommitteePeerWithPop);
+impl_direct_instruction_box!(
+    crate::isi::register_dataspace_asset_definition::RegisterDataspaceAssetDefinition
+);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RegisterConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RotateConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::DisableConsensusKey);
@@ -465,7 +495,7 @@ macro_rules! impl_sorafs_reserve_instruction_box {
         $(
             impl From<$instruction> for InstructionBox {
                 fn from(instruction: $instruction) -> Self {
-                    InstructionBox(Box::new(instruction))
+                    InstructionBox::from_boxed(Box::new(instruction))
                 }
             }
         )+
@@ -520,7 +550,7 @@ macro_rules! impl_musubi_instruction_box {
         $(
             impl From<crate::isi::musubi::$instruction> for InstructionBox {
                 fn from(i: crate::isi::musubi::$instruction) -> Self {
-                    InstructionBox(Box::new(i))
+                    InstructionBox::from_boxed(Box::new(i))
                 }
             }
         )+
@@ -692,7 +722,7 @@ pub trait Instruction: InstructionDynClone + seal::Instruction + Send + Sync + '
         Self: Sized,
     {
         // Coerce `Box<Self>` to `Box<dyn Instruction>` and wrap
-        InstructionBox(self)
+        InstructionBox::from_boxed(self)
     }
 }
 /// Marker trait for built-in instructions.
@@ -761,7 +791,7 @@ where
     T: Instruction + Clone,
 {
     fn dyn_box_clone(&self) -> InstructionBox {
-        InstructionBox(Box::new(self.clone()))
+        InstructionBox::from_boxed(Box::new(self.clone()))
     }
 }
 fn instruction_tuple_flags() -> u8 {
@@ -1632,7 +1662,7 @@ where
 {
     let _guard = norito::core::DecodeFlagsGuard::enter(header_flags);
     let instruction = norito::decode_from_bytes::<T>(input)?;
-    Ok(InstructionBox(Box::new(instruction)))
+    Ok(InstructionBox::from_boxed(Box::new(instruction)))
 }
 fn decode_instruction_payload_from_slice<T>(
     input: &[u8],
@@ -1644,7 +1674,7 @@ where
 {
     let _guard = norito::core::DecodeFlagsGuard::enter(header_flags);
     let instruction = norito::core::from_bytes_view(input)?.decode::<T>()?;
-    Ok(InstructionBox(Box::new(instruction)))
+    Ok(InstructionBox::from_boxed(Box::new(instruction)))
 }
 pub(crate) fn read_aos_field<'a>(
     bytes: &'a [u8],
@@ -1824,7 +1854,7 @@ macro_rules! impl_into_box {
     ( $($isi:ty)|* => $middle:ty ) => {
         impl From<$middle> for InstructionBox {
             fn from(instruction: $middle) -> Self {
-                InstructionBox(Box::new(instruction))
+                InstructionBox::from_boxed(Box::new(instruction))
             }
         }
         $(impl From<$isi> for InstructionBox {
@@ -1972,6 +2002,8 @@ pub mod private_settlement;
 pub mod ram_lfe;
 /// Registration-related instructions (accounts, assets, domains, etc.).
 pub mod register;
+/// Asset definitions registered directly in an explicit dataspace namespace.
+pub mod register_dataspace_asset_definition;
 /// Instruction registries shared across instruction families.
 pub mod registry;
 mod registry_install;
@@ -2026,6 +2058,7 @@ pub use oracle::*;
 pub use privacy::*;
 pub use ram_lfe::*;
 pub use register::*;
+pub use register_dataspace_asset_definition::*;
 pub use repo::*;
 pub use settlement::*;
 pub use soradns::*;
@@ -2730,6 +2763,7 @@ pub mod error {
             crate :: DeriveJsonSerialize,
             crate :: DeriveJsonDeserialize,
             thiserror::Error,
+            derive_more::Constructor,
         )]
         pub struct RepetitionError {
             /// Instruction type
@@ -2835,6 +2869,7 @@ pub mod prelude {
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
         },
         register::{Register, RegisterBox, Unregister, UnregisterBox},
+        register_dataspace_asset_definition::RegisterDataspaceAssetDefinition,
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
         retail_daily_limit::{
             ActivateRetailDailyLimitV1, BindRetailIdentityV1, RetailMonetaryMovementV1,

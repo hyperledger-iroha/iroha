@@ -764,7 +764,7 @@ public enum ToriiIdentifierNormalization: String, Codable, Sendable {
         case .exact:
             return trimmed
         case .lowercaseTrimmed:
-            return trimmed.lowercased()
+            return Self.asciiCase(trimmed, lower: true)
         case .phoneE164:
             let compact = trimmed.filter { !" \t\n\r-().".contains($0) }
             let withoutPrefix: Substring
@@ -775,12 +775,12 @@ public enum ToriiIdentifierNormalization: String, Codable, Sendable {
             } else {
                 withoutPrefix = Substring(compact)
             }
-            guard !withoutPrefix.isEmpty, withoutPrefix.allSatisfy(\.isNumber) else {
+            guard (2...15).contains(withoutPrefix.utf8.count), withoutPrefix.first != "0", withoutPrefix.utf8.allSatisfy({ (0x30...0x39).contains($0) }) else {
                 throw ToriiClientError.invalidPayload("\(field) must contain digits with optional leading `+` or `00`.")
             }
             return "+\(withoutPrefix)"
         case .emailAddress:
-            let lowered = trimmed.lowercased()
+            let lowered = Self.asciiCase(trimmed, lower: true)
             let components = lowered.split(separator: "@", omittingEmptySubsequences: false)
             guard components.count == 2,
                   !components[0].isEmpty,
@@ -790,9 +790,8 @@ public enum ToriiIdentifierNormalization: String, Codable, Sendable {
             }
             return lowered
         case .accountNumber:
-            let normalized = trimmed
-                .filter { !" \t\n\r-".contains($0) }
-                .uppercased()
+            let compact = trimmed.filter { !" \t\n\r-".contains($0) }
+            let normalized = Self.asciiCase(compact, lower: false)
             guard !normalized.isEmpty,
                   normalized.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "/" || $0 == ".") })
             else {
@@ -800,6 +799,13 @@ public enum ToriiIdentifierNormalization: String, Codable, Sendable {
             }
             return normalized
         }
+    }
+    private static func asciiCase(_ value: String, lower: Bool) -> String {
+        String(decoding: value.utf8.map { byte in
+            if lower && (0x41...0x5A).contains(byte) { return byte + 32 }
+            if !lower && (0x61...0x7A).contains(byte) { return byte - 32 }
+            return byte
+        }, as: UTF8.self)
     }
 }
 
@@ -811,6 +817,7 @@ public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
     public let normalization: ToriiIdentifierNormalization
     public let resolverPublicKey: String
     public let outputOpeningPublicKey: String
+    public let phoneRetailAttestorPublicKey: String?
     public let backend: String
     public let inputEncryption: String?
     public let inputEncryptionPublicParameters: String?
@@ -827,6 +834,7 @@ public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
         case normalization
         case resolverPublicKey = "resolver_public_key"
         case outputOpeningPublicKey = "output_opening_public_key"
+        case phoneRetailAttestorPublicKey = "phone_retail_attestor_public_key"
         case backend
         case inputEncryption = "input_encryption"
         case inputEncryptionPublicParameters = "input_encryption_public_parameters"
@@ -849,7 +857,8 @@ public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
                 inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters?,
                 ramFheProfile: ToriiIdentifierRamFheProfile?,
                 proofVerifier: ToriiRamLfeProofVerifierMetadata?,
-                note: String?) {
+                note: String?,
+                phoneRetailAttestorPublicKey: String? = nil) {
         self.policyId = policyId
         self.programId = programId
         self.owner = owner
@@ -864,6 +873,7 @@ public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
         self.ramFheProfile = ramFheProfile
         self.proofVerifier = proofVerifier
         self.note = note
+        self.phoneRetailAttestorPublicKey = phoneRetailAttestorPublicKey
     }
 
     public init(from decoder: Decoder) throws {
@@ -948,7 +958,8 @@ public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
                 from: container,
                 forKey: .note,
                 debugName: "identifier policy.note"
-            )
+            ),
+            phoneRetailAttestorPublicKey: try ToriiIdentifierReceiptWireValue.exactOptionalString(from: container, forKey: .phoneRetailAttestorPublicKey, debugName: "identifier policy.phone_retail_attestor_public_key")
         )
     }
 
@@ -967,7 +978,8 @@ public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
             inputEncryptionPublicParametersDecoded: inputEncryptionPublicParametersDecoded,
             ramFheProfile: ramFheProfile,
             proofVerifier: proofVerifier,
-            note: note
+            note: note,
+            phoneRetailAttestorPublicKey: phoneRetailAttestorPublicKey
         )
     }
 }
@@ -1272,15 +1284,9 @@ fileprivate enum ToriiIdentifierReceiptWireValue {
     }
 
     static func normalizedOpaqueId(_ raw: String, field: String = "payload.opaque_id") throws -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed == raw else {
-            throw ToriiClientError.invalidPayload("\(field) must not contain surrounding whitespace.")
-        }
-        let lower = raw.lowercased()
-        guard lower.hasPrefix("opaque:") else {
-            return lower
-        }
-        return "opaque:\(try normalizedHash(String(raw.dropFirst(7)), field: field))"
+        guard raw.hasPrefix("opaque:") else { throw ToriiClientError.invalidPayload("\(field) must be exact opaque:lowerhex32.") }
+        _ = try ToriiIdentifierOwnerContract.hash32(String(raw.dropFirst(7)), field: field)
+        return raw
     }
 
     static func normalizedUaid(_ raw: String, field: String = "payload.uaid") throws -> String {
@@ -1447,21 +1453,27 @@ fileprivate enum ToriiIdentifierReceiptWireValue {
         guard container.contains(key) else {
             return nil
         }
-        return try normalizedHash(try container.decode(String.self, forKey: key), field: key.stringValue)
+        return try ToriiIdentifierOwnerContract.decodeString(from: container, forKey: key) {
+            try ToriiIdentifierOwnerContract.hash32($0, field: key.stringValue)
+        }
     }
 
     static func normalizedOpaqueId<K: CodingKey>(
         from container: KeyedDecodingContainer<K>,
         forKey key: K
     ) throws -> String {
-        try normalizedOpaqueId(try container.decode(String.self, forKey: key), field: key.stringValue)
+        try ToriiIdentifierOwnerContract.decodeString(from: container, forKey: key) {
+            try normalizedOpaqueId($0, field: key.stringValue)
+        }
     }
 
     static func normalizedUaid<K: CodingKey>(
         from container: KeyedDecodingContainer<K>,
         forKey key: K
     ) throws -> String {
-        try normalizedUaid(try container.decode(String.self, forKey: key), field: key.stringValue)
+        try ToriiIdentifierOwnerContract.decodeString(from: container, forKey: key) {
+            try normalizedUaid($0, field: key.stringValue)
+        }
     }
 
     static func exactAccountId<K: CodingKey>(
@@ -1644,6 +1656,92 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
         policyId.writeField(CompactNorito.encodeString(policyKind))
         policyId.writeField(CompactNorito.encodeString(businessRule))
 
+        let executionPayloadBytes = try encodeExecutionPayload(execution)
+
+        let opening = payload.opening
+        var openingProgramId = CompactNoritoWriter()
+        openingProgramId.writeField(
+            CompactNorito.encodeString(
+                try exactNonEmpty(
+                    opening.payload.programId,
+                    field: "payload.opening.payload.programId"
+                )
+            )
+        )
+        var openingPayload = CompactNoritoWriter()
+        openingPayload.writeField(openingProgramId.data)
+        openingPayload.writeField(
+            try encodeHash(
+                opening.payload.inputCiphertextHash,
+                field: "payload.opening.payload.inputCiphertextHash"
+            )
+        )
+        openingPayload.writeField(
+            try encodeHash(
+                opening.payload.outputCiphertextHash,
+                field: "payload.opening.payload.outputCiphertextHash"
+            )
+        )
+        openingPayload.writeField(
+            try encodeHash(
+                opening.payload.parameterDigest,
+                field: "payload.opening.payload.parameterDigest"
+            )
+        )
+        openingPayload.writeField(
+            try encodeHash(
+                opening.payload.evaluationKeyDigest,
+                field: "payload.opening.payload.evaluationKeyDigest"
+            )
+        )
+        openingPayload.writeField(
+            try encodeHash(
+                opening.payload.openedOutputHash,
+                field: "payload.opening.payload.openedOutputHash"
+            )
+        )
+        openingPayload.writeField(CompactNorito.encodeUInt64(opening.payload.openedAtMs))
+        openingPayload.writeField(
+            try CompactNorito.encodeOption(
+                opening.payload.expiresAtMs,
+                encode: CompactNorito.encodeUInt64
+            )
+        )
+        var openingWriter = CompactNoritoWriter()
+        openingWriter.writeField(openingPayload.data)
+        openingWriter.writeField(
+            encodeConstVec(
+                try decodeHex(opening.signature, field: "payload.opening.signature")
+            )
+        )
+
+        var payloadWriter = CompactNoritoWriter()
+        payloadWriter.writeField(payload.networkId.bytes)
+        payloadWriter.writeField(policyId.data)
+        payloadWriter.writeField(executionPayloadBytes)
+        payloadWriter.writeField(openingWriter.data)
+        payloadWriter.writeField(
+            try encodePrefixedHash(
+                payload.opaqueId,
+                prefix: "opaque:",
+                field: "payload.opaqueId"
+            )
+        )
+        payloadWriter.writeField(
+            try encodeHash(payload.receiptHash, field: "payload.receiptHash")
+        )
+        payloadWriter.writeField(
+            try encodePrefixedHash(
+                payload.uaid,
+                prefix: "uaid:",
+                field: "payload.uaid"
+            )
+        )
+        payloadWriter.writeField(try encodeAccountId(payload.accountId))
+        return payloadWriter.data
+    }
+
+    static func encodeExecutionPayload(_ execution: ToriiIdentifierResolutionExecutionPayload) throws -> Data {
         var programId = CompactNoritoWriter()
         programId.writeField(
             CompactNorito.encodeString(
@@ -1714,86 +1812,7 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
             )
         )
 
-        let opening = payload.opening
-        var openingProgramId = CompactNoritoWriter()
-        openingProgramId.writeField(
-            CompactNorito.encodeString(
-                try exactNonEmpty(
-                    opening.payload.programId,
-                    field: "payload.opening.payload.programId"
-                )
-            )
-        )
-        var openingPayload = CompactNoritoWriter()
-        openingPayload.writeField(openingProgramId.data)
-        openingPayload.writeField(
-            try encodeHash(
-                opening.payload.inputCiphertextHash,
-                field: "payload.opening.payload.inputCiphertextHash"
-            )
-        )
-        openingPayload.writeField(
-            try encodeHash(
-                opening.payload.outputCiphertextHash,
-                field: "payload.opening.payload.outputCiphertextHash"
-            )
-        )
-        openingPayload.writeField(
-            try encodeHash(
-                opening.payload.parameterDigest,
-                field: "payload.opening.payload.parameterDigest"
-            )
-        )
-        openingPayload.writeField(
-            try encodeHash(
-                opening.payload.evaluationKeyDigest,
-                field: "payload.opening.payload.evaluationKeyDigest"
-            )
-        )
-        openingPayload.writeField(
-            try encodeHash(
-                opening.payload.openedOutputHash,
-                field: "payload.opening.payload.openedOutputHash"
-            )
-        )
-        openingPayload.writeField(CompactNorito.encodeUInt64(opening.payload.openedAtMs))
-        openingPayload.writeField(
-            try CompactNorito.encodeOption(
-                opening.payload.expiresAtMs,
-                encode: CompactNorito.encodeUInt64
-            )
-        )
-        var openingWriter = CompactNoritoWriter()
-        openingWriter.writeField(openingPayload.data)
-        openingWriter.writeField(
-            encodeConstVec(
-                try decodeHex(opening.signature, field: "payload.opening.signature")
-            )
-        )
-
-        var payloadWriter = CompactNoritoWriter()
-        payloadWriter.writeField(policyId.data)
-        payloadWriter.writeField(executionPayload.data)
-        payloadWriter.writeField(openingWriter.data)
-        payloadWriter.writeField(
-            try encodePrefixedHash(
-                payload.opaqueId,
-                prefix: "opaque:",
-                field: "payload.opaqueId"
-            )
-        )
-        payloadWriter.writeField(
-            try encodeHash(payload.receiptHash, field: "payload.receiptHash")
-        )
-        payloadWriter.writeField(
-            try encodePrefixedHash(
-                payload.uaid,
-                prefix: "uaid:",
-                field: "payload.uaid"
-            )
-        )
-        payloadWriter.writeField(try encodeAccountId(payload.accountId))
-        return payloadWriter.data
+        return executionPayload.data
     }
 
     static func encodeAttestation(_ attestation: ToriiIdentifierReceiptAttestation) throws -> Data {
@@ -1872,7 +1891,7 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
     }
 
     private static func encodeHash(_ raw: String, field: String) throws -> Data {
-        let normalized = try ToriiIdentifierReceiptWireValue.normalizedHash(raw, field: field)
+        let normalized = try ToriiIdentifierOwnerContract.hash32(raw, field: field)
         do {
             return try CompactNorito.encodeHash(try decodeHex(normalized, field: field))
         } catch {
@@ -1905,18 +1924,9 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
     }
 
     private static func decodeHex(_ raw: String, field: String) throws -> Data {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed == raw else {
-            throw ToriiClientError.invalidPayload("\(field) must contain exact hexadecimal bytes.")
-        }
-        let normalized: String
-        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
-            normalized = String(trimmed.dropFirst(2))
-        } else {
-            normalized = trimmed
-        }
-        guard !normalized.isEmpty, let bytes = Data(hexString: normalized) else {
-            throw ToriiClientError.invalidPayload("\(field) must contain valid hexadecimal bytes.")
+        let exact = try ToriiIdentifierOwnerContract.signature(raw, field: field)
+        guard let bytes = Data(hexString: exact) else {
+            throw ToriiClientError.invalidPayload("\(field) must contain exact lowercase signature bytes.")
         }
         return bytes
     }
@@ -2033,6 +2043,7 @@ public struct ToriiRamLfeOutputOpeningPayload: Codable, Sendable {
     }
 
     public init(from decoder: Decoder) throws {
+        try ToriiIdentifierOwnerContract.fields(decoder, required: ["program_id", "input_ciphertext_hash", "output_ciphertext_hash", "parameter_digest", "evaluation_key_digest", "opened_output_hash", "opened_at_ms"], optional: ["expires_at_ms"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
         guard let programId = try ToriiIdentifierReceiptWireValue.exactProgramId(
             from: container,
@@ -2086,28 +2097,16 @@ public struct ToriiRamLfeOutputOpening: Codable, Sendable {
 
     public init(payload: ToriiRamLfeOutputOpeningPayload, signature: String) {
         self.payload = payload
-        var normalized = signature.trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
-            normalized = String(normalized.dropFirst(2))
-        }
-        self.signature = normalized.lowercased()
+        self.signature = signature
     }
 
     public init(from decoder: Decoder) throws {
+        try ToriiIdentifierOwnerContract.fields(decoder, required: ["payload", "signature"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
         payload = try container.decode(ToriiRamLfeOutputOpeningPayload.self, forKey: .payload)
-        let rawSignature = try container.decode(String.self, forKey: .signature)
-        if rawSignature.trimmingCharacters(in: .whitespacesAndNewlines) != rawSignature {
-            throw DecodingError.dataCorruptedError(
-                forKey: .signature,
-                in: container,
-                debugDescription: "opening.signature must be exact and contain no surrounding whitespace."
-            )
+        signature = try ToriiIdentifierOwnerContract.decodeString(from: container, forKey: .signature) {
+            try ToriiIdentifierOwnerContract.signature($0, field: "opening.signature")
         }
-        signature = try ToriiRequestValidation.normalizedEvenLengthHex(
-            rawSignature,
-            field: "opening.signature"
-        )
     }
 }
 
@@ -2167,6 +2166,7 @@ public struct ToriiIdentifierResolutionExecutionPayload: Codable, Sendable {
     }
 
     public init(from decoder: Decoder) throws {
+        try ToriiIdentifierOwnerContract.fields(decoder, required: ["program_id", "program_digest", "backend", "verification_mode", "input_ciphertext_hash", "output_ciphertext_hash", "parameter_digest", "evaluation_key_digest", "output_hash", "associated_data_hash", "executed_at_ms"], optional: ["expires_at_ms"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
         guard let programId = try ToriiIdentifierReceiptWireValue.exactProgramId(
             from: container,
@@ -2298,6 +2298,7 @@ public struct ToriiIdentifierResolutionExecutionPayload: Codable, Sendable {
 }
 
 public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
+    public let networkId: NetworkId
     public let policyId: String
     public let opaqueId: String
     public let receiptHash: String
@@ -2309,6 +2310,7 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
     public let opening: ToriiRamLfeOutputOpening
 
     private enum CodingKeys: String, CodingKey {
+        case networkId = "network_id"
         case policyId = "policy_id"
         case execution
         case opening
@@ -2316,17 +2318,17 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
         case receiptHash = "receipt_hash"
         case uaid
         case accountId = "account_id"
-        case resolvedAtMs = "resolved_at_ms"
-        case expiresAtMs = "expires_at_ms"
     }
 
-    public init(policyId: String,
+    public init(networkId: NetworkId,
+                policyId: String,
                 opaqueId: String,
                 receiptHash: String,
                 uaid: String,
                 accountId: String,
                 execution: ToriiIdentifierResolutionExecutionPayload,
                 opening: ToriiRamLfeOutputOpening) {
+        self.networkId = networkId
         self.policyId = policyId
         self.opaqueId = opaqueId
         self.receiptHash = receiptHash
@@ -2339,7 +2341,11 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
     }
 
     public init(from decoder: Decoder) throws {
+        try ToriiIdentifierOwnerContract.fields(decoder, required: ["network_id", "policy_id", "execution", "opening", "opaque_id", "receipt_hash", "uaid", "account_id"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        networkId = try ToriiIdentifierOwnerContract.decodeString(from: container, forKey: .networkId) {
+            try ToriiIdentifierOwnerContract.network($0)
+        }
         policyId = try ToriiIdentifierReceiptWireValue.exactReceiptPolicyId(
             from: container,
             forKey: .policyId
@@ -2393,6 +2399,7 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(ToriiIdentifierOwnerContract.rawNetwork(networkId), forKey: .networkId)
         try container.encode(policyId, forKey: .policyId)
         try container.encode(opaqueId, forKey: .opaqueId)
         try container.encode(receiptHash, forKey: .receiptHash)
@@ -2453,122 +2460,54 @@ public struct ToriiIdentifierClaimRecord: Codable, Sendable {
 
 public struct ToriiIdentifierReceiptAttestation: Codable, Sendable {
     public let kind: String
-    public let algorithm: String?
     public let signature: String?
     public let proofBackend: String?
     public let proofB64: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case kind
-        case algorithm
-        case signature
-        case proofBackend = "proof_backend"
-        case proofB64 = "proof_b64"
-    }
-
+    enum CodingKeys: String, CodingKey { case kind, signature; case proofBackend = "proof_backend", proofB64 = "proof_b64" }
     public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        kind = try container.decode(String.self, forKey: .kind)
-        if kind.trimmingCharacters(in: .whitespacesAndNewlines) != kind {
-            throw DecodingError.dataCorruptedError(
-                forKey: .kind,
-                in: container,
-                debugDescription: "identifier receipt attestation kind must be exact and contain no surrounding whitespace."
-            )
-        }
-        let decodedAlgorithm = try container.decodeIfPresent(String.self, forKey: .algorithm)
-        signature = try container.decodeIfPresent(String.self, forKey: .signature)
-        proofBackend = try container.decodeIfPresent(String.self, forKey: .proofBackend)
-        proofB64 = try container.decodeIfPresent(String.self, forKey: .proofB64)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(String.self, forKey: .kind)
         switch kind {
         case "signed":
-            guard signature?.isEmpty == false, proofBackend == nil, proofB64 == nil else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .kind,
-                    in: container,
-                    debugDescription: "signed identifier receipt attestations require only signature."
-                )
+            try ToriiIdentifierOwnerContract.fields(decoder, required: ["kind", "signature"])
+            signature = try ToriiIdentifierOwnerContract.decodeString(from: c, forKey: .signature) {
+                try ToriiIdentifierOwnerContract.modelSignature($0, field: "attestation.signature")
             }
-            let resolvedAlgorithm = decodedAlgorithm ?? SigningAlgorithm.ed25519.wireName
-            guard !resolvedAlgorithm.isEmpty,
-                  resolvedAlgorithm.trimmingCharacters(in: .whitespacesAndNewlines) == resolvedAlgorithm else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .algorithm,
-                    in: container,
-                    debugDescription: "algorithm must be exact and contain no surrounding whitespace."
-                )
-            }
-            algorithm = resolvedAlgorithm
-            if signature?.trimmingCharacters(in: .whitespacesAndNewlines) != signature {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .signature,
-                    in: container,
-                    debugDescription: "signature must be exact and contain no surrounding whitespace."
-                )
-            }
-            let signatureBody: String
-            if let signature, signature.hasPrefix("0x") || signature.hasPrefix("0X") {
-                signatureBody = String(signature.dropFirst(2))
-            } else {
-                signatureBody = signature ?? ""
-            }
-            if signatureBody.isEmpty || Data(hexString: signatureBody) == nil {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .signature,
-                    in: container,
-                    debugDescription: "signature must be valid hex."
-                )
-            }
+            proofBackend = nil; proofB64 = nil
         case "proof":
-            guard signature == nil,
-                  decodedAlgorithm == nil,
-                  proofBackend?.isEmpty == false,
-                  proofB64?.isEmpty == false else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .kind,
-                    in: container,
-                    debugDescription: "proof identifier receipt attestations require proof_backend and proof_b64."
-                )
+            try ToriiIdentifierOwnerContract.fields(decoder, required: ["kind", "proof_backend", "proof_b64"])
+            signature = nil
+            proofBackend = try ToriiIdentifierOwnerContract.decodeString(from: c, forKey: .proofBackend) {
+                try ToriiIdentifierOwnerContract.exact($0, "proof_backend")
             }
-            algorithm = nil
-            if proofBackend?.trimmingCharacters(in: .whitespacesAndNewlines) != proofBackend {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .proofBackend,
-                    in: container,
-                    debugDescription: "proof_backend must be exact and contain no surrounding whitespace."
-                )
-            }
-            if proofB64?.trimmingCharacters(in: .whitespacesAndNewlines) != proofB64 {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .proofB64,
-                    in: container,
-                    debugDescription: "proof_b64 must be exact and contain no surrounding whitespace."
-                )
-            }
-            if let proofB64, Data(base64Encoded: proofB64) == nil {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .proofB64,
-                    in: container,
-                    debugDescription: "proof_b64 must be valid base64."
-                )
+            proofB64 = try ToriiIdentifierOwnerContract.decodeString(from: c, forKey: .proofB64) {
+                let value = try ToriiIdentifierOwnerContract.exact($0, "proof_b64")
+                guard Data(base64Encoded: value) != nil else {
+                    throw ToriiClientError.invalidPayload("proof_b64 must be valid base64.")
+                }
+                return value
             }
         default:
             throw DecodingError.dataCorruptedError(
-                forKey: .kind,
-                in: container,
-                debugDescription: "identifier receipt attestation kind must be signed or proof."
-            )
+                forKey: .kind, in: c, debugDescription: "attestation.kind must be signed or proof.")
         }
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self); try c.encode(kind, forKey: .kind)
+        if let signature { try c.encode(signature.uppercased(), forKey: .signature) }
+        try c.encodeIfPresent(proofBackend, forKey: .proofBackend); try c.encodeIfPresent(proofB64, forKey: .proofB64)
     }
 }
 
 public struct ToriiIdentifierResolutionReceipt: Codable, Sendable {
     public let payload: ToriiIdentifierResolutionPayload
     public let attestation: ToriiIdentifierReceiptAttestation
+    public let phoneRetailCanonicality: ToriiPhoneRetailCanonicalityAttestationV1?
 
     private enum CodingKeys: String, CodingKey {
         case payload
         case attestation
+        case phoneRetailCanonicality = "phone_retail_canonicality"
     }
 
     public var policyId: String { payload.policyId }
@@ -2581,83 +2520,37 @@ public struct ToriiIdentifierResolutionReceipt: Codable, Sendable {
     public var backend: String { payload.execution.backend }
 
     public init(from decoder: Decoder) throws {
+        try ToriiIdentifierOwnerContract.fields(decoder, required: ["payload", "attestation"], optional: ["phone_retail_canonicality"])
         let container = try decoder.container(keyedBy: CodingKeys.self)
         payload = try container.decode(ToriiIdentifierResolutionPayload.self, forKey: .payload)
         attestation = try container.decode(ToriiIdentifierReceiptAttestation.self, forKey: .attestation)
-        _ = try ToriiIdentifierReceiptCanonicalEncoder.canonicalPayloadBytes(for: self)
-    }
-}
-
-public struct ToriiIdentifierLookupRequest: Encodable, Sendable {
-    public let policyId: String
-    public let encryptedInputHex: String
-    public let outputOpening: ToriiRamLfeOutputOpening
-
-    private enum CodingKeys: String, CodingKey {
-        case policyId = "policy_id"
-        case encryptedInputHex = "encrypted_input"
-        case outputOpening = "output_opening"
-    }
-
-    public static func encrypted(policyId: String,
-                                 encryptedInputHex: String,
-                                 outputOpening: ToriiRamLfeOutputOpening) throws -> ToriiIdentifierLookupRequest {
-        let normalizedPolicyId = try ToriiRequestValidation.normalizedNonEmpty(policyId, field: "policyId")
-        let normalizedEncryptedInput = try ToriiRequestValidation.normalizedEvenLengthHex(
-            encryptedInputHex,
-            field: "encryptedInputHex"
-        )
-        return ToriiIdentifierLookupRequest(policyId: normalizedPolicyId,
-                                            encryptedInputHex: normalizedEncryptedInput,
-                                            outputOpening: outputOpening)
-    }
-
-    public static func encrypted(policy: ToriiIdentifierPolicySummary,
-                                 encryptedInputHex: String,
-                                 outputOpening: ToriiRamLfeOutputOpening) throws -> ToriiIdentifierLookupRequest {
-        guard policy.inputEncryption?.lowercased() == "bfv-v1" else {
-            throw ToriiClientError.invalidPayload(
-                "Policy \(policy.policyId) does not publish BFV encrypted-input support."
-            )
+        phoneRetailCanonicality = try container.decodeIfPresent(ToriiPhoneRetailCanonicalityAttestationV1.self, forKey: .phoneRetailCanonicality)
+        _ = try ToriiIdentifierOwnerContract.decodedValue(at: decoder.codingPath + [CodingKeys.payload]) {
+            try ToriiIdentifierReceiptCanonicalEncoder.canonicalPayloadBytes(for: self)
         }
-        return try encrypted(
-            policyId: policy.policyId,
-            encryptedInputHex: encryptedInputHex,
-            outputOpening: outputOpening
-        )
-    }
-
-    /// Current BFV profiles are insecure and cannot encrypt application inputs.
-    public static func encrypted(policy: ToriiIdentifierPolicySummary,
-                                 input: String,
-                                 outputOpening: ToriiRamLfeOutputOpening) throws -> ToriiIdentifierLookupRequest {
-        throw ToriiClientError.ramLfeEncryptionUnavailable
     }
 }
 
 public typealias ToriiRamLfeExecutionReceipt = [String: ToriiJSONValue]
 
 public struct ToriiRamLfeExecuteRequest: Encodable, Sendable {
-    public let encryptedInputHex: String
-
-    private enum CodingKeys: String, CodingKey {
-        case encryptedInputHex = "encrypted_input"
+    public let normalizedInput: String, inputNonceHex: String
+    enum CodingKeys: String, CodingKey { case normalizedInput = "normalized_input", inputNonceHex = "input_nonce" }
+    private init(normalizedInput: String, inputNonceHex: String) throws {
+        self.normalizedInput = try ToriiIdentifierOwnerContract.input(normalizedInput)
+        self.inputNonceHex = try ToriiIdentifierOwnerContract.nonce(inputNonceHex)
     }
-
-    public static func encrypted(encryptedInputHex: String) throws -> ToriiRamLfeExecuteRequest {
-        let normalizedEncryptedInput = try ToriiRequestValidation.normalizedEvenLengthHex(
-            encryptedInputHex,
-            field: "encryptedInputHex"
-        )
-        return ToriiRamLfeExecuteRequest(encryptedInputHex: normalizedEncryptedInput)
-    }
+    public static func ownerInput(normalizedInput: String, inputNonceHex: String) throws -> Self { try Self(normalizedInput: normalizedInput, inputNonceHex: inputNonceHex) }
 }
 
 public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
     public let programId: String
+    public let programIdCanonicalHex: String
+    public let execution: ToriiIdentifierResolutionExecutionPayload
+    public let attestation: ToriiIdentifierReceiptAttestation
     public let opaqueHash: String
     public let receiptHash: String
-    public let outputCiphertext: String
+    public let opaqueOutputHex: String
     public let outputHash: String
     public let associatedDataHash: String
     public let executedAtMs: UInt64
@@ -2668,9 +2561,10 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case programId = "program_id"
+        case programIdCanonicalHex = "program_id_canonical"
         case opaqueHash = "opaque_hash"
         case receiptHash = "receipt_hash"
-        case outputCiphertext = "output_ciphertext"
+        case opaqueOutputHex = "opaque_output"
         case outputHash = "output_hash"
         case associatedDataHash = "associated_data_hash"
         case executedAtMs = "executed_at_ms"
@@ -2692,31 +2586,13 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
             forKey: .programId,
             debugName: "ram-lfe execute response.program_id"
         )
-        opaqueHash = try ToriiIdentifierReceiptWireValue.exactHash(
-            from: container,
-            forKey: .opaqueHash,
-            debugName: "ram-lfe execute response.opaque_hash"
-        )
-        receiptHash = try ToriiIdentifierReceiptWireValue.exactHash(
-            from: container,
-            forKey: .receiptHash,
-            debugName: "ram-lfe execute response.receipt_hash"
-        )
-        outputCiphertext = try ToriiIdentifierReceiptWireValue.exactEvenLengthHex(
-            from: container,
-            forKey: .outputCiphertext,
-            debugName: "ram-lfe execute response.output_ciphertext"
-        )
-        outputHash = try ToriiIdentifierReceiptWireValue.exactHash(
-            from: container,
-            forKey: .outputHash,
-            debugName: "ram-lfe execute response.output_hash"
-        )
-        associatedDataHash = try ToriiIdentifierReceiptWireValue.exactHash(
-            from: container,
-            forKey: .associatedDataHash,
-            debugName: "ram-lfe execute response.associated_data_hash"
-        )
+        programIdCanonicalHex = try container.decode(String.self, forKey: .programIdCanonicalHex)
+        let canonicalProgram = try ToriiIdentifierOwnerContract.programFrame(programIdCanonicalHex)
+        opaqueHash = try ToriiIdentifierOwnerContract.hash32(container.decode(String.self, forKey: .opaqueHash), field: "ram-lfe execute response.opaque_hash")
+        receiptHash = try ToriiIdentifierOwnerContract.hash32(container.decode(String.self, forKey: .receiptHash), field: "ram-lfe execute response.receipt_hash")
+        opaqueOutputHex = try ToriiIdentifierOwnerContract.upperHex32(container.decode(String.self, forKey: .opaqueOutputHex), field: "ram-lfe execute response.opaque_output")
+        outputHash = try ToriiIdentifierOwnerContract.hash32(container.decode(String.self, forKey: .outputHash), field: "ram-lfe execute response.output_hash")
+        associatedDataHash = try ToriiIdentifierOwnerContract.hash32(container.decode(String.self, forKey: .associatedDataHash), field: "ram-lfe execute response.associated_data_hash")
         executedAtMs = try container.decode(UInt64.self, forKey: .executedAtMs)
         expiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .expiresAtMs)
         backend = try ToriiIdentifierReceiptWireValue.exactRamLfeTag(
@@ -2731,7 +2607,27 @@ public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
             debugName: "ram-lfe execute response.verification_mode",
             kind: .verificationMode
         )
+        guard backend == ToriiIdentifierOwnerContract.backend, verificationMode == "signed" else { throw ToriiClientError.invalidPayload("Current execute requires HKDF/Signed metadata.") }
+        try ToriiIdentifierOwnerContract.lease(executedAtMs, expiresAtMs)
         receipt = try container.decode(ToriiRamLfeExecutionReceipt.self, forKey: .receipt)
+        let signed = try container.decode(ToriiIdentifierExecutionReceiptDTO.self, forKey: .receipt)
+        execution = signed.payload; attestation = signed.attestation
+        let hashes = try ToriiIdentifierOwnerContract.outputCommitments(programFrame: canonicalProgram, opaque: opaqueOutputHex)
+        guard hashes.output == outputHash, hashes.opaque == opaqueHash, hashes.receipt == receiptHash, hashes.associated == associatedDataHash,
+              execution.programId == programId, execution.backend == backend, execution.verificationMode == verificationMode,
+              execution.outputHash == outputHash, execution.outputCiphertextHash == outputHash, execution.associatedDataHash == associatedDataHash,
+              execution.executedAtMs == executedAtMs, execution.expiresAtMs == expiresAtMs, attestation.kind == "signed" else {
+            throw ToriiClientError.invalidPayload("Execute DATA differs from its original signed receipt or producer output commitments.")
+        }
+    }
+    /// Verifies the complete program-only receipt under the caller's independent current policy.
+    /// Network authentication remains the independently selected canonical HTTP request domain.
+    public func verifyExecutionResolverAttestation(using policy: ToriiRamLfeProgramPolicySummary) throws -> Bool {
+        guard policy.active, policy.programId == programId, policy.backend == ToriiIdentifierOwnerContract.backend, policy.verificationMode == "signed", let signature = attestation.signature else { throw ToriiClientError.invalidPayload("Execute receipt differs from the independently selected current program policy.") }
+        let key = try ToriiIdentifierReceiptVerifier.parsePublicKey(policy.resolverPublicKey)
+        let bytes = try ToriiIdentifierReceiptCanonicalEncoder.encodeExecutionPayload(execution)
+        guard let signatureBytes = Data(hexString: signature) else { throw ToriiClientError.invalidPayload("Invalid original execution signature.") }
+        return try ToriiIdentifierReceiptVerifier.verify(algorithm: key.algorithm, publicKey: key.publicKey, message: ToriiIdentifierReceiptVerifier.prehash(bytes), signature: signatureBytes)
     }
 }
 
@@ -2807,30 +2703,32 @@ public struct ToriiRamLfeReceiptVerifyResponse: Decodable, Sendable {
 }
 
 public extension ToriiIdentifierPolicySummary {
-    func encryptedRequest(encryptedInputHex: String,
-                          outputOpening: ToriiRamLfeOutputOpening) throws -> ToriiIdentifierLookupRequest {
-        try ToriiIdentifierLookupRequest.encrypted(
-            policy: self,
-            encryptedInputHex: encryptedInputHex,
-            outputOpening: outputOpening
-        )
+    func prepareRequest(normalizedInput: String, inputNonceHex: String) throws -> ToriiIdentifierLookupRequest {
+        try requireCurrentOwnerInput(normalizedInput)
+        return try .prepare(policyId: policyId, normalizedInput: normalizedInput, inputNonceHex: inputNonceHex)
     }
-
-    /// Current BFV profiles are insecure and cannot encrypt application inputs.
-    func encryptInput(_ input: String) throws -> String {
-        throw ToriiClientError.ramLfeEncryptionUnavailable
+    func claimRequest(normalizedInput: String, inputNonceHex: String, outputOpening: ToriiRamLfeOutputOpening, phoneRetailCanonicality: ToriiPhoneRetailCanonicalityAttestationV1? = nil) throws -> ToriiIdentifierLookupRequest {
+        try requireCurrentOwnerInput(normalizedInput)
+        guard outputOpening.payload.programId == programId else { throw ToriiClientError.invalidPayload("Original opening differs from selected policy program.") }
+        return try .claim(policyId: policyId, normalizedInput: normalizedInput, inputNonceHex: inputNonceHex, outputOpening: outputOpening, phoneRetailCanonicality: phoneRetailCanonicality)
     }
-
-    /// Current BFV profiles are insecure and cannot encrypt application inputs.
-    func encryptedRequest(input: String,
-                          outputOpening: ToriiRamLfeOutputOpening) throws -> ToriiIdentifierLookupRequest {
-        throw ToriiClientError.ramLfeEncryptionUnavailable
+    private func requireCurrentOwnerInput(_ input: String) throws {
+        guard active, backend == ToriiIdentifierOwnerContract.backend, try normalization.normalize(input) == input else { throw ToriiClientError.invalidPayload("Current identifier input requires active HKDF policy and exact normalized input.") }
+        if policyId == "phone#retail" {
+            guard programId == "phone_retail", normalization == .phoneE164, let phoneRetailAttestorPublicKey else { throw ToriiClientError.invalidPayload("Exact phone policy requires an independent governed attestor.") }
+            let independent = try ToriiIdentifierReceiptVerifier.parsePublicKey(phoneRetailAttestorPublicKey)
+            for key in [resolverPublicKey, outputOpeningPublicKey] {
+                let other = try ToriiIdentifierReceiptVerifier.parsePublicKey(key)
+                guard independent.algorithm != other.algorithm || independent.publicKey != other.publicKey else { throw ToriiClientError.invalidPayload("Phone attestor must differ from resolver and opener keys.") }
+            }
+        }
     }
-
 }
 
 public extension ToriiIdentifierResolutionReceipt {
-    func verifyAttestation(using policy: ToriiIdentifierPolicySummary) throws -> Bool {
+    /// Verifies only the complete resolver attestation, not opening/phone/ledger admission.
+    func verifyResolverAttestation(using policy: ToriiIdentifierPolicySummary, intendedNetworkId: NetworkId) throws -> Bool {
+        guard payload.networkId == intendedNetworkId else { throw ToriiClientError.invalidPayload("Receipt network differs from independently selected NetworkId.") }
         let trimmedPolicyId = policy.policyId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPolicyId.isEmpty, trimmedPolicyId == policy.policyId else {
             throw ToriiClientError.invalidPayload("policy.policy_id must not contain surrounding whitespace.")
@@ -2849,14 +2747,8 @@ public extension ToriiIdentifierResolutionReceipt {
         guard signature.trimmingCharacters(in: .whitespacesAndNewlines) == signature else {
             throw ToriiClientError.invalidPayload("attestation.signature must be exact hex.")
         }
-        let signatureBody: String
-        if signature.hasPrefix("0x") || signature.hasPrefix("0X") {
-            signatureBody = String(signature.dropFirst(2))
-        } else {
-            signatureBody = signature
-        }
-        guard let signatureBytes = Data(hexString: signatureBody) else {
-            throw ToriiClientError.invalidPayload("attestation.signature must be valid hex.")
+        guard let signatureBytes = Data(hexString: try ToriiIdentifierOwnerContract.signature(signature, field: "attestation.signature")) else {
+            throw ToriiClientError.invalidPayload("attestation.signature must be valid canonical hex.")
         }
         let verifyingKey = try ToriiIdentifierReceiptVerifier.parsePublicKey(policy.resolverPublicKey)
         let message = ToriiIdentifierReceiptVerifier.prehash(payloadBytes)
@@ -2867,10 +2759,19 @@ public extension ToriiIdentifierResolutionReceipt {
             signature: signatureBytes
         )
     }
+    /// Required structural scope before current owner transport or native claim framing.
+    func requireCurrentOwnerScope() throws {
+        guard payload.execution.backend == ToriiIdentifierOwnerContract.backend, payload.execution.verificationMode == "signed", attestation.kind == "signed" else { throw ToriiClientError.invalidPayload("Current identifier receipt requires HKDF/Signed metadata.") }
+        try ToriiIdentifierOwnerContract.lease(payload.opening.payload.openedAtMs, payload.opening.payload.expiresAtMs)
+        if payload.policyId == "phone#retail" {
+            guard let phone = phoneRetailCanonicality, phone.payload.networkId == payload.networkId, phone.payload.accountId == payload.accountId, phone.payload.uaid == payload.uaid else { throw ToriiClientError.invalidPayload("Phone receipt requires exact original signed canonicality scope.") }
+            try phone.payload.requireOriginal(payload.opening)
+        } else if phoneRetailCanonicality != nil { throw ToriiClientError.invalidPayload("Nonphone receipt contains phone canonicality.") }
+    }
 }
 
-private enum ToriiIdentifierReceiptVerifier {
-    fileprivate struct ParsedPublicKey {
+enum ToriiIdentifierReceiptVerifier {
+    struct ParsedPublicKey {
         let algorithm: SigningAlgorithm
         let publicKey: Data
     }
@@ -7935,10 +7836,6 @@ public struct ToriiVerifyingKeyListItem: Decodable, Sendable {
         }
         record = try container.decodeIfPresent(ToriiVerifyingKeyRecord.self, forKey: .record)
     }
-}
-
-private struct ToriiVerifyingKeyListResponse: Decodable {
-    let items: [ToriiVerifyingKeyListItem]
 }
 
 public struct ToriiVerifyingKeyListQuery: Sendable {
@@ -19404,50 +19301,17 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiRamLfeProgramPolicyListResponse.self, from: data)
     }
 
-    public func resolveIdentifier(
-        _ requestBody: ToriiIdentifierLookupRequest,
-        canonicalAuth: ToriiCanonicalRequestAuth
-    ) async throws -> ToriiIdentifierResolutionReceipt? {
+    public func resolveIdentifier(_ requestBody: ToriiIdentifierLookupRequest, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiIdentifierResolutionReceipt? {
+        guard requestBody.phase == "claim" else { throw ToriiClientError.invalidPayload("Resolve requires its exact original claim request.") }
+        try requireIdentifierPhoneRequestScope(requestBody)
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeCanonicalAccountRequest(
-            path: "/v1/identifiers/resolve",
-            method: .post,
-            body: body,
-            headers: [
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            ],
-            canonicalAuth: canonicalAuth
-        )
+        let request = try makeCanonicalAccountRequest(path: "/v1/identifiers/resolve", method: .post, body: body, headers: ["Content-Type": "application/json", "Accept": "application/json"], canonicalAuth: canonicalAuth)
         let (data, response) = try await send(request)
-        if response.statusCode == 404 {
-            return nil
-        }
+        if response.statusCode == 404 { return nil }
         try ensureStatus(response, in: 200..<300, responseBody: data)
-        do {
-            return try decodeJSON(ToriiIdentifierResolutionReceipt.self, from: data)
-        } catch let error as ToriiClientError {
-            if case .decoding(let underlying) = error {
-                throw ToriiClientError.invalidPayload(
-                    "claim-receipt decode failed: \(underlying.localizedDescription); \(responseBodyDescriptor(data))"
-                )
-            }
-            throw error
-        }
-    }
-
-    public func resolveIdentifier(policyId: String,
-                                  encryptedInputHex: String,
-                                  outputOpening: ToriiRamLfeOutputOpening,
-                                  canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiIdentifierResolutionReceipt? {
-        try await resolveIdentifier(
-            buildIdentifierResolveRequest(
-                policyId: policyId,
-                encryptedInputHex: encryptedInputHex,
-                outputOpening: outputOpening
-            ),
-            canonicalAuth: canonicalAuth
-        )
+        let receipt = try decodeCurrentIdentifierReceipt(data)
+        try requireIdentifierReceiptScope(receipt, requestBody: requestBody, beneficiary: nil)
+        return receipt
     }
 
     public func getIdentifierClaimByReceiptHash(_ receiptHash: String) async throws -> ToriiIdentifierClaimRecord? {
@@ -19464,91 +19328,69 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiIdentifierClaimRecord.self, from: data)
     }
 
-    public func issueIdentifierClaimReceipt(accountId: String,
-                                            requestBody: ToriiIdentifierLookupRequest,
-                                            canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiIdentifierResolutionReceipt? {
-        guard accountId == canonicalAuth.accountId else {
-            throw ToriiClientError.invalidPayload(
-                "canonicalAuth.accountId must equal the claim-receipt path accountId."
-            )
-        }
+    /// Prepares an original opening for a beneficiary which may differ from the policy owner.
+    public func prepareIdentifierClaim(accountId: String, requestBody: ToriiIdentifierLookupRequest, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiIdentifierPrfPrepareResponse? {
+        guard requestBody.phase == "prepare" else { throw ToriiClientError.invalidPayload("Prepare endpoint requires phase=prepare.") }
+        _ = try exactCanonicalToriiAccountAddress(accountId)
         let encodedAccountId = try encodeAccountIdPath(accountId)
         let body = try JSONEncoder().encode(requestBody)
-        let request = try makeCanonicalAccountRequest(
-            path: "/v1/accounts/\(encodedAccountId)/identifiers/claim-receipt",
-            method: .post,
-            body: body,
-            headers: [
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            ],
-            canonicalAuth: canonicalAuth
-        )
+        let request = try makeCanonicalAccountRequest(path: "/v1/accounts/\(encodedAccountId)/identifiers/claim-receipt", method: .post, body: body, headers: ["Content-Type": "application/json", "Accept": "application/json"], canonicalAuth: canonicalAuth)
         let (data, response) = try await send(request)
-        if response.statusCode == 404 {
-            return nil
-        }
+        if response.statusCode == 404 { return nil }
         try ensureStatus(response, in: 200..<300, responseBody: data)
-        do {
-            return try decodeJSON(ToriiIdentifierResolutionReceipt.self, from: data)
-        } catch let error as ToriiClientError {
+        let prepared = try decodeJSON(ToriiIdentifierPrfPrepareResponse.self, from: data)
+        guard prepared.networkId == localSigningContext?.networkId, prepared.policyId == requestBody.policyId, prepared.accountId == accountId else { throw ToriiClientError.invalidPayload("Prepare response differs from independently selected network, policy or beneficiary.") }
+        return prepared
+    }
+
+    public func issueIdentifierClaimReceipt(accountId: String, requestBody: ToriiIdentifierLookupRequest, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiIdentifierResolutionReceipt? {
+        guard requestBody.phase == "claim" else { throw ToriiClientError.invalidPayload("Claim receipt requires phase=claim.") }
+        _ = try exactCanonicalToriiAccountAddress(accountId)
+        try requireIdentifierPhoneRequestScope(requestBody)
+        let encodedAccountId = try encodeAccountIdPath(accountId)
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeCanonicalAccountRequest(path: "/v1/accounts/\(encodedAccountId)/identifiers/claim-receipt", method: .post, body: body, headers: ["Content-Type": "application/json", "Accept": "application/json"], canonicalAuth: canonicalAuth)
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 { return nil }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        let receipt = try decodeCurrentIdentifierReceipt(data)
+        try requireIdentifierReceiptScope(receipt, requestBody: requestBody, beneficiary: accountId)
+        return receipt
+    }
+
+    public func executeRamLfeProgram(programId: String, requestBody: ToriiRamLfeExecuteRequest, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiRamLfeExecuteResponse? {
+        let exactProgramId = try ToriiIdentifierOwnerContract.exact(programId, "programId")
+        let encodedProgramId = encodePathComponent(exactProgramId)
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeCanonicalAccountRequest(path: "/v1/ram-lfe/programs/\(encodedProgramId)/execute", method: .post, body: body, headers: ["Content-Type": "application/json", "Accept": "application/json"], canonicalAuth: canonicalAuth)
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 { return nil }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        let executed = try decodeJSON(ToriiRamLfeExecuteResponse.self, from: data)
+        guard executed.programId == exactProgramId else { throw ToriiClientError.invalidPayload("Execute response differs from selected current program.") }
+        return executed
+    }
+
+    private func decodeCurrentIdentifierReceipt(_ data: Data) throws -> ToriiIdentifierResolutionReceipt {
+        do { return try decodeJSON(ToriiIdentifierResolutionReceipt.self, from: data) }
+        catch let error as ToriiClientError {
             if case .decoding(let underlying) = error {
-                throw ToriiClientError.invalidPayload(
-                    "claim-receipt decode failed: \(underlying.localizedDescription); \(responseBodyDescriptor(data))"
-                )
+                throw ToriiClientError.invalidPayload("claim-receipt decode failed: \(underlying.localizedDescription); \(responseBodyDescriptor(data))")
             }
             throw error
         }
     }
-
-    public func issueIdentifierClaimReceipt(accountId: String,
-                                            policyId: String,
-                                            encryptedInputHex: String,
-                                            outputOpening: ToriiRamLfeOutputOpening,
-                                            canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiIdentifierResolutionReceipt? {
-        try await issueIdentifierClaimReceipt(
-            accountId: accountId,
-            requestBody: buildIdentifierResolveRequest(
-                policyId: policyId,
-                encryptedInputHex: encryptedInputHex,
-                outputOpening: outputOpening
-            ),
-            canonicalAuth: canonicalAuth
-        )
-    }
-
-    public func executeRamLfeProgram(programId: String,
-                                     requestBody: ToriiRamLfeExecuteRequest,
-                                     canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiRamLfeExecuteResponse? {
-        let normalizedProgramId = try ToriiRequestValidation.normalizedNonEmpty(programId, field: "programId")
-        let encodedProgramId = encodePathComponent(normalizedProgramId)
-        let body = try JSONEncoder().encode(requestBody)
-        let request = try makeCanonicalAccountRequest(
-            path: "/v1/ram-lfe/programs/\(encodedProgramId)/execute",
-            method: .post,
-            body: body,
-            headers: [
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            ],
-            canonicalAuth: canonicalAuth
-        )
-        let (data, response) = try await send(request)
-        if response.statusCode == 404 {
-            return nil
+    private func requireIdentifierPhoneRequestScope(_ request: ToriiIdentifierLookupRequest) throws {
+        if let phone = request.phoneRetailCanonicality, phone.payload.networkId != localSigningContext?.networkId {
+            throw ToriiClientError.invalidPayload("Original phone request differs from independently selected NetworkId.")
         }
-        try ensureStatus(response, in: 200..<300, responseBody: data)
-        return try decodeJSON(ToriiRamLfeExecuteResponse.self, from: data)
     }
-
-    public func executeRamLfeProgram(programId: String,
-                                     encryptedInputHex: String,
-                                     canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiRamLfeExecuteResponse? {
-        try await executeRamLfeProgram(
-            programId: programId,
-            requestBody: buildRamLfeExecuteRequest(encryptedInputHex: encryptedInputHex),
-            canonicalAuth: canonicalAuth
-        )
+    private func requireIdentifierReceiptScope(_ receipt: ToriiIdentifierResolutionReceipt, requestBody: ToriiIdentifierLookupRequest, beneficiary: String?) throws {
+        try receipt.requireCurrentOwnerScope()
+        guard receipt.payload.networkId == localSigningContext?.networkId, receipt.policyId == requestBody.policyId else { throw ToriiClientError.invalidPayload("Receipt differs from selected network or request policy.") }
+        if let beneficiary, beneficiary != receipt.accountId { throw ToriiClientError.invalidPayload("Receipt differs from selected beneficiary.") }
+        guard let original = requestBody.outputOpening, ToriiIdentifierOwnerContract.sameOpening(receipt.payload.opening, original) else { throw ToriiClientError.invalidPayload("Receipt replaced an original opening field or signature.") }
+        guard try ToriiIdentifierOwnerContract.json(receipt.phoneRetailCanonicality) == ToriiIdentifierOwnerContract.json(requestBody.phoneRetailCanonicality) else { throw ToriiClientError.invalidPayload("Receipt replaced original independent phone canonicality.") }
     }
 
     public func verifyRamLfeReceipt(
@@ -22435,21 +22277,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return detail
     }
 
+    /// Decode Torii's canonical verifying-key list array, including its `ids_only` form.
     public func listVerifyingKeys(query: ToriiVerifyingKeyListQuery? = nil) async throws -> [ToriiVerifyingKeyListItem] {
         let request = try makeRequest(path: "/v1/zk/vk",
                                       queryItems: try query?.queryItems())
         let data = try await data(for: request)
-        let decoder = JSONDecoder()
-        do {
-            return try decoder.decode([ToriiVerifyingKeyListItem].self, from: data)
-        } catch let arrayError {
-            do {
-                let response = try decoder.decode(ToriiVerifyingKeyListResponse.self, from: data)
-                return response.items
-            } catch {
-                throw ToriiClientError.decoding(arrayError)
-            }
-        }
+        return try decodeJSON([ToriiVerifyingKeyListItem].self, from: data)
     }
 
     private func decodeVerifyingKeyTransactionDraft(
@@ -23058,11 +22891,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                            exactSuccessStatus: 202)
     }
 
-    /// Read the payer's exact finalized issuance original under the current wallet protocol.
+    /// Read the payer's original unsigned Load receipt from committed ledger state.
     ///
-    /// The returned bytes remain unverified. Only the Native wallet may decode/admit the
-    /// pending body or root-authenticated signed load voucher; HTTP success never credits a
-    /// balance. Missing/unfinalized source is an error, never a fresh issuance or absence.
+    /// The returned bytes remain unverified. Before wallet admission, the consumer must bind
+    /// the decoded receipt to the expected owner and independently authenticate the original
+    /// successful transaction, ordinary chain finality and the complete recursive Load proof.
+    /// This transport supplies no wallet admission; HTTP success never credits a balance.
+    /// An unavailable source is an error, never a fresh issuance or an absent wallet.
     public func getKagemushaWalletLoadIssuanceOriginalV1(
         selection: ToriiKagemushaWalletLoadSelectionV1,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -23083,6 +22918,123 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try ToriiKagemushaWalletLoadIssuanceOriginalV1(
             selection: selection, payerAccountID: canonicalAuth.accountId, networkID: network,
             expectedURL: request.url, response: response, bytes: data)
+    }
+
+    /// Read counted event-path DATA for the same canonically authenticated payer and Load.
+    /// Server proving consumes this original; the wallet verifies the returned terminal proof.
+    public func getKagemushaWalletLoadEventProofOriginalV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        requireCurrentOwner: @escaping @Sendable () async throws -> Void
+    ) async throws -> Data {
+        try await requireCurrentOwner()
+        var request = try makeCanonicalAccountRequest(path: selection.path + "/event-proof", method: .get,
+            headers: ["Accept": "application/x-norito", "Accept-Encoding": "identity",
+                      "Cache-Control": "no-cache, no-store"], canonicalAuth: canonicalAuth)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.httpShouldUsePipelining = false
+        return try await readKagemushaLedgerOriginal(request, maximum: 8192,
+            requireCurrentOwner: requireCurrentOwner)
+    }
+
+    /// Receive the complete canonical Load terminal proof from the authenticated payer route.
+    /// These bytes remain DATA until the installed Native wallet verifies them with the exact receipt.
+    public func getKagemushaWalletLoadFinalityOriginalV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        requireCurrentOwner: @escaping @Sendable () async throws -> Void
+    ) async throws -> Data {
+        while true {
+            try Task.checkCancellation()
+            try await requireCurrentOwner()
+            let request = try makeKagemushaWalletLoadFinalityRequestV1(selection: selection, canonicalAuth: canonicalAuth)
+            try await requireCurrentOwner()
+            let (bytes, response) = try await sendBoundedResponse(request,
+                context: "KAGEMUSHA Load finality", maximumBytes: 16_384)
+            try await requireCurrentOwner()
+            if response.statusCode != 202 {
+                return try validateKagemushaLedgerOriginal(request, response: response,
+                    bytes: bytes, maximum: 16_384)
+            }
+            // Pending is transport progress only. Keep the exact Load selection and
+            // re-sign each poll; neither this status nor its headers admit value.
+            let delay = try Self.kagemushaLoadFinalityRetryDelay(request,
+                response: response, bytes: bytes)
+            try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000)
+            try await requireCurrentOwner()
+        }
+    }
+
+    static func kagemushaLoadFinalityRetryDelay(_ request: URLRequest,
+        response: HTTPURLResponse, bytes: Data) throws -> Int {
+        let encoding = response.value(forHTTPHeaderField: "Content-Encoding")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard response.statusCode == 202, let expected = request.url,
+            response.url?.absoluteString == expected.absoluteString, bytes.isEmpty,
+            encoding == nil || encoding == "identity",
+            contentType == nil || contentType == "application/x-norito",
+            let retry = response.value(forHTTPHeaderField: "Retry-After"),
+            let delay = Int(retry), (1...30).contains(delay), String(delay) == retry
+        else { throw ToriiClientError.invalidResponse }
+        if let length = response.value(forHTTPHeaderField: "Content-Length"), length != "0" {
+            throw ToriiClientError.invalidResponse
+        }
+        return delay
+    }
+
+    /// Sign the exact terminal-proof target afresh; a receipt signature cannot authorize it.
+    func makeKagemushaWalletLoadFinalityRequestV1(
+        selection: ToriiKagemushaWalletLoadSelectionV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) throws -> URLRequest {
+        var request = try makeCanonicalAccountRequest(path: selection.path + "/finality", method: .get,
+            headers: ["Accept": "application/x-norito", "Accept-Encoding": "identity",
+                      "Cache-Control": "no-cache, no-store"], canonicalAuth: canonicalAuth)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.httpShouldUsePipelining = false
+        return request
+    }
+
+    /// Fetch one original ordinary finality proof by height. The height is only a locator;
+    /// the installed Native genesis and complete contiguous recursive history authenticate it.
+    public func getKagemushaWalletLedgerFinalityOriginalV1(
+        height: UInt64,
+        requireCurrentOwner: @escaping @Sendable () async throws -> Void
+    ) async throws -> Data {
+        guard height > 0 else { throw ToriiClientError.invalidPayload("finality height must be positive") }
+        try await requireCurrentOwner()
+        var request = try makeRequest(path: "/v1/bridge/finality/\(height)",
+            headers: ["Accept": "application/x-norito", "Accept-Encoding": "identity",
+                      "Cache-Control": "no-cache, no-store"])
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.httpShouldUsePipelining = false
+        return try await readKagemushaLedgerOriginal(request, maximum: 36 * 1024 * 1024,
+            requireCurrentOwner: requireCurrentOwner)
+    }
+
+    private func readKagemushaLedgerOriginal(_ request: URLRequest, maximum: Int,
+        requireCurrentOwner: @escaping @Sendable () async throws -> Void) async throws -> Data {
+        try await requireCurrentOwner()
+        let (bytes, response) = try await sendBoundedResponse(request,
+            context: "KAGEMUSHA ledger original", maximumBytes: maximum)
+        try await requireCurrentOwner()
+        return try validateKagemushaLedgerOriginal(request, response: response, bytes: bytes, maximum: maximum)
+    }
+
+    private func validateKagemushaLedgerOriginal(_ request: URLRequest, response: HTTPURLResponse,
+        bytes: Data, maximum: Int) throws -> Data {
+        try ensureStatus(response, equals: 200, responseBody: bytes)
+        guard let expected = request.url, response.url?.absoluteString == expected.absoluteString,
+            response.value(forHTTPHeaderField: "Content-Type")?.trimmingCharacters(in: .whitespacesAndNewlines) == "application/x-norito",
+            !bytes.isEmpty, bytes.count <= maximum else { throw ToriiClientError.invalidResponse }
+        let encoding = response.value(forHTTPHeaderField: "Content-Encoding")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard encoding == nil || encoding == "identity" else { throw ToriiClientError.invalidResponse }
+        if let rawLength = response.value(forHTTPHeaderField: "Content-Length") {
+            let length = rawLength.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !length.isEmpty, length.utf8.allSatisfy({ (48...57).contains($0) }),
+                Int(length) == bytes.count else { throw ToriiClientError.invalidResponse }
+        }
+        return Data(bytes)
     }
 
     /// One freshly signed canonical empty-body GET; no precomputed request-auth headers.
@@ -23106,7 +23058,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// canonical Norito bytes selected by the server.
     ///
     /// This authority-bearing route is deliberately unavailable over HTTP,
-    /// JSON, redirects, mock catalogs, or without the loaded exact ABI25
+    /// JSON, redirects, mock catalogs, or without the loaded exact ABI27
     /// artifact. The returned model retains the response bytes and binds every
     /// compiled row to that artifact's natively validated local catalog and the
     /// expected network from `localSigningContext`.
@@ -23126,7 +23078,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         // Fail before network I/O when the bridge is absent, stale, or missing
-        // any of the exact six privacy ABI25 symbols.
+        // any of the exact six privacy ABI27 symbols.
         _ = try PrivacyNativeBridge.compiledProfileCatalogV1()
         let request = try makePrivacyExact12CapabilityRequestV1(canonicalAuth: canonicalAuth)
         let (data, response) = try await sendBoundedResponse(
@@ -23614,29 +23566,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             throw ToriiClientError.invalidPayload("\(field) must be a 32-byte hex string")
         }
         return body.lowercased()
-    }
-
-    private func buildIdentifierResolveRequest(policyId: String,
-                                               encryptedInputHex: String,
-                                               outputOpening: ToriiRamLfeOutputOpening) throws -> ToriiIdentifierLookupRequest {
-        let normalizedPolicyId = try ToriiRequestValidation.normalizedNonEmpty(policyId, field: "policyId")
-        let normalizedEncryptedInput = try ToriiRequestValidation.normalizedEvenLengthHex(
-            encryptedInputHex,
-            field: "encryptedInputHex"
-        )
-        return ToriiIdentifierLookupRequest(
-            policyId: normalizedPolicyId,
-            encryptedInputHex: normalizedEncryptedInput,
-            outputOpening: outputOpening
-        )
-    }
-
-    private func buildRamLfeExecuteRequest(encryptedInputHex: String) throws -> ToriiRamLfeExecuteRequest {
-        let normalizedEncryptedInput = try ToriiRequestValidation.normalizedEvenLengthHex(
-            encryptedInputHex,
-            field: "encryptedInputHex"
-        )
-        return ToriiRamLfeExecuteRequest(encryptedInputHex: normalizedEncryptedInput)
     }
 
     private func makeRequest(path: String,

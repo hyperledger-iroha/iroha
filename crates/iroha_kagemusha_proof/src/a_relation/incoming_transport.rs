@@ -4,8 +4,8 @@
 //! the transported generator claims: the complete operation must keep the
 //! original P/V and Omega opening in its fixed incoming obligation slots.
 //! Active ingestion retains exact original lengths and byte digests separately
-//! from safe padded verifier views. TODO: compose the complete Receive result
-//! ownership, signature/map checks and terminal mode rule before admission.
+//! from safe padded verifier views. TODO: qualify the complete Receive owner
+//! chain, signature/map checks and final catalog before admission.
 
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region};
@@ -252,6 +252,9 @@ impl IncomingTransportCells {
 
     /// Soft-verify with all same-carrier decoder verdicts included internally.
     /// The caller cannot supply or replace a decode verdict.
+    /// `carried_key` is the trusted operation key, never a proposed incoming
+    /// identity. The witness verifier key must match it; a different decoded
+    /// identity or proof under another key contributes a false soft verdict.
     /// # Errors
     /// Wrong descriptor/operation class or synthesis failure.
     pub fn verify(
@@ -260,6 +263,7 @@ impl IncomingTransportCells {
         region: &mut Region<'_, Fp>,
         operation: &AProofPlan,
         key: &VerifierKeyCells<Ep>,
+        carried_key: &Word<Fp>,
     ) -> Result<IncomingOmegaCells, Error> {
         if operation.omega().ok_or(Error::Synthesis)?.binding() != &self.descriptor {
             return Err(Error::Synthesis);
@@ -270,7 +274,7 @@ impl IncomingTransportCells {
             operation,
             key,
             &self.public,
-            self.public.omega_key_digest(),
+            carried_key,
             &self.pallas,
             &self.vesta,
             &self.decode_bits,

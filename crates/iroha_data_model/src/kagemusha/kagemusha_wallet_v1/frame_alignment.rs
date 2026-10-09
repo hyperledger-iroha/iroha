@@ -1,4 +1,4 @@
-//! Fixed G1 frame alignment on every native target, including ARMv7.
+//! Fixed G1 frame alignment on every native target, including `ARMv7`.
 //!
 //! Norito framing uses the Rust type's archived storage alignment. Wallet types
 //! containing a direct u128 pin that alignment to 16 bytes; ordinary enclosing
@@ -8,6 +8,9 @@
 //! Compile-time assertions run in the shipping library, including cross builds.
 
 use super::*;
+#[cfg(test)]
+use crate::isi::kagemusha_wallet::load_finality::KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1;
+use crate::isi::kagemusha_wallet::load_finality::KagemushaWalletLoadReceiptV1;
 
 const fn canonical_padding<T>() -> usize {
     let alignment = norito::core::archived_payload_align::<T>();
@@ -20,12 +23,12 @@ const fn canonical_padding<T>() -> usize {
 }
 
 // Every direct u128 root is pinned, including map/payout records which can be
-// retained or framed outside one of the 26 bounded standalone object types.
+// retained or framed outside one of the 28 bounded standalone object types.
 const _: () = {
     assert!(norito::core::archived_payload_align::<KagemushaWalletMarkerStateV1>() == 16);
     assert!(norito::core::archived_payload_align::<KagemushaWalletMarkerV1>() == 16);
     assert!(norito::core::archived_payload_align::<KagemushaWalletFoldRecordV1>() == 16);
-    assert!(norito::core::archived_payload_align::<KagemushaWalletLoadVoucherBodyV1>() == 16);
+    assert!(norito::core::archived_payload_align::<KagemushaWalletLoadReceiptV1>() == 16);
     assert!(norito::core::archived_payload_align::<KagemushaWalletUnloadPayoutV1>() == 16);
     assert!(norito::core::archived_payload_align::<KagemushaWalletFeePayoutV1>() == 16);
     assert!(norito::core::archived_payload_align::<KagemushaWalletLedgerControlActionV1>() == 16);
@@ -82,6 +85,7 @@ assert_frame_padding! {
     KagemushaWalletFeeScheduleV1 => 8, KAGEMUSHA_WALLET_FEE_SCHEDULE_MAX_BYTES_V1;
     KagemushaWalletBlacklistV1 => 0, KAGEMUSHA_WALLET_BLACKLIST_MAX_BYTES_V1;
     KagemushaWalletQuotaShareV1 => 0, KAGEMUSHA_WALLET_QUOTA_SHARE_MAX_BYTES_V1;
+    KagemushaWalletQuotaRefreshWitnessV1 => 8, KAGEMUSHA_WALLET_QUOTA_REFRESH_WITNESS_MAX_BYTES_V1;
     KagemushaWalletTimeAnchorV1 => 0, KAGEMUSHA_WALLET_TIME_ANCHOR_MAX_BYTES_V1;
     KagemushaWalletChargeQuoteV1 => 8, KAGEMUSHA_WALLET_CHARGE_QUOTE_MAX_BYTES_V1;
     KagemushaWalletPaymentV1 => 8, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1;
@@ -90,7 +94,8 @@ assert_frame_padding! {
     KagemushaWalletRecoveryCapsuleV1 => 8, KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1;
     KagemushaWalletCompletionRecordV1 => 0, KAGEMUSHA_WALLET_COMPLETION_RECORD_MAX_BYTES_V1;
     KagemushaWalletFoldRecordV1 => 8, KAGEMUSHA_WALLET_FOLD_RECORD_MAX_BYTES_V1;
-    KagemushaWalletLoadVoucherV1 => 8, KAGEMUSHA_WALLET_LOAD_VOUCHER_MAX_BYTES_V1;
+    KagemushaWalletLoadReceiptV1 => 8, KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1;
+    KagemushaWalletLoadFinalityV1 => 0, KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1;
     KagemushaWalletUnloadClaimV1 => 8, KAGEMUSHA_WALLET_UNLOAD_CLAIM_MAX_BYTES_V1;
     KagemushaWalletFeeClaimV1 => 8, KAGEMUSHA_WALLET_FEE_CLAIM_MAX_BYTES_V1;
     KagemushaWalletLedgerControlV1 => 8, KAGEMUSHA_WALLET_LEDGER_CONTROL_MAX_BYTES_V1;
@@ -174,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_wallet_v1_frozen_frames_preserve_all_26_padding_contracts() {
+    fn kagemusha_wallet_v1_frozen_frames_preserve_all_28_padding_contracts() {
         let Value::Object(document) = vectors() else {
             panic!("fixture object");
         };
@@ -213,7 +218,7 @@ mod tests {
         let Value::Array(frames) = document.get("frames").expect("frames") else {
             panic!("frames array");
         };
-        assert_eq!(covered.len(), 26);
+        assert_eq!(covered.len(), 28);
         assert_eq!(frames.len(), covered.len());
         for frame in frames {
             let Value::Object(row) = frame else {

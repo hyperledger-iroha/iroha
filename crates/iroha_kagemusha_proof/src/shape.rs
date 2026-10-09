@@ -152,6 +152,29 @@ pub fn limb_bits_for(k: u32) -> usize {
     usize::try_from(k.saturating_sub(1)).map_or(24, |bits| bits.clamp(1, 24))
 }
 
+/// The fixed one-lane monetary source admitted by the native wallet profile.
+/// Quota-enabled Send uses k14; the other Send masks and both Receive selectors
+/// use k12. Every source uses folded prefixes and `k - 1`-bit range limbs.
+/// This selects a compiled recipe; it does not generate or qualify a key.
+///
+/// # Errors
+/// Rejects an undefined control mask.
+pub fn wallet_monetary_shape(
+    relation: crate::witness::SigmaRelation,
+) -> Result<SigmaShape, crate::circuit::ParamsError> {
+    let k = if relation.enforces(crate::witness::CONTROL_QUOTAS) {
+        14
+    } else {
+        12
+    };
+    let params = SigmaParams::new(
+        RelationShape::new(relation, crate::circuit::PrefixMode::Folded),
+        1,
+        limb_bits_for(k),
+    )?;
+    Ok(SigmaShape::new(params, k))
+}
+
 /// What [`select_shape`] searches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ShapePolicy {
@@ -248,6 +271,40 @@ mod tests {
 
     use super::*;
     use crate::{circuit::PrefixMode, witness::SigmaRelation};
+
+    #[test]
+    fn wallet_recipe_covers_exactly_the_ten_monetary_selectors() {
+        for relation in (0..8)
+            .map(SigmaRelation::send)
+            .chain((0..2).map(SigmaRelation::receive))
+        {
+            let shape = wallet_monetary_shape(relation).unwrap();
+            assert_eq!(
+                shape.k,
+                if relation.enforces(crate::witness::CONTROL_QUOTAS) {
+                    14
+                } else {
+                    12
+                }
+            );
+            assert_eq!(shape.params.lanes(), 1);
+            assert_eq!(shape.params.limb_bits(), limb_bits_for(shape.k));
+            assert_eq!(
+                shape.params.relation(),
+                RelationShape::new(relation, PrefixMode::Folded)
+            );
+        }
+        for relation in [
+            SigmaRelation::send(8),
+            SigmaRelation::receive(2),
+            SigmaRelation::receive(7),
+        ] {
+            assert_eq!(
+                wallet_monetary_shape(relation),
+                Err(crate::circuit::ParamsError::Relation(relation))
+            );
+        }
+    }
 
     #[test]
     fn limb_widths_follow_k() {

@@ -98,7 +98,6 @@ enum class KagemushaWalletSigningDomainV1(
     OFFER("kgwoffr1", 194),
     SESSION_CONTROL("kgwsctl1", 197),
     REQUEST("kgwrqst1", 458),
-    VOUCHER("kgwvchr1", 250),
     LEDGER_CONTROL("kgwlctl1", 211),
     ;
 
@@ -253,8 +252,9 @@ object KagemushaWalletWireV1 {
      *
      * σ and Ω byte caps are the exact proof lengths of the frozen σ verifying-key allowlist
      * (owner answer Q6), with Ω plus the largest σ_send at most [PAYMENT_PROOF_BUDGET_BYTES] and
-     * Ω at most [LINEAGE_PROOF_CAP_BYTES]. Until the artifacts freeze (TODO(G3)) only the carrying
-     * frame bounds them, which is all a structural carrier check enforces.
+     * σ_recv at most [CREDITED_RECEIVE_PROOF_BUDGET_BYTES] and Ω at most [LINEAGE_PROOF_CAP_BYTES].
+     * Until the artifacts freeze (TODO(G3)) only the carrying frame bounds them, which is all a
+     * structural carrier check enforces.
      */
     const val MESSAGE_MAX_BYTES: Int = 10_000
 
@@ -263,6 +263,12 @@ object KagemushaWalletWireV1 {
 
     /** Joint budget of the Ω transport proof and the largest σ_send (R9): `10,000 − F_payment`. */
     const val PAYMENT_PROOF_BUDGET_BYTES: Int = MESSAGE_MAX_BYTES - PAYMENT_FIXED_BYTES
+
+    /** Bytes of a Credited::Receive envelope other than its σ proof. */
+    const val CREDITED_RECEIVE_FIXED_BYTES: Int = 679
+
+    /** Available σ bytes in a complete Credited::Receive envelope. */
+    const val CREDITED_RECEIVE_PROOF_BUDGET_BYTES: Int = MESSAGE_MAX_BYTES - CREDITED_RECEIVE_FIXED_BYTES
 
     /**
      * `F_status`: the bytes of a Credited::Status envelope frame other than its Ω(h) transport
@@ -345,6 +351,7 @@ object KagemushaWalletWireV1 {
     private const val REQUEST_SIGNATURE_FIELD: Int = 4
     private const val REQUEST_BODY_FIELDS: Int = 19
     private const val REQUEST_BODY_SCHEME_FIELD: Int = 1
+    private const val REQUEST_BODY_AMOUNT_FIELD: Int = 9
     private const val PAYMENT_FIELDS: Int = 5
     private const val PAYMENT_REQUEST_FIELD: Int = 1
     private const val SIGNED_REQUEST_FIELDS: Int = 2
@@ -643,6 +650,21 @@ object KagemushaWalletWireV1 {
                 "KAGEMUSHA wallet V1 Credited does not name this Request's scheme"
             }
         }
+    }
+
+    /** Exact unsigned amount carried in the Payment's signed Request, for display only.
+     * This bounded structural parser authenticates nothing. A wallet must first obtain the
+     * exact Payment from its genuine Native completion or authenticated retained Send.
+     * Neither a decoded amount nor successful framing establishes a payment or receipt.
+     */
+    @JvmStatic
+    fun paymentAmountData(payment: ByteArray): BigInteger {
+        val fields = messageFields(payment, KagemushaWalletMessageKindV1.PAYMENT, PAYMENT_FIELDS)
+        val signed = recordFields(fields[PAYMENT_REQUEST_FIELD], SIGNED_REQUEST_FIELDS, "Payment signed Request")
+        val body = recordFields(signed[SIGNED_REQUEST_BODY_FIELD], REQUEST_BODY_FIELDS, "Request body")
+        val amount = body[REQUEST_BODY_AMOUNT_FIELD]
+        require(amount.size == 16) { "Payment amount must be canonical LE128" }
+        return BigInteger(1, amount.reversedArray()).also { require(it.signum() > 0) { "Payment amount must be positive" } }
     }
 
     /**

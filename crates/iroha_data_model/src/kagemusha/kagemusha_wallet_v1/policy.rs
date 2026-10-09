@@ -2247,9 +2247,9 @@ impl KagemushaWalletChargeQuoteBodyV1 {
 
 /// Signed load or unload charge quote (§6.2, design C7).
 ///
-/// An Unload effect names it by digest ([`Self::require_unload_effect`]); a load voucher names
+/// An Unload effect names it by digest ([`Self::require_unload_effect`]); an ordinary Load receipt names
 /// it by digest and must carry its exact terms
-/// (`KagemushaWalletLoadVoucherV1::require_charge_quote`).
+/// (`KagemushaWalletLoadReceiptV1::require_charge_quote`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletChargeQuoteV1"
@@ -2507,7 +2507,7 @@ impl KagemushaWalletStateV1 {
     /// credential must be the exact successor of the current one; the new floor is
     /// `F = max(old floor, t)` with `t` the update's signed time (the old floor for a scheme
     /// policy). A Blacklist update also inserts `(list_version, entries_root)` into the
-    /// blacklist history. A QuotaShare update requires every window to be longer than
+    /// blacklist history. A `QuotaShare` update requires every window to be longer than
     /// `time_anchor_max_response_ms`, sets `quota_share_expires_at_ms` to the share's expiry and
     /// rebuilds the quota-usage array from the predecessor's
     /// ([`KagemushaWalletQuotaUsageArrayV1::rebuild_for_share`]); every other update keeps
@@ -2673,7 +2673,7 @@ impl KagemushaWalletStateV1 {
     pub(super) fn effective_accepted_time(
         &self,
         anchored: Option<&KagemushaWalletAnchoredTimeV1>,
-        now: &KagemushaWalletMonotonicReadingV1,
+        now: Option<&KagemushaWalletMonotonicReadingV1>,
         receiver_accepted_time_ms: u64,
     ) -> WalletResult<KagemushaWalletTimeIntervalV1> {
         let floor = self
@@ -2698,6 +2698,7 @@ impl KagemushaWalletStateV1 {
         if anchor.time_anchor_digest() != self.rest.time_anchor {
             return Err(invalid_v1("state.rest.time_anchor"));
         }
+        let now = now.ok_or_else(|| invalid_v1("time_anchor.observation_missing"))?;
         let interval = anchored.interval_at(now, self.core.time_anchor_max_response_ms)?;
         let lower = floor.max(interval.lower_ms);
         KagemushaWalletTimeIntervalV1::new(lower, interval.upper_ms.max(lower))
@@ -2915,15 +2916,15 @@ impl KagemushaWalletStateV1 {
         if span > self.core.time_anchor_max_response_ms {
             return Err(invalid_v1("quota_share.time_span"));
         }
-        let mut charged = *usage;
+        let mut next_usage = *usage;
         let mut charges = Vec::new();
         for slot in touched_quota_slots_v1(windows, interval)? {
             let window = windows[usize::from(slot)];
-            let usage_leaf = charged
+            let usage_leaf = next_usage
                 .leaf(slot)
                 .ok_or_else(|| invalid_v1("quota_usage.alignment"))?;
-            let usage_opening = charged.opening(slot)?;
-            charged.charge(slot, gross, window.limit)?;
+            let usage_opening = next_usage.opening(slot)?;
+            next_usage.charge(slot, gross, window.limit)?;
             charges.push(KagemushaWalletQuotaChargeV1 {
                 window,
                 window_opening: kagemusha_wallet_quota_window_opening_v1(windows, slot)?,
@@ -2931,7 +2932,7 @@ impl KagemushaWalletStateV1 {
                 usage_opening,
             });
         }
-        Ok((charges, charged))
+        Ok((charges, next_usage))
     }
 }
 

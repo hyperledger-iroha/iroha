@@ -331,6 +331,7 @@ pub mod isi {
             | DataEventFilter::Social(_)
             | DataEventFilter::Bridge(_)
             | DataEventFilter::Sccp(_)
+            | DataEventFilter::KagemushaLoadCommitted(_)
             | DataEventFilter::Governance(_) => false,
         }
     }

@@ -70,8 +70,6 @@ def _valid_cli_tail(tmp_path: Path) -> list[str]:
     target.mkdir(mode=0o700)
     allocations = tmp_path / "allocations"
     allocations.mkdir(mode=0o700)
-    publisher_custody = tmp_path / "publisher-custody"
-    publisher_custody.mkdir(mode=0o700)
     return [
         "--cargo",
         str(cargo),
@@ -79,8 +77,6 @@ def _valid_cli_tail(tmp_path: Path) -> list[str]:
         str(target),
         "--xor-allocations-dir",
         str(allocations),
-        "--publisher-custody-dir",
-        str(publisher_custody),
         "--genesis-creation-time-ms",
         "1700000000000",
         "--cargo-lock-size",
@@ -111,18 +107,15 @@ def test_profile_command_always_pins_one_profile_output_and_kagami() -> None:
         "iroha3-dev",
         Path("/external/stage"),
         Path("/external/allocations"),
-        Path("/external/publisher-custody"),
         1_700_000_000_000,
     )
-    assert command == [
+    expected = [
         "/external/target/debug/xtask",
         "kagami-profiles",
         "--profile",
         "iroha3-dev",
         "--xor-allocations-dir",
         "/external/allocations",
-        "--publisher-custody-dir",
-        "/external/publisher-custody",
         "--genesis-creation-time-ms",
         "1700000000000",
         "--out",
@@ -130,6 +123,7 @@ def test_profile_command_always_pins_one_profile_output_and_kagami() -> None:
         "--kagami",
         "/external/target/debug/kagami",
     ]
+    assert command == expected
     assert "iroha3-nexus" not in command
     assert "all" not in command
 
@@ -138,7 +132,6 @@ def test_cli_requires_current_xor_allocations_and_refuses_retired_mint_arguments
     args = ["--write", "--profile", "iroha3-dev", "--output-root", str(tmp_path / "out"), *tail]
     parsed = MODULE._parse_args(args)
     assert parsed.xor_allocations_dir == str(tmp_path / "allocations")
-    assert parsed.publisher_custody_dir == str(tmp_path / "publisher-custody")
     assert parsed.genesis_creation_time_ms == 1_700_000_000_000
     assert not hasattr(parsed, "kagemusha_mint_finality_parameters_dir")
     missing = args.copy()
@@ -146,11 +139,6 @@ def test_cli_requires_current_xor_allocations_and_refuses_retired_mint_arguments
     del missing[index:index + 2]
     with pytest.raises(SystemExit):
         MODULE._parse_args(missing)
-    missing_publisher = args.copy()
-    index = missing_publisher.index("--publisher-custody-dir")
-    del missing_publisher[index:index + 2]
-    with pytest.raises(SystemExit):
-        MODULE._parse_args(missing_publisher)
     with pytest.raises(SystemExit):
         MODULE._parse_args([*args, "--kagemusha-mint-finality-parameters-dir", str(tmp_path / "retired")])
 
@@ -167,6 +155,42 @@ def test_creation_time_is_required_canonical_nonzero_and_bounded(tmp_path: Path)
         invalid[index + 1] = record
         with pytest.raises(SystemExit):
             MODULE._parse_args(invalid)
+
+
+@pytest.mark.parametrize("record", ["1700000000001", "1700000000000"])
+def test_cli_rejects_repeated_creation_time(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], record: str,
+) -> None:
+    args = ["--write", "--profile", "iroha3-dev", "--output-root", str(tmp_path / "out"), *_valid_cli_tail(tmp_path)]
+    with pytest.raises(SystemExit):
+        MODULE._parse_args([*args, "--genesis-creation-time-ms", record])
+    assert "--genesis-creation-time-ms may be supplied only once" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("mode", ["write", "check"])
+def test_run_passes_exact_creation_time_to_each_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    tmp_path = tmp_path.resolve()
+    args = [f"--{mode}", "--profile", "iroha3-dev", *_valid_cli_tail(tmp_path)]
+    if mode == "write":
+        args.extend(["--output-root", str(tmp_path / "out")])
+    else:
+        candidate = tmp_path / "candidate"
+        candidate.mkdir()
+        args.extend([
+            "--root", str(candidate),
+            "--stage-a", str(tmp_path / "stage-a"),
+            "--stage-b", str(tmp_path / "stage-b"),
+        ])
+    stages = []
+    monkeypatch.setattr(MODULE, "_authenticate_lock", lambda *args: b"lock")
+    monkeypatch.setattr(MODULE, "_build_tools", lambda *args: (None, {}))
+    monkeypatch.setattr(MODULE, "_generate_stage", lambda *args: stages.append(args) or {})
+    monkeypatch.setattr(MODULE, "_snapshot", lambda *args, **kwargs: {})
+    MODULE.run(MODULE._parse_args(args))
+    assert len(stages) == (1 if mode == "write" else 2)
+    assert all(stage[-1] == 1_700_000_000_000 for stage in stages)
 
 
 def test_cargo_build_command_is_locked_offline_and_uses_exact_root_lock() -> None:

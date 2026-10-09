@@ -1,6 +1,6 @@
 # Status
 
-Reviewed 2026-10-05. Iroha 3 remains under implementation and qualification.
+Reviewed 2026-10-07. Iroha 3 remains under implementation and qualification.
 Component checks cover substantial portions of the system, but the combined
 source has not passed the complete workspace, SDK, hardware and release gates.
 The [roadmap](roadmap.md) lists outstanding outcomes; the linked specifications
@@ -11,10 +11,10 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Area | Current state | Remaining qualification |
 | --- | --- | --- |
 | Sumeragi | The sans-IO core, simulator and node driver are integrated; the previous consensus runtime is removed. Certified results bind World roots and ordered events. | Current-candidate simulator/mutation gates, consumers, network faults and authenticated accelerated restoration. |
-| Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. Lifecycle/restart have component and node coverage. | Dataspace instances with their own State, cross-dataspace AMX, isolation and current-source network scale/restart. |
+| Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. The daemon can host an independent signed dataspace root with its own State, Kura, allocation pool and native context archive. Explicit Kagami AMX bootstrap authenticates the parent's original G1/H2 and stages the participant in private genesis. Lifecycle/restart have component and node coverage. | Managed AMX source acquisition and parent registration, complete outbound proof custody, durable validator relaying and current-source network isolation, scale and restart. |
 | Storage and execution | `lanes::LaneRunner` and `SumeragiLaneMerge` are the production path. Kura owns a shared fail-stop gate and authenticated native tips/journals. | Original funded execution custody through acquisition, certification, publication, replay and retained-generation reclamation. |
 | Configuration and DPN | Private dataspace definitions are separate from validator settings. `iroha dataspace plan/apply/status` derives artifacts and retains once-only transactions under one budget. Kagami has an isolated BPNG catalog/paid-namespace genesis preset. | Profile-based generator closure, four-daemon paid deployment/readback and physical isolation. BPNG local contracts, fee authority and application provisioning remain incomplete. Owner-node provisioning is outside this path. |
-| Kagami/Mochi developer experience | Shared native localnet generation, process ownership and workspace contexts are implemented in `iroha_deploy`; Musubi exposes source/artifact/package deployment with exact retained recovery. Installed-runtime fixtures cover config-free startup, all three deployment inputs, restart recovery and four-parent/four-private attachment. | The deployment, Core and default-feature data-model unit targets compile. Focused inventory, validator replay, state-certificate, wallet, epoch-scope, retained-decision, checkpoint and finality/resource checks pass. Initial recovery passes at the default stack. Generated issuer funding now covers its original reserve requirement and fee headroom, with allocation and native-role checks passing. Funding production uses bounded phases; parent recovery and the original bounded 64-reservation history regression still exceed their original deadlines in native diagnostics. The original two-second bootstrap authorization regression now passes. The shared branch needs combined runtime requalification, including paid provisioning, anchoring and payload isolation. Three-provider generation with shared network policy, distinct-key ingest, aggregate activation, bounded maintenance, independent enrollment restart and automatic custody renewal are implemented but await combined native qualification. Portable publication clock/journal/seed custody, daemon storage integration and authenticated provider-inventory reads are implemented and await native service qualification. Explicit finite startup authorization, bounded unsigned-request recovery and wallet cancellation are implemented but await native interruption qualification. Native paid pin coordination, publisher acquisition of complete signed provider inventories and generated publication TLS selection are implemented and await combined native qualification. Stock publication-service selection, generated runtime configuration, the explicit generated publication API, Kagami publication command and Mochi Packages view are implemented; their current native serving path and frontend handoff await qualification. Three-provider cold registry publication, the approved committed Taira installation profile and recurring signed checkpoint publication, native desktop interaction, signed native OS matrices and reference-host latency remain open. Release bundling refuses without that approved public profile. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
+| Kagami/Mochi developer experience | Shared config-free native localnet, owned processes and workspace contexts are implemented in `iroha_deploy`; Musubi provides source, artifact and package deployment with retained recovery. Matching macOS regressions pass for filesystem custody, continuous startup deadlines, worker handoff and failure cleanup, bootstrap selection and retained gateway projections. Installed release binaries pass private-root startup, restart and listener isolation. | Global deployment and the attachment parent exceed the original 30-second startup deadline. Extended startup reaches all three promoted provider catalogs but still expires during restart qualification. Permitted State/archive publication lag now retries without the prior fatal activation error, but combined readiness remains unqualified. Deep retained-history preparation still expires before native request retention. Failed attempts close all four owned peers. Combined paid provisioning, anchoring, payload isolation, renewal and publication need full validation. The public Taira installation profile is committed, both release packagers select its exact image, and its published checkpoint passes native signature and finality verification. Recurring signed checkpoints, cold registry publication, native desktop interaction, signed OS matrices and reference-host latency remain open. Concurrent source changes are recorded separately from compiled-candidate results. See the [developer goals](specs/kagami_mochi_devex_goals.md). |
 | Rust client | Immutable account contexts, owned async transport, explicit blocking capabilities and typed fee quoting are implemented. | Remaining capability/consumer migration, unified errors and network cancellation/finality/authorization coverage. |
 | Kotlin/JVM | Kotlin owns the SDK, HTTP/SSE/WebSocket, attestation tools and JNI API; Java consumers exercise that API. Host coverage includes native/confidential operations. Android Keystore alias existence is decided only by keystore2 `getKey` (API 31+); a Keystore error is never read as absence. | Remaining Java/publication retirement, signed packages, CUDA hardware and Android/device qualification. |
 | Other SDKs | Shared prepared-operation, signing, account and native checkpoint contracts are being migrated across Swift, JavaScript, Python and C#. | Same-source native artifacts, complete fixtures/consumers and release OS/architecture matrices. |
@@ -23,26 +23,31 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | IVM/Kotodama | IVM is the sole VM with ABI V1 and program header 1.1; header 1.0 is rejected. Compiler separation and state-free proof owners reduce normal dependency graphs. Source bundles support declaration includes and explicit module exports; authenticated error-message catalogs preserve nominal schemas. FASTPQ Metal uses one embedded-bundle admission owner; runtime source/path loading is removed. Ordinary Linux/Windows daemon dependencies include driver-loaded IVM CUDA; genuine bundle absence permits CPU build/startup, and supplied unapproved material is rejected. Original-pool idle-runtime rows and scoped committed/frozen account-rekey, trigger-contract and all four trigger-action captures are integrated; fresh compilation and runtime validation remain pending. | Lifecycle/custody closure, complete State/Kura publication, native execution proofs, anchored private invocation/AXT, coherent SDK regeneration and hardware validation. FASTPQ has no approved Metal bundle. IVM CUDA approval is `None`; genuine signed ten-family artifacts, driverless runtime checks and physical qualification remain open. |
 | ZK delivery plan | The [plan](specs/zk_delivery_plan.md) and its [task graph](specs/zk_delivery_graph.json) own the ZK, privacy, authenticated-State and FHE work. Landed as source-checked contracts and inventories: plan and graph checks; the zk-X509 presentation interval with shared vectors; the FASTPQ `air` interface with the shared-backend inventory; the IVM proof-coverage inventory; the first-release history and cutover contract with a pinned history; the FHE ownership inventory; the RAM-LFE V1 policy, receipt, opening, class and query-limit contract with a cleartext reference; the State table and root inventory with the keyed-commitment contract (`specs/sumeragi.md` §16); and the unified resource contract. Two shared crates exist: `iroha_fhe` (exact RNS, NTT, basis-conversion and rounding arithmetic used by BFV, ZK-AMS, Jindo and Bootle-Lantern) and `iroha_measurement` (phase and resource records, with `scripts/zk_resource_harness.py`). | No new proof relation, FHE construction, native ISI or SDK operation exists yet, and nothing consumes the RAM-LFE V1 types. The certified State root is still the World-only accumulator (inventory defects G1-D1 to G1-D11). The resource contract records eleven relations violated today, so a maximum zk-X509 proof transaction cannot be committed under current defaults. AVX2 on a physical x86-64 CPU, Metal/CUDA parity, Linux `RLIMIT_AS` enforcement, a complete X509 proof under the harness and four-validator evidence are unexecuted. |
 | SoraFS | Software signing, canonical manifests and storage/billing/publication ownership are implemented; the ordinary Node library tests pass. | Matched daemon/harness, provider resilience and L1/L2 promotion. |
-| KAGEMUSHA | Revision-4 G1/σ implements core33, fixed64 quotas, Request-recorded blacklist and expiry/time-span controls. Largest verified Send proof is 3,456 B; fixed Payment overhead is 1,723 B. Owned witnesses, process-wide 64 MiB MSM scratch, PIPA-R/PIPA-AS and total soft verifier components are tested. Common-Q2/A4 Bootstrap/Load key rebinding and the controls-off five-stage Send chain pass genuine proof/decision checks with mandatory current Credential, Enrollment certificate and Receipt authorization. Shared wallet coordination retains exact replay, fold witnesses and anchored checkpoints around G2; descriptor-relative custody rejects parent/staging replacement. Superseded monetary engines are deleted. See the [checklist](specs/kagemusha_evidence_gate.md#8-recorded-results). | Compact Bootstrap produces and natively verifies a 3,712 B proof / 4,800 B transport under its actual immutable Ω key, with signed objects and lineage rebuilt before proving. This fits the unchanged 4,821 B cap for one terminal; common two/three-terminal catalog validation and the complete release catalog remain open. Send's five source stages fit, but enabled controls, other operations, final uniform catalog and Ω key remain unfinished. Exact-length malformed Receive bytes and wallet collection pass component tests; Receive Objects and hard incoming σ bindings pass adversarial tests; the remaining Receive producers and terminal closure are open. Real-chip M3 qualification, native proof provider, rebuilt bridge/SDK artifacts, remaining retained-consumer migrations and real-proof A → B → C → unload on four validators remain open. SoraFS/Kaigi native component migrations pass; confidential production is re-keyed onto native PIPA-R and passes its 50-test Rust suite; final consumer and packaged SDK execution remain open. The 10,000 B and two-second p95 requirements are unchanged; physical-phone qualification is separate. |
+| KAGEMUSHA | G1 revision4, core33/rest8, fixed64 quotas, Request-recorded blacklist and time controls are implemented. Native PIPA-R/PIPA-AS and recursive operation components have genuine proof coverage. Shared wallet components retain durable folds, exact replay and descriptor-relative custody; all 728 ordinary wallet cases pass across source-bound captures and a focused rerun of two corrected test fixtures. The 27 artifact-dependent or heavy ignored cases remain open. Concrete native startup, original account admission, typed setup/operation APIs and thin SDK clients are implemented, with atomic Request publication and provider-preserving admission failures. Native collection and owner-bound custody deletion now have thin Swift/Kotlin APIs; uncertain deletion freezes ordinary operations until recovery. Ordinary Load execution/finality adapters are implemented; dedicated mint-finality, generic consensus attestation and superseded monetary engines are removed. Retained consumers use native proofs; the temporary differential oracle and three retired vendor trees are deleted, with captured independent vectors retained. Focused post-retirement guards and native checks pass; rebuilt delivery qualification remains open. See the [candidate evidence](specs/kagemusha_evidence_gate.md#8-recorded-results). | Full protocol qualification remains open. Captured construction of the complete 52-route producer catalog passes; its genuine Register history run failed on a raw H1 block-wire comparison after native verification. The resultless-identity repair is installed in Register and Load; rebuilt native7 passes its H1 regression and ten staging/custody tests. The earlier recovery process ended without a terminal result or completed history. The retained checkpoint is unchanged. Rebuilt native8 has unchanged actual compiler inputs, passes its signed six-height preflight and has reopened the server and restored genesis at height1; recovery toward H2–H6 is still running with durable progress logs. Current-owner installation, ordinary-finality Load and full Archive proofs, genuine native-owner and background-fold qualification, installed collection/deletion runtime qualification, fresh original-open bridge/SDK delivery and real-proof A→B→C→unload remain unfinished. Affected A/W/Omega artifacts require re-keying; earlier captures retain their recorded source scope. M3 candidate3 fails its real-Q four-worker elapsed gate (13.2846 s against 10 s); real-Q one-worker CPU and synthetic-A one-worker RSS margins are borderline. The installed scratch reuse passes ARM/x86 proof-byte checks and reduces measured quotient workspace by6MiB in both diagnostic workloads; calibrated M3 performance qualification remains open. The required source-bound VK-to-PK rebuild without commitment MSMs is absent from the maintained engine; its prepared implementation and per-stage wallet integration remain unqualified. Structural Payment size is9,979B (1,723B overhead+3,456B sigma+4,800B Omega); actual full-catalog acceptance must establish the10,000B gate. Recursive privacy (C12) remains open; passing bounded setup and simulator controls does not establish it. Two-second p95 durable completion and physical-phone qualification remain unmet. |
 | Petal Stream | `iroha_petal` implements the [Petal Stream](specs/petal_stream.md) animated optical transport (`天` orientation field, katakana, tile polarity and ring dots as three Reed–Solomon lanes under a rateless fountain) with decoder, renderer, camera simulator and `iroha offline petal`. A gain-free tile read keeps lanes `P` and `K` alive under over-exposure, veiling light and shadows. Swift, Kotlin/JVM, JavaScript, Python and C# ports reproduce the shared fixtures and decode the golden captures to the recorded lanes. Three corner blossoms suffice (a thumb, glare or frame edge may hide the fourth) and sessions track the pose between frames (about 4× cheaper per frame). Simulated reads complete a 10,000-byte KAGEMUSHA message in 11.5 s (45 s from lanes `P` and `D` alone). | All evidence is simulated: physical-camera reads on the governed Android/iOS device matrix, lane `K` at 480p or soft focus, and the public guides in `iroha-docs`. |
 
 ## Immediate blockers
 
-The Nexus proposal/status repairs and original invocation binding have recorded native
-functional coverage: the rebuilt daemon and harness passed ten fresh sixteen-validator
-paid settlements and the original serial all-seat restart/readback diagnostic. The
-independent disjoint-lane control also passed stopped-committee progress, recovery
-without resubmission and all-process restart. Subsequent crypto, evidence and snapshot
-repairs require a fresh combined-candidate run. Full fault/leakage campaigns and the
+The Nexus proposal/status repairs and original invocation binding are preserved.
+The paid Nexus workload exposed an AMX retry defect: a completed State visibility
+publication incorrectly invalidated retained decoded bytes and halted the node.
+The repair separates immutable decode custody from State authority; every retry
+still authenticates the current committed parent. Native retry and parent
+authentication controls pass. The rebuilt candidate passes ten fresh paid Nexus
+workloads, serial restart/readback of all sixteen validators and disjoint-lane
+stop/restart, with all expected peer processes closing cleanly.
+The retired publisher-custody fixture
+cannot supply current admission evidence.
+Full fault/leakage campaigns, optimized-build resource qualification and the
 complete original funded execution graph remain open.
 
 Native ceremony handoff preserves overlapping descriptors and read-only phase pipes.
-The rebuilt paid committee attempt authenticated seven-seat activation at height 129
-and its E+3 four-seat election, completed the corrected reward and exit-scheduling
-checks, then failed during four-seat return preparation when the original ceremony
-transport deadline expired. The original overall runtime limit was also exceeded.
+The committee fixture explicitly pays for the first E+1 successor before authenticating
+preparation: stopping exactly at the E selection boundary cannot supply E+1 evidence.
 Full paid 4→7→4, withdrawal, return-boundary liveness, restart and slashing qualification
-remain open. Lane retirement component controls now cover original reads, publications,
+remain open. Both rotation ceremonies must finish within their original transport and
+overall runtime deadlines on the rebuilt candidate. Lane retirement component controls
+now cover original reads, publications,
 historical opening joins, final-reader release and authentication/refusal propagation.
 Physical retirement and complete retained-history dependency closure remain open;
 certified disk frames remain retained for global replay.
@@ -56,8 +61,10 @@ accelerated complete-State restoration remains open.
 
 The runtime and trigger permission guards reject malformed recognized payloads before
 delegation; decoder refusals preserve local deferral. Core strict lint still fails on
-unused production/resource graphs. The repaired Rust SDK client source passes its unit
-suite and strict lint; qualification of the final combined source, signed RS16
+unused production/resource graphs, and blanket Clippy allowances leave entire lint
+groups unqualified. Dependency and test-network lint failures also remain open until
+their repairs pass the actual affected commands. The repaired Rust SDK client source
+passes its unit suite and strict lint; qualification of the final combined source, signed RS16
 loss/withholding and release remains open. Exact finalized-carrier retries retain
 original execution without requeueing or charging again; changed source requires fresh
 evidence.
@@ -103,10 +110,9 @@ least three more intermittently in a full parallel run; all five
 `agent_alias` tests of `torii_protocols` fail. `irohad_lib`: a full lib-test run
 aborts on a stack overflow in `beacon_bootstrap::seat_attempt::aggregate_tests`
 after five `durable::tests` failures, and two
-`musubi_publication_service::finality` tests fail. `iroha_core`:
-`sumeragi::node::tests::every_committed_block_contains_work_before_and_after_restart`
-(second transaction not committed within 30 s), three `sumeragi::executor`
-archive, publication and replay tests and `state` reserve-account tests fail.
+`musubi_publication_service::finality` tests fail. The rebuilt `iroha_core`
+restart/progress regression and complete archive, publication, replay and
+reserve-account selections now pass; the full Core suite remains unqualified.
 `fastpq_prover`: three lib tests and the
 four-quadrant tree capacity test (124 retained nodes against 127) fail. Four
 `ivm` Metal vector tests fail intermittently in a loaded full run and pass
@@ -118,19 +124,23 @@ owner).
 
 ## Deployment state
 
-Taira's four validators serve the e3766fdb daemon build and the fresh signed
-genesis `277902D32673C29F56D4AA104063347F290881909ECB838B5038E39ABE11C15F`.
-October 4 direct checks found height 9, three peers and an empty queue on every
-validator. Public status, text readiness and faucet policy return HTTP 200;
-twenty-two transactions are approved and none rejected. Idle chains create no
-empty blocks. Shared HTTP defaults are 1,000,000 requests per second,
-60,000,000 per minute and a 10,000,000-token burst. Native amendments applied
-26 explicit request-budget fields to each serving validator; installed-daemon
-config checks and service-unit checks passed before a serial restart. All four
-new process config bindings match the native amendment receipts. The live
-amendment excludes optional recipient lookup because the installed daemon's
-schema cannot accept its new source budget. The deployed native client's basic
-doctor passes all fifteen checks, including MCP server discovery and tools list.
+Taira is live at <https://taira.sora.org> on daemon source
+`c30e0b18cd7f5b9e1d680abe6478aea7f37ea5b9`, network
+`hash:47F0D781D98B119DB3DD130755BD806E08A5F81B1B5F4053601E9AD34D824297#9066`.
+The fresh deployment's authenticated cutover and cleanup completed. October 8
+02:52 UTC checks found all four validators at height 16, each with three peers
+and an empty queue. Public and direct readiness returned HTTP 200; the matching
+native client's basic doctor passed all fifteen checks, and authenticated
+consensus reported committed/applied height 16 with a ready beacon provider.
+The public MCP health call passed and exposed 164 tools. Idle chains create no
+empty blocks. The network-time enforcement mode remains `warn`.
+
+The preserved BPNG owner and direct `bpng` dataspace allocation are restored;
+the corrected Kina registration committed at height 16. Genuine signed
+checkpoint and network-profile artifacts are published under `/bootstrap/`
+and were verified against their producer hashes. Obsolete staged public binary
+copies were removed while preserving the current deployment and private state;
+guest filesystem space available after cleanup was 4.31 GB.
 
 Current source initializes fresh safety records before first startup and retires
 completed execution after successful replay before strict native archive
@@ -139,20 +149,10 @@ authenticated build-only candidate without a full regression gate. On-chain
 governance owns deployment policy; no fixed 24-hour fault test is a prerequisite
 for testnet or production. Release qualification remains open.
 
-The previous 7c77fd3c network's public accounts regression completed 240
-requests with HTTP 200 and no HTTP 429, but sustained only 3.01 requests per
-second against the required 20.
-The deployed fanout admission reserves its entire 48 MB execution pool for each
-read; the current single-World collection redesign still requires bounded row
-allocation and encoding before it can use a smaller concurrent reservation.
-Current-candidate release qualification and authenticated deployment completion
-remain open.
+Current-source release qualification remains open; the live testnet observation
+above applies to the deployed c30 candidate. BPNG application account/alias
+restoration and newer wallet ordinary-Load finality commissioning remain open.
 Private DPN, paid `dpn`/`admin@dpn` and clean-client completion remain open.
-The serving bundle lacks the standard `iroha3d` sibling and an installed native
-network profile. Source now prepares independently signed checkpoint/profile
-artifacts and provisions the dataspace and owner alias under one retained quote;
-component validation and a matching complete bundle remain required before
-those paths can qualify live deployment.
 Validators run in a Linux guest on MacStadium in Dublin; use the approved
 deployment tooling. Retained incident records describe the
 [previous readiness failure](docs/incidents/2026-09-30-taira-readiness.md).
@@ -165,12 +165,13 @@ require the explicitly approved OVH target.
 
 ## Build and release qualification
 
-The current `optimizations` checkout has merged HEAD
-`f6903d2de355a71aba2dc75cab5450d5a85eb645` and uncommitted handoff repairs.
+The current `optimizations` checkout includes uncommitted handoff repairs.
 Fresh combined Core, node, workspace and SDK qualification remains open.
-The repaired MV and crypto dependency graph compiles, but observed Core release
-compiler memory exceeds the 13 GiB ceiling. Normal-stack Core unit tests and
-fresh native network consumers still require the same repaired candidate.
+The repaired daemon and Nexus harness build with the original optimized compiler
+settings. Their observed Core compiler invocations stay below the unchanged 13 GiB
+kernel-measured ceiling, but both builds exceed the 20-minute target. Other feature
+combinations and the complete release remain unqualified. Complete Core unit tests
+and fresh native network consumers still require the same repaired candidate.
 The earlier eighteen-target Core/Kagami build and all 262 selected native
 executions passed with their recorded source and artifacts; they do not qualify
 the changed combined candidate. They account for all original
@@ -387,12 +388,34 @@ passes.
   a durable software provider and recursive proofs. Its Send is irreversible;
   recovery replays exact Payment bytes to the receiver, with no refund path.
   The old per-operation online-control implementation was deleted on
-  2026-10-05; the G1 canonical objects (with cross-language vectors) and the G2
-  `Advance` provider are the only implementation. Measured Pasta IPA proof
-  sizes (≈ 358 bytes per advice column at k=16) mean a 10,000-byte Payment
-  needs a narrow large-k outer proof layer; that architecture and the 2 s
-  target await owner decisions. Complete proofs, the provider's bridge
-  integration, load/unload and device recovery measurements remain open.
+  2026-10-05. The accepted Q → A → Ω construction now has native proof,
+  operation and shared-wallet components; original account admission and typed
+  C/JNI/Swift/Kotlin integration are implemented. The structural Payment envelope
+  is 9,979 bytes, pending acceptance under the complete authenticated producer
+  catalog. Signed pre-key permits, native enrollment custody and the private verifier codec
+  are implemented. The node journal now retains worker configuration and exact
+  requests/results and freezes credential bodies before signing. Captured issuer,
+  journal, private-worker protocol and universal-template Torii tests pass. A disposable
+  Linux guest passes206 Python cases (eight macOS-only skips) and six actual
+  process/clock cases; compiled Linux Torii launch and deployment remain unqualified. Enrollment admits
+  configured bank or asset/scheme-authorized
+  operator providers. Every universal-dataspace token is eligible: no Parliament
+  approval, named-token allowlist or legal asset-class gate. Exact asset authorization,
+  reserve backing and applicable controls remain required.
+  Asset-independent enrollment templates and finality-backed universal asset
+  selection are implemented. Actual Core registration execution, native registration
+  intake, CLI package publication and shared ledger recovery pass their component
+  tests. CBSI/BPNG remain deployment authentication adapters. Bank-required policies
+  retain bank KYC/freeze checks and never fall back after a bank failure. The rebuilt
+  ABI27 host passes Swift, Kotlin/JNI and C# consumer suites. Captured source-drift
+  records remain explicit; these results do not qualify the whole checkout or phones.
+  Scoped proof-crate strict lint and workspace formatting pass; dependency-inclusive
+  strict lint retains unrelated configuration failures.
+  A canonical executed ledger setup is now
+  exported for the native monetary integration, with the full matching proof
+  catalog and funded A receipt still pending.
+  Real-proof A → B → C → unload, the two-second durable-completion target,
+  the complete native release matrix and physical-device recovery remain unqualified.
   The [checklist](specs/kagemusha_evidence_gate.md) records verification without
   an approval gate; software markers claim no protection against OS takeover.
 

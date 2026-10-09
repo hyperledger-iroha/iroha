@@ -133,8 +133,16 @@ impl CommittedToriiRouterRuntime {
         runtime: TestApiRouterRuntime,
         chain: iroha_core::sumeragi::test_chain::CertifiedTestChain,
     ) -> Self {
-        assert_eq!(chain.height(), 1, "routing fixture retains its original applied genesis");
-        assert_eq!(chain.validators().len(), 4, "routing fixture retains its signed committee");
+        assert_eq!(
+            chain.height(),
+            1,
+            "routing fixture retains its original applied genesis"
+        );
+        assert_eq!(
+            chain.validators().len(),
+            4,
+            "routing fixture retains its signed committee"
+        );
         assert_eq!(*chain.state().network_id_ref(), chain.network_id());
         Self { runtime, chain }
     }

@@ -225,6 +225,25 @@ impl ManagedStreamTokenCustody {
         })
     }
 
+    pub(super) fn validate_unsigned_renewal_context_with_imports(
+        &self,
+        unsigned: &body_history::UnsignedEnrollment,
+        deadline: Instant,
+        imports: &mut crate::managed::service_authority::CheckpointImports<'_, '_>,
+    ) -> Result<()> {
+        let prerequisite = self.retained_initial_prerequisite_with_imports(deadline, imports)?;
+        let policy = prerequisite.policy;
+        let initial = prerequisite.enrollment;
+        let checkpoint = imports.decode(&unsigned.checkpoint)?;
+        self.require_unsigned_renewal_prerequisite(
+            unsigned,
+            &policy,
+            &initial,
+            &checkpoint,
+            deadline,
+        )
+    }
+
     fn validate_unsigned_renewal_context_with<V: Borrow<FinalityVerifier>>(
         &self,
         unsigned: &body_history::UnsignedEnrollment,
@@ -237,8 +256,21 @@ impl ManagedStreamTokenCustody {
         let initial = prerequisite.enrollment;
         let checkpoint = checkpoint()?;
         let checkpoint = checkpoint.borrow();
+        self.require_unsigned_renewal_prerequisite(
+            unsigned, &policy, &initial, checkpoint, deadline,
+        )
+    }
+
+    fn require_unsigned_renewal_prerequisite(
+        &self,
+        unsigned: &body_history::UnsignedEnrollment,
+        policy: &SignerCustodyPolicyV1,
+        initial: &RetainedCustodyEnrollment,
+        checkpoint: &FinalityVerifier,
+        deadline: Instant,
+    ) -> Result<()> {
         let selected = body_history::selected_policy(&unsigned.selection)?;
-        if selected != policy || checkpoint.checkpoint().height() < initial.finalized().height {
+        if selected != *policy || checkpoint.checkpoint().height() < initial.finalized().height {
             return Err(invalid(
                 "renewal predecessor differs from original initial enrollment",
             ));

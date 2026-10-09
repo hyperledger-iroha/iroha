@@ -1,120 +1,5 @@
 // Configuration validation tests, retaining the original module and cfg.
 #[cfg(test)]
-/// Native DATA originals for shared parser tests; these bytes cannot authorize a publisher.
-pub(crate) mod parser_only_publisher_test_fixture {
-    use std::{
-        fs,
-        io::Write as _,
-        path::{Path, PathBuf},
-        sync::atomic::{AtomicU64, Ordering},
-    };
-
-    struct Directory(PathBuf);
-    impl Directory {
-        fn new() -> Self {
-            static NEXT: AtomicU64 = AtomicU64::new(0);
-            for _ in 0..1024 {
-                let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
-                let path = std::env::temp_dir().join(format!(
-                    "iroha-config-parser-publisher-{}-{sequence}",
-                    std::process::id()
-                ));
-                let mut builder = fs::DirBuilder::new();
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::DirBuilderExt as _;
-                    builder.mode(0o700);
-                }
-                match builder.create(&path) {
-                    Ok(()) => {
-                        let directory = Self(path);
-                        // A real canonical key already present in the repository test fixture.
-                        let fixture: toml::Table = include_str!("../../tests/fixtures/base.toml")
-                            .parse()
-                            .unwrap();
-                        let submitter = fixture["soranet_transport_private_key"]
-                            .as_str()
-                            .expect("existing canonical Ed25519 parser fixture");
-                        directory.write(
-                            "publisher.keyring",
-                            b"unadmitted-shared-parser-only-keyring",
-                        );
-                        directory.write("publisher.submitter", submitter.as_bytes());
-                        return directory;
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(error) => panic!("create parser DATA fixture {}: {error}", path.display()),
-                }
-            }
-            panic!("could not allocate unique publisher parser DATA originals");
-        }
-        fn write(&self, name: &str, bytes: &[u8]) {
-            let mut options = fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt as _;
-                options.mode(0o600);
-            }
-            options
-                .open(self.0.join(name))
-                .unwrap()
-                .write_all(bytes)
-                .unwrap();
-        }
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for Directory {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-    std::thread_local! {
-        // User-layer tests can retain Root and invoke its real native parse later.
-        // Keep these originals for the test thread, then clean up on thread teardown.
-        static FILES: Directory = Directory::new();
-    }
-
-    /// Add explicit required parser references before unrelated test overlays are applied.
-    /// The fixture refuses an existing section rather than replacing caller-specified inputs.
-    pub(crate) fn install(mut table: toml::Table) -> toml::Table {
-        assert!(!table.contains_key("kagemusha_load_authorizer"));
-        FILES.with(|files| {
-            let publisher = toml::Table::from_iter([
-                (
-                    "keyring_file".into(),
-                    toml::Value::String(
-                        files
-                            .path()
-                            .join("publisher.keyring")
-                            .to_str()
-                            .unwrap()
-                            .into(),
-                    ),
-                ),
-                (
-                    "submitter_key_file".into(),
-                    toml::Value::String(
-                        files
-                            .path()
-                            .join("publisher.submitter")
-                            .to_str()
-                            .unwrap()
-                            .into(),
-                    ),
-                ),
-            ]);
-            table.insert(
-                "kagemusha_load_authorizer".into(),
-                toml::Value::Table(publisher),
-            );
-        });
-        table
-    }
-}
-#[cfg(test)]
 mod duration_clamp_tests {
     use super::{
         AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, ContentAuthMode,
@@ -206,9 +91,7 @@ identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A
 identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 "#;
     fn base_table() -> Table {
-        super::parser_only_publisher_test_fixture::install(
-            toml::from_str(MINIMAL_CONFIG).expect("parse minimal config"),
-        )
+        toml::from_str(MINIMAL_CONFIG).expect("parse minimal config")
     }
     include!("user/torii_https_transport_tests.rs");
     fn four_validator_roster_table() -> Table {
@@ -249,66 +132,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<super::Root>()
             .expect("load minimal user config")
-    }
-    #[test]
-    fn shared_parser_fixture_reads_private_originals_and_preserves_required_custody_refusal() {
-        let table = base_table();
-        let actual = load_user_root(table.clone())
-            .parse()
-            .expect("delayed user parse reads original publisher DATA");
-        assert_eq!(
-            actual.kagemusha_load_authorizer.custody.keyring.as_slice(),
-            b"unadmitted-shared-parser-only-keyring"
-        );
-        let publisher = table["kagemusha_load_authorizer"].as_table().unwrap();
-        for field in ["keyring_file", "submitter_key_file"] {
-            let path = Path::new(publisher[field].as_str().unwrap());
-            assert!(fs::metadata(path).unwrap().is_file());
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                assert_eq!(
-                    fs::metadata(path).unwrap().permissions().mode() & 0o7777,
-                    0o600
-                );
-                assert_eq!(
-                    fs::metadata(path.parent().unwrap())
-                        .unwrap()
-                        .permissions()
-                        .mode()
-                        & 0o7777,
-                    0o700
-                );
-            }
-            let mut missing = table.clone();
-            missing
-                .get_mut("kagemusha_load_authorizer")
-                .unwrap()
-                .as_table_mut()
-                .unwrap()
-                .remove(field);
-            let error = actual::Root::from_toml_source(TomlSource::inline(missing))
-                .expect_err("shared test fixture must not bypass a required publisher reference");
-            assert!(
-                format!("{error:?}").contains("requires both keyring_file and submitter_key_file")
-            );
-        }
-        let mut unavailable = table;
-        let publisher = unavailable
-            .get_mut("kagemusha_load_authorizer")
-            .unwrap()
-            .as_table_mut()
-            .unwrap();
-        let unavailable_path = Path::new(publisher["keyring_file"].as_str().unwrap())
-            .with_file_name("absent-publisher-original");
-        assert!(!unavailable_path.exists());
-        publisher.insert(
-            "keyring_file".into(),
-            Value::String(unavailable_path.to_str().unwrap().into()),
-        );
-        let error = actual::Root::from_toml_source(TomlSource::inline(unavailable))
-            .expect_err("native parser must not fall back when the exact test original is absent");
-        assert!(format!("{error:?}").contains("private custody files are absent"));
     }
     #[test]
     fn runtime_provider_broker_endpoint_is_public_bounded_and_exact() {
@@ -1238,6 +1061,26 @@ policy_digest_hex = "{policy_digest_hex}"
                 .expect_err("retired pre-release settlement keys must be rejected");
             assert!(
                 format!("{error:?}").contains("`settlement.offline`"),
+                "unexpected error: {error:?}"
+            );
+        }
+    }
+    #[test]
+    fn removed_load_publisher_configuration_is_unknown() {
+        for publisher in [
+            Value::Boolean(false),
+            Value::Table(Table::new()),
+            Value::Table(Table::from_iter([
+                ("keyring_file".into(), "absent-authorizer.norito".into()),
+                ("submitter_key_file".into(), "absent-submitter.key".into()),
+            ])),
+        ] {
+            let mut table = base_table();
+            table.insert("kagemusha_load_authorizer".into(), publisher);
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("removed publisher configuration must be rejected");
+            assert!(
+                format!("{error:?}").contains("kagemusha_load_authorizer"),
                 "unexpected error: {error:?}"
             );
         }

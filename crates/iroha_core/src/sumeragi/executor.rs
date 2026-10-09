@@ -729,10 +729,24 @@ struct Live<'s> {
     witness: Option<crate::state::CapturedExecWitness>,
     result: Hash32,
     /// Complete original canonical epoch result and its exact source-bound allocation ledger.
-    commitment: iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
+    /// Retained for custody through the same Live lifetime and field drop order, even when
+    /// shipping execution no longer reads its value after encoding the original preimage.
+    _commitment: iroha_allocation::RetainedPayload<ExecutionResultCommitment>,
     applied_config: AppliedConfig,
     committee: Vec<PeerId>,
     events: Vec<EventBox>,
+}
+
+#[cfg(test)]
+impl Live<'_> {
+    /// Borrow the retained canonical result for original-custody assertions.
+    fn commitment(&self) -> &iroha_allocation::RetainedPayload<ExecutionResultCommitment> {
+        let Self {
+            _commitment: commitment,
+            ..
+        } = self;
+        commitment
+    }
 }
 
 /// The one original execution's progress; no phase reconstructs a predecessor owner.
@@ -832,6 +846,8 @@ struct SignatureDecodeAttempt {
     decoded: Option<SignedBlock>,
     /// An original returned graph cannot be reused after an unfinished or mismatched projection.
     returned_refusal: Option<ReturnedDecodedRefusal>,
+    /// Completed leg graphs and decoder controls from this exact original proposal.
+    amx_legs: Option<super::amx::NativeAmxLegPreparations>,
 }
 
 /// Original failure retained beside the same graph after the validator returned ownership.
@@ -1453,6 +1469,7 @@ impl<'s> Worker<'s> {
                 decoder,
                 decoded: None,
                 returned_refusal: None,
+                amx_legs: None,
             });
         }
         let attempt = self
@@ -1583,17 +1600,54 @@ impl<'s> Worker<'s> {
             .as_mut()
             .and_then(|attempt| attempt.decoded.take())
             .expect("original completed proposal transfers to validation");
+        let genesis_account = &self.context.genesis_account;
+        let consensus_mode = self.context.consensus_mode;
+        let state = self.state;
+        let attempt = self
+            .signature_decode
+            .as_mut()
+            .expect("original validation attempt");
+        // Expansion legitimately appends/moves lane inputs. This first owner
+        // retains only unexpanded originals; other calls use the same funded kernel.
+        // TODO: compose retained leg identity with actual lane input ownership.
+        let amx_legs = if iroha_block.lane_merge().is_none() {
+            let original_source = &attempt.source;
+            let bank = attempt.amx_legs.get_or_insert_with(|| {
+                super::amx::NativeAmxLegPreparations::new(&iroha_block, original_source, &budget)
+            });
+            let original_matches =
+                bank.matches_original(&iroha_block, original_source, block, &budget);
+            #[cfg(all(test, sumeragi_core_mutation = "HC167"))]
+            let original_matches = original_matches
+                && bank.matches_original_publication(state.state_view_generation());
+            if !original_matches {
+                attempt.decoded = Some(iroha_block);
+                return Err(PublicationError::RecoveryRequired(
+                    "completed AMX preparation changed its original block, source or pool".into(),
+                ));
+            }
+            Some(bank)
+        } else {
+            if attempt.amx_legs.is_some() {
+                attempt.decoded = Some(iroha_block);
+                return Err(PublicationError::RecoveryRequired(
+                    "completed AMX attempt acquired a substituted lane expansion".into(),
+                ));
+            }
+            None
+        };
         let validated = catch_unwind(AssertUnwindSafe(|| {
-            ValidBlock::validate_sumeragi_block(
+            ValidBlock::validate_sumeragi_block_with_amx(
                 iroha_block,
                 &topology,
-                &self.context.genesis_account,
+                genesis_account,
                 cadence,
-                self.context.consensus_mode,
+                consensus_mode,
                 expansion,
                 block.header(),
                 block.payload().as_slice(),
-                self.state,
+                state,
+                amx_legs,
             )
         }));
         let validated = match validation_result(validated) {
@@ -1925,7 +1979,7 @@ impl<'s> Worker<'s> {
             overlay: Some(original.overlay),
             witness: Some(original.witness),
             result,
-            commitment,
+            _commitment: commitment,
             applied_config: original.applied_config,
             committee: original.committee,
             events: original.events,
@@ -3391,3 +3445,7 @@ mod payload_refusal_tests;
 #[cfg(test)]
 #[path = "executor_local_signature_preparation_tests.rs"]
 mod local_signature_preparation_tests;
+
+#[cfg(test)]
+#[path = "executor_amx_retry_tests.rs"]
+mod amx_retry_tests;

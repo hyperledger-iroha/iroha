@@ -1,7 +1,31 @@
 //! Ordered persisted sub-proofs, recorded Ω identities and native CreditStatus construction.
 
+use super::fold_custody::FoldSourcesV1;
 use super::*;
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_provider_digest_v1 as digest;
+
+struct FoldSeed {
+    sources: FoldSourcesV1,
+    credits: credit_tree::CreditTree,
+    pending: map_tree::PersistentMapV1,
+}
+impl FoldSeed {
+    fn view<'a>(
+        &self,
+        store: &'a mut dyn ObjectStore,
+        before: Option<&'a ReleasedStep>,
+        after: &'a ReleasedStep,
+    ) -> Result<FoldCustodyV1<'a>, Error> {
+        FoldCustodyV1::new(
+            store,
+            before,
+            after,
+            self.sources.clone(),
+            self.credits.clone(),
+            self.pending.clone(),
+        )
+    }
+}
 
 /// Result of one cooperative background scheduling turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,18 +67,83 @@ impl LineageCache {
         if self.verified.as_ref() == Some(&bytes) {
             return Ok(true);
         }
-        native.verify_lineage(lineage)?;
+        native.verify_lineage(lineage, None)?;
         self.verified = Some(bytes);
         Ok(false)
     }
 }
 
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
+    fn fold_seed(
+        &mut self,
+        manifest: &manifest::Manifest,
+        before: Option<&ReleasedStep>,
+        predecessor: Option<&KagemushaWalletFoldRecordV1>,
+        after: &ReleasedStep,
+    ) -> Result<Option<FoldSeed>, Error> {
+        let capsule = valid(after.frozen.capsule.capsule_digest())?;
+        if manifest
+            .capsule_sources
+            .get(&mut self.archive, &capsule)?
+            .is_none()
+        {
+            if after.frozen.capsule.kind == KagemushaWalletOperationKindV1::Bootstrap
+                || manifest
+                    .capsule_plans
+                    .get(&mut self.archive, &capsule)?
+                    .is_some()
+            {
+                return Err(Error::WitnessLost("fold preparation snapshot"));
+            }
+            return Ok(None);
+        }
+        let after_source = self.source_custody(manifest, after)?;
+        let before_source = before
+            .map(|step| self.source_custody(manifest, step))
+            .transpose()?;
+        let mut pending = before_source
+            .as_ref()
+            .map(|source| source.maps.pending().clone())
+            .unwrap_or_default();
+        if let Some(predecessor) = predecessor {
+            if let Some(address) = manifest.fold_pending.get(
+                &mut self.archive,
+                &manifest::sequence_key(predecessor.sequence),
+            )? {
+                let address: [u8; 32] = address
+                    .try_into()
+                    .map_err(|_| Error::WitnessLost("fold pending address"))?;
+                pending = archive::decode(&self.archive.read_object(&address, 2048)?)?;
+            }
+            pending.validate()?;
+            if pending.root() != predecessor.lineage.public.pending_outgoing_root
+                || manifest.credit_tree.root() != predecessor.lineage.public.credit_digest_root
+            {
+                return Err(Error::WitnessLost("fold predecessor map roots"));
+            }
+        }
+        let preparation = self.transition_preparation(manifest, &after.frozen)?;
+        Ok(Some(FoldSeed {
+            sources: FoldSourcesV1 {
+                before: before_source,
+                after: after_source,
+                preparation,
+                issued: manifest.issued_requests,
+                anchors: manifest.direct_anchors,
+            },
+            credits: manifest.credit_tree.clone(),
+            pending,
+        }))
+    }
     fn verify_fold_bytes(
         &mut self,
         step: &ReleasedStep,
         bytes: &[u8],
+        cancellation: Option<&Cancellation>,
     ) -> Result<RecordedFold, Error> {
+        if let Some(token) = cancellation {
+            token.check()?;
+        }
         let c = &step.frozen.capsule;
         let fold: RecordedFold = archive::decode(bytes)?;
         valid(fold.record.to_canonical_bytes())?;
@@ -82,7 +171,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             .map(Vec::as_slice)
             != Some(bytes)
         {
-            self.proofs.verify_lineage(&r.lineage)?;
+            self.proofs.verify_lineage(&r.lineage, cancellation)?;
         }
         // Only the most recently used Ω is cached; history must not accumulate in RAM.
         self.verified_folds.clear();
@@ -91,6 +180,16 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         Ok(fold)
     }
     pub(super) fn read_fold(&mut self, step: &ReleasedStep) -> Result<Option<RecordedFold>, Error> {
+        self.read_fold_cancellable(step, None)
+    }
+    pub(super) fn read_fold_cancellable(
+        &mut self,
+        step: &ReleasedStep,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<Option<RecordedFold>, Error> {
+        if let Some(token) = cancellation {
+            token.check()?;
+        }
         let (_, manifest) = self.manifest()?;
         let sequence = step.frozen.capsule.statement.sequence;
         let expected = manifest
@@ -112,7 +211,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         if expected != digest("wallet-recorded-fold", &bytes) {
             return Err(Error::WitnessLost("source-bound Ω identity"));
         }
-        let fold = self.verify_fold_bytes(step, &bytes)?;
+        let fold = self.verify_fold_bytes(step, &bytes, cancellation)?;
         Ok(Some(fold))
     }
     fn record_credit(
@@ -142,7 +241,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         predecessor: Option<&KagemushaWalletFoldRecordV1>,
         schedule: &[CheckpointLayout],
         manifest: &manifest::Manifest,
-    ) -> Result<(u32, [u8; 32], Option<Vec<u8>>), Error> {
+    ) -> Result<(u32, [u8; 32], Vec<Vec<u8>>), Error> {
         if usize::try_from(manifest.checkpoint_count)
             .ok()
             .is_none_or(|count| count > schedule.len())
@@ -151,7 +250,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }
         let c = &step.frozen.capsule;
         let mut previous = [0; 32];
-        let mut latest = None;
+        let mut originals = Vec::with_capacity(manifest.checkpoint_count as usize);
         let predecessor_fold = predecessor
             .map(KagemushaWalletFoldRecordV1::fold_digest)
             .transpose()
@@ -183,12 +282,12 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 return Err(Error::WitnessLost("checkpoint chain"));
             }
             previous = digest("wallet-fold-checkpoint", &bytes);
-            latest = Some(checkpoint.proof);
+            originals.push(checkpoint.proof);
         }
         if previous != manifest.checkpoint_digest {
             return Err(Error::WitnessLost("source-bound checkpoint identity"));
         }
-        Ok((manifest.checkpoint_count, previous, latest))
+        Ok((manifest.checkpoint_count, previous, originals))
     }
     /// Prove or adopt at most one persisted sub-proof. Index roots and exact Ω identity become
     /// durable under the source marker before success. Payment preemption releases workspaces.
@@ -208,12 +307,15 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             seq.checked_add(1)
                 .ok_or(Error::Invalid("sequence overflow"))
         })?;
-        let predecessor = if let Some(previous) = manifest.folded {
-            let step = self.indexed_step(&manifest, previous)?;
+        let predecessor_step = manifest
+            .folded
+            .map(|previous| self.indexed_step(&manifest, previous))
+            .transpose()?;
+        let predecessor = if let Some(step) = predecessor_step.as_ref() {
             let fold = self
-                .read_fold(&step)?
+                .read_fold_cancellable(step, Some(&guard.token))?
                 .ok_or(Error::WitnessLost("fold predecessor"))?;
-            if fold.record.lineage.public.credit_digest_root != manifest.credit_tree.root {
+            if fold.record.lineage.public.credit_digest_root != manifest.credit_tree.root() {
                 return Err(Error::WitnessLost("credit tree root"));
             }
             Some(fold.record)
@@ -224,11 +326,24 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Ok(FoldStatus::CaughtUp);
         }
         let step = self.indexed_step(&manifest, sequence)?;
-        let schedule = self.proofs.fold_schedule(&step, predecessor.as_ref())?;
+        let seed = self.fold_seed(
+            &manifest,
+            predecessor_step.as_ref(),
+            predecessor.as_ref(),
+            &step,
+        )?;
+        let schedule = {
+            let mut view = seed
+                .as_ref()
+                .map(|seed| seed.view(&mut self.archive, predecessor_step.as_ref(), &step))
+                .transpose()?;
+            self.proofs
+                .fold_schedule(&step, predecessor.as_ref(), view.as_mut())?
+        };
         for layout in &schedule {
             layout.record_limit()?;
         }
-        let (ordinal, previous, checkpoint) =
+        let (ordinal, previous, checkpoints) =
             self.checkpoints(&step, predecessor.as_ref(), &schedule, &manifest)?;
         guard.token.check()?;
         // A completed but unacknowledged publication is adopted byte-for-byte, never re-proved.
@@ -247,7 +362,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             None
         };
         let result = if let Some(bytes) = existing_fold.as_ref() {
-            let fold = self.verify_fold_bytes(&step, bytes)?;
+            let fold = self.verify_fold_bytes(&step, bytes, Some(&guard.token))?;
             FoldProgress::Complete {
                 lineage: fold.record.lineage,
                 burned: fold.burned,
@@ -256,10 +371,15 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             let candidate: Checkpoint = archive::decode(bytes)?;
             FoldProgress::Checkpoint(candidate.proof)
         } else {
+            let mut view = seed
+                .as_ref()
+                .map(|seed| seed.view(&mut self.archive, predecessor_step.as_ref(), &step))
+                .transpose()?;
             self.proofs.fold_next(
                 &step,
                 predecessor.as_ref(),
-                checkpoint.as_deref(),
+                &checkpoints,
+                view.as_mut(),
                 &guard.token,
             )?
         };
@@ -307,9 +427,42 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 if usize::try_from(ordinal).ok() != Some(schedule.len()) {
                     return Err(Error::Proof("premature final Ω"));
                 }
-                self.proofs.verify_lineage(&lineage)?;
-                Self::record_credit(&mut manifest.credit_tree, &mut self.archive, &step, burned)?;
-                if lineage.public.credit_digest_root != manifest.credit_tree.root {
+                self.proofs.verify_lineage(&lineage, Some(&guard.token))?;
+                if let Some(seed) = &seed {
+                    let mut view =
+                        seed.view(&mut self.archive, predecessor_step.as_ref(), &step)?;
+                    match step.frozen.capsule.kind {
+                        KagemushaWalletOperationKindV1::Receive => {
+                            view.credit_record(burned)?;
+                        }
+                        KagemushaWalletOperationKindV1::Send => {
+                            view.pending_insert()?;
+                        }
+                        KagemushaWalletOperationKindV1::ArchiveSent => {
+                            view.pending_remove()?;
+                        }
+                        _ if burned => return Err(Error::Invalid("non-Receive burn flag")),
+                        _ => {}
+                    }
+                    let (credits, pending) = view.finish(&lineage.public)?;
+                    manifest.credit_tree = credits;
+                    let address = self
+                        .archive
+                        .write_object(&archive::encode(&pending)?, 2048)?;
+                    manifest.fold_pending = manifest.fold_pending.set(
+                        &mut self.archive,
+                        manifest::sequence_key(sequence),
+                        &address,
+                    )?;
+                } else {
+                    Self::record_credit(
+                        &mut manifest.credit_tree,
+                        &mut self.archive,
+                        &step,
+                        burned,
+                    )?;
+                }
+                if lineage.public.credit_digest_root != manifest.credit_tree.root() {
                     return Err(Error::Proof("credit-digest root"));
                 }
                 let c = &step.frozen.capsule;
@@ -324,7 +477,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     lineage,
                 };
                 let bytes = archive::encode(&RecordedFold { record, burned })?;
-                self.verify_fold_bytes(&step, &bytes)?;
+                self.verify_fold_bytes(&step, &bytes, Some(&guard.token))?;
                 if existing_fold
                     .as_ref()
                     .is_some_and(|existing| *existing != bytes)
@@ -380,7 +533,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         let fold = self
             .read_fold(&step)?
             .ok_or(Error::WitnessLost("covering Ω"))?;
-        if fold.record.lineage.public.credit_digest_root != manifest.credit_tree.root {
+        if fold.record.lineage.public.credit_digest_root != manifest.credit_tree.root() {
             return Err(Error::WitnessLost("credit root"));
         }
         let (leaf, indexed, opening) =

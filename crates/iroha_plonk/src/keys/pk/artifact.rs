@@ -43,6 +43,8 @@ pub struct ReadConfig {
 /// Original proving-key admission failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    /// The explicit operation signal cancelled admission.
+    Cancelled,
     /// Not an explicit V2 descriptor or a mismatching pinned curve/domain/profile.
     Profile,
     /// An original length, arithmetic or caller allocation bound failed.
@@ -59,6 +61,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("operation cancelled"),
             Self::Profile => f.write_str("proving-key artifact profile differs"),
             Self::Length => f.write_str("proving-key artifact length or allocation bound failed"),
             Self::Encoding => f.write_str("noncanonical proving-key artifact"),
@@ -71,7 +74,23 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 impl From<KeyError> for Error {
     fn from(error: KeyError) -> Self {
-        Self::Key(error)
+        if error.is_cancelled() {
+            Self::Cancelled
+        } else {
+            Self::Key(error)
+        }
+    }
+}
+
+impl Error {
+    /// Whether admission was cancelled rather than rejected as invalid material.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled) || matches!(self, Self::Key(error) if error.is_cancelled())
+    }
+}
+impl From<iroha_pasta::Cancelled> for Error {
+    fn from(_: iroha_pasta::Cancelled) -> Self {
+        Self::Cancelled
     }
 }
 
@@ -94,6 +113,99 @@ fn dimensions(binding: &DescriptorBinding) -> Result<(usize, usize, usize), Erro
         .and_then(|n| n.checked_add(table_bytes))
         .ok_or(Error::Length)?;
     Ok((vk_bytes, columns, bytes))
+}
+
+/// Validate all length/allocation bounds before slicing or allocating key material.
+fn bounded_dimensions(
+    original: &[u8],
+    binding: &DescriptorBinding,
+    config: ReadConfig,
+) -> Result<(usize, usize), Error> {
+    let (vk_bytes, columns, expected) = dimensions(binding)?;
+    if original.len() != expected
+        || expected > config.maximum_bytes
+        || binding.n() > config.maximum_rows
+    {
+        return Err(Error::Length);
+    }
+    Ok((vk_bytes, columns))
+}
+
+struct OriginalParts<'a, C: PastaCurve> {
+    key: VerifyingKey<C>,
+    copy_digest: [u8; 32],
+    evaluations: &'a [u8],
+}
+
+/// Only called after `bounded_dimensions` checked the exact complete span.
+fn original_parts<'a, C: PastaCurve>(
+    original: &'a [u8],
+    binding: &DescriptorBinding,
+    vk_bytes: usize,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<OriginalParts<'a, C>, Error> {
+    if original[..8] != MAGIC || original[8..40] != *binding.digest() {
+        return Err(Error::Encoding);
+    }
+    let encoded_vk_bytes = u32::from_le_bytes(
+        original[40..HEADER]
+            .try_into()
+            .map_err(|_| Error::Encoding)?,
+    ) as usize;
+    if encoded_vk_bytes != vk_bytes {
+        return Err(Error::Length);
+    }
+    let vk_end = HEADER + vk_bytes;
+    let key = VerifyingKey::<C>::read_cancellable(&original[HEADER..vk_end], binding, cancellation)
+        .map_err(|error| Error::Key(KeyError::VerifyingKey(error)))?;
+    let copy_digest = original[vk_end..vk_end + COPY_BYTES]
+        .try_into()
+        .map_err(|_| Error::Encoding)?;
+    Ok(OriginalParts {
+        key,
+        copy_digest,
+        evaluations: &original[vk_end + COPY_BYTES..],
+    })
+}
+
+/// Read an untrusted original's lookup fingerprint without reconstructing a key.
+///
+/// Exact bounds, descriptor framing, canonical processed VK/selector encodings
+/// and every scalar are checked. Scalars are streamed, without retaining their
+/// evaluation tables or loading parameter arrays. The fingerprint excludes VK
+/// commitments: an attacker can preserve it while changing a valid commitment.
+/// It grants no authentication or source qualification. Matching only selects a
+/// candidate for mandatory [`ProvingKey::from_artifact_v2_cancellable`] admission.
+///
+/// # Errors
+/// Incorrect profile, bounds, framing, points or scalars, or explicit cancellation.
+pub fn source_fingerprint_v2<C: PastaCurve>(
+    original: &[u8],
+    binding: &DescriptorBinding,
+    config: ReadConfig,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<crate::keys::SourceFingerprintV2, Error> {
+    use iroha_pasta::CancellationToken;
+    CancellationToken::checkpoint(cancellation)?;
+    let (vk_bytes, _) = bounded_dimensions(original, binding, config)?;
+    let parts = original_parts::<C>(original, binding, vk_bytes, cancellation)?;
+    let mut hash = crate::keys::source_fingerprint::SourceHasher::new(
+        binding,
+        &parts.copy_digest,
+        parts.key.selectors(),
+        cancellation,
+    )?;
+    for (index, bytes) in parts.evaluations.chunks_exact(32).enumerate() {
+        if index % 1024 == 0 {
+            CancellationToken::checkpoint(cancellation)?;
+        }
+        let mut repr = <C::ScalarExt as PrimeField>::Repr::default();
+        repr.as_mut().copy_from_slice(bytes);
+        Option::<C::ScalarExt>::from(C::ScalarExt::from_repr(repr)).ok_or(Error::Encoding)?;
+        hash.scalar(bytes);
+    }
+    CancellationToken::checkpoint(cancellation)?;
+    Ok(hash.finish(binding.clone()))
 }
 
 impl<C: PastaCurve> ProvingKey<C> {
@@ -148,38 +260,39 @@ impl<C: PastaCurve> ProvingKey<C> {
         circuit: &Ci,
         config: ReadConfig,
     ) -> Result<Self, Error> {
-        let (vk_bytes, columns, expected) = dimensions(binding)?;
-        if original.len() != expected
-            || expected > config.maximum_bytes
-            || binding.n() > config.maximum_rows
-        {
-            return Err(Error::Length);
-        }
+        Self::from_artifact_v2_cancellable(original, binding, params, circuit, config, None)
+    }
+
+    /// Import original key material with cooperative cancellation at synthesis,
+    /// decoding, commitment and transform boundaries. No partial key escapes.
+    /// # Errors
+    /// As [`Self::from_artifact_v2`], or explicit cancellation.
+    pub fn from_artifact_v2_cancellable<Ci: Circuit<C::ScalarExt>>(
+        original: &[u8],
+        binding: &DescriptorBinding,
+        params: &PinnedParams<C>,
+        circuit: &Ci,
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        let (vk_bytes, columns) = bounded_dimensions(original, binding, config)?;
         if params.k() != u32::from(binding.descriptor().k) {
             return Err(Error::Profile);
         }
-        if original[..8] != MAGIC || original[8..40] != *binding.digest() {
-            return Err(Error::Encoding);
-        }
-        let encoded_vk_bytes = u32::from_le_bytes(
-            original[40..HEADER]
-                .try_into()
-                .map_err(|_| Error::Encoding)?,
-        ) as usize;
-        if encoded_vk_bytes != vk_bytes {
-            return Err(Error::Length);
-        }
-        let vk_end = HEADER + vk_bytes;
-        let key = VerifyingKey::<C>::read(&original[HEADER..vk_end], binding)
-            .map_err(|error| Error::Key(KeyError::VerifyingKey(error)))?;
-        let copy_digest = original[vk_end..vk_end + COPY_BYTES]
-            .try_into()
-            .map_err(|_| Error::Encoding)?;
+        let OriginalParts {
+            key,
+            copy_digest,
+            evaluations,
+        } = original_parts::<C>(original, binding, vk_bytes, cancellation)?;
         let width = binding.n().checked_mul(32).ok_or(Error::Length)?;
         let mut values = Vec::with_capacity(columns);
-        for column in original[vk_end + COPY_BYTES..].chunks_exact(width) {
+        for column in evaluations.chunks_exact(width) {
             let mut scalars = Vec::with_capacity(binding.n());
-            for bytes in column.chunks_exact(32) {
+            for (index, bytes) in column.chunks_exact(32).enumerate() {
+                if index % 1024 == 0 {
+                    iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+                }
                 let mut repr = <C::ScalarExt as PrimeField>::Repr::default();
                 repr.as_mut().copy_from_slice(bytes);
                 scalars.push(
@@ -199,6 +312,7 @@ impl<C: PastaCurve> ProvingKey<C> {
             permutation,
             copy_digest,
             config,
+            cancellation,
         )
     }
 }

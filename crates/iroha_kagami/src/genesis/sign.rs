@@ -1,3 +1,4 @@
+mod amx;
 use super::require_native_wire_protocol;
 use crate::{Outcome, RunArgs, genesis::reject_retired_public_chain_id, tui};
 use clap::Parser;
@@ -96,6 +97,9 @@ pub struct Args {
     /// set it so repeated signing produces identical canonical wire bytes.
     #[clap(long, value_name = "MILLISECONDS")]
     creation_time_ms: Option<u64>,
+    /// Explicit complete global source pair for native AMX participant bootstrap.
+    #[clap(flatten)]
+    amx: amx::Args,
     /// Optional peer config TOML used to derive the DA proof-policy bundle embedded into genesis.
     #[clap(long, value_name = "PATH")]
     config: Option<PathBuf>,
@@ -694,22 +698,32 @@ pub(super) fn load_peer_config_bytes(
     })?;
     let description = format!("peer config {}", config_path.display());
     let table = crate::secret_toml::parse_table(source_text, &description)?;
-    load_peer_config_source(
-        config_path,
-        TomlSource::new_sensitive(
-            config_path.to_path_buf(),
-            table,
-            crate::secret_toml::zeroize_table,
-        ),
-    )
+    load_peer_config_user(config_path, table)?
+        .parse()
+        .map_err(|_| eyre!("peer config {} is invalid", config_path.display()))
 }
 
-fn load_peer_config_source(
+/// Use the node's loader for the exact retained source, including profile and data-dir layout.
+fn load_peer_config_user(
     config_path: &Path,
-    source: TomlSource,
-) -> Result<actual::Root, color_eyre::eyre::Error> {
-    actual::Root::from_toml_source(source)
-        .map_err(|_| eyre!("peer config {} is invalid", config_path.display()))
+    table: toml::Table,
+) -> Result<iroha_config::parameters::user::Root, color_eyre::eyre::Error> {
+    use iroha_config::node_config::{NodeConfigOptions, open_node_config_source};
+    let source = TomlSource::new_sensitive(
+        config_path.to_path_buf(),
+        table,
+        crate::secret_toml::zeroize_table,
+    );
+    let node = open_node_config_source(source, NodeConfigOptions::default()).map_err(|_| {
+        eyre!(
+            "peer config {} has an invalid node layout",
+            config_path.display()
+        )
+    })?;
+    let (user, _) = node
+        .read()
+        .map_err(|_| eyre!("peer config {} is invalid", config_path.display()))?;
+    Ok(user)
 }
 /// Load one complete signing input. Absence of both runtime identity fields selects the
 /// distinct unpublished context; a supplied identity is always parsed by the strict runtime
@@ -727,16 +741,7 @@ fn load_peer_config_for_signing(
     let text = std::str::from_utf8(&config_bytes)
         .map_err(|_| eyre!("genesis signing config is not UTF-8"))?;
     let table = crate::secret_toml::parse_table(text, "genesis signing config")?;
-    let source = TomlSource::new_sensitive(
-        config_path.to_path_buf(),
-        table,
-        crate::secret_toml::zeroize_table,
-    );
-    let user = iroha_config::base::read::ConfigReader::new()
-        .without_env()
-        .with_toml_source(source)
-        .read_and_complete::<iroha_config::parameters::user::Root>()
-        .map_err(|_| eyre!("complete genesis signing config is invalid"))?;
+    let user = load_peer_config_user(config_path, table)?;
     if user.has_genesis_identity() {
         let config = user
             .parse()
@@ -923,6 +928,29 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Signing genesis manifest");
         let artifact_paths = resolve_artifact_paths(&self)?;
+        for input in self.amx.source_paths() {
+            let canonical = fs::canonicalize(input).wrap_err("resolve AMX global source")?;
+            for (label, output) in [
+                (
+                    "input genesis manifest",
+                    Some(artifact_paths.genesis_input.as_path()),
+                ),
+                (
+                    "signed genesis output",
+                    artifact_paths.signed_output.as_deref(),
+                ),
+                (
+                    "bound genesis manifest output",
+                    artifact_paths.bound_manifest_output.as_deref(),
+                ),
+                (
+                    "genesis expected-hash output",
+                    artifact_paths.expected_hash_output.as_deref(),
+                ),
+            ] {
+                reject_artifact_alias("AMX global source", Some(&canonical), label, output)?;
+            }
+        }
         let mut identity_guard = artifact_paths
             .expected_hash_output
             .as_deref()
@@ -939,6 +967,7 @@ impl<T: Write> RunArgs<T> for Args {
         }
         let genesis = RawGenesisTransaction::from_path(&artifact_paths.genesis_input)?;
         reject_retired_public_chain_id(genesis.chain_id().as_str())?;
+        let genesis = self.amx.append_to(genesis)?;
         // Keep every same-thread rebuild, config parse, and bound-manifest
         // serialization on the manifest's network. Staged execution re-enters
         // this discriminant on its worker thread.
@@ -2010,9 +2039,17 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 Some(&norito::json::Value::Null),
                 "{path} must not advertise a fingerprint before materialization"
             );
+            let manifest = RawGenesisTransaction::from_path(&full_path)
+                .expect("bounded source JSON must remain parseable before materialization");
+            assert_eq!(
+                manifest.consensus_fingerprint(),
+                None,
+                "{path} must remain unbound"
+            );
+            let mode = manifest.consensus_mode();
             assert!(
-                RawGenesisTransaction::from_path(&full_path).is_err(),
-                "{path} must not be accepted by the signing path"
+                prepare_genesis_for_signing(manifest, None, mode, None, &[]).is_err(),
+                "{path} must not enter signing without its required NPoS XOR selection"
             );
         }
     }
@@ -2041,9 +2078,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
     #[test]
-    fn unpublished_signing_context_requires_all_policy_and_binds_original_signature() {
-        // These parser-only publisher originals are explicitly unadmitted DATA. This control
-        // grants no Load role and never enters the production signer or PublicationWorker.
+    fn unpublished_signing_context_binds_original_signature() {
         let manifest = RawGenesisTransaction::from_path(minimal_genesis_file()).unwrap();
         let key = test_genesis_key_pair();
         let table = checked_in_consensus_config_table(
@@ -2055,34 +2090,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let genesis = table.get_mut("genesis").unwrap().as_table_mut().unwrap();
         genesis.remove("expected_hash");
         genesis.remove("expected_hash_file");
-        // The complete parser requires both retained private inputs. These bytes satisfy
-        // parser custody only: the keyring is deliberately not a Role-keyring frame and
-        // this test never invokes LoadRoleKeyring, publisher preflight or publication.
-        let custody = path.parent().expect("private parser fixture directory");
-        let keyring = custody.join("UNADMITTED-parser-keyring-DATA");
-        crate::secure_fs::write_private_file_atomic(
-            &keyring,
-            b"UNADMITTED parser DATA; no Load role or signer authorization",
-        )
-        .unwrap();
-        let submitter = custody.join("UNADMITTED-parser-submitter-key");
-        let record = zeroize::Zeroizing::new(
-            format!("{}\n", ExposedPrivateKey(key.private_key().clone())).into_bytes(),
-        );
-        crate::secure_fs::write_private_file_atomic(&submitter, record.as_slice()).unwrap();
-        table.insert(
-            "kagemusha_load_authorizer".to_owned(),
-            toml::Value::Table(toml::Table::from_iter([
-                (
-                    "keyring_file".to_owned(),
-                    keyring.to_string_lossy().into_owned().into(),
-                ),
-                (
-                    "submitter_key_file".to_owned(),
-                    submitter.to_string_lossy().into_owned().into(),
-                ),
-            ])),
-        );
         let source = || TomlSource::new(path.clone(), table.clone());
         assert!(actual::Root::from_toml_source(source()).is_err());
         let context = actual::GenesisSigningContext::from_toml_source(source()).unwrap();
@@ -2148,10 +2155,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 referenced_claim,
             ))
             .is_err()
-        );
-        table.remove("kagemusha_load_authorizer");
-        assert!(
-            actual::GenesisSigningContext::from_toml_source(TomlSource::new(path, table),).is_err()
         );
     }
     #[test]
@@ -2602,6 +2605,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 private_key_file: test_private_key_file(),
                 expected_public_key: None,
                 creation_time_ms: None,
+                amx: amx::Args::default(),
                 config: None,
             };
             let error = args
@@ -2628,6 +2632,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         current_args
@@ -2650,6 +2655,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 private_key_file: test_private_key_file(),
                 expected_public_key: None,
                 creation_time_ms: None,
+                amx: amx::Args::default(),
                 config: None,
             };
             let error = args.run(&mut BufWriter::new(Vec::new())).expect_err(
@@ -2679,6 +2685,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 private_key_file: private_key_file.clone(),
                 expected_public_key: None,
                 creation_time_ms: Some(1_700_000_000_000),
+                amx: amx::Args::default(),
                 config: None,
             };
             let mut writer = BufWriter::new(Vec::new());
@@ -2715,6 +2722,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut sink = BufWriter::new(Vec::new());
@@ -2743,6 +2751,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut sink = BufWriter::new(Vec::new());
@@ -2829,6 +2838,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file_for(&genesis_key_pair),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: Some(config_path),
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -2902,6 +2912,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let _ = args
@@ -2930,6 +2941,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let _ = args
@@ -2958,6 +2970,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let error = args
@@ -2988,6 +3001,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let error = args
@@ -3020,6 +3034,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let error = args
@@ -3043,6 +3058,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let error = args
@@ -3082,6 +3098,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let error = args
@@ -3130,6 +3147,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: Some(1_700_000_000_000),
+            amx: amx::Args::default(),
             config: None,
         }
     }
@@ -3418,6 +3436,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -3540,6 +3559,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -3559,6 +3579,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -3587,6 +3608,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -3634,6 +3656,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -3704,6 +3727,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file_for(&key_pair),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -3828,6 +3852,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file_for(&genesis_key_pair),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: Some(config_path),
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4013,6 +4038,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file,
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4309,6 +4335,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: Some(config_path),
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4412,6 +4439,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4483,6 +4511,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4513,6 +4542,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: Some(config_path),
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4543,6 +4573,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4572,6 +4603,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: Some(config_path),
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4611,6 +4643,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4673,6 +4706,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4697,6 +4731,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4795,6 +4830,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file_for(&key_pair),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: Some(config_path),
         };
         let mut writer = BufWriter::new(Vec::new());
@@ -4825,6 +4861,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
+            amx: amx::Args::default(),
             config: None,
         };
         let mut writer = BufWriter::new(Vec::new());

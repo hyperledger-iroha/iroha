@@ -17,6 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.offline.KagemushaP256Codec
@@ -212,6 +213,79 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertEquals(0, keyStore.deleteCalls)
     }
 
+    @Test fun `actual generation returns survive each fallible readback without another generation`() {
+        val profile = KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE
+        for (api in listOf(26, 33)) for (failure in 0..2) {
+            apiLevel(api)
+            val slot = slot()
+            val before = keyStore.generated.size
+            when (failure) {
+                0 -> keyStore.getKeyFailureAfterGenerations = before + 1
+                1 -> keyStore.chainFailure = ProviderException("chain read unavailable")
+                2 -> keyStore.factsFailure = ProviderException("KeyInfo unavailable")
+            }
+            val first = if (api < 31) fresh(slot) else paymentKey.generate(slot, challenge, profile)
+            assertIs<KagemushaWalletAndroidKeyGenerationV1.Unavailable>(first)
+            val original = keyStore.entries.getValue(alias(slot))
+            assertIs<KagemushaWalletAndroidKeyGenerationV1.Unavailable>(paymentKey.recoverGeneration(slot, challenge, profile))
+            assertEquals(before + 1, keyStore.generated.size)
+            keyStore.getKeyFailureAfterGenerations = Int.MAX_VALUE
+            keyStore.chainFailure = null
+            keyStore.factsFailure = null
+            repeat(2) {
+                val recovered = assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(paymentKey.recoverGeneration(slot, challenge, profile))
+                assertContentEquals(testSec1V1(original.pair.public), recovered.publicKeySec1())
+            }
+            assertSame(original, keyStore.entries.getValue(alias(slot)))
+            assertEquals(before + 1, keyStore.generated.size)
+        }
+        assertEquals(0, keyStore.deleteCalls)
+        assertEquals(0, keyStore.signCalls)
+    }
+
+    @Test fun `generation recovery binds the exact request and actual returned key`() {
+        apiLevel(26)
+        val slot = slot()
+        val profile = KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE
+        val requested = challenge.copyOf()
+        keyStore.factsFailure = ProviderException("readback failed")
+        assertIs<KagemushaWalletAndroidKeyGenerationV1.Unavailable>(paymentKey.generateFreshFromNative(slot, requested, profile))
+        val original = keyStore.entries.getValue(alias(slot))
+        requested[0] = (requested[0].toInt() xor 1).toByte()
+        keyStore.factsFailure = null
+        assertIs<KagemushaWalletAndroidKeyGenerationV1.Unavailable>(paymentKey.recoverGeneration(slot, requested, profile))
+        assertIs<KagemushaWalletAndroidKeyGenerationV1.Unavailable>(paymentKey.recoverGeneration(slot, challenge, KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT))
+        assertNull(paymentKey.recoverGeneration(this.slot(), challenge, profile))
+        // A fully valid attestation for a replacement key and the same challenge is insufficient.
+        keyStore.seed(alias(slot), challenge)
+        assertIs<KagemushaWalletAndroidKeyGenerationV1.Unavailable>(paymentKey.recoverGeneration(slot, challenge, profile))
+        keyStore.entries[alias(slot)] = original
+        val recovered = assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(paymentKey.recoverGeneration(slot, challenge, profile))
+        assertContentEquals(testSec1V1(original.pair.public), recovered.publicKeySec1())
+        assertEquals(1, keyStore.generated.size)
+        assertEquals(0, keyStore.deleteCalls)
+    }
+
+    @Test fun `key presence and a throwing generator never become successful generation replies`() {
+        apiLevel(26)
+        val profile = KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE
+        val existing = slot()
+        keyStore.seed(alias(existing), challenge)
+        assertNull(paymentKey.recoverGeneration(existing, challenge, profile))
+        val thrown = slot()
+        keyStore.generateFailureAfterWrite = ProviderException("provider reply lost")
+        assertIs<KagemushaWalletAndroidKeyGenerationV1.Unavailable>(fresh(thrown))
+        keyStore.generateFailureAfterWrite = null
+        assertTrue(keyStore.entries.containsKey(alias(thrown)))
+        assertNull(paymentKey.recoverGeneration(thrown, challenge, profile))
+        val returned = slot()
+        assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(fresh(returned))
+        val reopened = KagemushaWalletAndroidPaymentKeyV1(keyStore, environment)
+        assertNull(reopened.recoverGeneration(returned, challenge, profile))
+        assertEquals(2, keyStore.generated.size)
+        assertEquals(0, keyStore.deleteCalls)
+    }
+
     @Test fun `fresh Native attempts never overwrite any raw occupied entry even with invalid chain or key kind`() {
         apiLevel(26)
         val occupied = slot()
@@ -290,6 +364,18 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertEquals(KagemushaWalletAndroidSecurityLevelV1.STRONGBOX,
             assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(fresh(slot())).securityLevel)
         assertEquals(listOf(true, true, true, false, true, true), keyStore.generated.map { it.strongBox })
+    }
+
+    @Test fun `exact TEE policy never selects StrongBox even when available`() {
+        apiLevel(28)
+        val generated = assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(
+            fresh(slot(), KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE))
+        assertEquals(KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT, generated.securityLevel)
+        apiLevel(31)
+        assertEquals(KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT,
+            assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(paymentKey.generate(slot(), challenge,
+                KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE)).securityLevel)
+        assertEquals(listOf(false, false), keyStore.generated.map { it.strongBox })
     }
 
     @Test fun `fresh TEE hint is spent by the next matching attempt even when its probe fails`() {
@@ -638,7 +724,27 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertEquals(KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY, kagemushaWalletAndroidHardwarePlanV1(profiles.second, 31, false))
         assertEquals(KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT, KagemushaWalletAndroidKeyProfileV1.fromTag(1))
         assertEquals(KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE, KagemushaWalletAndroidKeyProfileV1.fromTag(2))
+        assertEquals(KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE, KagemushaWalletAndroidKeyProfileV1.fromTag(3))
+        for (hasStrongBox in listOf(false, true)) {
+            assertEquals(KagemushaWalletAndroidHardwarePlanV1.TEE_ONLY,
+                kagemushaWalletAndroidHardwarePlanV1(KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE, 31, hasStrongBox))
+        }
+        assertEquals(null, KagemushaWalletAndroidKeyProfileV1.fromTag(4))
         assertEquals(null, KagemushaWalletAndroidKeyProfileV1.fromTag(0))
+    }
+
+    @Test fun `signed TEE-only policy generates TEE despite StrongBox availability`() {
+        for (api in listOf(26, 30, 31, 35)) {
+            apiLevel(api)
+            environment.strongBox = true
+            val next = slot()
+            val outcome = if (api < 31) fresh(next, KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE)
+                else paymentKey.generate(next, challenge, KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE)
+            assertEquals(KagemushaWalletAndroidSecurityLevelV1.TRUSTED_ENVIRONMENT,
+                assertIs<KagemushaWalletAndroidKeyGenerationV1.Generated>(outcome).securityLevel)
+            assertFalse(keyStore.generated.last().strongBox)
+        }
+        assertEquals(KagemushaWalletAndroidKeyProfileV1.ANDROID_TEE, KagemushaWalletAndroidKeyProfileV1.fromTag(3))
     }
 
     @Test fun `signing hands the exact 32-byte message to SHA256withECDSA and returns the platform DER`() {
@@ -757,6 +863,19 @@ class KagemushaWalletAndroidPaymentKeyV1Test {
         assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.attestationChain(slot))
         keyStore.getKeyFailure = IllegalStateException("keystore2 binder failure")
         assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.attestationChain(slot))
+    }
+
+    @Test fun `enrollment attestation read binds the exact Native public key without generation`() {
+        val slot = slot()
+        val entry = keyStore.seed(alias(slot))
+        val publicKey = assertIs<KagemushaWalletAndroidKeyProbeV1.Present>(paymentKey.probe(slot)).publicKeySec1()
+        val chain = assertIs<KagemushaWalletAndroidAttestationChainV1.Present>(paymentKey.enrollmentAttestationChain(slot, publicKey))
+        assertEquals(entry.chain!!.map { it.encoded.toList() }, chain.certificatesDer().map { it.toList() })
+        assertEquals(KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE,
+            assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.enrollmentAttestationChain(slot, publicKey.copyOf().also { it[1] = (it[1].toInt() xor 1).toByte() })).reason)
+        keyStore.getKeyFailure = IllegalStateException("unavailable")
+        assertIs<KagemushaWalletAndroidAttestationChainV1.Unavailable>(paymentKey.enrollmentAttestationChain(slot, publicKey))
+        assertTrue(keyStore.generated.isEmpty())
     }
 
     private fun KagemushaWalletAndroidKeyFactsV1.copy(

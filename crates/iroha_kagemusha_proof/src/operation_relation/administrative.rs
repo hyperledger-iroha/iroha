@@ -1,6 +1,6 @@
-//! Bootstrap, Load, Unload and Retiring state effects.
+//! Bootstrap, Load, `ArchiveSent`, Unload and Retiring state effects.
 //!
-//! These effects compose with authenticated credential/voucher/quote inputs
+//! These effects compose with authenticated credentials, ordinary receipts and charge quotes
 //! and map transitions in A. They do not verify those signatures or finality.
 //! No stand-alone monetary acceptance API is exposed here.
 
@@ -202,4 +202,62 @@ pub fn monetary(
         )?;
     }
     Ok(())
+}
+
+/// Constrain `ArchiveSent`'s complete non-value state transition.
+///
+/// Only sequence, nonce and the committed pending root may change. The root's
+/// exact removal is authenticated by Native Advance and the map relation in A,
+/// which also owns the evidence-dependent adjusted pending removal/no-op. No
+/// evidence bit, refund, quota restoration or Payment deletion grant is supplied
+/// here. Adjusted burned value and permanent credit evidence remain unchanged.
+///
+/// # Errors
+/// Wrong fixed variant or layout failure; any unrelated state change, malformed
+/// opening or statement, sequence overflow or zero nonce is unsatisfiable.
+pub fn archive(
+    uint: &mut UintChip<'_, Fp>,
+    region: &mut Region<'_, Fp>,
+    transition: &MapTransition<'_>,
+) -> Result<(), Error> {
+    if !matches!(
+        transition.statement.variant(),
+        Variant::ArchiveReceive | Variant::ArchiveStatus
+    ) {
+        return Err(Error::Synthesis);
+    }
+    transition.statement.bind_states(
+        uint,
+        region,
+        Some((transition.predecessor.state, transition.predecessor.lineage)),
+        transition.successor.state,
+        transition.successor.lineage,
+    )?;
+    for (index, old) in transition.predecessor.state.core().iter().enumerate() {
+        if !matches!(
+            index,
+            core::SEQUENCE | core::STATE_NONCE | core::PENDING_OUTGOING_ROOT
+        ) {
+            GlueChip::assert_equal(region, old, &transition.successor.state.core()[index])?;
+        }
+    }
+    for (old, new) in transition
+        .predecessor
+        .state
+        .rest()
+        .iter()
+        .zip(transition.successor.state.rest())
+    {
+        GlueChip::assert_equal(region, old, new)?;
+    }
+    GlueChip::assert_equal(
+        region,
+        transition.predecessor.lineage.burned_total(),
+        transition.successor.lineage.burned_total(),
+    )?;
+    GlueChip::assert_equal(
+        region,
+        transition.predecessor.lineage.credit_root(),
+        transition.successor.lineage.credit_root(),
+    )
 }

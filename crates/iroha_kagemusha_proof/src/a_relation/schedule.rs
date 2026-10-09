@@ -75,8 +75,8 @@ pub enum OperationTask {
     BootstrapAuthorization = 2,
     /// Load arithmetic and exact depth32 insert-only recovery entry.
     LoadRecovery = 3,
-    /// Load issuer authorization and exact operation receipt.
-    LoadAuthorization = 4,
+    /// Exact own Advance receipt under the predecessor payment key.
+    LoadReceipt = 4,
     /// Send current credential, exact Request and held fee terms.
     SendObjects = 5,
     /// Send pending descriptor insertion into the adjusted lineage map.
@@ -113,6 +113,50 @@ pub enum OperationTask {
     UnloadAuthorization = 21,
     /// Unload/Retiring exact predecessor Omega and own sigma receipt binding.
     UnloadProof = 22,
+    /// Exact original Omega-plus-sigma consuming digest and both raw commitments.
+    ReceiveProofDigest = 23,
+    /// Policy update's exact state effects and credential renewal continuity.
+    RefreshEffects = 24,
+    /// Hard update issuer, purpose certificate and own receipt authorization.
+    RefreshUpdateAuthorization = 25,
+    /// Mandatory predecessor current credential and direct Enrollment certificate.
+    RefreshCurrentAuthorization = 26,
+    /// New blacklist version/root insertion into permanent history.
+    RefreshBlacklist = 27,
+    /// Exact fixed64 ordering, interval and charge-preserving matching rules.
+    RefreshQuotaMerge = 28,
+    /// Exact held Payment sources and pending descriptor, independent of evidence validity.
+    ArchiveRetainedPayment = 29,
+    /// Receive-package or `CreditStatus` body and original Credited transcript.
+    ArchiveEvidence = 30,
+    /// Total incoming proof decoders, succinct verification and key continuity.
+    ArchiveProofs = 31,
+    /// Incoming evidence receipt signature under the Request's quoted receiver key.
+    ArchiveSignatures = 32,
+    /// Hard own receipt, current credential and direct Enrollment certificate.
+    ArchiveAuthorization = 33,
+    /// Exact own sigma tape and its sigma-only receipt digest.
+    ArchiveOwnProof = 34,
+    /// Terminal evidence iff/no-op rule and exact incoming mode closure.
+    ArchiveEffects = 35,
+    /// Exact OQ-3 consumed-credit map update under the complete Receive verdict.
+    ReceiveConsumedEffects = 36,
+    /// Permanent first Payment/burn credit record under the same Receive verdict.
+    ReceiveCreditEffects = 37,
+    /// Authenticate all64 predecessor usage leaves against the prior state root.
+    RefreshQuotaPreviousRoot = 38,
+    /// Authenticate all64 signed replacement window leaves.
+    RefreshQuotaWindowRoot = 39,
+    /// Authenticate all64 successor usage leaves aligned with the new windows.
+    RefreshQuotaUsageRoot = 40,
+    /// Complete genesis-rooted ordinary receipt proof and both source claims.
+    LoadFinality = 41,
+    /// Exact retained Omega/sigma tapes and their unconditional joint bound.
+    ArchiveRetainedProofs = 42,
+    /// Unconditional removal of the exact retained descriptor from the core map.
+    ArchiveCorePending = 43,
+    /// Hard adjusted pending path with the complete committed evidence verdict.
+    ArchiveLineagePending = 44,
 }
 impl OperationTask {
     /// Stable context-schema code, not an operation's wire tag.
@@ -121,23 +165,23 @@ impl OperationTask {
     }
     /// Exact required operation task set; this metadata does not establish
     /// that the operation's complete circuit composition is implemented.
-    /// Other variants need their own task schema before complete composition.
-    pub const fn required(variant: Variant) -> Option<&'static [Self]> {
+    pub const fn required(variant: Variant) -> &'static [Self] {
         match variant {
-            Variant::Bootstrap => Some(&[Self::BootstrapState, Self::BootstrapAuthorization]),
-            Variant::Load => Some(&[
+            Variant::Bootstrap => &[Self::BootstrapState, Self::BootstrapAuthorization],
+            Variant::Load => &[
                 Self::LoadRecovery,
-                Self::LoadAuthorization,
+                Self::LoadReceipt,
                 Self::LoadCurrentAuthorization,
-            ]),
-            Variant::Send => Some(&[
+                Self::LoadFinality,
+            ],
+            Variant::Send => &[
                 Self::SendObjects,
                 Self::SendPending,
                 Self::SendFeeAndCarry,
                 Self::SendAuthorization,
                 Self::SendProof,
-            ]),
-            Variant::Receive | Variant::ReceiveRenewed => Some(&[
+            ],
+            Variant::Receive | Variant::ReceiveRenewed => &[
                 Self::ReceiveProofs,
                 Self::ReceiveObjects,
                 Self::ReceiveSignatures,
@@ -146,22 +190,58 @@ impl OperationTask {
                 Self::ReceiveAuthorization,
                 Self::ReceiveOwnProof,
                 Self::ReceiveEffects,
-            ]),
-            Variant::Unload => Some(&[
+                Self::ReceiveProofDigest,
+                Self::ReceiveConsumedEffects,
+                Self::ReceiveCreditEffects,
+            ],
+            Variant::Unload => &[
                 Self::UnloadRecovery,
                 Self::UnloadAuthorization,
                 Self::UnloadProof,
-            ]),
-            Variant::Retiring => Some(&[
+            ],
+            Variant::Retiring => &[
                 Self::RetiringState,
                 Self::UnloadAuthorization,
                 Self::UnloadProof,
-            ]),
-            _ => None,
+            ],
+            Variant::RefreshCredential
+            | Variant::RefreshSchemePolicy
+            | Variant::RefreshTimeAnchor => &[
+                Self::RefreshEffects,
+                Self::RefreshUpdateAuthorization,
+                Self::RefreshCurrentAuthorization,
+            ],
+            Variant::RefreshBlacklist => &[
+                Self::RefreshEffects,
+                Self::RefreshUpdateAuthorization,
+                Self::RefreshCurrentAuthorization,
+                Self::RefreshBlacklist,
+            ],
+            Variant::RefreshQuotaShare => &[
+                Self::RefreshEffects,
+                Self::RefreshUpdateAuthorization,
+                Self::RefreshCurrentAuthorization,
+                Self::RefreshQuotaMerge,
+                Self::RefreshQuotaPreviousRoot,
+                Self::RefreshQuotaWindowRoot,
+                Self::RefreshQuotaUsageRoot,
+            ],
+            Variant::ArchiveReceive | Variant::ArchiveStatus => &[
+                Self::ArchiveRetainedPayment,
+                Self::ArchiveEvidence,
+                Self::ArchiveProofs,
+                Self::ArchiveSignatures,
+                Self::ArchiveAuthorization,
+                Self::ArchiveOwnProof,
+                Self::ArchiveEffects,
+                Self::ArchiveRetainedProofs,
+                Self::ArchiveCorePending,
+                Self::ArchiveLineagePending,
+            ],
         }
     }
     pub(super) fn validate(variant: Variant, groups: &[Vec<Self>]) -> Result<(), Error> {
-        let required = Self::required(variant).ok_or(Error::Synthesis)?;
+        let required = Self::required(variant);
         if groups
             .iter()
             .any(|group| group.windows(2).any(|w| w[0] >= w[1]))
@@ -362,3 +442,6 @@ mod circuit_tests {
         );
     }
 }
+
+/// Compiled full operation partitions shared by native sources and artifact identity.
+pub mod compiled;

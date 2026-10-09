@@ -48,7 +48,7 @@ fn original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_ex
         let original_source = std::ptr::from_ref(block.source());
         let original_bytes = block.payload().as_slice().as_ptr();
         let original = worker.live.as_ref().unwrap();
-        let original_commitment = std::ptr::from_ref(original.commitment.get());
+        let original_commitment = std::ptr::from_ref(original.commitment().get());
         let original_overlay = std::ptr::from_ref(original.overlay.as_ref().unwrap());
         let original_witness = iroha_crypto::HashOf::new(original.witness.as_ref().unwrap().wire());
         let PublicationPhase::Executed { preimage, .. } = &original.phase else {
@@ -81,7 +81,7 @@ fn original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_ex
         );
         let retained = worker.live.as_ref().unwrap();
         assert_eq!(
-            std::ptr::from_ref(retained.commitment.get()),
+            std::ptr::from_ref(retained.commitment().get()),
             original_commitment
         );
         assert_eq!(
@@ -111,7 +111,7 @@ fn original_prepared_certificate_read_refusal_retains_worker_owner_and_funded_ex
         assert!(worker.routing_refusal.is_none());
         let retained = worker.live.as_ref().unwrap();
         assert_eq!(
-            std::ptr::from_ref(retained.commitment.get()),
+            std::ptr::from_ref(retained.commitment().get()),
             original_commitment
         );
         assert_eq!(
@@ -254,7 +254,7 @@ fn prepared_certificate_busy_retries_same_execution_after_original_reader_releas
         let original_source = std::ptr::from_ref(block.source());
         let original_bytes = block.payload().as_slice().as_ptr();
         let original = worker.live.as_ref().unwrap();
-        let original_commitment = std::ptr::from_ref(original.commitment.get());
+        let original_commitment = std::ptr::from_ref(original.commitment().get());
         let original_overlay = std::ptr::from_ref(original.overlay.as_ref().unwrap());
         let original_witness = iroha_crypto::HashOf::new(original.witness.as_ref().unwrap().wire());
         let PublicationPhase::Executed { preimage, .. } = &original.phase else {
@@ -299,7 +299,7 @@ fn prepared_certificate_busy_retries_same_execution_after_original_reader_releas
         });
         let retained = worker.live.as_ref().unwrap();
         assert_eq!(
-            std::ptr::from_ref(retained.commitment.get()),
+            std::ptr::from_ref(retained.commitment().get()),
             original_commitment
         );
         assert_eq!(
@@ -327,7 +327,7 @@ fn prepared_certificate_busy_retries_same_execution_after_original_reader_releas
         assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(result));
         let retained = worker.live.as_ref().unwrap();
         assert_eq!(
-            std::ptr::from_ref(retained.commitment.get()),
+            std::ptr::from_ref(retained.commitment().get()),
             original_commitment
         );
         assert_eq!(
@@ -548,6 +548,7 @@ fn original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_
                     .expect("same State-pool decoder"),
                 decoded: None,
                 returned_refusal: None,
+                amx_legs: None,
             };
             let entries = attempt
                 .original_decoded(&budget)
@@ -757,6 +758,7 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
                     .expect("actual original-pool signature decoder"),
                 decoded: None,
                 returned_refusal: None,
+                amx_legs: None,
             };
             let entries = attempt
                 .original_decoded(&budget)
@@ -969,7 +971,7 @@ fn prepared_certificate_uses_bounded_signed_root_without_rewalking_execution_his
             let original_payload = block.payload().as_slice().as_ptr();
             let live = worker.live.as_ref().unwrap();
             let original_overlay = std::ptr::from_ref(live.overlay.as_ref().unwrap());
-            let original_commitment = std::ptr::from_ref(live.commitment.get());
+            let original_commitment = std::ptr::from_ref(live.commitment().get());
             let original_witness = iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire());
             let root_allocation = original_reader_decode_allocation(|| {
                 let view = worker.state.view();
@@ -1015,7 +1017,7 @@ fn prepared_certificate_uses_bounded_signed_root_without_rewalking_execution_his
                 original_overlay
             );
             assert_eq!(
-                std::ptr::from_ref(retained.commitment.get()),
+                std::ptr::from_ref(retained.commitment().get()),
                 original_commitment
             );
             assert_eq!(

@@ -197,13 +197,42 @@ pub(crate) fn prepare_private_root_at(
     spec: &PrivateRootSpec,
     publication_root: Option<&Path>,
 ) -> crate::managed::Result<PreparedLocalnet> {
+    prepare_private_root_selected(name, directory, ports, spec, publication_root, None)
+}
+
+pub(crate) fn prepare_private_root_with_amx_at(
+    name: &str,
+    directory: &Path,
+    ports: &LocalnetPorts,
+    spec: &PrivateRootSpec,
+    publication_root: Option<&Path>,
+    sources: &crate::bootstrap::ParentBootstrapSources,
+) -> crate::managed::Result<PreparedLocalnet> {
+    prepare_private_root_selected(
+        name,
+        directory,
+        ports,
+        spec,
+        publication_root,
+        Some(sources),
+    )
+}
+
+fn prepare_private_root_selected(
+    name: &str,
+    directory: &Path,
+    ports: &LocalnetPorts,
+    spec: &PrivateRootSpec,
+    publication_root: Option<&Path>,
+    amx: Option<&crate::bootstrap::ParentBootstrapSources>,
+) -> crate::managed::Result<PreparedLocalnet> {
     spec.validate().map_err(|error| {
         Error::Invalid(format!("private-root SNS identity is invalid: {error}"))
     })?;
     if directory.exists() {
         let root = iroha_fs::PrivateDirectory::open(directory)?;
-        match root.read(PREPARED, 1024 * 1024) {
-            Ok(bytes) => {
+        match root.read_optional(PREPARED, 1024 * 1024)? {
+            Some(bytes) => {
                 if publication_root.is_some() {
                     return Err(Error::Invalid(
                         "publication stage already contains a prepared identity".into(),
@@ -217,13 +246,17 @@ pub(crate) fn prepare_private_root_at(
                     ));
                 }
                 verify_retained(root.path(), &retained.prepared, spec)?;
+                if let Some(sources) = amx {
+                    sources
+                        .require_signed_generation(&retained.prepared)
+                        .map_err(|error| Error::Invalid(error.to_string()))?;
+                }
                 return Ok(retained.prepared);
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+            None => {}
         }
     }
-    let mut prepared = prepare_fresh(name, directory, ports, spec, publication_root)
+    let mut prepared = prepare_fresh(name, directory, ports, spec, publication_root, amx)
         .map_err(|error| Error::Invalid(format!("private-root preparation failed: {error:#}")))?;
     verify_retained(&directory.canonicalize()?, &prepared, spec)?;
     if let Some(root) = publication_root {
@@ -394,6 +427,7 @@ fn prepare_fresh(
     ports: &LocalnetPorts,
     spec: &PrivateRootSpec,
     publication_root: Option<&Path>,
+    amx: Option<&crate::bootstrap::ParentBootstrapSources>,
 ) -> Result<PreparedLocalnet> {
     init_instruction_registry();
     // Parent SDK work can carry a different address-rendering scope on this thread. A fresh
@@ -451,6 +485,10 @@ fn prepare_fresh(
         LocalnetServiceProfile::Standard,
         &owner.account_id,
     )?;
+    let genesis = match amx {
+        Some(sources) => sources.append_to(genesis)?,
+        None => genesis,
+    };
     copy_rans_tables(&root)?;
     let signed_path = root.join("genesis.signed.nrt");
     let trusted = peers
@@ -1024,22 +1062,7 @@ mod tests {
                     iroha_config::parameters::defaults::network::PREAUTH_TIMEOUT,
                 )
             );
-            let pow = &config.network.soranet_handshake.pow;
-            let expected_pow = actual::SoranetPow::default_const();
-            assert_eq!(
-                (
-                    pow.difficulty,
-                    pow.puzzle.memory_kib,
-                    pow.puzzle.time_cost,
-                    pow.puzzle.lanes,
-                ),
-                (
-                    expected_pow.difficulty,
-                    expected_pow.puzzle.memory_kib,
-                    expected_pow.puzzle.time_cost,
-                    expected_pow.puzzle.lanes,
-                )
-            );
+            managed_puzzle::assert_managed_profile(&table, &config.network.soranet_handshake.pow);
             assert!(config.torii.peer_telemetry_urls.is_empty());
             assert_eq!(config.nexus.dataspace_catalog.entries().len(), 1);
             assert_eq!(

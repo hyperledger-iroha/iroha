@@ -22,25 +22,46 @@ mod readiness;
 mod renewal;
 use owned::PeerProcesses;
 
+/// Exercise the production lexical custody scope with genuine renderer fixtures.
+#[cfg(test)]
+pub(in crate::managed) fn test_with_renewal_custody<T>(
+    prepared: &PreparedLocalnet,
+    provider: iroha_data_model::sorafs::capacity::ProviderId,
+    action: impl FnOnce(&mut super::ManagedStreamTokenCustody) -> Result<T>,
+) -> Result<T> {
+    renewal::with_custody(prepared, provider, action)
+}
+
 /// Run the long-lived private localnet worker inside the installed Kagami executable.
 ///
 /// The CLI dispatches its internal `_managed-worker` entry point here. The worker retains the
 /// ownership lock for its full lifetime and transfers a clone into each child's standard input.
 /// A lost controller therefore cannot allow a second controller to adopt unverified PIDs.
+/// Standard input must be the frontend's inherited original `runtime.lock` object. Unix joins
+/// its private name and retains the shared open-file-description lock; Windows relies on the
+/// trusted frontend's inherited writer-denying handle, without reacquiring its process lock.
+/// `startup_deadline_ns` is the frontend's same-boot raw native continuous deadline, including
+/// suspend and process loading. It is checked together with the bounded local duration; it is
+/// not UTC signing authority and must not be transferred between machines or boots.
 ///
 /// # Errors
 /// Invalid custody or metadata, competing ownership, changed executables, process failure or
 /// readiness failure. Every failure stops only the children this invocation actually created.
-pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -> Result<()> {
+pub fn run_worker(
+    store: &ManagedStore,
+    name: &str,
+    startup_timeout: Duration,
+    startup_deadline_ns: u128,
+) -> Result<()> {
     let started = Instant::now();
     transport::supported()?;
-    if startup_timeout.is_zero() || startup_timeout > Duration::from_secs(600) {
+    if startup_timeout.is_zero() || startup_timeout > WORKER_STARTUP_MAXIMUM {
         return Err(Error::Invalid(
             "worker timeout is outside its bounded startup contract".into(),
         ));
     }
     let directory = store.directory(name)?;
-    let ownership = store::acquire(&directory, "runtime.lock", name)?;
+    let ownership = adopt_worker_ownership(&directory, inherited_worker_file()?, name)?;
     let retained = generation::read(&directory)?;
     store::validate_prepared(
         name,
@@ -48,39 +69,58 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         &retained.prepared,
         &retained.root_kind,
     )?;
-    let launcher_program = super::program::NativeProgram::matching(&retained.launcher)?;
-    let daemon_program = super::program::NativeProgram::matching(&retained.daemon)?;
-    let current = store::pin_binary(&std::env::current_exe()?)?;
-    if current.blake3 != retained.launcher.blake3 {
-        return Err(Error::Invalid(
-            "worker executable does not match the retained launcher".into(),
-        ));
-    }
-    launcher_program.validate()?;
-    startup_remaining(started, startup_timeout)?;
-    let listener = transport::Listener::bind(&directory)?;
-    let worker = WorkerRecord {
-        token: store::random_token(),
-    };
-    directory.write_atomic(WORKER, &encode(&worker)?, PublishMode::Replace)?;
     let mut status = ManagedStatus {
         context: retained.prepared.context.clone(),
         phase: ManagedPhase::Starting,
         running_peers: 0,
         failure: None,
     };
-    publish(&directory, &status)?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let progress = Arc::new(progress::Progress::default());
     let mut budget = Arc::new(activation::Budget {
         started,
         timeout: startup_timeout,
+        startup_deadline_ns: Some(startup_deadline_ns),
         utc_ceiling_unix_ms: None,
         cancelled: Arc::clone(&cancelled),
         progress: Arc::clone(&progress),
     });
+    // From this point the original owner and generation are admitted. Every ordinary failure
+    // before the first session/peer closes Starting with a zero-child diagnostic.
+    progress.enter(progress::Phase::ProgramAdmission);
+    let admission = (|| {
+        budget
+            .check()
+            .map_err(|failure| Error::Invalid(failure.message()))?;
+        let launcher_program = super::program::NativeProgram::matching(&retained.launcher)?;
+        let daemon_program = super::program::NativeProgram::matching(&retained.daemon)?;
+        let current = launcher_program.pin_for_path(&std::env::current_exe()?)?;
+        if current.blake3 != retained.launcher.blake3 {
+            return Err(Error::Invalid(
+                "worker executable does not match the retained launcher".into(),
+            ));
+        }
+        launcher_program.validate()?;
+        budget
+            .check()
+            .map_err(|failure| Error::Invalid(failure.message()))?;
+        let listener = transport::Listener::bind(&directory)?;
+        let worker = WorkerRecord {
+            token: store::random_token(),
+        };
+        directory.write_atomic(WORKER, &encode(&worker)?, PublishMode::Replace)?;
+        publish(&directory, &status)?;
+        budget
+            .check()
+            .map_err(|failure| Error::Invalid(failure.message()))?;
+        Ok((daemon_program, listener, worker))
+    })();
+    let (daemon_program, listener, worker) = match admission {
+        Ok(admitted) => admitted,
+        Err(error) => return fail_before_session(&directory, &mut status, &budget, error),
+    };
     let prepared = retained.prepared.clone();
-    let mut processes = PeerProcesses::default();
+    let mut processes = PeerProcesses::with_background(Arc::clone(&cancelled));
     let _cancel_on_exit = CancelOnExit(Arc::clone(&cancelled));
     let activation::Startup {
         launch,
@@ -92,7 +132,14 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         }
     };
     if processes
-        .start(&directory, &retained, &ownership, &daemon_program, launch)
+        .start(
+            &directory,
+            &retained,
+            &ownership,
+            &daemon_program,
+            launch,
+            &budget,
+        )
         .is_err()
     {
         return fail_worker(
@@ -100,7 +147,10 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
             &mut status,
             &mut processes,
             &cancelled,
-            progress.unconfirmed(),
+            budget
+                .check()
+                .err()
+                .unwrap_or_else(|| progress.unconfirmed()),
         );
     }
     status.running_peers = processes.children.len();
@@ -119,22 +169,37 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
     let background_prepared = prepared.clone();
     let background_budget = Arc::clone(&budget);
     let (sender, mut receiver) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let result = activation::initial(
-            &background_prepared,
-            &background_budget,
-            generated,
-            authorization,
-        );
-        let _ = sender.send(result);
-    });
+    processes
+        .spawn_activation(move || {
+            let result = activation::initial(
+                &background_prepared,
+                &background_budget,
+                generated,
+                authorization,
+            );
+            let _ = sender.send(result);
+        })
+        .map_err(|error| {
+            close_worker_error(
+                &directory,
+                &mut status,
+                &mut processes,
+                &cancelled,
+                progress.unconfirmed(),
+                error,
+            )
+        })?;
     let mut service_expiry: Option<maintenance::Observation> = None;
     let mut refresh: Option<
         mpsc::Receiver<std::result::Result<maintenance::Observation, progress::Failure>>,
     > = None;
-    let mut attachment: Option<remote::AttachmentWorker> = None;
     let mut attachment_attempted = false;
     loop {
+        if status.phase == ManagedPhase::Starting {
+            if let Err(failure) = budget.check() {
+                return fail_worker(&directory, &mut status, &mut processes, &cancelled, failure);
+            }
+        }
         if service_expiry
             .as_ref()
             .is_some_and(|expiry| !expiry.current().unwrap_or(false))
@@ -147,7 +212,20 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                 progress::Failure::ObservationExpired,
             );
         }
-        if let Some(mut connection) = listener.accept()? {
+        let connection = match listener.accept() {
+            Ok(connection) => connection,
+            Err(error) => {
+                return Err(close_worker_error(
+                    &directory,
+                    &mut status,
+                    &mut processes,
+                    &cancelled,
+                    progress.unconfirmed(),
+                    error,
+                ));
+            }
+        };
+        if let Some(mut connection) = connection {
             if let Ok(request) = connection.receive()
                 && same_token(&request.token, &worker.token)
             {
@@ -157,25 +235,18 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                     }
                     "attachment_start" => {
                         if status.phase == ManagedPhase::Ready
-                            && attachment
-                                .as_ref()
+                            && processes
+                                .attachment()
                                 .is_none_or(remote::AttachmentWorker::is_finished)
                         {
-                            attachment = remote::AttachmentWorker::start(
-                                store,
-                                name,
-                                &prepared,
-                                Arc::clone(&cancelled),
-                            )
-                            .ok()
-                            .flatten();
+                            let _ = processes.start_attachment(store, name, &prepared);
                             attachment_attempted = true;
                         }
                         let _ = connection.reply(&status);
                     }
                     "attachment_status" => {
-                        let observation = attachment
-                            .as_ref()
+                        let observation = processes
+                            .attachment()
                             .map(remote::AttachmentWorker::status)
                             .or_else(|| {
                                 remote::inactive_status(store, name, &prepared)
@@ -190,11 +261,13 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                         }
                     }
                     "down" => {
-                        cancelled.store(true, Ordering::Release);
-                        processes.stop()?;
-                        status.phase = ManagedPhase::Stopped;
-                        status.running_peers = 0;
-                        publish(&directory, &status)?;
+                        stop_worker(
+                            &directory,
+                            &mut status,
+                            &mut processes,
+                            &cancelled,
+                            progress.unconfirmed(),
+                        )?;
                         let _ = connection.reply(&status);
                         return Ok(());
                     }
@@ -217,7 +290,13 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                 }
             }
         }
-        check_owned_validator_exit(&directory, &mut status, &mut processes, &cancelled)?;
+        check_owned_validator_exit(
+            &directory,
+            &mut status,
+            &mut processes,
+            &cancelled,
+            &progress,
+        )?;
         if status.phase == ManagedPhase::Starting {
             // Deadline wins over a proof queued just before the worker observed it. Never
             // publish a transient Ready after the original startup budget was exhausted.
@@ -239,6 +318,7 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                 }
                 Some(Ok(activation::Outcome::Restart(restart))) => {
                     let next = (|| {
+                        budget.check()?;
                         let (launch, recheck) = restart.into_launch(&prepared, &budget)?;
                         // Old HTTP guards become inactive before any owned child is signalled.
                         processes.stop().map_err(|_| progress.unconfirmed())?;
@@ -250,18 +330,29 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                                 &ownership,
                                 &daemon_program,
                                 Some(launch),
+                                &budget,
                             )
-                            .map_err(|_| progress.unconfirmed())?;
+                            .map_err(|_| {
+                                budget
+                                    .check()
+                                    .err()
+                                    .unwrap_or_else(|| progress.unconfirmed())
+                            })?;
                         budget.check()?;
                         let live = processes.gateways().map_err(|_| progress.unconfirmed())?;
                         status.running_peers = processes.children.len();
                         let selected = prepared.clone();
                         let background_budget = Arc::clone(&budget);
                         let (sender, receiver) = mpsc::sync_channel(1);
-                        thread::spawn(move || {
-                            let _ =
-                                sender.send(recheck.finish(&selected, live, &background_budget));
-                        });
+                        processes
+                            .spawn_activation(move || {
+                                let _ = sender.send(recheck.finish(
+                                    &selected,
+                                    live,
+                                    &background_budget,
+                                ));
+                            })
+                            .map_err(|_| progress.unconfirmed())?;
                         Ok::<_, progress::Failure>(receiver)
                     })();
                     match next {
@@ -291,9 +382,36 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                             progress::Failure::ObservationExpired,
                         );
                     }
-                    // Successful handoffs are checked against the original deadline again above.
+                    // IPC/background proof and expiry reads may consume the final remainder.
+                    if let Err(failure) = budget.check() {
+                        return fail_worker(
+                            &directory,
+                            &mut status,
+                            &mut processes,
+                            &cancelled,
+                            failure,
+                        );
+                    }
                     status.phase = ManagedPhase::Ready;
-                    publish(&directory, &status)?;
+                    publish(&directory, &status).map_err(|error| {
+                        close_worker_error(
+                            &directory,
+                            &mut status,
+                            &mut processes,
+                            &cancelled,
+                            progress.unconfirmed(),
+                            error,
+                        )
+                    })?;
+                    if let Err(failure) = budget.check() {
+                        return fail_worker(
+                            &directory,
+                            &mut status,
+                            &mut processes,
+                            &cancelled,
+                            failure,
+                        );
+                    }
                 }
                 None => {}
             }
@@ -342,10 +460,10 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                     let live = processes.gateway(selection.provider())?;
                     let selected = prepared.clone();
                     let (sender, receiver) = mpsc::sync_channel(1);
-                    thread::spawn(move || {
+                    processes.spawn_refresh(move || {
                         let _ =
                             sender.send(maintenance::refresh(&selected, selection, live, &turn));
-                    });
+                    })?;
                     Ok(receiver)
                 })();
                 match next {
@@ -388,14 +506,34 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
                     // Withdraw Ready durably before the background owner can mutate custody.
                     // No stale observation survives across a native enrollment head change.
                     status.phase = ManagedPhase::Starting;
-                    publish(&directory, &status)?;
+                    publish(&directory, &status).map_err(|error| {
+                        close_worker_error(
+                            &directory,
+                            &mut status,
+                            &mut processes,
+                            &cancelled,
+                            progress.unconfirmed(),
+                            error,
+                        )
+                    })?;
                     service_expiry = None;
                     budget = Arc::clone(&turn.budget);
                     let selected = prepared.clone();
                     let (sender, next) = mpsc::sync_channel(1);
-                    thread::spawn(move || {
-                        let _ = sender.send(renewal::advance(&selected, turn, live));
-                    });
+                    processes
+                        .spawn_activation(move || {
+                            let _ = sender.send(renewal::advance(&selected, turn, live));
+                        })
+                        .map_err(|error| {
+                            close_worker_error(
+                                &directory,
+                                &mut status,
+                                &mut processes,
+                                &cancelled,
+                                progress.unconfirmed(),
+                                error,
+                            )
+                        })?;
                     receiver = next;
                 }
                 Ok(_) => {}
@@ -413,10 +551,7 @@ pub fn run_worker(store: &ManagedStore, name: &str, startup_timeout: Duration) -
         if status.phase == ManagedPhase::Ready && !attachment_attempted {
             // Parent custody and transport failures cannot change private execution readiness.
             // A later authenticated activation can retry a previously absent binding.
-            attachment =
-                remote::AttachmentWorker::start(store, name, &prepared, Arc::clone(&cancelled))
-                    .ok()
-                    .flatten();
+            let _ = processes.start_attachment(store, name, &prepared);
             attachment_attempted = true;
         }
         thread::sleep(POLL);
@@ -486,6 +621,7 @@ fn spawn_with_launch_fence(
     index: usize,
     command: &mut Command,
     daemon: &super::program::NativeProgram,
+    budget: &activation::Budget,
 ) -> Result<Child> {
     if command.get_program() != daemon.path().as_os_str() {
         return Err(Error::Invalid(
@@ -493,29 +629,31 @@ fn spawn_with_launch_fence(
         ));
     }
     let marker = format!("peer{index}.launch");
-    let fresh = match directory.read(&marker, 1) {
-        Ok(bytes) if bytes.as_slice() == b"1" => false,
-        Ok(bytes) if bytes.as_slice() == b"0" => {
+    let fresh = match directory.read_optional(&marker, 1)? {
+        Some(bytes) if bytes.as_slice() == b"1" => false,
+        Some(bytes) if bytes.as_slice() == b"0" => {
             directory.write_atomic(&marker, b"1", PublishMode::Replace)?;
             true
         }
-        Ok(_) => return Err(Error::Invalid("invalid retained key launch marker".into())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Some(_) => return Err(Error::Invalid("invalid retained key launch marker".into())),
+        None => {
             // Persist before exec. A lost controller must never repeat the assertion for keys
             // that might have signed. Only a definite spawn failure below can undo this fence.
             directory.write_atomic(&marker, b"1", PublishMode::CreateNew)?;
             true
         }
-        Err(error) => return Err(error.into()),
     };
     if fresh {
         command.arg("--sumeragi-assert-fresh-key");
     }
     // Keep the selected object alive and revalidate after all native launch-marker I/O.
     // Pathname execution still has an unavoidable race; this is not an atomic exec guarantee.
-    let spawned = daemon
-        .validate()
-        .and_then(|()| command.spawn().map_err(Error::from));
+    let spawned = daemon.validate().and_then(|()| {
+        budget
+            .check()
+            .map_err(|failure| Error::Invalid(failure.message()))?;
+        command.spawn().map_err(Error::from)
+    });
     match spawned {
         Ok(child) => Ok(child),
         Err(error) => {
@@ -540,8 +678,18 @@ fn check_owned_validator_exit(
     status: &mut ManagedStatus,
     processes: &mut PeerProcesses,
     cancelled: &AtomicBool,
+    progress: &progress::Progress,
 ) -> Result<()> {
-    if processes.any_exited()? {
+    if processes.any_exited().map_err(|error| {
+        close_worker_error(
+            directory,
+            status,
+            processes,
+            cancelled,
+            progress.unconfirmed(),
+            error,
+        )
+    })? {
         return fail_worker(
             directory,
             status,
@@ -553,6 +701,27 @@ fn check_owned_validator_exit(
     Ok(())
 }
 
+// The authenticated down reply follows this same closed cleanup path. Cancellation prevents
+// fresh work; joined tasks prove the owner cannot release runtime.lock with work still live.
+fn stop_worker(
+    directory: &PrivateDirectory,
+    status: &mut ManagedStatus,
+    processes: &mut PeerProcesses,
+    cancelled: &AtomicBool,
+    failure: progress::Failure,
+) -> Result<()> {
+    cancelled.store(true, Ordering::Release);
+    processes.stop().map_err(|error| {
+        close_worker_error(directory, status, processes, cancelled, failure, error)
+    })?;
+    status.phase = ManagedPhase::Stopped;
+    status.running_peers = 0;
+    publish(directory, status).map_err(|error| {
+        close_worker_error(directory, status, processes, cancelled, failure, error)
+    })?;
+    Ok(())
+}
+
 fn fail_worker(
     directory: &PrivateDirectory,
     status: &mut ManagedStatus,
@@ -560,6 +729,26 @@ fn fail_worker(
     cancelled: &AtomicBool,
     failure: progress::Failure,
 ) -> Result<()> {
+    Err(close_worker_error(
+        directory,
+        status,
+        processes,
+        cancelled,
+        failure,
+        Error::Invalid(failure.message()),
+    ))
+}
+
+// Every admitted worker error closes its owned children and retains only the safe progress
+// classification in status. The original typed error remains the ordinary return value.
+fn close_worker_error(
+    directory: &PrivateDirectory,
+    status: &mut ManagedStatus,
+    processes: &mut PeerProcesses,
+    cancelled: &AtomicBool,
+    failure: progress::Failure,
+    error: Error,
+) -> Error {
     cancelled.store(true, Ordering::Release);
     // A cleanup error must not erase the original safe stage, and a publication error must
     // not skip cleanup. Retain both results; only successful cleanup proves a zero count.
@@ -568,19 +757,107 @@ fn fail_worker(
     if cleanup.is_some() {
         status.running_peers = processes.children.len();
         status.failure = Some(format!(
-            "{}; owned validator cleanup is unconfirmed; running_peers is an upper bound from retained handles",
+            "{}; owned validator or background task cleanup is unconfirmed; running_peers is an upper bound from retained handles",
             failure.message()
         ));
     }
     let publication = publish(directory, status).err();
     if cleanup.is_some() || publication.is_some() {
-        return Err(Error::WorkerFailure {
-            failure: failure.message(),
+        return Error::WorkerFailure {
+            failure: error.to_string(),
             cleanup: cleanup.map(Box::new),
             publication: publication.map(Box::new),
+        };
+    }
+    error
+}
+
+#[cfg(unix)]
+fn inherited_worker_file() -> Result<File> {
+    use std::os::fd::AsFd;
+    Ok(File::from(std::io::stdin().as_fd().try_clone_to_owned()?))
+}
+#[cfg(windows)]
+fn inherited_worker_file() -> Result<File> {
+    use std::os::windows::io::AsHandle;
+    Ok(File::from(
+        std::io::stdin().as_handle().try_clone_to_owned()?,
+    ))
+}
+
+fn adopt_worker_ownership(directory: &PrivateDirectory, file: File, name: &str) -> Result<File> {
+    iroha_fs::FileSnapshot::private_journal(&file)?;
+    directory.read_scope(|scope| {
+        scope.require_same_file("runtime.lock", &file, || {
+            Error::Invalid("worker stdin differs from the original runtime owner".into())
+        })
+    })?;
+    #[cfg(unix)]
+    file.try_lock().map_err(|error| match error {
+        std::fs::TryLockError::WouldBlock => Error::Busy(name.into()),
+        std::fs::TryLockError::Error(error) => Error::Io(error),
+    })?;
+    // Windows uses the trusted frontend's inherited FILE_SHARE_READ writer-deny object.
+    // Reacquiring its process-owned LockFileEx can self-conflict; metadata/name admission alone
+    // does not attest arbitrary externally supplied stdin share flags.
+    #[cfg(windows)]
+    let _ = name;
+    iroha_fs::FileSnapshot::private_journal(&file)?;
+    directory.read_scope(|scope| {
+        scope.require_same_file("runtime.lock", &file, || {
+            Error::Invalid("worker runtime owner changed during admission".into())
+        })
+    })?;
+    Ok(file)
+}
+
+fn fail_before_session(
+    directory: &PrivateDirectory,
+    status: &mut ManagedStatus,
+    budget: &activation::Budget,
+    error: Error,
+) -> Result<()> {
+    let failure = budget
+        .check()
+        .err()
+        .unwrap_or_else(|| budget.progress.unconfirmed());
+    expire_startup_status(status, failure);
+    if let Err(publication) = publish(directory, status) {
+        return Err(Error::WorkerFailure {
+            failure: error.to_string(),
+            cleanup: None,
+            publication: Some(Box::new(publication)),
         });
     }
-    Err(Error::Invalid(failure.message()))
+    Err(error)
+}
+
+// Raw same-boot, suspend-inclusive continuous time is shared by frontend and child. This
+// internal startup DATA bound never supplies a wall-clock signing or financial authority.
+pub(super) fn startup_deadline(started: Instant, timeout: Duration) -> Result<u128> {
+    let now = iroha_primitives::time::native_continuous_clock_nanos()?;
+    now.checked_add(startup_remaining(started, timeout)?.as_nanos())
+        .ok_or_else(|| Error::Invalid("startup continuous deadline overflow".into()))
+}
+
+pub(super) fn continuous_remaining(deadline: u128) -> std::io::Result<Option<Duration>> {
+    let now = iroha_primitives::time::native_continuous_clock_nanos()?;
+    let Some(nanos) = deadline.checked_sub(now).filter(|value| *value > 0) else {
+        return Ok(None);
+    };
+    let seconds = u64::try_from(nanos / 1_000_000_000)
+        .map_err(|_| std::io::Error::other("startup continuous remainder overflow"))?;
+    Ok(Some(Duration::new(seconds, (nanos % 1_000_000_000) as u32)))
+}
+
+pub(super) fn startup_remaining_until(
+    started: Instant,
+    timeout: Duration,
+    deadline: u128,
+) -> Result<Duration> {
+    let local = startup_remaining(started, timeout)?;
+    let shared = continuous_remaining(deadline)?.ok_or(Error::Timeout(timeout))?;
+    Ok(local.min(shared))
 }
 
 /// Charge every startup phase to the same finite budget, including custody and binary checks.
@@ -607,6 +884,17 @@ pub(super) fn worker_startup_millis(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_budget() -> activation::Budget {
+        activation::Budget {
+            started: Instant::now(),
+            timeout: Duration::from_secs(30),
+            startup_deadline_ns: None,
+            utc_ceiling_unix_ms: None,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            progress: Arc::new(progress::Progress::default()),
+        }
+    }
 
     #[test]
     fn private_daemon_uses_the_explicit_nexus_profile_without_changing_global_launch() {
@@ -735,6 +1023,92 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn ordinary_worker_error_closes_owned_children_and_retains_safe_status() {
+        let _resources = super::super::native_test_guard();
+        for block_publication in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let (_, directory, prepared) =
+                super::super::tests::fixture(&temporary.path().join("managed"), "local");
+            let ownership = store::acquire(&directory, "runtime.lock", "local").unwrap();
+            let child = Command::new("/bin/sleep")
+                .arg("30")
+                .stdin(Stdio::from(ownership.try_clone().unwrap()))
+                .spawn()
+                .unwrap();
+            let mut processes = PeerProcesses::from_children(vec![child]);
+            drop(ownership);
+            let sentinel_child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+            let mut sentinel = PeerProcesses::from_children(vec![sentinel_child]);
+            let mut status = ManagedStatus {
+                context: prepared.context.clone(),
+                phase: ManagedPhase::Starting,
+                running_peers: 0,
+                failure: None,
+            };
+            publish(&directory, &status).unwrap();
+            status.running_peers = processes.children.len();
+            let progress = progress::Progress::default();
+            progress.enter(progress::Phase::InitialReadiness);
+            let failure = progress.unconfirmed();
+            let cancelled = AtomicBool::new(false);
+            assert!(matches!(
+                store::acquire(&directory, "runtime.lock", "local"),
+                Err(Error::Busy(_))
+            ));
+            // Genuine native I/O refusal supplies the original error. No descriptor,
+            // worker observation or readiness result is fabricated for this closure test.
+            let original: Error = directory
+                .read("missing-control-input", 1)
+                .unwrap_err()
+                .into();
+            let (original_kind, original_code) = match &original {
+                Error::Io(error) => (error.kind(), error.raw_os_error()),
+                other => panic!("expected native private-read refusal: {other:?}"),
+            };
+            let original_message = original.to_string();
+            let blocker = if block_publication {
+                assert!(directory.remove_private(STATUS).unwrap());
+                Some(directory.create_child(STATUS).unwrap())
+            } else {
+                None
+            };
+            let error = close_worker_error(
+                &directory,
+                &mut status,
+                &mut processes,
+                &cancelled,
+                failure,
+                original,
+            );
+            if block_publication {
+                assert!(matches!(error, Error::WorkerFailure {
+                    failure: original,
+                    cleanup: None,
+                    publication: Some(publication),
+                } if original == original_message && matches!(*publication, Error::Io(_))));
+            } else {
+                assert!(matches!(error, Error::Io(error)
+                    if error.kind() == original_kind && error.raw_os_error() == original_code));
+                let retained: ManagedStatus =
+                    decode(&directory.read(STATUS, MAX_METADATA).unwrap()).unwrap();
+                assert_eq!(retained, status);
+                assert!(!retained.failure.unwrap().contains("missing-control-input"));
+            }
+            assert!(cancelled.load(Ordering::Acquire));
+            assert!(processes.children.is_empty());
+            assert_eq!(status.context, prepared.context);
+            assert_eq!(status.phase, ManagedPhase::Failed);
+            assert_eq!(status.running_peers, 0);
+            assert_eq!(status.failure, Some(failure.message()));
+            store::acquire(&directory, "runtime.lock", "local").unwrap();
+            assert!(!sentinel.any_exited().unwrap());
+            sentinel.stop().unwrap();
+            drop(blocker);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn failed_startup_retains_original_stage_on_owned_cleanup_refusal_and_recovers() {
         // The fixture provides a real signed context; these directly owned sleepers test only
         // process cleanup and status custody, not native validator readiness or signing.
@@ -812,9 +1186,7 @@ mod tests {
                     other => panic!("original startup and typed cleanup errors lost: {other:?}"),
                 }
                 assert!(display.starts_with(&failure.message()));
-                assert!(
-                    display.contains("Owned validator cleanup failed: owned child lock failed")
-                );
+                assert!(display.contains("Owned worker cleanup failed: owned child lock failed"));
                 assert!(cancelled.load(Ordering::Acquire));
                 assert_eq!(status.phase, ManagedPhase::Failed);
                 assert_eq!(status.running_peers, 2);
@@ -926,7 +1298,7 @@ mod tests {
         } if original == failure.message() && matches!(*source, Error::Io(_))));
         assert!(display.starts_with(&failure.message()));
         assert!(display.contains("Failed to retain startup failure status:"));
-        assert!(!display.contains("Owned validator cleanup failed:"));
+        assert!(!display.contains("Owned worker cleanup failed:"));
         assert!(cancelled.load(Ordering::Acquire));
         assert!(processes.children.is_empty());
         assert_eq!(status.phase, ManagedPhase::Failed);
@@ -1011,6 +1383,7 @@ mod tests {
                         &mut status,
                         &mut processes,
                         &cancelled,
+                        &progress::Progress::default(),
                     )
                     .unwrap_err();
                     assert!(error.to_string().starts_with(original));
@@ -1098,6 +1471,7 @@ mod tests {
                             &mut status,
                             &mut processes,
                             &cancelled,
+                            &progress::Progress::default(),
                         )
                         .unwrap_err();
                         assert!(
@@ -1143,7 +1517,14 @@ mod tests {
         publish(&directory, &status).unwrap();
         let bytes = directory.read(STATUS, MAX_METADATA).unwrap();
         let cancelled = AtomicBool::new(false);
-        check_owned_validator_exit(&directory, &mut status, &mut processes, &cancelled).unwrap();
+        check_owned_validator_exit(
+            &directory,
+            &mut status,
+            &mut processes,
+            &cancelled,
+            &progress::Progress::default(),
+        )
+        .unwrap();
         assert_eq!(status, original);
         assert_eq!(directory.read(STATUS, MAX_METADATA).unwrap(), bytes);
         assert!(!cancelled.load(Ordering::Acquire));
@@ -1216,7 +1597,10 @@ mod tests {
         for _ in 0..2 {
             let mut command = Command::new(daemon.path());
             command.current_dir(temporary.path().join("absent-cwd"));
-            assert!(spawn_with_launch_fence(&directory, 0, &mut command, &daemon).is_err());
+            assert!(
+                spawn_with_launch_fence(&directory, 0, &mut command, &daemon, &test_budget())
+                    .is_err()
+            );
             assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"0");
             assert_eq!(
                 command.get_args().collect::<Vec<_>>(),
@@ -1228,7 +1612,9 @@ mod tests {
             .unwrap();
         let mut command = Command::new(daemon.path());
         command.current_dir(temporary.path().join("absent-cwd"));
-        assert!(spawn_with_launch_fence(&directory, 0, &mut command, &daemon).is_err());
+        assert!(
+            spawn_with_launch_fence(&directory, 0, &mut command, &daemon, &test_budget()).is_err()
+        );
         assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"1");
         assert_eq!(command.get_args().len(), 0);
     }
@@ -1303,7 +1689,7 @@ mod tests {
         let pin = daemon.pin().unwrap();
         let mut wrong = Command::new(std::env::current_exe().unwrap());
         assert!(matches!(
-            spawn_with_launch_fence(&directory, 0, &mut wrong, &daemon),
+            spawn_with_launch_fence(&directory, 0, &mut wrong, &daemon, &test_budget()),
             Err(Error::Invalid(message)) if message == "launch command differs from its selected native executable"
         ));
         assert!(!directory.path().join("peer0.launch").exists());
@@ -1314,7 +1700,9 @@ mod tests {
             .write_all(b"changed before native execution")
             .unwrap();
         let mut command = Command::new(daemon.path());
-        assert!(spawn_with_launch_fence(&directory, 0, &mut command, &daemon).is_err());
+        assert!(
+            spawn_with_launch_fence(&directory, 0, &mut command, &daemon, &test_budget()).is_err()
+        );
         assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"0");
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
@@ -1325,7 +1713,7 @@ mod tests {
         let mut retry = Command::new(restored.path());
         retry.current_dir(temporary.path().join("absent-cwd"));
         assert!(matches!(
-            spawn_with_launch_fence(&directory, 0, &mut retry, &restored),
+            spawn_with_launch_fence(&directory, 0, &mut retry, &restored, &test_budget()),
             Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
         ));
         assert_eq!(directory.read("peer0.launch", 1).unwrap().as_slice(), b"0");
@@ -1335,3 +1723,11 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "runtime/handoff_tests.rs"]
+mod handoff_tests;
+
+#[cfg(test)]
+#[path = "runtime/background_tests.rs"]
+mod background_tests;

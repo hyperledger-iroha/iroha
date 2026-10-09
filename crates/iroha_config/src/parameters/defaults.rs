@@ -20,25 +20,6 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-/// Required online finalized-load publication service defaults.
-pub mod kagemusha_load_authorizer {
-    /// Maximum encoded private Norito keyring bytes admitted at startup.
-    pub const KEYRING_MAX_BYTES: usize = 65_536;
-    /// Retry cadence while the chain, worker or submitter is unavailable.
-    pub const POLL_INTERVAL_MS: u64 = 1_000;
-    /// Bounded pending identities per tick.
-    pub const PAGE_SIZE: usize = 16;
-    /// Maximum original block frame bytes.
-    pub const BLOCK_BYTES: usize = 2 * 1024 * 1024;
-    /// Maximum original history bytes per tick.
-    pub const JOURNAL_BYTES: usize = 16 * 1024 * 1024;
-    /// Maximum original block frames per tick.
-    pub const BLOCK_COUNT: usize = 64;
-    /// Maximum Norito decoded allocation per tick.
-    pub const ALLOCATED_BYTES: usize = 32 * 1024 * 1024;
-    /// Normal online publication transaction expiration; vouchers themselves never expire here.
-    pub const TRANSACTION_TTL_MS: u64 = 60_000;
-}
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
     let domain_id =
         DomainId::parse_fully_qualified(domain).expect("default asset definition domain");
@@ -192,10 +173,6 @@ pub mod data_dir {
     pub const TRANSPORT_KEY: &str = "transport.key";
     /// Streaming identity Ed25519 private key (`streaming.identity_private_key_file`).
     pub const STREAMING_KEY: &str = "streaming.key";
-    /// Required online KAGEMUSHA publisher's private Norito signer keyring.
-    pub const KAGEMUSHA_LOAD_AUTHORIZER_KEYRING: &str = "kagemusha_load_authorizer.keyring.norito";
-    /// Required online KAGEMUSHA publisher's private transaction submitter key.
-    pub const KAGEMUSHA_LOAD_SUBMITTER_KEY: &str = "kagemusha_load_submitter.key";
     /// Soracloud runtime mutation-signer private key.
     pub const RUNTIME_SIGNER_KEY: &str = "runtime_signer.key";
     /// Global beacon partial-signer credential.
@@ -2621,6 +2598,42 @@ pub mod torii {
             None
         }
     }
+    /// Local limits only; no default issuer, bank, policy, signer or worker is selected.
+    pub mod kagemusha_enrollment {
+        /// Complete fresh bank observation timeout in milliseconds.
+        pub const REQUEST_TIMEOUT_MS: u64 = 5_000;
+        /// Complete private platform verification exchange timeout.
+        pub const WORKER_EXCHANGE_TIMEOUT_MS: u64 = 60_000;
+        /// Maximum concurrent authenticated service requests.
+        pub const MAX_INFLIGHT: usize = 16;
+    }
+
+    /// Local proof-service budgets; identities and custody paths have no defaults.
+    pub mod kagemusha_load_finality {
+        /// Maximum queued, active and unread terminal results.
+        pub const MAX_PENDING_REQUESTS: usize = 8;
+        /// Maximum committed receipt height eligible for replay from genesis.
+        pub const MAXIMUM_RECEIPT_HEIGHT: u64 = 1_000_000;
+        /// Maximum individual server proving-key original (256 MiB).
+        pub const MAXIMUM_KEY_BYTES: usize = 256 << 20;
+        /// Maximum resident proving-key cache (512 MiB).
+        pub const MAXIMUM_RESIDENT_PROVING_KEY_BYTES: usize = 512 << 20;
+        /// Maximum aggregate original graph extent (1 GiB).
+        pub const MAXIMUM_ORIGINAL_BYTES: usize = 1 << 30;
+        /// Maximum original graph entries.
+        pub const MAXIMUM_ARTIFACTS: usize = 4_096;
+        /// Scratch budget for each proof operation (64 MiB).
+        pub const MSM_BYTES: usize = 64 << 20;
+        /// Maximum retained journal entries including partials and locks.
+        pub const MAXIMUM_JOURNAL_ENTRIES: usize = 100_000;
+        /// Maximum retained journal extent (1 GiB).
+        pub const MAXIMUM_JOURNAL_BYTES: u64 = 1 << 30;
+        /// Allocation budget for native history acquisition (64 MiB).
+        pub const NATIVE_WORKING_SET_BYTES: usize = 64 << 20;
+        /// Deadline for one native block acquisition, in milliseconds.
+        pub const NATIVE_STEP_TIMEOUT_MS: u64 = 5_000;
+    }
+
     /// Retail recipient lookup defaults (disabled unless routes are configured).
     pub mod recipient_lookup {
         /// HTTP request timeout applied to configured bank Core API lookups.

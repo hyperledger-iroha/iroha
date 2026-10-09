@@ -1,6 +1,7 @@
-//! Genuine finalized-voucher, state/map and signed receipt witnesses for Load.
+//! Ordinary receipt terms, state/map and own signed receipt witnesses for Load.
+//! Synthetic ledger terms exercise components only; they carry no finality authority.
 
-use super::bootstrap_objects::{Signed, id, key, sec1, sign, small_id};
+use super::bootstrap_objects::{Signed, id, key, sign, small_id};
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::{
     a_relation::own::OwnPolicy,
@@ -12,25 +13,31 @@ use iroha_kagemusha_proof::{
 use iroha_pasta::{Fp, poseidon::hash_with_domain};
 use iroha_plonk_gadgets::{bytes::p_bytes_native, statement::STATEMENT_DOMAIN};
 
-pub fn authorized(before: &BootstrapWitness) -> (LoadWitness, IndexedInsert<Fp>, Signed, Signed) {
-    let mut body = 1u16.to_le_bytes().to_vec();
-    body.extend(id(before.core[1], before.core[2]));
-    body.push(2); // LoadAuthorization, distinct from Enrollment role1.
-    body.extend(sec1(key(19)));
-    body.extend(1u64.to_le_bytes());
-    let certificate = sign(ObjectKind::Certificate, body, 23, 43);
+#[derive(Clone)]
+pub struct OrdinaryReceipt {
+    pub bytes: [u8; 282],
+}
+impl OrdinaryReceipt {
+    pub fn digest(&self) -> Fp {
+        p_bytes_native(u64::from_le_bytes(*b"kgwolod1"), &self.bytes)
+    }
+}
+pub fn funded(before: &BootstrapWitness) -> (LoadWitness, IndexedInsert<Fp>, OrdinaryReceipt) {
     let mut body = 1u16.to_le_bytes().to_vec();
     for offset in [1, 3, 5] {
         body.extend(id(before.core[offset], before.core[offset + 1]));
     }
+    body.extend(small_id(103, 104));
     body.extend(before.core[core::NEXT_LOAD].to_repr()[..16].iter());
     body.extend(100u128.to_le_bytes());
     body.extend(3u128.to_le_bytes());
-    body.extend(Fp::from(104).to_repr()); // Issuer-attested online charge quote digest.
-    body.extend(small_id(105, 106)); // Finalized reserve source identity.
+    body.extend(Fp::from(104).to_repr());
+    body.extend(small_id(105, 106));
     body.extend(107u64.to_le_bytes());
-    body.extend(certificate.digest().to_repr());
-    let voucher = sign(ObjectKind::Voucher, body, 19, 47);
+    body.extend(small_id(108, 109));
+    let ordinary = OrdinaryReceipt {
+        bytes: body.try_into().unwrap(),
+    };
     let mut after = *before;
     after.core[core::BALANCE] += Fp::from(100);
     after.core[core::NEXT_LOAD] += Fp::ONE;
@@ -38,7 +45,7 @@ pub fn authorized(before: &BootstrapWitness) -> (LoadWitness, IndexedInsert<Fp>,
     after.core[core::STATE_NONCE] += Fp::ONE;
     let ordinal = before.core[core::NEXT_LOAD];
     let key = Fp::from(2).pow_vartime([128]) + ordinal;
-    let value = hash_with_domain(LOAD_DOMAIN, &[ordinal, voucher.digest(), Fp::from(100)]);
+    let value = hash_with_domain(LOAD_DOMAIN, &[ordinal, ordinary.digest(), Fp::from(100)]);
     let mut tree = IndexedTree::new();
     assert_eq!(tree.root(), before.core[core::LOAD_REDEEM_ROOT]);
     let insertion = tree.insert(key, value).unwrap();
@@ -48,7 +55,7 @@ pub fn authorized(before: &BootstrapWitness) -> (LoadWitness, IndexedInsert<Fp>,
     statement[14] = before.lineage[5];
     statement[16] = Fp::from(2);
     statement[17..].fill(Fp::ZERO);
-    statement[17] = voucher.digest();
+    statement[17] = ordinary.digest();
     statement[18] = ordinal;
     statement[19] = Fp::from(100);
     statement[20] = Fp::from(3);
@@ -59,8 +66,7 @@ pub fn authorized(before: &BootstrapWitness) -> (LoadWitness, IndexedInsert<Fp>,
             statement,
         },
         insertion,
-        certificate,
-        voucher,
+        ordinary,
     )
 }
 pub fn receipt(w: &LoadWitness, sigma: &[u8]) -> Signed {
@@ -95,7 +101,7 @@ pub fn receipt(w: &LoadWitness, sigma: &[u8]) -> Signed {
     sign(ObjectKind::Receipt, body, 29, 53)
 }
 pub fn policy() -> OwnPolicy {
-    OwnPolicy::new([1, 2], [31, 32], key(23)).unwrap()
+    OwnPolicy::new([31, 32], key(23)).unwrap()
 }
 
 /// Separate mandatory C4 signature leaf: current credential and fixed-root certificate.
@@ -122,5 +128,25 @@ pub fn current_signatures(
     .unwrap();
     let circuit = QSignatureCircuit::new(plan, witnesses.to_vec()).unwrap();
     let instances = circuit.instances(&[true; 2]).unwrap();
+    (circuit, instances)
+}
+
+/// Own Advance receipt signature, independent of ledger consensus finality.
+pub fn own_signature(
+    witness: iroha_kagemusha_proof::q_signature::SignatureWitness,
+) -> (
+    iroha_kagemusha_proof::q_signature::QSignatureCircuit,
+    [Vec<iroha_pasta::Fq>; 1],
+) {
+    use iroha_kagemusha_proof::q_signature::{
+        QSignatureCircuit, QSignaturePlan, SignatureKey, SignatureSlot,
+    };
+    let plan = QSignaturePlan::new(vec![SignatureSlot {
+        mode: iroha_plonk_gadgets::p256::VerifyMode::Hard,
+        key: SignatureKey::Variable,
+    }])
+    .unwrap();
+    let circuit = QSignatureCircuit::new(plan, vec![witness]).unwrap();
+    let instances = circuit.instances(&[true]).unwrap();
     (circuit, instances)
 }

@@ -238,6 +238,7 @@ pub(crate) static ASSET_DEFINITIONS: CollectionSpec = CollectionSpec {
         text("alias"),
         account("owned_by"),
         text("owning_domain"),
+        text("owning_dataspace"),
         json("mintable"),
         unsorted_text("alias_binding.alias"),
         unsorted_text("alias_binding.status"),
@@ -621,6 +622,16 @@ mod tests {
                 assert!(spec.field(field).is_some(), "{}: identity {field}", spec.id);
             }
         }
+    }
+
+    #[test]
+    fn asset_definition_direct_home_is_exact_text() {
+        let field = ASSET_DEFINITIONS
+            .field("owning_dataspace")
+            .expect("direct home field");
+        assert_eq!(field.ty, FieldType::String);
+        assert!(field.sortable);
+        assert!(!field.account);
     }
 
     #[test]

@@ -102,3 +102,82 @@ impl Directory {
         self.revalidate()
     }
 }
+
+impl Directory {
+    pub(crate) fn sync_custody_file(&self, name: &OsStr) -> io::Result<()> {
+        let original = self.open_retained(name, true, false)?;
+        original.revalidate()?;
+        original.file().sync_all()?;
+        original.revalidate()
+    }
+}
+impl RetainedFile {
+    pub(crate) fn rename_custody_file(
+        &mut self,
+        from: &OsStr,
+        to: &OsStr,
+        mode: PublishMode,
+    ) -> io::Result<()> {
+        if self.name.as_os_str() != from
+            || self.publication != PublicationAuthority::ExclusiveCreation
+            || !self.writable
+            || self.read_only
+        {
+            return Err(denied(
+                "journal rename requires its live exclusive original writer",
+            ));
+        }
+        self.revalidate()?;
+        if mode == PublishMode::Replace {
+            let destination = self.directory.open_read(to)?;
+            validate_file(&destination, true)?;
+        }
+        self.directory.revalidate()?;
+        match mode {
+            PublishMode::CreateNew => {
+                #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
+                rustix::fs::renameat_with(
+                    &self.directory.current().file,
+                    from,
+                    &self.directory.current().file,
+                    to,
+                    rustix::fs::RenameFlags::NOREPLACE,
+                )?;
+                #[cfg(not(any(
+                    target_vendor = "apple",
+                    target_os = "linux",
+                    target_os = "android"
+                )))]
+                return Err(io::ErrorKind::Unsupported.into());
+            }
+            PublishMode::Replace => rustix::fs::renameat(
+                &self.directory.current().file,
+                from,
+                &self.directory.current().file,
+                to,
+            )?,
+        }
+        to.clone_into(&mut self.name);
+        self.publication = PublicationAuthority::None;
+        self.revalidate()
+            .map_err(|error| io::Error::other(format!("native rename completed: {error}")))
+    }
+    pub(crate) fn remove_custody_file(self, name: &OsStr) -> io::Result<()> {
+        if self.name.as_os_str() != name
+            || self.publication != PublicationAuthority::ExclusiveCreation
+            || !self.writable
+            || self.read_only
+        {
+            return Err(denied(
+                "journal discard requires its unpublished original writer",
+            ));
+        }
+        self.revalidate()?;
+        rustix::fs::unlinkat(&self.directory.current().file, name, AtFlags::empty())?;
+        self.directory.revalidate().map_err(|error| {
+            io::Error::other(format!(
+                "native removal completed; custody check failed: {error}"
+            ))
+        })
+    }
+}

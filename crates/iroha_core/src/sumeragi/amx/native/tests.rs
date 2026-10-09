@@ -14,7 +14,7 @@ use iroha_data_model::{
         sumeragi_amx::{BeginAmxV1, RegisterAmxDataspaceV1, RelayAmxPreparedV1},
     },
     nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
-    sumeragi_amx::{AmxRecordKind, AmxTransactionV1, AmxVoteV1},
+    sumeragi_amx::{AmxRecordKind, AmxTransactionV1, AmxTransferLegV1, AmxVoteV1},
     sumeragi_finality::genesis_epoch,
 };
 use iroha_model_base::{chain::ChainId, domain::DomainId};
@@ -260,7 +260,7 @@ impl Roots {
     fn begin(
         &mut self,
         transaction: &AmxTransactionV1,
-    ) -> iroha_data_model::sumeragi_amx::AmxRecordProofV1 {
+    ) -> iroha_data_model::sumeragi_amx::AllocatedAmxRecordProofV1 {
         let signed = self.global.sign(
             &global_config().genesis_key,
             [BeginAmxV1 {
@@ -276,6 +276,7 @@ impl Roots {
             AmxRecordKind::Begin,
             transaction.id().unwrap(),
         )
+        .complete()
         .unwrap()
         .unwrap()
     }
@@ -283,27 +284,27 @@ impl Roots {
         &mut self,
         index: usize,
         transaction: &AmxTransactionV1,
-        begin: &iroha_data_model::sumeragi_amx::AmxRecordProofV1,
-    ) -> iroha_data_model::sumeragi_amx::AmxRecordProofV1 {
+        begin: &iroha_data_model::sumeragi_amx::AllocatedAmxRecordProofV1,
+    ) -> iroha_data_model::sumeragi_amx::AllocatedAmxRecordProofV1 {
         self.prepare_at(index, transaction, begin, 4_000)
     }
     fn prepare_at(
         &mut self,
         index: usize,
         transaction: &AmxTransactionV1,
-        begin: &iroha_data_model::sumeragi_amx::AmxRecordProofV1,
+        begin: &iroha_data_model::sumeragi_amx::AllocatedAmxRecordProofV1,
         timestamp_ms: u64,
-    ) -> iroha_data_model::sumeragi_amx::AmxRecordProofV1 {
+    ) -> iroha_data_model::sumeragi_amx::AllocatedAmxRecordProofV1 {
         let id = [FIRST, SECOND][index];
         let chain = &mut self.participants[index];
         let signed = chain.sign(
             &payer(),
-            [PrepareAmxV1 {
-                dataspace: id,
-                transaction: transaction.clone(),
-                begin: begin.clone(),
-            }
-            .into()],
+            [begin
+                .try_copy(&self.global.state().ivm_execution_budget())
+                .unwrap()
+                .into_prepare(id, transaction)
+                .complete(&self.global.state().ivm_execution_budget())
+                .unwrap()],
             timestamp_ms.checked_sub(1).unwrap(),
         );
         assert_eq!(chain.commit_at(timestamp_ms, vec![signed]), vec![true]);
@@ -313,24 +314,35 @@ impl Roots {
             AmxRecordKind::Prepared,
             transaction.id().unwrap(),
         )
+        .complete()
         .unwrap()
         .unwrap();
         assert!(
-            proof.block.commit_qc.len() > 0,
+            proof.canonical().block.commit_qc.len() > 0,
             "original signed certificate"
         );
         proof
     }
     fn decide(
         &mut self,
-        proofs: impl IntoIterator<Item = iroha_data_model::sumeragi_amx::AmxRecordProofV1>,
+        proofs: impl IntoIterator<Item = iroha_data_model::sumeragi_amx::AllocatedAmxRecordProofV1>,
         tx: [u8; 32],
-    ) -> iroha_data_model::sumeragi_amx::AmxRecordProofV1 {
+    ) -> iroha_data_model::sumeragi_amx::AllocatedAmxRecordProofV1 {
         let signed = self.global.sign(
             &global_config().genesis_key,
-            proofs
-                .into_iter()
-                .map(|proof| RelayAmxPreparedV1 { proof }.into()),
+            proofs.into_iter().map(|proof| {
+                let AmxRecordV1::Prepared(record) = &proof.canonical().record else {
+                    panic!("original participant Prepared proof");
+                };
+                let index = [FIRST, SECOND]
+                    .iter()
+                    .position(|id| *id == record.participant)
+                    .unwrap();
+                proof
+                    .into_relay()
+                    .complete(&self.participants[index].state().ivm_execution_budget())
+                    .unwrap()
+            }),
             4_999,
         );
         assert_eq!(self.global.commit_at(5_000, vec![signed]), vec![true]);
@@ -340,6 +352,7 @@ impl Roots {
             AmxRecordKind::Decision,
             tx,
         )
+        .complete()
         .unwrap()
         .unwrap()
     }
@@ -374,6 +387,41 @@ fn native(chain: &CertifiedTestChain) -> NativeAmxParticipantStateV1 {
         .clone()
 }
 
+#[inline(never)]
+fn check_paid_effects_at_original_pool_capacity(chain: &CertifiedTestChain) {
+    // The actual signed Prepare left this authenticated escrow in its original State pool.
+    let view = chain.state().view();
+    let owner = view.world().sumeragi_amx_participant();
+    let budget = chain.state().ivm_execution_budget();
+    assert!(owner.is_authenticated());
+    assert!(owner.belongs_to(&budget));
+    let original = owner.canonical().unwrap();
+    assert_eq!(original.escrows.len(), 1);
+    let record = &original.escrows[0];
+    assert_eq!(record.leg.amount, Quantity::from(100_u32));
+    let pointer = std::ptr::from_ref(&record.leg);
+    let frame = norito::encode_canonical(&record.leg).unwrap();
+    let expected: [u8; 32] =
+        iroha_crypto::Hash::new_from_chunks(&[b"iroha:native-amx-transfer:v1", &[0], &frame])
+            .into();
+    let reader = owner.clone();
+    assert!(std::ptr::eq(reader.canonical().unwrap(), original));
+    let retained = budget.reserved_bytes();
+    let limit = budget.limit_bytes();
+    budget.set_limit_bytes(retained);
+    let actual = iroha_data_model::sumeragi_amx::native_transfer_effects_hash(&record.leg);
+    budget.set_limit_bytes(limit);
+    assert_eq!(actual.unwrap(), expected);
+    assert_eq!(expected, record.effects_hash);
+    assert_eq!(budget.reserved_bytes(), retained);
+    assert_eq!(
+        std::ptr::from_ref(&reader.canonical().unwrap().escrows[0].leg),
+        pointer
+    );
+    drop(reader);
+    assert_eq!(budget.reserved_bytes(), retained);
+}
+
 #[test]
 fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
     let mut roots = Roots::new();
@@ -385,7 +433,7 @@ fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
         [PrepareAmxV1 {
             dataspace: FIRST,
             transaction: transaction.clone(),
-            begin: begin.clone(),
+            begin: begin.canonical().clone(),
         }
         .into()],
         3_500,
@@ -424,6 +472,7 @@ fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
             balance(chain, id, fee_asset(), account(&payer())) < 1_000_000_u32.into(),
             "actual positive private fee debit"
         );
+        check_paid_effects_at_original_pool_capacity(chain);
     }
     let custody = native(&roots.participants[0]).custody;
     let bypass = roots.participants[0].sign(
@@ -467,9 +516,11 @@ fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
     }
     let decision = roots.decide([first, second], transaction.id().unwrap());
     assert!(
-        matches!(decision.record,AmxRecordV1::Decision(value) if value.outcome==AmxOutcomeV1::Commit)
+        matches!(decision.canonical().record,AmxRecordV1::Decision(value) if value.outcome==AmxOutcomeV1::Commit)
     );
-    let mut forged = decision.clone();
+    // Deliberately malformed ordinary DTO fixture, separately owned from the immutable
+    // funded source. It grants no funding/authority and must be rejected by the real host.
+    let mut forged = decision.canonical().clone();
     if let AmxRecordV1::Decision(value) = &mut forged.record {
         value.outcome = AmxOutcomeV1::Abort;
     }
@@ -490,11 +541,12 @@ fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
     for (id, chain) in [FIRST, SECOND].into_iter().zip(&mut roots.participants) {
         let signed = chain.sign(
             &payer(),
-            [SettleAmxV1 {
-                dataspace: id,
-                decision: decision.clone(),
-            }
-            .into()],
+            [decision
+                .try_copy(&roots.global.state().ivm_execution_budget())
+                .unwrap()
+                .into_settle(id)
+                .complete(&roots.global.state().ivm_execution_budget())
+                .unwrap()],
             5_999,
         );
         assert_eq!(chain.commit_at(6_000, vec![signed]), vec![true]);
@@ -510,11 +562,12 @@ fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
         );
         let repeated = chain.sign(
             &payer(),
-            [SettleAmxV1 {
-                dataspace: id,
-                decision: decision.clone(),
-            }
-            .into()],
+            [decision
+                .try_copy(&roots.global.state().ivm_execution_budget())
+                .unwrap()
+                .into_settle(id)
+                .complete(&roots.global.state().ivm_execution_budget())
+                .unwrap()],
             6_099,
         );
         assert_eq!(chain.commit_at(6_100, vec![repeated]), vec![false]);
@@ -541,6 +594,7 @@ fn native_amx_paid_commit_survives_certified_restart_and_rejects_bypass() {
             AmxRecordKind::Prepared,
             transaction.id().unwrap(),
         )
+        .complete()
         .unwrap();
         if id == FIRST {
             assert!(
@@ -564,21 +618,23 @@ fn native_amx_certified_abort_returns_yes_escrow_and_held_decision_never_debits(
     let begin = roots.begin(&transaction);
     let first = roots.prepare(0, &transaction, &begin);
     let second = roots.prepare(1, &transaction, &begin);
-    assert!(matches!(second.record,AmxRecordV1::Prepared(value) if value.vote==AmxVoteV1::No));
+    assert!(
+        matches!(second.canonical().record,AmxRecordV1::Prepared(value) if value.vote==AmxVoteV1::No)
+    );
     assert!(native(&roots.participants[1]).escrows.is_empty());
     let decision = roots.decide([first, second], transaction.id().unwrap());
     assert!(
-        matches!(decision.record,AmxRecordV1::Decision(value) if value.outcome==AmxOutcomeV1::Abort)
+        matches!(decision.canonical().record,AmxRecordV1::Decision(value) if value.outcome==AmxOutcomeV1::Abort)
     );
-    let signed = roots.participants[0].sign(
-        &payer(),
-        [SettleAmxV1 {
-            dataspace: FIRST,
-            decision: decision.clone(),
-        }
-        .into()],
-        5_999,
-    );
+    let budget = roots.global.state().ivm_execution_budget();
+    let settle = decision
+        .try_copy(&budget)
+        .unwrap()
+        .into_settle(FIRST)
+        .complete(&budget)
+        .unwrap();
+    assert!(settle.amx_proof_admitted_to(&budget));
+    let signed = roots.participants[0].sign(&payer(), [settle], 5_999);
     assert_eq!(
         roots.participants[0].commit_at(6_000, vec![signed]),
         vec![true]
@@ -600,24 +656,19 @@ fn native_amx_certified_abort_returns_yes_escrow_and_held_decision_never_debits(
     let mut fresh = CertifiedTestChain::start(private_config(&roots.global, FIRST)).unwrap();
     let signed = fresh.sign(
         &payer(),
-        [SettleAmxV1 {
-            dataspace: FIRST,
-            decision,
-        }
-        .into()],
+        [decision
+            .into_settle(FIRST)
+            .complete(&roots.global.state().ivm_execution_budget())
+            .unwrap()],
         6_999,
     );
     assert_eq!(fresh.commit_at(7_000, vec![signed]), vec![true]);
-    let signed = fresh.sign(
-        &payer(),
-        [PrepareAmxV1 {
-            dataspace: FIRST,
-            transaction: transaction.clone(),
-            begin,
-        }
-        .into()],
-        7_999,
-    );
+    let prepare = begin
+        .into_prepare(FIRST, &transaction)
+        .complete(&budget)
+        .unwrap();
+    assert!(prepare.amx_proof_admitted_to(&budget));
+    let signed = fresh.sign(&payer(), [prepare], 7_999);
     assert_eq!(fresh.commit_at(8_000, vec![signed]), vec![true]);
     assert!(native(&fresh).escrows.is_empty());
     assert_eq!(
@@ -747,7 +798,7 @@ fn native_amx_enrolled_receiver_records_certified_no_without_monetary_or_mainten
     }
     let fee_before = balance(chain, FIRST, fee_asset(), account(&payer()));
     let proof = roots.prepare_at(0, &transaction, &begin, enrollment_ms + 1_000);
-    let AmxRecordV1::Prepared(prepared) = proof.record else {
+    let AmxRecordV1::Prepared(prepared) = &proof.canonical().record else {
         panic!("actual certified Prepared")
     };
     assert_eq!(prepared.vote, AmxVoteV1::No);
@@ -1043,11 +1094,10 @@ fn native_amx_edited_snapshot_admission_cannot_settle_without_original_replay() 
     }
     let signed = chain.sign(
         &payer(),
-        [SettleAmxV1 {
-            dataspace: FIRST,
-            decision,
-        }
-        .into()],
+        [decision
+            .into_settle(FIRST)
+            .complete(&roots.global.state().ivm_execution_budget())
+            .unwrap()],
         5_999,
     );
     assert_eq!(chain.commit_at(6_000, vec![signed]), vec![false]);
@@ -1110,11 +1160,10 @@ fn native_amx_new_state_cannot_inherit_live_authority_without_certified_replay()
     }
     let signed = chain.sign(
         &payer(),
-        [SettleAmxV1 {
-            dataspace: FIRST,
-            decision,
-        }
-        .into()],
+        [decision
+            .into_settle(FIRST)
+            .complete(&roots.global.state().ivm_execution_budget())
+            .unwrap()],
         5_999,
     );
     assert_eq!(chain.commit_at(6_000, vec![signed]), vec![false]);
@@ -1443,3 +1492,111 @@ fn original_authenticated_native_amx_mv_cell_refusal_keeps_original_cut_graph_an
 
 #[path = "tests/paid_borrowed_custody.rs"]
 mod paid_borrowed_custody;
+
+#[test]
+fn native_leg_decode_refuses_occupied_original_pool_before_any_copy_and_retries_exact_source() {
+    let first = payer();
+    let second = receiver();
+    let transfer = AmxTransferLegV1 {
+        source: AssetId::with_scope(
+            principal(),
+            account(&first),
+            AssetBalanceScope::Dataspace(FIRST),
+        ),
+        destination: account(&second),
+        amount: Quantity::from(17_u32),
+    };
+    let bytes = norito::encode_canonical(&transfer).unwrap();
+    let source = (bytes.as_ptr(), bytes.len());
+    let first_layout = first.public_key().retained_allocation_layout();
+    let controls = norito::core::PreparedDecodeWorkspace::allocation_layouts();
+    let control_bytes = controls.iter().map(std::alloc::Layout::size).sum::<usize>();
+    let destination_layout = second.public_key().retained_allocation_layout();
+    let amount_layout = transfer.amount.admission_clone_layout().unwrap();
+    let exact_retained = first_layout.size() + destination_layout.size() + amount_layout.size();
+    let budget = AllocationBudget::new(control_bytes);
+    let blocker = iroha_allocation::ChargedBuffer::<u8>::new(control_bytes, &budget).unwrap();
+    let expected = budget.try_reserve_layouts(controls).unwrap_err();
+    assert!(matches!(
+        expected,
+        iroha_allocation::AllocationRefusal::Capacity { .. }
+    ));
+    let mut result = None;
+    let allocations = crate::test_allocations::allocations_during(|| {
+        result = Some(decode_leg(&bytes, &budget));
+    });
+    let result = result.expect("actual production decoder was called once");
+    let refusal =
+        result.expect_err("occupied original pool must refuse before copying a canonical leg");
+    assert_eq!(refusal.to_string(), expected.to_string());
+    let AmxLegDecodeErrorV1::Allocation(iroha_allocation::ChargedBufferError::Admission(actual)) =
+        refusal
+    else {
+        panic!("original pool refusal was erased");
+    };
+    assert_eq!(actual, expected, "includes the original release generation");
+    assert_eq!(
+        allocations, 0,
+        "no key, alignment, quantity or graph copy may precede original pool refusal"
+    );
+    assert_eq!(budget.reserved_bytes(), control_bytes);
+    assert_eq!((bytes.as_ptr(), bytes.len()), source);
+    drop(blocker);
+    assert_eq!(budget.reserved_bytes(), 0);
+    budget.set_limit_bytes(exact_retained + control_bytes);
+    let retry = decode_leg(&bytes, &budget).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        budget.reserved_bytes(),
+        exact_retained,
+        "both real compact keys and native digits stay physically funded"
+    );
+    assert_eq!((bytes.as_ptr(), bytes.len()), source);
+    budget.set_limit_bytes(0);
+    drop(retry);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn native_leg_destination_and_scope_invariants_defer_without_protocol_rejection() {
+    use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
+    use iroha_data_model::block::BlockHeader;
+    use std::num::NonZeroU64;
+    for cause in [
+        AmxLegDecodeErrorV1::Invariant("populated native AMX leg destination"),
+        AmxLegDecodeErrorV1::Scope(norito::core::PreparedDecodeScopeError::ForeignPool),
+        AmxLegDecodeErrorV1::Scope(norito::core::PreparedDecodeScopeError::AttemptExhausted),
+    ] {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state
+            .try_block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0))
+            .unwrap();
+        let mut attempt = block.try_transaction().unwrap();
+        assert!(attempt.execution_deferral().is_none());
+        let diagnostic = leg_decode_error(cause, &mut attempt);
+        assert!(
+            matches!(diagnostic, Error::InvariantViolation(_)),
+            "model API carrier remains unchanged"
+        );
+        assert_eq!(
+            attempt.execution_deferral().unwrap().reason(),
+            ivm::error::ExecutionDeferral::LocalInvariantViolation
+        );
+        drop(attempt);
+        drop(block);
+        assert_eq!(
+            state.view().height(),
+            0,
+            "local bookkeeping failure grants no execution output"
+        );
+    }
+}
+
+pub(super) fn with_paid_prepare_retry_fixture(
+    test: impl FnOnce(&CertifiedTestChain, InstructionBox, KeyPair),
+) {
+    paid_borrowed_custody::with_paid_prepare_retry_fixture(test);
+}

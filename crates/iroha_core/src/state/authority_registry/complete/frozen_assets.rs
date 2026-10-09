@@ -1,4 +1,4 @@
-//! Eight actual frozen balance/reference/index owners and one original relation.
+//! Frozen balance/reference/index owners and exact direct-home authority.
 //! Scoped rows do not supply complete State or private settlement authority.
 //! TODO: join all remaining owners/cells/history to StatePublication and Kura.
 use super::{CanonicalTableLeafSet, CanonicalTablePairedSnapshot, LeafError, LeafLimits};
@@ -12,10 +12,13 @@ use iroha_data_model::{
     asset::{AssetDefinition, AssetDefinitionId, AssetId, AssetValue},
     domain::Domain,
 };
+use iroha_data_model::{nexus::AxtAssetIncarnationV1, parameter::Parameters};
 use iroha_model_base::domain::DomainId;
 use mv::storage::FrozenStorageImages;
 use std::collections::BTreeSet;
 struct Original<'frozen> {
+    parameters: [&'frozen Parameters; 2],
+    incarnations: FrozenStorageImages<'frozen, AssetDefinitionId, AxtAssetIncarnationV1>,
     rows: FrozenStorageImages<'frozen, AssetId, AssetValue>,
     definitions: FrozenStorageImages<'frozen, AssetDefinitionId, AssetDefinition>,
     domains: FrozenStorageImages<'frozen, DomainId, Domain>,
@@ -32,6 +35,8 @@ impl<'frozen> Original<'frozen> {
         if fields.world.publication != AggregatePublication::Frozen {
             return None;
         }
+        let parameters = &fields.world.parameters;
+        let incarnations = fields.world.axt_asset_incarnations.frozen_images()?;
         let rows = fields.world.assets.frozen_images()?;
         let definitions = fields.world.asset_definitions.frozen_images()?;
         let domains = fields.world.domains.frozen_images()?;
@@ -53,7 +58,11 @@ impl<'frozen> Original<'frozen> {
         let holders_owned = holders.belongs_to(&fields.state_ref.world.asset_definition_holders);
         let nonzero_owned =
             nonzero.belongs_to(&fields.state_ref.world.asset_definition_nonzero_holders);
-        if !rows_owned
+        if !parameters.belongs_to(&fields.state_ref.world.parameters)
+            || !incarnations.belongs_to(&fields.state_ref.world.axt_asset_incarnations)
+            || rows.mode() != parameters.mode()
+            || rows.mode() != incarnations.mode()
+            || !rows_owned
             || !definitions_owned
             || !domains_owned
             || !by_definition_owned
@@ -72,6 +81,8 @@ impl<'frozen> Original<'frozen> {
             return None;
         }
         Some(Self {
+            parameters: [parameters.get(), parameters.get_before_block()],
+            incarnations,
             rows,
             definitions,
             domains,
@@ -85,7 +96,7 @@ impl<'frozen> Original<'frozen> {
     }
 }
 /// Validate both original balance images and encode the caller's actual assets.
-/// All eight targets/modes and the original State pool stay borrowed through encoding.
+/// Every original target/mode and the State pool stay borrowed through encoding.
 pub(in crate::state) fn capture(
     block: &StateBlock<'_>,
     limits: LeafLimits,
@@ -103,6 +114,9 @@ pub(in crate::state) fn capture(
         &original.by_domain,
         &original.holders,
         &original.nonzero,
+        original.parameters,
+        &original.incarnations,
+        original.budget,
         max_work,
     )?;
     CanonicalTableLeafSet::paired_table_from_rows(
@@ -116,3 +130,69 @@ pub(in crate::state) fn capture(
 #[cfg(test)]
 #[path = "frozen_assets/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod direct_home_admission_tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{
+            State,
+            authority_registry::grouped_ownership::{
+                GroupedOwnershipError, asset_balance_test_support as fixture,
+            },
+        },
+    };
+    use iroha_data_model::block::BlockHeader;
+    use iroha_model_base::topology::DataSpaceId;
+    use mv::storage::StorageReadOnly;
+    use std::num::NonZeroU64;
+
+    #[test]
+    fn same_frozen_original_retries_after_original_pool_admission_refusal() {
+        let _pin = crossbeam_epoch::pin();
+        let mut world = *fixture::fixture(false);
+        let id = fixture::definition("coin");
+        world
+            .set_asset_definition_dataspace_for_testing(id.clone(), DataSpaceId::new(7))
+            .unwrap();
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let pool = state.ivm_execution_budget();
+        let original_limit = pool.limit_bytes();
+        let mut block = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
+        let pointer = core::ptr::from_ref(block.world.asset_definitions.get(&id).unwrap());
+        block.world.begin_freeze();
+        block.world.finish_freeze();
+        block.world.retire_frozen_cleanup();
+        let baseline = pool.reserved_bytes();
+        let limits = LeafLimits {
+            max_tables: 1,
+            max_rows: 64,
+            max_payload_bytes: 65536,
+            max_ordered_table_bytes: 131072,
+            max_streamed_value_bytes: 131072,
+        };
+        pool.set_limit_bytes(0);
+        assert!(matches!(
+            capture(&block, limits, 16_777_216),
+            Err(LeafError::GroupedOwnership(
+                GroupedOwnershipError::Admission(_)
+            ))
+        ));
+        assert_eq!(pool.reserved_bytes(), baseline);
+        pool.set_limit_bytes(original_limit);
+        let snapshot = capture(&block, limits, 16_777_216).unwrap().unwrap();
+        assert_eq!(
+            core::ptr::from_ref(block.world.asset_definitions.get(&id).unwrap()),
+            pointer
+        );
+        assert!(pool.reserved_bytes() > baseline);
+        drop(snapshot);
+        assert_eq!(pool.reserved_bytes(), baseline);
+    }
+}

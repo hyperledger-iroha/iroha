@@ -102,8 +102,8 @@ its owner's `admin@privateapp` alias without adding a parent execution lane.
 `--account-alias LABEL` selects another canonical owner label before first
 provisioning; changing it on retry is refused. The original two-lease rent quote
 and fee allowance survive interrupted preparation. A timeout leaves that work
-available for status and retry. Official Taira profile publication and combined runtime
-qualification remain tracked acceptance gates; the CLI invents no release key.
+available for status and retry. Release installation, recurring Taira checkpoint publication
+and combined runtime qualification remain tracked acceptance gates; the CLI invents no release key.
 
 Views and calls use an existing selected context and the verified deployed alias.
 A call's positive `--max-fee` caps the combined self-grant and call in that private
@@ -351,6 +351,18 @@ target/debug/kagami genesis sign \
 `TOPOLOGY_JSON` must contain those same four validators at distinct canonical
 addresses. First-release NPoS admission requires an exact `3f + 1` committee,
 so a two-validator signing example is intentionally unsupported.
+
+For a native AMX participant, the input manifest must already select its private
+dataspace and parent network. Supply `--amx-global-chain-id`,
+`--amx-global-genesis`, and `--amx-global-successor` together. The two files are
+the parent's canonical signed genesis and its genuine committed H2. Core's
+certified-prefix verifier authenticates them before one participant instruction
+is appended and the private genesis is staged and signed. Existing transactions
+remain intact; duplicate participant registration and outputs that alias either
+source are rejected. Managed source acquisition, parent registration and durable
+validator relaying remain separate work. `--config` uses the node configuration
+loader, including compiled profiles and the generated `data_dir` layout; its
+claimed genesis identity must still pass runtime validation.
 
 The one-line `genesis.expected_hash` output is the deployment trust root. It
 carries the exact signed header hash as one canonical checked NetworkId literal.

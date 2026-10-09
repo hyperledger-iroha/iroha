@@ -2,6 +2,7 @@
 
 Status: source inventory for the [implementation design](kagemusha_single_design_proposal.md), 2026-10-03;
 the deletion of the superseded implementation was applied on 2026-10-05 (§§2–3).
+The ordinary Load source account in §2.3 and the G5 rows was updated on 2026-10-06.
 This file records implementation evidence and the disposition of existing components.
 The design fixes the required behavior; a retained component is not thereby qualified.
 The irreversible Send and replay rules below are implementation requirements;
@@ -117,17 +118,56 @@ disposition. Deleted code remains in Git history; later goals rebuild from the
   ordinary-native and enrollment APIs, `kagami kagemusha`, and the
   `settlement.kagemusha`, `torii.kagemusha_v1_commands` and
   `nexus.storage.kagemusha_operation_index_bytes` settings.
-- **Source:** `crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1/ledger.rs`
-  defines the load voucher, unload and fee claims and the ledger controls. It
-  leaves the ledger instruction family as `TODO(G6)`. A load voucher is
-  authenticated by a LoadAuthorization-role signer certificate, not by
-  consensus seals.
+- **Source — ordinary Load (G5):**
+  `crates/iroha_data_model/src/isi/kagemusha_wallet.rs` defines `IssueLoad` with
+  the exact scheme, wallet, asset digest, expected ordinal, request ID, amount
+  and optional charge. `crates/iroha_core/src/kagemusha_wallet_v1/ledger.rs`
+  checks activation, the asset and ordinal, and applies reserve funding, charge
+  and ordinal advance atomically. Only the original transaction and height can
+  recover an identical execution result; a newly signed or later transaction
+  cannot reuse the request ID. Recover a lost response by querying the original
+  `KagemushaWalletLoadReceiptV1`. The online Load-authorizer role, custody and
+  publisher service, registration signer field, `PublishVoucher` and
+  `RotateLoadAuthorizer` instructions are removed; there is no extra publication
+  transaction.
+- **Source — native finality and query:**
+  `crates/iroha_data_model/src/isi/kagemusha_wallet/load_finality.rs` implements
+  `verify_finalized_kagemusha_wallet_load_v1` and its opaque
+  `VerifiedKagemushaWalletLoadV1`. It verifies native global scope and successful
+  external transaction inclusion, exact payer, direct instruction index and
+  approved terms; it derives the receipt with the original hash and height.
+  `crates/iroha_core/src/kagemusha_wallet_v1/committed.rs` reads recovery data
+  from one committed global State view, checking payer/scope, retained row
+  integrity and original transaction hash/height membership under finite record
+  and cumulative decode limits. It performs no historical QC reconstruction.
+  `crates/iroha_torii/src/kagemusha_wallet.rs` returns that canonical receipt;
+  old receipt recovery does not depend on local certificate availability.
+  Neither this query nor decoding its data confers independent finality. Model native-certificate
+  tests use synthetic execution rows and do not establish monetary execution;
+  Core's execution tests own that boundary.
 - **Consensus:** the paired-Pasta mint-finality authority, its genesis parameters,
   signing seeds, validator-key publication and KAGEMUSHA commit attestation are
-  deleted. Validator generations use the ordered BLS roster and native beacon
-  custody. The new wallet authenticates ledger load vouchers through its signer
-  certificate, with no consensus mint seal. Deployment and fixture consumers use
-  that same consensus model.
+  deleted. Ordinary Load uses the global chain's native finality and ordered BLS
+  validator roster, with no KAGEMUSHA-specific consensus signer or mint seal.
+  Deployment and fixture consumers use that same consensus model.
+- **Offline Load source and integration:** the ordinary receipt, local finality
+  evidence model and five-A/four-W Load relation replace the dedicated issuer
+  construction. The original receipt is unsigned and binds the successful
+  transaction, height, payer digest and complete approved terms. The installed
+  Load plan pins a complete authenticated global-genesis anchor and original
+  terminal source key. Its hard verifier retains both accumulated curve claims;
+  neither the receipt codec nor a native boolean grants offline authority.
+  The source includes the native BLS quorum, ordered aggregation, fixed complete
+  result/context scans, schedule continuity, finite-catalog history recursion
+  and counted Load event membership. The native graph owner composes these
+  sources, verifies restored history, advances each block and produces terminal
+  receipt evidence; Core adapters preserve verified native originals. This
+  implementation is not evidence of a complete original-key finality proof or
+  qualified wallet.
+  TODO(G3/G5): qualify the complete artifact producer, genesis-rooted proof,
+  Load and downstream lineage/catalog composition, then measure genuine complete
+  10,000-byte envelopes. Native envelope and execution checks remain separate
+  obligations of the online evidence provider.
 
 ## 3. Disposition of the inspected implementation
 
@@ -148,8 +188,8 @@ design and keeps none of the deleted wire formats or production profiles.
 | Testnet experiment value path: bridge `kagemusha_testnet_*` modules, Swift/Kotlin `KagemushaTestnetValue*`, `KagemushaReleasePurposeV1::TestnetExperiment` | **Deleted.** A testnet runs the same protocol; a testnet reset is its cutover. | No second value ledger, release purpose or validation path. |
 | Device probes and testnet observation tools | **Deleted** with the retired protocol (KeyMint single-use probes, the App Attest probe app, physical-evidence and observation-bundle tooling). | New device results go into the [checklist](kagemusha_evidence_gate.md) with raw artifacts; diagnostic tokens/keys remain outside the repository. |
 | Model wire and authority objects: `crates/iroha_data_model/src/kagemusha/` (`kagemusha_v1/`, `hardware*.rs`, `kagemusha_release_v1.rs`, `verifier_registry_v1.rs`, `kagemusha_ordinary_*`, retail/mobile-bootstrap modules), `iroha_core_zk/src/kagemusha_sender_wire.rs`, bridge hardware-evidence, mobile-bootstrap, sender-release, contract-vector and `platform_jni/kagemusha_*` modules | **Replaced by the G1 objects** (`kagemusha_wallet_v1`, [wire record](kagemusha_wallet_wire_v1.md)); the old types are deleted. The device public-key and signature types moved into G1. | Final codec fixtures; retired layouts rejected. |
-| Ledger/model: `crates/iroha_data_model/src/isi/kagemusha_v1.rs`, node `isi/kagemusha*` and `state/kagemusha_*`, bridge `kagemusha_reserve_finality_v1.rs` | **Deleted**; the consensus mint-finality authority is also deleted (§2.3). | G5 builds one load/unload family with canonical reserve receipts. Require completed Bootstrap activation before issuing a load voucher. Fees are earned at Send commit, with one payout per credit ID independent of delivery. Check atomic activation/reserve/replay behavior, canonical codec fixtures, authenticated load/unload and whole-node tests on the final candidate. |
-| Torii/client service: `crates/iroha_torii/src/kagemusha_commands.rs`, `kagemusha_state.rs`, shared API schemas, the issuer service in `python/iroha_app_attestation` (`/v1/kagemusha/ordinary-app-*`) and the participant enrollment HTTP contract (`kagemusha_ordinary_enrollment_http_v1.rs`, its fixture and clients) | **Deleted.** The generic ledger resource-name reads moved to the core route catalog. | G5 defines one route set and its server for §2.2 credentials and renewal, load, unload, status, §7 policy, time anchors and quota shares. Generated clients and route tests match one schema; no endpoint is a payment prerequisite. |
+| Ledger/model: `crates/iroha_data_model/src/isi/kagemusha_v1.rs`, node `isi/kagemusha*` and `state/kagemusha_*`, bridge `kagemusha_reserve_finality_v1.rs` | **Deleted**; the consensus mint-finality authority is also deleted (§2.3). | G5 ordinary `IssueLoad` and the original `KagemushaWalletLoadReceiptV1` query are implemented (§2.3), with exact asset/ordinal checks, activation and native finality. Recovery reads the original receipt; a different transaction cannot repeat its successful issuance. The ordinary-consensus source and Load consumer require complete original-key proof and catalog qualification. Fees are earned at Send commit, with one payout per credit ID independent of delivery. Check whole-node execution and proof qualification on the final candidate. |
+| Torii/client service: `crates/iroha_torii/src/kagemusha_commands.rs`, `kagemusha_state.rs`, shared API schemas, the issuer service in `python/iroha_app_attestation` (`/v1/kagemusha/ordinary-app-*`) and the participant enrollment HTTP contract (`kagemusha_ordinary_enrollment_http_v1.rs`, its fixture and clients) | **Deleted.** The generic ledger resource-name reads moved to the core route catalog. | G5 now exposes the authenticated original Load receipt query in `crates/iroha_torii/src/kagemusha_wallet.rs`; funding itself is an ordinary signed `IssueLoad` transaction, with no publisher or second transaction. The complete route/client set for §2.2 credentials and renewal, unload, status, §7 policy, time anchors and quota shares still needs qualification. Generated clients and route tests match one schema; receipt data alone is not finality evidence. |
 | Swift and Kotlin wallets, platform keys and UI | **Old monetary implementations deleted.** Kept: Swift `KagemushaWalletWireV1` and `KagemushaWalletApple*V1`, Kotlin `KagemushaWalletWireV1`, `KagemushaP256Codec` and `kagemusha-wallet-android` `sdk.offline.wallet`. | Adapters to the shared Rust core: native artifact and device tests, restore/retry behavior, canonical fixtures and Java-source consumer coverage. |
 | JavaScript, Python and C# SDK surfaces | **Monetary engines and retired-profile APIs deleted.** | A wallet-facing API delegates to the shared native owner once it exists. Published exports, installed-package tests, fixtures and examples migrate together. |
 | Java SDK duplicates under `java/` | **KAGEMUSHA and IrohaPeer duplicates deleted.** | Remaining Java retirement is tracked in `specs/jvm_consolidation_inventory.md`. |

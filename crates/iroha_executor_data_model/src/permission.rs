@@ -169,19 +169,6 @@ pub mod asset_definition {
         }
     }
     permission! {
-        /// Permission to submit load vouchers signed by one historical KAGEMUSHA issuer.
-        /// The token grants submission only; the exact role certificate, issuance body and
-        /// P-256 signature remain mandatory monetary authorization.
-        pub struct CanPublishKagemushaLoadVoucher {
-            /// Exact governed asset definition.
-            pub asset_definition: AssetDefinitionId,
-            /// Exact scheme whose issuance may be published.
-            pub scheme: [u8; 32],
-            /// Exact historical LoadAuthorization certificate digest.
-            pub authorizer_certificate: [u8; 32],
-        }
-    }
-    permission! {
         /// Permission to manage confidential policy and verifier roles for the specified asset definition.
         pub struct CanManageAssetDefinitionConfidentialPolicy {
             /// Identifier of the asset definition whose confidential policy may be changed.
@@ -826,13 +813,29 @@ pub mod settlement {
         }
     }
 }
-/// Unscoped NEVO DPN application-role permissions.
+/// NEVO DPN application-role and scoped enrollment permissions.
 ///
-/// These marker permissions deliberately carry only the JSON `null` payload emitted by a unit
-/// struct. The default executor rejects every other payload shape and restricts their lifecycle
-/// to an existing [`DpnAdmin`] holder after genesis.
+/// The application-role markers carry exactly the JSON `null` payload emitted by a unit struct.
+/// Their lifecycle requires a direct [`DpnAdmin`] after genesis, except the narrowly scoped
+/// enrollment capability below can grant only [`DpnUser`]. The capability carries an exact domain.
+/// Its issuance requires a direct administrator who owns that live domain. A direct administrator
+/// or the current live domain owner can revoke it, including after ownership transfer.
 pub mod dpn {
     use super::*;
+    use iroha_model_base::domain::DomainId;
+    permission! {
+        /// Grant only `DpnUser` to a registered UAID account with an active alias in this domain.
+        ///
+        /// Also permits the exact native account and direct-permission queries needed to verify
+        /// that enrollment. Balances, assets, aliases, rosters and other account queries remain
+        /// separately protected. Only a direct `DpnAdmin` who owns the live domain may issue
+        /// this capability. A direct administrator or current live domain owner may revoke
+        /// it; possession does not permit redelegation or role grants.
+        pub struct CanGrantDpnUserForAccountDomain {
+            /// Exact account-alias domain, including its dataspace name.
+            pub domain: DomainId,
+        }
+    }
     permission! {
         /// NEVO DPN contract administrator authority.
         #[derive(Copy)]

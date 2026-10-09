@@ -187,16 +187,11 @@ pub(super) fn read_optional(
     name: &str,
     maximum: usize,
 ) -> Result<Option<Vec<u8>>> {
-    match directory.read(name, maximum) {
-        // The native reader already completed every custody/size fence. Move its sole
-        // allocation into the existing owned result; no second copy needs secret cleanup.
-        Ok(mut bytes) => Ok(Some(std::mem::take(&mut *bytes))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            directory.revalidate()?;
-            Ok(None)
-        }
-        Err(error) => Err(error.into()),
-    }
+    // Initial absence is admitted by the native owner, after its unconditional custody exit.
+    // Move the sole successful allocation; later native errors cannot become absence.
+    Ok(directory
+        .read_optional(name, maximum)?
+        .map(|mut bytes| std::mem::take(&mut *bytes)))
 }
 pub(super) fn require_empty(directory: &PrivateDirectory) -> Result<()> {
     if !directory.entries(0)?.is_empty() {
@@ -226,8 +221,17 @@ impl ServiceAuthority {
             "current-checkpoint.nrt",
             MAX_CHECKPOINT_BYTES,
         )?;
+        // A seed is only a previously certified immutable receipt from this joined advance.
+        // Retained cursors keep their independent native bytes; no current verdict is shared.
+        let seed = if retained.is_none() {
+            self.certificate_seed()?
+        } else {
+            None
+        };
         let mut verifier = if let Some(bytes) = retained {
             self.decode_checkpoint(&bytes)?
+        } else if let Some(seed) = &seed {
+            seed.verifier()
         } else {
             let source = source(1, deadline)?;
             let proof = source
@@ -236,10 +240,25 @@ impl ServiceAuthority {
             FinalityVerifier::from_genesis(&self.genesis, &proof)
                 .map_err(|_| invalid("original genesis finality differs"))?
         };
-        let source = source(verifier.checkpoint().height(), deadline)?;
-        let observation = verifier.observe(&source, &rand::random());
-        let verified = observation.as_ref().map_or(0, AttestationQuorum::verified);
-        retain_observation(&self.directory, &mut verifier, observation)?;
+        let result = source(verifier.checkpoint().height(), deadline).and_then(|source| {
+            let observation = verifier.observe(&source, &rand::random());
+            let verified = observation.as_ref().map_or(0, AttestationQuorum::verified);
+            if let Some(seed) = &seed {
+                self.validate_profile()?;
+                seed.revalidate()?;
+                require_deadline(deadline)?;
+            }
+            retain_observation(&self.directory, &mut verifier, observation)?;
+            Ok(verified)
+        });
+        // Close source custody on every ordinary result, including source construction refusal.
+        // A certificate never substitutes for an available source or a fresh attestation quorum.
+        if let Some(seed) = &seed {
+            self.validate_profile()?;
+            seed.revalidate()?;
+            require_deadline(deadline)?;
+        }
+        let verified = result?;
         Ok((verifier, verified))
     }
 
@@ -319,7 +338,12 @@ impl ServiceAuthority {
             .transpose()?;
         let mut verifier = replay_start(original_verifier, progress, height)?;
         let source = self.source(verifier.checkpoint().height(), deadline)?;
-        retain_carrier_progress(directory, transaction, &mut verifier, height, &source)
+        let finalized =
+            retain_carrier_progress(directory, transaction, &mut verifier, height, &source)?;
+        if finalized.is_some() {
+            self.remember_certificate(directory, &verifier)?;
+        }
+        Ok(finalized)
     }
 }
 
@@ -352,6 +376,19 @@ pub(crate) fn retain_carrier_progress(
     let finalized = verify_carrier(verifier, transaction)?;
     directory.write_atomic("carrier.nrt", &bytes, PublishMode::CreateNew)?;
     Ok(Some(finalized))
+}
+
+// Optional post-replay reporting only. Required predecessor, authorization and native carrier
+// checks stay with their callers and must complete before this projection can be skipped.
+pub(super) fn optional_current<T>(
+    requested: bool,
+    observed: Option<&FinalityVerifier>,
+    read: impl FnOnce(&FinalityVerifier) -> Result<T>,
+) -> Option<T> {
+    if !requested {
+        return None;
+    }
+    observed.and_then(|verifier| read(verifier).ok())
 }
 
 // Every candidate is checked by the supplied SDK operation against the same independently
@@ -560,7 +597,11 @@ pub(super) fn checkpoint_bytes(verifier: &FinalityVerifier) -> Result<Vec<u8>> {
 pub(in crate::managed) fn require_retained_material<T>(value: Result<T>) -> Result<T> {
     value.map_err(|error| match error {
         Error::Bootstrap(_) | Error::NativeDeadline => error,
-        _ => super::ManagedBootstrapFailure::RetainedMaterial.into(),
+        _error => {
+            #[cfg(test)]
+            deadline_diagnostics::retained_error(&_error);
+            super::ManagedBootstrapFailure::RetainedMaterial.into()
+        }
     })
 }
 
@@ -600,3 +641,7 @@ mod deadline_tests;
 #[cfg(test)]
 #[path = "native_operation/optional_read_tests.rs"]
 mod optional_read_tests;
+
+#[cfg(test)]
+#[path = "native_operation/optional_admission_tests.rs"]
+mod optional_admission_tests;

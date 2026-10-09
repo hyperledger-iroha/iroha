@@ -241,11 +241,13 @@ impl SumeragiFinalityCheckpoint {
                     && decision.result != [0; 32]
                     && decision.committee_digest != [0; 32]
                     && decision.schedule.height == decision.height
-                    && match validation.as_deref_mut() {
-                        Some(validation) => decision.schedule.validate_with_validation(validation),
-                        None => decision.schedule.validate(),
-                    }
-                    .is_ok()
+                    && validation
+                        .as_deref_mut()
+                        .map_or_else(
+                            || decision.schedule.validate(),
+                            |validation| decision.schedule.validate_with_validation(validation),
+                        )
+                        .is_ok()
                     && decision.executed_len > 0
                     && decision.executed_len <= MAX_FINALITY_BLOCK_BYTES as u64,
                 "checkpoint commitments are malformed or discontinuous",
@@ -465,12 +467,10 @@ impl SumeragiFinalityVerifier {
             }
         }
         // Retain the capability produced by this complete single-witness verification.
-        let tip = verifier
-            .verify_retained_decision_with_validation(&selected.tip, validation.as_deref_mut())?;
+        let tip = verifier.verify_retained_decision_with_validation(&selected.tip, validation)?;
         drop(genesis);
         // End borrowed access before the consumer. Independent imports also release their
         // bounded pure workspace here; a borrowed workspace remains with its operation owner.
-        drop(validation);
         drop(local_validation);
         Ok(consume(checkpoint, verifier, tip))
     }

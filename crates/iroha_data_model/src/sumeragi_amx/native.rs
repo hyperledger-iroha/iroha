@@ -14,15 +14,44 @@ use norito::codec::{Decode, Encode};
 /// # Errors
 /// The canonical encoding cannot complete under the executing codec limits.
 pub fn native_transfer_effects_hash(leg: &AmxTransferLegV1) -> Result<[u8; 32], AmxError> {
-    let bytes = norito::encode_canonical(leg).map_err(|error| {
+    // DM7 restores only the original encoded-frame scratch, with the same bytes and errors.
+    #[cfg(all(test, sumeragi_model_mutation = "DM7"))]
+    let result = norito::encode_canonical(leg).map(|bytes| {
+        iroha_crypto::Hash::new_from_chunks(&[b"iroha:native-amx-transfer:v1", &[0], &bytes]).into()
+    });
+    #[cfg(not(all(test, sumeragi_model_mutation = "DM7")))]
+    let result = streamed_native_transfer_effects_hash(leg);
+    result.map_err(|error| {
         error
             .decode_resource_error()
             .map_or_else(|| AmxError::Proof(error.to_string()), AmxError::Resource)
-    })?;
-    Ok(
-        iroha_crypto::Hash::new_from_chunks(&[b"iroha:native-amx-transfer:v1", &[0], &bytes])
-            .into(),
-    )
+    })
+}
+
+#[cfg(not(all(test, sumeragi_model_mutation = "DM7")))]
+fn streamed_native_transfer_effects_hash(
+    leg: &AmxTransferLegV1,
+) -> Result<[u8; 32], norito::Error> {
+    // This closed schema borrows AssetId's UUID, scope and account controller. Single compact
+    // keys and MultisigPolicy member/key sequences stream borrowed fields under COMPACT_LEN;
+    // Quantity borrows Numeric/BigInt digits and writes its bounded two's-complement stack array.
+    // None of these concrete serializers needs an offset table or heap scratch. The canonical
+    // writer's two frame passes and Hash writer have fixed stack state. This audit does not
+    // extend to ordinary owning leg decode, its alignment copies, or witness publication.
+    let mut codec = None;
+    let hash = iroha_crypto::Hash::new_from_writer(|writer| {
+        writer.write_all(b"iroha:native-amx-transfer:v1")?;
+        writer.write_all(&[0])?;
+        norito::core::write_canonical_to_writer(leg, writer).map_err(|cause| {
+            codec = Some(cause);
+            // Preserve the exact codec/refusal cause, without formatting or boxing a bridge.
+            std::io::Error::from(std::io::ErrorKind::Other)
+        })
+    });
+    if let Some(cause) = codec {
+        return Err(cause);
+    }
+    Ok(hash.map_err(norito::Error::Io)?.into())
 }
 
 #[cfg(test)]
@@ -110,7 +139,7 @@ mod tests {
     DeriveJsonDeserialize,
     norito::NoritoSchema,
 )]
-#[norito(deny_unknown_fields)]
+#[norito(deny_unknown_fields, decode_fields)]
 #[norito_schema(name = "iroha_data_model::sumeragi_amx::AmxTransferLegV1")]
 pub struct AmxTransferLegV1 {
     /// Exact local account, asset definition and restricted balance partition to debit.
@@ -251,3 +280,9 @@ impl NativeAmxParticipantStateV1 {
         Ok(())
     }
 }
+
+mod leg_decode;
+pub use leg_decode::{
+    AllocatedAmxTransferLegV1, AmxLegDecodeErrorV1, CompletedAmxTransferLegDecodeV1,
+    PendingAmxTransferLegDecodeV1,
+};

@@ -12,5 +12,10 @@ fn host_limits_default_and_replacement_are_exact() {
     };
     host.set_zk_verify_limits(limits);
     assert_eq!(host.zk_verify_limits(), limits);
-    assert_eq!(DefaultHost::new().with_zk_verify_limits(limits).zk_verify_limits(), limits);
+    assert_eq!(
+        DefaultHost::new()
+            .with_zk_verify_limits(limits)
+            .zk_verify_limits(),
+        limits
+    );
 }

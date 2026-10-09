@@ -1188,6 +1188,11 @@ def test_sccp_heartbeat_keeps_the_original_ordered_start_owner(
     ("crates/iroha_core/src/state/output_seal.rs",
      "finalized.authorized.native_execution.telemetry_origin()",
      "crate::sumeragi::executor::CommitTelemetryOrigin::Forward"),
+    ("crates/iroha_core/src/sumeragi/executor.rs",
+     "if !certificate.admitted_to(&self.state.ivm_execution_budget())", "if false"),
+    ("crates/iroha_core/src/sumeragi/executor.rs",
+     'self.recovery = Some("prepared certificate lost its original pool custody".into());',
+     "self.recovery = None;"),
 ))
 def test_parliament_replay_origin_retains_actual_authenticated_execution(
     path: str, original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
@@ -1205,33 +1210,49 @@ def test_parliament_replay_origin_retains_actual_authenticated_execution(
         guard.require_parliament_commit_publication(state)
 
 
-@pytest.mark.parametrize("original,replacement", (
-    ("-> Result<(), PublicationError>", "-> Result<(), String>"),
-    ("require_body_admission(block, &self.execution_budget)?;", ""),
-    ("require_qc_witness_admission(commit_qc, &self.execution_budget)?;", ""),
-    ("require_body_admission(block, &self.execution_budget)?;",
+@pytest.mark.parametrize("path,declaration,original,replacement", (
+    ("crates/iroha_core/src/sumeragi/executor.rs", "    pub fn replay(",
+     "-> Result<(), PublicationError>", "-> Result<(), String>"),
+    ("crates/iroha_core/src/sumeragi/executor.rs", "    pub fn replay(",
+     "require_body_admission(block, &self.execution_budget)?;", ""),
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs", "    fn retire_completed_replay(",
+     "        if !certificate.admitted_to(&self.state.ivm_execution_budget()) {\n"
+     "            return Err(invalid(\n"
+     '                "published replay certificate lost original pool custody",\n'
+     "            ));\n        }", ""),
+    ("crates/iroha_core/src/sumeragi/executor.rs", "    pub fn replay(",
+     "require_body_admission(block, &self.execution_budget)?;",
      "require_body_admission(block, &self.execution_budget).map_err(|error| error.to_string())?;"),
-    ("require_qc_witness_admission(commit_qc, &self.execution_budget)?;",
-     "require_qc_witness_admission(commit_qc, &self.execution_budget).map_err(|error| error.to_string())?;"),
-    (".unwrap_or_else(|| Err(control::stopped()))",
+    ("crates/iroha_core/src/sumeragi/executor/replay.rs", "    fn retire_completed_replay(",
+     '.ok_or_else(|| invalid("published replay lost its certificate"))?;',
+     '.ok_or_else(|| invalid("published replay lost its certificate"))'
+     '.map_err(|error| error.to_string())?;'),
+    ("crates/iroha_core/src/sumeragi/executor.rs", "    pub fn replay(",
+     ".unwrap_or_else(|| Err(control::stopped()))",
      ".unwrap_or_else(|| Err(control::stopped())).map_err(|error| error.to_string())"),
-    (".unwrap_or_else(|| Err(control::stopped()))", ".unwrap_or(Ok(()))"),
+    ("crates/iroha_core/src/sumeragi/executor.rs", "    pub fn replay(",
+     ".unwrap_or_else(|| Err(control::stopped()))", ".unwrap_or(Ok(()))"),
 ))
 def test_replay_dispatch_preserves_typed_admission_and_channel_refusal(
-    original: str, replacement: str, monkeypatch: pytest.MonkeyPatch,
+    path: str, declaration: str, original: str, replacement: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Both original admissions precede a serialized, unprojected publication result."""
-    path = "crates/iroha_core/src/sumeragi/executor.rs"
+    """Original bodies and captured certificates retain serialized typed refusals."""
     state = guard.read(STATE_PATH)
     guard.require_parliament_commit_publication(state)
     source = guard.read(path)
-    replay = guard.rust_item(source, "    pub fn replay(", path)
-    assert replay.count(original) == 1
-    changed = source.replace(replay, replay.replace(original, replacement, 1), 1)
+    original_item = guard.rust_item(source, declaration, path)
+    assert original_item.count(original) == 1
+    changed = source.replace(
+        original_item, original_item.replace(original, replacement, 1), 1,
+    )
     original_read = guard.read
     monkeypatch.setattr(guard, "read", lambda target:
                         changed if target == path else original_read(target))
-    with pytest.raises(RuntimeError, match=path):
+    message = path
+    if declaration == "    fn retire_completed_replay(":
+        message += ": original replay certificate must retain pool custody and typed recovery before retirement"
+    with pytest.raises(RuntimeError, match=re.escape(message)):
         guard.require_parliament_commit_publication(state)
 
 
@@ -1253,7 +1274,8 @@ def test_indexed_beacon_requirement_gates_native_admission_and_production() -> N
 
 @pytest.mark.parametrize("path,old,new", (
     (guard.EPOCH_BEACON_PATH,
-     "record.session.adaptive_dkg.session.authority_generation != current.authority.generation",
+     "record.session.adaptive_dkg.session.authority_generation\n"
+     "            != current.authorization.authority_generation",
      "false"),
     (guard.EPOCH_BEACON_PATH, "pulse: Some(pulse),", "pulse: None,"),
     (guard.BEACON_PRODUCER_PATH,
@@ -1316,6 +1338,17 @@ def test_indexed_beacon_requirement_gates_native_admission_and_production() -> N
      "            return Err(NativeBeaconError::Context);\n        }\n", ""),
     (guard.BEACON_PRODUCER_PATH, "        let active = if required {",
      "        let _ = attempt.requires_beacon_pulse_at(slot);\n        let active = if required {"),
+    (guard.BEACON_PRODUCER_PATH,
+     "                signer\n"
+     "                    .attest_partial_signing_capability(active.aggregator.session(), index)\n"
+     "                    .map_err(|_| NativeBeaconError::LocalSigning)?;\n", ""),
+    (guard.BEACON_PRODUCER_PATH,
+     "                signer\n"
+     "                    .attest_partial_signing_capability(active.aggregator.session(), index)\n"
+     "                    .map_err(|_| NativeBeaconError::LocalSigning)?;",
+     "                signer\n"
+     "                    .attest_partial_signing_capability(active.aggregator.session(), index)\n"
+     "                    .unwrap();"),
 ))
 def test_beacon_requirement_rejects_lost_demand_or_unauthenticated_activation(
     path: str, old: str, new: str,
@@ -1825,6 +1858,36 @@ def test_borrowed_beacon_helpers_preserve_exact_source_cardinality_and_binding(
     monkeypatch.setattr(guard, "read", lambda target: changed if target == path else original_read(target))
     with pytest.raises(RuntimeError, match=re.escape(path)):
         guard.require_borrowed_beacon_roster_and_sealed_binding()
+
+
+def test_validator_boundary_keeps_complete_original_generation_and_credentials() -> None:
+    """Current boundary admission checks the frozen preparation and is wired into main."""
+    path = "crates/iroha_core/src/state/validator_committee.rs"
+    guard.require_validator_committee_boundary(guard.read(path))
+    calls = [node.func.id for node in ast.walk(ast.parse(inspect.getsource(guard.main)))
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+    assert calls.count("require_validator_committee_boundary") == 1
+
+
+@pytest.mark.parametrize("original,replacement", (
+    (".validate_against_preparing_authorization(&context.authorization)?;",
+     ".validate_against_preparing_authorization(&foreign.authorization)?;"),
+    (".get(&credentials.beacon.session_id)", ".get(&foreign.beacon.session_id)"),
+))
+def test_validator_boundary_rejects_substituted_generation_or_credentials(
+    original: str, replacement: str,
+) -> None:
+    """Activation cannot validate a foreign generation or select foreign beacon credentials."""
+    path = "crates/iroha_core/src/state/validator_committee.rs"
+    source = guard.read(path)
+    guard.require_validator_committee_boundary(source)
+    boundary = guard.rust_item(
+        source, "    pub(crate) fn finalize_validator_committee_boundary(", path,
+    )
+    assert boundary.count(original) == 1
+    changed = source.replace(boundary, boundary.replace(original, replacement, 1), 1)
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        guard.require_validator_committee_boundary(changed)
 
 
 @pytest.mark.parametrize("old,new", (

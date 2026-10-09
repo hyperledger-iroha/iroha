@@ -126,8 +126,6 @@ public enum KagemushaWalletSigningDomainV1: String, CaseIterable, Sendable {
   case sessionControl = "kgwsctl1"
   /// Request body, signed by the receiver payment key.
   case request = "kgwrqst1"
-  /// Load voucher body, signed by a LoadAuthorization-role key.
-  case voucher = "kgwvchr1"
   /// Ledger control body, signed by the payment key.
   case ledgerControl = "kgwlctl1"
 
@@ -149,7 +147,6 @@ public enum KagemushaWalletSigningDomainV1: String, CaseIterable, Sendable {
     case .offer: 194
     case .sessionControl: 197
     case .request: 458
-    case .voucher: 250
     case .ledgerControl: 211
     }
   }
@@ -249,11 +246,16 @@ public enum KagemushaWalletWireV1 {
   public static let paymentFixedBytes = 1_723
   /// Joint budget of the Ω transport proof and the largest σ_send (R9): `10,000 − F_payment`.
   ///
-  /// σ and Ω carry no other byte caps than this budget and ``lineageProofCapBytes``: their exact
-  /// lengths come from the frozen verifying-key allowlist (owner answer Q6). Until the artifacts
+  /// Proof transport is bounded by this budget, ``creditedReceiveProofBudgetBytes`` and
+  /// ``lineageProofCapBytes``; exact lengths come from the frozen verifying-key allowlist
+  /// (owner answer Q6). Until the artifacts
   /// freeze (TODO(G3)) only the carrying frame bounds them, which is all the structural envelope
   /// check enforces.
   public static let paymentProofBudgetBytes = messageMaximumBytes - paymentFixedBytes
+  /// Bytes of a Credited::Receive envelope other than its σ proof.
+  public static let creditedReceiveFixedBytes = 679
+  /// Available σ bytes in a complete Credited::Receive envelope.
+  public static let creditedReceiveProofBudgetBytes = messageMaximumBytes - creditedReceiveFixedBytes
   /// `F_status`: the bytes of a Credited::Status envelope frame other than its Ω(h) transport
   /// proof, with the fixed 32-sibling credit opening.
   public static let creditedStatusFixedBytes = 2_188
@@ -644,6 +646,59 @@ public enum KagemushaWalletWireV1 {
     }
     return KagemushaWalletEnvelopeFrameV1(
       kind: kind, schemeID: Data(payload[schemeRange]), canonicalBytes: canonical)
+  }
+
+  /// Require exact structural correspondence for one Request/Payment/Credited exchange.
+  /// Request has five fields and a 19-field body; Payment has five fields, including the
+  /// two-field signed Request. Its body and signature must equal the quoted originals.
+  /// Credited, when supplied, has three fields and must name that Request's scheme.
+  /// These comparisons grant no signature, proof, recipient or monetary authority; Native
+  /// still authenticates the complete messages and the evidence's payment/credit binding.
+  public static func requireExchangeBinding(
+    request: Data, payment: Data, credited: Data? = nil
+  ) throws {
+    let requestFields = try exchangeMessageFields(request, kind: .request, count: 5)
+    _ = try exchangeRecordFields(requestFields[0], count: 19, label: "request.body")
+    let paymentFields = try exchangeMessageFields(payment, kind: .payment, count: 5)
+    let signedRequest = try exchangeRecordFields(
+      paymentFields[1], count: 2, label: "payment.request")
+    guard signedRequest[0] == requestFields[0], signedRequest[1] == requestFields[4] else {
+      throw KagemushaWalletWireErrorV1.invalidField("payment.request.binding")
+    }
+    if let credited { try requireCreditedScheme(request: request, credited: credited) }
+  }
+
+  // A restored receiver record retains the Payment hash rather than the whole Payment.
+  // The retained Request still owns its exact scheme comparison before ACK replay.
+  static func requireCreditedScheme(request: Data, credited: Data) throws {
+    let requestFields = try exchangeMessageFields(request, kind: .request, count: 5)
+    let body = try exchangeRecordFields(requestFields[0], count: 19, label: "request.body")
+    let creditedFields = try exchangeMessageFields(credited, kind: .credited, count: 3)
+    guard creditedFields[1] == body[1] else {
+      throw KagemushaWalletWireErrorV1.schemeMismatch(field: "credited.scheme_id")
+    }
+  }
+
+  private static func exchangeMessageFields(
+    _ frame: Data, kind: KagemushaWalletMessageKindV1, count: Int
+  ) throws -> [Data] {
+    guard try inspectEnvelope(frame).kind == kind,
+          let decoded = noritoDecodeFrame(frame) else {
+      throw KagemushaWalletWireErrorV1.invalidField("exchange.kind")
+    }
+    let payload = [UInt8](decoded.payload)
+    let fields = try structFields(payload, in: 0..<payload.count)
+    let tagged = fields[1]
+    let message = try fieldPath(
+      payload, in: (tagged.lowerBound + 4)..<tagged.upperBound, path: [0])
+    return try exchangeRecordFields(Data(payload[message]), count: count, label: "exchange.fields")
+  }
+
+  private static func exchangeRecordFields(_ data: Data, count: Int, label: String) throws -> [Data] {
+    let bytes = [UInt8](data)
+    let fields = try structFields(bytes, in: 0..<bytes.count)
+    guard fields.count == count else { throw KagemushaWalletWireErrorV1.invalidField(label) }
+    return fields.map { Data(bytes[$0]) }
   }
 
   /// Strictly decode `kgm1:` text and validate the envelope frame it carries.

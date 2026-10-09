@@ -64,8 +64,34 @@ impl Fixture {
             deadline,
             mode,
             authorization,
+            checkpoint_import_scope: if mode == Mode::Advance {
+                None
+            } else {
+                CheckpointImportScope::for_original(&self.authority)
+            },
         }
         .reserve()
+    }
+
+    fn custody(
+        &self,
+        mode: Mode,
+        authorization: Option<&GeneratedBootstrapAuthorization>,
+        deadline: Instant,
+    ) -> Result<Phase<(ManagedTransactionFinality, ManagedTransactionFinality)>> {
+        Run {
+            authority: &self.authority,
+            original: &self.original,
+            deadline,
+            mode,
+            authorization,
+            checkpoint_import_scope: if mode == Mode::Advance {
+                None
+            } else {
+                CheckpointImportScope::for_original(&self.authority)
+            },
+        }
+        .custody(&self.original.policies.providers[0], 1)
     }
 
     fn network(&self) -> PrivateDirectory {
@@ -147,8 +173,8 @@ fn present_first_reserve_keeps_empty_dirty_link_and_native_lock_owner_refusals()
     assert_absent(empty.unwrap());
     assert_eq!(
         (opens, parses),
-        (1, 1),
-        "present pre-lock prefix keeps full standalone capture"
+        (1, 0),
+        "present prefix keeps fresh native admission without reparsing the original profile"
     );
     assert!(purpose.entries(1).unwrap().is_empty());
     purpose
@@ -160,7 +186,7 @@ fn present_first_reserve_keeps_empty_dirty_link_and_native_lock_owner_refusals()
         .unwrap();
     let (dirty, opens, parses) = measured(|| fixture.reserve(Mode::Local, None, deadline));
     assert!(dirty.is_err());
-    assert_eq!((opens, parses), (1, 1));
+    assert_eq!((opens, parses), (1, 0));
     assert_eq!(
         purpose.read("unknown.nrt", 64).unwrap().as_slice(),
         b"retained presence only"
@@ -170,11 +196,11 @@ fn present_first_reserve_keeps_empty_dirty_link_and_native_lock_owner_refusals()
     let held = ManagedInitialReservePolicy::open(&fixture.authority.prepared).unwrap();
     let (locked, opens, parses) = measured(|| fixture.reserve(Mode::Local, None, deadline));
     assert!(locked.is_err());
-    assert_eq!((opens, parses), (1, 1));
+    assert_eq!((opens, parses), (1, 0));
     drop(held);
     let (retried, opens, parses) = measured(|| fixture.reserve(Mode::Local, None, deadline));
     assert_absent(retried.unwrap());
-    assert_eq!((opens, parses), (1, 1));
+    assert_eq!((opens, parses), (1, 0));
     assert!(!purpose.path().join("set").exists());
     #[cfg(unix)]
     {
@@ -183,7 +209,7 @@ fn present_first_reserve_keeps_empty_dirty_link_and_native_lock_owner_refusals()
         std::os::unix::fs::symlink(fixture.authority.directory.path(), purpose.path()).unwrap();
         let (linked, opens, parses) = measured(|| fixture.reserve(Mode::Local, None, deadline));
         assert!(linked.is_err());
-        assert_eq!((opens, parses), (1, 1));
+        assert_eq!((opens, parses), (1, 0));
         std::fs::remove_file(purpose.path()).unwrap();
         let (retried, opens, parses) = measured(|| fixture.reserve(Mode::Local, None, deadline));
         assert_absent(retried.unwrap());
@@ -313,6 +339,106 @@ fn absent_advance_requires_real_live_authorization_before_any_child_creation() {
     assert_eq!(fixture.original_bytes(), original);
     assert_eq!(epochs.entries(64).unwrap(), epoch_names);
     assert_eq!(epochs.read("0001.nrt", 64 * 1024).unwrap(), epoch_bytes);
+    assert!(peers.requests.lock().unwrap().is_empty());
+    peers.finish();
+}
+
+#[test]
+fn custody_absence_keeps_original_authorization_and_enclosing_admission_before_creation() {
+    let _guard = crate::managed::native_test_guard();
+    let fixture = Fixture::new();
+    let mut peers = UnavailablePeers::start(&fixture.authority.prepared);
+    let runtime = fixture
+        .authority
+        .directory
+        .path()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let purpose = runtime.join("service-operations/providers/0/stream-token-custody");
+    assert!(!purpose.exists());
+    let original = fixture.original_bytes();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let (missing, opens, parses) = measured(|| fixture.custody(Mode::Advance, None, deadline));
+    assert!(
+        matches!(missing.err().unwrap(), crate::managed::Error::Invalid(message)
+        if message == "bootstrap advance requires its live worker authorization")
+    );
+    assert_eq!((opens, parses), (1, 0));
+    assert!(!purpose.exists());
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let authorization = GeneratedBootstrapAuthorization::issue(
+        &fixture.authority,
+        fixture.original.clone(),
+        deadline,
+        Arc::clone(&cancelled),
+    )
+    .unwrap();
+    let epochs = fixture
+        .authority
+        .directory
+        .open_child("initial")
+        .unwrap()
+        .open_child("epochs")
+        .unwrap();
+    let names = epochs.entries(64).unwrap();
+    let epoch = epochs.read("0001.nrt", 64 * 1024).unwrap();
+    let (expired, opens, parses) = measured(|| {
+        fixture.custody(
+            Mode::Advance,
+            Some(&authorization),
+            Instant::now() - Duration::from_secs(1),
+        )
+    });
+    assert!(matches!(
+        expired.err().unwrap(),
+        crate::managed::Error::Bootstrap(
+            crate::managed::ManagedBootstrapFailure::AuthorizationExpired
+        )
+    ));
+    assert_eq!((opens, parses), (1, 0));
+    assert!(!purpose.exists());
+    cancelled.store(true, Ordering::Release);
+    let (stopped, opens, parses) =
+        measured(|| fixture.custody(Mode::Advance, Some(&authorization), deadline));
+    assert!(matches!(
+        stopped.err().unwrap(),
+        crate::managed::Error::Bootstrap(crate::managed::ManagedBootstrapFailure::Cancelled)
+    ));
+    assert_eq!((opens, parses), (1, 0));
+    assert!(!purpose.exists());
+    let refusing = DecodeBudgetContext::new(caller_limits(0));
+    let (expected, opens, parses) = measured(|| {
+        refusing.with(|| {
+            ManagedStreamTokenCustody::open_existing(
+                &fixture.authority.prepared,
+                fixture.original.policies.providers[0].provider_id,
+            )
+        })
+    });
+    let expected = expected.err().unwrap();
+    assert_eq!((opens, parses), (1, 1));
+    let admission = DecodeBudgetContext::new(caller_limits(0));
+    let (actual, opens, parses) = measured(|| {
+        admission.with(|| fixture.custody(Mode::Advance, Some(&authorization), deadline))
+    });
+    assert_eq!(
+        actual.err().unwrap().to_string(),
+        expected.to_string(),
+        "active admission refuses before original authorization, as the standalone producer did"
+    );
+    assert_eq!((opens, parses), (1, 1));
+    assert_eq!(
+        admission.consumed_allocated_bytes(),
+        refusing.consumed_allocated_bytes()
+    );
+    assert!(!purpose.exists());
+    assert_eq!(fixture.original_bytes(), original);
+    assert_eq!(epochs.entries(64).unwrap(), names);
+    assert_eq!(epochs.read("0001.nrt", 64 * 1024).unwrap(), epoch);
     assert!(peers.requests.lock().unwrap().is_empty());
     peers.finish();
 }

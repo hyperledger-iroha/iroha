@@ -112,6 +112,7 @@ pub use sorafs_node::{
 #[cfg(feature = "app_api")]
 pub use stream_token_admission::{
     StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionProviderV1,
+    StreamTokenGatewayReconciliationReadV1, StreamTokenReconciliationOutcomeV1,
     StreamTokenReputationDeliveryV1,
 };
 #[cfg(feature = "test-fixtures")]

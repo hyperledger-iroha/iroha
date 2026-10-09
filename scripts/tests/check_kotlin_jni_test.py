@@ -731,9 +731,9 @@ def test_compiled_privacy_contract_seals_nonprivacy_main_classes_too(tmp_path):
         GUARD.audit_privacy_classfiles(tmp_path)
 
 
-# First-release KAGEMUSHA wallet V1 wire, platform adapters, Native owner clients
-# and typed snapshots. Kotlin declares six wallet JNI operations; compiled
-# declaration/export auditing still requires their exact Native ownership. These
+# First-release KAGEMUSHA eligibility and wallet V1 wire, platform adapters,
+# Native owner clients and typed projections. Compiled declaration/export auditing requires exact
+# Native ownership for every wallet JNI declaration. These
 # source inventories do not execute wallet JNI or prove artifacts are available.
 # They need no JDK, native artifact, network or environment variable.
 ROOT = Path(__file__).resolve().parents[2]
@@ -751,22 +751,65 @@ def kagemusha_named_files(root, directories):
 
 
 def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
-    """Pin the wire, P-256 codec, Android platform, Native client and typed snapshot files."""
+    """Pin current eligibility, ledger wire, P-256 and Android/Native wallet owners."""
     kotlin = ROOT / "kotlin"
     offline = KOTLIN_OFFLINE_PACKAGE
     wallet = "kagemusha-wallet-android/src"
     kept = {
+        "core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/"
+        "KagemushaWalletIssueLoadInstructionV1.kt",
+        "core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/"
+        "KagemushaWalletIssueLoadInstructionV1Test.kt",
+        "core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/"
+        "KagemushaWalletActivateInstructionV1.kt",
+        "core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/"
+        "KagemushaWalletActivateInstructionV1Test.kt",
         f"core-jvm/src/main/java/{offline}/KagemushaP256Codec.kt",
         f"core-jvm/src/main/java/{offline}/KagemushaWalletWireV1.kt",
+        f"core-jvm/src/main/java/{offline}/KagemushaWalletEnrollmentBindingV1.kt",
+        f"core-jvm/src/test/kotlin/{offline}/KagemushaWalletEnrollmentBindingV1Test.kt",
+        f"core-jvm/src/main/java/{offline}/KagemushaWalletAccountOriginalV1.kt",
+        f"core-jvm/src/test/kotlin/{offline}/KagemushaWalletAccountOriginalV1Test.kt",
+        f"core-jvm/src/main/java/{offline}/KagemushaEnrollmentEligibilityV1.kt",
+        f"core-jvm/src/test/kotlin/{offline}/KagemushaEnrollmentEligibilityV1Test.kt",
+        f"core-jvm/src/test/java/{offline}/KagemushaEligibilityJavaTest.java",
+        "core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/"
+        "KagemushaLedgerOriginalTransportV1Test.kt",
         f"core-jvm/src/test/kotlin/{offline}/KagemushaWalletVectorsV1Test.kt",
         f"{wallet}/androidTest/java/{offline}/wallet/KagemushaWalletAndroidPlatformDeviceV1Test.kt",
         f"{wallet}/main/res/xml/kagemusha_wallet_v1_data_extraction_rules.xml",
         f"{wallet}/main/res/xml/kagemusha_wallet_v1_full_backup_content.xml",
         f"{wallet}/main/java/{offline}/wallet/KagemushaWalletV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletEnrollmentV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletLoadOriginalV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletLedgerV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletCreditProjectionV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletRequestFeeSelectionV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletInstalledRuntimeV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletInstallationAttemptV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletEnrollmentV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletReviewV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletOpenV1.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaWalletSetupV1.kt",
         f"{wallet}/main/java/{offline}/wallet/KagemushaWalletNativeReplyV1.kt",
         f"{wallet}/main/java/{offline}/wallet/KagemushaWalletSnapshotV1.kt",
         f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletEnrollmentV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletInstalledRuntimeV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletInstallationAttemptV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletReviewV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletCurrentReviewIntegrationV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletInstalledHolderV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletCleanupQuarantineV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletAdmissionLifetimeV1Test.kt",
+        f"{wallet}/test/java/{offline}/wallet/KagemushaWalletLoadOriginalV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletSetupV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletHostNativeV1Test.kt",
         f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletSnapshotV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletLedgerV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletCreditProjectionV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletRequestFeeSelectionV1Test.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWalletBoundDeliveryV1Test.kt",
         *(
             f"{wallet}/main/java/{offline}/wallet/KagemushaWalletAndroid{name}V1.kt"
             for name in ("Environment", "KeyStore", "PaymentKey", "Platform", "Results")
@@ -805,6 +848,9 @@ def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
         "KagemushaWalletAndroidCustodyRootV1",
         "KagemushaWalletNativeReplyV1",
         "KagemushaWalletNativeV1",
+        "KagemushaWalletLoadOriginalNativeV1",
+        "KagemushaWalletInstalledRuntimeNativeV1",
+        "KagemushaWalletReviewReplyV1",
         "KagemushaWalletCallV1",
         "KagemushaWalletSnapshotReplyV1",
     }
@@ -845,10 +891,30 @@ def test_swift_ships_no_old_kagemusha_surface():
         "Sources/IrohaSwift/KagemushaWalletAppleSystemV1.swift",
         "Sources/IrohaSwift/KagemushaWalletWireV1.swift",
         "Sources/IrohaSwift/KagemushaWalletV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletEnrollmentV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletReviewV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletInstalledRuntimeV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletInstallationAttemptV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletAccountOriginalV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletLoadOriginalV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletLedgerV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletOpenV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletSetupV1.swift",
         "Sources/IrohaSwift/KagemushaWalletSnapshotV1.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletApplePlatformV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletVectorsV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletNativeV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletEnrollmentV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletReviewV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletInstalledRuntimeV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletInstallationAttemptV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletAccountOriginalV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletExchangeBindingV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletNativeLeaseV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletCurrentReviewIntegrationV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletLoadOriginalV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletOpenV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletSetupV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletSnapshotV1Tests.swift",
     }
     assert kagemusha_named_files(swift, ("Sources", "Tests")) == kept

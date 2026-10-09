@@ -9117,7 +9117,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Content = new StringContent(IdentifierResolveEnvelopeJson(
                 IdentifierResolvePayloadJson(),
-                """{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID"}""")),
+                """{"kind":"proof","proof_backend":"pipa-r/pasta","proof_b64":"AQID"}""")),
         });
 
         using var client = CreateRuntimeAuthenticatedClient(handler);
@@ -9140,10 +9140,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [InlineData("phone#retail", null, """{"kind":"signed","signature":" ABCD"}""", "attestation.signature", "whitespace")]
     [InlineData("phone#retail", null, """{"kind":"signed","signature":"ABCD","proof_b64":"AQID"}""", "signed attestations", "proof fields")]
     [InlineData("phone#retail", null, """{"kind":"proof","proof_b64":"AQID"}""", "attestation.proof_backend", "required")]
-    [InlineData("phone#retail", null, """{"kind":"proof","proof_backend":"halo2/ipa"}""", "attestation.proof_b64", "required")]
-    [InlineData("phone#retail", null, """{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"@@@"}""", "attestation.proof_b64", "valid base64")]
-    [InlineData("phone#retail", null, """{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AR=="}""", "attestation.proof_b64", "canonical base64")]
-    [InlineData("phone#retail", null, """{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID","signature":"ABCD"}""", "proof attestations", "must not include signature")]
+    [InlineData("phone#retail", null, """{"kind":"proof","proof_backend":"pipa-r/pasta"}""", "attestation.proof_b64", "required")]
+    [InlineData("phone#retail", null, """{"kind":"proof","proof_backend":"pipa-r/pasta","proof_b64":"@@@"}""", "attestation.proof_b64", "valid base64")]
+    [InlineData("phone#retail", null, """{"kind":"proof","proof_backend":"pipa-r/pasta","proof_b64":"AR=="}""", "attestation.proof_b64", "canonical base64")]
+    [InlineData("phone#retail", null, """{"kind":"proof","proof_backend":"pipa-r/pasta","proof_b64":"AQID","signature":"ABCD"}""", "proof attestations", "must not include signature")]
     public async Task ResolveIdentifierAsyncRejectsMalformedNestedReceiptEnvelope(
         string policyId,
         string? backend,
@@ -9405,7 +9405,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Content = new StringContent(IdentifierResolveEnvelopeJson(
                 IdentifierResolvePayloadJson(),
-                """{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID"}""")),
+                """{"kind":"proof","proof_backend":"pipa-r/pasta","proof_b64":"AQID"}""")),
         });
 
         using var client = CreateRuntimeAuthenticatedClient(handler);
@@ -9426,12 +9426,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [InlineData("""{"attestation":{"kind":"Signed","signature":"ABCD"}}""", "identifier resolve response.attestation.kind", "signed or proof")]
     [InlineData("""{"attestation":{"kind":"signed","signature":"ABCD","proof_b64":"AQID"}}""", "identifier resolve response.attestation signed attestations", "proof fields")]
     [InlineData("""{"attestation":{"proof_b64":"AQID"}}""", "identifier resolve response.attestation.kind", "required")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":" halo2/ipa","proof_b64":"AQID"}}""", "identifier resolve response.attestation.proof_backend", "whitespace")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ ipa","proof_b64":"AQID"}}""", "identifier resolve response.attestation.proof_backend", "whitespace")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":" AQID"}}""", "identifier resolve response.attestation.proof_b64", "whitespace")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID "}}""", "identifier resolve response.attestation.proof_b64", "whitespace")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"@@@"}}""", "identifier resolve response.attestation.proof_b64", "valid base64")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AR=="}}""", "identifier resolve response.attestation.proof_b64", "canonical base64")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":" pipa-r/pasta","proof_b64":"AQID"}}""", "identifier resolve response.attestation.proof_backend", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"pipa-r/ pasta","proof_b64":"AQID"}}""", "identifier resolve response.attestation.proof_backend", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"pipa-r/pasta","proof_b64":" AQID"}}""", "identifier resolve response.attestation.proof_b64", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"pipa-r/pasta","proof_b64":"AQID "}}""", "identifier resolve response.attestation.proof_b64", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"pipa-r/pasta","proof_b64":"@@@"}}""", "identifier resolve response.attestation.proof_b64", "valid base64")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"pipa-r/pasta","proof_b64":"AR=="}}""", "identifier resolve response.attestation.proof_b64", "canonical base64")]
     public async Task ResolveIdentifierAsyncRejectsNonExactAttestationSelectors(
         string patchJson,
         string expectedField,
@@ -27259,25 +27259,25 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         var id = new JsonObject
         {
-            ["backend"] = "halo2/ipa",
+            ["backend"] = "pipa-r/pasta",
             ["name"] = "vk_main",
         };
         var inlineKey = new JsonObject
         {
-            ["backend"] = "halo2/ipa",
+            ["backend"] = "pipa-r/pasta",
             ["bytes_b64"] = "AQID",
         };
         var record = new JsonObject
         {
             ["version"] = 2,
-            ["circuit_id"] = "halo2/ipa::transfer_v2",
-            ["backend"] = "halo2/ipa",
+            ["circuit_id"] = "pipa-r/pasta/confidential-transfer-v1",
+            ["backend"] = "pipa-r/pasta",
             ["curve"] = "pallas",
             ["public_inputs_schema_hash"] = new string('a', 64),
-            ["commitment"] = VerifyingKeyCommitmentHex("halo2/ipa", "abc"u8.ToArray()),
+            ["commitment"] = VerifyingKeyCommitmentHex("pipa-r/pasta", "abc"u8.ToArray()),
             ["vk_len"] = 3,
             ["max_proof_bytes"] = 8192,
-            ["gas_schedule_id"] = "halo2_default",
+            ["gas_schedule_id"] = "native_default",
             ["metadata_uri_cid"] = "ipfs://vk-meta",
             ["vk_bytes_cid"] = "ipfs://vk-bundle",
             ["activation_height"] = 1024,
@@ -27544,14 +27544,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new ToriiVerifyingKeyRegisterRequest
         {
             Authority = VerifyingKeyAuthorityAccountId,
-            Backend = "halo2/ipa",
+            Backend = "pipa-r/pasta",
             Name = "vk_main",
             Version = 1,
-            CircuitId = "halo2/ipa::transfer_v1",
+            CircuitId = "pipa-r/pasta/confidential-transfer-v1",
             PublicInputsSchemaHashHex = new string('a', 64),
-            GasScheduleId = "halo2_default",
+            GasScheduleId = "native_default",
             VerifyingKeyBytes = vkBytes,
-            CommitmentHex = VerifyingKeyCommitmentHex("halo2/ipa", vkBytes),
+            CommitmentHex = VerifyingKeyCommitmentHex("pipa-r/pasta", vkBytes),
             Status = "Active",
         };
     }
@@ -27562,14 +27562,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new ToriiVerifyingKeyUpdateRequest
         {
             Authority = VerifyingKeyAuthorityAccountId,
-            Backend = "halo2/ipa",
+            Backend = "pipa-r/pasta",
             Name = "vk_main",
             Version = 2,
-            CircuitId = "halo2/ipa::transfer_v2",
+            CircuitId = "pipa-r/pasta/confidential-transfer-v1",
             PublicInputsSchemaHashHex = new string('b', 64),
-            GasScheduleId = "halo2_default",
+            GasScheduleId = "native_default",
             VerifyingKeyBytes = vkBytes,
-            CommitmentHex = VerifyingKeyCommitmentHex("halo2/ipa", vkBytes),
+            CommitmentHex = VerifyingKeyCommitmentHex("pipa-r/pasta", vkBytes),
             Status = "Active",
         };
     }

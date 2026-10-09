@@ -1,9 +1,5 @@
 //! Validate the V1 hard cut for the aggregate pipeline signature-batch alias.
 
-#[path = "publisher_config_fixture.rs"]
-mod publisher_config_fixture;
-use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
-
 use std::path::PathBuf;
 
 use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Root as UserConfig};
@@ -11,11 +7,9 @@ use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
-    with_fixture_refs(
-        ConfigReader::new()
-            .read_toml_with_extends(base_path)
-            .expect("base config should load"),
-    )
+    ConfigReader::new()
+        .read_toml_with_extends(base_path)
+        .expect("base config should load")
 }
 
 fn strip_ansi_codes(input: &str) -> String {
@@ -60,7 +54,7 @@ fn retired_signature_batch_max_environment_alias_is_unvisited() {
         .with_env(env.clone())
         .read_and_complete::<UserConfig>()
         .expect("retired environment alias is not a schema input")
-        .parse_with_file_source(&ParserOnlyPublisherFiles)
+        .parse()
         .expect("retired environment alias cannot alter V1 configuration");
 
     assert!(

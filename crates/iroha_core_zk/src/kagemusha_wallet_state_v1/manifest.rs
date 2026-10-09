@@ -1,6 +1,9 @@
 //! Source-selected fixed manifests and bounded recovery of the unindexed committed tail.
 
 use super::*;
+
+#[path = "manifest/blacklists.rs"]
+mod blacklists;
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_archive_checkpoint_digest_v1 as manifest_digest;
 
 #[derive(Debug, Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
@@ -12,8 +15,26 @@ pub(super) struct Manifest {
     pub capsule: [u8; 32],
     pub steps: IndexRoot,
     pub credits: IndexRoot,
+    pub outgoing: IndexRoot,
     pub folds: IndexRoot,
     pub claims: IndexRoot,
+    pub preparations: IndexRoot,
+    pub blacklists: IndexRoot,
+    pub capsule_plans: IndexRoot,
+    pub capsule_sources: IndexRoot,
+    pub issued_requests: IndexRoot,
+    pub sessions: IndexRoot,
+    pub activation: Option<[u8; 32]>,
+    pub close_loads: IndexRoot,
+    pub ledger_checkpoint: Option<[u8; 32]>,
+    pub ledger_retired: Option<[u8; 32]>,
+    pub ledger_load_plans: IndexRoot,
+    pub ledger_load_ordinals: IndexRoot,
+    pub ledger_unload_confirmations: IndexRoot,
+    pub ledger_unload_proofs: IndexRoot,
+    pub ledger_unload_retired: Option<([u8; 32], [u8; 32])>,
+    pub direct_anchors: IndexRoot,
+    pub fold_pending: IndexRoot,
     pub folded: Option<u128>,
     pub checkpoint_count: u32,
     pub checkpoint_digest: [u8; 32],
@@ -40,8 +61,26 @@ impl Manifest {
             capsule: [0; 32],
             steps: IndexRoot::default(),
             credits: IndexRoot::default(),
+            outgoing: IndexRoot::default(),
             folds: IndexRoot::default(),
             claims: IndexRoot::default(),
+            preparations: IndexRoot::default(),
+            blacklists: IndexRoot::default(),
+            capsule_plans: IndexRoot::default(),
+            capsule_sources: IndexRoot::default(),
+            issued_requests: IndexRoot::default(),
+            sessions: IndexRoot::default(),
+            activation: None,
+            close_loads: IndexRoot::default(),
+            ledger_checkpoint: None,
+            ledger_retired: None,
+            ledger_load_plans: IndexRoot::default(),
+            ledger_load_ordinals: IndexRoot::default(),
+            ledger_unload_confirmations: IndexRoot::default(),
+            ledger_unload_proofs: IndexRoot::default(),
+            ledger_unload_retired: None,
+            direct_anchors: IndexRoot::default(),
+            fold_pending: IndexRoot::default(),
             folded: None,
             checkpoint_count: 0,
             checkpoint_digest: [0; 32],
@@ -200,11 +239,25 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 checkpoints: 0,
                 collected: false,
             };
+            self.index_source_custody(&mut manifest, digest, c.kind)?;
             manifest.steps = manifest.steps.set(
                 &mut self.archive,
                 sequence_key(current),
                 &archive::encode(&entry)?,
             )?;
+            if let KagemushaWalletEffectV1::Send { credit_id, .. } = c.statement.effect {
+                if manifest
+                    .outgoing
+                    .get(&mut self.archive, &credit_id)?
+                    .is_some()
+                {
+                    return Err(Error::WitnessLost("duplicate committed Send"));
+                }
+                manifest.outgoing =
+                    manifest
+                        .outgoing
+                        .set(&mut self.archive, credit_id, &sequence_key(current))?;
+            }
             if let KagemushaWalletEffectV1::Receive {
                 credit_id, amount, ..
             } = c.statement.effect
@@ -228,6 +281,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 )?;
             }
             self.retain_fee_claim(&mut manifest, &step)?;
+            self.retain_blacklist_source(&mut manifest, &step)?;
             digest = c.predecessor_capsule_digest;
             head = c.statement.predecessor;
             if current == 0 {

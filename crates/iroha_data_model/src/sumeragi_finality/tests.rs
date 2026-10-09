@@ -1040,6 +1040,7 @@ fn native_proof_rejects_retired_bridge_context_and_artifact_fields() {
     }
 }
 
+#[cfg(feature = "transparent_api")]
 impl Fixture {
     pub(crate) fn next_header(&self) -> BlockHeader {
         BlockHeader::new(
@@ -1221,4 +1222,102 @@ fn authenticated_successor_requires_exact_global_network_and_bounded_chain() {
             .verify_global_scope(private.network_id(), private.chain_id())
             .is_err()
     );
+}
+
+#[test]
+fn verifier_chain_label_is_exactly_the_selected_genesis_scope() {
+    let fixture = super::test_fixtures::NativeFinalityFixture::start_with_explicit_parameters(
+        "native-chain-label-regression",
+    );
+    assert_eq!(
+        fixture.verifier().chain_id(),
+        "native-chain-label-regression"
+    );
+    assert_eq!(fixture.verifier().clone().chain_id(), fixture.chain_id());
+}
+
+#[test]
+fn proof_reader_uses_the_strict_framed_decoder_for_genesis_and_tip() {
+    let fixture = Fixture::new();
+    let mut verifier = fixture.verifier();
+    for proof in [&fixture.first, &fixture.second] {
+        let original_wire = proof.block_wire.clone();
+        let original = decode_framed_signed_block(&original_wire).unwrap();
+        let decoded = proof.decode_checked().unwrap();
+        assert_eq!(decoded.block, original);
+        assert_eq!(decoded.block.header(), proof.block_header);
+        assert_eq!(decoded.block.encode_wire().unwrap(), original_wire);
+        verifier.verify(proof).unwrap();
+        assert_eq!(proof.block_wire, original_wire);
+    }
+}
+
+#[test]
+fn proof_reader_preserves_original_framing_refusals_without_a_second_frame() {
+    let fixture = Fixture::new();
+    let original = decode_framed_signed_block(&fixture.second.block_wire).unwrap();
+    // This is a complete checksummed Norito frame in its supported fixed-length
+    // layout. SignedBlockWire requires the compact canonical layout and refuses it.
+    let mut fixed_payload = Vec::new();
+    {
+        let _flags = norito::core::DecodeFlagsGuard::enter(0);
+        norito::core::serialize_to_buffer(&original, &mut fixed_payload).unwrap();
+    }
+    let fixed_frame =
+        norito::core::frame_bare_with_header_flags::<SignedBlock>(&fixed_payload, 0).unwrap();
+    norito::core::from_bytes_view(&fixed_frame).unwrap();
+    let mut fixed_wire = vec![fixture.second.block_wire[0]];
+    fixed_wire.extend_from_slice(&fixed_frame);
+
+    let mut wrong_version = fixture.second.block_wire.clone();
+    wrong_version[0] ^= 1;
+    let mut wrong_checksum = fixture.second.block_wire.clone();
+    wrong_checksum[1 + 31] ^= 1;
+    let mut trailing = fixture.second.block_wire.clone();
+    trailing.push(0);
+    for bytes in [fixed_wire, wrong_version, wrong_checksum, trailing] {
+        let original_error = decode_framed_signed_block(&bytes).unwrap_err();
+        assert_eq!(
+            original_error.kind(),
+            norito::core::DecodeAttemptErrorKind::Invalid
+        );
+        let mut offered = fixture.second.clone();
+        offered.block_wire = bytes;
+        assert_eq!(
+            offered.decode_checked().unwrap_err().0,
+            original_error.to_string()
+        );
+    }
+    let retried = fixture.second.decode_checked().unwrap();
+    assert_eq!(retried.block, original);
+    fixture.verifier().verify(&fixture.first).unwrap();
+}
+
+#[test]
+fn proof_reader_keeps_enclosing_decode_refusal_and_same_source_retry() {
+    let fixture = Fixture::new();
+    let original_wire = fixture.second.block_wire.clone();
+    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+    let original_error = norito::core::with_decode_limits_scope(limits, || {
+        decode_framed_signed_block(&original_wire)
+    })
+    .unwrap_err();
+    assert_eq!(
+        original_error.kind(),
+        norito::core::DecodeAttemptErrorKind::EnclosingLimit
+    );
+    let original_text = original_error.to_string();
+    assert!(matches!(
+        original_error.into_error().decode_resource_error(),
+        Some(norito::core::DecodeResourceError::TotalAllocationExceeded { limit: 0, .. })
+    ));
+    let error = norito::core::with_decode_limits_scope(limits, || fixture.second.decode_checked())
+        .unwrap_err();
+    assert_eq!(error.0, original_text);
+    assert_eq!(fixture.second.block_wire, original_wire);
+    let retried = fixture.second.decode_checked().unwrap();
+    assert_eq!(retried.block.encode_wire().unwrap(), original_wire);
+    let mut verifier = fixture.verifier();
+    verifier.verify(&fixture.first).unwrap();
+    verifier.verify(&fixture.second).unwrap();
 }

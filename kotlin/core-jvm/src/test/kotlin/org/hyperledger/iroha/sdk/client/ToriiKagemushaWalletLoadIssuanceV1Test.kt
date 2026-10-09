@@ -23,7 +23,7 @@ import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 
 /**
  * Transport-only tests: fake HTTP responses establish no server authentication or Native Load.
- * Valid canonical-account signing cases use the existing account-address ABI25 admission;
+ * Valid canonical-account signing cases use the existing account-address ABI27 admission;
  * missing that ordinary dependency must fail rather than manufacture an account controller.
  */
 class ToriiKagemushaWalletLoadIssuanceV1Test {
@@ -210,6 +210,73 @@ class ToriiKagemushaWalletLoadIssuanceV1Test {
         assertEquals(payer, value.payerAccountId)
         assertEquals(network, value.networkId)
         assertContentEquals(requestId, value.selection.requestId)
+    }
+
+    @Test
+    fun compactFinalityUsesExactSignedSiblingAndIndependentProofBound() {
+        val executor = RecordingExecutor()
+        val proof = client(executor).getKagemushaWalletLoadFinalityOriginalV1(selection(), auth(), Runnable {}).join()
+        assertContentEquals(byteArrayOf(0, -1, 7), proof)
+        val request = executor.requests.single()
+        assertEquals(selection().path + "/finality-proof", request.uri.path.removePrefix("/torii"))
+        assertEquals(16_384L, request.maximumResponseBytes)
+        assertEquals(RequestReplayPolicy.ONE_SHOT, request.replayPolicy)
+        assertEquals("GET", request.method)
+        assertTrue(request.body.isEmpty())
+        val timestamp = request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS]!!.single().toLong()
+        val nonce = request.headers[CanonicalRequestSigner.HEADER_NONCE]!!.single()
+        val signature = java.util.Base64.getDecoder().decode(request.headers[CanonicalRequestSigner.HEADER_SIGNATURE]!!.single())
+        val message = CanonicalRequestSigner.canonicalRequestSignatureMessage(network, "GET", request.uri, request.body, timestamp, nonce)
+        assertTrue(Ed25519Signer().run {
+            init(false, Ed25519PublicKeyParameters(publicKey, 0)); update(message, 0, message.size); verifySignature(signature)
+        })
+    }
+
+    @Test
+    fun compactFinalityRejectsOversizeWrongTransportAndUnavailableWithoutFallback() {
+        for (failure in 0..5) {
+            val executor = RecordingExecutor()
+            executor.response = { request -> CompletableFuture.completedFuture(TransportResponse(
+                if (failure == 0) 503 else 200,
+                if (failure == 1) ByteArray(16_385) else byteArrayOf(1), "",
+                mapOf("Content-Type" to listOf(if (failure == 2) "application/json" else "application/x-norito")) +
+                    if (failure == 3) mapOf("Content-Encoding" to listOf("gzip")) else emptyMap(),
+                if (failure == 4) URI.create("https://other.test/") else request.uri, failure == 5)) }
+            assertFailsWith<CompletionException> {
+                client(executor).getKagemushaWalletLoadFinalityOriginalV1(selection(), auth(), Runnable {}).join()
+            }
+            assertEquals(1, executor.requests.size)
+            assertTrue(executor.requests.single().uri.path.endsWith("/finality-proof"))
+        }
+    }
+
+    @Test
+    fun compactFinalityChecksOwnerBeforeSigningAndAgainBeforeDelivering() {
+        val executor = RecordingExecutor()
+        assertFailsWith<IllegalStateException> {
+            client(executor).getKagemushaWalletLoadFinalityOriginalV1(selection(),
+                ToriiCanonicalRequestAuth(payer, RequestSigner { error("must not sign") }), Runnable { error("retired") })
+        }
+        assertTrue(executor.requests.isEmpty())
+        var current = true
+        val pending = CompletableFuture<TransportResponse>()
+        executor.response = { pending }
+        val result = client(executor).getKagemushaWalletLoadFinalityOriginalV1(selection(), auth(), Runnable { check(current) })
+        current = false
+        pending.complete(TransportResponse(200, byteArrayOf(1), "", mapOf("Content-Type" to listOf("application/x-norito")),
+            executor.requests.single().uri, false))
+        assertFailsWith<CompletionException> { result.join() }
+    }
+
+    @Test
+    fun compactFinalityCancellationCancelsItsSingleUpstreamRead() {
+        val executor = RecordingExecutor()
+        val pending = CompletableFuture<TransportResponse>()
+        executor.response = { pending }
+        val result = client(executor).getKagemushaWalletLoadFinalityOriginalV1(selection(), auth(), Runnable {})
+        result.cancel(false)
+        assertTrue(pending.isCancelled)
+        assertEquals(1, executor.requests.size)
     }
 
     @Test

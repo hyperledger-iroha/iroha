@@ -433,6 +433,18 @@ without imposing an additional deserialization lifetime bound. Actual archived
 realignment buffers and owned child storage retain their own allocation charges;
 field, flags, bounds, depth and complete-consumption checks remain active.
 
+`ChargedElementSequence` constructs exact span backing from the original finite
+pool during that same sequence walk. It borrows the original input and exposes
+the existing prepared element visitor without a second framing pass. Crypto's
+`PreparedPublicKeyDecode::try_decode_payload` and the numeric
+`PreparedQuantityDecode::try_decode_payload` similarly admit their final compact
+key or native-digit backing at the canonical field's allocation point. Later
+field failures destroy that backing before returning physical credit; consumed
+logical decode work is never reset or refunded. These owners cover their stated
+allocations only. Enclosing source, diagnostics and retained execution through
+worker refusal remain separate obligations. V1 bytes and validation order are
+unchanged.
+
 `PreparedDecodeWorkspace` preadmits its two reusable physical counter controls
 from an explicit original `iroha_allocation` reservation. Active scopes borrow
 synchronous stack nodes; every reused attempt has a new checked identity, so a

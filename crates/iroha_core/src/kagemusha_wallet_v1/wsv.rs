@@ -121,18 +121,6 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
                 &references.checked_add(1).ok_or(Error::Overflow)?,
             )?);
         }
-        rows.push(Self::row(
-            storage::key(
-                storage::CERTIFICATE,
-                scheme,
-                registration.load_authorizer.certificate_digest(),
-            ),
-            &registration.load_authorizer,
-        )?);
-        rows.push(Self::row(
-            storage::key(storage::ACTIVE_AUTHORIZER, scheme, asset),
-            &registration.load_authorizer.certificate_digest(),
-        )?);
         self.insert_immutable(rows)
     }
     /// Reserve one bounded native package verification under the existing transaction
@@ -208,68 +196,6 @@ impl<'borrow, 'block, 'state> WsvLedger<'borrow, 'block, 'state> {
             ),
             &certificate,
         )?])
-    }
-    pub(crate) fn publish_voucher(
-        &mut self,
-        request: Digest,
-        voucher: &KagemushaWalletLoadVoucherV1,
-    ) -> Result<()> {
-        use iroha_executor_data_model::permission::asset_definition::CanPublishKagemushaLoadVoucher;
-        let registration =
-            self.registration(&voucher.body.scheme_id, &voucher.body.asset_digest)?;
-        let permission = CanPublishKagemushaLoadVoucher {
-            asset_definition: registration.asset.asset,
-            scheme: voucher.body.scheme_id,
-            authorizer_certificate: voucher.body.authorizer_certificate,
-        };
-        if !crate::smartcontracts::isi::helpers::world_account_has_permission(
-            self.state.world(),
-            &self.authority,
-            permission.into(),
-        ) {
-            return Err(Error::Execution(iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
-                "KAGEMUSHA publication requires the exact historical issuer submission permission".into(),
-            )));
-        }
-        super::ledger::retain_voucher(self, request, voucher).map(|_| ())
-    }
-    pub(crate) fn rotate_load_authorizer(
-        &mut self,
-        asset: Digest,
-        certificate: KagemushaWalletSignerCertificateV1,
-    ) -> Result<()> {
-        use iroha_executor_data_model::permission::asset_definition::CanManageKagemushaWallet;
-        let scheme = certificate.body.scheme_id;
-        let registration = self.registration(&scheme, &asset)?;
-        certificate.verify_role(
-            &registration.scheme,
-            KagemushaWalletSignerRoleV1::LoadAuthorization,
-        )?;
-        if !crate::smartcontracts::isi::helpers::world_account_has_permission(
-            self.state.world(),
-            &self.authority,
-            CanManageKagemushaWallet {
-                asset_definition: registration.asset.asset,
-            }
-            .into(),
-        ) {
-            return Err(Error::Binding);
-        }
-        let digest = certificate.certificate_digest();
-        let history = Self::row(
-            storage::key(storage::CERTIFICATE, scheme, digest),
-            &certificate,
-        )?;
-        let active = Self::row(
-            storage::key(storage::ACTIVE_AUTHORIZER, scheme, asset),
-            &digest,
-        )?;
-        self.insert_immutable(vec![history])?;
-        self.state
-            .world
-            .kagemusha_wallet_ledger
-            .insert(active.0, active.1);
-        Ok(())
     }
     pub(crate) fn retain_credential(&mut self, value: CredentialRecord) -> Result<()> {
         let body = &value.credential.body;
@@ -412,19 +338,10 @@ impl Transaction for WsvLedger<'_, '_, '_> {
         self.state.block_height()
     }
     fn registration(&self, scheme: &Digest, asset: &Digest) -> Result<Registration> {
-        let mut registration: Registration = self
+        let registration: Registration = self
             .read(&storage::key(storage::REGISTRATION, *scheme, *asset))?
             .ok_or(Error::Unavailable)?;
         self.require_asset(&registration)?;
-        let active: Digest = self
-            .read(&storage::key(storage::ACTIVE_AUTHORIZER, *scheme, *asset))?
-            .ok_or(Error::Unavailable)?;
-        let certificate = self.certificate(scheme, &active)?;
-        certificate.verify_role(
-            &registration.scheme,
-            KagemushaWalletSignerRoleV1::LoadAuthorization,
-        )?;
-        registration.load_authorizer = certificate;
         Ok(registration)
     }
     fn wallet(&self, scheme: &Digest, wallet: &Digest) -> Result<Option<WalletRecord>> {
@@ -436,17 +353,7 @@ impl Transaction for WsvLedger<'_, '_, '_> {
         wallet: &Digest,
         request: &Digest,
     ) -> Result<Option<Issuance>> {
-        let issuance: Option<Issuance> =
-            self.read(&storage::issuance_key(*scheme, *wallet, *request))?;
-        if let Some(issuance) = &issuance {
-            let pending = PendingPublication::from_issuance(issuance);
-            let retained: Option<PendingPublication> =
-                self.read(&pending.key(*scheme, issuance.body.authorizer_certificate))?;
-            if retained != issuance.voucher.is_none().then_some(pending) {
-                return Err(Error::Binding);
-            }
-        }
-        Ok(issuance)
+        self.read(&storage::issuance_key(*scheme, *wallet, *request))
     }
     fn payout(
         &self,
@@ -492,7 +399,7 @@ impl Transaction for WsvLedger<'_, '_, '_> {
     fn apply(&mut self, batch: Batch) -> Result<()> {
         let registration = self.registration(&batch.scheme, &batch.asset)?;
         let mut rows = Vec::with_capacity(3);
-        let mut remove_pending = None;
+        let mut load_event = None;
         if let Some((wallet, record)) = batch.wallet {
             if record.asset != batch.asset {
                 return Err(Error::Binding);
@@ -507,38 +414,15 @@ impl Transaction for WsvLedger<'_, '_, '_> {
             {
                 return Err(Error::Binding);
             }
-            if let Some(prior) = self.issuance(
-                &batch.scheme,
-                &issuance.command.wallet,
-                &issuance.command.request_id,
-            )? {
-                if prior.body != issuance.body
-                    || prior.command != issuance.command
-                    || prior.payer != issuance.payer
-                    || prior.voucher.is_some()
-                    || issuance.voucher.is_none()
-                {
-                    return Err(Error::Conflict);
-                }
-            }
-            let pending = PendingPublication::from_issuance(&issuance);
-            let pending_key = pending.key(batch.scheme, issuance.body.authorizer_certificate);
-            if issuance.voucher.is_none() {
-                if self
-                    .state
-                    .world
-                    .kagemusha_wallet_ledger
-                    .get(&pending_key)
-                    .is_some()
-                {
-                    return Err(Error::Conflict);
-                }
-                rows.push(Self::row(pending_key, &pending)?);
-            } else {
-                if self.read::<PendingPublication>(&pending_key)? != Some(pending) {
-                    return Err(Error::Binding);
-                }
-                remove_pending = Some(pending_key);
+            if self
+                .issuance(
+                    &batch.scheme,
+                    &issuance.command.wallet,
+                    &issuance.command.request_id,
+                )?
+                .is_some()
+            {
+                return Err(Error::Conflict);
             }
             rows.push(Self::row(
                 storage::issuance_key(
@@ -548,6 +432,15 @@ impl Transaction for WsvLedger<'_, '_, '_> {
                 ),
                 &issuance,
             )?);
+            // This event is an execution effect authenticated by the ordinary event
+            // commitment in R. Construct it before any effects, emit only after the
+            // atomic debit and immutable receipt insertion. Exact execution retry
+            // returns the retained issuance without entering this batch again.
+            load_event = Some(
+                iroha_data_model::events::data::kagemusha::KagemushaLoadCommittedV1::from_receipt(
+                    &issuance.body,
+                )?,
+            );
         }
         let release = batch.payout.is_some();
         if let Some(payout) = batch.payout {
@@ -614,9 +507,7 @@ impl Transaction for WsvLedger<'_, '_, '_> {
         for (key, bytes) in rows {
             self.state.world.kagemusha_wallet_ledger.insert(key, bytes);
         }
-        if let Some(key) = remove_pending {
-            self.state.world.kagemusha_wallet_ledger.remove(key);
-        }
+        self.state.world.emit_events(load_event);
         Ok(())
     }
 }

@@ -262,7 +262,7 @@ where
             .expect("protocol")
             .shape()
             .usable_rows;
-        let digest = witness.digest(usable_rows);
+        let digest = witness.digest(usable_rows, None).unwrap();
         for workers in [1, 4] {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(workers)
@@ -283,7 +283,7 @@ where
             assert_eq!(proof, reference, "{choice:?}, {workers} workers");
             assert_eq!(setup.verify(instances, &proof), Ok(()));
         }
-        assert_eq!(witness.digest(usable_rows), digest);
+        assert_eq!(witness.digest(usable_rows, None).unwrap(), digest);
         let contexts = context_log.lock().expect("contexts");
         assert_eq!(contexts.len(), 3);
         assert!(contexts.iter().all(|context| *context == contexts[0]));
@@ -298,6 +298,97 @@ fn owned_witness_prover_bytes_identical() {
     owned_proof_parity::<Eq, _>(&LOOKUPS, &[]);
     owned_proof_parity::<Ep, _>(&PERMUTATIONS, &PERMUTATIONS.instances::<Fq>());
     owned_proof_parity::<Eq, _>(&PERMUTATIONS, &PERMUTATIONS.instances::<Fp>());
+}
+
+#[test]
+fn reusable_workspace_proof_bytes_and_bound_both_curves() {
+    fn check<C: PastaCurve>()
+    where
+        C::ScalarExt: PoseidonField,
+        C::Base: PoseidonField,
+    {
+        let mut workspace = QuotientWorkspace::new(1 << 20);
+        for profile in 0..=CHOICES.len() {
+            for (policy, k) in [
+                (crate::keys::CosetCachePolicy::Eager, K),
+                (crate::keys::CosetCachePolicy::OnDemand, K + 1),
+                (crate::keys::CosetCachePolicy::Eager, K),
+            ] {
+                let params = PinnedParams::<C>::derive(k).unwrap();
+                let pk = CHOICES.get(profile).map_or_else(
+                    || {
+                        let mut config = crate::keys::KeygenConfigV2::pipa_r(Vec::new());
+                        config.coset_cache = policy;
+                        crate::keys::keygen_pk_v2(&params, &LOOKUPS, &config).unwrap()
+                    },
+                    |choice| {
+                        let mut config = crate::test_circuits::keygen_config(*choice);
+                        config.coset_cache = policy;
+                        crate::keys::keygen_pk(&params, &LOOKUPS, &config).unwrap()
+                    },
+                );
+                let setup = Setup { params, pk };
+                let witness = Witness::from_circuit(&setup.pk, &LOOKUPS, &[]).unwrap();
+                let reference = create_proof(
+                    &setup.params,
+                    &setup.pk,
+                    &witness,
+                    ProverRandomness::fixed_seed_for_tests([91; 32]),
+                    ProverConfig::default(),
+                )
+                .unwrap();
+                for workers in [1, 4, 1] {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(workers)
+                        .build()
+                        .unwrap();
+                    let owned = Witness::from_circuit(&setup.pk, &LOOKUPS, &[]).unwrap();
+                    let output = pool
+                        .install(|| {
+                            create_proof_owned_with_workspace(
+                                &setup.params,
+                                &setup.pk,
+                                owned,
+                                ProverRandomness::fixed_seed_for_tests([91; 32]),
+                                ProverConfig::default(),
+                                &mut workspace,
+                            )
+                        })
+                        .unwrap();
+                    assert_eq!(output.proof, reference);
+                    assert_eq!(output.opening.decide(&setup.params, BUDGET), Ok(()));
+                    assert_eq!(setup.verify(&[], &output.proof), Ok(()));
+                    assert!(workspace.is_zeroized());
+                    assert!(workspace.allocated_bytes() > 0);
+                    assert!(workspace.allocated_bytes() <= workspace.maximum_bytes());
+                }
+                let required = quotient::workspace_elements(
+                    &setup.pk,
+                    &Protocol::new(setup.pk.binding().descriptor()).unwrap(),
+                )
+                .unwrap()
+                    * size_of::<C::ScalarExt>();
+                let mut short = QuotientWorkspace::new(required - 1);
+                let owned = Witness::from_circuit(&setup.pk, &LOOKUPS, &[]).unwrap();
+                assert!(matches!(
+                    create_proof_owned_with_workspace(
+                        &setup.params,
+                        &setup.pk,
+                        owned,
+                        ProverRandomness::fixed_seed_for_tests([91; 32]),
+                        ProverConfig::default(),
+                        &mut short
+                    ),
+                    Err(ProverError::Workspace(WorkspaceError::Limit { .. }))
+                ));
+                assert_eq!(short.allocated_bytes(), 0);
+            }
+        }
+        workspace.clear();
+        assert_eq!(workspace.allocated_bytes(), 0);
+    }
+    check::<Ep>();
+    check::<Eq>();
 }
 
 #[test]
@@ -318,7 +409,9 @@ fn owned_witness_buffers_are_transformed_in_place() {
         advice.values.iter().map(Vec::as_ptr).collect::<Vec<_>>(),
         pointers
     );
-    advice.interpolate_in_place(&setup.pk).expect("interpolate");
+    advice
+        .interpolate_in_place(&setup.pk, None)
+        .expect("interpolate");
     assert!(advice.values.is_empty());
     assert_eq!(
         advice.polys.iter().map(Vec::as_ptr).collect::<Vec<_>>(),
@@ -340,7 +433,7 @@ fn advice_buffers_remain_owned_on_transform_failure() {
     };
     let pointer = advice.values[0].as_ptr();
     assert!(matches!(
-        advice.interpolate_in_place(&setup.pk),
+        advice.interpolate_in_place(&setup.pk, None),
         Err(ProverError::Fft(_))
     ));
     // The error does not leak or discard a secret allocation: the same
@@ -420,6 +513,7 @@ where
             witness(),
             ProverRandomness::fixed_seed_for_tests([1; 32]),
             ProverConfig {
+                cancellation: None,
                 msm_budget: MemoryBudget::new(0),
             },
         ),
@@ -867,7 +961,7 @@ fn equal_advice_commitments_with_different_evaluations_are_rejected() {
         pk.vk().transcript_repr().scalar().expect("scalar profile"),
         &[],
     );
-    let instance = InstanceColumns::new(pk, &[]).expect("instances");
+    let instance = InstanceColumns::new(pk, &[], None).expect("instances");
 
     // Row 1: one blinded column, committed twice.
     let mut values = witness.advice()[0].clone();
@@ -891,7 +985,7 @@ fn equal_advice_commitments_with_different_evaluations_are_rejected() {
     let beta = transcript.squeeze_challenge();
     let gamma = transcript.squeeze_challenge();
     let random =
-        commit_random(params, pk, &shape, &mut rng, &mut transcript, BUDGET).expect("random");
+        commit_random(params, pk, &shape, &mut rng, &mut transcript, BUDGET, None).expect("random");
     let y = transcript.squeeze_challenge();
     let compiled = CompiledExpressions::compile(descriptor, true).expect("compile");
     let h = super::quotient::evaluate(
@@ -913,8 +1007,17 @@ fn equal_advice_commitments_with_different_evaluations_are_rejected() {
         &crate::protocol::AllTerms,
     )
     .expect("quotient");
-    let quotient =
-        commit_quotient(params, pk, &shape, h, &mut rng, &mut transcript, BUDGET).expect("pieces");
+    let quotient = commit_quotient(
+        params,
+        pk,
+        &shape,
+        h,
+        &mut rng,
+        &mut transcript,
+        BUDGET,
+        None,
+    )
+    .expect("pieces");
     let x = transcript.squeeze_challenge();
     let xn = x.pow_vartime([shape.n as u64]);
     let combined = quotient.combine(xn);
@@ -965,7 +1068,16 @@ fn equal_advice_commitments_with_different_evaluations_are_rejected() {
         quotient: combined,
     };
     let _claim = opened
-        .open(params, pk, &protocol, x, &mut rng, &mut transcript, BUDGET)
+        .open(
+            params,
+            pk,
+            &protocol,
+            x,
+            &mut rng,
+            &mut transcript,
+            BUDGET,
+            None,
+        )
         .expect("open");
     let proof = transcript.finish();
     assert_eq!(proof.len(), protocol.proof_length());
@@ -1281,7 +1393,7 @@ fn witness_and_statement_digests_stream_the_documented_bytes() {
         }
     }
     assert_eq!(
-        witness.digest(usable),
+        witness.digest(usable, None).unwrap(),
         crate::cs::descriptor::blake2b_personal::<32>(WITNESS_PERSONA, &[&bytes])
     );
     let repr = Fq::from(5);
@@ -1403,3 +1515,6 @@ fn measure_prove_and_verify() {
         }
     }
 }
+
+#[path = "fixed_only_tests.rs"]
+mod fixed_only;

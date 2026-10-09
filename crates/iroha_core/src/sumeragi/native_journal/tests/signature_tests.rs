@@ -202,7 +202,9 @@ fn retained_signature_actual_byte_and_control_allocator_refusal_preserves_origin
 #[test]
 fn original_prepared_signature_graphs_keep_genesis_and_successor_native_finality_unchanged() {
     let (chain, journal) = fixture();
-    let pool = chain.state().ivm_execution_budget();
+    // Prepared signature graphs belong to this original offline-reader pool;
+    // unrelated chain fixture epoch reclamation cannot count as their refunds.
+    let pool = AllocationBudget::new(limits().allocated_bytes);
     let original_blocks = [
         chain.committed(1).block().clone(),
         chain.committed(2).block().clone(),

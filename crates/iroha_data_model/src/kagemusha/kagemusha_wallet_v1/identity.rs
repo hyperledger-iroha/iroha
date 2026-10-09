@@ -439,9 +439,6 @@ pub enum KagemushaWalletSignerRoleV1 {
     /// Issues wallet credentials.
     #[codec(index = 1)]
     Enrollment,
-    /// Signs load vouchers after ledger finality.
-    #[codec(index = 2)]
-    LoadAuthorization,
     /// Signs scheme policies, fee schedules, blacklists, quota shares and charge quotes.
     #[codec(index = 3)]
     RegulatoryPolicy,
@@ -455,9 +452,8 @@ pub enum KagemushaWalletSignerRoleV1 {
 
 impl KagemushaWalletSignerRoleV1 {
     /// Every signer role, in tag order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 4] = [
         Self::Enrollment,
-        Self::LoadAuthorization,
         Self::RegulatoryPolicy,
         Self::TimeAnchor,
         Self::Artifact,
@@ -468,7 +464,6 @@ impl KagemushaWalletSignerRoleV1 {
     pub const fn tag(self) -> u8 {
         match self {
             Self::Enrollment => 1,
-            Self::LoadAuthorization => 2,
             Self::RegulatoryPolicy => 3,
             Self::TimeAnchor => 4,
             Self::Artifact => 5,

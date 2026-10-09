@@ -970,7 +970,7 @@ fn reversible_publication_refusal_retains_original_overlay_capture_and_certified
             .live
             .as_ref()
             .unwrap()
-            .commitment
+            .commitment()
             .get()
             .schedule
             .current
@@ -1001,7 +1001,7 @@ fn reversible_publication_refusal_retains_original_overlay_capture_and_certified
                     .live
                     .as_ref()
                     .unwrap()
-                    .commitment
+                    .commitment()
                     .get()
                     .schedule
                     .current
@@ -1613,7 +1613,7 @@ fn context_proof_capacity_retry_retains_original_witness_inputs_and_execution() 
             overlay
         );
         assert_eq!(
-            live.commitment.get().schedule.current.committee.as_ptr(),
+            live.commitment().get().schedule.current.committee.as_ptr(),
             authority
         );
         assert_eq!(live.witness.as_ref().unwrap().writes.as_ptr(), writes);
@@ -1713,7 +1713,7 @@ fn result_encoding_capacity_retry_keeps_original_execution_and_allocation_custod
             overlay
         );
         assert_eq!(
-            live.commitment.get().schedule.current.committee.as_ptr(),
+            live.commitment().get().schedule.current.committee.as_ptr(),
             authority
         );
         assert_eq!(
@@ -1775,7 +1775,7 @@ fn assert_certificate_allocation_retry(
             let overlay = original_overlay(worker);
             let live = worker.live.as_ref().unwrap();
             let witness = iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire());
-            let authority = live.commitment.get().schedule.current.committee.as_ptr();
+            let authority = live.commitment().get().schedule.current.committee.as_ptr();
             let preimage = match &live.phase {
                 PublicationPhase::Executed { preimage, .. } => preimage.as_slice().as_ptr(),
                 _ => panic!("original executed phase"),
@@ -1841,7 +1841,7 @@ fn assert_certificate_allocation_retry(
                     witness
                 );
                 assert_eq!(
-                    live.commitment.get().schedule.current.committee.as_ptr(),
+                    live.commitment().get().schedule.current.committee.as_ptr(),
                     authority
                 );
                 assert_eq!(live.events.len(), event_count);
@@ -2221,7 +2221,26 @@ fn native_invalid_payloads_are_rejected_at_ordinary_and_boundary_heights() {
                 let applied = worker.applied;
                 let state_height = worker.state.view().height();
                 let block = proposal(chain, worker);
-                let flagged = chain.author_payload(block.header().clone(), vec![0xFF]);
+                let malformed = vec![0xFF];
+                let crypto = worker.context.crypto.as_ref().unwrap();
+                let mut header = block.header().clone();
+                // Genuine availability authenticates these exact malformed application bytes;
+                // retaining the valid proposal's declared digest would fail before execution.
+                header.payload_hash = payload_hash(&**crypto, &malformed);
+                header.payload_len = u32::try_from(malformed.len()).unwrap();
+                let flagged = chain.author_payload(header, malformed);
+                assert_eq!(flagged.source().config(), block.source().config());
+                assert_eq!(flagged.header().height, block.header().height);
+                assert_eq!(flagged.header().payload_len, 1);
+                assert_eq!(
+                    flagged.header().payload_hash,
+                    payload_hash(&**crypto, flagged.payload().as_slice())
+                );
+                assert!(flagged.admitted_to(&worker.state.ivm_execution_budget()));
+                assert!(matches!(
+                    payload::decode(flagged.payload().as_slice()),
+                    Err(payload::PayloadError::NotCanonical(_))
+                ));
                 let flagged_hash = flagged.hash(&**worker.context.crypto.as_ref().unwrap());
                 for _ in 0..2 {
                     assert!(matches!(
@@ -2255,14 +2274,14 @@ fn native_prepare_checks_real_quorum_before_changing_original_publication_owners
     with_worker(|chain, worker, _, _| {
         let (block, qc) = executed(chain, worker);
         let original = original_overlay(worker);
-        let commitment = std::ptr::from_ref(worker.live.as_ref().unwrap().commitment.get());
+        let commitment = std::ptr::from_ref(worker.live.as_ref().unwrap().commitment().get());
         let mut changed = qc.clone();
         changed.result = Hash32([0xA9; 32]);
         // The unchanged genuine signature cannot authenticate a different execution result.
         assert!(worker.prepare(&block, &changed).is_err());
         assert_eq!(original_overlay(worker), original);
         assert_eq!(
-            std::ptr::from_ref(worker.live.as_ref().unwrap().commitment.get()),
+            std::ptr::from_ref(worker.live.as_ref().unwrap().commitment().get()),
             commitment
         );
         assert!(matches!(
@@ -2297,8 +2316,8 @@ fn native_certificate_refusals_retain_original_execution_until_exact_publication
                 let state_height = worker.state.view().height();
                 let overlay = original_overlay(worker);
                 let live = worker.live.as_ref().unwrap();
-                let commitment = std::ptr::from_ref(live.commitment.get());
-                let authority = live.commitment.get().schedule.current.committee.as_ptr();
+                let commitment = std::ptr::from_ref(live.commitment().get());
+                let authority = live.commitment().get().schedule.current.committee.as_ptr();
                 let event_count = live.events.len();
                 let PublicationPhase::Executed { preimage, .. } = &live.phase else {
                     panic!("actual execution owns its original result preimage")
@@ -2364,9 +2383,9 @@ fn native_certificate_refusals_retain_original_execution_until_exact_publication
                     assert!(worker.commit(&block, refused).is_err());
                     assert_eq!(original_overlay(worker), overlay);
                     let live = worker.live.as_ref().unwrap();
-                    assert_eq!(std::ptr::from_ref(live.commitment.get()), commitment);
+                    assert_eq!(std::ptr::from_ref(live.commitment().get()), commitment);
                     assert_eq!(
-                        live.commitment.get().schedule.current.committee.as_ptr(),
+                        live.commitment().get().schedule.current.committee.as_ptr(),
                         authority
                     );
                     assert_eq!(live.events.len(), event_count);
@@ -2422,7 +2441,7 @@ fn boundary_certificate_read_refusal_retains_original_source_and_availability_un
 
             let overlay = original_overlay(worker);
             let live = worker.live.as_ref().unwrap();
-            let authority = live.commitment.get().schedule.current.committee.as_ptr();
+            let authority = live.commitment().get().schedule.current.committee.as_ptr();
             let PublicationPhase::Executed { preimage, .. } = &live.phase else {
                 panic!("actual original boundary preimage")
             };
@@ -2461,7 +2480,7 @@ fn boundary_certificate_read_refusal_retains_original_source_and_availability_un
                         .live
                         .as_ref()
                         .unwrap()
-                        .commitment
+                        .commitment()
                         .get()
                         .schedule
                         .current
@@ -2522,7 +2541,7 @@ fn boundary_discard_releases_only_the_unretained_original_execution_and_result()
             let state_height = worker.state.view().height();
             let overlay = original_overlay(worker);
             let live = worker.live.as_ref().unwrap();
-            let commitment = std::ptr::from_ref(live.commitment.get());
+            let commitment = std::ptr::from_ref(live.commitment().get());
             let PublicationPhase::Executed { preimage, .. } = &live.phase else {
                 panic!("actual original boundary execution")
             };
@@ -2530,7 +2549,7 @@ fn boundary_discard_releases_only_the_unretained_original_execution_and_result()
             worker.discard(10, &[qc.block_hash]);
             assert_eq!(original_overlay(worker), overlay);
             let live = worker.live.as_ref().unwrap();
-            assert_eq!(std::ptr::from_ref(live.commitment.get()), commitment);
+            assert_eq!(std::ptr::from_ref(live.commitment().get()), commitment);
             assert_eq!(live.result, qc.result);
             let PublicationPhase::Executed { preimage, .. } = &live.phase else {
                 panic!("keep preserves the same original result preimage")
@@ -2666,11 +2685,11 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
         // RetainedPayload's inline value moves into Live. Its original heap allocations,
         // complete canonical value and allocation-pool custody must survive that move.
         assert_eq!(
-            live.commitment.get().schedule.current.committee.as_ptr(),
+            live.commitment().get().schedule.current.committee.as_ptr(),
             authority
         );
         assert_eq!(
-            live.commitment
+            live.commitment()
                 .get()
                 .schedule
                 .current
@@ -2681,10 +2700,10 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             proofs
         );
         assert_eq!(
-            norito::encode_canonical(live.commitment.get()).unwrap(),
+            norito::encode_canonical(live.commitment().get()).unwrap(),
             canonical_result
         );
-        assert!(live.commitment.belongs_to(&budget));
+        assert!(live.commitment().belongs_to(&budget));
         assert_eq!(
             iroha_crypto::HashOf::new(live.witness.as_ref().unwrap().wire()),
             witness
@@ -2714,7 +2733,7 @@ fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
             "archive retains the exact original execution write order"
         );
         assert!(
-            live.commitment
+            live.commitment()
                 .get()
                 .native_lanes
                 .matches_state_encoding(chain.network_id(), 2, &projection.lanes)
@@ -2888,14 +2907,14 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
         assert_eq!(
             Some((
                 retained
-                    .commitment
+                    .commitment()
                     .get()
                     .schedule
                     .current
                     .committee
                     .as_ptr(),
                 retained
-                    .commitment
+                    .commitment()
                     .get()
                     .schedule
                     .current
@@ -2903,13 +2922,13 @@ fn native_context_archive_preparation_refuses_foreign_pool_without_reexecuting()
                     .iter()
                     .map(|member| member.proof_of_possession.as_ptr())
                     .collect::<Vec<_>>(),
-                norito::encode_canonical(retained.commitment.get()).unwrap(),
+                norito::encode_canonical(retained.commitment().get()).unwrap(),
             )),
             original_result
         );
         assert!(
             retained
-                .commitment
+                .commitment()
                 .belongs_to(&worker.state.ivm_execution_budget())
         );
         assert!(retained.native_contexts.is_some());
@@ -3440,4 +3459,161 @@ fn worker_fixture_invokes_and_consumes_one_move_only_callback_on_the_actual_chai
     });
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+/// Late World-cut control funding must not discard successful native reconstruction.
+#[test]
+fn original_worker_world_cut_retains_completed_tail_after_final_control_refusal() {
+    use crate::state::world_projection::world_state_accumulator::world_state_cut::completion_observer;
+    with_worker(|chain, worker, blocks, events| {
+        let (block, qc) = executed(chain, worker);
+        let budget = worker.state.ivm_execution_budget();
+        let limit = budget.limit_bytes();
+        let height = worker.state.view().height();
+        let applied = worker.applied;
+        let overlay = original_overlay(worker);
+        let wire = block.payload().as_slice().as_ptr();
+        let source = std::ptr::from_ref(block.source());
+        assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(qc.result));
+        blocks.append(&block, &qc).unwrap();
+        completion_observer::observe(&budget, |observation| {
+            let Err(PublicationError::Deferred(reason)) = worker.commit(&block, &qc) else {
+                panic!("actual completed World cut must defer at final original shell funding");
+            };
+            assert!(matches!(reason.allocation_refusal(),
+                Some(iroha_allocation::AllocationRefusal::Capacity { requested_bytes, limit_bytes, .. })
+                if *requested_bytes == completion_observer::control_bytes()
+                && *limit_bytes == limit));
+            drop(reason);
+            let completed = observation.snapshot();
+            assert_eq!(
+                completed.0, 1,
+                "actual native reconstruction completed once"
+            );
+            assert!(completed.1.is_some());
+            assert_eq!(
+                worker
+                    .live
+                    .as_ref()
+                    .unwrap()
+                    .overlay
+                    .as_deref()
+                    .unwrap()
+                    .completed_world_cut_identity_for_test(),
+                completed.1,
+                "completed original World cut must survive final shared-control refusal"
+            );
+            assert_eq!(original_overlay(worker), overlay);
+            assert_eq!(worker.applied, applied);
+            assert_eq!(worker.state.view().height(), height);
+            assert!(worker.recovery.is_none());
+            assert!(events.try_recv().is_err());
+            assert!(budget.same_pool(&worker.state.ivm_execution_budget()));
+            assert_eq!(block.payload().as_slice().as_ptr(), wire);
+            assert_eq!(std::ptr::from_ref(block.source()), source);
+            let (write_free, commit_free) = worker.state.publication_fences_available_for_test();
+            assert!(write_free);
+            assert!(commit_free);
+            // The original reconstructed scratch retired on the refused return.
+            // Its freed capacity may already fit the shell; never require another
+            // refusal or change the configured limit to manufacture a retry.
+            observation.release_original_blocker();
+            worker
+                .commit(&block, &qc)
+                .expect("same original completed cut publishes after release");
+            assert_eq!(
+                observation.snapshot(),
+                completed,
+                "final shell retry must not hash or reconstruct the original tail again"
+            );
+            assert_eq!(budget.limit_bytes(), limit);
+            assert_eq!(worker.applied, (block.header().height, qc.block_hash));
+            assert_eq!(worker.state.view().height(), height + 1);
+            assert!(worker.live.as_ref().unwrap().overlay.is_none());
+            assert!(worker.recovery.is_none());
+            let original_events = std::iter::from_fn(|| events.try_recv().ok()).count();
+            assert!(
+                original_events > 0,
+                "real original publication emits its retained events"
+            );
+            worker.commit(&block, &qc).unwrap();
+            assert_eq!(observation.snapshot(), completed);
+            assert!(
+                events.try_recv().is_err(),
+                "published completion delivers events once"
+            );
+        });
+    });
+}
+
+/// Completed local cut custody cannot authorize a changed State visibility source.
+#[test]
+fn original_worker_completed_world_cut_refuses_changed_publication_source() {
+    use crate::state::world_projection::world_state_accumulator::world_state_cut::completion_observer;
+    with_worker(|chain, worker, blocks, _events| {
+        let (block, qc) = executed(chain, worker);
+        let budget = worker.state.ivm_execution_budget();
+        let height = worker.state.view().height();
+        let overlay = original_overlay(worker);
+        assert_eq!(worker.prepare(&block, &qc).unwrap(), Some(qc.result));
+        blocks.append(&block, &qc).unwrap();
+        completion_observer::observe(&budget, |observation| {
+            assert!(matches!(
+                worker.commit(&block, &qc),
+                Err(PublicationError::Deferred(_))
+            ));
+            let completed = observation.snapshot();
+            assert_eq!(completed.0, 1);
+            assert_eq!(
+                worker
+                    .live
+                    .as_ref()
+                    .unwrap()
+                    .overlay
+                    .as_deref()
+                    .unwrap()
+                    .completed_world_cut_identity_for_test(),
+                completed.1
+            );
+            let generation = worker.state.state_view_generation();
+            worker
+                .state
+                .with_held_view_publication_for_reader_test(|_| {});
+            assert_eq!(worker.state.state_view_generation(), generation + 2);
+            observation.release_original_blocker();
+            let mut exact_changed_source = false;
+            let retry = worker.commit_with(&block, &qc, |original| {
+                let outcome = original.try_publish();
+                exact_changed_source = matches!(&outcome,
+                    crate::state::StatePublicationOutcome::RecoveryRequired(
+                        crate::state::storage_transactions::TransactionsBlockError::SnapshotObservationChanged));
+                outcome
+            });
+            assert!(
+                exact_changed_source,
+                "the original typed generation refusal precedes completed capsule reuse"
+            );
+            assert!(matches!(retry, Err(PublicationError::RecoveryRequired(_))));
+            assert_eq!(observation.snapshot(), completed);
+            assert_eq!(original_overlay(worker), overlay);
+            assert_eq!(
+                worker
+                    .live
+                    .as_ref()
+                    .unwrap()
+                    .overlay
+                    .as_deref()
+                    .unwrap()
+                    .completed_world_cut_identity_for_test(),
+                completed.1
+            );
+            assert_eq!(worker.state.view().height(), height);
+            assert!(worker.recovery.is_some());
+            assert!(matches!(
+                worker.commit(&block, &qc),
+                Err(PublicationError::RecoveryRequired(_))
+            ));
+            assert_eq!(observation.snapshot(), completed);
+        });
+    });
 }

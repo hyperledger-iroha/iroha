@@ -409,7 +409,12 @@ STAGES = (
         'taira_public_reset::host::occupied::tests::stopped_unit_admission_requires_the_exact_prior_or_durable_successor',
     )),
     ("stopped owner runtime cleanup", (
-        "taira_public_reset::host::maintenance::tests::maintenance_scope_binds_all_four_units_and_failed_installed_runtime",
+        "taira_public_reset::host::maintenance::tests::maintenance_scope_admits_all_four_observed_daemon_pins",
+        "taira_public_reset::host::maintenance::tests::maintenance_scope_rejects_incomplete_or_crossed_observed_cohorts",
+        "taira_public_reset::host::maintenance::tests::maintenance_predecessor_kind_is_explicit_and_never_inferred",
+        "taira_public_reset::host::maintenance::tests::observed_daemon_hash_is_exact_size_and_deadline_bounded",
+        "taira_public_reset::host::maintenance::tests::maintenance_scope_binds_v2_all_four_units_and_installed_runtime",
+        "taira_public_reset::host::maintenance::tests::maintenance_scope_rejects_unsupported_update_contracts",
         "taira_public_reset::host::maintenance::tests::maintenance_flock_requires_one_exact_live_updater_owner",
         "taira_public_reset::host::maintenance::tests::maintenance_process_identity_handles_names_and_rejects_dead_owner",
         "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cohort_preflight_preserves_workers_until_every_slot_is_admitted",
@@ -3576,10 +3581,8 @@ def require_tests(listing: str, stages=None) -> None:
         raise CheckError("required regressions missing from native harness: " + ", ".join(missing))
 
 
-def require_one_pass(name: str, result: subprocess.CompletedProcess[str]) -> None:
-    if (result.returncode != 0
-            or f"test {name} ... ok" not in result.stdout.splitlines()
-            or "test result: ok. 1 passed; 0 failed; 0 ignored;" not in result.stdout):
+def require_one_pass(name: str, result: subprocess.CompletedProcess[str], filtered_out: int) -> None:
+    if native_test_batch_failures((name,), filtered_out, result):
         # These tests use disposable fixtures, never operator runtime inputs.
         sys.stderr.write(result.stdout)
         sys.stderr.write(result.stderr)
@@ -3639,7 +3642,7 @@ def native_test_batch_failures(names: tuple[str, ...], filtered_out: int,
             diagnostics = True
         if diagnostics:
             continue
-        match = re.fullmatch(r"test (\S+) \.\.\. (ok|FAILED|ignored(?:, .*)?|bench: .*)", line)
+        match = re.fullmatch(r"test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored(?:, .*)?|bench: .*)", line)
         if match is None:
             failures.append(f"CLI batch has malformed result output: {line}")
             continue
@@ -3750,6 +3753,7 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
     else:
         raise CheckError("native stage lacks the current artifact's preflight inventory")
     require_tests(listing, stages)
+    available = {line.removesuffix(": test") for line in listing.splitlines() if line.endswith(": test")}
     if batch:
         run_native_test_batch(harness, fixture_root, env, stages, lock_fds, names, listing)
         return
@@ -3765,7 +3769,7 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
                                     cwd=fixture_root, env=env, stdin=subprocess.DEVNULL,
                                     text=True, capture_output=True, check=False, pass_fds=lock_fds, umask=0o077)
             try:
-                require_one_pass(name, result)
+                require_one_pass(name, result, len(available) - 1)
             except CheckError as error:
                 failures.append(str(error))
                 print(f"[taira-check] failed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)

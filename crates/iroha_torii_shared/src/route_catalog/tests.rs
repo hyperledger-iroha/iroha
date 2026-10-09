@@ -3,6 +3,23 @@
 mod tests {
     use super::*;
     #[test]
+    fn kagemusha_enrollment_is_an_account_authenticated_private_mutation() {
+        let route = contracts_and_verification_keys::KAGEMUSHA_ENROLLMENT_POST;
+        assert_eq!(
+            route.path(),
+            crate::kagemusha_enrollment::ENROLLMENT_SERVICE_ROUTE_V1
+        );
+        assert_eq!(route.method(), HttpMethod::Post);
+        assert_eq!(route.effect(), RouteEffect::Mutation);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.authentication().requires_private_no_store());
+        assert!(CATALOGED_ROUTES.contains(&route));
+    }
+    #[test]
     fn kagemusha_issuance_is_a_private_authenticated_read() {
         let route = contracts_and_verification_keys::KAGEMUSHA_LOAD_ISSUANCE_GET;
         assert_eq!(
@@ -11,6 +28,39 @@ mod tests {
         );
         assert_eq!(route.method(), HttpMethod::Get);
         assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.authentication().requires_private_no_store());
+        assert!(CATALOGED_ROUTES.contains(&route));
+    }
+    #[test]
+    fn kagemusha_load_event_path_is_a_private_authenticated_read() {
+        let route = contracts_and_verification_keys::KAGEMUSHA_LOAD_EVENT_PROOF_GET;
+        assert_eq!(
+            route.path(),
+            "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/event-proof"
+        );
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.authentication().requires_private_no_store());
+        assert!(CATALOGED_ROUTES.contains(&route));
+    }
+    #[test]
+    fn kagemusha_load_finality_is_a_private_authenticated_read() {
+        let route = contracts_and_verification_keys::KAGEMUSHA_LOAD_FINALITY_PROOF_GET;
+        assert_eq!(
+            route.path(),
+            "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality-proof"
+        );
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
         assert_eq!(
             route.authentication(),
             AuthenticationPolicy::CanonicalAccountSignature
@@ -1176,6 +1226,7 @@ mod tests {
             aliases::RETAIL_RECIPIENT_ROUTE,
             fees::QUOTE,
             fees::SPONSOR_PROGRAM_BY_ID,
+            fees::SPONSOR_ENROLLMENT_BY_ID,
         ] {
             assert_eq!(
                 route.authentication(),

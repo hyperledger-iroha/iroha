@@ -58,6 +58,13 @@ that workflow for local release verification.
 - Swift toolchain 5.9 or newer.
 - Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
 
+Authenticated native builds also require `MOBILE_SDK_WALLET_RUNTIME_AUTHORITY`
+to select `bpng-taira-v7` or `cbsi-release-v1`, together with
+`MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX` containing the independently
+selected, nonzero lowercase 32-byte public signer key. The same pair is embedded
+in every slice and bound into its build evidence; retired authority identifiers
+are rejected.
+
 ## Versioning model
 
 1. Select the canonical Swift package/archive SemVer in `IrohaSwift/VERSION`.
@@ -104,7 +111,7 @@ that workflow for local release verification.
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework/NoritoBridge.artifacts.json`; the companion
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.artifacts.json` path is a stable relative symlink to that file, so
    one atomic XCFramework exchange publishes the binaries and manifest together. The
-   manifest binds exact native bridge ABI 25, the mandatory privacy build recipe,
+   manifest binds exact native bridge ABI 27, the mandatory privacy build recipe,
    source commit and fingerprint, embedded source commit, header digest,
    required-symbol inventory, and per-slice SHA-256 hashes. Ordinary builds embed
    their own commit. An exact mechanical fallback-pin child embeds its parent commit,
@@ -181,7 +188,7 @@ that workflow for local release verification.
 
    Before releasing its authenticated artifact-publication lock, the builder invokes
    the sole archive owner on the generation it just published. The owner retains a
-   unique source snapshot and re-authenticates the exact ABI-25 inventory,
+   unique source snapshot and re-authenticates the exact ABI-27 inventory,
    recomputes source and tool provenance, verifies each Mach-O architecture and the
    required/forbidden export policy with the sealed Xcode toolchain, sorts entries,
    stores them without host-zlib variance, normalizes modes and ZIP timestamps from
@@ -235,7 +242,7 @@ that workflow for local release verification.
    `--sdk-scratch` directories outside source. It stages the checked-in
    `scripts/fixtures/swift_release_consumers` executables and uses `swift run
    --configuration release` for both. The public SDK consumer adds no direct
-   native-target references or unsafe linker flags. Both execute ABI-25 native
+   native-target references or unsafe linker flags. Both execute ABI-27 native
    cryptography and Connect key agreement; the SDK also checks canonical JSON,
    BLAKE3 and AEAD. Either build or runtime failure stops the Apple release gate.
 
@@ -291,7 +298,7 @@ application can depend on `IrohaSwift` without unsafe linker flags. Qualify both
 the authenticated ZIP consumer and a separate ordinary SDK dependency in
 Release. The SDK consumer must execute native key generation, public-key
 derivation and directional-key agreement, reject an all-zero peer key, and
-admit exact ABI 25. A library-only build does not establish this execution.
+admit exact ABI 27. A library-only build does not establish this execution.
 
 Publish the immutable `NoritoBridge-v<version>.xcframework.zip` with its
 authenticated manifest/checksum inventory and reviewed package source. Retain
@@ -332,7 +339,7 @@ ignored `target/norito-bridge-local/` directory. Create owned canonical mode-070
 `cargo`, `build`, `artifacts`, and `projections` directories there, and use the first
 three as the explicit Cargo, build, and output roots. Reuse this fixed Cargo lane.
 The builder still performs all five real Apple builds, source/lock/tool seals,
-consumer links, ABI-25 checks and atomic artifact exchange. It does not clean Cargo.
+consumer links, ABI-27 checks and atomic artifact exchange. It does not clean Cargo.
 Select the current root graph explicitly with `--lockfile-path "$PWD/Cargo.lock"`
 for the builder, pin owner and artifact checker. This local-only route retains
 `--locked --offline` and the source/lock identity checks; it never changes the
@@ -386,7 +393,13 @@ pin, archive, and CI handoff owners retain the five-triple/three-slice contract.
 `--target-dir` under an exclusive emitter lock. Omit `--jobs` for Cargo's native
 jobserver. A warm artifact retains Cargo's actual freshness observation and must
 pass all existing source, tool, dep-info, archive custody and ABI checks. Its
-external evidence directory remains create-only; the target lane is preserved.
+evidence directory remains create-only below the original checkout's
+`target/qualification/`; the target lane is preserved. The guarded host builder
+and local-unit package producer both require this artifact location. Create an
+owned canonical mode-0700 parent there and select a new child for each capture.
+Symbolic ancestors, existing destinations, source directories and external
+outputs are refused. Retained artifacts remain separate from the warm Cargo
+lane, with all source, inode and admission checks enforced.
 
 The current KAGEMUSHA wallet inventory includes the C
 `connect_norito_kagemusha_wallet_snapshot_v1` export and the JNI

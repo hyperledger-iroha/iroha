@@ -749,6 +749,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             faucet: None,
             tx_history: None,
             recipient_lookup: Default::default(),
+            kagemusha_enrollment: None,
+            kagemusha_load_finality: None,
             public_dataspace_upstreams: Vec::new(),
             webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
             zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,
@@ -974,14 +976,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
         musubi_publication: A::MusubiPublication::default(),
-        // Torii configuration DATA never starts the mandatory daemon publisher. Empty
-        // original custody here is unadmitted and cannot pass its startup validation.
-        kagemusha_load_authorizer: A::KagemushaLoadAuthorizer::new(
-            A::KagemushaLoadAuthorizerCustody {
-                keyring: Vec::new().into(),
-                submitter: checked_random_keypair("unadmitted publisher configuration fixture"),
-            },
-        ),
         kura: A::Kura { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(std::env::temp_dir()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: nonzero!(10usize),

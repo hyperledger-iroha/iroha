@@ -476,23 +476,59 @@ REQUIRED_PROTOCOL_C_SYMBOLS=(
   connect_norito_private_settlement_audit_approval_response_verify_v1
   connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json
   connect_norito_kagemusha_wallet_revision_v1
-  connect_norito_kagemusha_wallet_open_v1
+  connect_norito_kagemusha_wallet_open_begin_v1
+  connect_norito_kagemusha_wallet_open_finish_v1
+  connect_norito_kagemusha_wallet_open_cancel_v1
   connect_norito_kagemusha_wallet_close_v1
   connect_norito_kagemusha_wallet_activity_v1
-  connect_norito_kagemusha_wallet_commit_v1
+  connect_norito_kagemusha_wallet_setup_v1
+  connect_norito_kagemusha_wallet_execute_v1
+  connect_norito_kagemusha_wallet_load_original_validate_v1
+  connect_norito_kagemusha_wallet_request_status_v1
   connect_norito_kagemusha_wallet_retry_v1
   connect_norito_kagemusha_wallet_resume_v1
   connect_norito_kagemusha_wallet_fold_v1
   connect_norito_kagemusha_wallet_credit_status_v1
   connect_norito_kagemusha_wallet_snapshot_v1
+  connect_norito_kagemusha_wallet_review_v1
+  connect_norito_kagemusha_wallet_execute_reviewed_v1
+  connect_norito_kagemusha_wallet_discard_review_v1
+  connect_norito_kagemusha_wallet_installation_begin_v1
+  connect_norito_kagemusha_wallet_installation_register_v1
+  connect_norito_kagemusha_wallet_installation_close_v1
+  connect_norito_kagemusha_wallet_registration_source_relocate_v1
+  connect_norito_kagemusha_wallet_observe_v1
+  connect_norito_kagemusha_wallet_account_original_v1
+  connect_norito_kagemusha_wallet_account_display_v1
+  connect_norito_kagemusha_wallet_enrollment_v1
 )
 REQUIRED_WALLET_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_revision
-  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_open
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_openBegin
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_openFinish
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_openCancel
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_close
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_activity
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_call
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_setup
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_enrollment
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_execute
   Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_snapshot
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_beginInstallation
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_registerInstallation
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_closeInstallation
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_relocateRegistrationSource
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletObservationNativeV1_observe
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_review
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_executeReviewed
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_discardReview
+)
+REQUIRED_LOAD_ORIGINAL_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletLoadOriginalNativeV1_validate
+)
+REQUIRED_AUTH_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_reserve
+  Java_org_hyperledger_iroha_sdk_crypto_keystore_NativeFirstDeviceAuthKeyJniV1_restore
 )
 RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS=(
   connect_norito_private_settlement_auditor_capsule_response
@@ -530,7 +566,7 @@ check_binary_symbols() {
   [[ -n "$symbols" ]] || { fail "$label has no inspectable exported symbols"; return; }
   local symbol
   if [[ "$nm_mode" == "elf" ]]; then
-    for symbol in "${REQUIRED_WALLET_JNI_SYMBOLS[@]}"; do
+    for symbol in "${REQUIRED_WALLET_JNI_SYMBOLS[@]}" "${REQUIRED_LOAD_ORIGINAL_JNI_SYMBOLS[@]}" "${REQUIRED_AUTH_JNI_SYMBOLS[@]}"; do
       if ! grep -Fxq "$symbol" <<<"$symbols"; then
         fail "$label is missing $symbol"
       fi
@@ -543,7 +579,7 @@ check_binary_symbols() {
       Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_; do
       while IFS= read -r symbol; do
         [[ -n "$symbol" ]] || continue
-        case " ${REQUIRED_WALLET_JNI_SYMBOLS[*]} " in
+        case " ${REQUIRED_WALLET_JNI_SYMBOLS[*]} ${REQUIRED_LOAD_ORIGINAL_JNI_SYMBOLS[*]} " in
           *" ${symbol} "*) ;;
           *) fail "$label exposes a retired KAGEMUSHA JNI namespace: $symbol" ;;
         esac

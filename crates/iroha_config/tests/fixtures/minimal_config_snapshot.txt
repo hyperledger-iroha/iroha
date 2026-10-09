@@ -509,6 +509,8 @@ Root {
             request_timeout: 4s,
             routes: [],
         },
+        kagemusha_enrollment: None,
+        kagemusha_load_finality: None,
         da_ingest: DaIngest {
             replay_cache_capacity: 4096,
             replay_cache_max_lane_epochs: 1024,
@@ -695,19 +697,6 @@ Root {
         pin_storage_class: Hot,
         pin_retention_horizon_secs: 2592000,
         pin_transaction_authority: IngressBroker,
-    },
-    kagemusha_load_authorizer: KagemushaLoadAuthorizer {
-        custody: KagemushaLoadAuthorizerCustody { .. },
-        poll_interval: 1s,
-        page_size: 16,
-        finality_limits: NativeFinalityLimits {
-            block_bytes: 2097152,
-            journal_bytes: 16777216,
-            block_count: 64,
-            allocated_bytes: 33554432,
-        },
-        transaction_ttl: 60s,
-        charge_limits: [],
     },
     kura: Kura {
         init_mode: Strict,

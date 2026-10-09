@@ -3,22 +3,12 @@
 use super::*;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize, asset::AssetBalanceScope};
 
-/// Source-finalized load query result. An unsigned body remains distinct from the immutable
-/// signed voucher bytes; neither an HTTP success nor this codec alone establishes finality.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema, iroha_schema::IntoSchema,
-)]
-#[norito_schema(name = "iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLoadIssuanceV1")]
-pub struct KagemushaWalletLoadIssuanceV1 {
-    /// Original stable issuance retry identity.
-    pub request_id: [u8; 32],
-    /// Authenticated payer whose finalized transaction funded the deposit.
-    pub payer: AccountId,
-    /// Original fixed voucher body, including transaction, height, ordinal and historical signer.
-    pub body: crate::kagemusha::KagemushaWalletLoadVoucherBodyV1,
-    /// First published canonical voucher bytes, or `None` while publication is pending.
-    pub voucher: Option<Vec<u8>>,
-}
+/// Authenticated successful Load transactions on the selected global chain.
+pub mod load_finality;
+/// Native-finality authentication of actual successful Global asset registration.
+pub mod registration_finality;
+
+pub use load_finality::KagemushaWalletLoadReceiptV1;
 
 /// Displayed online load charge, separate from the net offline amount.
 #[derive(
@@ -59,7 +49,14 @@ pub struct KagemushaWalletLoadChargeV1 {
     DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerActionV1")]
-#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+// Keep the direct u128 variant root identical on 32-bit and 64-bit targets.
+#[repr(align(16))]
 pub enum KagemushaWalletLedgerActionV1 {
     /// Permanently segregate the consenting reserve account's exact balance bucket.
     Register {
@@ -71,17 +68,15 @@ pub enum KagemushaWalletLedgerActionV1 {
         reserve: AccountId,
         /// Exact immutable balance partition.
         balance_scope: AssetBalanceScope,
-        /// Canonical LoadAuthorization-role certificate frame.
-        load_authorizer: Vec<u8>,
     },
     /// Install one immutable complete verifier pack under the registered reserve
     /// account and its exact asset governance permission. No producer/open readiness.
     InstallVerifierPack {
         /// Registered asset whose consenting reserve authorizes this scheme install.
         asset: [u8; 32],
-        /// Exact independently selected signed ArtifactManifest identity.
+        /// Exact independently selected signed `ArtifactManifest` identity.
         manifest_digest: [u8; 32],
-        /// Canonical complete native VerifierPackV1 original bytes.
+        /// Canonical complete native `VerifierPackV1` original bytes.
         pack: Vec<u8>,
     },
     /// Complete canonical activation frame; native Bootstrap verification is mandatory.
@@ -90,10 +85,14 @@ pub enum KagemushaWalletLedgerActionV1 {
     Abandon(Vec<u8>),
     /// Complete canonical Retiring/later committed package proving the closing ordinal.
     CloseLoads(Vec<u8>),
-    /// Debit the authenticated payer and record a unique successive issuance atomically.
+    /// Debit the authenticated payer and record the requested successive Load atomically.
     IssueLoad {
         /// Wallet incarnation.
         wallet: [u8; 32],
+        /// Exact registered asset digest approved for this deposit.
+        asset: [u8; 32],
+        /// Expected next Load ordinal; execution rejects a stale value atomically.
+        ordinal: u128,
         /// Stable nonzero retry identity.
         request_id: [u8; 32],
         /// Net offline amount in registered atomic units.
@@ -121,28 +120,13 @@ pub enum KagemushaWalletLedgerActionV1 {
     },
     /// Retain the complete signed Request and historical fee terms by their digests.
     RetainRequest(Vec<u8>),
-    /// Freeze the first exact voucher bytes for an already recorded issuance. Submission
-    /// requires the dedicated permission scoped to its historical signer certificate.
-    PublishVoucher {
-        /// Original stable issuance request identity.
-        request_id: [u8; 32],
-        /// Canonical voucher frame signed by the historical `LoadAuthorization` key.
-        voucher: Vec<u8>,
-    },
-    /// Select the root-authenticated load signer used for future issuance. Existing
-    /// issuance, certificates and published bytes retain their original identities.
-    RotateLoadAuthorizer {
-        /// Exact registered asset digest.
-        asset: [u8; 32],
-        /// Canonical LoadAuthorization-role certificate under this scheme's root.
-        certificate: Vec<u8>,
-    },
 }
 
 isi! {
     /// One exact KAGEMUSHA ledger operation under a registered scheme.
     #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1")]
+    #[repr(align(16))]
     pub struct KagemushaWalletLedgerV1 {
         /// Exact scheme identity; embedded objects must match.
         pub scheme: [u8; 32],
@@ -150,6 +134,17 @@ isi! {
         pub action: KagemushaWalletLedgerActionV1,
     }
 }
+// Shipping assertions: these current u128 roots retain the frozen eight padding bytes
+// after the 40-byte header on ARM32 as well as 64-bit hosts. This changes no field encoding.
+const _: () = {
+    let action = norito::core::archived_payload_align::<KagemushaWalletLedgerActionV1>();
+    let ledger = norito::core::archived_payload_align::<KagemushaWalletLedgerV1>();
+    assert!(action == 16 && ledger == 16);
+    assert!(norito::core::Header::SIZE == 40);
+    assert!((action - norito::core::Header::SIZE % action) % action == 8);
+    assert!((ledger - norito::core::Header::SIZE % ledger) % ledger == 8);
+};
+
 impl crate::seal::Instruction for KagemushaWalletLedgerV1 {}
 impl KagemushaWalletLedgerV1 {
     /// Canonical first-release instruction wire identity.
@@ -184,48 +179,14 @@ mod tests {
         assert_eq!(from_json, original);
     }
     #[test]
-    fn issuance_query_codec_preserves_pending_and_published_forms() {
-        let fixtures: norito::json::Value = norito::json::from_str(include_str!(
-            "../../../../fixtures/kagemusha/wallet_v1_vectors.json"
-        ))
-        .unwrap();
-        let row = fixtures["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["type"].as_str() == Some("KagemushaWalletLoadVoucherV1"))
-            .unwrap();
-        let bytes = hex::decode(row["canonical_hex"].as_str().unwrap()).unwrap();
-        let voucher: crate::kagemusha::KagemushaWalletLoadVoucherV1 =
-            norito::decode_from_bytes(&bytes).unwrap();
-        let payer = AccountId::new(
-            iroha_crypto::KeyPair::from_seed(vec![0x67; 32], iroha_crypto::Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        );
-        for published in [None, Some(bytes)] {
-            let response = KagemushaWalletLoadIssuanceV1 {
-                request_id: [3; 32],
-                payer: payer.clone(),
-                body: voucher.body,
-                voucher: published,
-            };
-            let encoded = norito::to_bytes(&response).unwrap();
-            let decoded: KagemushaWalletLoadIssuanceV1 = norito::decode_canonical_with_limits(
-                &encoded,
-                norito::canonical_decode_limits(encoded.len()),
-            )
-            .unwrap();
-            assert_eq!(decoded, response);
-        }
-    }
-    #[test]
     #[ignore = "explicit maintenance capture of the current KAGEMUSHA ledger instruction"]
     fn print_ledger_identity_capture() {
         let value = KagemushaWalletLedgerV1::new(
             [1; 32],
             KagemushaWalletLedgerActionV1::IssueLoad {
                 wallet: [2; 32],
+                asset: [4; 32],
+                ordinal: 0,
                 request_id: [3; 32],
                 amount: 7,
                 charge: None,
@@ -243,6 +204,8 @@ mod tests {
             [1; 32],
             KagemushaWalletLedgerActionV1::IssueLoad {
                 wallet: [2; 32],
+                asset: [4; 32],
+                ordinal: 0,
                 request_id: [3; 32],
                 amount: 7,
                 charge: None,

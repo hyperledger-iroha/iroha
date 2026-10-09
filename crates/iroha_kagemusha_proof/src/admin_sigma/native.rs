@@ -1,7 +1,9 @@
-//! Original-key intake and proving for the four fixed administrative sigma leaves.
+//! Original-key intake and proving for the fixed administrative sigma leaves.
 //!
-//! The installation owner authenticates the complete original descriptor/VK/PK
-//! and selects the operation independently of wallet input. Each typed owner
+//! The installation owner independently authenticates the descriptor/VK and fixed
+//! operation selection. Strict compiled-source/commitment import and exact VK
+//! equality transitively admit original proving material; no separate PK signature
+//! is required. Each typed owner
 //! checks its existing compiled circuit, imports its original key and completely
 //! self-verifies proofs. No runtime key generation or profile fallback is used.
 //! A still authenticates objects, map effects, signatures and predecessor proofs.
@@ -19,13 +21,16 @@ use iroha_plonk::{
     frontend::Circuit,
     keys::pk::artifact::{Error as ArtifactError, ReadConfig},
     pcs::ipa::PinnedParams,
-    verifier::verify_full,
 };
 
 use super::{
-    BOOTSTRAP_K, BootstrapCircuit, BootstrapWitness, ConsumingWitness, LoadCircuit, LoadWitness,
-    RetiringCircuit, StateWitness, UnloadCircuit,
+    ArchiveCircuit, ArchiveWitness, BOOTSTRAP_K, BootstrapCircuit, BootstrapWitness,
+    ConsumingWitness, LoadCircuit, LoadWitness, REFRESH_K, RefreshCircuit, RefreshKind,
+    RefreshUpdateWitness, RefreshWitness, RetiringCircuit, StateWitness, UnloadCircuit,
 };
+
+// The one Refresh source is deliberately in the same measured k12 class.
+const _: () = assert!(REFRESH_K == BOOTSTRAP_K);
 
 const DESCRIPTOR_MAX_BYTES: usize = 1 << 20;
 const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
@@ -54,6 +59,17 @@ impl fmt::Display for AdminSigmaError {
     }
 }
 impl std::error::Error for AdminSigmaError {}
+impl AdminSigmaError {
+    /// Whether this is cancellation, never an invalid incoming proof or burn witness.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Artifact(error) => error.is_cancelled(),
+            Self::Prover(error) => error.is_cancelled(),
+            Self::Verify(error) => error.is_cancelled(),
+            _ => false,
+        }
+    }
+}
 
 // Only the typed public owners can select this helper's fixed native circuit.
 struct AdminProver {
@@ -61,14 +77,20 @@ struct AdminProver {
     key: ProvingKey<Eq>,
 }
 impl AdminProver {
-    fn from_original_artifact<C: Circuit<Fp>>(
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    fn from_original_artifact_cancellable<C: Circuit<Fp>>(
         circuit: &C,
         params: PinnedParams<Eq>,
         descriptor: &[u8],
         installed_vk: &[u8],
         original: &[u8],
         config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
     ) -> Result<Self, AdminSigmaError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| AdminSigmaError::Prover(iroha_plonk::ProverError::Cancelled))?;
         if params.k() != BOOTSTRAP_K {
             return Err(AdminSigmaError::Parameters);
         }
@@ -101,8 +123,15 @@ impl AdminProver {
         })?;
         // Witnessless import checks the operation's fixed tables, copy mapping,
         // selectors and commitments, not merely the shared descriptor class.
-        let key = ProvingKey::from_artifact_v2(original, &binding, &params, circuit, config)
-            .map_err(AdminSigmaError::Artifact)?;
+        let key = ProvingKey::from_artifact_v2_cancellable(
+            original,
+            &binding,
+            &params,
+            circuit,
+            config,
+            cancellation,
+        )
+        .map_err(AdminSigmaError::Artifact)?;
         if key.vk().to_bytes() != installed_vk {
             return Err(AdminSigmaError::UnauthorizedKey);
         }
@@ -116,17 +145,19 @@ impl AdminProver {
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<AdminSigmaProof, AdminSigmaError> {
-        let witness = Witness::from_circuit(&self.key, circuit, &instances)
-            .map_err(AdminSigmaError::Prover)?;
+        let witness =
+            Witness::from_circuit_cancellable(&self.key, circuit, &instances, config.cancellation)
+                .map_err(AdminSigmaError::Prover)?;
         let bytes = create_proof_owned(&self.params, &self.key, witness, randomness, config)
             .map_err(AdminSigmaError::Prover)?;
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.params,
             self.key.binding(),
             self.key.vk(),
             &instances,
             &bytes,
             config.msm_budget,
+            config.cancellation,
         )
         .map_err(AdminSigmaError::Verify)?;
         Ok(AdminSigmaProof { bytes, instances })
@@ -151,6 +182,33 @@ fn blank_load() -> LoadWitness {
         statement: [Fp::ZERO; 26],
     }
 }
+fn blank_archive() -> ArchiveWitness {
+    ArchiveWitness {
+        predecessor: blank_state(),
+        successor: blank_state(),
+        statement: [Fp::ZERO; 26],
+    }
+}
+fn blank_refresh() -> RefreshWitness {
+    RefreshWitness {
+        predecessor: blank_state(),
+        successor: blank_state(),
+        statement: [Fp::ZERO; 26],
+        update: RefreshUpdateWitness {
+            kind: RefreshKind::Credential,
+            digest: Fp::ZERO,
+            scheme: [Fp::ZERO; 2],
+            asset: [Fp::ZERO; 2],
+            wallet: [Fp::ZERO; 2],
+            counter: Fp::ZERO,
+            issued_at_ms: Fp::ZERO,
+            expires_at_ms: Fp::ZERO,
+            root: Fp::ZERO,
+            controls: Fp::ZERO,
+            fee_schedule: Fp::ZERO,
+        },
+    }
+}
 fn blank_consuming() -> ConsumingWitness {
     ConsumingWitness {
         predecessor: blank_state(),
@@ -166,10 +224,20 @@ macro_rules! admin_prover {
             inner: AdminProver,
         }
         impl $owner {
+            /// Exact witnessless compiled source used for offline artifact
+            /// construction and strict original import. No key or authority is
+            /// created by obtaining this circuit.
+            #[must_use]
+            pub fn source_circuit() -> $circuit {
+                $circuit::new(&$blank()).without_witnesses()
+            }
+
             /// Import the original key against this fixed compiled operation.
             ///
-            /// The installation owner must first authenticate the complete originals,
-            /// operation, scheme/catalog scope and resource policy. This constructor
+            /// The installation owner must independently authenticate the descriptor,
+            /// VK, operation, scheme/catalog scope and resource policy. Exact source
+            /// and commitment checks then admit the PK material under that VK; no
+            /// additional PK signature ceremony is required. This constructor
             /// supplies a proving component, not catalog admission or a wallet-open
             /// grant. Original/domain bounds do not qualify total prover memory.
             ///
@@ -183,15 +251,38 @@ macro_rules! admin_prover {
                 original: &[u8],
                 config: ReadConfig,
             ) -> Result<Self, AdminSigmaError> {
-                let circuit = $circuit::new(&$blank());
+                Self::from_original_artifact_cancellable(
+                    params,
+                    descriptor,
+                    installed_vk,
+                    original,
+                    config,
+                    None,
+                )
+            }
+            /// Import the same original with an explicit operation cancellation signal.
+            /// # Errors
+            /// As the ordinary import, or cancellation without a partial installed key.
+            pub fn from_original_artifact_cancellable(
+                params: PinnedParams<Eq>,
+                descriptor: &[u8],
+                installed_vk: &[u8],
+                original: &[u8],
+                config: ReadConfig,
+                cancellation: Option<&iroha_pasta::CancellationToken>,
+            ) -> Result<Self, AdminSigmaError> {
+                iroha_pasta::CancellationToken::checkpoint(cancellation)
+                    .map_err(|_| AdminSigmaError::Prover(iroha_plonk::ProverError::Cancelled))?;
+                let circuit = Self::source_circuit();
                 Ok(Self {
-                    inner: AdminProver::from_original_artifact(
+                    inner: AdminProver::from_original_artifact_cancellable(
                         &circuit,
                         params,
                         descriptor,
                         installed_vk,
                         original,
                         config,
+                        cancellation,
                     )?,
                 })
             }
@@ -255,6 +346,13 @@ admin_prover!(
     "Original imported key and fixed Load sigma proving owner."
 );
 admin_prover!(
+    ArchiveProver,
+    ArchiveCircuit,
+    ArchiveWitness,
+    blank_archive,
+    "Original imported key and fixed `ArchiveSent` sigma proving owner."
+);
+admin_prover!(
     UnloadProver,
     UnloadCircuit,
     ConsumingWitness,
@@ -267,6 +365,14 @@ admin_prover!(
     ConsumingWitness,
     blank_consuming,
     "Original imported key and fixed Retiring sigma proving owner."
+);
+
+admin_prover!(
+    RefreshProver,
+    RefreshCircuit,
+    RefreshWitness,
+    blank_refresh,
+    "Original imported key for one fixed `RefreshPolicy` sigma source covering all five kinds."
 );
 
 /// Actual self-verified sigma bytes and the digest derived from the typed witness.

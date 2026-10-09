@@ -331,6 +331,8 @@ pub struct WorkerArgs {
     name: String,
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=600000))]
     startup_timeout_ms: u64,
+    #[arg(long)]
+    startup_deadline_ns: u128,
 }
 
 impl<T: Write> RunArgs<T> for WorkerArgs {
@@ -340,6 +342,7 @@ impl<T: Write> RunArgs<T> for WorkerArgs {
             &store,
             &self.name,
             Duration::from_millis(self.startup_timeout_ms),
+            self.startup_deadline_ns,
         )?;
         Ok(())
     }
@@ -1141,6 +1144,65 @@ mod tests {
     use clap::Parser as _;
 
     #[test]
+    fn internal_worker_requires_the_absolute_deadline_and_keeps_bounded_milliseconds() {
+        let base = [
+            "kagami",
+            "_managed-worker",
+            "--root",
+            "state",
+            "--name",
+            "local",
+        ];
+        assert!(
+            crate::Cli::try_parse_from(base.into_iter().chain(["--startup-timeout-ms", "30000"]))
+                .is_err()
+        );
+        for milliseconds in ["1", "30000", "600000"] {
+            let parsed = crate::Cli::try_parse_from(base.into_iter().chain([
+                "--startup-timeout-ms",
+                milliseconds,
+                "--startup-deadline-ns",
+                "18446744073709551616",
+            ]))
+            .unwrap();
+            let crate::Command::ManagedWorker(worker) = parsed.command else {
+                panic!("wrong command");
+            };
+            assert_eq!(
+                worker.startup_timeout_ms,
+                milliseconds.parse::<u64>().unwrap()
+            );
+            assert_eq!(worker.startup_deadline_ns, 18_446_744_073_709_551_616_u128);
+        }
+        for milliseconds in ["0", "600001", "-1"] {
+            assert!(
+                crate::Cli::try_parse_from(base.into_iter().chain([
+                    "--startup-timeout-ms",
+                    milliseconds,
+                    "--startup-deadline-ns",
+                    "1"
+                ]))
+                .is_err()
+            );
+        }
+        for deadline in [
+            "-1",
+            "not-an-integer",
+            "340282366920938463463374607431768211456",
+        ] {
+            assert!(
+                crate::Cli::try_parse_from(base.into_iter().chain([
+                    "--startup-timeout-ms",
+                    "30000",
+                    "--startup-deadline-ns",
+                    deadline
+                ]))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn relative_inputs_and_journals_use_the_selected_workspace() {
         let temporary = tempfile::tempdir().unwrap();
         let workspace = temporary.path().join("project");
@@ -1664,7 +1726,19 @@ mod tests {
         std::fs::write(&unsupported, "unsupported input").unwrap();
         let source = temporary.path().join("contract.ko");
         std::fs::write(&source, "seiyaku Test {}").unwrap();
-        for (path, alias) in [(&unsupported, None), (&source, Some("not an alias"))] {
+        let bytecode = temporary.path().join("invalid.to");
+        std::fs::write(&bytecode, b"not an IVM artifact").unwrap();
+        let package = temporary.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let manifest = package.join("Musubi.toml");
+        std::fs::write(&manifest, "[broken").unwrap();
+        for (path, alias) in [
+            (&unsupported, None),
+            (&source, Some("not an alias")),
+            (&bytecode, None),
+            (&manifest, None),
+            (&package, None),
+        ] {
             let mut args = vec![
                 "kagami",
                 "contract",

@@ -40,7 +40,6 @@ pub fn authenticate(
 ) -> Result<Bit<Fp>, Error> {
     let (role, index) = match object.kind() {
         ObjectKind::Credential => (1, 28),
-        ObjectKind::Voucher => (2, 10),
         ObjectKind::SchemePolicy | ObjectKind::Blacklist => (3, 6),
         ObjectKind::FeeSchedule | ObjectKind::ChargeQuote => (3, 10),
         ObjectKind::QuotaShare => (3, 9),

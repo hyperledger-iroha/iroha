@@ -15,7 +15,8 @@
           "node_execution",
           "node_configuration",
           "telemetry_runtime",
-          "storage_runtime"
+          "storage_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_plonk_oracle"
@@ -39,7 +40,8 @@
           "node_execution",
           "node_configuration",
           "telemetry_runtime",
-          "storage_runtime"
+          "storage_runtime",
+          "wallet_proof_execution"
         ],
         "include_root_dev_dependencies": true,
         "package": "iroha_data_model",
@@ -59,7 +61,8 @@
           "node_execution",
           "node_configuration",
           "telemetry_runtime",
-          "storage_runtime"
+          "storage_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_plonk_oracle"
@@ -98,7 +101,8 @@
           "storage_client",
           "sdk",
           "proof_primitives",
-          "http_transport"
+          "http_transport",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_plonk_oracle"
@@ -126,7 +130,8 @@
           "storage_client",
           "sdk",
           "proof_primitives",
-          "http_transport"
+          "http_transport",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_plonk_oracle"
@@ -160,7 +165,8 @@
           ]
         },
         "forbidden_layers": [
-          "node_execution"
+          "node_execution",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -177,7 +183,8 @@
         "forbidden_features": {},
         "forbidden_layers": [
           "node_execution",
-          "sccp_wallet"
+          "sccp_wallet",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_plonk_oracle"
@@ -211,7 +218,8 @@
           ]
         },
         "forbidden_layers": [
-          "node_execution"
+          "node_execution",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -251,7 +259,8 @@
           "node_execution",
           "node_configuration",
           "telemetry_runtime",
-          "storage_runtime"
+          "storage_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -296,7 +305,8 @@
           "node_execution",
           "node_configuration",
           "telemetry_runtime",
-          "storage_runtime"
+          "storage_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -341,7 +351,8 @@
           "node_execution",
           "node_configuration",
           "telemetry_runtime",
-          "storage_runtime"
+          "storage_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -386,7 +397,8 @@
           "node_execution",
           "node_configuration",
           "telemetry_runtime",
-          "storage_runtime"
+          "storage_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -431,7 +443,8 @@
           "node_execution",
           "node_configuration",
           "telemetry_runtime",
-          "storage_runtime"
+          "storage_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -453,7 +466,8 @@
           "telemetry_runtime",
           "storage_runtime",
           "protocol",
-          "sdk"
+          "sdk",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_plonk_oracle"
@@ -488,7 +502,8 @@
         },
         "forbidden_layers": [
           "node_execution",
-          "service_runtime"
+          "service_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -530,7 +545,8 @@
         },
         "forbidden_layers": [
           "node_execution",
-          "service_runtime"
+          "service_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -572,7 +588,8 @@
         },
         "forbidden_layers": [
           "node_execution",
-          "service_runtime"
+          "service_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -614,7 +631,8 @@
         },
         "forbidden_layers": [
           "node_execution",
-          "service_runtime"
+          "service_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -656,7 +674,8 @@
         },
         "forbidden_layers": [
           "node_execution",
-          "service_runtime"
+          "service_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_p2p",
@@ -681,7 +700,8 @@
           "node_execution",
           "node_configuration",
           "telemetry_runtime",
-          "storage_runtime"
+          "storage_runtime",
+          "wallet_proof_execution"
         ],
         "forbidden_packages": [
           "iroha_plonk_oracle"
@@ -724,7 +744,10 @@
         "iroha_privacy_model"
       ],
       "proof_primitives": [
-        "iroha_zkp_halo2"
+        "iroha_zkp_halo2",
+        "iroha_pasta",
+        "iroha_plonk",
+        "iroha_plonk_gadgets"
       ],
       "protocol": [
         "iroha_data_model",
@@ -758,12 +781,16 @@
       ],
       "telemetry_runtime": [
         "iroha_telemetry"
+      ],
+      "wallet_proof_execution": [
+        "iroha_plonk_recursion",
+        "iroha_kagemusha_proof"
       ]
     },
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:47cda369fbe51a7fe676bb91a2d2ddc0c034a5e8b6a38e547ba0715f6d1bd6f5",
+    "manifest_fingerprint": "sha256:a1daa41ff2da1cd4bfb564b6fc3950d7b07901a092d23d107410ede85c0a8e83",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -790,18 +817,18 @@
     "iroha-cli-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1045,
-        "declared_external_dependency_edges": 608,
-        "declared_external_packages": 156,
-        "declared_local_packages": 82,
+        "declared_dependency_edges": 1062,
+        "declared_external_dependency_edges": 615,
+        "declared_external_packages": 158,
+        "declared_local_packages": 83,
         "declared_path_packages": 1,
-        "declared_workspace_packages": 81,
-        "required_dependency_edges": 907,
-        "required_external_dependency_edges": 497,
-        "required_external_packages": 115,
-        "required_local_packages": 79,
+        "declared_workspace_packages": 82,
+        "required_dependency_edges": 924,
+        "required_external_dependency_edges": 504,
+        "required_external_packages": 118,
+        "required_local_packages": 80,
         "required_path_packages": 1,
-        "required_workspace_packages": 78
+        "required_workspace_packages": 79
       },
       "roots": [
         "iroha_cli"
@@ -810,15 +837,15 @@
     "iroha-data-model-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 259,
-        "declared_external_dependency_edges": 192,
-        "declared_external_packages": 88,
+        "declared_dependency_edges": 260,
+        "declared_external_dependency_edges": 193,
+        "declared_external_packages": 87,
         "declared_local_packages": 29,
         "declared_path_packages": 1,
         "declared_workspace_packages": 28,
-        "required_dependency_edges": 204,
-        "required_external_dependency_edges": 143,
-        "required_external_packages": 61,
+        "required_dependency_edges": 205,
+        "required_external_dependency_edges": 144,
+        "required_external_packages": 60,
         "required_local_packages": 26,
         "required_path_packages": 1,
         "required_workspace_packages": 25
@@ -850,15 +877,15 @@
     "iroha-sdk-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 338,
-        "declared_external_dependency_edges": 239,
-        "declared_external_packages": 101,
+        "declared_dependency_edges": 339,
+        "declared_external_dependency_edges": 240,
+        "declared_external_packages": 100,
         "declared_local_packages": 38,
         "declared_path_packages": 1,
         "declared_workspace_packages": 37,
-        "required_dependency_edges": 276,
-        "required_external_dependency_edges": 184,
-        "required_external_packages": 73,
+        "required_dependency_edges": 277,
+        "required_external_dependency_edges": 185,
+        "required_external_packages": 72,
         "required_local_packages": 35,
         "required_path_packages": 1,
         "required_workspace_packages": 34
@@ -870,18 +897,18 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 1043,
-        "declared_external_dependency_edges": 615,
-        "declared_external_packages": 165,
-        "declared_local_packages": 80,
+        "declared_dependency_edges": 1060,
+        "declared_external_dependency_edges": 623,
+        "declared_external_packages": 167,
+        "declared_local_packages": 81,
         "declared_path_packages": 1,
-        "declared_workspace_packages": 79,
-        "required_dependency_edges": 877,
-        "required_external_dependency_edges": 498,
-        "required_external_packages": 124,
-        "required_local_packages": 75,
+        "declared_workspace_packages": 80,
+        "required_dependency_edges": 894,
+        "required_external_dependency_edges": 506,
+        "required_external_packages": 127,
+        "required_local_packages": 76,
         "required_path_packages": 1,
-        "required_workspace_packages": 74
+        "required_workspace_packages": 75
       },
       "roots": [
         "irohad"
@@ -890,15 +917,15 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 2141,
-        "declared_external_dependency_edges": 1177,
-        "declared_external_packages": 237,
+        "declared_dependency_edges": 2170,
+        "declared_external_dependency_edges": 1192,
+        "declared_external_packages": 240,
         "declared_local_packages": 128,
         "declared_path_packages": 4,
         "declared_workspace_packages": 124,
-        "required_dependency_edges": 1963,
-        "required_external_dependency_edges": 1038,
-        "required_external_packages": 189,
+        "required_dependency_edges": 1992,
+        "required_external_dependency_edges": 1053,
+        "required_external_packages": 193,
         "required_local_packages": 128,
         "required_path_packages": 4,
         "required_workspace_packages": 124

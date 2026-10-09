@@ -41,6 +41,11 @@ gadget or recursion code.
   keeps the bucket-selection posture of the vendored MSM and zeroises its
   digit and bucket scratch (all digit-dependent buffers, including spare
   capacity) on drop, also when unwinding.
+- MSM bucket selection and reduction are explicitly variable-time. Sparse
+  reduction weights each running sum by the exact following gap using complete
+  curve formulas; dense windows retain linear summation. Occupancy includes
+  affine and overflow contributions, including cancellation. Full 255-bit
+  secret scalar planning, secret inversion and scratch clearing are unchanged.
 - Memory budgets are charged for everything a kernel holds at once (fixed-base
   tables include their construction scratch), and whether a kernel fits a
   budget never depends on the Rayon pool size.
@@ -85,3 +90,11 @@ Integration tests:
 - `poseidon_kat`: sponge outputs, the 256-level empty replay root and table
   digests exported from the vendored `halo2-base`/snark-verifier
   implementation.
+
+`CancellationToken` is a caller-owned permanent signal for one operation. The
+cancellable MSM, FFT, generator fold, and batch-inversion entry points check
+this signal between bounded batches and Rayon tasks, then join all work before
+returning `Cancelled`. Cancellation introduces no global control flag and does
+not change the process-wide scratch budget. Existing variable-time MSM timing
+behavior is unchanged; the token is an explicit caller signal, not a branch on
+secret witness contents.

@@ -378,7 +378,8 @@ fn each_of_eight_balance_originals_precedes_all_validation_outcomes() {
     for source in 0..8 {
         for validation in 0..3 {
             let world = fixture(true);
-            let checked = CheckedAssets::capture(&world, 16_777_216).unwrap();
+            let budget = iroha_allocation::AllocationBudget::new(16_777_216);
+            let checked = CheckedAssets::capture(&world, &budget, 16_777_216).unwrap();
             publish(&world, source);
             let result = match validation {
                 0 => Ok(()),
@@ -415,7 +416,8 @@ pub(super) fn publish(world: &World, source: usize) {
 #[test]
 fn first_busy_balance_source_keeps_original_release_before_later_changed_sources() {
     let world = fixture(true);
-    let checked = CheckedAssets::capture(&world, 16_777_216).unwrap();
+    let budget = iroha_allocation::AllocationBudget::new(16_777_216);
+    let checked = CheckedAssets::capture(&world, &budget, 16_777_216).unwrap();
     world.asset_definitions.block().commit();
     world.asset_definition_nonzero_holders.block().commit();
     let detached = world

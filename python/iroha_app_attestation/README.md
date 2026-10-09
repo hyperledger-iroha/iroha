@@ -11,10 +11,10 @@ result records what the platform attested. The caller selects every scope value
 (challenge, release, profile, lane, app identity and roots) from its own
 authenticated policy, never from the evidence, and composes the separate checks
 below itself. The credential issuer and the enrollment and renewal routes of the
-wallet design (`specs/kagemusha_single_design_proposal.md` §2.2) are not
-implemented as a serving issuer in this package yet. `wallet_enrollment.py` now composes
-the retained real verifiers for current E1 enrollment; Native signing/HTTP/DATA ownership
-and the deployed private worker remain required before issuance is enabled.
+wallet design (`specs/kagemusha_single_design_proposal.md` §2.2) are owned by the
+native Core/Torii enrollment service. `wallet_enrollment.py` composes
+the retained real verifiers for current E1 enrollment; this package does not expose
+an issuer or signer. The complete private Linux deployment still requires qualification.
 
 ## Current E1 entry points
 
@@ -40,8 +40,82 @@ The private Native issuer must select policy and existing account ownership, ret
 the exact E1 and originals with its audited DATA journal, and sign a compact credential using
 its actual root-delegated Enrollment-role P256 key. Python request input exposes no signing
 authority. An interrupted external attempt retrieves its original; it never resets a counter
-or repeats a consumed assertion. The old Python private worker/ZIP builder/native encoders are
-absent in current source, so these verifier components alone do not enable the Core endpoint.
+or repeats a consumed assertion. `wallet_enrollment_worker.py` implements the current private
+verification/recovery channel. Before exposing E1, Native retains the worker's actual journal
+incarnation, selects its immutable preparation and durably retains the worker acknowledgement.
+Complete or Recover can atomically claim that prepared row once. A delayed first claim uses
+fresh trusted Native dispatch time without changing its original request. Before claiming,
+the Linux worker samples OS realtime and retains `CLOCK_BOOTTIME`. Fresh readings include
+suspend and are checked around KeyMint, revocation, OAuth/Google and Apple verification,
+and before the durable result commits. Realtime regression or missing boottime is unavailable;
+there is no suspend-excluding clock fallback. Google evidence age is checked again after
+decode. The evidence timestamp retains the selected Core dispatch time; the local clock
+only narrows whether the operation may still finish.
+
+Once claimed, an unknown result stays `outcome_unknown`; no action repeats external
+verification. Inspect reads an exact retained result without claiming a prepared row,
+even while E1 is live. An unclaimed Inspect returns `unavailable`; an already claimed row
+without a result returns `outcome_unknown`. The issuer uses Inspect for passive recovery
+after E1 expiry and requires fresh selected-provider eligibility before any live Complete/Recover that
+could claim a row. Missing prepared custody remains `unavailable`, never a definitive
+evidence rejection or permission to recreate a row. Native prohibits Prepare after E5
+selection, including during recovery.
+The journal retains exact request/result originals and their configuration pin. Apple assertion
+counter/challenge consumption and the recoverable evidence result commit in one FULL-synchronous
+transaction. Changed retained originals are rejected. The inherited configuration, crypto
+original and storage identities are rechecked before exposure. These components do not alone
+enable issuance: the genuine Native issuer, audited DATA and authenticated installed runtime
+must admit and retain every original.
+
+The worker opens only an already initialized E1 journal. The separate installed command
+`iroha-wallet-e1-store-init --store-directory /absolute/private/empty/directory`
+(also `python -m iroha_app_attestation.wallet_enrollment_install`) invokes the sole
+`E1CounterStore.initialize` implementation. It requires an existing, empty, canonical,
+service-owned private directory and holds its descriptor throughout initialization.
+It never creates directories, follows aliases, replaces an existing store, or repairs a
+failed installation. The implementation exclusively creates a durable generation original before creating
+the database, and binds that generation in the database's exact first-release schema. Serving
+startup never initializes missing files or repairs missing tables. Database, generation or
+schema loss remains unavailable; interrupted initialization retains its originals for explicit
+operator reconciliation. SQLite connections use existing-only `mode=rw`, so a missing database
+between the custody check and open cannot become an empty replacement. Held descriptor/path
+checks reject substitution, and the counter/attempt tables and journal generation retain their original contents
+across restart. These checks do not detect privileged rollback of the entire store.
+The native Torii owner selects and rechecks the configured originals and retains the
+worker generation lock; complete Linux launch and real platform qualification remain open.
+
+`tools/build_wallet_e1_verifier_zipapp.py` packages an explicit current source inventory,
+including `wallet_policy.py`, into deterministic unsigned bytes. It does not authenticate a
+runtime. The private Linux owner uses OAuth13, generation lock16, protected directory17,
+Python18, archive19, configuration20 and OpenSSL21; requests and replies are length-framed on private standard
+input/output with schema `iroha.kagemusha.wallet-e1-verifier.v1`. It has no listener or
+issuer-key input. The separate existing Ed25519 account ownership message remains Native's.
+
+The exact configuration schema is `iroha.kagemusha.wallet-e1-verifier-config.v1`, version 1.
+Its fields are `platform`, `app_policy_hex`, `enrollment_policy_hex`, `openssl_path`,
+`openssl_sha256`, `store_directory` and `policy`, in addition to `schema` and `version`.
+Both platform policy objects contain `scheme_id_hex`, `asset_digest_hex`, `root_base64`,
+`root_sha256`, `regulatory_policy` (exactly `permitted_controls`, `blacklist_max_age_ms`,
+`time_anchor_max_response_ms`), `challenge_lifetime_ms` and `attestation_lease_lifetime_ms`.
+Apple adds `app_id`. Android adds `package_name`, `package_version`,
+`app_certificate_sha256`, `security_levels` (`[1]`, `[2]` or `[1,2]`),
+`patch_floor_yyyymm`, `google_policy_base64`, `google_policy_sha256`,
+`maximum_evidence_age_ms`, `require_play_recognized`, `require_licensed` and
+`minimum_device_integrity`. Unknown, duplicate, mistyped and noncanonical fields are rejected.
+The worker rederives current Model app/enrollment policy digests from this projection and
+matches Native's exact pins and E1; it checks the selected lifetime without refreshing it.
+Rust's `issuer_worker::VerifierConfigurationV1` now constructs this exact projection from
+the selected typed Model policies, pinned root and decoder originals and private runtime
+locations. It retains the exact configuration and derives subsequent requests under the
+same policy/configuration pin. Construction checks consistency only; the process owner
+must still authenticate operator approval, installed runtime and descriptor custody.
+The separate governed Google decoder original has its own pin and the same selected app.
+OAuth accepts only the inherited credential original owned by the effective service UID,
+matching native private-file admission, and preserves the actual loaded OpenSSL/TLS
+custody checks. Configured executable/archive pins do not attest the complete dependency
+closure: the OS, interpreter, standard library, dynamic loader and TLS roots remain trusted.
+Enrollment-time Google verification creates no offline
+payment prerequisite or periodic Integrity lease.
 
 ## Modules
 
@@ -110,10 +184,12 @@ and [Google's attestation revocation policy](https://developer.android.com/priva
 
 ## Tests
 
-Run the package tests with the selected Python/OpenSSL runtime:
+From this package directory, use Python 3.10+ and the selected OpenSSL 3 on `PATH`.
+The archive tests build their own unsigned fixtures with the current package builder:
 
 ```sh
-PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
+  python3 -B -m unittest discover -s tests -v
 ```
 
 Synthetic fixtures, Apple's published sample attestation and scripted Google

@@ -1229,6 +1229,21 @@ impl JsonDeserialize for SumeragiConsensusMode {
 }
 // (Codecs are provided by derives and candidate decoders. Tests use wrappers where needed.)
 impl SumeragiParameters {
+    /// Maximum canonical block size in bytes.
+    #[must_use]
+    pub fn max_block_bytes(&self) -> NonZeroU32 {
+        self.max_block_bytes
+    }
+    /// Execution time budget in milliseconds.
+    #[must_use]
+    pub fn exec_budget_ms(&self) -> NonZeroU64 {
+        self.exec_budget_ms
+    }
+    /// Apply time budget in milliseconds.
+    #[must_use]
+    pub fn apply_budget_ms(&self) -> NonZeroU64 {
+        self.apply_budget_ms
+    }
     /// Signed, immutable block cadence in milliseconds.
     #[must_use]
     pub fn block_cadence_ms(&self) -> NonZeroU64 {
@@ -3488,7 +3503,7 @@ mod tests {
         let mut retired = value;
         retired.as_object_mut().expect("metadata object").insert(
             "kagemusha_mint_finality".to_owned(),
-            Value::Object(Default::default()),
+            Value::Object(std::collections::BTreeMap::default()),
         );
         norito::json::value::from_value::<ConsensusHandshakeMetadata>(retired)
             .expect_err("the retired mint-finality authority is an unknown field");
@@ -3499,7 +3514,7 @@ mod tests {
         let baseline = handshake_metadata_fixture();
         baseline.validate().expect("canonical metadata");
         for version in [0, 2, 3, 4, 5, 7, 8, 99] {
-            let mut bad_version = baseline.clone();
+            let mut bad_version = baseline;
             bad_version.wire_protocol_version = version;
             assert!(
                 bad_version.validate().is_err(),

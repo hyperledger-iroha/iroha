@@ -28,8 +28,15 @@ pub(super) const METADATA_BOUND: usize = 1024;
 )]
 #[norito_schema(name = "iroha_core_zk::kagemusha_wallet_state_v1::ArchiveKey")]
 pub enum ArchiveKey {
+    /// Immutable generation-zero native nonce/source choices; never a completion authority.
+    BootstrapPreparation,
+    /// Immutable reference to the exact frozen Bootstrap capsule before Advance.
+    BootstrapFrozen,
     /// Exact frozen pre-signing inputs, keyed by the G1 capsule digest.
     Capsule([u8; 32]),
+    /// Exact local witness snapshot retained before the associated capsule is selected.
+    /// Its descriptor becomes authoritative only through the selected capsule/manifest.
+    SourceCustody([u8; 32]),
     /// Content-addressed persistent index node or bounded auxiliary object.
     Object([u8; 32]),
     /// A sequential sub-proof for one released sequence.
@@ -48,7 +55,10 @@ pub enum ArchiveKey {
 impl ArchiveKey {
     fn name(self) -> String {
         match self {
+            Self::BootstrapPreparation => "bootstrap-preparation.arc".into(),
+            Self::BootstrapFrozen => "bootstrap-frozen.arc".into(),
             Self::Capsule(digest) => format!("c-{}.arc", hex::encode(digest)),
+            Self::SourceCustody(digest) => format!("s-{}.arc", hex::encode(digest)),
             Self::Object(digest) => format!("o-{}.arc", hex::encode(digest)),
             Self::Checkpoint { sequence, ordinal } => {
                 format!("p-{sequence:032x}-{ordinal:08x}.arc")
@@ -180,7 +190,7 @@ impl<F: Fs> FsArchive<F> {
             Err(e) if e.kind() == io::ErrorKind::NotFound => false,
             Err(e) => return Err(e.into()),
         };
-        let stage = self.fs.staging_name();
+        let stage = self.fs.staging_name()?;
         let mut file = self.fs.create_new(&self.directory, &stage)?;
         self.fs.write_all(&mut file, bytes)?;
         self.fs.sync_staged(&file)?;
@@ -268,8 +278,14 @@ impl<F: Fs> ArchiveStore for FsArchive<F> {
 }
 
 fn parse_key(name: &str) -> Option<ArchiveKey> {
-    let key = if let Some(raw) = name.strip_prefix("c-").and_then(|s| s.strip_suffix(".arc")) {
+    let key = if name == "bootstrap-preparation.arc" {
+        ArchiveKey::BootstrapPreparation
+    } else if name == "bootstrap-frozen.arc" {
+        ArchiveKey::BootstrapFrozen
+    } else if let Some(raw) = name.strip_prefix("c-").and_then(|s| s.strip_suffix(".arc")) {
         ArchiveKey::Capsule(hex::decode(raw).ok()?.try_into().ok()?)
+    } else if let Some(raw) = name.strip_prefix("s-").and_then(|s| s.strip_suffix(".arc")) {
+        ArchiveKey::SourceCustody(hex::decode(raw).ok()?.try_into().ok()?)
     } else if let Some(raw) = name.strip_prefix("o-").and_then(|s| s.strip_suffix(".arc")) {
         ArchiveKey::Object(hex::decode(raw).ok()?.try_into().ok()?)
     } else if let Some(raw) = name.strip_prefix("q-").and_then(|s| s.strip_suffix(".arc")) {
@@ -325,3 +341,7 @@ impl<A: ArchiveStore> super::ObjectStore for A {
         Ok(digest)
     }
 }
+
+#[cfg(test)]
+#[path = "archive/tests.rs"]
+mod tests;

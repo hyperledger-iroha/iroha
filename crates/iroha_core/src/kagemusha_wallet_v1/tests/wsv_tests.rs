@@ -18,6 +18,26 @@ use iroha_executor_data_model::permission::asset_definition::CanManageKagemushaW
 use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
 use mv::storage::StorageReadOnly as _;
 
+#[path = "load_event_evidence_tests.rs"]
+mod load_event_evidence_tests;
+
+#[path = "universal_asset_registration_tests.rs"]
+mod universal_asset_registration_tests;
+
+fn load_event_digests(events: &[iroha_data_model::events::EventBox]) -> Vec<[u8; 32]> {
+    use iroha_data_model::events::{EventBox, data::DataEvent};
+    events
+        .iter()
+        .filter_map(|event| match event {
+            EventBox::Data(event) => match event.as_ref() {
+                DataEvent::KagemushaLoadCommitted(load) => Some(load.receipt_digest),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 fn world_state(memory: &Memory, permission: bool) -> State {
     let r = &memory.registration;
     let owner = &memory.authority;
@@ -85,6 +105,12 @@ fn transact<T>(
     tx.current_network_entrypoint_hash = Some(HashOf::from_untyped_unchecked(invocation));
     let result = action(&mut tx)?;
     tx.apply();
+    event_evidence::retain(
+        &mut block.world,
+        height,
+        &iroha_allocation::AllocationBudget::new(2_000_000),
+    )
+    .map_err(|_| Error::Unavailable)?;
     block.commit_world_overlay_for_testing().unwrap();
     state.push_block_hash_for_testing(header.hash());
     Ok(result)
@@ -164,6 +190,28 @@ fn registration_requires_dedicated_asset_permission_and_reserve_consent() {
         "exact retry must not increment permanent references"
     );
 }
+#[test]
+fn registration_rejects_a_foreign_network_before_creating_reserve_rows() {
+    let memory = Memory::new();
+    let mut state = world_state(&memory, true);
+    state.network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::from_untyped_unchecked(Hash::new(b"foreign KAGEMUSHA network")),
+    );
+    assert!(matches!(
+        register(&mut state, &memory, 1),
+        Err(Error::Binding)
+    ));
+    assert!(
+        state
+            .view()
+            .world
+            .kagemusha_wallet_ledger()
+            .iter()
+            .next()
+            .is_none()
+    );
+}
+
 #[test]
 fn registered_reserve_rejects_ordinary_transfer_burn_and_teardown() {
     let memory = Memory::new();
@@ -258,7 +306,18 @@ fn real_asset_batch_loads_once_and_failed_debit_rolls_back_ordinal() {
     .unwrap();
     let prior = balance(&state, &memory, &memory.registration.reserve);
     let first = transact(&mut state, 3, |tx| {
-        issue_load(&mut wsv::WsvLedger::new(tx, &memory.authority)?, &command)
+        let original = {
+            let mut ledger = wsv::WsvLedger::new(tx, &memory.authority)?;
+            let original = issue_load(&mut ledger, &command)?;
+            assert_eq!(issue_load(&mut ledger, &command)?, original);
+            original
+        };
+        assert_eq!(
+            load_event_digests(&tx.world.external_event_buf),
+            [original.body.receipt_digest()?],
+            "the same execution retry must not emit a second funding event",
+        );
+        Ok(original)
     })
     .unwrap();
     let funded = balance(&state, &memory, &memory.registration.reserve);
@@ -274,14 +333,13 @@ fn real_asset_batch_loads_once_and_failed_debit_rolls_back_ordinal() {
             )
             .unwrap()
     );
-    assert_eq!(
+    assert!(matches!(
         transact(&mut state, 4, |tx| issue_load(
             &mut wsv::WsvLedger::new(tx, &memory.authority)?,
             &command
-        ))
-        .unwrap(),
-        first
-    );
+        )),
+        Err(Error::Conflict)
+    ));
     assert_eq!(
         balance(&state, &memory, &memory.registration.reserve),
         funded
@@ -289,6 +347,7 @@ fn real_asset_batch_loads_once_and_failed_debit_rolls_back_ordinal() {
     let mut overdrawn = command.clone();
     overdrawn.request_id = [0x79; 32];
     overdrawn.amount = 10_000;
+    overdrawn.ordinal = 1;
     assert!(
         transact(&mut state, 5, |tx| issue_load(
             &mut wsv::WsvLedger::new(tx, &memory.authority)?,
@@ -302,6 +361,10 @@ fn real_asset_batch_loads_once_and_failed_debit_rolls_back_ordinal() {
     );
     transact(&mut state, 5, |tx| {
         let ledger = wsv::WsvLedger::new(tx, &memory.authority)?;
+        assert_eq!(
+            ledger.issuance(&command.scheme, &command.wallet, &command.request_id)?,
+            Some(first.clone())
+        );
         assert_eq!(
             ledger
                 .wallet(&command.scheme, &command.wallet)?
@@ -328,63 +391,70 @@ fn real_asset_batch_loads_once_and_failed_debit_rolls_back_ordinal() {
         storage::validate_snapshot(rows.iter(), |key| rows.get(key).map(Vec::as_slice))
     };
     check(&rows).unwrap();
-    let pending = PendingPublication::from_issuance(&first);
-    let pending_key = pending.key(command.scheme, first.body.authorizer_certificate);
-    assert!(rows.contains_key(&pending_key));
     for missing_key in [
-        pending_key,
-        storage::issuance_key(command.scheme, command.wallet, command.request_id),
+        storage::key(storage::REGISTRATION, command.scheme, command.asset),
+        storage::key(storage::WALLET, command.scheme, command.wallet),
     ] {
         let mut missing = rows.clone();
         missing.remove(&missing_key);
         assert!(
             check(&missing).is_err(),
-            "pending and original issuance must survive in the same snapshot generation"
+            "issuance requires its permanent registration and wallet"
         );
     }
-    let mut wrong_certificate = rows;
-    let bytes = wrong_certificate.remove(&pending_key).unwrap();
-    wrong_certificate.insert(pending.key(command.scheme, [0x88; 32]), bytes);
-    assert!(check(&wrong_certificate).is_err());
+    for mutation in 0..6 {
+        let mut altered = first.clone();
+        match mutation {
+            0 => altered.body.asset_digest = [0x88; 32],
+            1 => altered.body.ordinal += 1,
+            2 => altered.body.request_id = [0x89; 32],
+            3 => {
+                altered.body.payer_account_digest =
+                    kagemusha_wallet_account_digest_v1(&memory.registration.reserve).unwrap()
+            }
+            4 => altered.body.amount += 1,
+            _ => altered.command.wallet = [0x90; 32],
+        }
+        let mut changed = rows.clone();
+        changed.insert(
+            storage::issuance_key(command.scheme, command.wallet, command.request_id),
+            storage::encode(&altered).unwrap(),
+        );
+        assert!(
+            check(&changed).is_err(),
+            "altered issuance field {mutation}"
+        );
+    }
 }
 #[test]
-fn finalized_reader_requires_real_current_qc_and_bounded_history() {
+fn committed_reader_requires_an_original_cut_and_finite_limits() {
     use crate::sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig};
-    use iroha_data_model::sumeragi::finality::NativeFinalityLimits;
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
-    let limits = NativeFinalityLimits {
-        block_bytes: 2_000_000,
-        journal_bytes: 8_000_000,
-        block_count: 8,
-        allocated_bytes: 16_000_000,
-    };
+    let limits = norito::DecodeLimits::new(2_000_000, 2_000_000, 8_000_000, 16_000_000, 128);
     assert!(matches!(
-        FinalizedLedger::new(&chain.state().view(), limits),
-        Err(Error::NotFinalized)
+        CommittedLoadReceipts::new(&chain.state().view(), 2_000_000, limits),
+        Err(Error::NotCommitted)
     ));
     chain.commit_at(2_000, Vec::new());
     {
         let view = chain.state().view();
-        let reader = FinalizedLedger::new(&view, limits).unwrap();
+        let reader = CommittedLoadReceipts::new(&view, 2_000_000, limits).unwrap();
         assert!(matches!(
-            reader.issuance(&[1; 32], &[2; 32], &[3; 32]),
+            reader.receipt_for(&Memory::new().authority, &[1; 32], &[2; 32], &[3; 32]),
             Err(Error::Unavailable)
         ));
-        let tiny = NativeFinalityLimits {
-            block_bytes: 1,
-            journal_bytes: 1,
-            block_count: 1,
-            allocated_bytes: 1,
-        };
-        assert!(FinalizedLedger::new(&view, tiny).is_err());
+        for maximum in [0, usize::MAX] {
+            assert!(CommittedLoadReceipts::new(&view, maximum, limits).is_err());
+        }
+        assert!(
+            CommittedLoadReceipts::new(&view, 2_000_000, norito::DecodeLimits::new(1, 1, 1, 0, 1))
+                .is_err()
+        );
     }
-    chain.commit_at(3_000, Vec::new());
-    assert!(FinalizedLedger::new(&chain.state().view(), limits).is_ok());
-    chain.corrupt_local_quorum_for_test(3, Signers::BelowQuorum);
-    assert!(matches!(
-        FinalizedLedger::new(&chain.state().view(), limits),
-        Err(Error::NotFinalized)
-    ));
+    // Recovery data comes from the original committed cut, without reopening local QCs.
+    // This constructor produces no independent finality verification capability.
+    chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
+    assert!(CommittedLoadReceipts::new(&chain.state().view(), 2_000_000, limits).is_ok());
 }
 
 #[test]
@@ -408,6 +478,8 @@ fn routing_uses_permanent_scope_and_refuses_missing_wallet_records() {
         instruction.scheme,
         KagemushaWalletLedgerActionV1::IssueLoad {
             wallet: [3; 32],
+            asset: memory.registration.asset.asset_digest(),
+            ordinal: 0,
             request_id: [4; 32],
             amount: 1,
             charge: None,
@@ -420,37 +492,102 @@ fn routing_uses_permanent_scope_and_refuses_missing_wallet_records() {
 }
 
 #[test]
-fn verifier_install_routing_uses_only_the_registered_asset_scope() {
+fn verifier_pack_routing_requires_the_exact_registered_asset_and_permanent_scope() {
+    use iroha_data_model::isi::kagemusha_wallet::{
+        KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1,
+    };
+    use iroha_model_base::topology::DataSpaceId;
+
+    let memory = Memory::new();
+    let scheme = memory.registration.scheme.scheme_id();
+    let asset = memory.registration.asset.asset_digest();
+    let instruction = KagemushaWalletLedgerV1::new(
+        scheme,
+        KagemushaWalletLedgerActionV1::InstallVerifierPack {
+            asset,
+            manifest_digest: [0x51; 32],
+            // Routing selects the registered scope; execution authenticates the pack.
+            pack: Vec::new(),
+        },
+    );
+    let key = storage::key(storage::REGISTRATION, scheme, asset);
+    let mut world = World::new();
+    assert!(matches!(
+        routing::dataspace(&world.view(), &instruction),
+        Err(Error::Unavailable)
+    ));
+    for (scope, expected) in [
+        (AssetBalanceScope::Global, Some(DataSpaceId::UNIVERSAL)),
+        (
+            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+            Some(DataSpaceId::new(7)),
+        ),
+        (AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL), None),
+    ] {
+        let mut registration = memory.registration.clone();
+        registration.balance_scope = scope;
+        world
+            .kagemusha_wallet_ledger
+            .insert(key, storage::encode(&registration).unwrap());
+        match expected {
+            Some(expected) => {
+                assert_eq!(
+                    routing::dataspace(&world.view(), &instruction).unwrap(),
+                    expected
+                );
+            }
+            None => assert!(matches!(
+                routing::dataspace(&world.view(), &instruction),
+                Err(Error::Binding)
+            )),
+        }
+    }
+    let mut substituted = memory.registration.clone();
+    substituted.asset.asset_incarnation[0] ^= 1;
+    world
+        .kagemusha_wallet_ledger
+        .insert(key, storage::encode(&substituted).unwrap());
+    assert!(matches!(
+        routing::dataspace(&world.view(), &instruction),
+        Err(Error::Binding)
+    ));
+}
+
+#[test]
+fn verifier_install_routing_requires_the_registered_authorizing_asset_and_scheme() {
     use iroha_data_model::isi::kagemusha_wallet::{
         KagemushaWalletLedgerActionV1, KagemushaWalletLedgerV1,
     };
     let memory = Memory::new();
     let mut state = world_state(&memory, true);
     register(&mut state, &memory, 1).unwrap();
-    // Deliberately unadmitted DATA: routing reads the permanent asset registration;
-    // it neither mounts these empty originals nor grants install authority.
-    let instruction = |asset| {
+    let scheme = memory.registration.scheme.scheme_id();
+    let asset = memory.registration.asset.asset_digest();
+    let instruction = |scheme, asset| {
         KagemushaWalletLedgerV1::new(
-            memory.registration.scheme.scheme_id(),
+            scheme,
             KagemushaWalletLedgerActionV1::InstallVerifierPack {
                 asset,
-                manifest_digest: [9; 32],
+                manifest_digest: [0x47; 32],
+                // Routing uses permanent scope, not untrusted artifact contents. The
+                // execution owner separately rejects this unadmitted empty pack.
                 pack: Vec::new(),
             },
         )
     };
     assert_eq!(
-        routing::dataspace(
-            &state.view().world,
-            &instruction(memory.registration.asset.asset_digest())
-        )
-        .unwrap(),
+        routing::dataspace(&state.view().world, &instruction(scheme, asset)).unwrap(),
         iroha_model_base::topology::DataSpaceId::UNIVERSAL
     );
-    assert!(matches!(
-        routing::dataspace(&state.view().world, &instruction([7; 32])),
-        Err(Error::Unavailable)
-    ));
+    for (selected_scheme, selected_asset) in [(scheme, [0x91; 32]), ([0x92; 32], asset)] {
+        assert!(matches!(
+            routing::dataspace(
+                &state.view().world,
+                &instruction(selected_scheme, selected_asset),
+            ),
+            Err(Error::Unavailable)
+        ));
+    }
 }
 
 #[test]
@@ -653,11 +790,6 @@ fn genuine_verifier_install_is_immutable_exact_retry_and_same_overlay_native_own
     let mut memory = Memory::new();
     memory.registration.scheme =
         KagemushaWalletSchemeV1::decode_canonical(&pack.scheme, &installation.scheme_id).unwrap();
-    memory.registration.load_authorizer = certificate(
-        &memory.registration.scheme,
-        KagemushaWalletSignerRoleV1::LoadAuthorization,
-        0x34,
-    );
     let mut state = world_state(&memory, true);
     register(&mut state, &memory, 1).unwrap();
     let original = pack.to_canonical_bytes().unwrap();
@@ -1135,141 +1267,281 @@ fn snapshot_requires_exact_reserve_indexes_and_reference_counts() {
 }
 
 #[test]
-fn publication_requires_exact_submission_scope_and_retains_historical_signer_after_rotation() {
-    use iroha_executor_data_model::permission::asset_definition::CanPublishKagemushaLoadVoucher;
-    let mut memory = Memory::new();
-    let command = memory.active();
-    let mut state = world_state(&memory, true);
-    register(&mut state, &memory, 1).unwrap();
-    transact(&mut state, 2, |tx| {
-        activate(
-            &mut wsv::WsvLedger::new(tx, &memory.authority)?,
-            &Verifier::new(true),
-            &fixture("KagemushaWalletActivationV1"),
-        )
-    })
-    .unwrap();
-    let first = transact(&mut state, 3, |tx| {
-        issue_load(&mut wsv::WsvLedger::new(tx, &memory.authority)?, &command)
-    })
-    .unwrap();
-    let signed = voucher(&first, &memory);
-    let token = CanPublishKagemushaLoadVoucher {
-        asset_definition: memory.registration.asset.asset.clone(),
-        scheme: command.scheme,
-        authorizer_certificate: signed.body.authorizer_certificate,
+fn private_root_load_rejects_before_debit_or_receipt_creation() {
+    use crate::{
+        state::StateReadOnly as _,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
     };
-    let mut wrong_asset = token.clone();
-    wrong_asset.asset_definition =
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_model_base::domain::DomainId::try_new("other", "universal").unwrap(),
-            "coin".parse().unwrap(),
-        );
-    for wrong in [
-        None,
-        Some(wrong_asset),
-        Some(CanPublishKagemushaLoadVoucher {
-            scheme: [0x51; 32],
-            ..token.clone()
+    use iroha_data_model::{
+        block::consensus::{PrivateRootFeePolicy, SumeragiRootScope},
+        domain::Domain,
+        isi::{
+            Mint, Register,
+            kagemusha_wallet::{KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1},
+        },
+        nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
+    };
+    use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
+
+    let mut memory = Memory::new();
+    let payer_key =
+        iroha_crypto::KeyPair::from_seed(vec![0x66; 32], iroha_crypto::Algorithm::Ed25519);
+    memory.balances.remove(&memory.authority);
+    memory.authority = AccountId::new(payer_key.public_key().clone());
+    memory.balances.insert(memory.authority.clone(), 1000);
+    let dataspace = DataSpaceId::new(117);
+    let balance_scope = AssetBalanceScope::Dataspace(dataspace);
+    memory.registration.balance_scope = balance_scope;
+    // The owning domain must resolve to the actual configured private dataspace.
+    let dataspace_alias = "private-load";
+    let domain = DomainId::try_new("load", dataspace_alias).unwrap();
+    let mut world = World::with_assets(
+        [Domain::new(domain.clone()).build(&memory.authority)],
+        memory
+            .balances
+            .keys()
+            .map(|account| Account::new(account.clone()).build(account)),
+        [AssetDefinition::new(
+            memory.registration.asset.asset.clone(),
+            "private Load principal",
+            NumericSpec::fractional(memory.registration.asset.scale),
+            AssetBalancePolicy::DataspaceRestricted,
+            Some(domain.clone()),
+        )
+        .build(&memory.authority)],
+        memory.balances.iter().map(|(account, amount)| {
+            Asset::new(
+                AssetId::with_scope(
+                    memory.registration.asset.asset.clone(),
+                    account.clone(),
+                    balance_scope,
+                ),
+                Quantity::from_canonical_numeric(Numeric::new(
+                    *amount,
+                    memory.registration.asset.scale,
+                ))
+                .unwrap(),
+            )
         }),
-        Some(CanPublishKagemushaLoadVoucher {
-            authorizer_certificate: [0x52; 32],
-            ..token.clone()
-        }),
+        [],
+    );
+    world.axt_asset_incarnations.insert(
+        memory.registration.asset.asset.clone(),
+        AxtAssetIncarnationV1::try_from_bytes(memory.registration.asset.asset_incarnation).unwrap(),
+    );
+    world.account_permissions.insert(
+        memory.registration.reserve.clone(),
+        Permissions::from_iter([CanManageKagemushaWallet {
+            asset_definition: memory.registration.asset.asset.clone(),
+        }
+        .into()]),
+    );
+    let fee_asset = iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )
+    .unwrap();
+    let mut config = TestChainConfig::new(world, 1_000);
+    // Genesis registers the separate execution-fee asset in this domain. Keep
+    // its actual owner distinct from the ordinary Load payer being tested.
+    let genesis_authority = AccountId::new(config.genesis_key.public_key().clone());
+    config.world.insert_domain_for_testing(
+        domain.clone(),
+        Domain::new(domain.clone()).build(&genesis_authority),
+    );
+    config.root_scope = SumeragiRootScope::Dataspace {
+        parent_network_id: iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::from_untyped_unchecked(Hash::new(b"parent of private Load root")),
+        ),
+        dataspace_id: dataspace,
+    };
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.lane_catalog = LaneCatalog::new(
+        1_u32.try_into().unwrap(),
+        vec![LaneConfig {
+            dataspace_id: dataspace,
+            alias: dataspace_alias.into(),
+            ..LaneConfig::default()
+        }],
+    )
+    .unwrap();
+    nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+        id: dataspace,
+        alias: dataspace_alias.into(),
+        description: None,
+        fault_tolerance: 1,
+    }])
+    .unwrap();
+    nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+    nexus.routing_policy.default_dataspace = dataspace;
+    nexus.fees.fee_asset_id = fee_asset.canonical_address();
+    nexus.fees.fee_sink_account_id =
+        AccountId::new(config.genesis_key.public_key().clone()).to_string();
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    config.nexus = Some(nexus);
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Custom(
+            PrivateRootFeePolicy {
+                asset_definition_id: fee_asset.clone(),
+                base_fee: 1_u32.into(),
+                per_byte_fee: Quantity::zero(),
+                per_instruction_fee: 1_u32.into(),
+                per_gas_unit_fee: 1_u32.into(),
+            }
+            .into_custom_parameter()
+            .unwrap(),
+        ));
+    config.pipeline.gas.tech_account_id =
+        AccountId::new(config.genesis_key.public_key().clone()).to_string();
+    config.pipeline.gas.accepted_assets = vec![fee_asset.canonical_address()];
+    config.pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
+        asset: fee_asset.canonical_address(),
+        units_per_gas: 1,
+        twap_local_per_xor: Numeric::one(),
+        liquidity: iroha_config::parameters::actual::GasLiquidity::Tier2,
+        volatility: iroha_config::parameters::actual::GasVolatility::Stable,
+    }];
+    config
+        .genesis_instructions
+        .extend([Register::asset_definition(AssetDefinition::numeric(
+            fee_asset.clone(),
+            "private Load execution fee",
+            AssetBalancePolicy::DataspaceRestricted,
+            Some(domain),
+        ))
+        .into()]);
+    // Execution fees have a separate asset; principal balances must remain exact.
+    for key in [
+        payer_key.clone(),
+        config.genesis_key.clone(),
+        iroha_crypto::KeyPair::from_seed(vec![0xCC; 32], iroha_crypto::Algorithm::Ed25519),
     ] {
-        assert!(
-            transact(&mut state, 4, |tx| {
-                tx.world.account_permissions.insert(
-                    memory.authority.clone(),
-                    Permissions::from_iter(wrong.map(Into::into)),
-                );
-                wsv::WsvLedger::new(tx, &memory.authority)?
-                    .publish_voucher(command.request_id, &signed)
-            })
-            .is_err()
+        config.genesis_instructions.push(
+            Mint::asset_quantity(
+                1_000_000_u32,
+                AssetId::with_scope(
+                    fee_asset.clone(),
+                    AccountId::new(key.public_key().clone()),
+                    balance_scope,
+                ),
+            )
+            .into(),
         );
     }
-    let next = certificate(
-        &memory.registration.scheme,
-        KagemushaWalletSignerRoleV1::LoadAuthorization,
-        0x35,
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    memory.registration.scheme.network_id = *chain.network_id().as_bytes();
+    let scheme = memory.registration.scheme.scheme_id();
+    let wallet = [0x95; 32];
+    let request = [0x96; 32];
+    // Enrollment is fixture data, as in the global happy-path test. The root scope,
+    // payer source, routing, paid execution and rejection are actual chain inputs.
+    chain.setup_world_at(2_000, |tx| {
+        tx.current_network_entrypoint_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"private registration fixture",
+        )));
+        wsv::WsvLedger::new(tx, &memory.registration.reserve)
+            .unwrap()
+            .register(memory.registration.clone())
+            .unwrap();
+        tx.world.kagemusha_wallet_ledger.insert(
+            storage::key(storage::WALLET, scheme, wallet),
+            storage::encode(&WalletRecord {
+                asset: memory.registration.asset.asset_digest(),
+                phase: Phase::Active,
+                activation: [0x97; 32],
+                next_load: 0,
+            })
+            .unwrap(),
+        );
+    });
+    let instruction = KagemushaWalletLedgerV1::new(
+        scheme,
+        Action::IssueLoad {
+            wallet,
+            asset: memory.registration.asset.asset_digest(),
+            ordinal: 0,
+            request_id: request,
+            amount: 100,
+            charge: None,
+        },
+    );
+    let original_rows = {
+        let view = chain.state().view();
+        let target = crate::queue::native_instruction_execution_target(
+            &instruction,
+            &view.nexus().dataspace_catalog,
+            view.world(),
+            2_000,
+        )
+        .unwrap();
+        assert_eq!(target.dataspace, Some(dataspace));
+        assert!(
+            !target.global,
+            "ordinary private routing alone permits this Load"
+        );
+        view.world()
+            .kagemusha_wallet_ledger()
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect::<Vec<_>>()
+    };
+    let load = chain.sign(&payer_key, [instruction.into()], 1_999);
+    assert_eq!(chain.commit_at(2_000, vec![load]), vec![false]);
+    let committed = chain.committed(2);
+    let (_, output) = committed.block().network_output_at(0).unwrap();
+    assert!(
+        format!("{:?}", output.result).contains("KAGEMUSHA Load requires the original Global root"),
+        "unexpected rejection: {:?}",
+        output.result,
+    );
+    let view = chain.state().view();
+    for (account, amount) in &memory.balances {
+        assert_eq!(
+            view.world()
+                .assets()
+                .get(&AssetId::with_scope(
+                    memory.registration.asset.asset.clone(),
+                    account.clone(),
+                    balance_scope,
+                ))
+                .unwrap()
+                .as_ref(),
+            &Quantity::from_canonical_numeric(Numeric::new(
+                *amount,
+                memory.registration.asset.scale
+            ))
+            .unwrap(),
+        );
+    }
+    assert_eq!(
+        view.world()
+            .kagemusha_wallet_ledger()
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect::<Vec<_>>(),
+        original_rows,
+        "rejected Load must preserve the wallet ordinal and every retained row",
     );
     assert!(
-        transact(&mut state, 4, |tx| wsv::WsvLedger::new(
-            tx,
-            &memory.authority
-        )?
-        .rotate_load_authorizer(
-            memory.registration.asset.asset_digest(),
-            next
-        ))
-        .is_err()
+        view.world()
+            .kagemusha_wallet_ledger()
+            .get(&storage::issuance_key(scheme, wallet, request))
+            .is_none()
     );
-    transact(&mut state, 4, |tx| {
-        wsv::WsvLedger::new(tx, &memory.registration.reserve)?
-            .rotate_load_authorizer(memory.registration.asset.asset_digest(), next)
-    })
-    .unwrap();
-    let balances = (
-        balance(&state, &memory, &memory.authority),
-        balance(&state, &memory, &memory.registration.reserve),
-    );
-    transact(&mut state, 5, |tx| {
-        tx.world.account_permissions.insert(
-            memory.authority.clone(),
-            Permissions::from_iter([token.into()]),
-        );
-        let mut ledger = wsv::WsvLedger::new(tx, &memory.authority)?;
-        ledger.publish_voucher(command.request_id, &signed)?;
-        ledger.publish_voucher(command.request_id, &signed)?;
-        assert!(matches!(
-            ledger.publish_voucher(command.request_id, &alternative_voucher(&first, &memory)),
-            Err(Error::Conflict)
-        ));
-        assert_eq!(
-            ledger
-                .issuance(&command.scheme, &command.wallet, &command.request_id)?
-                .unwrap()
-                .voucher,
-            Some(signed.to_canonical_bytes().unwrap())
-        );
-        Ok(())
-    })
-    .unwrap();
-    assert_eq!(
-        (
-            balance(&state, &memory, &memory.authority),
-            balance(&state, &memory, &memory.registration.reserve)
-        ),
-        balances
-    );
-    let mut later = command.clone();
-    later.request_id = [0x55; 32];
-    let issued = transact(&mut state, 6, |tx| {
-        issue_load(&mut wsv::WsvLedger::new(tx, &memory.authority)?, &later)
-    })
-    .unwrap();
-    assert_eq!(
-        issued.body.authorizer_certificate,
-        next.certificate_digest()
-    );
-    assert_ne!(
-        issued.body.authorizer_certificate,
-        first.body.authorizer_certificate
-    );
-    let view = state.view();
-    let rows = view.world.kagemusha_wallet_ledger();
-    storage::validate_snapshot(rows.iter(), |key| rows.get(key).map(Vec::as_slice)).unwrap();
 }
 
 #[test]
-fn certified_chain_issues_publishes_and_retrieves_original_voucher_after_growth() {
-    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
-    use iroha_data_model::{
-        isi::kagemusha_wallet::{KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1},
-        sumeragi::finality::NativeFinalityLimits,
+fn ordinary_load_receipt_is_recovered_after_growth_and_local_qc_loss() {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig};
+    use iroha_data_model::isi::kagemusha_wallet::{
+        KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1,
     };
-    use iroha_executor_data_model::permission::asset_definition::CanPublishKagemushaLoadVoucher;
     let mut memory = Memory::new();
     let payer_key =
         iroha_crypto::KeyPair::from_seed(vec![0x66; 32], iroha_crypto::Algorithm::Ed25519);
@@ -1279,16 +1551,11 @@ fn certified_chain_issues_publishes_and_retrieves_original_voucher_after_growth(
     let world = world_state(&memory, true).world;
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 1_000)).unwrap();
     memory.registration.scheme.network_id = *chain.network_id().as_bytes();
-    memory.registration.load_authorizer = certificate(
-        &memory.registration.scheme,
-        KagemushaWalletSignerRoleV1::LoadAuthorization,
-        0x34,
-    );
     let scheme = memory.registration.scheme.scheme_id();
     let wallet = [0x91; 32];
     let request = [0x92; 32];
-    // Only enrollment/Bootstrap admission is a fixture. Load issuance, publication, exact
-    // transaction membership and CommitQC verification below use the actual chain owners.
+    // Only Bootstrap enrollment is a fixture. Issuance, transaction/output membership,
+    // ordinary permissions and exact-quorum finality use the actual chain owners.
     chain.setup_world_at(2_000, |tx| {
         tx.current_network_entrypoint_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
             b"registration fixture",
@@ -1307,166 +1574,258 @@ fn certified_chain_issues_publishes_and_retrieves_original_voucher_after_growth(
             })
             .unwrap(),
         );
-        tx.world.account_permissions.insert(
-            memory.authority.clone(),
-            Permissions::from_iter([
-                CanPublishKagemushaLoadVoucher {
-                    asset_definition: memory.registration.asset.asset.clone(),
-                    scheme,
-                    authorizer_certificate: memory
-                        .registration
-                        .load_authorizer
-                        .certificate_digest(),
-                }
-                .into(),
-                CanManageKagemushaWallet {
-                    asset_definition: memory.registration.asset.asset.clone(),
-                }
-                .into(),
-            ]),
-        );
     });
-    let issue = KagemushaWalletLedgerV1::new(
-        scheme,
-        Action::IssueLoad {
-            wallet,
-            request_id: request,
-            amount: 100,
-            charge: None,
-        },
-    );
-    let issue_tx = chain.sign(&payer_key, [issue.into()], 1_999);
-    assert_eq!(chain.commit_at(2_000, vec![issue_tx]), vec![true]);
-    let replacement = certificate(
-        &memory.registration.scheme,
-        KagemushaWalletSignerRoleV1::LoadAuthorization,
-        0x35,
-    );
-    let rotate = KagemushaWalletLedgerV1::new(
-        scheme,
-        Action::RotateLoadAuthorizer {
-            asset: memory.registration.asset.asset_digest(),
-            certificate: replacement.to_canonical_bytes().unwrap(),
-        },
-    );
-    let rotate_tx = chain.sign(&payer_key, [rotate.into()], 2_999);
-    assert_eq!(chain.commit_at(3_000, vec![rotate_tx]), vec![true]);
-    let limits = NativeFinalityLimits {
-        block_bytes: 2_000_000,
-        journal_bytes: 8_000_000,
-        block_count: 8,
-        allocated_bytes: 16_000_000,
+    let issue = |ordinal, request_id| {
+        KagemushaWalletLedgerV1::new(
+            scheme,
+            Action::IssueLoad {
+                wallet,
+                asset: memory.registration.asset.asset_digest(),
+                ordinal,
+                request_id,
+                amount: 100,
+                charge: None,
+            },
+        )
     };
-    let (original, publish) = {
+    chain.take_events().unwrap();
+    let first = chain.sign(&payer_key, [issue(0, request).into()], 1_999);
+    assert_eq!(chain.commit_at(2_000, vec![first]), vec![true]);
+    let limits = norito::DecodeLimits::new(2_000_000, 2_000_000, 16_000_000, 32_000_000, 128);
+    let original = {
         let view = chain.state().view();
-        let source = FinalizedLedger::new(&view, limits).unwrap();
+        let source = CommittedLoadReceipts::new(&view, 2_000_000, limits).unwrap();
         let original = source
-            .issuance_for(&memory.authority, &scheme, &wallet, &request, 2_000_000)
+            .receipt_for(&memory.authority, &scheme, &wallet, &request)
             .unwrap();
-        assert_eq!(original.body.block_height, 2);
-        assert!(original.voucher.is_none());
-        assert!(
-            source
-                .issuance_for(
-                    &memory.registration.reserve,
-                    &scheme,
-                    &wallet,
-                    &request,
-                    2_000_000
-                )
-                .is_err()
-        );
-        assert!(
-            source
-                .issuance_for(&memory.authority, &scheme, &wallet, &request, 1)
-                .is_err()
-        );
-        let keyring = LoadAuthorizerKeyringV1 {
-            version: 1,
-            keys: vec![LoadAuthorizerKeyV1 {
-                scheme: memory.registration.scheme,
-                certificate: memory.registration.load_authorizer,
-                secret: [0x34; 32],
-            }],
-        };
-        let encoded = storage::encode(&keyring).unwrap();
-        let mut before_outage = PublicationWorker::from_canonical_keyring(&encoded).unwrap();
-        let prepared = before_outage
-            .prepare_page(&source, 1)
-            .unwrap()
-            .pop()
-            .unwrap()
-            .into_publication_instruction()
-            .unwrap();
-        // Simulate a dropped/unknown submission result and restart with no local journal.
-        // The original finalized issuance recovers exactly the same voucher bytes.
-        drop(before_outage);
-        let mut restarted = PublicationWorker::from_canonical_keyring(&encoded).unwrap();
-        let retry = restarted
-            .prepare_page(&source, 1)
-            .unwrap()
-            .pop()
-            .unwrap()
-            .into_publication_instruction()
-            .unwrap();
+        assert_eq!(original.block_height, 2);
+        assert_eq!(original.ordinal, 0);
+        assert_eq!(original.request_id, request);
         assert_eq!(
-            storage::encode(&prepared).unwrap(),
-            storage::encode(&retry).unwrap()
+            original.payer_account_digest,
+            kagemusha_wallet_account_digest_v1(&memory.authority).unwrap()
         );
-        let wrong = LoadAuthorizerKeyringV1 {
-            version: 1,
-            keys: vec![LoadAuthorizerKeyV1 {
-                scheme: memory.registration.scheme,
-                certificate: certificate(
-                    &memory.registration.scheme,
-                    KagemushaWalletSignerRoleV1::LoadAuthorization,
-                    0x35,
-                ),
-                secret: [0x35; 32],
-            }],
-        };
-        let mut wrong_worker =
-            PublicationWorker::from_canonical_keyring(&storage::encode(&wrong).unwrap()).unwrap();
-        assert!(wrong_worker.prepare_page(&source, 1).unwrap().is_empty());
-        assert!(restarted.prepare_page(&source, 0).is_err());
         assert!(
-            restarted
-                .prepare_page(&source, MAX_PENDING_PAGE + 1)
+            source
+                .receipt_for(&memory.registration.reserve, &scheme, &wallet, &request)
                 .is_err()
         );
-        (original, prepared)
-    };
-    let publish_tx = chain.sign(&payer_key, [publish.into()], 3_999);
-    assert_eq!(chain.commit_at(4_000, vec![publish_tx]), vec![true]);
-    chain.commit_at(5_000, Vec::new());
-    let view = chain.state().view();
-    let source = FinalizedLedger::new(&view, limits).unwrap();
-    let retained = source
-        .issuance_for(&memory.authority, &scheme, &wallet, &request, 2_000_000)
-        .unwrap();
-    assert_eq!(retained.body, original.body);
-    assert_eq!(retained.command, original.command);
-    let signed =
-        KagemushaWalletLoadVoucherV1::decode_canonical(retained.voucher.as_ref().unwrap(), &scheme)
-            .unwrap();
-    signed
-        .verify(
-            &memory.registration.scheme,
-            &memory.registration.load_authorizer,
+        let tiny = CommittedLoadReceipts::new(&view, 1, limits).unwrap();
+        assert!(matches!(
+            tiny.receipt_for(&memory.authority, &scheme, &wallet, &request),
+            Err(Error::Unavailable)
+        ));
+        let bounded = CommittedLoadReceipts::new(
+            &view,
+            2_000_000,
+            norito::DecodeLimits::new(2_000_000, 2_000_000, 16_000_000, 64_000, 128),
         )
         .unwrap();
-    assert_eq!(signed.body, original.body);
-    assert!(
-        source
-            .pending_publications(
-                scheme,
-                memory.registration.load_authorizer.certificate_digest(),
-                None,
-                1
+        assert_eq!(
+            bounded
+                .receipt_for(&memory.authority, &scheme, &wallet, &request)
+                .unwrap(),
+            original
+        );
+        assert!((0..128).any(|_| {
+            bounded
+                .receipt_for(&memory.authority, &scheme, &wallet, &request)
+                .is_err()
+        }));
+        assert!(
+            bounded
+                .receipt_for(&memory.authority, &scheme, &wallet, &request)
+                .is_err()
+        );
+        let fresh = CommittedLoadReceipts::new(&view, 2_000_000, limits).unwrap();
+        assert!(
+            norito::core::with_decode_limits_scope(
+                norito::DecodeLimits::new(2_000_000, 2_000_000, 16_000_000, 1, 128),
+                || fresh.receipt_for(&memory.authority, &scheme, &wallet, &request),
             )
-            .unwrap()
-            .is_empty()
+            .is_err()
+        );
+        original
+    };
+    // The native certificate authenticates the exact ordinary event bytes and count.
+    // Publishing the event does not add any separate signature or authority.
+    let emitted = chain
+        .take_events()
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            !matches!(
+                event,
+                iroha_data_model::events::EventBox::Pipeline(_)
+                    | iroha_data_model::events::EventBox::PipelineBatch(_)
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        load_event_digests(&emitted),
+        [original.receipt_digest().unwrap()]
     );
-    let rows = view.world.kagemusha_wallet_ledger();
-    storage::validate_snapshot(rows.iter(), |key| rows.get(key).map(Vec::as_slice)).unwrap();
+    let certified = chain.committed(2);
+    assert_eq!(
+        certified.commitment().execution.event_commitment,
+        crate::sumeragi::commitment::event_commitment(&emitted).unwrap(),
+    );
+    let tree = emitted
+        .iter()
+        .map(HashOf::new)
+        .collect::<iroha_crypto::MerkleTree<_>>();
+    let event_index = emitted
+        .iter()
+        .position(|event| !load_event_digests(core::slice::from_ref(event)).is_empty())
+        .unwrap();
+    assert!(
+        tree.get_proof(event_index.try_into().unwrap())
+            .unwrap()
+            .verify(
+                &HashOf::new(&emitted[event_index]),
+                &certified.commitment().execution.event_commitment.unwrap(),
+            )
+    );
+    let stale = chain.sign(&payer_key, [issue(0, [0x94; 32]).into()], 2_999);
+    assert_eq!(chain.commit_at(3_000, vec![stale]), vec![false]);
+    assert!(load_event_digests(&chain.take_events().unwrap()).is_empty());
+    let retry = chain.sign(&payer_key, [issue(0, request).into()], 3_999);
+    assert_eq!(chain.commit_at(4_000, vec![retry]), vec![false]);
+    assert!(load_event_digests(&chain.take_events().unwrap()).is_empty());
+    // Load succeeds in its disposable overlay, then a later instruction fails.
+    // Neither the event nor its reserve transfer/ordinal/receipt may escape rollback.
+    let failed_request = [0x98; 32];
+    let rollback = chain.sign(
+        &payer_key,
+        [
+            issue(1, failed_request).into(),
+            Burn::asset_quantity(
+                10_000_u32,
+                AssetId::of(
+                    memory.registration.asset.asset.clone(),
+                    memory.authority.clone(),
+                ),
+            )
+            .into(),
+        ],
+        4_999,
+    );
+    let before_reserve = balance(chain.state(), &memory, &memory.registration.reserve);
+    assert_eq!(chain.commit_at(5_000, vec![rollback]), vec![false]);
+    let rejected = chain.committed(5);
+    let (_, output) = rejected.block().network_output_at(0).unwrap();
+    assert!(
+        format!("{:?}", output.result).contains("insufficient fee custody balance"),
+        "unexpected rejection: {:?}",
+        output.result
+    );
+    assert!(load_event_digests(&chain.take_events().unwrap()).is_empty());
+    assert_eq!(
+        balance(chain.state(), &memory, &memory.registration.reserve),
+        before_reserve
+    );
+    {
+        let view = chain.state().view();
+        let rows = view.world().kagemusha_wallet_ledger();
+        assert!(
+            rows.get(&storage::issuance_key(scheme, wallet, failed_request))
+                .is_none()
+        );
+        let record: WalletRecord = storage::decode(
+            rows.get(&storage::key(storage::WALLET, scheme, wallet))
+                .unwrap(),
+            2_000_000,
+        )
+        .unwrap();
+        assert_eq!(record.next_load, 1);
+    }
+    for height in 6..=20 {
+        chain.commit_at(height * 1_000, Vec::new());
+    }
+    {
+        let view = chain.state().view();
+        let source = CommittedLoadReceipts::new(&view, 2_000_000, limits).unwrap();
+        assert_eq!(
+            source
+                .receipt_for(&memory.authority, &scheme, &wallet, &request)
+                .unwrap(),
+            original
+        );
+        assert!(matches!(
+            source.receipt_for(&memory.authority, &scheme, &wallet, &[0x94; 32]),
+            Err(Error::Unavailable)
+        ));
+        let rows = view.world.kagemusha_wallet_ledger();
+        storage::validate_snapshot(rows.iter(), |key| rows.get(key).map(Vec::as_slice)).unwrap();
+    }
+    load_event_evidence_tests::check_retained_load_event(&chain, &memory, &original);
+    // Local certificate availability cannot prevent receipt recovery. The returned DTO
+    // remains data; the independent native finality verifier still owns proof admission.
+    chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
+    {
+        let view = chain.state().view();
+        let source = CommittedLoadReceipts::new(&view, 2_000_000, limits).unwrap();
+        assert_eq!(
+            source
+                .receipt_for(&memory.authority, &scheme, &wallet, &request)
+                .unwrap(),
+            original
+        );
+    }
+    let key = storage::issuance_key(scheme, wallet, request);
+    let retained: Issuance = {
+        let view = chain.state().view();
+        storage::decode(
+            view.world.kagemusha_wallet_ledger().get(&key).unwrap(),
+            2_000_000,
+        )
+        .unwrap()
+    };
+    // Malformed local recovery data cannot claim a missing or different committed input.
+    for changed in 0..2 {
+        let mut altered = retained.clone();
+        if changed == 0 {
+            altered.body.transaction_hash = *Hash::new(b"absent load transaction").as_ref();
+        } else {
+            altered.body.block_height += 1;
+        }
+        chain.setup_world_at(21_000, |tx| {
+            tx.world
+                .kagemusha_wallet_ledger
+                .insert(key, storage::encode(&altered).unwrap());
+        });
+        let view = chain.state().view();
+        let source = CommittedLoadReceipts::new(&view, 2_000_000, limits).unwrap();
+        assert!(
+            source
+                .receipt_for(&memory.authority, &scheme, &wallet, &request)
+                .is_err()
+        );
+    }
+    let mut foreign = memory.registration.clone();
+    foreign.scheme.network_id = *Hash::new(b"foreign receipt recovery network").as_ref();
+    let foreign_scheme = foreign.scheme.scheme_id();
+    let mut foreign_issue = retained.clone();
+    foreign_issue.command.scheme = foreign_scheme;
+    foreign_issue.body.scheme_id = foreign_scheme;
+    chain.setup_world_at(21_000, |tx| {
+        tx.world.kagemusha_wallet_ledger.insert(
+            storage::key(
+                storage::REGISTRATION,
+                foreign_scheme,
+                foreign.asset.asset_digest(),
+            ),
+            storage::encode(&foreign).unwrap(),
+        );
+        tx.world.kagemusha_wallet_ledger.insert(
+            storage::issuance_key(foreign_scheme, wallet, request),
+            storage::encode(&foreign_issue).unwrap(),
+        );
+    });
+    let view = chain.state().view();
+    let source = CommittedLoadReceipts::new(&view, 2_000_000, limits).unwrap();
+    assert!(matches!(
+        source.receipt_for(&memory.authority, &foreign_scheme, &wallet, &request),
+        Err(Error::Binding)
+    ));
 }

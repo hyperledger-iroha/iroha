@@ -19,8 +19,11 @@ mod selection;
 pub(in crate::managed) use selection::{generated, initial};
 #[path = "attempts/closure.rs"]
 mod closure;
+#[path = "attempts/parser_pass.rs"]
+mod parser_pass;
 #[path = "attempts/retained_graph.rs"]
 mod retained_graph;
+pub(in crate::managed) use parser_pass::EnrollmentReadPass;
 #[path = "attempts/scope.rs"]
 mod scope;
 use closure::{ClosurePlan, ClosureRecord};
@@ -224,6 +227,19 @@ impl Attempt {
         }
         Ok(())
     }
+    fn verify_authorization_in_scope(
+        &self,
+        reader: &mut iroha_fs::PrivateReadScope<'_>,
+    ) -> Result<()> {
+        if read_record_in_scope::<Authorization>(reader, "authorization.nrt")?.as_ref()
+            != Some(&self.authorization)
+        {
+            return Err(invalid(
+                "original dispatch authorization was lost or changed",
+            ));
+        }
+        Ok(())
+    }
     fn validate_inventory(&self, names: &[std::ffi::OsString], reserved: bool) -> Result<()> {
         if reserved
             && (names.len() != 1 || names.first().is_none_or(|name| name != "authorization.nrt"))
@@ -325,7 +341,7 @@ impl History {
         semantic: [u8; 32],
         scope: &HistoryScope,
     ) -> Result<Self> {
-        Self::read_with_handles(operation, purpose, semantic, scope, None)
+        Self::read_with_handles(operation, purpose, semantic, scope, None, None)
     }
 
     // The opaque graph lends only native handles. Every record and the supplied fresh scope
@@ -336,6 +352,27 @@ impl History {
         semantic: [u8; 32],
         scope: &HistoryScope,
         retained: &History,
+    ) -> Result<Self> {
+        Self::read_retained_with_pass(operation, purpose, semantic, scope, retained, None)
+    }
+
+    pub(in crate::managed) fn read_with_pass(
+        operation: &PrivateDirectory,
+        purpose: Purpose,
+        semantic: [u8; 32],
+        scope: &HistoryScope,
+        pass: Option<&EnrollmentReadPass<'_>>,
+    ) -> Result<Self> {
+        Self::read_with_handles(operation, purpose, semantic, scope, None, pass)
+    }
+
+    pub(in crate::managed) fn read_retained_with_pass(
+        operation: &PrivateDirectory,
+        purpose: Purpose,
+        semantic: [u8; 32],
+        scope: &HistoryScope,
+        retained: &History,
+        pass: Option<&EnrollmentReadPass<'_>>,
     ) -> Result<Self> {
         retained.revalidate_retained_handles()?;
         let mut current = Some(retained);
@@ -361,7 +398,7 @@ impl History {
                 .predecessor()
                 .map(VerifiedUnsignedClosure::retained_history);
         }
-        let current = Self::read_with_handles(operation, purpose, semantic, scope, matched)?;
+        let current = Self::read_with_handles(operation, purpose, semantic, scope, matched, pass)?;
         retained.revalidate_retained_handles()?;
         Ok(current)
     }
@@ -372,6 +409,7 @@ impl History {
         semantic: [u8; 32],
         scope: &HistoryScope,
         retained: Option<&History>,
+        pass: Option<&EnrollmentReadPass<'_>>,
     ) -> Result<Self> {
         if let Some(prior) = retained {
             prior.revalidate_handles()?;
@@ -384,7 +422,7 @@ impl History {
                 return Err(invalid("retained dispatch belongs to another original"));
             }
         }
-        let current = Self::parse(operation, purpose, semantic, scope, retained)?;
+        let current = Self::parse(operation, purpose, semantic, scope, retained, pass)?;
         if let Some(prior) = retained {
             prior.revalidate_handles()?;
             if (prior.root.is_some()
@@ -455,6 +493,26 @@ impl History {
     // Directory custody only: old metadata can legitimately differ after the canonical writer.
     // Fresh record/scope verification belongs exclusively to the parser, never this traversal.
     pub(in crate::managed) fn revalidate_retained_handles(&self) -> Result<()> {
+        // There is no common predecessor ancestry to share on the single-body path.
+        // Inherited decode owners retain the original physical handle-check recipe.
+        if self.scope.predecessor().is_none() || norito::core::decode_limits_active() {
+            return self.revalidate_retained_handles_in_tree(None);
+        }
+        // This census reads handles only and closes before its caller can parse records,
+        // inspect a wallet or perform an effect. Every separate census stays separate.
+        retained_graph::with_native_read_tree(self, |tree| {
+            #[cfg(test)]
+            retained_handle_census_tests::record_tree_bracket(tree.is_some());
+            self.revalidate_retained_handles_in_tree(tree)
+        })
+    }
+
+    // A caller-owned BodyHistory bracket can share its original ancestor across sibling
+    // operations. This carries handles only, never a source, record or authority verdict.
+    pub(in crate::managed) fn revalidate_retained_handles_in_tree(
+        &self,
+        mut tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+    ) -> Result<()> {
         let mut current = Some(self);
         let mut count = 0usize;
         while let Some(history) = current {
@@ -462,7 +520,12 @@ impl History {
             if count > MAX_ATTEMPTS {
                 return Err(invalid("retained dispatch graph exceeds its body bound"));
             }
-            history.revalidate_handles()?;
+            #[cfg(test)]
+            retained_handle_census_tests::record_history(history);
+            match tree.as_deref_mut() {
+                Some(tree) => history.revalidate_handles_in_tree(tree)?,
+                None => history.revalidate_handles()?,
+            }
             current = history
                 .scope
                 .predecessor()
@@ -472,12 +535,50 @@ impl History {
     }
 
     fn revalidate_handles(&self) -> Result<()> {
-        self.operation.revalidate()?;
+        #[cfg(test)]
+        retained_handle_census_tests::record_full_operation();
+        // Entry authenticates the original operation first; exit closes every Result.
+        // No record read, native observation, signing or mutation runs in this bracket.
+        self.operation
+            .read_tree_scope(|tree| self.revalidate_descendant_handles_in_tree(tree))
+    }
+
+    fn revalidate_handles_in_tree(
+        &self,
+        tree: &mut iroha_fs::PrivateReadTreeScope<'_>,
+    ) -> Result<()> {
+        #[cfg(test)]
+        retained_handle_census_tests::record_tree_operation();
+        tree.revalidate_directory(&self.operation)?;
+        // Existing callers can already lend a tree while a decoder is active. Preserve
+        // their original native observation recipe as well as the standalone fallback.
+        if norito::core::decode_limits_active() {
+            return self.revalidate_descendant_handles_in_tree(tree);
+        }
+        let result = self.revalidate_descendant_handles_in_tree(tree);
+        #[cfg(test)]
+        let result = result.and_then(|()| retained_handle_census_tests::after_descendants());
+        // Preserve the operation's closing observation after every descendant and every
+        // ordinary result. Its refusal takes precedence before the outer root also closes.
+        #[cfg(test)]
+        retained_handle_census_tests::record_operation_exit();
+        tree.revalidate_directory(&self.operation)?;
+        result
+    }
+
+    fn revalidate_descendant_handles_in_tree(
+        &self,
+        tree: &mut iroha_fs::PrivateReadTreeScope<'_>,
+    ) -> Result<()> {
         if let Some(root) = &self.root {
-            root.revalidate()?;
+            #[cfg(test)]
+            retained_handle_census_tests::record_attempt_root(root);
+            tree.revalidate_directory(root)?;
         }
         for attempt in &self.attempts {
-            attempt.directory.revalidate()?;
+            #[cfg(test)]
+            retained_handle_census_tests::record_attempt(&attempt.directory);
+            tree.revalidate_directory(&attempt.directory)?;
         }
         Ok(())
     }
@@ -488,8 +589,9 @@ impl History {
         semantic: [u8; 32],
         scope: &HistoryScope,
         retained: Option<&History>,
+        pass: Option<&EnrollmentReadPass<'_>>,
     ) -> Result<Self> {
-        scope.validate(operation, purpose, semantic)?;
+        scope.validate(operation, purpose, semantic, pass)?;
         // The inventory begins and ends with fresh native directory checks.
         operation_inventory(operation, purpose)?;
         require_semantic_original(operation, semantic)?;
@@ -500,48 +602,52 @@ impl History {
         if retained_operation.identity()? != operation.identity()? {
             return Err(invalid("dispatch operation custody changed"));
         }
-        let dispatch: Option<Dispatch> = read_record(operation, "dispatch.nrt")?;
-        if let Some(value) = &dispatch {
-            value.highest.terms.validate()?;
-            validate_origin(&value.highest.origin)?;
-            scope.require_fees(&value.highest.terms.fees)?;
-            if value.purpose != purpose
-                || value.semantic != semantic
-                || value.scope != scope.commitment()?
-                || value.highest.purpose != purpose
-                || value.highest.semantic != semantic
-                || value.highest.ordinal == 0
-                || scope
-                    .prior_total()
-                    .checked_add(usize::from(value.highest.ordinal))
-                    .is_none_or(|n| n > MAX_ATTEMPTS)
-                || value.first == [0; 32]
-                || (value.highest.ordinal == 1
-                    && (value.highest.previous.is_some() || value.first != digest(&value.highest)?))
-            {
-                return Err(invalid(
-                    "dispatch high-water differs from its original scope",
-                ));
+        let (dispatch, cumulative_reserved, closing, closed) = operation.read_scope(|reader| {
+            let dispatch: Option<Dispatch> = read_record_in_scope(reader, "dispatch.nrt")?;
+            if let Some(value) = &dispatch {
+                value.highest.terms.validate()?;
+                validate_origin(&value.highest.origin)?;
+                scope.require_fees(&value.highest.terms.fees)?;
+                if value.purpose != purpose
+                    || value.semantic != semantic
+                    || value.scope != scope.commitment()?
+                    || value.highest.purpose != purpose
+                    || value.highest.semantic != semantic
+                    || value.highest.ordinal == 0
+                    || scope
+                        .prior_total()
+                        .checked_add(usize::from(value.highest.ordinal))
+                        .is_none_or(|n| n > MAX_ATTEMPTS)
+                    || value.first == [0; 32]
+                    || (value.highest.ordinal == 1
+                        && (value.highest.previous.is_some()
+                            || value.first != digest(&value.highest)?))
+                {
+                    return Err(invalid(
+                        "dispatch high-water differs from its original scope",
+                    ));
+                }
             }
-        }
-        let cumulative_reserved = scope
-            .prior_total()
-            .checked_add(
-                dispatch
-                    .as_ref()
-                    .map_or(0, |value| usize::from(value.highest.ordinal)),
-            )
-            .filter(|count| *count <= MAX_ATTEMPTS)
-            .ok_or_else(|| invalid("body dispatch count exceeds its cumulative bound"))?;
-        let closing: Option<ClosurePlan> = read_record(operation, "closing.nrt")?;
-        let closed: Option<ClosureRecord> = read_record(operation, "closed.nrt")?;
+            let cumulative_reserved = scope
+                .prior_total()
+                .checked_add(
+                    dispatch
+                        .as_ref()
+                        .map_or(0, |value| usize::from(value.highest.ordinal)),
+                )
+                .filter(|count| *count <= MAX_ATTEMPTS)
+                .ok_or_else(|| invalid("body dispatch count exceeds its cumulative bound"))?;
+            let closing: Option<ClosurePlan> = read_record_in_scope(reader, "closing.nrt")?;
+            let closed: Option<ClosureRecord> = read_record_in_scope(reader, "closed.nrt")?;
+            Ok::<_, crate::managed::Error>((dispatch, cumulative_reserved, closing, closed))
+        })?;
         let root = match retained.and_then(|prior| prior.root.as_ref()) {
-            Some(root) => root.retain(),
-            None => operation.open_child("attempts"),
+            Some(root) => root.retain().map(Some),
+            None => operation.open_child_optional("attempts"),
         };
         let root = match root {
-            Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(Some(value)) => value,
+            Ok(None) => {
                 if dispatch.as_ref().is_some_and(|value| {
                     value.state != ReservationState::Reserved || value.highest.ordinal != 1
                 }) {
@@ -588,130 +694,146 @@ impl History {
         let mut last_digest = None;
         let mut attempts: Vec<Attempt> = Vec::with_capacity(names.len());
         let mut empty_tail = false;
-        for (index, name) in names.iter().enumerate() {
-            if name != OsStr::new(&format!("{:04}", index + 1)) {
-                return Err(invalid(
-                    "dispatch attempt inventory has a gap or foreign name",
-                ));
-            }
-            let directory = match retained.and_then(|prior| prior.attempts.get(index)) {
-                Some(attempt) => {
-                    if attempt.directory.path() != root.path().join(name) {
-                        return Err(invalid("retained dispatch row belongs to another path"));
-                    }
-                    attempt.directory.retain()?
+        // One fresh attempts-root transaction shares only its exact retained native prefix.
+        // Every row retains its original owner, inventory, lazy record/codec order and semantic
+        // checks; nonshared owners use full checks. The exit closes every ordinary loop result.
+        root.read_tree_scope(|tree| {
+            for (index, name) in names.iter().enumerate() {
+                if name != OsStr::new(&format!("{:04}", index + 1)) {
+                    return Err(invalid(
+                        "dispatch attempt inventory has a gap or foreign name",
+                    ));
                 }
-                None => root.open_child(name)?,
-            };
-            let inventory = attempt_inventory(&directory)?;
-            let Some(authorization): Option<Authorization> =
-                read_record(&directory, "authorization.nrt")?
-            else {
-                if index + 1 != names.len()
-                    || !inventory.is_empty()
-                    || !dispatch.as_ref().is_some_and(|value| {
+                let directory = match retained.and_then(|prior| prior.attempts.get(index)) {
+                    Some(attempt) => {
+                        if attempt.directory.path() != root.path().join(name) {
+                            return Err(invalid("retained dispatch row belongs to another path"));
+                        }
+                        attempt.directory.retain()?
+                    }
+                    None => root.open_child(name)?,
+                };
+                let (inventory, row) = tree.read_scope(&directory, |reader| {
+                    let inventory = checked_attempt_inventory(reader.entries(7)?)?;
+                    let Some(authorization): Option<Authorization> =
+                        read_record_in_scope(reader, "authorization.nrt")?
+                    else {
+                        if index + 1 != names.len()
+                            || !inventory.is_empty()
+                            || !dispatch.as_ref().is_some_and(|value| {
+                                value.state == ReservationState::Reserved
+                                    && usize::from(value.highest.ordinal) == index + 1
+                            })
+                        {
+                            return Err(invalid(
+                                "dispatch material exists without its authorization",
+                            ));
+                        }
+                        return Ok((inventory, None));
+                    };
+                    authorization.terms.validate()?;
+                    scope.require_fees(&authorization.terms.fees)?;
+                    validate_origin(&authorization.origin)?;
+                    let previous = attempts
+                        .last()
+                        .map(|attempt| row_digest(attempt, &mut last_digest))
+                        .transpose()?;
+                    if attempts.len() == 1 {
+                        first_digest = last_digest;
+                    }
+                    if usize::from(authorization.ordinal) != index + 1
+                        || authorization.purpose != purpose
+                        || authorization.semantic != semantic
+                        || authorization.previous != previous
+                    {
+                        return Err(invalid(
+                            "dispatch authorization changed its original purpose, intent or predecessor",
+                        ));
+                    }
+                    if let Some(prior) = attempts.last() {
+                        validate_successor(&prior.authorization, &authorization)?;
+                    }
+                    let observation: Option<Observation> =
+                        read_record_in_scope(reader, "observation.nrt")?;
+                    if let Some(observation) = observation {
+                        observation.validate(&authorization)?;
+                    }
+                    let commit: Option<Commit> = read_record_in_scope(reader, "committed.nrt")?;
+                    let retirement: Option<Retirement> = read_record_in_scope(reader, "retired.nrt")?;
+                    Ok::<_, crate::managed::Error>((
+                        inventory,
+                        Some((authorization, observation, commit, retirement)),
+                    ))
+                })?;
+                let Some((authorization, observation, commit, retirement)) = row else {
+                    empty_tail = true;
+                    continue;
+                };
+                let attempt = Attempt {
+                    directory,
+                    authorization,
+                    observation,
+                    commit,
+                    retirement,
+                };
+                attempt.validate_inventory(
+                    &inventory,
+                    dispatch.as_ref().is_some_and(|value| {
                         value.state == ReservationState::Reserved
                             && usize::from(value.highest.ordinal) == index + 1
-                    })
-                {
-                    return Err(invalid(
-                        "dispatch material exists without its authorization",
-                    ));
-                }
-                empty_tail = true;
-                continue;
-            };
-            authorization.terms.validate()?;
-            scope.require_fees(&authorization.terms.fees)?;
-            validate_origin(&authorization.origin)?;
-            let previous = attempts
-                .last()
-                .map(|attempt| row_digest(attempt, &mut last_digest))
-                .transpose()?;
-            if attempts.len() == 1 {
-                first_digest = last_digest;
-            }
-            if usize::from(authorization.ordinal) != index + 1
-                || authorization.purpose != purpose
-                || authorization.semantic != semantic
-                || authorization.previous != previous
-            {
-                return Err(invalid(
-                    "dispatch authorization changed its original purpose, intent or predecessor",
-                ));
-            }
-            if let Some(prior) = attempts.last() {
-                validate_successor(&prior.authorization, &authorization)?;
-            }
-            let observation: Option<Observation> = read_record(&directory, "observation.nrt")?;
-            if let Some(observation) = observation {
-                observation.validate(&authorization)?;
-            }
-            let commit: Option<Commit> = read_record(&directory, "committed.nrt")?;
-            let retirement: Option<Retirement> = read_record(&directory, "retired.nrt")?;
-            let attempt = Attempt {
-                directory,
-                authorization,
-                observation,
-                commit,
-                retirement,
-            };
-            attempt.validate_inventory(
-                &inventory,
-                dispatch.as_ref().is_some_and(|value| {
-                    value.state == ReservationState::Reserved
-                        && usize::from(value.highest.ordinal) == index + 1
-                }),
-            )?;
-            let mut current_digest = None;
-            if let Some(commit) = &attempt.commit {
-                let observed = attempt
-                    .observation
-                    .ok_or_else(|| invalid("committed dispatch lost its original observation"))?;
-                let prior_retirement = attempts
-                    .last()
-                    .map(|prior| {
-                        prior
-                            .retirement
-                            .as_ref()
-                            .ok_or_else(|| invalid("dispatch predecessor was not retired"))
-                    })
-                    .transpose()?;
-                if !valid_sha256(&commit.request_sha256)
-                    || commit.authorization != row_digest(&attempt, &mut current_digest)?
-                    || commit.observation != digest(&observed)?
-                    || commit.previous_retirement != prior_retirement.map(digest).transpose()?
-                {
-                    return Err(invalid("dispatch commit differs from original custody"));
-                }
-            }
-            if let Some(retirement) = &attempt.retirement {
-                if retirement.authorization != row_digest(&attempt, &mut current_digest)?
-                    || retirement.successor == [0; 32]
-                    || matches!(&retirement.kind, RetirementKind::Request { request_sha256 } if !valid_sha256(request_sha256))
-                {
-                    return Err(invalid(
-                        "retired dispatch contains changed or execution material",
-                    ));
-                }
-            }
-            if let Some(prior) = attempts.last() {
-                if let Some(retirement) = &prior.retirement {
-                    if retirement.successor != row_digest(&attempt, &mut current_digest)? {
-                        return Err(invalid("unsigned retirement selected another successor"));
+                    }),
+                )?;
+                let mut current_digest = None;
+                if let Some(commit) = &attempt.commit {
+                    let observed = attempt
+                        .observation
+                        .ok_or_else(|| invalid("committed dispatch lost its original observation"))?;
+                    let prior_retirement = attempts
+                        .last()
+                        .map(|prior| {
+                            prior
+                                .retirement
+                                .as_ref()
+                                .ok_or_else(|| invalid("dispatch predecessor was not retired"))
+                        })
+                        .transpose()?;
+                    if !valid_sha256(&commit.request_sha256)
+                        || commit.authorization != row_digest(&attempt, &mut current_digest)?
+                        || commit.observation != digest(&observed)?
+                        || commit.previous_retirement != prior_retirement.map(digest).transpose()?
+                    {
+                        return Err(invalid("dispatch commit differs from original custody"));
                     }
-                } else if index + 1 != names.len() || attempt.commit.is_some() {
-                    return Err(invalid(
-                        "dispatch chain has an unretired interior predecessor",
-                    ));
                 }
+                if let Some(retirement) = &attempt.retirement {
+                    if retirement.authorization != row_digest(&attempt, &mut current_digest)?
+                        || retirement.successor == [0; 32]
+                        || matches!(&retirement.kind, RetirementKind::Request { request_sha256 } if !valid_sha256(request_sha256))
+                    {
+                        return Err(invalid(
+                            "retired dispatch contains changed or execution material",
+                        ));
+                    }
+                }
+                if let Some(prior) = attempts.last() {
+                    if let Some(retirement) = &prior.retirement {
+                        if retirement.successor != row_digest(&attempt, &mut current_digest)? {
+                            return Err(invalid("unsigned retirement selected another successor"));
+                        }
+                    } else if index + 1 != names.len() || attempt.commit.is_some() {
+                        return Err(invalid(
+                            "dispatch chain has an unretired interior predecessor",
+                        ));
+                    }
+                }
+                if attempts.is_empty() {
+                    first_digest = current_digest;
+                }
+                last_digest = current_digest;
+                attempts.push(attempt);
             }
-            if attempts.is_empty() {
-                first_digest = current_digest;
-            }
-            last_digest = current_digest;
-            attempts.push(attempt);
-        }
+            Ok::<_, crate::managed::Error>(())
+        })?;
         if let Some(last) = attempts.last() {
             if let Some(retirement) = &last.retirement {
                 if !dispatch.as_ref().is_some_and(|value| {
@@ -790,23 +912,38 @@ impl History {
         Ok(value)
     }
 
+    #[cfg(test)]
+    pub(in crate::managed) fn test_enrollment_evidence(
+        &self,
+    ) -> Result<&dyn EnrollmentScopeEvidence> {
+        self.scope.enrollment()
+    }
+
     /// Inspect every retained wallet through the concrete canonical purpose owner. The closure
     /// cannot substitute a decoded DTO for the opaque wallet result.
     pub(in crate::managed) fn verify_wallets(
         &self,
         inspect: impl FnMut(&Attempt) -> Result<VerifiedNativePreparation>,
     ) -> Result<()> {
+        self.verify_wallets_with_pass(inspect, None)
+    }
+    pub(in crate::managed) fn verify_wallets_with_pass(
+        &self,
+        inspect: impl FnMut(&Attempt) -> Result<VerifiedNativePreparation>,
+        pass: Option<&EnrollmentReadPass<'_>>,
+    ) -> Result<()> {
         if self.closing.is_some() || self.closed.is_some() {
             return Err(ManagedBootstrapFailure::TransitionPending.into());
         }
-        self.verify_wallets_inner(inspect, None)
+        self.verify_wallets_inner(inspect, None, pass)
     }
     fn verify_wallets_inner(
         &self,
         mut inspect: impl FnMut(&Attempt) -> Result<VerifiedNativePreparation>,
         closing: Option<&ClosurePlan>,
+        pass: Option<&EnrollmentReadPass<'_>>,
     ) -> Result<()> {
-        self.require_current()?;
+        self.require_current_with_pass(pass)?;
         if closing != self.closing.as_ref() {
             return Err(invalid("wallet verifier has another unsigned closing plan"));
         }
@@ -909,27 +1046,58 @@ impl History {
                 }
             }
         }
-        self.require_current()?;
+        self.require_current_with_pass(pass)?;
         Ok(())
     }
 
     fn require_current(&self) -> Result<()> {
         retained_graph::validate(self)
     }
+    fn require_current_with_pass(&self, pass: Option<&EnrollmentReadPass<'_>>) -> Result<()> {
+        match pass {
+            Some(pass) => pass.validate(self),
+            None => self.require_current(),
+        }
+    }
+    pub(in crate::managed) fn close_parser_read(&self) -> Result<()> {
+        self.require_current()
+    }
 
-    // Only the complete retained-graph owner may omit predecessor descent here. Every local
-    // native handle, original record and before/after inventory check remains authoritative.
-    fn require_current_local(&self) -> Result<()> {
+    // The parser already owns predecessor coverage and its separate full-graph exit. This
+    // bracket shares only native ancestry inside one local census; every original record,
+    // codec, inventory and scope check still runs before it closes on every ordinary result.
+    fn require_current_local(
+        &self,
+        pass: Option<&crate::managed::stream_token_custody::body_history::SnapshotReadPass<'_>>,
+    ) -> Result<()> {
+        retained_graph::with_native_read_tree(self, |tree| {
+            self.require_current_local_in_tree(pass, tree)
+        })
+    }
+
+    fn require_current_local_in_tree(
+        &self,
+        pass: Option<&crate::managed::stream_token_custody::body_history::SnapshotReadPass<'_>>,
+        mut tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+    ) -> Result<()> {
+        // An inherited decoder always retains the original physical read/allocation recipe,
+        // even if a caller entered this native bracket before installing its decode owner.
+        if norito::core::decode_limits_active() {
+            tree = None;
+        }
         #[cfg(test)]
         retained_graph::record_validation_visit(self)?;
+        #[cfg(test)]
+        retained_graph::record_native_tree_visit(tree.is_some());
         // The original identity-aware handles remain live. Re-read their bounded canonical
         // records one at a time instead of retaining another complete directory graph.
         self.scope
-            .validate_local(&self.operation, self.purpose, self.semantic)?;
+            .validate_local(&self.operation, self.purpose, self.semantic, pass)?;
         // The inventory begins and ends with fresh native directory checks.
-        let operation_names = operation_inventory(&self.operation, self.purpose)?;
-        require_semantic_original(&self.operation, self.semantic)?;
-        self.require_metadata()?;
+        let operation_names =
+            operation_inventory_in_tree(&self.operation, self.purpose, tree.as_deref_mut())?;
+        require_semantic_original_in_tree(&self.operation, self.semantic, tree.as_deref_mut())?;
+        self.require_metadata_in_tree(tree.as_deref_mut())?;
         match &self.root {
             None => {
                 if operation_names.iter().any(|name| name == "attempts") {
@@ -940,7 +1108,7 @@ impl History {
             }
             Some(root) => {
                 // entries brackets its actual census with native custody checks.
-                let names = root.entries(MAX_ATTEMPTS)?;
+                let names = directory_entries_in_tree(root, MAX_ATTEMPTS, tree.as_deref_mut())?;
                 if names.len() < self.attempts.len()
                     || names.len() > self.attempts.len() + usize::from(self.empty_tail)
                     || names
@@ -952,56 +1120,72 @@ impl History {
                         "dispatch inventory changed during native operation",
                     ));
                 }
-                for attempt in &self.attempts {
-                    // The inventory preserves both native directory fences.
-                    let inventory = attempt_inventory(&attempt.directory)?;
-                    attempt.validate_inventory(
-                        &inventory,
-                        self.dispatch.as_ref().is_some_and(|value| {
-                            value.state == ReservationState::Reserved
-                                && value.highest.ordinal == attempt.ordinal()
-                        }),
-                    )?;
-                    attempt.verify_authorization()?;
-                    if read_record::<Observation>(&attempt.directory, "observation.nrt")?
-                        != attempt.observation
-                        || read_record::<Commit>(&attempt.directory, "committed.nrt")?
-                            != attempt.commit
-                        || read_record::<Retirement>(&attempt.directory, "retired.nrt")?
-                            != attempt.retirement
-                        || attempt_inventory(&attempt.directory)? != inventory
-                    {
-                        return Err(invalid(
-                            "retained dispatch metadata changed during native operation",
-                        ));
+                let inspect_attempts = |tree: &mut iroha_fs::PrivateReadTreeScope<'_>| {
+                    for attempt in &self.attempts {
+                        tree.read_scope(&attempt.directory, |reader| {
+                            // Both native censuses and all lazy record reads share one closed
+                            // suffix bracket; persistent exit custody overrides every result.
+                            let inventory = checked_attempt_inventory(reader.entries(7)?)?;
+                            attempt.validate_inventory(
+                                &inventory,
+                                self.dispatch.as_ref().is_some_and(|value| {
+                                    value.state == ReservationState::Reserved
+                                        && value.highest.ordinal == attempt.ordinal()
+                                }),
+                            )?;
+                            attempt.verify_authorization_in_scope(reader)?;
+                            if read_record_in_scope::<Observation>(reader, "observation.nrt")?
+                                != attempt.observation
+                                || read_record_in_scope::<Commit>(reader, "committed.nrt")?
+                                    != attempt.commit
+                                || read_record_in_scope::<Retirement>(reader, "retired.nrt")?
+                                    != attempt.retirement
+                            {
+                                return Err(invalid(
+                                    "retained dispatch metadata changed during native operation",
+                                ));
+                            }
+                            if checked_attempt_inventory(reader.entries(7)?)? != inventory {
+                                return Err(invalid(
+                                    "retained dispatch metadata changed during native operation",
+                                ));
+                            }
+                            Ok::<_, crate::managed::Error>(())
+                        })?;
                     }
-                    attempt.directory.revalidate()?;
+                    Ok::<_, crate::managed::Error>(())
+                };
+                match tree.as_deref_mut() {
+                    Some(tree) => inspect_attempts(tree)?,
+                    None => root.read_tree_scope(inspect_attempts)?,
                 }
                 // A Reserved prefix may have its last empty directory but no authorization.
                 // It is inspected transiently; Published custody can never use this branch.
                 if names.len() > self.attempts.len() {
                     let tail = root.open_child(&names[self.attempts.len()])?;
-                    if !tail.entries(1)?.is_empty() {
+                    if !directory_entries_in_tree(&tail, 1, tree.as_deref_mut())?.is_empty() {
                         return Err(invalid("reserved dispatch empty tail changed"));
                     }
-                    tail.revalidate()?;
+                    revalidate_directory_in_tree(&tail, tree.as_deref_mut())?;
                 }
-                if root.entries(MAX_ATTEMPTS)? != names {
+                if directory_entries_in_tree(root, MAX_ATTEMPTS, tree.as_deref_mut())? != names {
                     return Err(invalid("dispatch inventory changed during inspection"));
                 }
-                root.revalidate()?;
+                revalidate_directory_in_tree(root, tree.as_deref_mut())?;
             }
         }
-        self.require_metadata()?;
-        require_semantic_original(&self.operation, self.semantic)?;
-        if operation_inventory(&self.operation, self.purpose)? != operation_names {
+        self.require_metadata_in_tree(tree.as_deref_mut())?;
+        require_semantic_original_in_tree(&self.operation, self.semantic, tree.as_deref_mut())?;
+        if operation_inventory_in_tree(&self.operation, self.purpose, tree.as_deref_mut())?
+            != operation_names
+        {
             return Err(invalid(
                 "dispatch operation inventory changed during inspection",
             ));
         }
-        self.operation.revalidate()?;
+        revalidate_directory_in_tree(&self.operation, tree.as_deref_mut())?;
         self.scope
-            .validate_local(&self.operation, self.purpose, self.semantic)
+            .validate_local(&self.operation, self.purpose, self.semantic, pass)
     }
 
     // Keep original native owners live through the sole fresh parser; retain shares their
@@ -1016,16 +1200,25 @@ impl History {
         )
     }
 
-    fn require_metadata(&self) -> Result<()> {
-        if read_record::<Dispatch>(&self.operation, "dispatch.nrt")? != self.dispatch
-            || read_record::<ClosurePlan>(&self.operation, "closing.nrt")? != self.closing
-            || read_record::<ClosureRecord>(&self.operation, "closed.nrt")? != self.closed
-        {
-            return Err(invalid(
-                "dispatch inventory changed during native operation",
-            ));
+    fn require_metadata_in_tree(
+        &self,
+        tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+    ) -> Result<()> {
+        let read = |reader: &mut iroha_fs::PrivateReadScope<'_>| {
+            if read_record_in_scope::<Dispatch>(reader, "dispatch.nrt")? != self.dispatch
+                || read_record_in_scope::<ClosurePlan>(reader, "closing.nrt")? != self.closing
+                || read_record_in_scope::<ClosureRecord>(reader, "closed.nrt")? != self.closed
+            {
+                return Err(invalid(
+                    "dispatch inventory changed during native operation",
+                ));
+            }
+            Ok(())
+        };
+        match tree {
+            Some(tree) => tree.read_scope(&self.operation, read),
+            None => self.operation.read_scope(read),
         }
-        Ok(())
     }
 
     fn retain_root(&self, operation: &PrivateDirectory) -> Result<()> {
@@ -1139,12 +1332,9 @@ impl History {
             None => operation.create_child("attempts")?,
         };
         let name = format!("{:04}", old.highest.ordinal);
-        let directory = match root.open_child(&name) {
-            Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                root.create_child(&name)?
-            }
-            Err(error) => return Err(error.into()),
+        let directory = match root.open_child_optional(&name)? {
+            Some(value) => value,
+            None => root.create_child(&name)?,
         };
         let names = directory.entries(1)?;
         if names.iter().any(|name| name != "authorization.nrt") {
@@ -1234,8 +1424,14 @@ fn operation_inventory(
     operation: &PrivateDirectory,
     purpose: Purpose,
 ) -> Result<Vec<std::ffi::OsString>> {
+    checked_operation_inventory(operation.entries(6)?, purpose)
+}
+
+fn checked_operation_inventory(
+    names: Vec<std::ffi::OsString>,
+    purpose: Purpose,
+) -> Result<Vec<std::ffi::OsString>> {
     let enrollment = scope::is_enrollment(purpose);
-    let names = operation.entries(6)?;
     if names.iter().any(|name| {
         name != "original.nrt"
             && name != "dispatch.nrt"
@@ -1263,8 +1459,71 @@ fn require_semantic_original(operation: &PrivateDirectory, semantic: [u8; 32]) -
     Ok(())
 }
 
+// These read-only adapters retain the sole native leaf/census producers. The graph owner
+// chooses the existing ancestry bracket; no pathname or validation result supplies coverage.
+fn directory_entries_in_tree(
+    directory: &PrivateDirectory,
+    maximum: usize,
+    tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+) -> Result<Vec<std::ffi::OsString>> {
+    match tree {
+        Some(tree) => tree.read_scope(directory, |reader| Ok(reader.entries(maximum)?)),
+        None => Ok(directory.entries(maximum)?),
+    }
+}
+
+fn revalidate_directory_in_tree(
+    directory: &PrivateDirectory,
+    tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+) -> Result<()> {
+    match tree {
+        Some(tree) => tree.revalidate_directory(directory)?,
+        None => directory.revalidate()?,
+    }
+    Ok(())
+}
+
+fn operation_inventory_in_tree(
+    operation: &PrivateDirectory,
+    purpose: Purpose,
+    tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+) -> Result<Vec<std::ffi::OsString>> {
+    match tree {
+        Some(tree) => tree.read_scope(operation, |reader| {
+            checked_operation_inventory(reader.entries(6)?, purpose)
+        }),
+        None => operation_inventory(operation, purpose),
+    }
+}
+
+fn require_semantic_original_in_tree(
+    operation: &PrivateDirectory,
+    semantic: [u8; 32],
+    tree: Option<&mut iroha_fs::PrivateReadTreeScope<'_>>,
+) -> Result<()> {
+    let Some(tree) = tree else {
+        return require_semantic_original(operation, semantic);
+    };
+    tree.read_scope(operation, |reader| {
+        let original = reader
+            .read_optional(
+                "original.nrt",
+                super::MAX_CHECKPOINT_BYTES + 3 * 1024 * 1024,
+                |bytes| *Hash::new(bytes).as_ref(),
+            )?
+            .ok_or_else(|| invalid("dispatch lost its original semantic intent"))?;
+        if original != semantic {
+            return Err(invalid("dispatch semantic original was changed"));
+        }
+        Ok(())
+    })
+}
+
 fn attempt_inventory(directory: &PrivateDirectory) -> Result<Vec<std::ffi::OsString>> {
-    let names = directory.entries(7)?;
+    checked_attempt_inventory(directory.entries(7)?)
+}
+
+fn checked_attempt_inventory(names: Vec<std::ffi::OsString>) -> Result<Vec<std::ffi::OsString>> {
     if names.iter().any(|name| {
         ![
             "authorization.nrt",
@@ -1558,6 +1817,22 @@ pub(in crate::managed) fn read_record<
     tests::parse_digest_tests::record_decoded();
     Ok(Some(value))
 }
+// The same canonical decoder and physical test counters, under a caller-owned closed
+// directory bracket. Missing leaves remain distinct from its unconditional custody exit.
+fn read_record_in_scope<T: norito::NoritoSerialize + for<'a> norito::NoritoDeserialize<'a>>(
+    reader: &mut iroha_fs::PrivateReadScope<'_>,
+    name: &str,
+) -> Result<Option<T>> {
+    #[cfg(test)]
+    tests::parse_digest_tests::record_read();
+    let Some(value) = reader.read_optional(name, MAX_RECORD_BYTES, decode_record::<T>)? else {
+        return Ok(None);
+    };
+    let value = value?;
+    #[cfg(test)]
+    tests::parse_digest_tests::record_decoded();
+    Ok(Some(value))
+}
 /// Decode one already bounded record image with the sole original dispatch codec limits.
 pub(in crate::managed) fn decode_record<
     T: norito::NoritoSerialize + for<'a> norito::NoritoDeserialize<'a>,
@@ -1595,3 +1870,7 @@ pub(in crate::managed) fn write_record<T: norito::NoritoSerialize>(
 #[cfg(test)]
 #[path = "attempts/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "attempts/retained_handle_census_tests.rs"]
+mod retained_handle_census_tests;

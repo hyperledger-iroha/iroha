@@ -16191,6 +16191,54 @@ class ToriiClient(
             interval=interval,
         )
 
+    def register_dataspace_asset_definition_and_wait(
+        self,
+        *,
+        authority: str,
+        fee_payment: Mapping[str, Any],
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        definition_id: str,
+        dataspace_id: int,
+        balance_scope_policy: str,
+        name: str,
+        description: Optional[str] = None,
+        alias: Optional[str] = None,
+        scale: Optional[Union[int, str]] = None,
+        mintable: Optional[str] = "Infinitely",
+        asset_metadata: Optional[Mapping[str, Any]] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Register directly in an exact dataspace and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            authority=authority,
+            fee_payment=fee_payment,
+            metadata=transaction_metadata,
+        )
+        draft.register_dataspace_asset_definition(
+            definition_id,
+            dataspace_id=dataspace_id,
+            name=name,
+            description=description,
+            alias=alias,
+            scale=scale,
+            mintable=mintable,
+            balance_scope_policy=balance_scope_policy,
+            metadata=asset_metadata,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
     def mint_asset_quantity_and_wait(
         self,
         *,

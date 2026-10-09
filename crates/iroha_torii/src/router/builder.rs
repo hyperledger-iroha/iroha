@@ -1195,9 +1195,24 @@ mod tests {
     .with_authentication(AuthenticationPolicy::ManifestConditionalContent);
     const ROUTES: &[RouteDescriptor] = &[READ, WRITE, FEATURED];
     #[test]
-    fn only_finalized_load_read_remains_in_kagemusha_catalog_projections() {
+    fn kagemusha_catalog_contains_only_enrollment_and_authenticated_load_originals() {
         let catalog = RouteCatalog::new(iroha_torii_shared::route_catalog::CATALOGED_ROUTES);
         let load_read = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_ISSUANCE_GET;
+        let event_read = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_EVENT_PROOF_GET;
+        let finality_read = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_FINALITY_PROOF_GET;
+        let enrollment = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_ENROLLMENT_POST;
+        assert_eq!(finality_read.method(), HttpMethod::Get);
+        assert_eq!(finality_read.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            finality_read.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(event_read.method(), HttpMethod::Get);
+        assert_eq!(event_read.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            event_read.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
         assert_eq!(load_read.method(), HttpMethod::Get);
         assert_eq!(load_read.effect(), RouteEffect::ReadOnly);
         assert_eq!(
@@ -1216,7 +1231,10 @@ mod tests {
                         .project(projection, features)
                         .iter()
                         .all(|route| !route.path().starts_with("/v1/kagemusha/")
-                            || **route == load_read),
+                            || **route == load_read
+                            || **route == event_read
+                            || **route == finality_read
+                            || **route == enrollment),
                     "retired KAGEMUSHA transport remains in {projection:?}"
                 );
             }

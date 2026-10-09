@@ -15,7 +15,7 @@
 //! - [`kagemusha_poseidon::PoseidonHash`]: the KAGEMUSHA RP57 Poseidon sponge
 //!   with snark-verifier `NativeLoader` semantics (spec 6.2). Production
 //!   absorbs points injectively; the `fe_to_fe` oracle absorption exists only
-//!   under `cfg(test)` and `--cfg iroha_plonk_oracle`.
+//!   under `cfg(test)`.
 //!
 //! # Encodings and rejections
 //!
@@ -39,7 +39,7 @@ use ff::PrimeField;
 use group::{GroupEncoding, prime::PrimeCurveAffine};
 use iroha_pasta::{PastaCurve, poseidon::PoseidonField};
 
-#[cfg(any(test, iroha_plonk_oracle))]
+#[cfg(test)]
 use crate::cs::TranscriptV1;
 use crate::cs::TranscriptV2;
 
@@ -330,6 +330,8 @@ pub struct TranscriptReader<'a, C: PastaCurve, H> {
     hash: H,
     proof: &'a [u8],
     position: usize,
+    #[cfg(test)]
+    challenges: Option<Vec<C::ScalarExt>>,
     _curve: PhantomData<C>,
 }
 
@@ -341,8 +343,22 @@ impl<'a, C: PastaCurve, H: TranscriptHash<C>> TranscriptReader<'a, C, H> {
             hash,
             proof,
             position: 0,
+            #[cfg(test)]
+            challenges: None,
             _curve: PhantomData,
         }
+    }
+
+    /// Record actual squeezes for independent oracle comparisons only.
+    #[cfg(test)]
+    pub(crate) fn record_challenges(&mut self) {
+        self.challenges = Some(Vec::new());
+    }
+
+    /// Transfer the recorded public challenge tape before strict completion.
+    #[cfg(test)]
+    pub(crate) fn take_challenges(&mut self) -> Vec<C::ScalarExt> {
+        self.challenges.take().unwrap_or_default()
     }
 
     /// The number of unread proof bytes.
@@ -392,7 +408,12 @@ impl<'a, C: PastaCurve, H: TranscriptHash<C>> TranscriptReader<'a, C, H> {
 
 impl<C: PastaCurve, H: TranscriptHash<C>> Transcript<C> for TranscriptReader<'_, C, H> {
     fn squeeze_challenge(&mut self) -> C::ScalarExt {
-        self.hash.squeeze()
+        let challenge = self.hash.squeeze();
+        #[cfg(test)]
+        if let Some(challenges) = &mut self.challenges {
+            challenges.push(challenge);
+        }
+        challenge
     }
 
     fn common_point(&mut self, point: &C::AffineExt) -> Result<(), TranscriptError> {
@@ -459,8 +480,8 @@ where
     }
 
     /// The oracle-mode hash of `transcript` (`fe_to_fe` Poseidon point
-    /// absorption, spec 6.4). Test and oracle builds only.
-    #[cfg(any(test, iroha_plonk_oracle))]
+    /// absorption, spec 6.4). Unit tests only.
+    #[cfg(test)]
     #[doc(hidden)]
     #[must_use]
     pub fn oracle(transcript: TranscriptV1) -> Self {
@@ -605,8 +626,8 @@ pub fn absorb_prelude<C: PastaCurve, T: Transcript<C> + ?Sized>(
 }
 
 /// Absorbs the oracle-mode prelude: `transcript_repr` only, no instance frame
-/// (spec 6.4). Test and oracle builds only.
-#[cfg(any(test, iroha_plonk_oracle))]
+/// (spec 6.4). Unit tests only.
+#[cfg(test)]
 #[doc(hidden)]
 pub fn absorb_prelude_oracle<C: PastaCurve, T: Transcript<C> + ?Sized>(
     transcript: &mut T,

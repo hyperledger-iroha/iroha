@@ -73,6 +73,7 @@ impl Schedule {
         Ok(Budget {
             started,
             timeout,
+            startup_deadline_ns: None,
             utc_ceiling_unix_ms: Some(self.expiry.utc_ceiling()),
             cancelled,
             progress,
@@ -218,7 +219,6 @@ pub(super) fn reconcile(
     validate_live(prepared, live, budget)?;
     let provider = live.provider();
     let policies = budget.call(|_| ManagedServiceBootstrap::open(prepared)?.selected_policies())?;
-    let mut custody = budget.call(|_| ManagedStreamTokenCustody::open(prepared, provider))?;
     let options = BoundedTransactionOptions {
         fee_payment: policies.network.runtime_fee_payment.clone(),
         max_total_fees: BTreeMap::from([(
@@ -228,19 +228,24 @@ pub(super) fn reconcile(
         deadline: budget.deadline()?,
     };
     let mut turn = budget.call(|deadline| {
-        GeneratedRenewalTurn::begin(
-            &custody,
-            &policies.provider(provider)?.custody,
-            Fees::from_options(&options)?,
-            minimum,
-            deadline,
-            Arc::clone(&budget.cancelled),
-        )
+        with_custody(prepared, provider, |custody| {
+            GeneratedRenewalTurn::begin(
+                custody,
+                &policies.provider(provider)?.custody,
+                Fees::from_options(&options)?,
+                minimum,
+                deadline,
+                Arc::clone(&budget.cancelled),
+            )
+        })
     })?;
     loop {
         budget.check()?;
         validate_live(prepared, live, budget)?;
-        let result = custody.reconcile_generated_renewal(&mut turn, budget.deadline()?);
+        let deadline = budget.deadline()?;
+        let result = with_custody(prepared, provider, |custody| {
+            custody.reconcile_generated_renewal(&mut turn, deadline)
+        });
         budget.check()?;
         validate_live(prepared, live, budget)?;
         match result {
@@ -264,6 +269,18 @@ pub(super) fn reconcile(
         }
         budget.wait()?;
     }
+}
+
+// Runtime validation independently reopens each provider's custody. Keep an operation's
+// exclusive owner inside this call, including on errors; only the same finite renewal turn
+// survives between calls. Its original lease, cancellation and deadline are never replaced.
+pub(super) fn with_custody<T>(
+    prepared: &PreparedLocalnet,
+    provider: ProviderId,
+    action: impl FnOnce(&mut ManagedStreamTokenCustody) -> Result<T>,
+) -> Result<T> {
+    let mut custody = ManagedStreamTokenCustody::open(prepared, provider)?;
+    action(&mut custody)
 }
 
 /// Called only after the main process owner has durably left Ready. An exhausted original fails

@@ -414,9 +414,13 @@ async fn execute_prepared_collection_local(
                 };
                 let binding =
                     asset_definition_alias_binding_for(world_ref, definition.id(), now_ms);
-                asset_definition_to_json_value(&definition, binding.as_ref())
-                    .and_then(object_row_from_value)
-                    .map(|row| (after_cursor, Some(row)))
+                asset_definition_to_json_value(
+                    &definition,
+                    binding.as_ref(),
+                    asset_definition_dataspace_for_read(world_ref, definition.id())?,
+                )
+                .and_then(object_row_from_value)
+                .map(|row| (after_cursor, Some(row)))
             });
             let mut failure = None;
             let rows = until_error(rows, &mut failure);

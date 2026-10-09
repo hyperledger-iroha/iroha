@@ -228,7 +228,7 @@ fn below_quorum_and_identical_certificate_values_are_rejected() {
 }
 
 #[test]
-fn original_history_rejects_flagged_parent_authority_without_erasing_signed_safety_evidence() {
+fn original_history_refuses_false_parent_qc_reports_and_preserves_signed_safety_evidence() {
     use crate::sumeragi::crypto::KeyPairSigner;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_model_base::peer::PeerId;

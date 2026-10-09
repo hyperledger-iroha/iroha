@@ -7,10 +7,10 @@ use crate::{
     },
     network_profiles, workspace_root,
 };
-use iroha_deploy::managed::{NativeBundleLayout, admit_native_program, macos_info_plist};
+use iroha_deploy::managed::{NativeBundleLayout, admit_native_build_input, macos_info_plist};
 use iroha_fs::{
-    FileSnapshot, OwnerDirectory, PrivateDirectory, PublishMode, ReaderDirectory, RetainedFile,
-    SealedPrivateFile,
+    FileSnapshot, OwnerDirectory, PrivateDirectory, PublishMode, ReaderDirectory,
+    RetainedBuildInput, RetainedFile, SealedPrivateFile,
 };
 use norito::json::{self, Map, Value};
 use sha2::{Digest, Sha256};
@@ -160,12 +160,21 @@ type RetainedImage = (RetainedFile, FileSnapshot, String);
 
 struct BundleCustody {
     inputs: Vec<RetainedImage>,
+    build_inputs: Vec<(RetainedBuildInput, FileSnapshot, String)>,
     outputs: Vec<(PathBuf, RetainedImage)>,
     created: Vec<(Option<fs::File>, FileSnapshot)>,
 }
 
 impl BundleCustody {
     fn verify(&mut self) -> Result<(), Box<dyn Error>> {
+        for (file, snapshot, hash) in &mut self.build_inputs {
+            if file.snapshot()? != *snapshot
+                || digest(file)? != *hash
+                || file.snapshot()? != *snapshot
+            {
+                return Err("Mochi build input changed before publication".into());
+            }
+        }
         for (file, snapshot, hash) in self
             .inputs
             .iter_mut()
@@ -529,6 +538,10 @@ pub(crate) fn run_bundle_smoke(result: &MochiBundleResult) -> Result<(), Box<dyn
             &NativeBundleLayout::current().executable(&result.bundle_root, "kagami"),
         )?;
         drop(retained_bundle(result)?);
+        developer_smoke::cold_start_smoke::run(
+            &NativeBundleLayout::current().executable(&result.bundle_root, "kagami"),
+        )?;
+        drop(retained_bundle(result)?);
         Ok(())
     }
 }
@@ -773,6 +786,7 @@ fn stage_bundle_checked(
     };
     let mut copied = BundleCustody {
         inputs: Vec::new(),
+        build_inputs: Vec::new(),
         outputs: Vec::new(),
         created: Vec::new(),
     };
@@ -1098,9 +1112,9 @@ fn copy_runtime_binaries(
             if !path.is_absolute() {
                 return Err("Cargo executable path is not absolute".into());
             }
-            let mut file = RetainedFile::open_regular(path)?;
+            let mut file = RetainedBuildInput::open(path)?;
             let snapshot = file.snapshot()?;
-            admit_native_program(&mut file)?;
+            admit_native_build_input(&mut file)?;
             let hash = digest(&mut file)?;
             if file.snapshot()? != snapshot {
                 return Err("Mochi artifact changed during native admission".into());
@@ -1132,7 +1146,8 @@ fn copy_runtime_binaries(
         created_outputs.push((created, snapshot));
     }
     let mut custody = BundleCustody {
-        inputs: custody_inputs,
+        inputs: Vec::new(),
+        build_inputs: custody_inputs,
         outputs: custody_outputs,
         created: created_outputs,
     };
@@ -1427,6 +1442,65 @@ mod tests {
             );
         }
         assert!(!root.path().join("target/debug").exists());
+    }
+
+    #[test]
+    fn cargo_linked_mochi_runtime_keeps_build_custody_and_single_link_private_outputs() {
+        let root = tempdir().unwrap();
+        let current = native_sources(&root.path().join("cargo target/native/debug"));
+        for path in current.values() {
+            fs::hard_link(path, path.with_extension("cargo-dependency-link")).unwrap();
+            assert!(iroha_fs::RetainedFile::open_regular(path).is_err());
+        }
+        let programs =
+            super::collect_native_programs(Cursor::new(cargo_records(&current)), &RUNTIME_BINARIES)
+                .unwrap();
+        let bundle = root.path().join("bundle");
+        let mut custody = copy_runtime_binaries(&programs, &bundle).unwrap();
+        assert_eq!(custody.build_inputs.len(), RUNTIME_BINARIES.len());
+        assert!(custody.inputs.is_empty());
+        custody.verify().unwrap();
+        for name in RUNTIME_BINARIES {
+            let output = NativeBundleLayout::current().executable(&bundle, name);
+            assert_eq!(
+                fs::read(&output).unwrap(),
+                fs::read(&current[name]).unwrap()
+            );
+            iroha_fs::RetainedFile::open_regular(&output)
+                .unwrap()
+                .revalidate()
+                .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                assert_eq!(fs::metadata(&output).unwrap().nlink(), 1);
+                assert_eq!(fs::metadata(&current[name]).unwrap().nlink(), 2);
+            }
+            assert!(
+                current[name]
+                    .with_extension("cargo-dependency-link")
+                    .is_file()
+            );
+        }
+        #[cfg(unix)]
+        {
+            fs::write(
+                current["kagami"].with_extension("cargo-dependency-link"),
+                b"changed after copy",
+            )
+            .unwrap();
+            assert!(custody.verify().is_err());
+        }
+        #[cfg(windows)]
+        {
+            assert!(
+                fs::OpenOptions::new()
+                    .write(true)
+                    .open(current["kagami"].with_extension("cargo-dependency-link"))
+                    .is_err()
+            );
+            custody.verify().unwrap();
+        }
     }
 
     #[test]

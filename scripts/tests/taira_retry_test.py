@@ -380,6 +380,46 @@ class RetryTests(unittest.TestCase):
         argv = self.ssh_route("root@192.168.64.3", guest_keys, proxy=proxy)
         self.assertEqual(retry.validate_ssh({"argv": argv, "pins": pins}), argv)
 
+    def test_ssh_compression_preserves_direct_and_nested_host_key_pins(self):
+        guest_keys, mac_keys = "/public/guest_hosts", "/public/mac_hosts"
+        for host, keys in (("root@192.168.64.3", guest_keys),
+                           ("administrator@208.83.1.62", mac_keys)):
+            argv = self.ssh_route(host, keys)
+            argv[-2:-2] = ["-o", "Compression=yes"]
+            with self.subTest(host=host):
+                self.assertEqual(retry.ssh_host_key_paths(argv), {keys})
+        proxy = self.ssh_route("administrator@208.83.1.62", mac_keys,
+                               forwarding="192.168.64.3:22")
+        argv = self.ssh_route("root@192.168.64.3", guest_keys, proxy=proxy)
+        # The outer guest connection compresses plaintext. Its fixed Mac hop
+        # transports ciphertext and does not need a second compression layer.
+        argv[-2:-2] = ["-o", "Compression=yes"]
+        self.assertEqual(retry.ssh_host_key_paths(argv), {guest_keys, mac_keys})
+        self.assertNotIn("Compression=yes", proxy)
+        proxy[-1:-1] = ["-o", "Compression=yes"]
+        argv = self.ssh_route("root@192.168.64.3", guest_keys, proxy=proxy)
+        self.assertEqual(retry.ssh_host_key_paths(argv), {guest_keys, mac_keys})
+
+    def test_ssh_compression_accepts_only_explicit_yes_and_preserves_route_guards(self):
+        good = self.ssh_route("root@192.168.64.3", "/public/guest_hosts")
+        good[-2:-2] = ["-o", "Compression=yes"]
+        for option in ("Compression=no", "Compression=adaptive", "Compression=1",
+                       "StrictHostKeyChecking=no", "ProxyCommand=ssh arbitrary"):
+            changed = good[:-2] + ["-o", option] + good[-2:]
+            with self.subTest(option=option), self.assertRaises(retry.RetryError):
+                retry.ssh_host_key_paths(changed)
+        for value in ("no", "adaptive", "1", "YES"):
+            changed = ["Compression=" + value if item == "Compression=yes" else item
+                       for item in good]
+            with self.subTest(value=value), self.assertRaises(retry.RetryError):
+                retry.ssh_host_key_paths(changed)
+        for extra in (["-C"], ["-o", "Compression=yes"]):
+            with self.subTest(extra=extra), self.assertRaises(retry.RetryError):
+                retry.ssh_host_key_paths(good[:-2] + extra + good[-2:])
+        banned = good[:-2] + ["root@denylist.vultr.example", good[-1]]
+        with self.assertRaises(retry.RetryError):
+            retry.ssh_host_key_paths(banned)
+
     def test_ssh_rejects_unrelated_or_missing_pins_before_reading_any_bytes(self):
         argv = self.ssh_route("root@192.168.64.3", "/public/known_hosts")
         valid = {"path": "/public/known_hosts", "sha256": "a" * 64}

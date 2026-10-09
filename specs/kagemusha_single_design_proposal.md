@@ -54,7 +54,7 @@ implementation returns an explicit error rather than reporting a payment complet
 |---|---|---|
 | R1 | Offline payments | After enrollment and loading, peers need only each other (§5). |
 | R2 | Mainstream phones | Stock Android/vendor equivalents and iPhone, hardware-backed keys, no custom applet (§2). Actual platform evidence and measurements are recorded separately. Activation, loading and receiving require a device class whose published lineage budget is met (§5.3). |
-| R3 | Load from the ledger | A finalized reserve debit creates one wallet-bound load voucher (§6). |
+| R3 | Load from the ledger | A finalized reserve debit creates one wallet-bound ordinary Load receipt (§6). |
 | R4 | Final device-to-device value, unbounded hops | Send irreversibly transfers value to the bound receiver. Receive makes it immediately and durably owned by the receiver, subject only to the P4 burn exception (§3.2). The value becomes onward-spendable offline once the receiver's local lineage fold reaches its current head, which covers the crediting head; the fold needs no network, counterparty or approval. Only exact Payment replay can finish delivery; no refund or hop ceiling (§§3–5). |
 | R5 | Optional return online | Unload is the holder's choice, available from any folded head (§3.1). Remaining offline has no deadline unless an enabled regulatory control supplies one (§§6–7). |
 | R6 | Account blacklist | With the control enabled, a payment does not take place if the payer's own committed list contains the receiver when it sends, or the receiver's own committed list contains the payer when it issues the Request. The Request records the receiver's list, and Receive checks only that list, so a newer receiver list never strands a committed Payment. Lists are best effort and may differ between phones (§7). |
@@ -146,6 +146,24 @@ Enrollment is online once per wallet incarnation. Bind a fresh issuer challenge
 to the canonical domainless `AccountId`, network, scheme, asset incarnation,
 wallet key, app identity and enrollment policy. A new incarnation always begins
 at zero; reenrollment never imports an old balance or resets its replay state.
+
+Every token on the universal dataspace is eligible for KAGEMUSHA offline payments. There
+is no Parliament approval, named-token allowlist or regulated/non-regulated asset-class gate.
+The canonical universal balance scope is `AssetBalanceScope::Global`, routed to
+`DataSpaceId::UNIVERSAL`. Its ordinary asset authorization, exact incarnation and scale,
+reserve backing, enrollment and proof requirements still apply. These setup requirements
+must be available to every universal asset through the shared registration and SDK paths;
+no special governance authority is required merely because a token is non-regulated.
+Current enrollment eligibility and freeze status use the
+[eligibility SDK contract](kagemusha_enrollment_eligibility_v1.md). Bank-required enrollment
+uses the user's bank middleware for KYC approval and freeze status. Other schemes select
+their own authorized provider, including an issuer, community operator or SORA Parliament
+for assets it governs. Parliament approval is not a protocol prerequisite. A scheme may
+explicitly admit public enrollment; missing bank data never selects that policy implicitly.
+The issuer rechecks authenticated authority, account routing and fresh eligibility at the
+online enrollment boundaries. These observations do not replace platform evidence or confer
+monetary authority, and add no per-payment call. Regulatory classification is an issuer policy
+concern, not a cryptographic limitation or a legal classification made by the codec.
 
 The issuer verifies platform evidence and issues a compact signed credential:
 
@@ -284,7 +302,7 @@ recomputes is Poseidon:
   the chains, the statement digest (σ's public-input encoding of its statement,
   which the receipt also binds), `operation_id`, the unload nullifier, the object
   digest of each signed object that a relation verifies or names (requests,
-  receipts, credentials, certificates, load vouchers, fee schedules, scheme
+  receipts, credentials, certificates, ordinary Load receipts, fee schedules, scheme
   policies, blacklists, quota shares, time anchors and charge quotes, over the
   signed message and the signature), the certificate-set and package digests, and
   the roots, leaves and openings of every wallet map, of the blacklist,
@@ -422,7 +440,7 @@ domain (§4.1):
 To make a transition:
 
 1. Natively verify every input package and object (an incoming Payment,
-   Credited evidence, a load voucher, a policy update). For Send, Unload and
+   Credited evidence, an ordinary Load receipt, a policy update). For Send, Unload and
    Retiring the predecessor must be folded. The wallet uses the Ω recorded as
    self-verified at fold time (step 5) and does not re-verify it on the payment
    path.
@@ -470,6 +488,18 @@ must have shared vectors. No server receives wallet private state or acts as
 its monetary prover; proving runs in the native wallet core. Enrollment
 evidence verification is an issuer task.
 
+The wallet artifact bundle carries every exact descriptor, verifying key and
+proving key used by its sigma, Q, A, W and Ω source owners. Its ordinary-finality
+portion carries the complete descriptor/verifying-key graph required to
+reconstruct and authenticate the receipt verifier. Ordinary-finality server
+proving keys remain server artifacts: their exact lengths and content hashes
+stay committed in the signed producer inventory, but wallet transport and
+installation neither require nor read their bytes. Missing or changed wallet
+proving keys or required finality verifier originals prevent export or complete
+source qualification; reinstallable artifact unavailability is not custody loss.
+Directory contents cannot substitute for the compiler's closed original list;
+signed genesis and the complete source qualification remain separate checks.
+
 Every transition enforces the following. The tag says where and when each
 check runs.
 
@@ -502,7 +532,7 @@ check runs.
     case;
   - this step's σ and τ, and every input package's Ω, σ and τ;
   - every signature it owns: the Request and receiver credential only in
-    Λ_recv; load vouchers in Λ_load; certificates, credentials, and policy,
+    Λ_recv; ordinary Load receipts in Λ_load; certificates, credentials, and policy,
     list, time and credential updates in the step that consumes them;
   - the Request's account digests against the credential each belongs to:
     Λ_send checks the payer account digest against the payer's own
@@ -613,14 +643,14 @@ Post-commit failure is contained:
   commit. The Request signature and receiver credential are checked natively
   before Advance, and in-circuit only in the receiver's own Λ_recv. Fee terms
   are checked against the payer's own policy.
-- Load vouchers, certificates, fee schedules, credentials, and policy, list,
+- Ordinary Load receipts, certificates, fee schedules, credentials, and policy, list,
   time and credential updates have no failure branch. The issuer and ledger
   roles of §2.3 sign them. A peer can relay them but cannot forge or re-encode
   them (§8), so only a verifier defect can make them fail in-circuit. The next
   two rules target that defect.
 - Native and in-circuit verifiers accept exactly the same set for every object
   that Λ verifies after a native check: Ω including its deferred values, σ, τ,
-  the Request, Credited evidence, load vouchers, fee schedules, certificates,
+  the Request, Credited evidence, ordinary Load receipts, fee schedules, certificates,
   credentials, and policy, list, time and credential updates.
 - Every signature that Λ verifies uses a P-256 gadget that is complete for every
   input the native verifier accepts.
@@ -638,12 +668,21 @@ credential without its uninstalled enrollment marker is a used incarnation and
 is never initialized again.
 The ledger enables load issuance only after verifying and recording the complete
 Bootstrap package for that incarnation. A credential alone cannot receive a
-load voucher. This activation is idempotent and occurs during enrollment.
+ordinary Load receipt. This activation is idempotent and occurs during enrollment.
+The ordinary account-signed transaction carrying Activate may have several
+submission attempts, each retaining its exact signed envelope. A new envelope
+must carry the identical retained Activation, with the same account, network,
+asset and incarnation; it does not repeat Bootstrap or initialize another head.
+Each candidate remains subject to ordinary transaction admission and fees.
+Expiry or an HTTP response is not evidence of non-inclusion. Native retains each
+attempt's independent verification cursor and confirms the wallet only after
+authenticating successful inclusion of one retained attempt. That confirmation
+proves activation of the wallet, not successful execution of every envelope.
 An interrupted enrollment resumes the same installation; it never creates two
 initialized heads. Abandonment is allowed only while the enrollment marker is
 still selected and Bootstrap has never committed. It commits a terminal marker
 and records its receipt in a ledger instruction that atomically rejects prior
-activation and permanently disables activation and loads. No voucher or monetary
+activation and permanently disables activation and loads. No receipt or monetary
 balance exists to return. Once Bootstrap commits, including an uncertain
 activation response, recover that incarnation and use §6.3; do not abandon funded
 obligations. Releasing an unused quota allocation requires that terminal evidence
@@ -716,7 +755,7 @@ a hash or a key-store marker alone is insufficient for onward spending.
 Until a durable Ω covers a step, the capsule and completion records of that
 step retain every input that Λ verifies for it: σ, τ, every consumed input (the
 incoming Payment with the payer's Ω, σ and τ; the Request; Credited evidence
-and the matching Payment; the load voucher; policy, list, time and credential
+and the matching Payment; the ordinary Load receipt; policy, list, time and credential
 updates with their certificates and fee schedules) and the map openings. These
 fold witnesses are outside backup sets and marker-bound. A missing witness is
 custody loss under §1.2, shown as such, never a silent wait.
@@ -916,7 +955,7 @@ budget is met when its published Λ peak memory and fold-witness storage for
 the operation's relation fit the device's available app memory and reserved
 storage. A class with no published budget does not meet it. A wallet activates,
 Loads, Receives or commits RefreshPolicy only on a device class whose published
-lineage budget is met; otherwise it refuses before commit, and the voucher or
+lineage budget is met; otherwise it refuses before commit, and the receipt or
 Payment stays deliverable. Never rely on platform background-execution time
 for multi-minute proving: folds resume whenever the app runs. Fold-witness
 storage counts toward the reserved capacity. Existing measurements do not yet
@@ -940,15 +979,61 @@ resumes delivery of the existing Payment; it does not create another payment.
 
 ### 6.1 Load and unload
 
-After completed Bootstrap activation (§3.2), a finalized online transaction
-debits the payer's ledger account into the scheme reserve and creates a unique
-load voucher bound to `(wallet_id, next_load, asset, amount)`. The ledger assigns
-successive ordinals per incarnation. `Load` consumes exactly the next voucher,
-verifies its finalized issuance, adds its amount and increments `next_load`.
-Out-of-order vouchers wait; duplicates cannot load twice. Retrieving the
-original voucher after a connection failure is idempotent. Unabsorbed vouchers
-remain reserve liabilities; failed delivery does not refund their issuance.
-Retirement closes future loads atomically (§6.3).
+After completed Bootstrap activation (§3.2), the payer submits an ordinary signed
+block transaction containing `KagemushaWalletLedgerActionV1::IssueLoad` inside
+`KagemushaWalletLedgerV1`. It fixes the
+scheme, wallet, asset digest, expected next ordinal, nonzero request ID, net
+amount and any canonical charge quote and beneficiary. Ledger execution compares
+the exact asset and ordinal, debits the payer into the scheme reserve, applies
+any displayed charge and advances the ordinal atomically. A stale ordinal or
+changed retry terms fail. No separate Load signer, publisher service or receipt
+publication transaction participates in this operation.
+
+The immutable `KagemushaWalletLoadReceiptV1` records those terms, the payer account digest,
+original transaction hash and block height. An exact replay within the original
+transaction and height can recover its original result; another transaction or
+height cannot reuse that request ID successfully. After a lost response, the
+payer queries the original receipt instead of signing another successful Load.
+Receipt retrieval reads bounded recovery data from committed State without
+reconstructing historical certificates; its result grants no independent
+finality or offline balance authority. Retrieval is idempotent; failed delivery
+does not refund the deposit or remove its reserve liability. Retirement closes future loads atomically (§6.3).
+
+Native finality verification is implemented in
+`iroha_data_model::isi::kagemusha_wallet::load_finality`:
+`verify_finalized_kagemusha_wallet_load_v1` returns the opaque
+`VerifiedKagemushaWalletLoadV1` only after authenticating the selected global
+network and chain, successful external transaction, exact direct instruction
+index, payer and complete approved terms. Its receipt is bound to the original
+transaction and height. The query's serialized receipt alone is not finality
+proof. `Load` must absorb only its exact next ordinal and cannot credit a
+duplicate.
+
+The offline Load relation now consumes the exact ordinary receipt and an original
+terminal finality proof under an independently installed source key and complete
+global-genesis anchor. It verifies the proof and retains both carried curve
+claims. The model has no Load issuer certificate role, voucher signing domain
+or fallback decoder. A receipt or native-verification verdict alone cannot
+supply this proof authority.
+
+The finality source binds the exact native CommitQC, ordered normal committee,
+aggregate signer selection, complete signed result, epoch schedule from genesis
+and counted successful-Load event membership. Under the ordinary consensus
+assumption (at most `f` faulty committee members and honest validators signing
+only after normal block and execution validation), the quorum certifies those
+execution terms. The source does not reexecute the VM or replace the native
+provider's full original-envelope and custody checks. Fixed byte-scan schedules
+and a two-source recursive history catalog permit a finite installed key set.
+The native producer mounts that complete fixed graph, imports original proving
+tables per active node, advances each history height and re-verifies terminal
+receipt evidence before local custody. Its Core adapter preserves native block
+and event originals and derives the anchor from explicitly signed genesis parameters.
+
+TODO(G3/G5): qualify the complete producer from original source artifacts,
+through genesis-rooted finality, Load, subsequent Receive/Unload and the common
+terminal catalog. Rebuild original keys after source changes and measure genuine
+complete Payment envelopes against 10,000 bytes. Component constraints, internal
+wrapper sizes and structural fixture bytes do not establish that release gate.
 
 `Unload` subtracts a chosen positive amount, increments `next_redeem` and creates
 a ledger-directed claim with a domain-separated nullifier derived from scheme,
@@ -1011,20 +1096,21 @@ cannot move or unload value; no online path unloads an unfolded lineage. The
 Keep the old wallet's key, private state, replay map and unresolved Payment and
 claim bytes. Zero spendable balance does not mean its custody data is disposable.
 
-Retirement closes new setup and funding, while preserving existing claims:
+Retirement closes new Request quotes and funding, while preserving existing claims:
 
 1. Commit a proven `Retiring` transition from a folded head (§3.1). It issues
    no new Request quotes, but
    continues to Receive valid Payments under previously signed quotes, including
-   Sends that commit later. It may Load vouchers already issued, Send or Unload
-   remaining value and finish delivery, fee and redemption claims. The lifecycle
+   Sends that commit later. It may Ordinary Load receipts already issued, Send or Unload
+   remaining value and finish delivery, fee and redemption claims. New Offers
+   remain available for those Sends. The lifecycle
    never reverts to Active.
 2. Submit a ledger-control instruction carrying the complete Retiring package,
    or a later complete Send or Unload package proving that lifecycle and its
    `next_load`. Each of these commits only from a folded head and carries its
    predecessor Ω (§3.1). In one transaction, the ledger
-   checks that no voucher at or above that ordinal exists and permanently
-   disables further loads. If a voucher exists, the instruction fails and the
+   checks that no receipt at or above that ordinal exists and permanently
+   disables further loads. If a receipt exists, the instruction fails and the
    wallet loads it first. A load submitted after
    closure is refused and debits nothing. Repeating closure is idempotent;
    later activation attempts cannot reopen it.
@@ -1039,7 +1125,7 @@ custody deletion writes a terminal marker before deleting key material and
 warns that late incoming Payments and any retained claims will be lost. It is
 a destructive custody action under §1.2, not a lossless monetary drain or a
 way to refund the payer. Unused enrollment abandonment has the separate
-unactivated/no-voucher condition in §3.2.
+unactivated/no-receipt condition in §3.2.
 
 There is no seed restore that recreates spent offline value on another phone
 or automatic issuer reissue. The issuer cannot reclaim or reissue a committed
@@ -1240,11 +1326,11 @@ checks are in [the evidence appendix](kagemusha_single_design_evidence.md).
 
 | Owner | Current responsibility and remaining work |
 |---|---|
-| `crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/`; future monetary state owner | The current provider owns custody bytes and head selection. Build the monetary state machine with native verification and step proof, then Advance, then background lineage folding. Add fold scheduling, witness custody, lineage-adjusted values, the credit-digest root and burn/no-op branches. |
-| `crates/iroha_kagemusha_proof/` | One artifact set on PIPA-v1: native step relations, the lineage relation and the transport wrap. Complete the P-256 and recursion gadgets in the native proof owners; vendored halo2 remains the test oracle. |
+| `crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/` and `kagemusha_wallet_state_v1/` | The shared state machine retains native operation originals, permanent replay indexes, source-selected fold witnesses and checkpoints around the existing Advance provider. Its background worker performs ordered native folding with cooperative payment preemption. Qualify the complete installed proof catalog, funded exchange and custody/recovery lifetime on stock phones; component fixtures do not establish these outcomes. |
+| `crates/iroha_kagemusha_proof/` | Native step, lineage and transport relations use PIPA-v1 with the P-256 and recursion gadget owners. Complete and qualify the authenticated artifact set, original-receipt finality chain and real operation compositions; vendored halo2 remains only the temporary independent test oracle pending the recorded retirement gate. |
 | `crates/iroha_plonk`, `crates/iroha_plonk_gadgets`, `crates/iroha_pasta` | The PIPA-v1 proof system: arithmetization, transcripts, prover, verifier, accumulation and `decide`, gadget chips, Pasta fields, curves, MSM and Poseidon ([PIPA-v1](plonk_ipa_v1.md)). |
 | `iroha_crypto`; canonical wallet custody types | Use the current encryption and recovery primitives with canonical caller contracts and domain bindings. The retired KAGEMUSHA crypto module is deleted. |
-| `crates/connect_norito_bridge/` (integration pending) | Build one adapter for opaque current state/proof handles, Advance platform dispatch and durable retry coordination. The superseded coordinator and per-payment service phases are deleted. |
+| `crates/connect_norito_bridge/` | C/JNI adapters expose opaque native state/proof handles, Advance platform dispatch and retained retry originals to thin SDKs. Qualify the current rebuilt native artifacts and complete installed wallet flow; the superseded coordinator and per-payment service phases are deleted. |
 | Swift; Kotlin `core-jvm`, `client-android`, `kagemusha-wallet-android` | Thin shared-core clients; platform evidence/key/storage adapters and carriers remain in their appropriate modules. Kotlin owns JVM behavior; preserve Java consumer assertions. |
 | `iroha_data_model`, `iroha_core`, `iroha_torii`, `iroha_config` | One model and service family for enrollment, load, unload and policy; reserve/finality/replay enforcement; configuration through user → actual → defaults. |
 | Formal models, fixtures and package tools | Update the selected trust boundary, messages and crash transitions; preserve useful assertions and regenerate one canonical set of vectors. |

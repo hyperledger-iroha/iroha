@@ -1,12 +1,12 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for the current instruction records and concrete generic instantiations. Its 332
-type rows preserve 375 populated values and 1,500 complete root, vector, option
+for the current instruction records and concrete generic instantiations. Its 331
+type rows preserve 374 populated values and 1,496 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
-`fda9d3efe685fda3f368d5858fa80c6e00b2098965ead928a5446a5f84d81373`.
+`4a6568079490fc73ddf6dd052a17fd8f0cc64ba57c2a52acb17b969c0089d2d2`.
 `ClaimPublicLaneRewards` uses the required explicit fee-claim field and canonical
 XOR custody. Its native producer checks all four frame roundtrips; the nominal
 and directional identity hashes are unchanged.
@@ -126,7 +126,7 @@ consensus effect that cancels that penalty. The merged first-release inventory r
 the current registry has 388 instructions (21 governance and 367 non-governance).
 These totals combine existing captures and are not a new native qualification run.
 
-The current capture contains 332 rows, 375 populated cases and 1,500 frame forms.
+That earlier checkpoint contains 332 rows, 375 populated cases and 1,500 frame forms.
 Earlier dated counts and checksums above describe only their original candidates.
 
 The completion-authority instruction cases bind distinct provider-owner and
@@ -167,3 +167,14 @@ The KAGEMUSHA `RedeemKagemushaV1` and `TopUpKagemushaV1` instructions left the
 built-in registry and the generated-record inventory on 2026-10-05. Their two
 rows were deleted from this fixture; no other row or byte changed. The fixture
 now holds 330 rows and 373 cases, and the missing-record producers number 50.
+
+On 2026-10-08, both `ClaimIdentifier` cases were recaptured after the signed
+identifier receipt gained its mandatory `network_id`. The maintained native
+`print_current_claim_identifier_fixture_cases` producer preserves the exact
+original outer accounts and case order, constructs current typed receipts, and
+verifies root, vector, option and map decode/compare/exact re-encode roundtrips.
+The two networkless root frames remain only as explicit negative controls in
+`claim_identifier_networkless_rejected_frames.json`; the current decoder rejects
+both. No networkless receipt decoder or production fallback is introduced.
+Only these two positive cases changed; all nominal and directional identities,
+the other 330 rows, and the 331-row, 374-case inventory remain unchanged.

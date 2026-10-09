@@ -649,7 +649,7 @@ fn checkpoint_single_witness_rechecks_certificate_and_preserves_distinct_witness
         CHAIN,
         |source, imported, tip| {
             calls.set(calls.get() + 1);
-            assert!(std::ptr::eq(source, &good));
+            assert!(std::ptr::eq(source, &raw const good));
             assert_eq!(imported.export_checkpoint(&source.tip).unwrap(), good);
             assert_eq!(tip.block().encode_wire().unwrap(), good.tip.block_wire);
             tip.context_id()
@@ -803,7 +803,7 @@ fn checkpoint_import_handoff_preserves_exact_witness_scope_and_resource_errors()
             CHAIN,
             |source, imported, tip| {
                 refused.set(refused.get() + 1);
-                assert!(std::ptr::eq(source, &selected));
+                assert!(std::ptr::eq(source, &raw const selected));
                 assert_eq!(imported.export_checkpoint(proof).unwrap(), selected);
                 assert_eq!(tip.block().encode_wire().unwrap(), proof.block_wire);
                 tip.height()

@@ -978,7 +978,7 @@ async fn acquire(
                 valid_until_ms,
             },
         )]);
-        let plan = planning_client.client().plan_alias_setup(&request)?;
+        let plan = planning_client.plan_alias_setup(&request)?;
         ensure!(
             plan.body.blockers.is_empty() && plan.body.resources.len() == 1,
             "native planner did not produce one executable resource"

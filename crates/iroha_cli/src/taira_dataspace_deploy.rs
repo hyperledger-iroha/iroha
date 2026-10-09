@@ -47,12 +47,20 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[path = "taira_dataspace_deploy_authority.rs"]
+mod authority;
 #[path = "taira_dataspace_deploy_finality.rs"]
 mod finality;
 #[path = "taira_dataspace_deploy_manifest.rs"]
 mod lane_manifest;
 #[path = "taira_dataspace_deploy_profile.rs"]
 mod profile;
+#[path = "taira_dataspace_runtime_update.rs"]
+mod runtime_update;
+pub use authority::{
+    DataspaceAuthorityOriginal, VerifiedDataspaceAuthority, dataspace_authority_completion_sha256,
+    dataspace_authority_original_inventory, verify_dataspace_authority_originals,
+};
 
 pub(crate) use finality::authenticated_height::{
     AuthenticatedHeightObserverV1, HeightObservationV1, VerifiedCommittedHeightV1,
@@ -80,6 +88,8 @@ const DEFAULT_OPERATION_TIMEOUT_MS: u64 = 180_000;
 pub(crate) enum Command {
     /// Export independently selected network trust once for all its dataspaces.
     ExportProfile(profile::ExportProfile),
+    /// Replay completed allocation originals without loading credentials or contacting peers.
+    VerifyAuthority(authority::VerifyAuthority),
     /// Validate the definition and save its immutable plan without submitting transactions.
     Plan(DefinitionArgs),
     /// Plan if needed, then advance the retained transactions without resubmission.
@@ -94,12 +104,35 @@ impl Command {
         let (args, status) = match self {
             Self::Plan(args) | Self::Apply(args) => (args, false),
             Self::Status(args) => (args, true),
-            Self::ExportProfile(_) => eyre::bail!("profile export has no verification routes"),
+            Self::ExportProfile(_) | Self::VerifyAuthority(_) => {
+                eyre::bail!("local authority tooling has no verification routes")
+            }
         };
         require(
             status || args.verification_peer_urls.is_empty(),
             "--verification-peer-url is only available for read-only dataspace status",
         )?;
+        require(
+            status || args.verification_runtime_update.is_empty(),
+            "--verification-runtime-update is only available for read-only dataspace status",
+        )?;
+        require(
+            status || args.export_authority.is_none(),
+            "--export-authority is only available for read-only dataspace status",
+        )?;
+        require(
+            args.verification_source_commit.is_some() == args.verification_source_version.is_some()
+                && (args.verification_source_commit.is_none()
+                    || (status && !args.verification_runtime_update.is_empty())),
+            "explicit target source requires a complete source pair and read-only runtime-update status",
+        )?;
+        if let (Some(commit), Some(version)) = (
+            &args.verification_source_commit,
+            &args.verification_source_version,
+        ) {
+            runtime_update::selected_source_fingerprint(commit, version)?;
+        }
+        runtime_update::validate_selection(&args.verification_runtime_update)?;
         finality::verification_origins(trust, &args.verification_peer_urls)
     }
 }
@@ -118,6 +151,18 @@ pub(crate) struct DefinitionArgs {
     /// Signed peer identities and retained deployment intent are never changed.
     #[arg(long = "verification-peer-url", value_name = "URL")]
     pub(crate) verification_peer_urls: Vec<String>,
+    /// Completed preserved-state updates on this guest, oldest to newest. Repeat for a chain.
+    #[arg(long, value_name = "DIRECTORY")]
+    pub(crate) verification_runtime_update: Vec<PathBuf>,
+    /// Independently authenticated target commit for read-only status with a separate verifier.
+    #[arg(long, value_name = "COMMIT", requires_all = ["verification_source_version", "verification_runtime_update"])]
+    pub(crate) verification_source_commit: Option<String>,
+    /// Package version from that same independently authenticated target source.
+    #[arg(long, value_name = "VERSION", requires_all = ["verification_source_commit", "verification_runtime_update"])]
+    pub(crate) verification_source_version: Option<String>,
+    /// New private directory for verified public allocation originals, after successful status.
+    #[arg(long, value_name = "DIRECTORY")]
+    pub(crate) export_authority: Option<PathBuf>,
     /// Total time budget for planning, dispatch and fresh verification.
     #[arg(long, default_value_t = DEFAULT_OPERATION_TIMEOUT_MS,
           value_parser = clap::value_parser!(u64).range(1..))]
@@ -928,9 +973,10 @@ fn bootstrap_present(plan: &PlanV1, client: &Client) -> Result<bool> {
 fn phase_instructions(
     plan: &PlanV1,
     phase: &str,
-    client: &Client,
+    blocking: &BlockingClient,
     retained_alias_request: Option<&AliasSetupPlanRequestV1>,
 ) -> Result<(Vec<InstructionBox>, Option<AliasTransactionPlanV1>)> {
+    let client = blocking.client();
     match phase {
         "catalog" => {
             finality::committee_preflight(client, &plan.manifest)?;
@@ -988,7 +1034,7 @@ fn phase_instructions(
                 )?;
                 &unsigned_request
             };
-            let alias_plan = client.plan_alias_setup(request)?;
+            let alias_plan = blocking.plan_alias_setup(request)?;
             let instructions = validate_alias_plan(&plan.manifest, &alias_plan, client)?;
             Ok((instructions, Some(alias_plan)))
         }
@@ -1516,7 +1562,12 @@ fn run_saved_until<C: RunContext>(
     apply: bool,
     deadline: Instant,
     verification_origins: &[String],
+    runtime_update: Option<&runtime_update::Verified>,
 ) -> Result<ReportV1> {
+    require(
+        !apply || runtime_update.is_none(),
+        "runtime verification cannot authorize an apply",
+    )?;
     require_operation_budget(deadline, "validate retained operation")?;
     operation_id(&plan.operation_id)?;
     plan.verify()
@@ -1571,7 +1622,7 @@ fn run_saved_until<C: RunContext>(
             .wrap_err_with(|| {
                 format!("deployment phase {phase}: verify funding for remaining caps")
             })?;
-            let (instructions, alias_plan) = phase_instructions(plan, phase, client.client(), None)
+            let (instructions, alias_plan) = phase_instructions(plan, phase, &client, None)
                 .wrap_err_with(|| {
                     format!("deployment phase {phase}: prepare native instructions")
                 })?;
@@ -1643,15 +1694,11 @@ fn run_saved_until<C: RunContext>(
                 .as_ref()
                 .map(|alias| alias_request_from_plan(&plan.manifest, alias))
                 .transpose()?;
-            let (instructions, fresh_alias_plan) = phase_instructions(
-                plan,
-                phase,
-                client.client(),
-                retained_alias_request.as_ref(),
-            )
-            .wrap_err_with(|| {
-                format!("deployment phase {phase}: revalidate instructions before dispatch")
-            })?;
+            let (instructions, fresh_alias_plan) =
+                phase_instructions(plan, phase, &client, retained_alias_request.as_ref())
+                    .wrap_err_with(|| {
+                        format!("deployment phase {phase}: revalidate instructions before dispatch")
+                    })?;
             require(
                 instructions == prepared.instructions,
                 "phase changed before first dispatch",
@@ -1734,8 +1781,13 @@ fn run_saved_until<C: RunContext>(
     if report.state == "applied_verification_pending" {
         eprintln!("[dataspace] starting fresh four-validator finality verification");
         let verification: Result<()> = (|| {
-            let mut completion =
-                finality::Completion::new(plan, journal, deadline, verification_origins)?;
+            let mut completion = finality::Completion::new(
+                plan,
+                journal,
+                deadline,
+                verification_origins,
+                runtime_update,
+            )?;
             complete_until(apply, deadline, &mut report, |report| {
                 completion.complete(context, report)
             })
@@ -2730,6 +2782,7 @@ mod tests {
                 apply,
                 Instant::now(),
                 &[],
+                None,
             )
             .unwrap_err();
             assert!(error.to_string().contains("deadline elapsed"));
@@ -2750,6 +2803,7 @@ mod tests {
             true,
             operation_deadline(60_000).unwrap(),
             &[],
+            None,
         )
         .unwrap_err();
         assert!(

@@ -29,6 +29,7 @@ fn network_config(replay_root: &std::path::Path) -> iroha_config::parameters::ac
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../iroha_config/iroha_test_config.toml");
     let user = ConfigReader::new()
+        .without_env()
         .read_toml_with_extends(&path)
         .unwrap()
         .read_and_complete::<user::Root>()

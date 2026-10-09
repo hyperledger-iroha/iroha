@@ -17,7 +17,7 @@ use crate::{
     },
     verify::finality::FinalityVerifier,
 };
-use iroha_core::state::{AllocationBudget, State, StateReadOnly as _};
+use iroha_core::state::{AllocationBudget, State, StateReadOnly as _, WorldStateSnapshotError};
 use iroha_data_model::{
     isi::{InstructionBox, Log},
     sorafs::{
@@ -88,32 +88,67 @@ impl NativeFixture {
         policy: &SignerCustodyPolicyV1,
         checkpoint: &FinalityVerifier,
     ) -> VerifiedStreamTokenCustodyStateV1 {
+        self.bootstrap_custody_snapshot(authority, policy, checkpoint, None)
+            .unwrap()
+    }
+
+    // Three component workers share this one executed State. Unlike four HTTP peers, its
+    // cold complete-World publication has one original exclusive current/undo owner.
+    // Retry only that exact temporary acquisition refusal, under the caller's deadline.
+    pub(in crate::managed) fn bootstrap_custody_before(
+        &self,
+        authority: &ServiceAuthority,
+        policy: &SignerCustodyPolicyV1,
+        checkpoint: &FinalityVerifier,
+        deadline: Instant,
+    ) -> Result<VerifiedStreamTokenCustodyStateV1> {
+        require_deadline(deadline)?;
+        self.bootstrap_custody_snapshot(authority, policy, checkpoint, Some(deadline))
+    }
+
+    fn bootstrap_custody_snapshot(
+        &self,
+        authority: &ServiceAuthority,
+        policy: &SignerCustodyPolicyV1,
+        checkpoint: &FinalityVerifier,
+        deadline: Option<Instant>,
+    ) -> Result<VerifiedStreamTokenCustodyStateV1> {
         let tip = self.chain.committed(self.chain.height());
         let budget = AllocationBudget::new(32 * 1024 * 1024);
-        let bytes = self
-            .chain
-            .state()
-            .with_native_stream_token_custody_snapshot_v1(
-                &tip,
-                authority.provider_id().unwrap(),
-                &budget,
-                |world, owner, current| {
-                    norito::encode_canonical(&StreamTokenCustodyProofRefV1::new(
-                        world, owner, current,
-                    ))
-                    .map_err(|error| error.to_string())
-                },
-            )
-            .unwrap();
-        assert_eq!(budget.reserved_bytes(), 0);
-        StreamTokenCustodyProofV1::decode_frame(&bytes).unwrap().verify(
+        let capture = || {
+            self.chain
+                .state()
+                .with_native_stream_token_custody_snapshot_v1(
+                    &tip,
+                    authority.provider_id().unwrap(),
+                    &budget,
+                    |world, owner, current| {
+                        norito::encode_canonical(&StreamTokenCustodyProofRefV1::new(
+                            world, owner, current,
+                        ))
+                        .map_err(|error| error.to_string())
+                    },
+                )
+        };
+        let bytes = match deadline {
+            Some(deadline) => bounded_native_snapshot(&budget, deadline, capture)?,
+            None => capture().map_err(|error| crate::managed::Error::Invalid(error.to_string()))?,
+        };
+        if deadline.is_none() {
+            assert_eq!(budget.reserved_bytes(), 0);
+        }
+        let current = StreamTokenCustodyProofV1::decode_frame(&bytes).unwrap().verify(
             authority.config.network_id,
             authority.provider_id().unwrap(),
             authority.provider_role(crate::localnet::service_authorities::StreamTokenAuthorityRole::IssuerOperator).unwrap(),
             &policy.binding,
             State::native_world_schema_hash_v1().unwrap(),
             &checkpoint.verified_tip().unwrap(),
-        ).unwrap()
+        ).unwrap();
+        if let Some(deadline) = deadline {
+            require_deadline(deadline)?;
+        }
+        Ok(current)
     }
 
     pub(in crate::managed) fn bootstrap_reserve(
@@ -141,6 +176,156 @@ impl NativeFixture {
     }
 }
 
+// This test transport retries only the actual exclusive snapshot acquisition. Every attempt
+// reruns the complete State cut/source/root checks, and no verifier or deadline is replaced.
+fn bounded_native_snapshot<T>(
+    budget: &AllocationBudget,
+    deadline: Instant,
+    mut capture: impl FnMut() -> std::result::Result<T, WorldStateSnapshotError>,
+) -> Result<T> {
+    loop {
+        require_deadline(deadline)?;
+        match capture() {
+            Ok(value) => {
+                require_deadline(deadline)?;
+                return Ok(value);
+            }
+            Err(WorldStateSnapshotError::Acquisition(
+                mv::storage::AdmittedStorageError::Busy { release, .. },
+            )) => wait_native_snapshot_release(budget, release, deadline)?,
+            Err(error) => return Err(crate::managed::Error::Invalid(error.to_string())),
+        }
+    }
+}
+
+fn wait_native_snapshot_release(
+    budget: &AllocationBudget,
+    release: iroha_allocation::release::ReleaseWait,
+    deadline: Instant,
+) -> Result<()> {
+    use iroha_allocation::{ChargedShared, release::ReleaseRegistration};
+
+    struct SnapshotWaiter(std::thread::Thread);
+    impl iroha_allocation::shared::SharedWake for SnapshotWaiter {
+        fn wake(&self) {
+            self.0.unpark();
+        }
+    }
+    require_deadline(deadline)?;
+    // The failed acquisition has dropped its partial World owners. Actual waiter and wake
+    // storage use this same finite snapshot pool. Local controls retire before the next
+    // attempt; an in-flight release callback may retain its charged wake until it returns.
+    let bytes = ReleaseRegistration::allocation_layout()
+        .size()
+        .checked_add(ChargedShared::<SnapshotWaiter>::allocation_layout().size())
+        .ok_or_else(|| invalid("native snapshot waiter layout overflow"))?;
+    let mut prepaid = budget
+        .try_reserve_bytes(bytes)
+        .map_err(|_| invalid("native snapshot waiter admission refused"))?;
+    let mut registration = ReleaseRegistration::from_reservation(&mut prepaid)
+        .map_err(|_| invalid("native snapshot waiter allocation refused"))?;
+    let wake =
+        ChargedShared::from_reservation(SnapshotWaiter(std::thread::current()), &mut prepaid)
+            .map_err(|_| invalid("native snapshot wake allocation refused"))?;
+    drop(prepaid);
+    let waker = wake.into_waker();
+    let mut context = std::task::Context::from_waker(&waker);
+    let mut wait = release.wait_for_release(&mut registration);
+    loop {
+        require_deadline(deadline)?;
+        if std::future::Future::poll(std::pin::Pin::new(&mut wait), &mut context).is_ready() {
+            return Ok(());
+        }
+        // A wake is only permission to reattempt; spurious wakes grant no snapshot result.
+        std::thread::park_timeout(deadline.saturating_duration_since(Instant::now()));
+    }
+}
+
+#[test]
+fn native_snapshot_retry_waits_for_original_world_release_and_preserves_refusals() {
+    use iroha_core::{
+        state::World,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
+    let state = chain.state();
+    let held_budget = AllocationBudget::new(32 * 1024 * 1024);
+    let read_budget = AllocationBudget::new(32 * 1024 * 1024);
+    let held = state.world.try_block(&held_budget).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let attempts = AtomicUsize::new(0);
+    let (observed, original_busy) = std::sync::mpsc::sync_channel(1);
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            bounded_native_snapshot(&read_budget, deadline, || {
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                let result = state.world.try_block(&read_budget);
+                if attempt == 0
+                    && matches!(result, Err(mv::storage::AdmittedStorageError::Busy { .. }))
+                {
+                    observed.send(()).unwrap();
+                }
+                result
+                    .map(drop)
+                    .map_err(WorldStateSnapshotError::Acquisition)
+            })
+        });
+        original_busy
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        drop(held);
+        reader.join().unwrap().unwrap();
+    });
+    // World drop releases several original roles in order. A genuine wake may precede
+    // another role's release, so later Busy results must neither block this observer nor
+    // fabricate atomic release of the complete World.
+    assert!(attempts.load(Ordering::SeqCst) >= 2);
+    assert_eq!(read_budget.reserved_bytes(), 0);
+    assert_eq!(held_budget.reserved_bytes(), 0);
+
+    let held = state.world.try_block(&held_budget).unwrap();
+    let mut attempts = 0;
+    let refused = bounded_native_snapshot(
+        &read_budget,
+        Instant::now() + Duration::from_secs(1),
+        || {
+            attempts += 1;
+            state
+                .world
+                .try_block(&read_budget)
+                .map(drop)
+                .map_err(WorldStateSnapshotError::Acquisition)
+        },
+    );
+    assert!(matches!(
+        refused,
+        Err(crate::managed::Error::NativeDeadline)
+    ));
+    assert_eq!(attempts, 1);
+    assert_eq!(read_budget.reserved_bytes(), 0);
+    drop(held);
+
+    let mut attempts = 0;
+    let refused: Result<()> = bounded_native_snapshot(
+        &read_budget,
+        Instant::now() + Duration::from_secs(5),
+        || {
+            attempts += 1;
+            Err(WorldStateSnapshotError::Invalid(
+                "changed certified cut".into(),
+            ))
+        },
+    );
+    assert!(
+        matches!(refused, Err(crate::managed::Error::Invalid(message)) if message == "changed certified cut")
+    );
+    assert_eq!(attempts, 1, "ordinary source refusal cannot become a retry");
+    assert_eq!(read_budget.reserved_bytes(), 0);
+}
+
 fn funding_finalities(report: ProviderFundingProgress) -> [ManagedTransactionFinality; 4] {
     let ProviderFundingProgress::Complete {
         request,
@@ -159,10 +344,69 @@ fn funding_finalities(report: ProviderFundingProgress) -> [ManagedTransactionFin
 }
 
 fn finalities(report: ServiceBootstrapProgress) -> Vec<ManagedTransactionFinality> {
-    let ServiceBootstrapProgress::Complete(history) = report else {
+    let ServiceBootstrapProgress::Complete(mut history) = report else {
         panic!("the parent must recover every original child independently");
     };
-    history.ordered_carriers().unwrap()
+    assert_completed_funding_history(&mut history)
+}
+
+// Exercise the exact opaque completed history produced by the genuine native child owners.
+// Refuse changed pair/source/order claims, then restore every original before returning it.
+fn assert_completed_funding_history(
+    history: &mut HistoricalServiceBootstrap,
+) -> Vec<ManagedTransactionFinality> {
+    let expected = history.ordered_carriers().unwrap();
+    let request = history.providers[0].funding.request.take().unwrap();
+    assert!(
+        history
+            .ordered_carriers()
+            .unwrap_err()
+            .to_string()
+            .contains("bootstrap funding history omits one original")
+    );
+    history.providers[0].funding.request = Some(request);
+    let approval = history.providers[0].funding.approval.take().unwrap();
+    assert!(
+        history
+            .ordered_carriers()
+            .unwrap_err()
+            .to_string()
+            .contains("bootstrap funding history omits one original")
+    );
+    history.providers[0].funding.approval = Some(approval);
+    let (first, rest) = history.providers.split_at_mut(1);
+    assert_ne!(
+        first[0].funding.request.as_ref().unwrap().movement_id(),
+        rest[0].funding.request.as_ref().unwrap().movement_id()
+    );
+    std::mem::swap(
+        &mut first[0].funding.approval,
+        &mut rest[0].funding.approval,
+    );
+    assert!(
+        history
+            .ordered_carriers()
+            .unwrap_err()
+            .to_string()
+            .contains("bootstrap funding histories differ")
+    );
+    let (first, rest) = history.providers.split_at_mut(1);
+    std::mem::swap(
+        &mut first[0].funding.approval,
+        &mut rest[0].funding.approval,
+    );
+    let capacity = history.providers[0].funding.capacity;
+    history.providers[0].funding.capacity.height = history.providers[0].funding.credit.height;
+    assert!(
+        history
+            .ordered_carriers()
+            .unwrap_err()
+            .to_string()
+            .contains("original service child carrier predates its prerequisite")
+    );
+    history.providers[0].funding.capacity = capacity;
+    assert_eq!(history.ordered_carriers().unwrap(), expected);
+    expected
 }
 
 #[test]
@@ -181,6 +425,12 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
     ) {
         let policies = &original.policies;
         for (slot, selected) in policies.providers.iter().enumerate() {
+            // Preserve the real child order while identifying the last completed provider
+            // if a bounded native run fails before reaching offline parent recovery.
+            eprintln!(
+                "parent recovery diagnostic: starting provider {slot} at native height {}",
+                native.chain.height()
+            );
             let provider = selected.provider_id;
             let mut custody = ManagedStreamTokenCustody::open(prepared, provider).unwrap();
             let configure = if slot == 0 {
@@ -240,6 +490,10 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
                     .unwrap(),
             );
             drop(gateway);
+            eprintln!(
+                "parent recovery diagnostic: completed provider {slot} at native height {}",
+                native.chain.height()
+            );
         }
     }
 
@@ -276,10 +530,42 @@ fn original_parent_recovers_all_native_children_offline_and_rejects_foreign_late
             let fresh = original
                 .fees
                 .options(Instant::now() + Duration::from_secs(30));
+            let recovery_started = Instant::now();
             assert_eq!(finalities(owner.recover(fresh.deadline).unwrap()), expected);
-            assert_eq!(
-                finalities(owner.advance(authorization, fresh.deadline).unwrap()),
-                expected
+            eprintln!(
+                "parent offline recovery timing: recover_elapsed_ms={} fresh_remaining_ms={} original_signing_utc_remaining_ms={:?}",
+                recovery_started.elapsed().as_millis(),
+                fresh
+                    .deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis(),
+                now_ms().map(|now| authorization
+                    .test_terms()
+                    .signing_deadline_unix_ms
+                    .saturating_sub(now)),
+            );
+            eprintln!(
+                "parent offline recovery timing: before advance fresh_remaining_ms={}",
+                fresh
+                    .deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis(),
+            );
+            let advance_started = Instant::now();
+            let (_, passes) = phases::test_passes::count(|| {
+                assert_eq!(
+                    finalities(owner.advance(authorization, fresh.deadline).unwrap()),
+                    expected
+                );
+            });
+            assert_eq!(passes, [1, 0, 0]); // One fresh local graph, no dispatch graph.
+            eprintln!(
+                "parent offline recovery timing: advance_elapsed_ms={} fresh_remaining_ms={}",
+                advance_started.elapsed().as_millis(),
+                fresh
+                    .deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis(),
             );
             let epoch_inventory = directory
                 .open_child("epochs")

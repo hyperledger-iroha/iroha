@@ -4559,6 +4559,7 @@ pub(crate) mod valid {
                 ConsensusValidationProfile::SumeragiGenesis { consensus_mode },
                 false,
                 None,
+                None,
             )
         }
         /// Execute the exact original nonempty proposal bound by its native consensus header.
@@ -4577,6 +4578,34 @@ pub(crate) mod valid {
             native_payload: &[u8],
             state: &'state State,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
+            Self::validate_sumeragi_block_with_amx(
+                block,
+                topology,
+                genesis_account,
+                block_cadence,
+                consensus_mode,
+                expansion,
+                native_header,
+                native_payload,
+                state,
+                None,
+            )
+        }
+
+        /// The same validator borrowing only the original Worker's completed leg owners.
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn validate_sumeragi_block_with_amx<'state>(
+            block: SignedBlock,
+            topology: &Topology,
+            genesis_account: &AccountId,
+            block_cadence: Duration,
+            consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
+            expansion: crate::sumeragi::lanes::merge::Expansion<'state>,
+            native_header: &iroha_sumeragi::message::BlockHeader,
+            native_payload: &[u8],
+            state: &'state State,
+            amx_legs: Option<&mut crate::sumeragi::amx::NativeAmxLegPreparations>,
+        ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             if let Err(error) = expansion.validate_publication(state) {
                 return WithEvents::new(Err((
                     Box::new(block),
@@ -4588,6 +4617,8 @@ pub(crate) mod valid {
                     Ok(source) => source,
                     Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
                 };
+            // Completed AMX legs retain canonical byte custody only. The fresh native
+            // source and pristine StateBlock authenticate current authority on every attempt.
             if !block.has_consensus_work() {
                 let header = source.header();
                 return WithEvents::new(Err((
@@ -4630,6 +4661,7 @@ pub(crate) mod valid {
                 },
                 true,
                 None,
+                amx_legs,
             )
             .with_authenticated_rejection(
                 authenticated_header,
@@ -4713,6 +4745,7 @@ pub(crate) mod valid {
             mut validation_profile: ConsensusValidationProfile,
             allow_empty_block: bool,
             mut send_events: Option<&mut dyn FnMut(PipelineEventBox)>,
+            amx_legs: Option<&mut crate::sumeragi::amx::NativeAmxLegPreparations>,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             let total_start = Instant::now();
             let stateless_start = Instant::now();
@@ -4929,6 +4962,7 @@ pub(crate) mod valid {
                 timings.as_deref_mut(),
                 genesis.as_ref(),
                 validation_profile.sccp_height_source(),
+                amx_legs,
             ) {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
@@ -5417,6 +5451,20 @@ pub(crate) mod valid {
                 crate::state::WitnessCaptureError::StorageAdmission(error) => {
                     BlockValidationError::StateStorageAdmission(error)
                 }
+            }
+        }
+        fn amx_deadline_error(
+            error: iroha_data_model::sumeragi_amx::AmxError,
+        ) -> BlockValidationError {
+            match error {
+                iroha_data_model::sumeragi_amx::AmxError::Resource(original)
+                    if !cfg!(all(test, sumeragi_core_mutation = "HC162")) =>
+                {
+                    BlockValidationError::StateStorageAdmission(
+                        crate::state::StateStorageAdmissionError::AmxDecode(original),
+                    )
+                }
+                other => Self::execution_context_error(other.to_string()),
             }
         }
         fn execution_context_error(message: impl Into<String>) -> BlockValidationError {
@@ -6222,6 +6270,7 @@ pub(crate) mod valid {
                 timings,
                 genesis,
                 crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1::Unauthenticated,
+                None,
             )
         }
         /// Execute and seal ordinary outputs. `sccp_height` names the authenticated consensus
@@ -6234,6 +6283,7 @@ pub(crate) mod valid {
             timings: Option<&mut ValidationTimings>,
             genesis: Option<&AuthenticatedGenesisOutputSource>,
             sccp_height: crate::smartcontracts::isi::sccp::height::SccpHeightSourceV1,
+            amx_legs: Option<&mut crate::sumeragi::amx::NativeAmxLegPreparations>,
         ) -> Result<(), BlockValidationError> {
             let start = Instant::now();
             let mut timings = timings;
@@ -6391,7 +6441,7 @@ pub(crate) mod valid {
                 // AMX deadline decisions (`specs/sumeragi.md` §11.5) are World writes too.
                 state
                     .advance_sumeragi_amx()
-                    .map_err(Self::execution_context_error)?;
+                    .map_err(Self::amx_deadline_error)?;
                 Self::validate_native_genesis_policy(source, state)?;
                 Self::finalize_owned_execution_metadata(
                     source,
@@ -6408,7 +6458,8 @@ pub(crate) mod valid {
             state_block
                 .require_original_execution_recorder()
                 .map_err(Self::execution_context_error)?;
-            let result = state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize);
+            let result = state_block
+                .execute_and_seal_ordinary_outputs_with_amx(block, genesis, finalize, amx_legs);
             result.map_err(|error| match error {
                 crate::state::ExecutionOutputSealError::Storage(error) => {
                     BlockValidationError::StateStorageAdmission(error)
@@ -6862,6 +6913,48 @@ pub(crate) mod valid {
         }
         include!("block/post_execution_tail_tests.rs");
         include!("block/sccp_call_site_tests.rs");
+        #[test]
+        fn amx_deadline_finalizer_preserves_exact_local_refusal_without_rejection() {
+            use iroha_data_model::sumeragi_amx::AmxError;
+            use norito::core::DecodeResourceError;
+
+            for original in [
+                DecodeResourceError::AllocationFailed { bytes: 57 },
+                DecodeResourceError::TotalAllocationExceeded {
+                    attempted: 99,
+                    limit: 73,
+                },
+            ] {
+                let mapped = ValidBlock::amx_deadline_error(AmxError::Resource(original));
+                assert!(matches!(
+                    &mapped,
+                    BlockValidationError::StateStorageAdmission(
+                        crate::state::StateStorageAdmissionError::AmxDecode(retained)
+                    ) if *retained == original
+                ));
+                assert_eq!(
+                    map_block_err_to_reason(&mapped),
+                    None,
+                    "unfinished local deadline output cannot emit a protocol rejection"
+                );
+            }
+            for semantic in [
+                AmxError::Encoding("invalid canonical decision".into()),
+                AmxError::Record("malformed decision"),
+            ] {
+                let expected = semantic.to_string();
+                let mapped = ValidBlock::amx_deadline_error(semantic);
+                assert!(matches!(
+                    &mapped,
+                    BlockValidationError::ExecutionContextInvalid(retained) if *retained == expected
+                ));
+                assert_eq!(
+                    map_block_err_to_reason(&mapped),
+                    Some(Reason::TransactionValidationFailed)
+                );
+            }
+        }
+
         fn checked_block_signature(
             private_key: &PrivateKey,
             block_hash: HashOf<BlockHeader>,

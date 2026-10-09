@@ -135,7 +135,7 @@ fn canonical_signature_writer_needs_no_frame_buffer_and_refuses_before_writing()
         .signature_payload()
         .write_canonical(&context, expected.len(), &mut exact)
         .unwrap();
-    assert_eq!(exact.position() as usize, expected.len());
+    assert_eq!(usize::try_from(exact.position()).unwrap(), expected.len());
     assert_eq!(destination, expected);
     let mut untouched = CountWriter::default();
     let (result, allocations) = measured(|| {
@@ -198,12 +198,12 @@ fn canonical_signing_ignores_ambient_layout_and_descriptor_views_borrow_children
     let (view, allocations) = measured(|| EntrypointDescriptorView::from(original));
     assert_eq!(allocations, 0);
     assert!(std::ptr::eq(view.name.as_ptr(), original.name.as_ptr()));
-    assert!(std::ptr::eq(view.params.0, &original.params));
+    assert!(std::ptr::eq(view.params.0, &raw const original.params));
     assert!(std::ptr::eq(
         view.argument_schema.0,
-        &original.argument_schema
+        &raw const original.argument_schema
     ));
-    assert!(std::ptr::eq(view.triggers.0, &original.triggers));
+    assert!(std::ptr::eq(view.triggers.0, &raw const original.triggers));
     let (same, allocations) = measured(|| view.same_content(original));
     assert!(same);
     assert_eq!(allocations, 0);

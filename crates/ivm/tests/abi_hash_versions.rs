@@ -1,6 +1,8 @@
 //! ABI hash tests ensure the hash is stable for the same policy.
 use ivm::syscalls::compute_abi_hash;
-const ABI_V1_HASH_GOLDEN: &str = "32a1fc6e3ca277e857d4aed4c12c8fd47f76ee9fb4c3f4bbdca13e702d0a32bd";
+#[path = "../../iroha_data_model/tests/fixtures/abi_v1_hash.rs"]
+mod abi_v1_fixture;
+use abi_v1_fixture::ABI_V1_HASH_GOLDEN;
 #[test]
 fn abi_hash_is_stable() {
     let h1 = compute_abi_hash(ivm::SyscallPolicy::AbiV1);
@@ -11,6 +13,7 @@ fn abi_hash_is_stable() {
 fn abi_hash_matches_v1_golden() {
     let hash = compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     assert_eq!(hex::encode(hash), ABI_V1_HASH_GOLDEN);
+    assert_eq!(hash, abi_v1_fixture::abi_v1_hash());
 }
 #[test]
 fn abi_hash_has_valid_iroha_hash_marker() {

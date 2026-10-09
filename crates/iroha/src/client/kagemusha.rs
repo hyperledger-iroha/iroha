@@ -1,20 +1,25 @@
-//! Account-authenticated retrieval of canonical wallet load issuance originals.
+//! Account-authenticated wallet enrollment and canonical load issuance originals.
+
+mod enrollment;
+mod event_proof;
+pub use iroha_torii_shared::kagemusha_enrollment::{
+    EnrollmentServiceActionV1, EnrollmentServiceRequestV1, EnrollmentServiceResponseV1,
+};
 
 use super::{AccountClient, ActivationEvidenceReadAuth, Client, dispatch};
 use crate::{Error, Result, http::StatusCode};
-use iroha_data_model::{
-    isi::kagemusha_wallet::KagemushaWalletLoadIssuanceV1, kagemusha::KagemushaWalletLoadVoucherV1,
+use iroha_data_model::isi::kagemusha_wallet::load_finality::{
+    KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1, KagemushaWalletLoadReceiptV1,
 };
 
-// A voucher is at most 1,024 bytes. This independent response capacity also covers the
-// complete original body, canonical account controller and Norito framing.
-pub(super) const MAX_RESPONSE_BYTES: usize = 16 * 1024;
+// The receipt contains a fixed payer digest and one bounded canonical frame.
+pub(super) const MAX_RESPONSE_BYTES: usize = KAGEMUSHA_WALLET_LOAD_RECEIPT_MAX_BYTES_V1;
 const READ: &str = "kagemusha.wallet.load_issuance.read";
 
-/// Load issuance reads using one immutable payer and network context.
+/// Wallet service operations using one immutable account and network context.
 ///
-/// These records are transport data. The shared native wallet still verifies the signed
-/// voucher and its complete authenticated Load relation before Advance changes a balance.
+/// These records are transport data. Monetary authorization requires independently verified
+/// ordinary block finality and the successful transaction with these exact load terms.
 ///
 /// ```compile_fail
 /// fn read_load(client: &iroha::client::Client) {
@@ -32,7 +37,7 @@ pub struct Kagemusha<'a> {
 }
 
 impl AccountClient {
-    /// Retrieve retained wallet load records using this account's exact network signature.
+    /// Access wallet enrollment and load records using this account's exact network signature.
     #[must_use]
     pub const fn kagemusha(&self) -> Kagemusha<'_> {
         Kagemusha { account: self }
@@ -40,23 +45,22 @@ impl AccountClient {
 }
 
 impl Kagemusha<'_> {
-    /// Retrieve one exact issuance and its original voucher, if publication has completed.
+    /// Retrieve the original receipt of one finalized ordinary load transaction.
     ///
     /// All three identities must be nonzero. The request signs the canonical lowercase
     /// route for this context's payer and network. It performs one bounded asynchronous
-    /// GET, without a compatibility probe, alternate codec or automatic retry. A pending
-    /// publication remains `voucher: None`; an unavailable source remains an error.
-    /// Neither response form grants finality, completion or offline balance authority.
+    /// GET, without a compatibility probe, alternate codec or automatic retry. An unavailable
+    /// source remains an error. This read alone grants no offline balance authority.
     ///
     /// # Errors
     /// Rejects invalid identities or a non-direct signer, signing/transport/deadline/HTTP
-    /// failures, noncanonical binary responses, foreign payer/scope or a substituted voucher.
+    /// failures, noncanonical binary responses, foreign payer/scope or invalid receipt fields.
     pub async fn load_issuance(
         &self,
         scheme: &[u8; 32],
         wallet: &[u8; 32],
         request: &[u8; 32],
-    ) -> Result<KagemushaWalletLoadIssuanceV1> {
+    ) -> Result<KagemushaWalletLoadReceiptV1> {
         let client = &self.account.context;
         for identity in [scheme, wallet, request] {
             if identity == &[0; 32] {
@@ -78,7 +82,7 @@ impl Kagemusha<'_> {
                     .to_owned(),
             });
         }
-        ensure_deadline(client)?;
+        ensure_deadline(client, READ)?;
         let path = iroha_torii_shared::route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_ISSUANCE_GET
             .path()
             .replace("{scheme}", &hex::encode(scheme))
@@ -106,24 +110,24 @@ impl Kagemusha<'_> {
         let issuance =
             Client::decode_canonical_norito_response(&response, MAX_RESPONSE_BYTES, READ)?;
         validate_response(&issuance, self.account.authority(), scheme, wallet, request)?;
-        ensure_deadline(client)?;
+        ensure_deadline(client, READ)?;
         Ok(issuance)
     }
 }
 
-fn ensure_deadline(client: &Client) -> Result<()> {
+fn ensure_deadline(client: &Client, operation: &'static str) -> Result<()> {
     if client
         .http_transport
         .deadline()
         .is_some_and(|deadline| std::time::Instant::now() >= deadline)
     {
-        return Err(Error::Timeout { operation: READ });
+        return Err(Error::Timeout { operation });
     }
     Ok(())
 }
 
 fn validate_response(
-    issuance: &KagemushaWalletLoadIssuanceV1,
+    issuance: &KagemushaWalletLoadReceiptV1,
     payer: &iroha_data_model::account::AccountId,
     scheme: &[u8; 32],
     wallet: &[u8; 32],
@@ -136,22 +140,15 @@ fn validate_response(
     if issuance.request_id != *request {
         return Err(mismatch("request_id"));
     }
-    if &issuance.payer != payer {
+    if issuance.payer_account_digest
+        != iroha_data_model::kagemusha::kagemusha_wallet_account_digest_v1(payer)
+            .map_err(|_| mismatch("payer"))?
+    {
         return Err(mismatch("payer"));
     }
-    if issuance.body.scheme_id != *scheme || issuance.body.wallet_id != *wallet {
+    if issuance.scheme_id != *scheme || issuance.wallet_id != *wallet {
         return Err(mismatch("wallet scope"));
     }
-    issuance
-        .body
-        .validate()
-        .map_err(|_| mismatch("issuance body"))?;
-    if let Some(raw) = &issuance.voucher {
-        let voucher = KagemushaWalletLoadVoucherV1::decode_canonical(raw, scheme)
-            .map_err(|_| mismatch("voucher original"))?;
-        if voucher.body != issuance.body {
-            return Err(mismatch("voucher body"));
-        }
-    }
+    issuance.validate().map_err(|_| mismatch("issuance body"))?;
     Ok(())
 }

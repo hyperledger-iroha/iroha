@@ -1070,6 +1070,11 @@
         "discriminant": 25,
         "tag": "Sccp",
         "type": "SccpEventFilter"
+      },
+      {
+        "discriminant": 26,
+        "tag": "KagemushaLoadCommitted",
+        "type": "Option<Array<u8, 32>>"
       }
     ]
   },

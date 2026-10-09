@@ -314,6 +314,11 @@ fn installed_signature_originals_reject_bounds_keys_and_slot_source() {
     let mut key_config = KeygenConfigV2::pipa_r(QSignaturePlan::instance_types().to_vec());
     key_config.compress_selectors = false;
     let key = keygen_pk_v2(&params, &c, &key_config).unwrap();
+    let factory = c.plan().source_circuit().unwrap();
+    let (binding, verifier) =
+        iroha_plonk::keys::keygen_vk_with_binding_v2(&params, &factory, &key_config).unwrap();
+    assert_eq!(&binding, key.binding());
+    assert_eq!(verifier.to_bytes(), key.vk().to_bytes());
     let original = key.artifact_bytes_v2().unwrap();
     let config = signature_read_config(&original);
     let mount = |bytes: &[u8], selected: ReadConfig| {

@@ -22,7 +22,6 @@ zk_lane_retry_replayed_total	iroha_zk_lane_retry_replayed_total	Count of tasks r
 zk_lane_retry_exhausted_total	iroha_zk_lane_retry_exhausted_total	Count of tasks dropped after exhausting ZK lane retry attempts.	registered
 zk_lane_pending_depth	iroha_zk_lane_pending_depth	Current number of tasks buffered in ZK lane dispatch backlog.	registered
 zk_lane_retry_ring_depth	iroha_zk_lane_retry_ring_depth	Current number of tasks buffered in the ZK lane retry ring.	registered
-zk_verifier_cache_events_total	iroha_zk_verifier_cache_events_total	Verifier cache events grouped by cache name and event (hit|miss|insert|evict).	registered
 confidential_gas_base_verify	iroha_confidential_gas_base_verify	Base gas charged when verifying a confidential proof.	registered
 confidential_gas_per_public_input	iroha_confidential_gas_per_public_input	Gas multiplier per confidential proof public input.	registered
 confidential_gas_per_proof_byte	iroha_confidential_gas_per_proof_byte	Gas multiplier per confidential proof byte.	registered

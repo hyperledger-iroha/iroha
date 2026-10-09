@@ -16,5 +16,4 @@ iroha_crypto = { path = "../iroha_crypto", default-features = false }
 iroha_pasta = { path = "../iroha_pasta", default-features = false }
 iroha_plonk = { path = "../iroha_plonk", default-features = false }
 ff = "0.13.1"
-poseidon-primitives = "0.2.0"
 zeroize = { workspace = true }

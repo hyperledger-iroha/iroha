@@ -45,7 +45,8 @@ impl_id_key_codec!(
     crate::proof::ProofId,
     crate::isi::settlement::SettlementId,
 );
-#[cfg(feature = "governance")]
+// Parliament certificate identities are available without governance instructions;
+// their canonical storage keys must have the same availability.
 impl_id_key_codec!(
     crate::governance::types::GovernanceAttemptId,
     crate::governance::types::BallotAttemptId,
@@ -448,7 +449,16 @@ mod tests {
             let mut parser = Parser::new(&encoded);
             let raw = parser.parse_string().expect("parse governance storage key");
             assert_eq!(&T::decode_json_key(&raw).expect("decode storage key"), key);
-            assert!(T::decode_json_key(&raw.to_uppercase()).is_err());
+            assert_eq!(raw.len(), 64, "canonical keys contain exactly 32 hex bytes");
+            for invalid in [
+                raw.to_uppercase(),
+                format!("0x{raw}"),
+                raw[..62].to_owned(),
+                format!("{raw}00"),
+                "zz".repeat(32),
+            ] {
+                assert!(T::decode_json_key(&invalid).is_err());
+            }
         }
 
         check(&GovernanceAttemptId::new([0xab; 32]));

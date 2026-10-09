@@ -37,11 +37,11 @@ record.
 |---|---|
 | Every protocol P-256 signature signs the 32-byte canonical encoding of the body's `P_bytes` signing message with SHA256withECDSA (proposal §3, wire §1) | Each in-circuit ECDSA needs exactly one SHA-256 compression block, in the same Q slot as the ECDSA |
 | Every wallet map and the lineage-level credit-digest tree is a depth-32 Poseidon indexed Merkle tree (IMT, wire §3.2), except the B5 quota-usage array | One IMT chip; there is no sparse-Merkle-tree chip |
-| **OQ-1 (B1), applied.** Every digest Λ recomputes is Poseidon: `operation_id`, the unload nullifier, the request, receipt, package, credential, certificate, voucher, fee-schedule and policy object digests, the certificate-set digest, and the receipt's statement digest. `H` remains only for `scheme_id`, the enrollment and renewal transcripts, `account`, the marker, the output descriptor and the artifact digests | Λ computes no SHA-256 beyond one block per signature. Identities Λ only carries (`wallet_id`, `enrollment_id`, asset scope, `relation_id`, verifying-key set) are never recomputed in-circuit (scope question, wire §7). Encodings (wire §§1, 3.2): an object digest is `P(d_obj, [m, r_lo, r_hi, s_lo, s_hi])` (3 permutations); the package digest has 3 elements (2), `operation_id` 4 or 5 (3), the nullifier 5 (3); the statement digest is the σ statement digest, 26 elements (14) |
+| **OQ-1 (B1), applied.** Every digest Λ recomputes is Poseidon: `operation_id`, the unload nullifier, the request, receipt, package, credential, certificate, ordinary Load receipt, fee-schedule and policy object digests, the certificate-set digest, and the receipt's statement digest. `H` remains only for `scheme_id`, the enrollment and renewal transcripts, `account`, the marker, the output descriptor and the artifact digests | Λ computes no SHA-256 beyond one block per signature. Identities Λ only carries (`wallet_id`, `enrollment_id`, asset scope, `relation_id`, verifying-key set) are never recomputed in-circuit (scope question, wire §7). Encodings (wire §§1, 3.2): an object digest is `P(d_obj, [m, r_lo, r_hi, s_lo, s_hi])` (3 permutations); the package digest has 3 elements (2), `operation_id` 4 or 5 (3), the nullifier 5 (3); the statement digest is the σ statement digest, 26 elements (14) |
 | **OQ-2 (B2), applied.** Λ_recv and Λ_archive may fold a self-computed *corrected claim* (G*, u), with G* = ⟨s(u), g⟩ ≠ G, as the witness that an incoming accumulator (G, u) fails to decide | §2.7 burn and no-op branches |
 | **OQ-3 (B3), applied.** On the burn branch with a duplicate `credit_id`, the committed consumed-credit root equals the predecessor's root or is a structurally valid IMT insert of a fresh key | §2.7 |
 | **OQ-4 (B4), applied.** The QuotaShare refresh rule "keeps the end of every existing usage key" is checked only for the 64 quota-window slots | §5.1; with B5 it is part of the usage-array rebuild, whose budget §5.4 states |
-| **B5.** The quota-usage map is a depth-6 fixed array aligned one to one with the 64 quota-window slots; a Send charges its window slots in place | σ_send: ≈ 45 permutations per charge, ≈ 309 for the quota part and ≈ 346 with every control [E], a single-lane k14 shape (≈ 3,424 B [C]) or k13 with shared paths, replacing the k15 IMT estimate. Λ_refresh(QuotaShare): array rebuild ≈ 954 permutations instead of ≈ 4,734; no A-split (§§5.1, 5.4) |
+| **B5.** The quota-usage map is a depth-6 fixed array aligned one to one with the 64 quota-window slots; a Send charges its window slots in place | σ_send: ≈ 45 permutations per charge, ≈ 309 for the quota part and ≈ 346 with every control [E], a single-lane k14 shape (≈ 3,424 B [C]) or k13 with shared paths, replacing the k15 IMT estimate. Λ_refresh(QuotaShare): array rebuild ≈ 954 permutations instead of ≈ 4,734; the measured recursive composition requires split root/merge owners (§§5.1, 5.4) |
 | **B6.** The Request records the receiver blacklist version and root used at issuance; Receive (native and σ_recv) checks only that list | σ_recv proves the gap in the recorded root and its key is selected by the recorded version. Λ_recv looks the recorded pair up in the blacklist-history IMT of the rest (≈ 68 permutations); Refresh(Blacklist) inserts into it (≈ 264). F_payment +42 B, so R9 becomes 8,277 B (§3.5) |
 | **B7.** `quota_share_expires_at_ms` is a core field; σ_send enforces `U < expires_at_ms` with the quota control | σ only; one 64-bit comparison |
 | **B8.** `time_anchor_max_response_ms` < the shortest quota window, checked when a share is installed; σ_send checks `U − L ≤ time_anchor_max_response_ms` (a core field) with the quota control | Λ_refresh(QuotaShare): 64 length comparisons; σ_send: one comparison; two charge candidates per kind suffice |
@@ -185,6 +185,21 @@ Build order: σ VKs → Q VKs → A VKs → Ω VK → `vkΩ_digest` and
 bound by its statement digest (wire §3.2, `StatementV1`). It is never a circuit constant
 (`relation_id_is_never_a_circuit_constant`).
 
+The same build order requires `scheme_id` to be carried, never fixed into an A
+key: it depends on the completed key inventory through `relation_id`. Bootstrap
+binds its certificate and credential to the scheme limbs in its constrained
+state, statement and lineage. Later steps bind their signed objects to the
+scheme limbs of the authenticated current state and predecessor. The provider
+identity and scheme-root public key are independently selected constants; they
+remain fixed in the authorization keys. Native admission separately requires
+the carried scheme and relation to equal the authenticated installation.
+
+The former `OwnPolicy` and `BootstrapPolicy` scheme constants violated this
+order. Their removal requires fresh affected A/W/Ω keys and complete catalog
+qualification. Proof captures made with those constants remain evidence only
+for their recorded source; they do not qualify the corrected artifacts. No
+compatibility key or fallback acceptance path is retained.
+
 **VK digest framing.** A PIPA-R verifying key has the base-field digest
 `P_B(kgwvkey1; 1, curve_code, k, fixed_count, permutation_count, transcript_repr,
 descriptor_digest_lo128, descriptor_digest_hi128, fixed_points[x,y]..., permutation_points[x,y]...)`.
@@ -303,10 +318,16 @@ Why this meets proposal §3.2 (§7 C8):
 **A-split.** Used when a variant's A exceeds its capacity of 1.67M cells [E: 32 × 63k ×
 0.83]:
 
-1. A_1 verifies some Q leaves and writes `D_ctx = P(kgwctx_1, …)`, domain-separated from
-   `kgwomg_1`.
-2. W (Ω's descriptor, with its own VK, verifying the A_1 variant) wraps A_1.
-3. A_2 verifies W as it verifies Ω(pred), then continues.
+1. Each A_i binds the complete immutable operation context
+   `C = P(kgwctx_1, …)` and its current Pallas accumulator with
+   `D_i = P(kgwlink1, [1, variant, i, C, encode(P_i)])`.
+2. W_i (Ω's descriptor, with its own exact stage VK) wraps A_i and retains
+   its Vesta part and opening obligation.
+3. A_(i+1) recomputes C and D_i, hard-verifies W_i, and folds the carried P_i,
+   W_i opening and every assigned new obligation. It reuses C for its output.
+   The fixed key sequence supplies the recursive link; no historical digest
+   trace is retained. The exact framing and induction are in
+   `kagemusha_a_split_context_v1.md`.
 
 Native verifiers recompute only `kgwomg_1`, so W can never pose as Ω. Cost: +1 A, +1 W and
 +2 folds ≈ +48–65 s on 1 Mac thread [E]. At the M3 P-256 thresholds the split is needed only by
@@ -372,8 +393,8 @@ public transcript, the transported acc_P and the constant `vkΩ_digest`.
 
 ### 3.4 PIPA-AS-v1 fold proof
 
-BCMS20 PC_DL accumulation (snark-verifier `IpaAs`; reference `iroha_core_zk`
-`accumulation.rs`):
+BCMS20 PC_DL accumulation, implemented in
+`iroha_plonk_recursion::accumulation`:
 
 - **Transcript.** A base-field sponge with tag `pipa-as1` absorbs a canonical prover salt
   (one base-field element), r, and for each slot (finite G_i as [x, y], source k_i,
@@ -401,12 +422,17 @@ V = n_a + 8n_l + n_z + q_a + q_f + m + max(3n_z − 1, 0) + n_s. The Ω budget w
 largest measured revision-4 σ_send is 8,277 − 3,456 = 4,821 B (B6 adds 42 B to
 F_payment), so 32·(44 + V) + 1,088 ≤ 4,821 requires **V ≤ 72**. The baseline Ω descriptor has V = 70 [E].
 
-The current degree-nine secondary-range component has V = 69 and the exact
+The captured degree-nine secondary-range component has V = 69 and the exact
 PIPA count 32·(47 + V) = 3,712 proof bytes, hence **4,800 transported bytes** [M].
 The unchanged 4,821 B cap therefore requires V ≤ 69 at degree nine; the separate
 G-Ω1 bound V ≤ 72 is also retained. Actual native Bootstrap-source proofs pass
-for witnessed-key and pinned-one-key layouts. These are component results;
-full catalog and carried-key rebinding, every operation and qualification remain open.
+for witnessed-key and pinned-one-key layouts; the captured witnessed-key
+Bootstrap/Load/Send-mask0 catalog also passes its three-terminal rebuild. These
+are historical component results. The current native producer pins the complete
+catalog into its source; its fresh layout, proof size and signed-source rebuilding
+remain pending. Descriptor equality does not transfer source qualification.
+Ordinary-finality Load, the full catalog and every operation's qualification
+remain open.
 
 
 | Ω descriptor [E] | Transport [C] | Margin to 4,821 B |
@@ -538,7 +564,7 @@ for the value and the leaf.
 | RefreshPolicy (Blacklist), B6 | insertion of `(list_version, entries_root)` into the rest's blacklist-history IMT (≈ 264 permutations) |
 | RefreshPolicy (QuotaShare), OQ-4 with B5 | rebuild of the 64-slot usage array: the 64 predecessor usage leaves against the core's `quota_usage_root` (318 permutations), the 64 new window leaves against the share's signed `windows_root` (318) and the 64 successor usage leaves (318), ≈ 954 permutations, plus a constrained sorted merge of the two key-sorted arrays (the current deterministic 128-entry bitonic merge uses 448 compare/swap nodes): matching keys keep `end` and carry `used`, an absent key starts at 0 only with `start ≥` the new floor (unless no share was held), a charged key is dropped only with `end ≤` the new floor, and every window is longer than `time_anchor_max_response_ms` (B8) |
 
-Current component evidence: the complete fixed64 quota rebuild plus both state openings and refresh effects fits k16 at 51,652 maximum assigned rows on the stand-alone sponge lane (36,008 range rows, 17,604 glue rows). The same constraints pass on A’s shared verifier duplex. This excludes the recursive Q/predecessor verifiers and authenticated object composition and does not qualify the earlier full-A timing/split estimates.
+Current component evidence: the complete fixed64 quota rebuild plus both state openings and refresh effects fits k16 at 51,652 maximum assigned rows on the stand-alone sponge lane (36,008 range rows, 17,670 glue rows). The same constraints pass on A’s shared verifier duplex. Its actual Bootstrap-rooted recursive composition exceeded k16 at 91,131 rows, and the run stopped before generating an oversized proof. The replacement source assigns three exact array-root owners and one deterministic matching owner, all mandatory. Their shared internal context contains `[H_old, H_windows, H_used, issued, count]`; the three hashes use `kgwciw_1` with distinct tags7/8/9 and fixed counts256/256/64. The context object uses tag6 and count5 (160 bytes of canonical field words). Each root owner opens every array it consumes; the matching owner opens all three arrays and binds issue/count to the signed share. This preserves all578 witness words and all fixed64 semantics without duplicating every array hash in every stage. The first eight-stage recursive attempt produced four valid 7,744-byte A proofs, then failed the PreviousRoot stage at 68,931 rows. Its result is retained; no oversized proof was generated. Root-only stages now retain proposed object digest/length/tape triples under the exact complete quota task/schema plan. Mandatory Effects and authorization owners recompute every signed original, and Merge binds signed issue/count; root proposals cannot supply signed fields. The eight-stage proposal preflight reduced PreviousRoot to 65,490 rows but found WindowRoot/UsageRoot at 67,303/70,411. It generated no Refresh proof. The current seven-stage schedule places Effects+PreviousRoot with the hard predecessor at A0, WindowRoot at A1, UsageRoot at A2, Q-sigma at A3, update authorization at A4, current authorization at A5, and Merge at A6. The seven-stage unknown-witness preflight and genuine recursive closure pass at maxima53,206/60,014/63,122/62,715/61,679/62,974/61,420 under the unchanged65,529 ceiling. The representative-W preflight is only a sizing diagnostic; the actual chain derives every successive key and independently confirms those bounds. All seven A proofs are7,744 B and all six W continuations verify with every original/Q/opening obligation retained. The captured native producer/canonical checkpoint test passes1/1 in3,884.48 s with exact A/W proof-byte replay and every checkpoint restored. This uses the earlier typed-key mount; current strict original-PK intake is qualified separately. The component result establishes neither a performance gate nor terminal admission.
 
 Signed messages are `P_bytes` over the body transcript (wire §1): A links the transcript
 bytes (2–3 cells per byte, 108–476 B per body) and hashes them; Q receives m as a Bounded
@@ -549,7 +575,7 @@ instance and feeds its 32-byte canonical encoding to SHA-256.
 | Operation | P-256 V / F | SHA blocks | σ verified | Ω verified in A | Bytes linked in A |
 |---|---|---:|---:|---:|---|
 | Bootstrap | 2 / 1 (τ, credential; certificate) | 3 | 1 | 0 | σ (3.3 KB) |
-| Load | 3 / 2 (+ voucher; LoadAuthorization certificate) | 5 | 1 | 1 | σ |
+| Load | 2 / 1 (own receipt, credential; Enrollment certificate) | 3 | 1 | 1 + ordinary finality | σ; original receipt/finality |
 | Send, Unload, Retiring | 2 / 1 | 3 | 1 | 1 | Ω(pred) ‖ σ (8.4 KB) |
 | Receive | 4 / 1 (τ_recv, credential, τ_send, Request; certificate) | 5 | 2 | 2 | σ_recv; Ω_in ‖ σ_send |
 | Receive (renewed receiver credential) | 5 / 2 | 7 | 2 | 2 | as Receive |
@@ -575,15 +601,18 @@ evaluation cost is ≈ 0.43k cells per chunk [E], about 46k–48k cells per σ.
 | Ω / W | 16 | 11 | 3,648 (+1,088) | 0.58M | 15–21 s |
 | PIPA-AS fold | K16 | — | 1,088 | — | 2.9–3.1 s |
 
-Prove-time calibration [E]: a 25-column k16 circuit took 43.5 s with the vendored prover on 1
-thread [M]; the measured native/vendored ratio of 0.43–0.60 gives 18.7–26 s. No native proof
-wider than k14 has been timed (G3.6).
+Historical prove-time calibration [E]: a 25-column k16 circuit took 43.5 s with the
+vendored prover on one thread [M]; the measured native/vendored ratio of 0.43–0.60
+gave an estimate of 18.7–26 s. Current native k16 synthetic and real-chip measurements
+are recorded in the [evidence checklist](kagemusha_evidence_gate.md); that campaign
+still has hard failures, borderline margins and incomplete configurations. These
+historical estimates cannot establish the current G3.6 result.
 
 | Unit | Cells |
 |---|---:|
 | Pow5 permutation | 148 [M] |
 | Tree node `P(d, [l, r])` | 2 permutations = 296 [M] |
-| P-256 variable key (complete, low-S, SEC1, soft) | 0.2–0.4M [E]; **threshold 0.30M**; measured today with halo2-base: 1,466,624 [M, checklist §8] |
+| P-256 variable key (complete, low-S, SEC1, soft) | 0.2–0.4M [E]; **threshold 0.30M**; historical retired-engine measurement: 1,466,624 [M, checklist §8] |
 | P-256 fixed key (scheme root) | 0.06–0.15M [E]; **threshold 0.12M** |
 | SHA-256 block, degree 6 | 37–50k [E] (Table8 source estimate 2,304 rows, unmeasured) |
 | FF-CRT multiplication (Fq-in-Fp, Fp-in-Fq, P-256 p and n) | 80–100 [E] |
@@ -665,12 +694,14 @@ The peak falls in the quotient phase [E]:
   4] + 2(d − 1);
 - × 2 MiB at k16 × 1.15, + 8 MiB params + 64 MiB MSM scratch cap + 50 MiB core baseline.
 
-The witness factor is c = 3 today, because `commit_advice` clones the witness values and then
-keeps coefficients [S `crates/iroha_plonk/src/prover/advice.rs`]; c = 2 with an owned-witness
-API. Streaming keeps fixed and permutation columns as coefficients only and drops advice values
-once the permutation and lookup products are built.
+The original borrowed-witness estimate used c = 3; the implemented consuming-witness
+path uses c = 2 in that estimate. Advice values move into coefficient buffers after
+the permutation and lookup products are built
+[S `crates/iroha_plonk/src/prover/advice.rs`]. The table below retains design estimates;
+current peak RSS qualification must use the measured owned-witness path and complete
+process lifetime. Streaming fixed/permutation columns remains a separate memory choice.
 
-| Circuit | Today (c = 3) | Owned witness (c = 2) | Streamed |
+| Circuit | Borrowed estimate (c = 3) | Owned estimate (c = 2) | Streamed estimate |
 |---|---:|---:|---:|
 | A (32 / 44 / 10 / 3) | 0.91 GiB | **0.84 GiB** | 0.64 GiB |
 | Q (22 / 32 / 8 / 3) | 0.72 GiB | 0.67 GiB | 0.53 GiB |
@@ -773,10 +804,21 @@ bad path. The [containment argument](kagemusha_recursion_soundness_v1.md#branch-
 reduces the selection rule to C2, C7 and C10; complete operation binding and
 independent review remain G4.1 work.
 
-**C9. Liveness of hard verification.** Q, A and Ω are hiding and are re-proved with fresh
-blinds if self-verification fails, which by C7 never happens for honest witnesses. PIPA-AS takes
-a prover salt as cheap insurance; grinding through it only adds hash queries, already counted in
-C2.
+**C9. Hard-verifier completeness and retries.** C7 gives native/circuit verdict agreement;
+it does not exclude zero challenges, identity messages or exceptional denominators for an
+honest witness. The native Q/A/Ω owners perform one proving attempt and propagate proof,
+self-verification, entropy, resource and cancellation failures. A failure does not establish
+payment completion or authorize a burn. PIPA-AS does not silently retry its salt,
+and a salt retry cannot repair an all-short input set (§3.3).
+
+A retry of unpublished proof work is a new attempt; all hash queries and any fresh blinds
+or fold salts actually drawn enter the bounded experiment, including failed attempts.
+Q's capsule-derived public local-fold nonce is reused and is not fresh private entropy.
+Retained checkpoints and completed Ω records are restored from their exact bytes;
+payment retries return the retained Payment and never repeat irreversible Send. The
+[conditional failure bounds](kagemusha_recursion_soundness_v1.md#conditional-honest-fold-abort-bound)
+retain their independent-challenge premise and separate operational failures. Hiding and
+verdict parity alone establish no unconditional liveness or zero failure probability.
 
 **C10. Maps.** Every wallet map except the quota-usage array (below) and the credit-digest tree
 is the wire §3.2 depth-32 indexed Merkle tree (the Aztec construction): leaves `(key, value, next_key)` sorted and linked from a
@@ -803,12 +845,21 @@ of `P` and of SHA-256 on 32-byte inputs, plus P-256 EUF-CMA (owner protocol choi
 in-circuit P-256 is complete for natively accepted inputs: complete Renes–Costello–Batina
 formulas, low-S, x(R) mod n.
 
-**C12. Zero knowledge.** Ω follows the halo2 argument (PIPA §13). acc_P and acc_V are outputs of
-non-hiding fold IPAs whose inputs derive from hiding proofs; in the ROM u is a hash of
-high-entropy transcripts and G = ⟨s(u), g⟩ is public given u, so a simulator samples u. D_A is
-a function of public fields and acc_P. Q, A and the fold proofs never leave the device. Ω
-already exposes `wallet_id` and `payment_key`, so linkability is unchanged. The formal memo is
-M4 work (PIPA §13 TODO).
+**C12. Zero knowledge.** Ω uses the hiding proof construction in PIPA §13. For a deciding
+accumulator, G = ⟨s(u), g⟩ is determined by u and the pinned generators. D_A hashes the
+18 public lineage fields and acc_P's coordinates and challenge limbs (52 field words),
+so it adds no information beyond that public tuple. Q, A and the local fold proofs are
+not transported; `wallet_id` and `payment_key` are already public.
+
+These local facts do not prove privacy of the joint public transcript. The two exposed
+challenge vectors come from non-hiding folds and can share inputs correlated with
+public σ proofs and earlier accumulators. A simulator must handle both vectors and Ω
+under one random oracle, including adaptive queries, retained checkpoint reuse, retries
+and exceptional aborts. Independently sampling two vectors does not by itself produce
+an Ω witness or establish that distribution. Fresh private salts support a possible
+hidden-prefix argument, but that argument and the composed simulator remain M4 work
+([recursive soundness memo](kagemusha_recursion_soundness_v1.md), PIPA §13 TODO).
+No stronger privacy or linkability conclusion is established by this paragraph.
 
 ## 8. PIPA-v1 extensions (applied to `plonk_ipa_v1.md` in M4)
 
@@ -944,6 +995,13 @@ measured proof is verified. A one- or four-worker Rayon pool is constructed and
 its actual worker count checked. Missing CPU/RSS probes invalidate a run. Memory
 is the kernel lifetime high-water RSS of a fresh process, including setup; it is
 never a subtraction of phase peaks or the maximum of periodic RSS samples.
+The current driver keeps one explicit caller-owned quotient workspace across
+both proofs, with a 256 MiB field-buffer ceiling. Its allocation is included in
+kernel RSS; it does not replace or relax the independent process-wide 64 MiB MSM
+scratch limit. The first proof starts with empty workspace storage and the second
+reuses the same column allocations. Reports bind the ceiling and both before/after byte
+counts; missing or inconsistent reuse evidence invalidates the attempt. Every
+lease zeroizes retained rows before return, including errors and unwinding.
 
 Run `scripts/kagemusha_qualify.py prepare --output <untracked-directory>` to build
 and freeze a candidate, then its `run` subcommand. Preserve source and binary
@@ -951,6 +1009,14 @@ hashes, compiler/profile/features, descriptor, machine/OS, power and thermal
 state, cache policy, witness API, process scratch cap, seeds and all raw results.
 The exact synthetic Q/A shapes and real chip-filled Q/A workloads are separate
 configurations and cannot stand in for each other.
+For a component qualification during unrelated protocol work, `prepare
+--component` derives its source scope from Cargo's actual compiled package
+artifacts, including local build/dev dependencies, cross-crate Rust inputs,
+workspace build configuration and the measurement harness. It records every
+selected file and both whole-checkout hashes. Changes anywhere in a selected
+crate invalidate that component; edits outside the recorded scope do not.
+A component verdict qualifies only those measured workloads and cannot establish
+a frozen whole-release candidate. Registry versions remain bound by Cargo.lock.
 
 For each configuration collect three separated blocks of three fresh processes,
 balancing configuration order with a recorded shuffle seed. Retain the first two
@@ -961,8 +1027,20 @@ normal memory pressure and no new compression, pageout or swapout episode from
 before process creation through exit. A fresh process starts without compressed
 pages; unchanged global compression counters also exclude compression of that
 process. Existing compressed pages of other processes do not invalidate a run.
+Swap-in increases are retained as diagnostics, not an additional veto: the
+three required unchanged counters above define this memory-activity rule.
+A decreasing counter or failed/missing probe invalidates the evidence. The
+prepared candidate binds this exact policy; a changed policy requires a fresh
+candidate and schedule, and never upgrades a retained invalid attempt.
 Keep failed attempts/reasons; at most 18 attempts per configuration may be used
 to collect nine valid samples, otherwise the result is inconclusive.
+An optional stop after a valid hard-limit breach retains the failing partial
+schedule. It can establish a failure, never a qualification pass.
+The retained ledger includes each measured process and both calibrations, with
+their exit status, raw output and environmental probes, plus source/binary hashes
+before and after the attempt. Recomputing a verdict rechecks those records and
+the declared execution order; cached validity flags or report-only records cannot
+establish a pass. Probe or process-launch failures remain invalid attempts.
 
 | Metric | Each block median | Every valid sample |
 |---|---:|---:|
@@ -970,9 +1048,10 @@ to collect nine valid samples, otherwise the result is inconclusive.
 | A, one worker, process CPU | ≤ 32.4 s | ≤ 36 s |
 | Q, four workers, observed elapsed | ≤ 9 s | ≤ 10 s |
 
-The maximum kernel peak RSS across both worker counts must be ≤ 0.7125 GiB for
-Q and ≤ 0.8075 GiB for A for a qualification pass. The hard caps remain 0.75 and
-0.85 GiB respectively. A4 supplies memory and diagnostic timing evidence. Values
+For each worker count, every block's median kernel peak RSS must be ≤ 0.7125 GiB
+for Q and ≤ 0.8075 GiB for A for a qualification pass. Every valid process must
+meet the unchanged hard caps of 0.75 and 0.85 GiB respectively; report its peak
+and the maximum as well as the block medians. A4 supplies memory and diagnostic timing evidence. Values
 within hard limits but missing headroom are borderline; hard-limit violations
 fail. Invalid environmental evidence is inconclusive, never a pass. Normalized
 estimates cannot turn an observed four-worker failure into a pass. Load is logged,
@@ -1024,7 +1103,7 @@ hard slot; MV14 skip the VK-digest equality in A; MV15 allow a Corrected slot wi
 |---|---|
 | G4.1 | Fiat–Shamir, CRT and PCD/containment memos written; PIPA-R and PIPA-AS text merged into `plonk_ipa_v1.md` with KATs |
 | G4.2 | In-circuit verify cells ≤ σ 191k; Q 297k + 0.45k per instance; A 337k; Ω 212k; PIPA-AS (r = 4) 91k |
-| G4.3 | Ω descriptor V ≤ 72 with exactly one lookup; transport ≤ 4,821 B with the measured largest σ_send of 3,456 B. The current degree-nine Bootstrap component produces 3,712 B proof / 4,800 B transport; the full catalog, root continuity and qualification remain open |
+| G4.3 | Ω descriptor V ≤ 72 with exactly one lookup; transport ≤ 4,821 B with the measured largest σ_send of 3,456 B. The captured degree-nine Bootstrap component produces 3,712 B proof / 4,800 B transport; current pinned-catalog source measurement, full catalog, root continuity and qualification remain open |
 | G4.4 | PIPA-AS prover ≤ 3.5 s Mac 1t, ≤ 1.2 s 4t |
 | G4.5 | `msm_complete` at 2^16 measured on 4 threads; two decides ≤ 0.35 s Mac 4t |
 | G4.6 | Measured peak RSS ≤ 0.85 GiB for the A shape under the owned-witness API |
@@ -1088,7 +1167,7 @@ Named tests:
 | # | Risk | Effect | Mitigation |
 |---|---|---|---|
 | R1 | P-256 cost: estimated 0.2–0.4M cells, measured today at 1.47M | above 0.30M Receive needs the A-split (+48–65 s Mac); above 0.40M every operation gains a Q leaf | G3.1 first; window tables; precommitted own key |
-| R2 | The compact Bootstrap component produces 4,800 B, leaving 21 B under the 4,821 B cap; full-catalog capacity and qualification remain open | any descriptor growth beyond 21 B breaks the current Payment bound | G4.3; preserve exactly one lookup and establish the full admitted catalog/root before artifact freeze |
+| R2 | The captured compact Bootstrap component produces 4,800 B, leaving 21 B under the 4,821 B cap; current pinned-catalog capacity and qualification remain open | any descriptor growth beyond 21 B breaks the current Payment bound | G4.3; preserve exactly one lookup and establish the full admitted catalog/root before artifact freeze |
 | R3 | σ_send with enabled controls grows; largest measured revision-4 proof is 3,456 B | with a 4,800 B Ω, σ_send above 3,477 B breaks R9; the threshold is always 8,277 − actual Ω bytes | B5 fixed64 usage array and measured k14 controls; remeasure every allowlisted mask and apply G-Ω2 at artifact freeze |
 | R4 | No native measurement wider than k14; quotient cost of the wide gate sets | fold times 1.5–2× the model | G3.6, G3.7, G4.7 |
 | R5 | RAM: A at 0.84 GiB under the owned-witness API, close to 0.85 | over the cap | streaming (0.64 GiB); A-split; global scratch cap |
@@ -1118,7 +1197,7 @@ last were applied to the proposal and the wire record with the third set of owne
   consumed-credit root equals the predecessor's root or is a structurally valid indexed-tree
   insert of a fresh key. The credit-digest leaf of the first insertion stays (wire §3.2).
 - **Applied. Proposal §3 hash families and wire §1 (OQ-1, B1):** the object digests of the
-  request, receipt, credential, certificate, voucher, fee schedule and policy objects, the
+  request, receipt, credential, certificate, ordinary Load receipt, fee schedule and policy objects, the
   certificate-set and package digests, `operation_id`, the unload nullifier and the
   receipt's statement digest left the SHA-256 role table (34 → 18 roles) and are `P` values
   with the encodings of §1.1. The statement digest is the σ statement digest, now 26 elements

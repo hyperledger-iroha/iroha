@@ -64,10 +64,15 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
+mod kagemusha_enrollment;
+pub use kagemusha_enrollment::{
+    KagemushaEnrollmentGoogle, KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider,
+    KagemushaEnrollmentWorker,
+};
+mod kagemusha_load_finality;
+pub use kagemusha_load_finality::KagemushaLoadFinality;
 mod app_routed_read_config;
-mod kagemusha_load_authorizer;
 mod musubi_publication_installation;
-pub use kagemusha_load_authorizer::KagemushaLoadAuthorizer;
 pub use musubi_publication_installation::MusubiPublicationInstallation;
 mod sccp;
 pub use sccp::{
@@ -958,8 +963,6 @@ pub struct Root {
     #[config(nested)]
     musubi_publication: MusubiPublication,
     #[config(nested)]
-    kagemusha_load_authorizer: KagemushaLoadAuthorizer,
-    #[config(nested)]
     sorafs: Sorafs,
     #[config(nested)]
     pipeline: Pipeline,
@@ -1095,9 +1098,6 @@ pub enum ParseError {
     /// Private Musubi publication listener settings were invalid.
     #[error("Invalid Musubi publication configuration")]
     InvalidMusubiPublicationConfig,
-    /// Online finalized-load publisher custody or finite limits were invalid.
-    #[error("Invalid KAGEMUSHA load authorizer configuration")]
-    InvalidKagemushaLoadAuthorizerConfig,
     /// Snapshot configuration contained invalid resource budgets.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
@@ -1258,8 +1258,7 @@ impl Root {
     }
     /// Validate complete unpublished policy without inventing a runtime genesis identity.
     /// # Errors
-    /// Rejects either expected-identity field and preserves every ordinary node validator,
-    /// including both required private publisher originals.
+    /// Rejects either expected-identity field and preserves every ordinary node validation.
     pub fn parse_for_genesis_signing(self) -> Result<actual::GenesisSigningContext, ParseError> {
         self.parse_with_genesis(&ConfigFiles::Native, Genesis::parse_for_signing)
             .map(actual::GenesisSigningContext::new)
@@ -1409,7 +1408,6 @@ impl Root {
                 .parse_with_file_source(files, &mut emitter, parsed_sorafs);
         let soracloud_runtime = self.soracloud_runtime.parse(&mut emitter);
         let musubi_publication = self.musubi_publication.parse(&mut emitter);
-        let kagemusha_load_authorizer = self.kagemusha_load_authorizer.parse(files, &mut emitter);
         let telemetry = self.telemetry.map(actual::Telemetry::from);
         let telemetry_profile = actual::TelemetryProfile::from(self.telemetry_profile);
         let telemetry_integrity = self.telemetry_integrity.parse(&mut emitter);
@@ -1564,8 +1562,6 @@ impl Root {
             torii,
             soracloud_runtime,
             musubi_publication,
-            kagemusha_load_authorizer: kagemusha_load_authorizer
-                .expect("load authorizer configuration validated by emitter"),
             kura,
             sumeragi,
             block_sync,
@@ -15031,6 +15027,10 @@ pub struct Torii {
     pub tx_history: Option<ToriiTxHistory>,
     /// Retail recipient lookup routes used by Torii app API.
     pub recipient_lookup: Option<ToriiRecipientLookup>,
+    /// Optional KAGEMUSHA issuer; all trust and runtime leaves are mandatory when present.
+    pub kagemusha_enrollment: Option<KagemushaEnrollmentIssuer>,
+    /// Optional bounded terminal Load proof service over committed native history.
+    pub kagemusha_load_finality: Option<KagemushaLoadFinality>,
     /// Explicit Torii origins used for public-dataspace routed reads.
     #[config(default)]
     pub public_dataspace_upstreams: Vec<ToriiPublicDataspaceUpstream>,
@@ -15082,6 +15082,8 @@ impl core::fmt::Debug for Torii {
             )
             .field("tx_history", &self.tx_history)
             .field("recipient_lookup", &self.recipient_lookup)
+            .field("kagemusha_enrollment", &self.kagemusha_enrollment)
+            .field("kagemusha_load_finality", &self.kagemusha_load_finality)
             .field(
                 "public_dataspace_upstream_count",
                 &self.public_dataspace_upstreams.len(),
@@ -16316,6 +16318,12 @@ impl Torii {
                 .and_then(|config| config.parse_with_file_source(files, emitter)),
             ram_lfe: self.ram_lfe.and_then(|config| config.parse(emitter)),
             tx_history: self.tx_history.map(|config| config.parse(emitter)),
+            kagemusha_enrollment: self
+                .kagemusha_enrollment
+                .and_then(|config| config.parse(emitter)),
+            kagemusha_load_finality: self
+                .kagemusha_load_finality
+                .and_then(|config| config.parse(emitter)),
             recipient_lookup: self
                 .recipient_lookup
                 .and_then(|config| config.parse(emitter))

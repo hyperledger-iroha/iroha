@@ -69,8 +69,23 @@ a different origin, choose its HTTP and operator credentials explicitly.
 Bind account operations with `client.account_client()?` and privileged operations
 with `client.operator_client(operator_key_pair)?`. Synchronous applications use
 `iroha::blocking`, which owns a reusable runtime and rejects calls from an async
-runtime. Remaining synchronous capability methods and authority-owned operations
-are tracked in the repository's first-release architecture redesign record.
+runtime. `blocking::Client::with_request_deadline` retains that runtime and its HTTP
+pools while binding the account context to the shorter deadline. Either view may
+outlive the other; an expired deadline refuses HTTP dispatch. Remaining synchronous
+capability methods and authority-owned operations are tracked in the repository's
+first-release architecture redesign record.
+
+Alias setup planning uses `client.plan_alias_setup(&request).await?`. It signs
+the complete request, awaits asynchronous HTTP transport, and verifies the returned
+plan against that request, the account, the network, and its expiry. Synchronous
+callers use `iroha::blocking::Client::plan_alias_setup(&request)?`, which runs the
+same transport and verification through the facade's owned runtime.
+
+`account.kagemusha().load_issuance(...)` and `load_event_proof(...)` read bounded
+canonical Load receipt and event-path originals with the account’s exact network
+signature; the blocking account facade exposes the same methods. These reads do
+not grant balance authority: verify the event path against an independently
+finalized block’s counted event commitment and the exact retained receipt.
 
 Signed Iroha queries use `account.query_single(query).await?` for singular
 lookups such as `FindAccountById`. Iterable signed queries

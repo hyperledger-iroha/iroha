@@ -275,4 +275,4 @@ Notes
 - Keep ABI hash and syscall-list golden tests in sync with any syscall-surface
   change.
 - Preserve pointer-ABI round-trip fixtures in
-  `crates/iroha_data_model/tests/norito_pointer_abi_roundtrip.rs`.
+  `crates/ivm_abi/tests/norito_pointer_abi_roundtrip.rs`.

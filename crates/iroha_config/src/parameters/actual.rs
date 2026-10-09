@@ -79,9 +79,14 @@ use std::{
 };
 #[path = "actual_soranet_handshake_debug.rs"]
 mod actual_soranet_handshake_debug;
-mod kagemusha_load_authorizer;
+mod kagemusha_enrollment;
+pub use kagemusha_enrollment::{
+    KagemushaEnrollmentGoogle, KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider,
+    KagemushaEnrollmentWorker,
+};
+mod kagemusha_load_finality;
+pub use kagemusha_load_finality::KagemushaLoadFinality;
 mod sccp;
-pub use kagemusha_load_authorizer::{KagemushaLoadAuthorizer, KagemushaLoadAuthorizerCustody};
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
 use crate::{
@@ -135,8 +140,6 @@ pub struct Root<G = Genesis> {
     pub soracloud_runtime: SoracloudRuntime,
     /// Non-secret local custody root for the injected private Musubi publisher.
     pub musubi_publication: MusubiPublication,
-    /// Required source-verified online load voucher publisher.
-    pub kagemusha_load_authorizer: KagemushaLoadAuthorizer,
     /// Block storage (Kura) configuration.
     pub kura: Kura,
     /// Consensus (Sumeragi) configuration.
@@ -316,10 +319,6 @@ pub enum NodeSecretFile {
     Transport,
     /// Streaming identity Ed25519 private key.
     Streaming,
-    /// Required online KAGEMUSHA publisher's private Norito signer keyring.
-    KagemushaLoadAuthorizerKeyring,
-    /// Required online KAGEMUSHA publisher's private transaction submitter key.
-    KagemushaLoadSubmitter,
     /// Soracloud runtime mutation-signer private key.
     RuntimeSigner,
     /// Global beacon partial-signer credential.
@@ -336,12 +335,10 @@ pub enum NodeSecretFile {
 }
 impl NodeSecretFile {
     /// Every fixed secret file, in a stable order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 8] = [
         Self::Validator,
         Self::Transport,
         Self::Streaming,
-        Self::KagemushaLoadAuthorizerKeyring,
-        Self::KagemushaLoadSubmitter,
         Self::RuntimeSigner,
         Self::BeaconCredential,
         Self::FaucetAuthority,
@@ -356,8 +353,6 @@ impl NodeSecretFile {
             Self::Validator => names::VALIDATOR_KEY,
             Self::Transport => names::TRANSPORT_KEY,
             Self::Streaming => names::STREAMING_KEY,
-            Self::KagemushaLoadAuthorizerKeyring => names::KAGEMUSHA_LOAD_AUTHORIZER_KEYRING,
-            Self::KagemushaLoadSubmitter => names::KAGEMUSHA_LOAD_SUBMITTER_KEY,
             Self::RuntimeSigner => names::RUNTIME_SIGNER_KEY,
             Self::BeaconCredential => names::BEACON_CREDENTIAL,
             Self::FaucetAuthority => names::FAUCET_AUTHORITY_KEY,
@@ -504,8 +499,6 @@ mod data_dir_tests {
                 "validator.key",
                 "transport.key",
                 "streaming.key",
-                "kagemusha_load_authorizer.keyring.norito",
-                "kagemusha_load_submitter.key",
                 "runtime_signer.key",
                 "beacon.cred",
                 "authority/faucet.key",
@@ -513,18 +506,6 @@ mod data_dir_tests {
                 "authority/sorafs_council.key",
             ]
         );
-        for (file, name) in [
-            (
-                NodeSecretFile::KagemushaLoadAuthorizerKeyring,
-                "kagemusha_load_authorizer.keyring.norito",
-            ),
-            (
-                NodeSecretFile::KagemushaLoadSubmitter,
-                "kagemusha_load_submitter.key",
-            ),
-        ] {
-            assert_eq!(data_dir.secret(file), data_dir.secrets_dir().join(name));
-        }
         assert_eq!(
             data_dir.secret(NodeSecretFile::OnboardingAuthority),
             PathBuf::from("/var/lib/iroha/taira/v1/secrets/authority/onboarding.key")
@@ -1033,7 +1014,6 @@ impl<G> Root<G> {
             torii,
             soracloud_runtime,
             musubi_publication,
-            kagemusha_load_authorizer,
             kura,
             sumeragi,
             block_sync,
@@ -1076,7 +1056,6 @@ impl<G> Root<G> {
             torii,
             soracloud_runtime,
             musubi_publication,
-            kagemusha_load_authorizer,
             kura,
             sumeragi,
             block_sync,
@@ -2994,15 +2973,11 @@ impl GenesisSigningContext {
     pub fn zk(&self) -> &Zk {
         &self.policy.zk
     }
-    /// Required original private publisher custody and finite service limits.
-    pub fn publisher(&self) -> &KagemushaLoadAuthorizer {
-        &self.policy.kagemusha_load_authorizer
-    }
     /// Bind this authoring policy to a genuine signed genesis-header identity.
     ///
     /// A provisional block may be used only for local policy execution. The final generator
-    /// must parse every final config and authenticate its publisher against the final network
-    /// before publication; a provisional context is never a deployment admission receipt.
+    /// must parse every final config against the final network before publication; a
+    /// provisional context is never a deployment admission receipt.
     /// # Errors
     /// Refuses a non-genesis block, missing or extra signatures, a wrong signer, or invalid
     /// original block and transaction signatures.
@@ -7508,6 +7483,10 @@ pub struct Torii {
     pub tx_history: Option<ToriiTxHistory>,
     /// Retail recipient lookup route configuration.
     pub recipient_lookup: ToriiRecipientLookup,
+    /// Optional current bank-selected KAGEMUSHA issuer dependencies; absent disables serving.
+    pub kagemusha_enrollment: Option<KagemushaEnrollmentIssuer>,
+    /// Optional bounded terminal Load proof service over committed native history.
+    pub kagemusha_load_finality: Option<KagemushaLoadFinality>,
     /// Explicit Torii origins used for public-dataspace routed reads.
     pub public_dataspace_upstreams: Vec<ToriiPublicDataspaceUpstream>,
     /// App-facing query/backpressure limits.
@@ -7566,6 +7545,8 @@ impl fmt::Debug for Torii {
             )
             .field("tx_history", &self.tx_history)
             .field("recipient_lookup", &self.recipient_lookup)
+            .field("kagemusha_enrollment", &self.kagemusha_enrollment)
+            .field("kagemusha_load_finality", &self.kagemusha_load_finality)
             .field("da_ingest", &self.da_ingest)
             .field("push", &self.push)
             .finish_non_exhaustive()

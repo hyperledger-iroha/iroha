@@ -133,12 +133,64 @@ fn sign(key: &SigningKey, message: &[u8]) -> KagemushaWalletSignerOutputV1<'stat
 /// These circuits qualify only the installation/immutable-custody code under test.
 #[must_use]
 pub fn signed_inventory() -> (VerifierPackV1, InstallationV1) {
+    let (pack, installation, _) = signed_inventory_with_catalog(|_| None);
+    (pack, installation)
+}
+
+/// Sign a test-selected catalog commitment before deriving the engineering scheme.
+/// No supplied catalog or dummy producer original gains source qualification.
+pub(crate) fn signed_inventory_with_catalog(
+    catalog: impl FnOnce(&VerifierPackV1) -> Option<Vec<u8>>,
+) -> (VerifierPackV1, InstallationV1, Option<Vec<u8>>) {
+    build_inventory(Vec::new(), catalog)
+}
+
+/// Replace selected sigma originals before any allowlist or authority derivation.
+/// Other selectors and Omega remain explicit non-monetary engineering fixtures.
+#[cfg(test)]
+pub(crate) fn signed_inventory_with_step_originals(
+    steps: Vec<StepOriginalV1>,
+) -> (VerifierPackV1, InstallationV1) {
+    let (pack, installation, _) = build_inventory(steps, |_| None);
+    (pack, installation)
+}
+
+/// Sign exact test sources and their producer inventory before identity derivation.
+/// The caller still must qualify each source; this grants no production authority.
+#[cfg(test)]
+pub(crate) fn signed_inventory_with_sources(
+    steps: Vec<StepOriginalV1>,
+    catalog: impl FnOnce(&VerifierPackV1) -> Option<Vec<u8>>,
+) -> (VerifierPackV1, InstallationV1, Option<Vec<u8>>) {
+    build_inventory(steps, catalog)
+}
+
+fn build_inventory(
+    replacements: Vec<StepOriginalV1>,
+    catalog: impl FnOnce(&VerifierPackV1) -> Option<Vec<u8>>,
+) -> (VerifierPackV1, InstallationV1, Option<Vec<u8>>) {
+    let mut selected: [Option<StepOriginalV1>; 16] = core::array::from_fn(|_| None);
+    for replacement in replacements {
+        let index = SIGMA_CATALOG_V1
+            .iter()
+            .position(|selector| {
+                *selector == (replacement.kind.tag(), replacement.enabled_controls)
+            })
+            .expect("defined replacement selector");
+        assert!(
+            selected[index].replace(replacement).is_none(),
+            "duplicate replacement selector"
+        );
+    }
     let eq = PinnedParams::<Eq>::derive(12).expect("actual Vesta params");
     let ep = PinnedParams::<Ep>::derive(16).expect("actual Pallas params");
     let steps: Vec<_> = SIGMA_CATALOG_V1
         .iter()
         .enumerate()
         .map(|(index, (tag, mask))| {
+            if let Some(replacement) = selected[index].take() {
+                return replacement;
+            }
             let kind = *KagemushaWalletOperationKindV1::ALL
                 .iter()
                 .find(|kind| kind.tag() == *tag)
@@ -178,7 +230,14 @@ pub fn signed_inventory() -> (VerifierPackV1, InstallationV1) {
         allowlist: norito::encode_canonical(&allowlist).expect("canonical complete allowlist"),
         steps,
         lineage,
+        // This verifier-only engineering inventory deliberately has no producer
+        // preimage. Its commitment must never grant source or wallet admission.
+        producer_catalog_digest: artifact_digest(b"producer-catalog", b"engineering-verifier-only"),
     };
+    let producer = catalog(&pack);
+    if let Some(bytes) = &producer {
+        pack.producer_catalog_digest = artifact_digest(b"producer-catalog", bytes);
+    }
     let runtime = pack
         .runtime_bindings()
         .expect("actual complete native inventory");
@@ -241,6 +300,7 @@ pub fn signed_inventory() -> (VerifierPackV1, InstallationV1) {
             scheme_id: scheme.scheme_id(),
             manifest_digest: manifest.manifest_digest(),
         },
+        producer,
     )
 }
 

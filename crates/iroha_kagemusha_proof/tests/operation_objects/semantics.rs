@@ -5,10 +5,8 @@ use iroha_kagemusha_proof::operation_relation::{
     incoming_statement::{DynamicStatementCells, IncomingStatementCells},
     objects::{
         credential::CredentialCells,
-        policy::PolicyCells,
         receipt::{self, ReceiptContext},
     },
-    statement::StatementCells,
 };
 use iroha_plonk::frontend::Region;
 use iroha_plonk_gadgets::Word;
@@ -281,21 +279,6 @@ impl Circuit<Fp> for Receipt {
                     &mut region,
                     &self.context.iter().map(value).collect::<Vec<_>>(),
                 )?;
-                if object.kind() == ObjectKind::Voucher {
-                    let statement = StatementCells::constrain(
-                        &mut uint,
-                        &mut hash,
-                        &mut region,
-                        self.variant,
-                        &fields,
-                    )?;
-                    return PolicyCells::check(&mut uint, &mut region, &object)?.bind_load_voucher(
-                        &mut uint,
-                        &mut region,
-                        &statement,
-                        &[context[0].clone(), context[1].clone()],
-                    );
-                }
                 if self.dynamic {
                     let statement = DynamicStatementCells::constrain(
                         &mut uint,
@@ -610,94 +593,6 @@ fn receipt_bindings_match_send_and_receive_vectors_and_reject_every_substitution
     }
 }
 
-#[test]
-fn load_voucher_binds_issuer_owned_effect_and_wallet_without_finality_boolean() {
-    let object = cases()
-        .into_iter()
-        .find(|(c, ..)| c.kind == ObjectKind::Voucher)
-        .expect("voucher")
-        .0;
-    let integer = |start| {
-        Fp::from_u128(u128::from_le_bytes(
-            object.bytes[start..start + 16].try_into().expect("u128"),
-        ))
-    };
-    let mut statement: [Fp; 26] = fixture()["field_encodings"]["send_statement"]["items"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .map(|v| field(v.as_str().expect("field")))
-        .collect::<Vec<_>>()
-        .try_into()
-        .expect("26");
-    statement[3] = integer(2);
-    statement[4] = integer(18);
-    statement[5] = integer(34);
-    statement[6] = integer(50);
-    statement[10] = integer(98) + Fp::ONE;
-    statement[11..14].fill(Fp::ZERO);
-    statement[16..].fill(Fp::ZERO);
-    statement[16] = Fp::from(2);
-    statement[17] = object.public(Fp::ZERO)[1];
-    statement[18] = integer(98);
-    statement[19] = integer(114);
-    statement[20] = integer(130);
-    let context = [
-        integer(66),
-        integer(82),
-        Fp::ZERO,
-        Fp::ZERO,
-        Fp::ZERO,
-        Fp::ZERO,
-    ];
-    let c = Receipt {
-        object,
-        variant: Variant::Load,
-        statement,
-        context,
-        valid: true,
-        dynamic: false,
-    };
-    assert!(c.accepts());
-    // Every signed byte range, including the issuer's signature, participates
-    // in the voucher digest committed by the Load statement.
-    for offset in [0, 2, 34, 66, 98, 114, 130, 146, 178, 210, 218, 250, 282] {
-        let mut wrong = c.clone();
-        wrong.object.bytes[offset] ^= 1;
-        wrong.valid = false;
-        assert!(wrong.accepts(), "total voucher substitution {offset}");
-        wrong.valid = true;
-        assert!(!wrong.accepts(), "forged voucher substitution {offset}");
-    }
-    for i in [3, 4, 5, 6, 17, 19, 20] {
-        let mut wrong = c.clone();
-        wrong.statement[i] += Fp::ONE;
-        wrong.valid = false;
-        assert!(wrong.accepts(), "total effect substitution {i}");
-        wrong.valid = true;
-        assert!(!wrong.accepts(), "forged effect substitution {i}");
-    }
-    let mut ordinal = c.clone();
-    ordinal.statement[18] += Fp::ONE;
-    ordinal.statement[10] += Fp::ONE;
-    ordinal.valid = false;
-    assert!(ordinal.accepts());
-    ordinal.valid = true;
-    assert!(!ordinal.accepts());
-    for i in 0..2 {
-        let mut wrong = c.clone();
-        wrong.context[i] += Fp::ONE;
-        wrong.valid = false;
-        assert!(wrong.accepts());
-        wrong.valid = true;
-        assert!(!wrong.accepts());
-    }
-    let known = synthesize(&c, 12, None).expect("known");
-    let unknown = synthesize(&c.without_witnesses(), 12, None).expect("unknown");
-    assert_eq!(known.tables.fixed(), unknown.tables.fixed());
-    assert_eq!(known.tables.permutation(), unknown.tables.permutation());
-}
-
 const REQUEST_WIDTHS: [usize; 19] = [
     2, 32, 32, 32, 32, 32, 32, 16, 32, 16, 32, 16, 8, 32, 8, 8, 32, 32, 32,
 ];
@@ -803,7 +698,6 @@ pub fn policy_set(c: &mut ObjectCircuit, index: usize, value: u128) {
         ObjectKind::QuotaShare => &[2, 32, 32, 32, 8, 8, 8, 32, 4, 32],
         ObjectKind::TimeAnchor => &[2, 32, 32, 32, 8, 32],
         ObjectKind::ChargeQuote => &[2, 32, 32, 32, 1, 16, 16, 16, 32, 8, 32],
-        ObjectKind::Voucher => &[2, 32, 32, 32, 16, 16, 16, 32, 32, 8, 32],
         _ => panic!("fixed policy"),
     };
     let offset: usize = widths[..index].iter().sum();
@@ -863,18 +757,6 @@ fn issuer_body_rules_match_native_bounds_and_have_total_false_paths() {
                 (8, 0),
                 (10, 0),
             ],
-            ObjectKind::Voucher => &[
-                (1, 0),
-                (2, 0),
-                (3, 0),
-                (5, 0),
-                (5, u128::MAX),
-                (6, 0),
-                (7, 0),
-                (8, 0),
-                (9, 0),
-                (10, 0),
-            ],
             _ => unreachable!(),
         };
         for (index, value) in attacks {
@@ -890,12 +772,6 @@ fn issuer_body_rules_match_native_bounds_and_have_total_false_paths() {
             assert!(unload.accepts(Fp::ZERO));
             policy_set(&mut unload, 7, 11);
             invalid(unload, "quote exceeds redemption");
-        }
-        if c.kind == ObjectKind::Voucher {
-            let mut free = c.clone();
-            policy_set(&mut free, 6, 0);
-            policy_set(&mut free, 7, 0);
-            assert!(free.accepts(Fp::ZERO));
         }
     }
 }

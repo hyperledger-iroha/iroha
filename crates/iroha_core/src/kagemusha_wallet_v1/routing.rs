@@ -54,13 +54,8 @@ pub(crate) fn dataspace(
                 .body
                 .asset_digest
         }
-        Action::InstallVerifierPack { asset, .. }
-        | Action::RetainCertificate { asset, .. }
-        | Action::RotateLoadAuthorizer { asset, .. } => *asset,
-        Action::PublishVoucher { voucher, .. } => {
-            KagemushaWalletLoadVoucherV1::decode_canonical(voucher, &scheme)?
-                .body
-                .asset_digest
+        Action::InstallVerifierPack { asset, .. } | Action::RetainCertificate { asset, .. } => {
+            *asset
         }
         Action::RetainCredential { credential, .. } => {
             KagemushaWalletCredentialV1::decode_canonical(credential, &scheme)?

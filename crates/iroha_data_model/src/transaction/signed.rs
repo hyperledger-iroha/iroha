@@ -2593,6 +2593,9 @@ mod tests;
 #[cfg(test)]
 #[path = "signed/ttl_tests.rs"]
 mod ttl_tests;
+#[cfg(test)]
+#[path = "signed/wire_v1_test_support.rs"]
+mod wire_v1_test_support;
 include!("signed/attachments_tests.rs");
 impl TransactionEntrypoint {
     /// Account authorized to initiate this transaction when one exists.
@@ -2783,7 +2786,7 @@ mod checked_container_cleanup_tests {
 
     #[test]
     fn original_transaction_result_checked_container_retains_success_rejection_and_depth() {
-        audit(&TransactionResult::new(Ok(Default::default())));
+        audit(&TransactionResult::new(Ok(Vec::default())));
         let rejection = crate::transaction::error::TransactionRejectionReason::LimitCheck(
             crate::transaction::error::TransactionLimitError {
                 reason: "original rejection".into(),

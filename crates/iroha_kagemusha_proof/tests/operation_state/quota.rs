@@ -2,12 +2,20 @@
 
 use super::*;
 use iroha_kagemusha_proof::{
-    operation_relation::quota_refresh::{self, QuotaRebuildCells},
+    operation_relation::quota_refresh::{self, QUOTA_WITNESS_WORDS, QuotaRebuildCells, QuotaRoot},
     tree::{QUOTA_NODE_DOMAIN, QUOTA_USAGE_DOMAIN, QUOTA_USAGE_NODE_DOMAIN, QUOTA_WINDOW_DOMAIN},
 };
 
+#[derive(Clone, Copy)]
+enum Scope {
+    Combined,
+    Root(QuotaRoot),
+    Semantics,
+}
+
 #[derive(Clone)]
 pub(super) struct Fixture {
+    scope: Scope,
     old: Vec<[Fp; 4]>,
     windows: Vec<[Fp; 4]>,
     used: Vec<Fp>,
@@ -50,19 +58,34 @@ impl Fixture {
         let windows =
             ::core::array::from_fn(|i| ::core::array::from_fn(|j| w[256 + 4 * i + j].clone()));
         let used = ::core::array::from_fn(|i| w[512 + i].clone());
-        quota_refresh::constrain(
-            uint,
-            sponge,
-            region,
-            transition,
-            &QuotaRebuildCells {
-                old,
-                windows,
-                used,
-                issued: w[576].clone(),
-                window_count: w[577].clone(),
-            },
-        )
+        let witness = QuotaRebuildCells {
+            old,
+            windows,
+            used,
+            issued: w[576].clone(),
+            window_count: w[577].clone(),
+        };
+        let committed = witness.commitment_words();
+        assert_eq!(committed.len(), QUOTA_WITNESS_WORDS);
+        assert_eq!(
+            committed
+                .iter()
+                .map(iroha_plonk_gadgets::Word::cell)
+                .collect::<Vec<_>>(),
+            w.iter()
+                .map(iroha_plonk_gadgets::Word::cell)
+                .collect::<Vec<_>>(),
+            "fixed quota commitment preserves every assigned word in order"
+        );
+        match self.scope {
+            Scope::Combined => quota_refresh::constrain(uint, sponge, region, transition, &witness),
+            Scope::Root(root) => {
+                quota_refresh::constrain_root(sponge, region, transition, &witness, root)
+            }
+            Scope::Semantics => {
+                quota_refresh::constrain_semantics(uint, region, transition, &witness)
+            }
+        }
     }
     fn roots(&self) -> [Fp; 3] {
         fn root(leaves: &[[Fp; 4]], leaf_domain: u64, node_domain: u64) -> Fp {
@@ -121,6 +144,7 @@ pub(super) fn sample() -> RefreshCircuit {
     before.core[core::QUOTA_WINDOWS_ROOT] = Fp::from(71);
     before.core[core::QUOTA_SHARE_EXPIRY] = Fp::from(100);
     let mut q = Fixture {
+        scope: Scope::Combined,
         count_override: None,
         old: vec![[Fp::ZERO; 4]; 64],
         windows: vec![[Fp::ZERO; 4]; 64],
@@ -260,4 +284,45 @@ fn quota_first_share_and_expired_or_unused_drops_follow_exact_floor_rules() {
         rebuild_roots(&mut c);
         assert!(!c.accepts(), "signed share cannot contain zero windows");
     }
+}
+
+#[test]
+fn split_quota_roots_reject_changed_preimages_and_preserve_fixed_layout() {
+    for root in [
+        QuotaRoot::PreviousUsage,
+        QuotaRoot::ReplacementWindows,
+        QuotaRoot::ReplacementUsage,
+    ] {
+        let mut c = sample();
+        c.quota.as_mut().expect("quota").scope = Scope::Root(root);
+        assert!(c.accepts(), "root {root:?}");
+        let known = synthesize(&c, 16, Some(&[c.statement.public()])).expect("known");
+        let unknown = synthesize(&c.without_witnesses(), 16, None).expect("unknown");
+        assert_eq!(known.tables.fixed(), unknown.tables.fixed());
+        assert_eq!(known.tables.permutation(), unknown.tables.permutation());
+        assert_eq!(
+            known.tables.advice_assigned(),
+            unknown.tables.advice_assigned()
+        );
+        let q = c.quota.as_mut().expect("quota");
+        match root {
+            QuotaRoot::PreviousUsage => q.old[0][3] += Fp::ONE,
+            QuotaRoot::ReplacementWindows => q.windows[0][3] += Fp::ONE,
+            QuotaRoot::ReplacementUsage => q.used[0] += Fp::ONE,
+        }
+        assert!(!c.accepts(), "changed exact {root:?} preimage");
+    }
+}
+
+#[test]
+fn split_quota_semantics_reject_reset_with_consistently_rehashed_roots() {
+    let mut c = sample();
+    c.quota.as_mut().expect("quota").scope = Scope::Semantics;
+    assert!(c.accepts());
+    c.quota.as_mut().expect("quota").used[0] = Fp::ZERO;
+    rebuild_roots(&mut c);
+    assert!(
+        !c.accepts(),
+        "matching usage cannot reset even with rebound roots"
+    );
 }

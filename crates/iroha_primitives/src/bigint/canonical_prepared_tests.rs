@@ -110,14 +110,15 @@ fn ordinary_scalar_decoder_probes_exact_native_digits_without_negative_byte_scra
 fn archived_bigint_retains_original_allocation_refusal_and_retries_same_quantity_source() {
     use crate::numeric::{Numeric, Quantity};
 
+    #[repr(align(8))]
+    struct AlignedSource([u8; 64]);
+
     let _flags = ncore::DecodeFlagsGuard::enter(0);
     let mantissa = BigInt::from(1_u128 << 127);
     let native_charge = mantissa.admission_clone_layout().unwrap().size();
     let expected = Quantity::try_from(Numeric::try_new(mantissa, 1).unwrap()).unwrap();
     let mut bytes = Vec::new();
     ncore::serialize_to_buffer(&expected, &mut bytes).unwrap();
-    #[repr(align(8))]
-    struct AlignedSource([u8; 64]);
     let mut aligned = AlignedSource([0; 64]);
     aligned.0[..bytes.len()].copy_from_slice(&bytes);
     let source = &aligned.0[..bytes.len()];

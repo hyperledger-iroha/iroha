@@ -358,3 +358,283 @@ fn inspected_sequence_keeps_declared_element_byte_charges_and_late_framing_error
         ));
     }
 }
+
+#[test]
+fn charged_sequence_admits_only_exact_spans_and_decodes_the_original_borrowed_source() {
+    use norito::core::{ChargedElementSequence, DecodeBudgetContext, plan_binary_sequence};
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        for count in [0, 4, 31, 961] {
+            let expected: Vec<u64> = (0..count as u64).map(|i| i * 7 + 3).collect();
+            let bytes = super::bare_bytes(&expected, flags);
+            let source = (bytes.as_ptr(), bytes.len());
+            let (ordinary_values, used) =
+                decode_element_sequence_from_slice_serial::<u64>(&bytes).unwrap();
+            assert_eq!((ordinary_values, used), (expected.clone(), bytes.len()));
+            let ordinary_context = DecodeBudgetContext::new(limits(1 << 20));
+            let ordinary = ordinary_context
+                .with(|| plan_binary_sequence(&bytes, flags))
+                .unwrap();
+            let context = DecodeBudgetContext::new(limits(1 << 20));
+            context.with(|| ());
+            let exact = std::alloc::Layout::array::<SequenceSpan>(count).unwrap();
+            let pool = AllocationBudget::new(exact.size());
+            let foreign = AllocationBudget::new(exact.size());
+            let mut result = None;
+            super::REQUESTED_ALLOCATION_BYTES.with(|bytes| bytes.set(0));
+            let allocations = super::allocations_during(|| {
+                result =
+                    Some(context.with(|| ChargedElementSequence::try_from_payload(&bytes, &pool)));
+            });
+            let owner = result.unwrap().unwrap();
+            assert_eq!(allocations, usize::from(count != 0));
+            assert_eq!(
+                super::REQUESTED_ALLOCATION_BYTES.with(std::cell::Cell::get),
+                exact.size()
+            );
+            assert_eq!(
+                context.consumed_allocated_bytes(),
+                ordinary_context.consumed_allocated_bytes()
+            );
+            assert!(owner.belongs_to(&pool));
+            assert!(!owner.belongs_to(&foreign));
+            assert_eq!(pool.reserved_bytes(), exact.size());
+            let view = owner.as_prepared();
+            assert_eq!(
+                (view.len(), view.used()),
+                (ordinary.spans.len(), ordinary.used)
+            );
+            assert_eq!(view.is_empty(), count == 0);
+            // Visiting scalar fields borrows these bytes. It neither copies nor
+            // re-plans the sequence, and the private spans remain in their owner.
+            let mut visited = 0;
+            let allocations = super::allocations_during(|| {
+                context.with(|| {
+                    view.decode_elements::<u64, Infallible>(|index, field| {
+                        field.with_payload(|payload| {
+                            assert!(payload.as_ptr().addr() >= bytes.as_ptr().addr());
+                            assert!(
+                                payload.as_ptr().addr() + payload.len()
+                                    <= bytes.as_ptr().addr() + bytes.len()
+                            );
+                            let (value, used) = u64::decode_from_slice(payload)?;
+                            assert_eq!(used, payload.len());
+                            assert_eq!(value, expected[index]);
+                            visited += 1;
+                            Ok(())
+                        })
+                    })
+                    .unwrap();
+                });
+            });
+            assert_eq!(allocations, 0);
+            assert_eq!(visited, count);
+            assert_eq!((bytes.as_ptr(), bytes.len()), source);
+            pool.set_limit_bytes(0);
+            assert_eq!(pool.reserved_bytes(), exact.size());
+            drop(owner);
+            assert_eq!(pool.reserved_bytes(), 0);
+        }
+    }
+}
+
+#[test]
+fn charged_sequence_preserves_ordinary_failed_prefix_and_shared_context_retry() {
+    use norito::core::{
+        ChargedElementSequence, DecodeBudgetContext, SequenceAdmissionError, plan_binary_sequence,
+    };
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let valid = super::bare_bytes(&vec![3_u64, 5, 7, 11], flags);
+        let mut invalid = valid.clone();
+        invalid.pop();
+        let oracle = DecodeBudgetContext::new(limits(1 << 20));
+        let _first = oracle.with(|| plan_binary_sequence(&valid, flags)).unwrap();
+        let first_work = oracle.consumed_allocated_bytes();
+        let expected_invalid = oracle
+            .with(|| plan_binary_sequence(&invalid, flags))
+            .unwrap_err();
+        assert!(matches!(expected_invalid, norito::Error::LengthMismatch));
+        let failed_prefix = oracle.consumed_allocated_bytes();
+        assert!(failed_prefix > first_work);
+        let maximum = usize::try_from(failed_prefix - 1).unwrap();
+        let ordinary = DecodeBudgetContext::new(limits(maximum));
+        let context = DecodeBudgetContext::new(limits(maximum));
+        let shared = context.clone();
+        let _ordinary_first = ordinary
+            .with(|| plan_binary_sequence(&valid, flags))
+            .unwrap();
+        let exact = std::alloc::Layout::array::<SequenceSpan>(4).unwrap();
+        let pool = AllocationBudget::new(2 * exact.size());
+        let first = context
+            .with(|| ChargedElementSequence::try_from_payload(&valid, &pool))
+            .unwrap();
+        let expected = ordinary
+            .with(|| plan_binary_sequence(&invalid, flags))
+            .unwrap_err();
+        assert!(
+            expected.is_decode_resource_limit(),
+            "earlier quota refusal precedes the late truncated body"
+        );
+        let failure = shared
+            .with(|| ChargedElementSequence::try_from_payload(&invalid, &pool))
+            .err()
+            .unwrap();
+        let SequenceAdmissionError::Codec(actual) = failure else {
+            panic!("original codec cause required")
+        };
+        assert_eq!(
+            actual.decode_resource_error(),
+            expected.decode_resource_error()
+        );
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            ordinary.consumed_allocated_bytes()
+        );
+        assert!(context.consumed_allocated_bytes() > first_work);
+        assert_eq!(
+            pool.reserved_bytes(),
+            exact.size(),
+            "only the earlier completed owner survives"
+        );
+        assert!(first.belongs_to(&pool));
+        let expected = ordinary
+            .with(|| plan_binary_sequence(&valid, flags))
+            .unwrap_err();
+        let failure = shared
+            .with(|| ChargedElementSequence::try_from_payload(&valid, &pool))
+            .err()
+            .unwrap();
+        let SequenceAdmissionError::Codec(actual) = failure else {
+            panic!("retry cannot gain fresh quota")
+        };
+        assert_eq!(
+            actual.decode_resource_error(),
+            expected.decode_resource_error()
+        );
+        assert_eq!(
+            context.consumed_allocated_bytes(),
+            ordinary.consumed_allocated_bytes()
+        );
+        drop(first);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn charged_sequence_keeps_count_span_and_output_refusals_in_original_order() {
+    use norito::core::{ChargedElementSequence, DecodeBudgetContext, SequenceAdmissionError};
+    for flags in [0, header_flags::COMPACT_LEN] {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let bytes = super::bare_bytes(&vec![3_u64, 5, 7, 11], flags);
+        let span_bytes = 4 * std::mem::size_of::<SequenceSpan>();
+        let field_bytes = 4 * std::mem::size_of::<u64>();
+        let pool = AllocationBudget::new(span_bytes);
+        for maximum in [
+            3,
+            4 + span_bytes - 1,
+            4 + span_bytes + field_bytes - 1,
+            4 + span_bytes + 2 * field_bytes - 1,
+        ] {
+            let ordinary = DecodeBudgetContext::new(limits(maximum));
+            let context = DecodeBudgetContext::new(limits(maximum));
+            let expected = ordinary
+                .with(|| decode_element_sequence_from_slice_serial::<u64>(&bytes))
+                .unwrap_err();
+            let outcome = context.with(|| {
+                let owner = ChargedElementSequence::try_from_payload(&bytes, &pool)?;
+                owner
+                    .as_prepared()
+                    .decode_elements::<u64, Infallible>(|_, _| {
+                        panic!("original count/span/framing/output refusal precedes every scalar")
+                    })
+                    .map_err(|error| SequenceAdmissionError::Codec(error.into_codec()))
+            });
+            let SequenceAdmissionError::Codec(actual) = outcome.unwrap_err() else {
+                panic!("logical quota cause required")
+            };
+            assert_eq!(
+                actual.decode_resource_error(),
+                expected.decode_resource_error()
+            );
+            assert_eq!(
+                context.consumed_allocated_bytes(),
+                ordinary.consumed_allocated_bytes()
+            );
+            assert_eq!(pool.reserved_bytes(), 0);
+        }
+        let mut late = super::bare_bytes(&vec![false, true, false, true], flags);
+        late[8 + if flags == 0 { 8 } else { 1 }] = 2;
+        late.pop();
+        let failure = ChargedElementSequence::try_from_payload(&late, &pool)
+            .err()
+            .unwrap();
+        assert!(
+            matches!(
+                failure,
+                SequenceAdmissionError::Codec(norito::Error::LengthMismatch)
+            ),
+            "complete framing precedes the invalid first element"
+        );
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn charged_sequence_preserves_exact_pool_and_allocator_causes_before_late_framing() {
+    use iroha_allocation::ChargedBufferError;
+    use norito::core::{ChargedElementSequence, DecodeBudgetContext, SequenceAdmissionError};
+    let flags = header_flags::COMPACT_LEN;
+    let _flags = DecodeFlagsGuard::enter(flags);
+    let valid = super::bare_bytes(&vec![3_u64, 5, 7, 11], flags);
+    let mut invalid = valid.clone();
+    invalid.pop();
+    let exact = std::alloc::Layout::array::<SequenceSpan>(4).unwrap();
+    let pool = AllocationBudget::new(exact.size());
+    let context = DecodeBudgetContext::new(limits(1 << 20));
+    let first = context
+        .with(|| ChargedElementSequence::try_from_payload(&valid, &pool))
+        .unwrap();
+    let before = context.consumed_allocated_bytes();
+    let expected = pool.try_reserve(exact).unwrap_err();
+    let failure = context
+        .with(|| ChargedElementSequence::try_from_payload(&invalid, &pool))
+        .err()
+        .unwrap();
+    let SequenceAdmissionError::Allocation(ChargedBufferError::Admission(actual)) = failure else {
+        panic!("original capacity refusal precedes later framing")
+    };
+    assert_eq!(actual, expected);
+    let admitted_work = u64::try_from(4 + exact.size()).unwrap();
+    assert_eq!(context.consumed_allocated_bytes(), before + admitted_work);
+    assert_eq!(pool.reserved_bytes(), exact.size());
+    drop(first);
+    assert_eq!(pool.reserved_bytes(), 0);
+    // The existing real global allocator fault targets only this exact request.
+    // Restore its test-local state before asserting or formatting any result.
+    let prior_size = super::REFUSE_SIZE.with(|value| value.replace(exact.size()));
+    let prior_matches = super::MATCHES_BEFORE_REFUSAL.with(|value| value.replace(0));
+    let outcome = context.with(|| ChargedElementSequence::try_from_payload(&invalid, &pool));
+    super::REFUSE_SIZE.with(|value| value.set(prior_size));
+    super::MATCHES_BEFORE_REFUSAL.with(|value| value.set(prior_matches));
+    let failure = outcome.err().unwrap();
+    assert!(
+        matches!(failure, SequenceAdmissionError::Allocation(ChargedBufferError::Allocator { requested_bytes }) if requested_bytes == exact.size())
+    );
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        before + 2 * admitted_work
+    );
+    assert_eq!(pool.reserved_bytes(), 0);
+    let retry = context
+        .with(|| ChargedElementSequence::try_from_payload(&valid, &pool))
+        .unwrap();
+    assert!(retry.belongs_to(&pool));
+    assert_eq!(
+        context.consumed_allocated_bytes(),
+        2 * before + 2 * admitted_work
+    );
+    assert_eq!(pool.reserved_bytes(), exact.size());
+    drop(retry);
+    assert_eq!(pool.reserved_bytes(), 0);
+}

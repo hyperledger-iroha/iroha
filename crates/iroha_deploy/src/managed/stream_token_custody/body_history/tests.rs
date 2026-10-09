@@ -1323,8 +1323,11 @@ fn body_reads_create_wallet_only_for_observed_attempts_and_recheck_every_request
     // Keep the authenticated historical cut that selected this body. The generated helper
     // independently verifies a fresh current proof before retaining the successor request.
     wait_until(first.terms.signing_deadline_unix_ms, Duration::from_secs(4));
+    let authorization = turn
+        .authorize_retained(&fixture.owner, &history, fixture.options.deadline)
+        .unwrap();
     let second = fixture
-        .retain_generated_attempt(&mut turn, &history, &current)
+        .retain_generated_attempt(authorization, &history, &current)
         .unwrap_or_else(|error| {
             let failed_at = now_ms().unwrap();
             panic!(

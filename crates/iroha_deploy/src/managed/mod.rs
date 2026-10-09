@@ -10,7 +10,7 @@ mod build_registry;
 mod bundle;
 mod contracts;
 mod program;
-pub use program::admit_native_program;
+pub use program::{admit_native_build_input, admit_native_program};
 mod deployment_report;
 pub(crate) mod gateway_compliance;
 mod generated_service_runtime;
@@ -21,6 +21,7 @@ mod provider_capacity;
 mod provider_credit;
 mod provider_economics;
 mod provider_funding;
+mod provider_round;
 mod remote;
 mod remote_failure;
 mod remote_status;
@@ -39,6 +40,15 @@ mod transport;
 mod workspace;
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
+
+// Observation may await an already-dispatched task through its original maximum budget.
+// These bounds never extend task execution, signing authority or a retained transaction.
+const WORKER_STARTUP_MAXIMUM: Duration = Duration::from_secs(600);
+const OWNED_PEER_STOP_GRACE: Duration = Duration::from_secs(5);
+const STOP_REPLY_ALLOWANCE: Duration = Duration::from_secs(5);
+const STOP_OBSERVATION_MAXIMUM: Duration = WORKER_STARTUP_MAXIMUM
+    .saturating_add(OWNED_PEER_STOP_GRACE)
+    .saturating_add(STOP_REPLY_ALLOWANCE);
 
 use norito::json::{JsonDeserialize, JsonSerialize};
 
@@ -124,12 +134,13 @@ pub enum Error {
     /// The original native I/O budget elapsed; retained custody remains unresolved.
     #[error("native operation I/O deadline elapsed; retain original journals")]
     NativeDeadline,
-    /// Startup failed at its original closed stage, and cleanup or status publication also failed.
+    /// A local worker failure occurred, and owned cleanup or status publication also failed.
     #[error("{failure}{}", worker_failure_followup(cleanup, publication))]
     WorkerFailure {
-        /// Original closed startup or service failure, excluding remote bodies and credentials.
+        /// Original local startup or service cause, including native I/O diagnostics.
+        /// Retained status uses a separate closed classification, never this cause's text.
         failure: String,
-        /// Exact error from stopping this worker's directly owned validator handles.
+        /// Exact error from stopping owned validators or joining owned background tasks.
         cleanup: Option<Box<Error>>,
         /// Exact error from retaining the failed status after cleanup was attempted.
         publication: Option<Box<Error>>,
@@ -157,7 +168,7 @@ fn worker_failure_followup(
 ) -> String {
     let mut details = String::new();
     if let Some(error) = cleanup {
-        details.push_str(&format!("\nOwned validator cleanup failed: {error}"));
+        details.push_str(&format!("\nOwned worker cleanup failed: {error}"));
     }
     if let Some(error) = publication {
         details.push_str(&format!(

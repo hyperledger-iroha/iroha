@@ -450,6 +450,20 @@ impl ProtocolDescriptor {
         self.arithmetic_layout().check_selector_plan(selectors)
     }
 
+    /// Recheck the same selector map with operation-local cancellation.
+    ///
+    /// # Errors
+    /// As [`Self::check_selector_plan`], or typed constraint-system cancellation.
+    pub fn check_selector_plan_cancellable(
+        &self,
+        selectors: &[Vec<bool>],
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), DescriptorError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(super::CsError::from)?;
+        self.arithmetic_layout()
+            .check_selector_plan_cancellable(selectors, cancellation)
+    }
+
     /// The common arithmetic in the retained validator's input type. The
     /// temporary hash profile is never used for binding or transcript dispatch.
     pub(crate) fn arithmetic_layout(&self) -> CircuitDescriptorV1 {

@@ -1,5 +1,28 @@
-//! Pure source-frame mutation checks. No fixture here is an admitted operation.
+//! Source-frame mutations and resumed fold cancellation. No fixture is an admitted operation.
 use super::*;
+
+#[test]
+fn restored_terminal_fold_observes_cancellation_after_configuration() {
+    let params = PinnedParams::<Ep>::derive(1).unwrap();
+    let cancellation = iroha_pasta::CancellationToken::new();
+    let config = terminal_restore_fold_config(MemoryBudget::default(), Some(&cancellation));
+    assert!(matches!(
+        create_fold(&params, &[], Fp::ZERO.to_repr(), &config),
+        Err(iroha_plonk_recursion::Error::Parameters(_))
+    ));
+    cancellation.cancel();
+    // Cancellation after configuration must reach the resumed recursive fold
+    // through the same shared signal, before its deliberately short parameters.
+    assert!(matches!(
+        create_fold(&params, &[], Fp::ZERO.to_repr(), &config),
+        Err(iroha_plonk_recursion::Error::Cancelled)
+    ));
+    let independent = terminal_restore_fold_config(MemoryBudget::default(), None);
+    assert!(matches!(
+        create_fold(&params, &[], Fp::ZERO.to_repr(), &independent),
+        Err(iroha_plonk_recursion::Error::Parameters(_))
+    ));
+}
 
 fn original() -> Inputs {
     let state = BootstrapWitness {
@@ -9,7 +32,7 @@ fn original() -> Inputs {
         statement: [Fp::ZERO; 26],
     };
     let sigma = (0..64).collect::<Vec<u8>>();
-    let mut raw = (sigma.len() as u32).to_le_bytes().to_vec();
+    let mut raw = u32::try_from(sigma.len()).unwrap().to_le_bytes().to_vec();
     raw.extend(&sigma);
     let statement = hash_with_domain(
         iroha_plonk_gadgets::statement::STATEMENT_DOMAIN,
@@ -84,10 +107,10 @@ fn malformed_q_exports_never_select_a_scalar_alias_or_short_padding() {
     }
     // p is a valid Fq integer, but it is not a canonical Fp scalar.
     let p = [
-        0x992d30ed00000001_u64,
-        0x224698fc094cf91b,
+        0x992d_30ed_0000_0001_u64,
+        0x2246_98fc_094c_f91b,
         0,
-        0x4000000000000000,
+        0x4000_0000_0000_0000,
     ];
     let mut repr = [0; 32];
     for (to, word) in repr.chunks_exact_mut(8).zip(p) {
@@ -102,7 +125,7 @@ fn malformed_q_exports_never_select_a_scalar_alias_or_short_padding() {
 fn exact_signed_original_digest_binds_body_and_both_raw_signature_halves() {
     for kind in object_kinds() {
         let bytes = (0..kind.body_len() + 64)
-            .map(|i| i as u8)
+            .map(|i| u8::try_from(i % 256).unwrap())
             .collect::<Vec<_>>();
         let digest = object_digest(kind, &bytes).unwrap();
         for index in [
@@ -137,4 +160,25 @@ fn homogeneous_frame_binds_high_foreign_challenge_limbs_and_fixed_absent_slots()
     let altered = frame(&fields, &changed, &part).unwrap();
     assert_ne!(altered[0], public[0]);
     assert_eq!(&altered[1..], &public[1..]);
+}
+
+#[test]
+fn original_bounds_reject_missing_oversized_and_over_domain_tables() {
+    let config = ReadConfig {
+        maximum_bytes: 16,
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    assert_eq!(original_bounds(&[], 1 << 16, config), Err(Error::Artifact));
+    assert_eq!(
+        original_bounds(&[0; 17], 1 << 16, config),
+        Err(Error::Artifact)
+    );
+    assert_eq!(
+        original_bounds(&[0; 16], (1 << 16) + 1, config),
+        Err(Error::Artifact)
+    );
+    assert_eq!(original_bounds(&[0; 16], 1 << 16, config), Ok(()));
+    // Passing these bounds alone never parses or admits an original proving key.
 }

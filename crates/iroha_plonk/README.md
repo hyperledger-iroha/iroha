@@ -111,6 +111,22 @@ Stage ENGINE-3 (tasks T12 and T13) provides:
   (deterministic weights, one merged `g` MSM, suffixes as accumulator
   items). Rejections are typed `VerifyError`s.
 
+Proving and verification accept an explicit operation cancellation token from
+`iroha_pasta`. `ProverConfig::cancellation` and the `_cancellable` witness,
+original-key import, and verification entry points share this signal. Kernels
+check it at Rayon task boundaries and in bounded sequential batches. Every
+spawned task joins before `Cancelled` is returned; owned secret polynomials,
+blinding buffers, and quotient leases are wiped before resources are released.
+Cancellation has no proof verdict and must never authorize a corrected claim or
+burn. Original-key installation and pinned-parameter derivation are separate
+startup work; no cancellation bound is claimed for those noncancellable APIs.
+
+A cancelled operation consumes its witness and may have advanced its transcript
+and randomness. Retry with a fresh operation token, transcript, witness, and
+randomness owner. Do not continue or publish a partially written IPA transcript.
+The ordinary APIs invoke the same implementation with no token, and an
+uncancelled token preserves proof bytes and arithmetic ordering.
+
 In oracle mode (`--cfg iroha_plonk_oracle`) `create_proof_oracle` reproduces
 vendored halo2-axiom proof bytes, and `verify_full_oracle` accepts vendored
 proofs (checked for Committed and Direct instances on both curves, with and
@@ -143,13 +159,52 @@ Oracle mode (the injected vendored `transcript_repr`, `fe_to_fe` Poseidon
 point absorption and caller-seeded prover randomness) is compiled only with
 `--cfg iroha_plonk_oracle` (and in this crate's unit tests); it is never a
 Cargo feature. `build.rs` only declares the cfg for `check-cfg`. The oracle
-run is manual today (TODO: a CI job); `ORACLE_BUILD` reports the cfg, and
+run is enforced by `.github/workflows/native_prover_parity.yml`; `ORACLE_BUILD` reports the cfg, and
 every shipping root that links this crate asserts `!ORACLE_BUILD` at compile
 time.
+
+Offline compiler recovery can use `keys::source_fingerprint_v2` to identify
+exact witnessless public source tables before generating commitments. It runs the
+ordinary key preparation and hashes the complete descriptor, copy mapping digest,
+finalized fixed/permutation evaluations and selector bitmaps. Its matching
+`keys::pk::artifact::source_fingerprint_v2` checks bounded canonical originals
+and streams their scalar bytes without retaining a second set of tables or
+loading parameter arrays. Both return lookup DATA only. Cache/table/MSM resource
+choices do not change the identity, and no global cache is introduced.
+
+A fingerprint match does not authenticate a VK or authorize its use. In
+particular, a different valid commitment can retain the same lookup fingerprint.
+The compiler must still call `ProvingKey::from_artifact_v2_cancellable` against
+the exact installed source and reject every source, copy, profile or commitment
+mismatch before publishing a reused key. These helpers do not change proof
+bytes, original-key encoding or source-qualified capability construction.
+
+Large polynomial evaluations use fixed Horner subtrees, and multiopen reconstruction
+walks the original slot order over disjoint coefficient blocks. Grand-product
+inversions use constant-time field inversion in worker-sized chunks; their scratch
+lengths sum to at most the original column length. These phases use the caller's
+Rayon pool without copying a coefficient column or changing the transcript schedule.
 
 Every output is a pure function of its inputs and the prover's random stream;
 results do not depend on the Rayon pool size, and no behaviour comes from
 environment variables.
+
+The ignored `actual_descriptor_node_major_tile_experiment` unit test compares
+row-wise evaluation with node-major tiles on exact M3 workload descriptors.
+The `iroha_plonk_gadgets` M3 test's
+`actual_m3_source_descriptors_for_dag_experiment` exporter supplies those frames
+without generating keys. Pin the exported bytes and both executable/source
+identities before running the experiment on either field with one or four workers.
+It compares every node and row, checks cancellation and a fresh retry, and bounds
+additional DAG scratch at 16 MiB. Its deterministic dense inputs are not satisfying
+witnesses; kernel timings and lifetime RSS cannot qualify proofs or M3 gates.
+The experiment itself provides no complete-proof qualification. The production
+candidate uses four-row tiles with a strided row view, preserving node arithmetic,
+root order and constraint folding. Scratch expansion beyond the scalar buffer is
+reserved before spawning work, with a shared 16 MiB sublimit inside the existing
+process-wide 64 MiB scratch ceiling. Contention or oversized public shapes select
+the scalar evaluator immediately. Zeroizing worker buffers drop before reservation
+release; no task waits while retaining scratch.
 
 Validate:
 

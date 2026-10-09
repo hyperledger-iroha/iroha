@@ -310,8 +310,15 @@ pub trait KagemushaWalletFsV1 {
     ///
     /// `WouldBlock` when another opener holds it; otherwise the OS error.
     fn try_lock(&self) -> io::Result<Self::Lock>;
-    /// A fresh staging name (`.tmp-` and 32 lowercase hex digits).
-    fn staging_name(&self) -> String;
+    /// A candidate staging name (`.tmp-` and 32 lowercase hex digits).
+    ///
+    /// Names carry no custody authority: callers must still create exclusively and retain
+    /// the original descriptor. Name generation itself does not mutate the filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns an entropy or platform failure before any staging file is created.
+    fn staging_name(&self) -> io::Result<String>;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -364,6 +371,8 @@ pub enum KagemushaWalletKeyProfileV1 {
     /// Android StrongBox when available, otherwise the TEE; iPhone Secure Enclave. A TEE key
     /// is generated only while the slot's probe is still definitively absent.
     SecureElementOrTee,
+    /// Android TEE only, even when StrongBox exists; unsupported on Apple.
+    AndroidTee,
 }
 
 impl KagemushaWalletKeyProfileV1 {
@@ -373,6 +382,7 @@ impl KagemushaWalletKeyProfileV1 {
         match self {
             Self::SecureElement => 1,
             Self::SecureElementOrTee => 2,
+            Self::AndroidTee => 3,
         }
     }
 
@@ -382,6 +392,7 @@ impl KagemushaWalletKeyProfileV1 {
         match tag {
             1 => Some(Self::SecureElement),
             2 => Some(Self::SecureElementOrTee),
+            3 => Some(Self::AndroidTee),
             _ => None,
         }
     }
@@ -393,7 +404,9 @@ impl KagemushaWalletKeyProfileV1 {
 /// secp256r1, `DIGEST_SHA256`, `setAttestationChallenge(challenge_digest)`,
 /// `setIsStrongBoxBacked(true)` and, for [`KagemushaWalletKeyProfileV1::SecureElementOrTee`]
 /// only, a TEE retry after `StrongBoxUnavailableException`. A platform without definitive
-/// absence requires a new explicit enrollment and fresh slot for that retry. Never any user-authentication,
+/// absence requires a new explicit enrollment and fresh slot for that retry. A signed
+/// [`KagemushaWalletKeyProfileV1::AndroidTee`] selection requests hardware TEE directly.
+/// Never any user-authentication,
 /// unlocked-device, usage-count or confirmation option. iPhone (C vtable): a Secure Enclave
 /// P-256 signing key with `.privateKeyUsage`; the challenge digest is the App Attest
 /// `clientDataHash` used at E5. The alias or keychain account is derived from the slot
@@ -519,6 +532,15 @@ pub trait KagemushaWalletPlatformV1: Send + Sync {
         slot: &KagemushaWalletSlotIdV1,
     ) -> KagemushaWalletProbeV1<KagemushaDevicePublicKeyV1>;
 
+    /// Leaf-first original DER attestation chain for the actual existing payment key.
+    /// This is bounded evidence DATA; no certificate or Play Integrity verdict is inferred.
+    fn key_attestation_chain(
+        &self,
+        _slot: &KagemushaWalletSlotIdV1,
+    ) -> KagemushaWalletProbeV1<Vec<Vec<u8>>> {
+        KagemushaWalletProbeV1::Unavailable(KagemushaWalletUnavailableV1::Platform(0))
+    }
+
     /// Generate the payment key of `slot` under `request` (attestation challenge and hardware
     /// policy). Called only after a definitive `Absent` probe in the state "intent, no marker,
     /// not abandoned"; never replaces an entry.
@@ -527,6 +549,21 @@ pub trait KagemushaWalletPlatformV1: Send + Sync {
         slot: &KagemushaWalletSlotIdV1,
         request: &KagemushaWalletKeyGenerationRequestV1,
     ) -> KagemushaWalletKeyGenerationV1;
+
+    /// Retry validation of an actual successful generation return retained by this same
+    /// platform owner. This method never generates or restores a key. `None` means no such
+    /// return was retained; it is not a key-absence verdict. The provider must still perform
+    /// its ordinary protected-storage/key probe before any definitive-absence continuation.
+    ///
+    /// # Errors
+    /// Unsupported recovery or unavailable original/KeyInfo/attestation readback stays unavailable.
+    fn key_recover_generation_reply(
+        &self,
+        _slot: &KagemushaWalletSlotIdV1,
+        _request: &KagemushaWalletKeyGenerationRequestV1,
+    ) -> Result<Option<KagemushaDevicePublicKeyV1>, KagemushaWalletUnavailableV1> {
+        Err(KagemushaWalletUnavailableV1::Platform(0))
+    }
 
     /// Creation policy of this platform. The default preserves platforms with definitive
     /// absence; Android keystore1 selects fresh enrollment only. Query errors never select

@@ -231,7 +231,9 @@ fn all_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
     };
     let staker = AccountId::new(key(0x71, Algorithm::Ed25519).public_key().clone());
     let custody = AccountId::new(key(0x72, Algorithm::Ed25519).public_key().clone());
-    let xor = SumeragiNposParameters::default().xor_asset_definition_id;
+    let xor = SumeragiNposParameters::default()
+        .xor_asset_definition_id()
+        .clone();
     let plan = PublicLaneMonetaryPlanV1 {
         network_scope: PublicLaneMonetaryScopeV1::Network(network_id),
         valid_until_height: 210,
@@ -428,7 +430,9 @@ fn preparation_fixture_rows() -> Vec<(&'static str, Vec<u8>)> {
 
 #[test]
 fn operation_specific_monetary_fixtures_roundtrip_exact_bindings_and_network_xor() {
-    let xor = SumeragiNposParameters::default().xor_asset_definition_id;
+    let xor = SumeragiNposParameters::default()
+        .xor_asset_definition_id()
+        .clone();
     let rows = fixture_rows();
     let plans = rows
         .iter()
@@ -511,7 +515,9 @@ fn staking_preparation_frames_keep_schema_alignment_and_exact_native_intent() {
             );
             assert_eq!(
                 response.xor_asset_definition_id,
-                SumeragiNposParameters::default().xor_asset_definition_id
+                SumeragiNposParameters::default()
+                    .xor_asset_definition_id()
+                    .clone()
             );
             for row in response.balances {
                 assert_eq!(
@@ -540,7 +546,9 @@ fn retired_synthetic_xor_has_the_same_rejected_sdk_identity() {
     );
     assert_ne!(
         retired,
-        SumeragiNposParameters::default().xor_asset_definition_id
+        SumeragiNposParameters::default()
+            .xor_asset_definition_id()
+            .clone()
     );
 }
 

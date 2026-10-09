@@ -1,10 +1,6 @@
 //! `[sumeragi]` keys of the Sumeragi core: local-parameter overrides, safety-record paths and
 //! retired keys (`specs/sumeragi.md` §7.4, §12.4).
 
-#[path = "publisher_config_fixture.rs"]
-mod publisher_config_fixture;
-use publisher_config_fixture::{ParserOnlyPublisherFiles, with_fixture_refs};
-
 use std::{path::PathBuf, time::Duration};
 
 use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
@@ -20,11 +16,9 @@ fn fixtures_dir() -> PathBuf {
 }
 
 fn base_reader() -> ConfigReader {
-    with_fixture_refs(
-        ConfigReader::new()
-            .read_toml_with_extends(fixtures_dir().join("base.toml"))
-            .expect("base config should load"),
-    )
+    ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base config should load")
 }
 
 fn parse_inline(toml: &str) -> Result<ActualConfig, String> {
@@ -33,7 +27,7 @@ fn parse_inline(toml: &str) -> Result<ActualConfig, String> {
         .with_toml_source(TomlSource::inline(table))
         .read_and_complete::<UserConfig>()
         .map_err(|error| format!("{error:?}"))?
-        .parse_with_file_source(&ParserOnlyPublisherFiles)
+        .parse()
         .map_err(|error| format!("{error:?}"))
 }
 
@@ -139,15 +133,13 @@ fn a_partial_override_leaves_the_other_parameters_unset() {
 
 #[test]
 fn relative_record_paths_resolve_against_their_config_file() {
-    let config: ActualConfig = with_fixture_refs(
-        ConfigReader::new()
-            .read_toml_with_extends(fixtures_dir().join("sumeragi_record_paths.toml"))
-            .expect("config loads"),
-    )
-    .read_and_complete::<UserConfig>()
-    .expect("user config")
-    .parse_with_file_source(&ParserOnlyPublisherFiles)
-    .expect("actual config");
+    let config: ActualConfig = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("sumeragi_record_paths.toml"))
+        .expect("config loads")
+        .read_and_complete::<UserConfig>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
     assert_eq!(
         config.sumeragi.records_dir,
         fixtures_dir().join("sumeragi/records")
@@ -272,7 +264,7 @@ fn retired_body_ingress_environment_name_is_not_an_input() {
         .with_env(env.clone())
         .read_and_complete::<UserConfig>()
         .expect("a retired environment name is not a schema input")
-        .parse_with_file_source(&ParserOnlyPublisherFiles)
+        .parse()
         .expect("a retired environment name cannot alter the configuration");
     assert!(env.unvisited().contains("SUMERAGI_QUEUES_BODY_BYTES"));
 }

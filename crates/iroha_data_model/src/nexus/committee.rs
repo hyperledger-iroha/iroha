@@ -1045,7 +1045,7 @@ mod tests {
                 PrepareValidatorCommitteeCredentialsV1 {
                     transition_id: transition.preparation.transition_id().unwrap(),
                     target_epoch: transition.preparation.target_epoch,
-                    credentials: transition.credentials.clone().unwrap(),
+                    credentials: transition.credentials.unwrap(),
                 },
             ),
             ValidatorCommitteeOperationV1::AdmitSeat(AdmitValidatorCommitteeSeatV1 {

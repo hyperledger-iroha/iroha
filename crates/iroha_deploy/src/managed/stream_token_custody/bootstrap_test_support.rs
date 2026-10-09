@@ -304,3 +304,49 @@ impl ManagedStreamTokenCustody {
         retained
     }
 }
+
+/// Real independently challenged finality and same-cut native custody, with transport replaced
+/// only by the actual executed fixture. Used to qualify provider scheduling, not service Ready.
+impl ManagedStreamTokenCustody {
+    pub(in crate::managed) fn test_native_current(
+        &self,
+        native: &NativeFixture,
+        policy: &SignerCustodyPolicyV1,
+        deadline: Instant,
+        challenges: &std::sync::Mutex<Vec<[u8; 32]>>,
+    ) -> Result<VerifiedStreamTokenCustodyStateV1> {
+        self.authority.validate_profile()?;
+        let (checkpoint, verified) = self
+            .authority
+            .observe_finality_with_source(deadline, |_, _| {
+                Ok(CountedNativeCurrent { native, challenges })
+            })?;
+        assert_eq!(verified, 4);
+        let current =
+            native.bootstrap_custody_before(&self.authority, policy, &checkpoint, deadline)?;
+        self.authority.validate_profile()?;
+        require_deadline(deadline)?;
+        Ok(current)
+    }
+}
+struct CountedNativeCurrent<'a> {
+    native: &'a NativeFixture,
+    challenges: &'a std::sync::Mutex<Vec<[u8; 32]>>,
+}
+impl crate::verify::finality::FinalitySource for CountedNativeCurrent<'_> {
+    type Error = std::io::Error;
+    fn finality_proof(
+        &self,
+        height: std::num::NonZeroU64,
+    ) -> std::io::Result<iroha_data_model::sumeragi_finality::SumeragiFinalityProof> {
+        crate::verify::finality::FinalitySource::finality_proof(self.native, height)
+    }
+    fn latest_attestation(
+        &self,
+        peer: &iroha_model_base::peer::PeerId,
+        challenge: &[u8; 32],
+    ) -> std::io::Result<crate::verify::finality::FinalityAttestation> {
+        self.challenges.lock().unwrap().push(*challenge);
+        crate::verify::finality::FinalitySource::latest_attestation(self.native, peer, challenge)
+    }
+}

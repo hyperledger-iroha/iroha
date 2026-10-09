@@ -19,6 +19,10 @@ use std::{
 #[path = "taira_authenticated_height.rs"]
 pub(crate) mod authenticated_height;
 
+#[path = "taira_dataspace_deploy_authority_replay.rs"]
+mod authority_replay;
+pub(super) use authority_replay::OriginalCompletion;
+
 const MAX_NEW_PROOFS: usize = 128;
 const VERIFICATION_PEERS: usize = 4;
 
@@ -547,8 +551,9 @@ impl<'a> Preflight<'a> {
             let peer = &self.trust.peers[index];
             let height = NonZeroU64::new(client.get_sumeragi_status()?.committed_height)
                 .ok_or_else(|| eyre!("validator has no durable tip"))?;
-            let attestation =
-                client.get_sumeragi_finality_attestation(height, challenge, &peer.peer_id)?;
+            let attestation = client
+                .get_sumeragi_finality_attestation(height, challenge, &peer.peer_id)?
+                .into_attestation();
             validate_attestation(&self.authority, peer, challenge, &attestation)?;
             Ok(attestation)
         })?;
@@ -1094,7 +1099,7 @@ fn verify_peer_state(
         challenge,
         &peer.peer_id,
     ))? {
-        PeerRead::Verified(attestation) => attestation,
+        PeerRead::Verified(attestation) => attestation.into_attestation(),
         PeerRead::Pending => {
             require_operation_budget(deadline, "validator finality tip is changing")?;
             return Ok(PeerRead::Pending);
@@ -1247,6 +1252,7 @@ pub(super) struct Completion<'a> {
     prefix: ProofPrefix,
     deadline: std::time::Instant,
     verification_origins: Vec<String>,
+    runtime_update: Option<&'a runtime_update::Verified>,
 }
 
 impl<'a> Completion<'a> {
@@ -1255,6 +1261,7 @@ impl<'a> Completion<'a> {
         journal: &'a Journal,
         deadline: std::time::Instant,
         origins: &[String],
+        runtime_update: Option<&'a runtime_update::Verified>,
     ) -> Result<Self> {
         require_operation_budget(deadline, "starting finality verification")?;
         let authority = plan.manifest.finality.authority(plan.manifest.network_id)?;
@@ -1267,6 +1274,7 @@ impl<'a> Completion<'a> {
             prefix: ProofPrefix::default(),
             deadline,
             verification_origins: verification_origins(&plan.manifest.finality, origins)?,
+            runtime_update,
         })
     }
 
@@ -1302,7 +1310,13 @@ fn complete<C: RunContext>(
                 .all(|phase| phase.state == "applied_verification_pending"),
         "completion requires all three retained phases to be applied",
     )?;
-    let trust = &plan.manifest.finality;
+    if let Some(update) = completion.runtime_update {
+        update.revalidate()?;
+    }
+    let trust = completion
+        .runtime_update
+        .map(|update| &update.trust)
+        .unwrap_or(&plan.manifest.finality);
     let challenge: [u8; 32] = rand::random();
     require(challenge != [0; 32], "random finality challenge is zero")?;
     let clients = peer_clients(context, trust, &completion.verification_origins)?
@@ -1320,7 +1334,7 @@ fn complete<C: RunContext>(
             challenge,
             &peer.peer_id,
         ))? {
-            PeerRead::Verified(attestation) => attestation,
+            PeerRead::Verified(attestation) => attestation.into_attestation(),
             PeerRead::Pending => {
                 require_operation_budget(deadline, "validator finality tip is changing")?;
                 return Ok(PeerRead::Pending);
@@ -1363,6 +1377,13 @@ fn complete<C: RunContext>(
     )? {
         report.state = "verification_sync_pending".into();
         return Ok(());
+    }
+    if let Some(update) = completion.runtime_update {
+        update.retained_tip_claims()?.verify_authenticated_prefix(
+            &completion.prefix.proofs,
+            tips.iter()
+                .map(|tip| tip.body.finality_proof.block_header.height().get()),
+        )?;
     }
     let prepared = PHASES
         .iter()
@@ -1425,6 +1446,7 @@ fn complete<C: RunContext>(
         receipts.len() == VERIFICATION_PEERS,
         "four validator receipts are required",
     )?;
+    let runtime_update = completion.runtime_update;
     let completion = CompletionV1 {
         schema_version: 1,
         operation_id: plan.operation_id.clone(),
@@ -1436,7 +1458,21 @@ fn complete<C: RunContext>(
     };
     let receipt_name = format!("completion-{}.json", hex::encode(challenge));
     require_operation_budget(deadline, "publishing completion receipt")?;
-    journal.install_json(&receipt_name, &completion)?;
+    if let Some(update) = runtime_update {
+        update.revalidate()?;
+        let trust_file = format!("verification-trust-{}.json", hex::encode(challenge));
+        journal.install_json(&trust_file, &update.trust)?;
+        let mut value = json::to_value(&completion)?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| eyre!("completion must be an object"))?;
+        object.insert("schema_version".into(), norito::json!(2));
+        object.insert("runtime_update".into(), update.receipt.clone());
+        object.insert("verification_trust_file".into(), norito::json!(trust_file));
+        journal.install_json(&receipt_name, &value)?;
+    } else {
+        journal.install_json(&receipt_name, &completion)?;
+    }
     require_operation_budget(deadline, "published completion receipt")?;
     report.completion_receipt = Some(receipt_name);
     report.deployment_complete = true;

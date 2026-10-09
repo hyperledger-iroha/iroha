@@ -11,7 +11,9 @@ use crate::{
     provisioning::{ProvisioningProgress, ProvisioningStage, RemoteProvisioning},
 };
 use iroha_data_model::sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1};
-use iroha_fs::{OwnerDirectory, PrivateDirectory, PublishMode};
+#[cfg(test)]
+use iroha_fs::OwnerDirectory;
+use iroha_fs::{PrivateDirectory, PublishMode};
 use iroha_model_base::topology::DataSpaceId;
 use iroha_wallet::operations::OperationStatus;
 use std::{
@@ -107,6 +109,7 @@ struct Activation {
     deadline_ms: u64,
 }
 
+#[cfg(test)]
 fn outer_path(store: &ManagedStore, name: &str) -> PathBuf {
     store.root().join("attachments").join(name)
 }
@@ -115,12 +118,10 @@ fn release_path(store: &ManagedStore, name: &str) -> PathBuf {
 }
 fn existing_outer(store: &ManagedStore, name: &str) -> Result<Option<PrivateDirectory>> {
     validate_name(name)?;
-    let path = outer_path(store, name);
-    match std::fs::symlink_metadata(&path) {
-        Ok(_) => Ok(Some(PrivateDirectory::open(path)?)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-    }
+    let Some(attachments) = store.attachments_directory()? else {
+        return Ok(None);
+    };
+    Ok(attachments.open_child_optional(name)?)
 }
 fn read_binding(directory: &PrivateDirectory) -> Result<Binding> {
     let binding: Binding = decode(&directory.read(BINDING, MAX_METADATA)?)?;
@@ -177,6 +178,21 @@ fn terminal_operation_error(status: &ManagedAttachmentStatus) -> Option<Error> {
                 status.stage,
             ))
         })
+}
+
+// A blocking status observation consumes the same foreground budget. Retain terminal
+// operation failure precedence, then reject an otherwise complete reply received too late.
+fn attachment_complete(status: &ManagedAttachmentStatus, deadline: Instant) -> Result<bool> {
+    if let Some(error) = terminal_operation_error(status) {
+        return Err(error);
+    }
+    let complete = status.stage == ManagedAttachmentPhase::Attached
+        && status.failure.is_none()
+        && status.parent_confirmed.is_some();
+    if complete {
+        remaining(deadline).map_err(|_| attachment_deadline(status))?;
+    }
+    Ok(complete)
 }
 
 fn record_wallet_status(
@@ -335,8 +351,8 @@ fn retain_prepared_activation(
 }
 
 fn attachment_turn_deadline(directory: &PrivateDirectory) -> Result<Instant> {
-    match directory.read(ACTIVATION, MAX_METADATA) {
-        Ok(bytes) => {
+    match directory.read_optional(ACTIVATION, MAX_METADATA)? {
+        Some(bytes) => {
             let activation: Activation = decode(&bytes)?;
             let milliseconds = activation.deadline_ms.saturating_sub(now_ms()?);
             if milliseconds > 0 {
@@ -345,10 +361,7 @@ fn attachment_turn_deadline(directory: &PrivateDirectory) -> Result<Instant> {
                 Ok(Instant::now() + RELAY_TURN)
             }
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(Instant::now() + RELAY_TURN)
-        }
-        Err(error) => Err(error.into()),
+        None => Ok(Instant::now() + RELAY_TURN),
     }
 }
 
@@ -503,8 +516,7 @@ impl ManagedStore {
                     account_alias: request.account_alias.clone(),
                     context: None,
                 };
-                let parent = OwnerDirectory::open_or_create(self.root().join("attachments"))?;
-                parent.publish_private_child(
+                self.publish_attachment(
                     &request.name,
                     &[("request.lock", b""), (BINDING, &encode(&binding)?)],
                 )?
@@ -533,12 +545,25 @@ impl ManagedStore {
             )?;
         }
         let spec = binding.spec.clone();
-        let local = self.up_private_root_bound(
+        let bootstrap =
+            authenticate_parent(&release_path(self, &request.name), profile, deadline, false)?;
+        if bootstrap.release().network_id != spec.parent_network_id {
+            return Err(Error::Invalid(
+                "parent reset cannot replace the selected AMX private root".into(),
+            ));
+        }
+        let sources = crate::bootstrap::AmxSourceSelection {
+            bootstrap: &bootstrap,
+            attachment: &directory,
+            deadline,
+        };
+        let local = self.up_private_root_with_amx_bound(
             &runtime.private_root_request(
                 &request.name,
                 remaining(deadline)?.min(Duration::from_secs(30)),
             ),
             &spec,
+            &sources,
             |prepared| {
                 retain_prepared_activation(
                     self,
@@ -567,13 +592,7 @@ impl ManagedStore {
             let status = self
                 .dataspace_status(&request.name)?
                 .ok_or_else(|| Error::Invalid("worker has no bound attachment".into()))?;
-            if let Some(error) = terminal_operation_error(&status.attachment) {
-                return Err(error);
-            }
-            if status.attachment.stage == ManagedAttachmentPhase::Attached
-                && status.attachment.failure.is_none()
-                && status.attachment.parent_confirmed.is_some()
-            {
+            if attachment_complete(&status.attachment, deadline)? {
                 return Ok(status);
             }
             if status.local.phase != ManagedPhase::Ready {
@@ -620,12 +639,9 @@ impl ManagedStore {
             }
             return Ok(Some(response));
         }
-        let mut attachment = match directory.read(PROGRESS, MAX_METADATA) {
-            Ok(bytes) => decode(&bytes)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                connecting(binding.profile.name.clone())
-            }
-            Err(error) => return Err(error.into()),
+        let mut attachment = match directory.read_optional(PROGRESS, MAX_METADATA)? {
+            Some(bytes) => decode(&bytes)?,
+            None => connecting(binding.profile.name.clone()),
         };
         if attachment.network != binding.profile.name {
             return Err(Error::Invalid(
@@ -687,6 +703,13 @@ impl AttachmentWorker {
     pub(super) fn is_finished(&self) -> bool {
         self.thread.is_finished()
     }
+    /// Consume the actual relay task after its caller has cancelled the shared owner.
+    /// No detached timeout can release ownership while a finite relay turn still mutates.
+    pub(super) fn join(self) -> Result<()> {
+        self.thread
+            .join()
+            .map_err(|_| Error::Invalid("owned parent attachment task panicked".into()))
+    }
 }
 
 /// Report a bound but inactive owner without exposing its internal filesystem error.
@@ -727,7 +750,10 @@ fn relay_loop(
             &prepared,
             &mut service,
             &status,
-            refresh,
+            RelayControl {
+                refresh,
+                cancelled: &cancelled,
+            },
         );
         // Failed current observations may mean signed peer mappings rotated. Fetch one new
         // artifact next turn without clearing the monotonic release or child identity binding.
@@ -770,6 +796,11 @@ fn relay_loop(
         }
     }
 }
+struct RelayControl<'a> {
+    refresh: bool,
+    cancelled: &'a Arc<AtomicBool>,
+}
+
 fn relay_turn(
     directory: &PrivateDirectory,
     release_path: &Path,
@@ -777,8 +808,12 @@ fn relay_turn(
     prepared: &PreparedLocalnet,
     service: &mut Option<RemoteProvisioning>,
     status: &Mutex<ManagedAttachmentStatus>,
-    refresh: bool,
+    control: RelayControl<'_>,
 ) -> std::result::Result<(), ManagedAttachmentFailure> {
+    let RelayControl { refresh, cancelled } = control;
+    if cancelled.load(Ordering::Acquire) {
+        return Err(ManagedAttachmentFailure::SupervisorStopped);
+    }
     let runtime = InstalledRuntime::discover()?;
     let profiles = runtime.network_profiles()?;
     let profile = profiles
@@ -797,6 +832,9 @@ fn relay_turn(
     if bootstrap.release().network_id != binding.spec.parent_network_id {
         return Err(ManagedAttachmentFailure::ContextRejected);
     }
+    if cancelled.load(Ordering::Acquire) {
+        return Err(ManagedAttachmentFailure::SupervisorStopped);
+    }
     if service.is_none() {
         *service = Some(
             RemoteProvisioning::open(
@@ -805,6 +843,7 @@ fn relay_turn(
                 prepared,
                 &binding.account_alias,
             )
+            .and_then(|service| service.with_cancellation(Arc::clone(cancelled)))
             .map_err(ManagedAttachmentFailure::from)?,
         );
     }

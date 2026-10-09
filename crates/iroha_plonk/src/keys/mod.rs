@@ -29,17 +29,20 @@ use crate::{
 
 pub mod keygen;
 pub mod pk;
+mod source_fingerprint;
 #[cfg(test)]
 mod tests;
 pub mod vk;
 
 pub use keygen::{
     KeygenConfig, KeygenConfigV2, keygen_from_tables, keygen_from_tables_v2, keygen_pk,
-    keygen_pk_v2, keygen_vk, keygen_vk_v2, keygen_vk_with_binding_v2, permutation_values,
+    keygen_pk_v2, keygen_pk_v2_cancellable, keygen_vk, keygen_vk_v2, keygen_vk_with_binding_v2,
+    keygen_vk_with_binding_v2_cancellable, permutation_values, source_fingerprint_v2,
 };
 pub use pk::{
     CosetCachePolicy, CosetMasks, CosetPolynomial, KeyConstraintSystem, ProvingKey, QuotientDomain,
 };
+pub use source_fingerprint::SourceFingerprintV2;
 pub use vk::{VK_VERSION, VerifyingKey, VkError};
 
 /// A validated descriptor, its canonical Norito frame `D` and
@@ -139,6 +142,8 @@ impl DescriptorBinding {
 /// Key generation or proving-key construction failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyError {
+    /// The caller cancelled key arithmetic before completion.
+    Cancelled,
     /// The circuit failed to configure or synthesize.
     Synthesis(frontend::Error),
     /// The constraint system is unusable.
@@ -188,9 +193,25 @@ pub enum KeyError {
     },
 }
 
+impl KeyError {
+    /// Whether this failure is cooperative cancellation, never an invalid proof.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Cancelled | Self::ConstraintSystem(CsError::Cancelled) => true,
+            Self::Descriptor(error) => error.is_cancelled(),
+            Self::VerifyingKey(error) => error.is_cancelled(),
+            Self::Synthesis(error) => matches!(error, frontend::Error::Cancelled),
+            Self::Msm(error) => matches!(error, MsmError::Cancelled),
+            Self::Fft(error) => matches!(error, FftError::Cancelled),
+            _ => false,
+        }
+    }
+}
+
 impl fmt::Display for KeyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("operation cancelled"),
             Self::Synthesis(error) => write!(f, "synthesis: {error}"),
             Self::ConstraintSystem(error) => write!(f, "constraint system: {error}"),
             Self::Descriptor(error) => write!(f, "descriptor: {error}"),
@@ -219,22 +240,39 @@ impl fmt::Display for KeyError {
 }
 
 impl std::error::Error for KeyError {}
+impl From<iroha_pasta::Cancelled> for KeyError {
+    fn from(_: iroha_pasta::Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
 
 impl From<frontend::Error> for KeyError {
     fn from(error: frontend::Error) -> Self {
-        Self::Synthesis(error)
+        if matches!(error, frontend::Error::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Synthesis(error)
+        }
     }
 }
 
 impl From<CsError> for KeyError {
     fn from(error: CsError) -> Self {
-        Self::ConstraintSystem(error)
+        if matches!(error, CsError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::ConstraintSystem(error)
+        }
     }
 }
 
 impl From<DescriptorError> for KeyError {
     fn from(error: DescriptorError) -> Self {
-        Self::Descriptor(error)
+        if error.is_cancelled() {
+            Self::Cancelled
+        } else {
+            Self::Descriptor(error)
+        }
     }
 }
 
@@ -247,6 +285,7 @@ impl From<PermutationError> for KeyError {
 impl From<VkError> for KeyError {
     fn from(error: VkError) -> Self {
         match error {
+            VkError::Cancelled => Self::Cancelled,
             VkError::Point {
                 index,
                 error: crate::transcript::TranscriptError::IdentityPoint,
@@ -258,13 +297,21 @@ impl From<VkError> for KeyError {
 
 impl From<FftError> for KeyError {
     fn from(error: FftError) -> Self {
-        Self::Fft(error)
+        if matches!(error, FftError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Fft(error)
+        }
     }
 }
 
 impl From<MsmError> for KeyError {
     fn from(error: MsmError) -> Self {
-        Self::Msm(error)
+        if matches!(error, MsmError::Cancelled) {
+            Self::Cancelled
+        } else {
+            Self::Msm(error)
+        }
     }
 }
 

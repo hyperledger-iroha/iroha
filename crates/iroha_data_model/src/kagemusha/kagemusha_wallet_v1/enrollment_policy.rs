@@ -15,6 +15,9 @@ use super::{
     invalid_v1, overflow_v1, require_nonzero_v1, require_scheme_v1, require_version_v1,
 };
 
+mod template;
+pub use template::KagemushaWalletEnrollmentPolicyTemplateV1;
+
 #[cfg(test)]
 #[path = "enrollment_policy_tests.rs"]
 pub(super) mod enrollment_policy_tests;
@@ -25,14 +28,14 @@ pub const KAGEMUSHA_WALLET_ENROLLMENT_POLICY_MAX_BYTES_V1: usize = 1024;
 // these shipping-library assertions qualify layout only, not actual native/device operation.
 const _: () = {
     assert!(
-        norito::core::Header::SIZE
-            % norito::core::archived_payload_align::<KagemushaWalletAppPolicyV1>()
-            == 0
+        norito::core::Header::SIZE.is_multiple_of(norito::core::archived_payload_align::<
+            KagemushaWalletAppPolicyV1,
+        >())
     );
     assert!(
-        norito::core::Header::SIZE
-            % norito::core::archived_payload_align::<KagemushaWalletEnrollmentPolicyV1>()
-            == 0
+        norito::core::Header::SIZE.is_multiple_of(norito::core::archived_payload_align::<
+            KagemushaWalletEnrollmentPolicyV1,
+        >())
     );
 };
 
@@ -192,7 +195,7 @@ impl WalletVersionsV1 for KagemushaWalletAppPolicyV1 {
     }
 }
 
-/// Current KeyMint hardware levels; no software or disabled selector exists.
+/// Current `KeyMint` hardware levels; no software or disabled selector exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletAndroidHardwareV1"
@@ -201,7 +204,7 @@ pub enum KagemushaWalletAndroidHardwareV1 {
     /// Transcript tag 1: only hardware TEE level 1.
     #[codec(index = 1)]
     Tee,
-    /// Transcript tag 2: only StrongBox level 2.
+    /// Transcript tag 2: only `StrongBox` level 2.
     #[codec(index = 2)]
     StrongBox,
     /// Transcript tag 3: either of the two hardware levels.
@@ -229,7 +232,7 @@ pub enum KagemushaWalletPlayIntegrityLevelV1 {
     name = "iroha_data_model::kagemusha::kagemusha_wallet_v1::KagemushaWalletEnrollmentPlatformV1"
 )]
 pub enum KagemushaWalletEnrollmentPlatformV1 {
-    /// Transcript tag 1: KeyMint, current Google revocation and server Google decode all run.
+    /// Transcript tag 1: `KeyMint`, current Google revocation and server Google decode all run.
     #[codec(index = 1)]
     Android {
         /// Nonzero SHA-256 pin of the genuine selected Google root DER.
@@ -286,54 +289,22 @@ impl KagemushaWalletEnrollmentPolicyV1 {
     /// Rejects zero bindings, invalid patch/Google selectors, inconsistent regulators/lease.
     pub fn validate(&self) -> WalletResult<()> {
         self.require_versions()?;
-        require_nonzero_v1("enrollment_policy.scheme_id", &self.scheme_id)?;
         require_nonzero_v1("enrollment_policy.asset_digest", &self.asset_digest)?;
-        require_nonzero_v1("enrollment_policy.app_policy", &self.app_policy)?;
-        self.regulatory_policy.validate()?;
-        if self.challenge_lifetime_ms == 0 {
-            return Err(invalid_v1("enrollment_policy.challenge_lifetime_ms"));
+        self.template().validate()
+    }
+
+    /// Extract asset-independent policy DATA; this does not authenticate template approval.
+    #[must_use]
+    pub const fn template(&self) -> KagemushaWalletEnrollmentPolicyTemplateV1 {
+        KagemushaWalletEnrollmentPolicyTemplateV1 {
+            version: self.version,
+            scheme_id: self.scheme_id,
+            app_policy: self.app_policy,
+            platform: self.platform,
+            regulatory_policy: self.regulatory_policy,
+            challenge_lifetime_ms: self.challenge_lifetime_ms,
+            attestation_lease_lifetime_ms: self.attestation_lease_lifetime_ms,
         }
-        if (self.attestation_lease_lifetime_ms > 0)
-            != self
-                .regulatory_policy
-                .permits(KAGEMUSHA_WALLET_CONTROL_ATTESTATION_LEASE_V1)
-        {
-            return Err(invalid_v1(
-                "enrollment_policy.attestation_lease_lifetime_ms",
-            ));
-        }
-        match self.platform {
-            KagemushaWalletEnrollmentPlatformV1::Android {
-                attestation_root_sha256,
-                patch_floor_yyyymm,
-                play_integrity_maximum_age_ms,
-                ..
-            } => {
-                require_nonzero_v1(
-                    "enrollment_policy.attestation_root_sha256",
-                    &attestation_root_sha256,
-                )?;
-                let year = patch_floor_yyyymm / 100;
-                let month = patch_floor_yyyymm % 100;
-                if !(1900..=9999).contains(&year) || !(1..=12).contains(&month) {
-                    return Err(invalid_v1("enrollment_policy.patch_floor_yyyymm"));
-                }
-                if play_integrity_maximum_age_ms == 0
-                    || play_integrity_maximum_age_ms > self.challenge_lifetime_ms
-                {
-                    return Err(invalid_v1(
-                        "enrollment_policy.play_integrity_maximum_age_ms",
-                    ));
-                }
-            }
-            KagemushaWalletEnrollmentPlatformV1::Apple {
-                attestation_root_sha256,
-            } => require_nonzero_v1(
-                "enrollment_policy.attestation_root_sha256",
-                &attestation_root_sha256,
-            )?,
-        }
-        Ok(())
     }
 
     /// Validate the exact app/scheme/platform pairing, without authenticating its approval.
@@ -342,28 +313,7 @@ impl KagemushaWalletEnrollmentPolicyV1 {
     /// Rejects invalid policies or app/scheme/platform substitutions.
     pub fn validate_for_app(&self, app: &KagemushaWalletAppPolicyV1) -> WalletResult<()> {
         self.validate()?;
-        app.validate()?;
-        require_scheme_v1(
-            "enrollment_policy.scheme_id",
-            &self.scheme_id,
-            &app.scheme_id,
-        )?;
-        if self.app_policy != app.policy_digest()? {
-            return Err(invalid_v1("enrollment_policy.app_policy"));
-        }
-        if !matches!(
-            (&app.identity, self.platform),
-            (
-                KagemushaWalletAppIdentityV1::Android { .. },
-                KagemushaWalletEnrollmentPlatformV1::Android { .. }
-            ) | (
-                KagemushaWalletAppIdentityV1::Apple { .. },
-                KagemushaWalletEnrollmentPlatformV1::Apple { .. }
-            )
-        ) {
-            return Err(invalid_v1("enrollment_policy.platform"));
-        }
-        Ok(())
+        self.template().validate_for_app(app)
     }
 
     /// Exact NEW transcript; regulator bytes and durations follow the selected platform.

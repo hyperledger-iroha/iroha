@@ -118,6 +118,19 @@ All mutable collections and byte arrays are copied on construction and access. U
   and consumes the authenticated repository-root `Cargo.lock`. Bootstrap,
   alternate locks, and compiler or profile configuration overrides are rejected;
   the root lock and effective Cargo configuration are rechecked after execution.
+  Production builds may explicitly select both `MOBILE_SDK_CARGO_HOME` and
+  `MOBILE_SDK_CARGO_INVOCATION_DIR`. They must be existing owned canonical
+  non-symbolic mode-0700 directories disjoint from source and each other.
+  The invocation directory must contain only the exact discovery manifest
+  `[workspace]\nmembers = []\n` for Cargo discovery, with `Cargo.lock` absent;
+  the actual build still selects the authenticated root manifest and lock.
+  Every effective Cargo configuration, including absent candidates, is held
+  through before/after checks. The source seal retains `cargo_configuration`
+  and the producer joins it to the actual selected configuration before build
+  and promotion. With neither variable set, the existing default cache/source
+  working directory and strict configuration refusals remain in force. Setting
+  only one variable fails. This selection never changes the production profile,
+  ABI inventory, release admission, artifact directory or warm target.
 - **Canonical wallet framing**: the reviewed wallet-local fixed-alignment source
   pins direct `u128` records/enums to 16-byte archived alignment and preserves all
   26 existing padding values through shipping compile-time assertions. Norito
@@ -173,11 +186,16 @@ It runs the tagged Java software-key-manager and explicit-chain-context cases,
 plus the shared SoraFS reference-validator cases. Missing native artifacts or
 capabilities fail; host JNI execution is separate from Android/device qualification.
 
-The current wallet module declares managed platform, payment-key and backup-rule
-unit tests. Its Rust `KagemushaWalletPlatformV1` JNI adapter exists, while wallet
-open still returns `ARTIFACTS_UNAVAILABLE` (`-4`). Complete installed prover and
-typed preparation integration plus authenticated owner intake remain unfinished;
-there is no wallet host-JNI test task or wallet execution qualification.
+The current wallet module declares managed platform, payment-key, backup-rule,
+setup and admission-contract unit tests. Its Rust `KagemushaWalletPlatformV1`
+JNI adapter provides platform custody. Native startup authenticates installed
+artifacts and retains custody; wallet opening requires original issuer/account
+frames and the existing account's signature over a fresh native challenge. An
+unavailable native runtime returns `ARTIFACTS_UNAVAILABLE` (`-4`). The separate
+`:kagemusha-wallet-android:testDebugHostNative` task uses the explicit rebuilt
+host library to check native failure results, malformed intake, closed handles
+and unavailable runtime admission. It cannot qualify successful monetary
+operations, Android artifacts or physical devices.
 
 ## Version Catalog
 

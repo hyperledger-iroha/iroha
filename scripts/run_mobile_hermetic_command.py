@@ -49,6 +49,25 @@ ANDROID_CARGO_ENVIRONMENT = SERIALIZED_CARGO_ENVIRONMENT | {
     "ANDROID_NDK_HOME",
     "ANDROID_NDK_ROOT",
 }
+WALLET_RUNTIME_TRUST_INPUT = "MOBILE_SDK_WALLET_RUNTIME_TRUST_ED25519_HEX"
+WALLET_RUNTIME_AUTHORITY_INPUT = "MOBILE_SDK_WALLET_RUNTIME_AUTHORITY"
+WALLET_RUNTIME_AUTHORITIES = frozenset({"bpng-taira-v7", "cbsi-release-v1"})
+
+
+def wallet_runtime_authority(value: str) -> str:
+    """Validate the immutable application parser selected by the genuine build owner."""
+    if value not in WALLET_RUNTIME_AUTHORITIES:
+        raise RuntimeError("native wallet runtime authority must be bpng-taira-v7 or cbsi-release-v1")
+    return value
+
+
+def wallet_runtime_trust(value: str) -> str:
+    """Validate public build DATA; it grants no runtime or monetary authority."""
+    if re.fullmatch(r"[0-9a-f]{64}", value) is None or value == "0" * 64:
+        raise RuntimeError("native wallet runtime trust must be nonzero lowercase 32-byte hex")
+    return value
+
+
 GRADLE_JVM_ENVIRONMENT = frozenset(
     {
         "ANDROID_HOME",
@@ -105,6 +124,24 @@ PROFILES = {
         "IROHA_LOCALNET_TEST",
     },
 }
+
+
+for _profile in AUTHENTICATED_CARGO_PROFILES:
+    PROFILES[_profile] = PROFILES[_profile] | {WALLET_RUNTIME_TRUST_INPUT, WALLET_RUNTIME_AUTHORITY_INPUT}
+
+
+def validate_profile_environment(profile: str, environment: dict[str, str]) -> None:
+    """Enforce an exact profile and mandatory immutable public Native signer root."""
+    expected = PROFILES[profile]
+    actual = set(environment)
+    if actual != expected:
+        raise RuntimeError(
+            f"{profile} environment inventory is not exact "
+            f"(missing={sorted(expected - actual)}, unexpected={sorted(actual - expected)})"
+        )
+    if profile in AUTHENTICATED_CARGO_PROFILES:
+        wallet_runtime_trust(environment[WALLET_RUNTIME_TRUST_INPUT])
+        wallet_runtime_authority(environment[WALLET_RUNTIME_AUTHORITY_INPUT])
 
 
 def parse_assignment(raw: str) -> tuple[str, str]:
@@ -297,8 +334,9 @@ def authenticate_android_cargo_arguments(
     return root_lock, lock_identity
 
 
-def android_armv7_diagnostic_configuration(
+def android_cargo_configuration(
     root: pathlib.Path, cache: pathlib.Path, invocation: pathlib.Path,
+    *, diagnostic: bool = False,
 ) -> dict[str, object]:
     import importlib.util
     policy = pathlib.Path(__file__).with_name("norito_bridge_local_integration.py")
@@ -307,9 +345,17 @@ def android_armv7_diagnostic_configuration(
         raise RuntimeError("Android diagnostic configuration policy is unavailable")
     owner = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(owner)
-    return owner.android_armv7_diagnostic_configuration(
-        root, cache, invocation, local_integration=True,
-    )
+    if diagnostic:
+        return owner.android_armv7_diagnostic_configuration(
+            root, cache, invocation, local_integration=True,
+        )
+    return owner.android_cargo_configuration(root, cache, invocation)
+
+
+def android_armv7_diagnostic_configuration(
+    root: pathlib.Path, cache: pathlib.Path, invocation: pathlib.Path,
+) -> dict[str, object]:
+    return android_cargo_configuration(root, cache, invocation, diagnostic=True)
 
 
 def authenticate_android_armv7_diagnostic_arguments(command: list[str]) -> None:
@@ -469,26 +515,18 @@ def recheck_cargo_invocation_directory(
 
 def main() -> int:
     args = parse_args()
-    expected = PROFILES[args.profile]
     environment: dict[str, str] = {}
     for name, value in args.assignments:
         if name in environment:
             raise RuntimeError(f"duplicate environment assignment: {name}")
         environment[name] = value
-    actual = set(environment)
-    if actual != expected:
-        missing = sorted(expected - actual)
-        unexpected = sorted(actual - expected)
-        raise RuntimeError(
-            f"{args.profile} environment inventory is not exact "
-            f"(missing={missing}, unexpected={unexpected})"
-        )
+    validate_profile_environment(args.profile, environment)
     source_root = pathlib.Path.cwd()
     invocation_directory = source_root
     invocation_observation = None
     if args.working_directory is not None:
-        if not args.profile.startswith("apple-") and args.profile != "android-armv7-diagnostic-cargo":
-            raise RuntimeError("an explicit Cargo working directory requires an Apple or armv7 diagnostic Cargo profile")
+        if not args.profile.startswith("apple-") and args.profile not in {"android-cargo", "android-armv7-diagnostic-cargo"}:
+            raise RuntimeError("an explicit Cargo working directory requires an authenticated Apple or Android Cargo profile")
         invocation_observation = authenticate_cargo_invocation_directory(
             source_root, args.working_directory
         )
@@ -506,6 +544,11 @@ def main() -> int:
         authenticate_android_armv7_diagnostic_arguments(args.command)
     else:
         diagnostic_configuration = None
+    cargo_configuration = (
+        android_cargo_configuration(
+            source_root, pathlib.Path(environment["CARGO_HOME"]), invocation_directory,
+        ) if args.profile == "android-cargo" and invocation_observation is not None else None
+    )
 
     authenticated_tools: dict[str, tuple[pathlib.Path, tuple[int, ...]]] = {}
     authenticated_files: dict[str, tuple[pathlib.Path, tuple[int, ...]]] = {}
@@ -553,6 +596,11 @@ def main() -> int:
                 source_root, pathlib.Path(environment["CARGO_HOME"]), invocation_directory,
             ) != diagnostic_configuration):
         raise RuntimeError("Android diagnostic configuration or custody changed during invocation")
+    if (cargo_configuration is not None
+            and android_cargo_configuration(
+                source_root, pathlib.Path(environment["CARGO_HOME"]), invocation_directory,
+            ) != cargo_configuration):
+        raise RuntimeError("Android Cargo configuration or custody changed during invocation")
     for name, (path, expected_identity) in authenticated_tools.items():
         _, current_identity = authenticate_regular_executable(name, str(path))
         if current_identity != expected_identity:

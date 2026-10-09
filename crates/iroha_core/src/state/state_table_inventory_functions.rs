@@ -83,12 +83,6 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/query/native_receipts.rs",
-        "amx_record_proof",
-        1,
-        UseOwner::Roots(&["execution_witness_roots"]),
-    ),
-    function(
-        "crates/iroha_core/src/query/native_receipts.rs",
         "fee_evidence_block_proof",
         1,
         UseOwner::Roots(&["execution_witness_roots", "fee_evidence_record_root"]),
@@ -125,6 +119,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "validation_fee_policy_witness",
         1,
         UseOwner::Roots(&["execution_witness_roots", "validation_fee_policy_snapshot"]),
+    ),
+    function(
+        "crates/iroha_core/src/query/native_receipts/amx_read.rs",
+        "complete",
+        1,
+        UseOwner::Roots(&["execution_witness_roots"]),
     ),
     function(
         "crates/iroha_core/src/query/topology_authority.rs",

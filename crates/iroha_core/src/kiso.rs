@@ -1079,6 +1079,8 @@ mod tests {
                 ram_lfe: None,
                 tx_history: None,
                 recipient_lookup: iroha_config::parameters::actual::ToriiRecipientLookup::default(),
+                kagemusha_enrollment: None,
+                kagemusha_load_finality: None,
                 public_dataspace_upstreams: Vec::new(),
                 events_buffer_capacity: NonZeroUsize::new(
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
@@ -1317,15 +1319,6 @@ mod tests {
             },
             soracloud_runtime: iroha_config::parameters::actual::SoracloudRuntime::default(),
             musubi_publication: iroha_config::parameters::actual::MusubiPublication::default(),
-            // This configuration-only fixture does not start a publisher. Its empty keyring
-            // is deliberately unadmitted and would fail the mandatory daemon preflight.
-            kagemusha_load_authorizer:
-                iroha_config::parameters::actual::KagemushaLoadAuthorizer::new(
-                    iroha_config::parameters::actual::KagemushaLoadAuthorizerCustody {
-                        keyring: zeroize::Zeroizing::new(Vec::new()),
-                        submitter: streaming_identity.clone(),
-                    },
-                ),
             kura: Kura { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(std::env::temp_dir()),
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,

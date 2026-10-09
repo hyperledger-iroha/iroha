@@ -132,7 +132,7 @@ use tokio::{
     net::{TcpListener as TokioTcpListener, TcpStream},
     process::Child,
     runtime::{self, Runtime},
-    sync::{Mutex, Notify, broadcast, oneshot, watch},
+    sync::{Mutex, Notify, OwnedRwLockWriteGuard, RwLock, broadcast, oneshot, watch},
     task::{JoinHandle, JoinSet, spawn_blocking},
     time::timeout,
 };
@@ -3242,6 +3242,7 @@ set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 to disable timeout or provide an isolate
 #[derive(Clone)]
 struct PreparedPeerGenesis {
     bytes: Arc<[u8]>,
+    network_id: NetworkId,
 }
 impl PreparedPeerGenesis {
     async fn prepare(block: GenesisBlock) -> Result<Self> {
@@ -3264,8 +3265,10 @@ impl PreparedPeerGenesis {
     ) -> Result<Self> {
         spawn_blocking(move || {
             init_instruction_registry();
+            let network_id = NetworkId::from_genesis_hash(block.0.hash());
             encode(&block).map(|bytes| Self {
                 bytes: bytes.into(),
+                network_id,
             })
         })
         .await
@@ -3546,14 +3549,15 @@ impl Network {
             .as_ref()?
             .stats_for(observer)
     }
-    /// Pause or resume validator-to-observer forwarding on every transparent
-    /// slow-reader relay. Returns `false` when this network has no relay hook.
-    pub fn set_observer_slow_reader_relays_paused(&self, paused: bool) -> bool {
-        let Some(relays) = &self.observer_slow_reader_relays else {
-            return false;
-        };
-        relays.set_paused(paused);
-        true
+    /// Pause validator-to-observer forwarding on every transparent slow-reader relay.
+    ///
+    /// Acknowledgement waits for every in-flight delayed write and its byte-counter
+    /// update to retire. New connections use the same gate. Dropping the returned
+    /// owner resumes forwarding; shutdown can join connections while it is held.
+    /// The caller must bound this acquisition with its existing test deadline.
+    /// Returns `None` when this network has no relay hook.
+    pub async fn pause_observer_slow_reader_relays(&self) -> Option<ObserverSlowReaderRelayPause> {
+        Some(self.observer_slow_reader_relays.as_ref()?.pause().await)
     }
     /// Iterate over global validators, committee validators, then observers.
     pub fn all_peers(&self) -> impl Iterator<Item = &NetworkPeer> {
@@ -5400,6 +5404,15 @@ impl ObserverSlowReaderRelayConfig {
         self.read_delay
     }
 }
+/// Exclusive forwarding hold for every observer relay in one test network.
+///
+/// This owns the acknowledged pause boundary. Dropping it resumes ciphertext
+/// forwarding. It changes no consensus message, node configuration, or counter.
+#[derive(Debug)]
+#[must_use = "dropping the pause owner resumes observer forwarding"]
+pub struct ObserverSlowReaderRelayPause {
+    _forwarding: OwnedRwLockWriteGuard<()>,
+}
 /// Snapshot of transparent observer-relay activity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObserverSlowReaderRelayStats {
@@ -5452,7 +5465,7 @@ struct ObserverSlowReaderRelays {
     routes: Vec<ObserverSlowReaderRelayRoute>,
     published_addresses: HashMap<PeerId, SocketAddr>,
     running: AtomicBool,
-    paused: watch::Sender<bool>,
+    forwarding: Arc<RwLock<()>>,
     runtime: StdMutex<ObserverSlowReaderRelayRuntime>,
 }
 impl ObserverSlowReaderRelays {
@@ -5475,13 +5488,12 @@ impl ObserverSlowReaderRelays {
             .iter()
             .map(|route| (route.peer_id.clone(), route.published_address.clone()))
             .collect();
-        let (paused, _) = watch::channel(false);
         Self {
             config,
             routes,
             published_addresses,
             running: AtomicBool::new(false),
-            paused,
+            forwarding: Arc::new(RwLock::new(())),
             runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
         }
     }
@@ -5517,8 +5529,10 @@ impl ObserverSlowReaderRelays {
             .find(|route| &route.peer_id == peer_id)
             .map(|route| route.counters.snapshot())
     }
-    fn set_paused(&self, paused: bool) {
-        self.paused.send_replace(paused);
+    async fn pause(&self) -> ObserverSlowReaderRelayPause {
+        ObserverSlowReaderRelayPause {
+            _forwarding: Arc::clone(&self.forwarding).write_owned().await,
+        }
     }
     async fn start(&self) -> Result<()> {
         let mut runtime = self
@@ -5552,7 +5566,7 @@ impl ObserverSlowReaderRelays {
                 let counters = Arc::clone(&route.counters);
                 let config = self.config;
                 let shutdown_rx = shutdown_rx.clone();
-                let paused = self.paused.subscribe();
+                let forwarding = Arc::clone(&self.forwarding);
                 let peer_id = route.peer_id.clone();
                 let published_address = route.published_address.clone();
                 let upstream_address = route.upstream_address.clone();
@@ -5565,7 +5579,7 @@ impl ObserverSlowReaderRelays {
                         config,
                         counters,
                         shutdown_rx,
-                        paused,
+                        forwarding,
                     )
                     .await;
                 })
@@ -5612,7 +5626,7 @@ async fn run_observer_slow_reader_listener(
     config: ObserverSlowReaderRelayConfig,
     counters: Arc<ObserverSlowReaderRelayCounters>,
     mut shutdown: watch::Receiver<bool>,
-    paused: watch::Receiver<bool>,
+    forwarding: Arc<RwLock<()>>,
 ) {
     let mut connections = JoinSet::new();
     loop {
@@ -5643,7 +5657,7 @@ async fn run_observer_slow_reader_listener(
             .fetch_add(1, Ordering::Relaxed);
         let connection_counters = Arc::clone(&counters);
         let connection_shutdown = shutdown.clone();
-        let connection_paused = paused.clone();
+        let connection_forwarding = Arc::clone(&forwarding);
         let connection_peer_id = peer_id.clone();
         let connection_upstream = upstream_address.clone();
         connections.spawn(async move {
@@ -5654,7 +5668,7 @@ async fn run_observer_slow_reader_listener(
                 config,
                 connection_counters,
                 connection_shutdown,
-                connection_paused,
+                connection_forwarding,
             )
             .await;
         });
@@ -5668,7 +5682,7 @@ async fn run_observer_slow_reader_connection(
     config: ObserverSlowReaderRelayConfig,
     counters: Arc<ObserverSlowReaderRelayCounters>,
     mut shutdown: watch::Receiver<bool>,
-    paused: watch::Receiver<bool>,
+    forwarding: Arc<RwLock<()>>,
 ) {
     let upstream = loop {
         let connect = TcpStream::connect(upstream_address.to_string());
@@ -5708,7 +5722,7 @@ async fn run_observer_slow_reader_connection(
         config,
         Arc::clone(&counters),
         shutdown.clone(),
-        paused,
+        forwarding,
     );
     let returned = tokio::io::copy(&mut upstream_read, &mut client_write);
     tokio::pin!(delayed);
@@ -5735,7 +5749,7 @@ async fn slow_copy_observer_ciphertext<R, W>(
     config: ObserverSlowReaderRelayConfig,
     counters: Arc<ObserverSlowReaderRelayCounters>,
     mut shutdown: watch::Receiver<bool>,
-    mut paused: watch::Receiver<bool>,
+    forwarding: Arc<RwLock<()>>,
 ) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
@@ -5756,24 +5770,16 @@ where
             return Ok(());
         }
         counters.delayed_reads.fetch_add(1, Ordering::Relaxed);
-        loop {
-            let forwarding_is_paused = *paused.borrow();
-            if !forwarding_is_paused {
-                break;
+        // A writer queues ahead of subsequent readers, so a requested pause
+        // drains earlier complete writes without admitting another forwarding
+        // operation. The read owner also covers the completed-byte increment.
+        let forwarding_owner = tokio::select! {
+            changed = shutdown.changed() => {
+                let _ = changed;
+                return Ok(());
             }
-            tokio::select! {
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        return Ok(());
-                    }
-                }
-                changed = paused.changed() => {
-                    if changed.is_err() {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+            owner = Arc::clone(&forwarding).read_owned() => owner,
+        };
         tokio::select! {
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
@@ -5793,6 +5799,7 @@ where
         counters
             .forwarded_to_observers_bytes
             .fetch_add(u64::try_from(read).unwrap_or(u64::MAX), Ordering::Relaxed);
+        drop(forwarding_owner);
     }
 }
 #[derive(Clone)]
@@ -6257,44 +6264,45 @@ fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
     ensure_sora_profile_trusted_peer_pop(&mut merged);
     merged
 }
-fn raw_nexus_overrides(table: &Table) -> bool {
-    let Some(nexus) = table.get("nexus").and_then(Value::as_table) else {
-        return false;
-    };
-    if nexus.contains_key("lane_catalog") || nexus.contains_key("dataspace_catalog") {
-        return true;
-    }
-    if let Some(policy) = nexus.get("routing_policy") {
-        let Some(policy) = policy.as_table() else {
-            return true;
-        };
-        let default_lane =
-            i64::from(iroha_config::parameters::defaults::nexus::DEFAULT_ROUTING_LANE_INDEX);
-        let default_lane_override = match policy.get("default_lane") {
-            None => false,
-            Some(value) => value.as_integer().map_or(true, |lane| lane != default_lane),
-        };
-        let default_dataspace_override = match policy.get("default_dataspace") {
-            None => false,
-            Some(value) => value.as_str().map_or(true, |alias| {
-                alias != iroha_config::parameters::defaults::nexus::DEFAULT_DATASPACE_ALIAS
-            }),
-        };
-        let rules_override = match policy.get("rules") {
-            None => false,
-            Some(value) => value.as_array().map_or(true, |rules| !rules.is_empty()),
-        };
-        if default_lane_override || default_dataspace_override || rules_override {
-            return true;
+fn typed_sora_profile_requirements(merged: &Table) -> Result<bool> {
+    // Keep the exact selected namespaces, including malformed values for their original reader.
+    let mut selected = Table::new();
+    for name in ["chain_discriminant", "nexus", "sorafs"] {
+        if let Some(value) = merged.get(name) {
+            selected.insert(name.to_string(), value.clone());
         }
     }
-    nexus
-        .get("lane_count")
-        .and_then(Value::as_integer)
-        .is_some_and(|value| value > 1)
+    let mut reader = ConfigReader::new()
+        .with_env(MockEnv::default())
+        .with_toml_source(TomlSource::inline(selected));
+    let chain_discriminant = reader
+        .read_parameter::<u16>(["chain_discriminant"])
+        .value_or_else(iroha_config::parameters::defaults::common::chain_discriminant)
+        .finish();
+    let nexus = reader.read_nested::<iroha_config::parameters::user::Nexus>("nexus");
+    let sorafs = reader.read_nested::<iroha_config::parameters::user::Sorafs>("sorafs");
+    reader
+        .into_result()
+        .map_err(|err| eyre!("failed to read Sora profile policy fields: {err:?}"))?;
+    let sorafs = sorafs.unwrap();
+    let services = sorafs.storage.enabled
+        || sorafs.discovery.discovery_enabled
+        || sorafs.repair.enabled
+        || sorafs.gc.enabled;
+    let _account_address_scope = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        chain_discriminant.unwrap(),
+    );
+    let mut emitter = iroha_config::base::util::Emitter::new();
+    let nexus = nexus.unwrap().parse(&mut emitter);
+    emitter
+        .into_result()
+        .map_err(|err| eyre!("failed to parse Sora profile Nexus policy: {err:?}"))?;
+    let nexus =
+        nexus.ok_or_else(|| eyre!("Sora profile Nexus policy did not produce a configuration"))?;
+    Ok(services || nexus.uses_multilane_catalogs() || nexus.has_lane_overrides())
 }
 fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
-    // Inject required fields so profile detection can parse without the base layer.
+    // Inspect the same typed Nexus geometry without requiring unrelated runtime services.
     let merged = merged_sora_profile_detection_config(config_layers);
     let raw_sorafs_storage = read_bool(&merged, &["torii", "sorafs", "storage", "enabled"])
         .unwrap_or(false)
@@ -6310,49 +6318,42 @@ fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
         || read_bool(&merged, &["sorafs", "repair", "enabled"]).unwrap_or(false);
     let raw_sorafs_gc = read_bool(&merged, &["torii", "sorafs", "gc", "enabled"]).unwrap_or(false)
         || read_bool(&merged, &["sorafs", "gc", "enabled"]).unwrap_or(false);
-    let reader = ConfigReader::new()
-        .with_env(MockEnv::default())
-        .with_toml_source(TomlSource::inline(merged.clone()));
-    let config = match reader.read_and_complete::<iroha_config::parameters::user::Root>() {
-        Ok(user) => match user.parse() {
-            Ok(parsed) => Some(parsed),
-            Err(err) => {
-                warn!(
-                    ?err,
-                    "failed to parse merged config for Sora profile detection; falling back to raw scan"
-                );
-                None
-            }
-        },
+    match typed_sora_profile_requirements(&merged) {
+        Ok(required) => {
+            required
+                || raw_sorafs_storage
+                || raw_sorafs_discovery
+                || raw_sorafs_repair
+                || raw_sorafs_gc
+        }
         Err(err) => {
             warn!(
                 ?err,
-                "failed to parse merged config for Sora profile detection; falling back to raw scan"
+                "failed to read typed Sora profile fields; runtime parsing will reject invalid configuration"
             );
-            None
+            // Service flags remain observable, but field presence alone is never a Nexus override.
+            raw_sorafs_storage || raw_sorafs_discovery || raw_sorafs_repair || raw_sorafs_gc
         }
-    };
-    if let Some(config) = config {
-        let sorafs_storage = config.torii.sorafs_storage.enabled || raw_sorafs_storage;
-        let sorafs_discovery =
-            config.torii.sorafs_discovery.discovery_enabled || raw_sorafs_discovery;
-        let sorafs_repair = config.torii.sorafs_repair.enabled || raw_sorafs_repair;
-        let sorafs_gc = config.torii.sorafs_gc.enabled || raw_sorafs_gc;
-        let nexus_requires_router = config.nexus.uses_multilane_catalogs();
-        let nexus_lane_overrides = config.nexus.has_lane_overrides();
-        sorafs_storage
-            || sorafs_discovery
-            || sorafs_repair
-            || sorafs_gc
-            || nexus_requires_router
-            || nexus_lane_overrides
-    } else {
-        raw_sorafs_storage
-            || raw_sorafs_discovery
-            || raw_sorafs_repair
-            || raw_sorafs_gc
-            || raw_nexus_overrides(&merged)
     }
+}
+
+#[cfg(test)]
+fn sora_profile_runtime_config_fixture(
+    config_layers: &[Table],
+) -> (tempfile::TempDir, NetworkPeer, Table) {
+    let directory = tempfile::tempdir().expect("temporary private Sora-profile peer");
+    let environment = Environment {
+        dir: directory.path().to_path_buf(),
+    };
+    let peer = NetworkPeer::builder().build(&environment);
+    let mut merged = sora_profile_detection_defaults();
+    // Preserve the original detection identities and PoP roster for full-runtime parsing.
+    for layer in config_layers {
+        merge_tables(&mut merged, layer);
+    }
+    apply_identity_defaults_for_detection(&mut merged);
+    ensure_sora_profile_trusted_peer_pop(&mut merged);
+    (directory, peer, merged)
 }
 #[cfg(test)]
 fn resolve_actual_config(
@@ -8612,6 +8613,8 @@ impl NetworkPeer {
         config_layers: impl Iterator<Item = T>,
         genesis: Option<&PreparedPeerGenesis>,
     ) -> Result<()> {
+        let storage_layers: Vec<Table> =
+            config_layers.map(|layer| layer.as_ref().clone()).collect();
         if self.should_run_bind_preflight() {
             let preflight = preflight_bind_addresses([self.p2p_address(), self.api_address()]);
             if let Err(err) = preflight {
@@ -8624,8 +8627,6 @@ impl NetworkPeer {
         let span = info_span!(parent: &self.span, "peer_run", run_num);
         let has_genesis = genesis.is_some();
         span.in_scope(|| info!(has_genesis, "Starting"));
-        let storage_layers: Vec<Table> =
-            config_layers.map(|layer| layer.as_ref().clone()).collect();
         let (storage_dir, storage_dir_key, storage_dir_value) =
             resolve_kura_store_dir(self, &storage_layers)?;
         let reset_for_bootstrap =
@@ -11047,6 +11048,11 @@ mod tests {
             OsString::from(ALICE_KEYPAIR.public_key().to_string()),
         );
         let _private_key_guard = EnvRestore::clear("PRIVATE_KEY");
+        let _fee_asset_guard = EnvRestore::set(
+            "NEXUS_FEE_ASSET_ID",
+            OsString::from("invalid-host-fee-selector"),
+        );
+        assert!(!config_requires_sora_profile(&[Table::new()]));
         let layer = Table::new().write(["torii", "sorafs", "storage", "enabled"], true);
         assert!(
             config_requires_sora_profile(&[layer]),
@@ -11744,6 +11750,123 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn ordinary_load_peers_keep_exact_signed_genesis_identity_without_publisher_custody()
+    -> Result<()> {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        let genesis = network.genesis();
+        let original_hash = genesis.0.hash();
+        let original_network = NetworkId::from_genesis_hash(original_hash);
+        let mut signatures = genesis.0.signatures();
+        let signature = signatures.next().expect("canonical genesis signature");
+        assert!(signatures.next().is_none());
+        assert!(
+            signature
+                .signature()
+                .verify_hash(network.genesis_key_pair.public_key(), original_hash,)
+                .is_ok()
+        );
+        assert_eq!(network.network_id(), original_network);
+        assert_eq!(network.validators().len(), 4);
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        for peer in network.all_peers() {
+            assert!(
+                peer.base_config_table()
+                    .get("kagemusha_load_authorizer")
+                    .is_none()
+            );
+            assert!(!peer.dir.join("kagemusha-load-authorizer").exists());
+            let actual = resolve_actual_config_result(peer, &layers)?;
+            assert_eq!(actual.genesis.expected_hash, original_hash);
+            assert_eq!(actual.common.chain, network.chain_id());
+            assert_eq!(
+                peer.client_config.get().unwrap().network_id,
+                original_network
+            );
+            assert_eq!(*peer.client().client().network_id(), original_network);
+            let cloned = peer.clone();
+            assert!(Arc::ptr_eq(&cloned.client_config, &peer.client_config));
+            assert_eq!(
+                resolve_actual_config_result(&cloned, &layers)?
+                    .genesis
+                    .expected_hash,
+                original_hash,
+            );
+        }
+        assert_eq!(network.genesis().0.hash(), original_hash);
+        Ok(())
+    }
+
+    #[test]
+    fn generated_peer_base_config_parses_without_retired_load_publisher() -> Result<()> {
+        let dir = tempdir()?;
+        let environment = Environment {
+            dir: dir.path().to_path_buf(),
+        };
+        let peer = NetworkPeer::builder().build(&environment);
+        let original = fs::read(peer.dir.join("config.base.toml"))?;
+        let written: Table = toml::from_str(std::str::from_utf8(&original)?)?;
+        assert!(!written.contains_key("kagemusha_load_authorizer"));
+        let base = peer.base_config_table();
+        assert!(!base.contains_key("kagemusha_load_authorizer"));
+        let actual = resolve_actual_config_result(&peer, &[config::base_iroha_config()])?;
+        assert_eq!(
+            actual.common.key_pair.public_key(),
+            peer.key_pair.public_key()
+        );
+        assert!(peer.client_config.get().is_none());
+        assert!(!peer.dir.join("kagemusha-load-authorizer").exists());
+        let cloned = peer.clone();
+        assert_eq!(cloned.base_config_table(), base);
+        assert_eq!(fs::read(peer.dir.join("config.base.toml"))?, original);
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_load_peer_configuration_rejects_retired_publisher_overrides() -> Result<()> {
+        let dir = tempdir()?;
+        let environment = Environment {
+            dir: dir.path().to_path_buf(),
+        };
+        let peer = NetworkPeer::builder().build(&environment);
+        let base = config::base_iroha_config();
+        resolve_actual_config_result(&peer, std::slice::from_ref(&base))?;
+        assert!(
+            peer.base_config_table()
+                .get("kagemusha_load_authorizer")
+                .is_none()
+        );
+        let missing = dir.path().join("missing-caller-keyring.nrt");
+        for publisher in [
+            Value::Boolean(false),
+            Value::Table(Table::new()),
+            Value::Table(Table::from_iter([
+                (
+                    "keyring_file".into(),
+                    missing.to_string_lossy().into_owned().into(),
+                ),
+                ("submitter_key_file".into(), "missing-submitter.key".into()),
+            ])),
+        ] {
+            let mut layer = base.clone();
+            layer.insert("kagemusha_load_authorizer".into(), publisher);
+            let error = resolve_actual_config_result(&peer, &[layer]).expect_err(
+                "retired publisher configuration must not select or synthesize custody",
+            );
+            assert!(
+                format!("{error:#}").contains("kagemusha_load_authorizer"),
+                "unexpected error: {error:?}"
+            );
+            assert!(!missing.exists());
+            assert!(!peer.dir.join("kagemusha-load-authorizer").exists());
+        }
+        resolve_actual_config_result(&peer, &[base])?;
+        Ok(())
+    }
+
     #[test]
     fn write_base_config_uses_addr_literals() {
         let env = Environment::new();
@@ -13351,10 +13474,16 @@ mod tests {
             .observer_slow_reader_relays
             .as_ref()
             .expect("relay harness is present");
-        assert!(network.set_observer_slow_reader_relays_paused(true));
-        assert!(*relays.paused.borrow());
-        assert!(network.set_observer_slow_reader_relays_paused(false));
-        assert!(!*relays.paused.borrow());
+        let runtime = runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("relay control runtime");
+        let paused = runtime
+            .block_on(network.pause_observer_slow_reader_relays())
+            .expect("relay hook returns a pause owner");
+        assert!(relays.forwarding.try_read().is_err());
+        drop(paused);
+        assert!(relays.forwarding.try_read().is_ok());
         assert_eq!(relays.routes.len(), network.observers().len());
         assert_eq!(
             network.observer_slow_reader_relay_stats(),
@@ -13473,7 +13602,6 @@ mod tests {
             .expect("bounded relay config");
         let counters = Arc::new(ObserverSlowReaderRelayCounters::default());
         let peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
-        let (paused, _) = watch::channel(false);
         let relays = ObserverSlowReaderRelays {
             config,
             routes: vec![ObserverSlowReaderRelayRoute {
@@ -13485,7 +13613,7 @@ mod tests {
             }],
             published_addresses: HashMap::from([(peer_id.clone(), published_address.clone())]),
             running: AtomicBool::new(false),
-            paused,
+            forwarding: Arc::new(RwLock::new(())),
             runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
         };
         relays.start().await.expect("start transparent relay");
@@ -13524,7 +13652,7 @@ mod tests {
         let mut client = TcpStream::connect(published_address.to_string())
             .await
             .expect("connect validator side to relay");
-        relays.set_paused(true);
+        let paused = relays.pause().await;
         client
             .write_all(&payload)
             .await
@@ -13546,7 +13674,7 @@ mod tests {
             0,
             "paused relay must not forward a byte it has already read",
         );
-        relays.set_paused(false);
+        drop(paused);
         let mut received_reply = vec![0_u8; reply.len()];
         timeout(
             Duration::from_secs(5),
@@ -13580,12 +13708,215 @@ mod tests {
         );
         assert_eq!(relays.stats_for(&peer_id), Some(stats));
     }
+    #[tokio::test]
+    async fn observer_relay_pause_acknowledges_only_after_inflight_write_and_counter_retire() {
+        // A one-byte output buffer makes a real write_all remain partially
+        // complete. No mock counter or sleep stands in for the write owner.
+        let (mut validator, reader) = tokio::io::duplex(16);
+        let (writer, mut observer) = tokio::io::duplex(1);
+        let config = ObserverSlowReaderRelayConfig::new(8, Duration::from_millis(1))
+            .expect("bounded relay config");
+        let counters = Arc::new(ObserverSlowReaderRelayCounters::default());
+        let relays = ObserverSlowReaderRelays {
+            config,
+            routes: Vec::new(),
+            published_addresses: HashMap::new(),
+            running: AtomicBool::new(false),
+            forwarding: Arc::new(RwLock::new(())),
+            runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
+        };
+        let (shutdown, shutdown_rx) = watch::channel(false);
+        let copy = tokio::spawn(slow_copy_observer_ciphertext(
+            reader,
+            writer,
+            config,
+            Arc::clone(&counters),
+            shutdown_rx,
+            Arc::clone(&relays.forwarding),
+        ));
+        validator
+            .write_all(b"ABCD")
+            .await
+            .expect("first opaque read");
+        let mut first = [0_u8; 1];
+        timeout(Duration::from_secs(2), observer.read_exact(&mut first))
+            .await
+            .expect("first write began")
+            .expect("first byte forwarded");
+        assert_eq!(first, *b"A");
+        assert_eq!(counters.snapshot().forwarded_to_observers_bytes, 0);
+        let pause = relays.pause();
+        tokio::pin!(pause);
+        assert!(
+            futures::poll!(&mut pause).is_pending(),
+            "pause must not acknowledge a partially completed write_all"
+        );
+        let mut rest = [0_u8; 3];
+        timeout(Duration::from_secs(2), observer.read_exact(&mut rest))
+            .await
+            .expect("old write finishes")
+            .expect("remaining opaque bytes");
+        assert_eq!(rest, *b"BCD");
+        let paused = timeout(Duration::from_secs(2), &mut pause)
+            .await
+            .expect("pause follows old write retirement");
+        assert_eq!(
+            counters.snapshot().forwarded_to_observers_bytes,
+            4,
+            "the read owner must retain the completed-byte update until acknowledgement"
+        );
+        validator
+            .write_all(b"EF")
+            .await
+            .expect("new opaque read during hold");
+        timeout(Duration::from_secs(2), async {
+            while counters.snapshot().delayed_reads != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("copy read the new ciphertext before blocking at the same gate");
+        assert_eq!(counters.snapshot().forwarded_to_observers_bytes, 4);
+        assert!(relays.forwarding.try_read().is_err());
+        drop(paused);
+        let mut fresh = [0_u8; 2];
+        timeout(Duration::from_secs(2), observer.read_exact(&mut fresh))
+            .await
+            .expect("release forwards new read")
+            .expect("new opaque bytes");
+        assert_eq!(fresh, *b"EF");
+        timeout(Duration::from_secs(2), async {
+            while counters.snapshot().forwarded_to_observers_bytes != 6 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("released write and counter retire");
+        shutdown
+            .send(true)
+            .expect("copy still owns shutdown receiver");
+        timeout(Duration::from_secs(2), copy)
+            .await
+            .expect("copy joins")
+            .expect("copy does not panic")
+            .expect("copy shutdown succeeds");
+    }
+
+    #[tokio::test]
+    async fn observer_relay_pause_covers_new_connections_and_shutdown_joins_while_held() {
+        let upstream_listener = TokioTcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock observer listener");
+        let upstream_address = SocketAddr::from(upstream_listener.local_addr().unwrap());
+        let published_port = AllocatedPort::new();
+        let published_address = socket_addr!(127.0.0.1:*published_port);
+        let config = ObserverSlowReaderRelayConfig::new(8, Duration::from_millis(1))
+            .expect("bounded relay config");
+        let counters = Arc::new(ObserverSlowReaderRelayCounters::default());
+        let peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
+        let relays = ObserverSlowReaderRelays {
+            config,
+            routes: vec![ObserverSlowReaderRelayRoute {
+                peer_id: peer_id.clone(),
+                published_address: published_address.clone(),
+                upstream_address,
+                counters: Arc::clone(&counters),
+                _published_port: published_port,
+            }],
+            published_addresses: HashMap::from([(peer_id, published_address.clone())]),
+            running: AtomicBool::new(false),
+            forwarding: Arc::new(RwLock::new(())),
+            runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
+        };
+        relays.start().await.expect("start transparent relay");
+        let mut first = TcpStream::connect(published_address.to_string())
+            .await
+            .unwrap();
+        let (mut first_observer, _) = timeout(Duration::from_secs(2), upstream_listener.accept())
+            .await
+            .expect("first connection bounded")
+            .unwrap();
+        first.write_all(b"warm").await.unwrap();
+        let mut warm = [0_u8; 4];
+        timeout(Duration::from_secs(2), first_observer.read_exact(&mut warm))
+            .await
+            .expect("established forwarding bounded")
+            .unwrap();
+        assert_eq!(warm, *b"warm");
+        let paused = timeout(Duration::from_secs(2), relays.pause())
+            .await
+            .expect("pause established connection");
+        let before = counters.snapshot();
+        assert_eq!(before.forwarded_to_observers_bytes, 4);
+        assert_eq!(before.upstream_connections, 1);
+        // The connection did not exist at acknowledgement; it must share the
+        // same exclusive gate rather than obtain a new unpaused authority.
+        let mut late = TcpStream::connect(published_address.to_string())
+            .await
+            .unwrap();
+        let (mut late_observer, _) = timeout(Duration::from_secs(2), upstream_listener.accept())
+            .await
+            .expect("late connection bounded")
+            .unwrap();
+        late.write_all(b"new").await.unwrap();
+        timeout(Duration::from_secs(2), async {
+            loop {
+                let stats = counters.snapshot();
+                if stats.upstream_connections == 2 && stats.delayed_reads > before.delayed_reads {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("late connection reader reached held forwarding gate");
+        assert_eq!(counters.snapshot().forwarded_to_observers_bytes, 4);
+        timeout(Duration::from_secs(2), relays.shutdown())
+            .await
+            .expect("shutdown cancels gate waiters and joins every connection while held");
+        let mut trailing = [0_u8; 1];
+        assert_eq!(
+            timeout(Duration::from_secs(2), first_observer.read(&mut trailing))
+                .await
+                .expect("old upstream closes")
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            timeout(Duration::from_secs(2), late_observer.read(&mut trailing))
+                .await
+                .expect("new upstream closes")
+                .unwrap(),
+            0
+        );
+        let stats = counters.snapshot();
+        assert_eq!(stats.accepted_connections, 2);
+        assert_eq!(stats.upstream_connections, 2);
+        assert_eq!(stats.forwarded_to_observers_bytes, 4);
+        assert!(!relays.running.load(Ordering::Acquire));
+        assert!(
+            TcpStream::connect(published_address.to_string())
+                .await
+                .is_err()
+        );
+        drop(paused);
+        assert!(relays.forwarding.try_read().is_ok());
+    }
+
     #[test]
     fn default_builder_has_no_observers_and_preserves_validator_peer_semantics() {
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         assert_eq!(network.peers().as_slice(), network.validators());
         assert!(network.observers().is_empty());
-        assert!(!network.set_observer_slow_reader_relays_paused(true));
+        let runtime = runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("relay control runtime");
+        assert!(
+            runtime
+                .block_on(network.pause_observer_slow_reader_relays())
+                .is_none()
+        );
         assert_eq!(network.all_peers().count(), network.peers().len());
         assert_eq!(network.torii_urls().len(), network.peers().len());
         assert_eq!(network.topology_entries().len(), network.peers().len());
@@ -16315,6 +16646,7 @@ mod tests {
         assert!(timer_progress.load(Ordering::SeqCst));
         assert_eq!(preparations.load(Ordering::SeqCst), 1);
         assert_eq!(prepared.bytes.as_ref(), expected.as_slice());
+        assert_eq!(prepared.network_id, network.network_id());
         let layers = network
             .config_layers()
             .map(Cow::into_owned)

@@ -1,6 +1,4 @@
 //! Consolidated integration-test harness for `iroha_config`.
-#[path = "publisher_config_fixture.rs"]
-mod publisher_config_fixture;
 #[path = "autoscale_config.rs"]
 mod autoscale_config;
 #[path = "checked_in_profiles_parse.rs"]

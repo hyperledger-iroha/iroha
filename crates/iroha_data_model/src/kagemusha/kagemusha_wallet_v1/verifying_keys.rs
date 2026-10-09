@@ -11,7 +11,8 @@
 //! length. Its digest `H("verifying-key-set", transcript)` is the `verifying_key_set_digest` that
 //! the relation identity and the signed artifact manifest bind. The σ and Ω byte caps are these
 //! exact lengths (owner answer Q6): under R9 the Ω length plus the largest `σ_send` length fits
-//! the Payment budget [`KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1`], and the Ω length fits the
+//! the Payment budget [`KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1`], the `σ_recv` length fits
+//! [`KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1`], and the Ω length fits the
 //! Credited bound with the fixed 32-sibling opening
 //! ([`KAGEMUSHA_WALLET_LINEAGE_PROOF_CAP_V1`]). Until the artifacts freeze, structural
 //! validation of the wire objects enforces only the frame bounds.
@@ -20,8 +21,9 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use super::{
-    KAGEMUSHA_WALLET_LINEAGE_PROOF_CAP_V1, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1,
-    KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1, WalletResult, WalletVersionsV1, decode_frame_v1,
+    KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1, KAGEMUSHA_WALLET_LINEAGE_PROOF_CAP_V1,
+    KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, KAGEMUSHA_WALLET_PAYMENT_PROOF_BUDGET_V1, WalletResult,
+    WalletVersionsV1, decode_frame_v1,
     digest::{KagemushaWalletDigestRoleV1 as Role, WalletTranscriptV1, kagemusha_wallet_digest_v1},
     encode_frame_v1,
     identity::{
@@ -142,8 +144,9 @@ impl KagemushaWalletVerifyingKeyAllowlistV1 {
     /// than the blacklist bit on Receive, a nonzero mask outside Send and Receive, an undefined
     /// control bit, a Receive blacklist entry present without a Send mask carrying the
     /// blacklist bit or missing with one, zero digests or lengths, an Ω length plus the largest
-    /// `σ_send` length above the Payment budget (R9), an Ω length above the Credited cap, and a
-    /// σ longer than a message.
+    /// `σ_send` length above the Payment budget (R9), a `σ_recv` length above its complete
+    /// Credited envelope budget, an Ω length above the Credited cap, and a σ longer than a
+    /// message.
     pub fn validate(&self) -> WalletResult<()> {
         require_version_v1("verifying_keys.version", self.version)?;
         if self.steps.len() > KAGEMUSHA_WALLET_VERIFYING_KEY_ENTRIES_MAX_V1 {
@@ -160,6 +163,11 @@ impl KagemushaWalletVerifyingKeyAllowlistV1 {
                 .map_err(|_| overflow_v1("verifying_keys.proof_bytes"))?;
             if proof_bytes > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
                 return Err(invalid_v1("verifying_keys.proof_bytes"));
+            }
+            if entry.kind == KagemushaWalletOperationKindV1::Receive
+                && proof_bytes > KAGEMUSHA_WALLET_CREDITED_RECEIVE_PROOF_BUDGET_V1
+            {
+                return Err(invalid_v1("verifying_keys.receive_proof_bytes"));
             }
         }
         for kind in KagemushaWalletOperationKindV1::ALL {

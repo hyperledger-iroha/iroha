@@ -6,7 +6,10 @@ mod common;
 
 use ff::{Field, PrimeField};
 use iroha_kagemusha_proof::{
-    admin_sigma::{ConsumingWitness, RetiringCircuit, StateWitness, UnloadCircuit},
+    admin_sigma::{
+        ArchiveCircuit, ArchiveWitness, ConsumingWitness, RetiringCircuit, StateWitness,
+        UnloadCircuit,
+    },
     operation_relation::administrative::NULLIFIER_DOMAIN,
     witness::{CORE_DOMAIN, REST_DOMAIN, core_index as core},
 };
@@ -28,7 +31,7 @@ fn rebind(w: &mut ConsumingWitness) {
         let mut preimage = state.core.to_vec();
         preimage.push(hash_with_domain(REST_DOMAIN, &state.rest));
         state.lineage[5] = hash_with_domain(CORE_DOMAIN, &preimage);
-        state.lineage[1..3].copy_from_slice(&state.core[core::SCHEME..core::SCHEME + 2]);
+        state.lineage[1..3].copy_from_slice(&state.core[core::SCHEME..=core::SCHEME + 1]);
         state.lineage[6..8].copy_from_slice(&state.core[core::WALLET..core::WALLET + 2]);
         state.lineage[8] = state.core[core::CREDENTIAL];
         state.lineage[13] = state.core[core::LIFECYCLE]
@@ -315,6 +318,97 @@ fn native_consuming_proofs_verify_complete_openings_and_reject_mutations() {
         UnloadCircuit::instance_types()
     );
     prove(&retiring, &retiring.instances(), 198);
+}
+
+fn archive_witness() -> ArchiveWitness {
+    let mut source = witness(false);
+    source.successor = source.predecessor;
+    source.successor.core[core::SEQUENCE] += Fp::ONE;
+    source.successor.core[core::STATE_NONCE] += Fp::ONE;
+    source.successor.core[core::PENDING_OUTGOING_ROOT] = Fp::from(103);
+    source.statement[16] = Fp::from(5);
+    source.statement[17..].fill(Fp::ZERO);
+    source.statement[17] = Fp::from(105);
+    source.statement[18] = Fp::from(107);
+    rebind(&mut source);
+    source.statement[12..14].fill(Fp::ZERO);
+    ArchiveWitness {
+        predecessor: source.predecessor,
+        successor: source.successor,
+        statement: source.statement,
+    }
+}
+
+fn rebind_archive(w: &mut ArchiveWitness) {
+    let mut source = ConsumingWitness {
+        predecessor: w.predecessor,
+        successor: w.successor,
+        statement: w.statement,
+    };
+    rebind(&mut source);
+    source.statement[12..14].fill(Fp::ZERO);
+    w.predecessor = source.predecessor;
+    w.successor = source.successor;
+    w.statement = source.statement;
+}
+
+fn accepts_archive(w: &ArchiveWitness) -> bool {
+    let circuit = ArchiveCircuit::new(w);
+    check_circuit(&circuit, K, &circuit.instances(), CheckMode::Strict)
+        .is_ok_and(|report| report.is_satisfied())
+}
+
+#[test]
+fn archive_leaf_preserves_value_counters_credentials_and_held_policy() {
+    let honest = archive_witness();
+    let circuit = ArchiveCircuit::new(&honest);
+    assert!(accepts_archive(&honest));
+    shape(&circuit, &circuit.instances());
+    for index in 0..33 {
+        if [core::STATE_NONCE, core::PENDING_OUTGOING_ROOT].contains(&index) {
+            continue;
+        }
+        let mut wrong = honest;
+        wrong.successor.core[index] += Fp::ONE;
+        rebind_archive(&mut wrong);
+        assert!(!accepts_archive(&wrong), "Archive rehashed core {index}");
+    }
+    for index in 0..8 {
+        let mut wrong = honest;
+        wrong.successor.rest[index] += Fp::ONE;
+        rebind_archive(&mut wrong);
+        assert!(!accepts_archive(&wrong), "Archive rehashed rest {index}");
+    }
+    for index in [14, 16] {
+        let mut wrong = honest;
+        wrong.successor.lineage[index] += Fp::ONE;
+        assert!(!accepts_archive(&wrong), "Archive lineage {index}");
+    }
+    // Both adjusted-root branches are left to A's authenticated evidence and
+    // removal constraints. The private core's removal never changes the balance.
+    let mut removed = honest;
+    removed.successor.lineage[15] = Fp::from(109);
+    assert!(accepts_archive(&removed));
+    for index in [17, 18] {
+        let mut wrong = honest;
+        wrong.statement[index] = Fp::ZERO;
+        assert!(!accepts_archive(&wrong));
+    }
+    for index in 19..26 {
+        let mut wrong = honest;
+        wrong.statement[index] = Fp::ONE;
+        assert!(!accepts_archive(&wrong));
+    }
+}
+
+#[test]
+fn native_archive_leaf_verifies_complete_opening_and_rejects_mutations() {
+    let circuit = ArchiveCircuit::new(&archive_witness());
+    assert_eq!(
+        ArchiveCircuit::instance_types(),
+        UnloadCircuit::instance_types()
+    );
+    prove(&circuit, &circuit.instances(), 199);
 }
 
 macro_rules! installed_consuming_case {

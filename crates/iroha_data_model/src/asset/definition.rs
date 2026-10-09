@@ -193,10 +193,12 @@ mod model {
         /// Balance partition policy for concrete ownership buckets.
         #[getset(get_copy = "pub")]
         pub balance_scope_policy: AssetBalancePolicy,
-        /// Immutable owning domain for a dataspace-restricted definition.
+        /// Immutable owning domain when the definition is domain-owned.
         ///
         /// Global definitions may also be domain-owned. Alias bindings are routing labels and
-        /// are deliberately independent from this ownership relationship.
+        /// are deliberately independent from this ownership relationship. Definitions registered
+        /// with [`crate::isi::RegisterDataspaceAssetDefinition`] keep this field absent and store
+        /// their exact immutable dataspace home in a separate authoritative ledger binding.
         #[getset(get = "pub")]
         pub owning_domain: Option<DomainId>,
         /// The account that owns this asset. Usually the [`Account`] that registered it.
@@ -823,6 +825,21 @@ mod validation_tests {
     use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     use norito::codec::DecodeAll as _;
+    // Exact pre-direct-dataspace field order, kept separate from the production builder so a
+    // future accidental field append or reorder changes this comparison.
+    #[derive(Encode)]
+    struct OriginalNewAssetDefinitionV1 {
+        id: AssetDefinitionId,
+        name: String,
+        description: Option<String>,
+        alias: Option<AssetDefinitionAlias>,
+        spec: NumericSpec,
+        mintable: Mintable,
+        logo: Option<SorafsUri>,
+        metadata: Metadata,
+        balance_scope_policy: AssetBalancePolicy,
+        owning_domain: Option<DomainId>,
+    }
     #[derive(Encode)]
     struct ForgedAssetDefinition {
         id: AssetDefinitionId,
@@ -1032,6 +1049,41 @@ mod validation_tests {
         assert_eq!(decoded.id, explicit.id);
         assert_eq!(decoded.alias, None);
         assert_eq!(decoded.owning_domain, Some(domain));
+    }
+    #[test]
+    fn existing_global_and_domain_definition_payloads_keep_original_field_order() {
+        let domain = DomainId::try_new("wonderland", "universal").expect("domain");
+        for (policy, owning_domain) in [
+            (AssetBalancePolicy::Global, None),
+            (AssetBalancePolicy::Global, Some(domain.clone())),
+            (
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(domain.clone()),
+            ),
+        ] {
+            let id = AssetDefinitionId::derive_from_components(
+                domain.clone(),
+                "rose".parse().expect("asset name"),
+            );
+            let object = AssetDefinition::numeric(id, "Rose", policy, owning_domain);
+            let original = OriginalNewAssetDefinitionV1 {
+                id: object.id.clone(),
+                name: object.name.clone(),
+                description: object.description.clone(),
+                alias: object.alias.clone(),
+                spec: object.spec,
+                mintable: object.mintable,
+                logo: object.logo.clone(),
+                metadata: object.metadata.clone(),
+                balance_scope_policy: object.balance_scope_policy,
+                owning_domain: object.owning_domain.clone(),
+            };
+            assert_eq!(object.encode(), original.encode());
+            let original_payload = original.encode();
+            let restored = NewAssetDefinition::decode_all(&mut original_payload.as_slice())
+                .expect("decode original field layout");
+            assert_eq!(restored.encode(), original_payload);
+        }
     }
     #[test]
     fn new_asset_definition_binary_rejects_custom_confidential_policy() {

@@ -8,6 +8,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.security.KeyPair
+import java.security.PrivateKey
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.cert.CertificateFactory
@@ -43,11 +45,11 @@ class KagemushaWalletAndroidPlatformDeviceV1Test {
     )
 
     @Test
-    fun creationIsRefusedBelowApi31() {
+    fun creationIsRefusedBelowApi26() {
         assumeTrue(Build.VERSION.SDK_INT < KAGEMUSHA_WALLET_ANDROID_MIN_API_V1)
         try {
             KagemushaWalletAndroidPlatformV1.create(context)
-            fail("keystore1 must be refused")
+            fail("wallet custody requires API 26 or later")
         } catch (expected: IllegalStateException) {
         }
     }
@@ -68,8 +70,62 @@ class KagemushaWalletAndroidPlatformDeviceV1Test {
     }
 
     @Test
-    fun thePaymentKeyLifecycleUsesTheRealKeystore() {
-        assumeTrue(Build.VERSION.SDK_INT >= KAGEMUSHA_WALLET_ANDROID_MIN_API_V1)
+    fun api26Through30DoNotInferCustodyAuthorityFromANullLookup() {
+        assumeTrue(Build.VERSION.SDK_INT in
+            KAGEMUSHA_WALLET_ANDROID_MIN_API_V1 until KAGEMUSHA_WALLET_ANDROID_KEYSTORE2_API_V1)
+        // Reads use the real AndroidKeyStore. A regression must fail before it can mutate a
+        // key: null is unknown on these APIs, and this test has no Native fresh-slot grant.
+        val keyStore = object : KagemushaWalletAndroidKeyStoreV1 by KagemushaWalletAndroidSystemKeyStoreV1() {
+            var generationCalls = 0
+            var signCalls = 0
+            var deleteCalls = 0
+
+            override fun generate(spec: KagemushaWalletAndroidKeySpecV1): KeyPair {
+                generationCalls += 1
+                error("ordinary generation must not reach AndroidKeyStore on API 26–30")
+            }
+
+            override fun sign(key: PrivateKey, message: ByteArray): ByteArray {
+                signCalls += 1
+                error("unknown key lookup must not reach signing")
+            }
+
+            override fun deleteEntry(alias: String) {
+                deleteCalls += 1
+                error("unknown key lookup must not reach destructive cleanup")
+            }
+        }
+        val adapter = KagemushaWalletAndroidPlatformAdapterV1(
+            KagemushaWalletAndroidSystemEnvironmentV1(context), keyStore,
+        )
+        val slot = nonzero32()
+        val unknown = KagemushaWalletAndroidUnavailableV1.platform(
+            KagemushaWalletAndroidUnavailableV1.PLATFORM_KEY_ABSENCE_UNKNOWN,
+        )
+        assertEquals(1, adapter.keyGenerationMode())
+        assertEquals(unknown, (adapter.keyProbe(slot) as KagemushaWalletAndroidKeyProbeV1.Unavailable).reason)
+        assertEquals(
+            unknown,
+            (adapter.keyGenerate(slot, nonzero32(), KagemushaWalletAndroidKeyProfileV1.SECURE_ELEMENT_OR_TEE.tag)
+                as KagemushaWalletAndroidKeyGenerationV1.Unavailable).reason,
+        )
+        assertEquals(unknown, (adapter.attestationChain(slot) as KagemushaWalletAndroidAttestationChainV1.Unavailable).reason)
+        assertEquals(unknown, (adapter.keySign(slot, nonzero32()) as KagemushaWalletAndroidSignatureV1.Unavailable).reason)
+        assertEquals(
+            KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_KEYSTORE_UNSUPPORTED),
+            (adapter.keyDelete(slot) as KagemushaWalletAndroidRemoveV1.Uncertain).reason,
+        )
+        assertEquals(0, keyStore.generationCalls)
+        assertEquals(0, keyStore.signCalls)
+        assertEquals(0, keyStore.deleteCalls)
+        assertEquals(unknown, (adapter.keyProbe(slot) as KagemushaWalletAndroidKeyProbeV1.Unavailable).reason)
+        // Genuine API 26–30 generation/signing needs installed Native enrollment and its
+        // consumed one-shot grant. Never call the internal fresh-generation hook to fake it.
+    }
+
+    @Test
+    fun thePaymentKeyLifecycleUsesTheRealKeystoreOnApi31AndLater() {
+        assumeTrue(Build.VERSION.SDK_INT >= KAGEMUSHA_WALLET_ANDROID_KEYSTORE2_API_V1)
         val adapter = adapter()
         val slot = nonzero32()
         assertSame(KagemushaWalletAndroidKeyProbeV1.Absent, adapter.keyProbe(slot))
@@ -96,9 +152,12 @@ class KagemushaWalletAndroidPlatformDeviceV1Test {
                     )
                 }
                 is KagemushaWalletAndroidKeyGenerationV1.Unavailable -> {
-                    // A software-only Keystore (an emulator) is refused and its key left in place.
+                    // A retained but unusable key may exercise refusal, never a successful
+                    // hardware lifecycle. Other provider/StrongBox failures remain failures;
+                    // the mixed profile's safe TEE fallback belongs to the production adapter.
                     assertEquals(KagemushaWalletAndroidUnavailableV1.KEY_UNUSABLE, result.reason)
                     assertTrue(adapter.keyProbe(slot) is KagemushaWalletAndroidKeyProbeV1.Present)
+                    assumeTrue("The provider refused the key; hardware lifecycle was not exercised", false)
                 }
                 KagemushaWalletAndroidKeyGenerationV1.AlreadyPresent -> fail("a fresh slot had a key")
             }

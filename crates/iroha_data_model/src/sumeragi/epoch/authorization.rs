@@ -243,8 +243,9 @@ impl ValidatorEpochAuthorizationV1 {
         generation: &ValidatorGenerationV1,
     ) -> Result<(), ValidatorEpochAuthorizationErrorV1> {
         self.validate()?;
+        let expected_generation = generation.generation;
         if self.network_id != generation.network_id
-            || self.authority_generation != generation.generation
+            || self.authority_generation != expected_generation
             || self.authority_id != generation.generation_id()?
         {
             return Err(invalid("epoch_authorization.generation"));

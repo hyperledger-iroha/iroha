@@ -5635,15 +5635,30 @@ mod tests_null_decode {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
         for backend in BackendTag::ALL {
-            for syscall in [syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT, syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY] {
-                let envelope = OpenVerifyEnvelope::new(backend, "mock-unadmitted-relation", [1;32], vec![2;32], vec![3;32]);
+            for syscall in [
+                syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
+                syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
+            ] {
+                let envelope = OpenVerifyEnvelope::new(
+                    backend,
+                    "mock-unadmitted-relation",
+                    [1; 32],
+                    vec![2; 32],
+                    vec![3; 32],
+                );
                 let payload = encode_canonical_norito(&envelope).expect("envelope");
-                let ptr = vm.alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload)).expect("allocate proof");
+                let ptr = vm
+                    .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload))
+                    .expect("allocate proof");
                 vm.set_register(10, ptr);
                 call_syscall(&mut vm, syscall).expect("bounded rejection");
                 assert_eq!(vm.register(10), 0);
                 assert_eq!(vm.register(11), crate::host::ERR_BACKEND);
-                let host = vm.host_mut_any().expect("host").downcast_ref::<WsvHost>().expect("mock host");
+                let host = vm
+                    .host_mut_any()
+                    .expect("host")
+                    .downcast_ref::<WsvHost>()
+                    .expect("mock host");
                 assert!(host.zk_verified_ballot.is_empty());
                 assert!(host.zk_verified_tally.is_none());
             }

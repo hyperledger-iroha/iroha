@@ -97,10 +97,10 @@
 //! faults during recovery and platform faults); run them with
 //! `cargo test -p iroha_core_zk --lib kagemusha_wallet_advance_v1`. Shared wallet state,
 //! authenticated archive indexes and descriptor-relative filesystem custody are implemented.
-//! Mobile callback adapters live in `connect_norito_bridge`; foreign open remains gated on
-//! the unfinished authenticated operation/Λ/Ω loader. Nothing here is phone qualification.
-// TODO(G3/G4): authenticated native proof-artifact loading and E8 activation integration.
-// TODO(G2-S): acknowledgement-driven retained witness collection.
+//! Mobile callback adapters live in `connect_norito_bridge`. The native state owner connects
+//! authenticated operation/Λ/Ω source admission, retained activation and covered-witness
+//! collection. Foreign open requires an actual complete source grant; these implementations
+//! alone establish neither artifact qualification nor phone qualification.
 // TODO(G2-iOS): device tests of keychain power-loss durability and residual anchor window.
 
 mod advance;
@@ -112,9 +112,14 @@ mod enrollment;
 mod layout;
 mod marker;
 mod platform;
+mod prekey_custody;
 mod provider;
+#[cfg(test)]
+use enrollment::KagemushaWalletChallengeLivenessV1;
+pub(crate) use prekey_custody::{PreKeyPublicationV1, PreKeyRecordV1};
 mod reconcile;
 mod retained;
+mod setup;
 mod store;
 mod terminal;
 
@@ -123,7 +128,6 @@ pub use self::store::{
     KagemushaWalletSimFaultV1, KagemushaWalletSimFsV1, KagemushaWalletSimLockV1,
     KagemushaWalletSimPowerLossV1, KagemushaWalletSimStagedFileV1, KagemushaWalletSimStepV1,
 };
-#[cfg(unix)]
 pub use self::store::{KagemushaWalletStdFsLockV1, KagemushaWalletStdFsV1};
 pub use self::{
     advance::{
@@ -140,7 +144,7 @@ pub use self::{
     capsule::{KAGEMUSHA_WALLET_FROZEN_FILE_OVERHEAD_BYTES_V1, KagemushaWalletFrozenFrameV1},
     completion::KagemushaWalletCompletionFrameV1,
     enrollment::{
-        KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1, KagemushaWalletChallengeLivenessV1,
+        KAGEMUSHA_WALLET_ENROLLMENT_REQUEST_MAX_BYTES_V1, KagemushaWalletEnrollmentDatesV1,
         KagemushaWalletEnrollmentRecordV1, KagemushaWalletEnrollmentStepV1,
         KagemushaWalletFreshGenerationV1, KagemushaWalletIntentV1,
     },
@@ -220,6 +224,9 @@ pub enum KagemushaWalletLostCustodyV1 {
 }
 
 /// Error of the provider.
+// Fixed retained-status digests stay inline so this bounded error remains Copy.
+// On 32-bit targets pointer-sized variants are smaller; no extra allocation is needed.
+#[cfg_attr(target_pointer_width = "32", allow(variant_size_differences))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum KagemushaWalletProviderErrorV1 {
     /// Storage, the key store or the platform gave no definitive answer; retry.
@@ -362,3 +369,7 @@ mod tests {
         assert!(decode_envelope_v1::<KagemushaWalletRootSentinelV1>(&corrupt, 1_024).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "kagemusha_wallet_enrollment_v1/tests.rs"]
+mod enrollment_owner_tests;

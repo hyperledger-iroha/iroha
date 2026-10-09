@@ -68,7 +68,11 @@ mod history_producer;
 mod identifier_resolution;
 mod iso_profile;
 #[cfg(feature = "app_api")]
+mod kagemusha_enrollment;
+#[cfg(feature = "app_api")]
 mod kagemusha_wallet;
+#[cfg(feature = "app_api")]
+mod kagemusha_wallet_finality;
 mod ledger_state_finality;
 mod multisig_execution_evidence;
 mod native_projection_response;
@@ -2486,6 +2490,10 @@ struct AppState {
     musubi_search: Arc<RwLock<iroha_core::musubi_search::MusubiSearchIndexV1>>,
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_enrollment: Option<Arc<kagemusha_enrollment::EnrollmentService>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_load_finality: Option<Arc<kagemusha_wallet_finality::FinalityService>>,
     kiso: KisoHandle,
     query_service: LiveQueryStoreHandle,
     query_inflight: Arc<tokio::sync::Semaphore>,
@@ -10334,31 +10342,90 @@ fn identifier_execution_error(error: identifier_resolution::IdentifierResolution
     ) {
         return Error::AppServiceUnavailable {
             code: "ram_lfe_backend_unavailable",
-            message: "This backend does not support encrypted execution.".to_owned(),
+            message: "This backend does not support authenticated owner PRF execution.".to_owned(),
         };
     }
     identifier_internal_error(error.to_string())
 }
 #[cfg(feature = "app_api")]
-fn parse_encrypted_identifier_ciphertext(
-    raw: &str,
-) -> Result<iroha_crypto::BfvIdentifierCiphertext, Error> {
-    let literal = raw.trim();
-    if literal.is_empty() {
+fn identifier_owner_unauthorized() -> Error {
+    Error::AppUnauthorized {
+        code: "identifier_owner_required",
+        message: "The current ledger identifier policy owner must authenticate this exact request."
+            .to_owned(),
+    }
+}
+#[cfg(feature = "app_api")]
+fn authenticate_identifier_owner_request(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+) -> Result<AccountId, Error> {
+    if method != axum::http::Method::POST
+        || uri.query().is_some()
+        || body.is_empty()
+        || body.len() > 16_384
+    {
         return Err(identifier_conversion_error(
-            "encrypted identifier ciphertext must not be empty",
+            "owner PRF requires a bounded exact POST body without a query",
         ));
     }
-    let bytes = hex::decode(literal.trim_start_matches("0x")).map_err(|err| {
-        identifier_conversion_error(format!(
-            "encrypted identifier ciphertext is not valid hex: {err}"
-        ))
-    })?;
-    norito::decode_from_bytes::<iroha_crypto::BfvIdentifierCiphertext>(&bytes).map_err(|err| {
-        identifier_conversion_error(format!(
-            "encrypted identifier ciphertext is not valid Norito BFV data: {err}"
-        ))
-    })
+    require_signed_account_request(
+        app,
+        headers,
+        method,
+        uri,
+        body,
+        "identifier_owner_required",
+        "The current ledger identifier policy owner must authenticate this exact request.",
+    )
+}
+#[cfg(feature = "app_api")]
+fn require_identifier_program_owner(
+    caller: &AccountId,
+    program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
+) -> Result<(), Error> {
+    if caller != &program_policy.owner {
+        return Err(identifier_owner_unauthorized());
+    }
+    Ok(())
+}
+#[cfg(feature = "app_api")]
+fn identifier_claim_is_live_at(
+    claim: &iroha_data_model::identifier::IdentifierClaimRecord,
+    now_ms: u64,
+) -> bool {
+    now_ms > 0
+        && claim.verified_at_ms <= now_ms
+        && claim.expires_at_ms.is_none_or(|expiry| expiry > now_ms)
+}
+#[cfg(feature = "app_api")]
+fn parse_identifier_input_nonce(raw: &str) -> Result<[u8; 32], Error> {
+    if raw.len() != 64
+        || !raw
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(identifier_conversion_error(
+            "input_nonce must be exactly 64 lowercase hexadecimal characters",
+        ));
+    }
+    let bytes = zeroize::Zeroizing::new(
+        hex::decode(raw).map_err(|_| identifier_conversion_error("invalid input_nonce"))?,
+    );
+    if bytes.len() != 32 {
+        return Err(identifier_conversion_error("invalid input_nonce length"));
+    }
+    let mut nonce = [0_u8; 32];
+    nonce.copy_from_slice(bytes.as_slice());
+    if nonce.iter().all(|byte| *byte == 0) {
+        return Err(identifier_conversion_error(
+            "input_nonce must be privately generated and nonzero",
+        ));
+    }
+    Ok(nonce)
 }
 #[cfg(feature = "app_api")]
 fn parse_hex_bytes(raw: &str, field_name: &str) -> Result<Vec<u8>, Error> {
@@ -10383,12 +10450,18 @@ fn derive_ram_lfe_request_draft(
     resolver: &identifier_resolution::IdentifierResolutionService,
     program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
     request: &routing::RamLfeExecuteRequestDto,
+    network_id: &iroha_data_model::NetworkId,
 ) -> Result<identifier_resolution::RamLfeExecutionDraft, Error> {
     identifier_resolution::require_supported_program_policy(program_policy)
         .map_err(identifier_execution_error)?;
-    let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
+    let nonce = zeroize::Zeroizing::new(parse_identifier_input_nonce(&request.input_nonce)?);
     resolver
-        .execute_encrypted(program_policy, &ciphertext)
+        .execute_owner_prf(
+            program_policy,
+            &request.normalized_input,
+            &nonce,
+            network_id,
+        )
         .map_err(identifier_execution_error)
 }
 #[cfg(feature = "app_api")]
@@ -10399,54 +10472,28 @@ fn derive_identifier_request_draft(
     request: &routing::IdentifierResolveRequestDto,
     network_id: &iroha_data_model::NetworkId,
 ) -> Result<identifier_resolution::IdentifierResolutionDraft, Error> {
-    identifier_resolution::require_supported_program_policy(program_policy)
-        .map_err(identifier_execution_error)?;
-    let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
-    let phone_like = policy.id.kind.as_ref() == "phone"
-        || policy.normalization == iroha_data_model::identifier::IdentifierNormalization::PhoneE164
-        || policy.program_id.to_string() == "phone_retail";
-    if phone_like {
-        if !policy.id.is_phone_retail() {
-            return Err(identifier_conversion_error(
-                "first-release phone requests require exactly phone#retail",
-            ));
-        }
-        let canonicality = request.phone_retail_canonicality.clone().ok_or_else(|| {
-            identifier_conversion_error(
-                "phone#retail requires a trusted canonical E.164 nullifier attestation",
-            )
-        })?;
-        return resolver
-            .derive_phone_retail_encrypted(
-                policy,
-                program_policy,
-                &ciphertext,
-                request.output_opening.clone(),
-                canonicality,
-                network_id,
-            )
-            .map_err(|err| identifier_conversion_error(err.to_string()));
-    }
-    if request.phone_retail_canonicality.is_some() {
+    if request.phase != "claim" {
         return Err(identifier_conversion_error(
-            "phone canonicality attestation is only valid for phone#retail",
+            "identifier receipt resolution requires phase claim",
         ));
     }
-    match program_policy.commitment.backend {
-        iroha_crypto::RamLfeBackend::BfvAffineV1 | iroha_crypto::RamLfeBackend::BfvProgrammedV1 => {
-            resolver
-                .derive_encrypted(
-                    policy,
-                    program_policy,
-                    &ciphertext,
-                    request.output_opening.clone(),
-                )
-                .map_err(identifier_execution_error)
-        }
-        _ => Err(identifier_conversion_error(
-            "identifier encrypted input requires a BFV-backed RAM-LFE program",
-        )),
-    }
+    identifier_resolution::require_supported_program_policy(program_policy)
+        .map_err(identifier_execution_error)?;
+    let nonce = zeroize::Zeroizing::new(parse_identifier_input_nonce(&request.input_nonce)?);
+    let opening = request.output_opening.clone().ok_or_else(|| {
+        identifier_conversion_error("claim requires the original signed native owner PRF opening")
+    })?;
+    resolver
+        .derive_owner_prf(
+            policy,
+            program_policy,
+            &request.normalized_input,
+            &nonce,
+            opening,
+            request.phone_retail_canonicality.clone(),
+            network_id,
+        )
+        .map_err(identifier_execution_error)
 }
 #[cfg(feature = "app_api")]
 fn ram_lfe_proof_verifier_metadata_dto(
@@ -10515,9 +10562,22 @@ fn identifier_resolution_receipt_payload_dto(
     payload: &iroha_data_model::identifier::IdentifierResolutionReceiptPayload,
 ) -> routing::IdentifierResolutionReceiptPayloadDto {
     routing::IdentifierResolutionReceiptPayloadDto {
+        network_id: hex::encode(payload.network_id.as_bytes()),
         policy_id: payload.policy_id.to_string(),
         execution: ram_lfe_execution_receipt_payload_dto(&payload.execution),
-        opening: payload.opening.clone(),
+        opening: routing::IdentifierOutputOpeningDto {
+            payload: routing::IdentifierOutputOpeningPayloadDto {
+                program_id: payload.opening.payload.program_id.to_string(),
+                input_ciphertext_hash: payload.opening.payload.input_ciphertext_hash.to_string(),
+                output_ciphertext_hash: payload.opening.payload.output_ciphertext_hash.to_string(),
+                parameter_digest: payload.opening.payload.parameter_digest.to_string(),
+                evaluation_key_digest: payload.opening.payload.evaluation_key_digest.to_string(),
+                opened_output_hash: payload.opening.payload.opened_output_hash.to_string(),
+                opened_at_ms: payload.opening.payload.opened_at_ms,
+                expires_at_ms: payload.opening.payload.expires_at_ms,
+            },
+            signature: hex::encode(payload.opening.signature.payload()),
+        },
         opaque_id: payload.opaque_id.to_string(),
         receipt_hash: payload.receipt_hash.to_string(),
         uaid: payload.uaid.to_string(),
@@ -10614,9 +10674,12 @@ fn ram_lfe_execute_response(
 ) -> routing::RamLfeExecuteResponseDto {
     routing::RamLfeExecuteResponseDto {
         program_id: receipt.payload.program_id.to_string(),
+        program_id_canonical: hex::encode_upper(identifier_resolution::program_id_bytes(
+            &receipt.payload.program_id,
+        )),
         opaque_hash: draft.opaque_hash.to_string(),
         receipt_hash: draft.receipt_hash.to_string(),
-        output_ciphertext: hex::encode_upper(&draft.output),
+        opaque_output: hex::encode_upper(&draft.output),
         output_hash: draft.output_hash.to_string(),
         associated_data_hash: draft.associated_data_hash.to_string(),
         executed_at_ms: draft.executed_at_ms,
@@ -10789,7 +10852,6 @@ async fn handler_explorer_metrics(
     }
     routing::handle_v1_explorer_metrics(
         app.state.clone(),
-        app.kura.clone(),
         app.telemetry.clone(),
         visibility.current_visibility(),
     )
@@ -14050,6 +14112,14 @@ fn resolve_signed_query_routing_for_app(
         SignedQueryScope::UniversalAssetDefinition(_) => {
             resolve_torii_route_for_dataspace_id(app, DataSpaceId::UNIVERSAL)
         }
+        SignedQueryScope::DataspaceAssetDefinition(dataspace_id) => {
+            resolve_torii_route_for_dataspace_id(app, dataspace_id)
+        }
+        SignedQueryScope::UnavailableAssetDefinitionHome => {
+            Err(queue::RoutingResolveError::OrdinaryRouteUnavailable {
+                reason: "invalid authoritative asset-definition home".to_owned(),
+            })
+        }
         SignedQueryScope::PublicControlPlane
         | SignedQueryScope::LocalReplicated
         | SignedQueryScope::AuthorityRouted
@@ -16257,6 +16327,8 @@ enum SignedQueryScope {
     TargetAlias(iroha_data_model::account::AccountAlias),
     TargetDomain(iroha_model_base::domain::DomainId),
     UniversalAssetDefinition(iroha_data_model::asset::AssetDefinitionId),
+    DataspaceAssetDefinition(DataSpaceId),
+    UnavailableAssetDefinitionHome,
 }
 fn torii_signed_query_permission_denied_response(
     authority: &AccountId,
@@ -16297,6 +16369,11 @@ fn torii_authorize_signed_query_routes(
 ) -> Result<Vec<RoutingDecision>, Response> {
     let authority = &request.request_with_authority().authority;
     match scope {
+        SignedQueryScope::UnavailableAssetDefinitionHome => Err(torii_proxy_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "invalid_asset_definition_home",
+            "authoritative asset-definition home is invalid",
+        )),
         SignedQueryScope::PublicControlPlane => Ok(Vec::new()),
         SignedQueryScope::LocalReplicated => Ok(routes),
         SignedQueryScope::CrossDataspaceFanout => {
@@ -16327,6 +16404,30 @@ fn torii_authorize_signed_query_routes(
         }
         SignedQueryScope::TargetAccount(target) => {
             let state_view = app.state.view();
+            // Only the native exact account/permission enrollment queries may use this grant.
+            // The same state-aware predicate still gates Core execution after routing.
+            match iroha_core::executor::can_observe_dpn_enrollment_query(
+                state_view.world(),
+                authority,
+                request.request_with_authority().request(),
+                state_view.query_ledger_time_ms(),
+            ) {
+                Ok(true) => return Ok(routes),
+                Ok(false) => {}
+                Err(error) => {
+                    return Err(match error {
+                        iroha_core::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                            Error::Query(error)
+                        }
+                        iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => {
+                            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+                            ))
+                        }
+                    }
+                    .into_response());
+                }
+            }
             let exact_account_permission: Permission =
                 iroha_executor_data_model::permission::query::CanReadAccountData {
                     account: target.clone(),
@@ -16370,7 +16471,9 @@ fn torii_authorize_signed_query_routes(
                 ))
             }
         }
-        SignedQueryScope::TargetDomain(_) | SignedQueryScope::UniversalAssetDefinition(_) => {
+        SignedQueryScope::TargetDomain(_)
+        | SignedQueryScope::UniversalAssetDefinition(_)
+        | SignedQueryScope::DataspaceAssetDefinition(_) => {
             let (allowed, denied) = torii_intersect_signed_query_routes(
                 routes,
                 torii_global_signed_query_read_routes(app, authority),
@@ -16559,6 +16662,17 @@ fn resolve_asset_definition_scope(
     asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
 ) -> Option<SignedQueryScope> {
     let world = app.state.world_view();
+    resolve_asset_definition_scope_in_world(&world, asset_definition_id)
+}
+fn resolve_asset_definition_scope_in_world(
+    world: &impl WorldReadOnly,
+    asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
+) -> Option<SignedQueryScope> {
+    match world.asset_definition_dataspace(asset_definition_id) {
+        Ok(Some(dataspace)) => return Some(SignedQueryScope::DataspaceAssetDefinition(dataspace)),
+        Ok(None) => {}
+        Err(_) => return Some(SignedQueryScope::UnavailableAssetDefinitionHome),
+    }
     if let Some(domain) = world.asset_definition_domains().get(asset_definition_id) {
         return Some(SignedQueryScope::TargetDomain(domain.clone()));
     }
@@ -16572,6 +16686,40 @@ fn resolve_asset_definition_scope(
             (definition.balance_scope_policy == iroha_data_model::asset::AssetBalancePolicy::Global)
                 .then(|| SignedQueryScope::UniversalAssetDefinition(asset_definition_id.clone()))
         })
+}
+#[cfg(test)]
+mod direct_dataspace_definition_query_scope_tests {
+    use super::*;
+
+    use iroha_data_model::Registrable as _;
+
+    #[test]
+    fn direct_definition_query_uses_exact_home_and_unknown_id_stays_unclassified() {
+        let mut world = iroha_core::state::World::default();
+        let id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("cash", "universal").expect("id seed"),
+            "kina".parse().expect("name"),
+        );
+        let home = DataSpaceId::new(8_648_377_547_929_788_715);
+        assert_eq!(
+            resolve_asset_definition_scope_in_world(&world.view(), &id),
+            None
+        );
+        let definition = iroha_data_model::asset::AssetDefinition::numeric(
+            id.clone(),
+            "Kina",
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            None,
+        )
+        .build(&iroha_test_samples::ALICE_ID);
+        world
+            .insert_direct_asset_definition_with_assets_for_testing(definition, home, [])
+            .expect("direct home fixture");
+        assert_eq!(
+            resolve_asset_definition_scope_in_world(&world.view(), &id),
+            Some(SignedQueryScope::DataspaceAssetDefinition(home))
+        );
+    }
 }
 fn target_account_iterable_query(
     query: &iroha_data_model::query::QueryWithParams,
@@ -16946,6 +17094,13 @@ fn torii_authorized_signed_query_routes(
         ]);
     }
     let routes = match scope {
+        SignedQueryScope::UnavailableAssetDefinitionHome => {
+            return Err(torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_asset_definition_home",
+                "authoritative asset-definition home is invalid",
+            ));
+        }
         SignedQueryScope::PublicControlPlane => Vec::new(),
         SignedQueryScope::LocalReplicated => Vec::new(),
         SignedQueryScope::AuthorityRouted => unreachable!("handled above"),
@@ -16965,6 +17120,15 @@ fn torii_authorized_signed_query_routes(
         SignedQueryScope::TargetAlias(alias) => torii_target_alias_routes(app, alias)?,
         SignedQueryScope::TargetDomain(domain_id) => torii_target_domain_routes(app, domain_id)?,
         SignedQueryScope::UniversalAssetDefinition(_) => vec![torii_nexus_route(app)?],
+        SignedQueryScope::DataspaceAssetDefinition(dataspace) => vec![
+            resolve_torii_route_for_dataspace_id(app, *dataspace).map_err(|_| {
+                torii_proxy_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "route_unavailable",
+                    "failed to resolve asset-definition home route",
+                )
+            })?,
+        ],
     };
     torii_authorize_signed_query_routes(app, request, scope, routes)
 }
@@ -18305,9 +18469,13 @@ fn torii_signed_query_fanout_routes(
         SignedQueryScope::PublicControlPlane
         | SignedQueryScope::LocalReplicated
         | SignedQueryScope::AuthorityRouted
-        | SignedQueryScope::UniversalAssetDefinition(_) => Err(unsupported_routed_query_response(
-            "Nexus fanout coordinator received a single-route query",
-        )),
+        | SignedQueryScope::UniversalAssetDefinition(_)
+        | SignedQueryScope::DataspaceAssetDefinition(_)
+        | SignedQueryScope::UnavailableAssetDefinitionHome => {
+            Err(unsupported_routed_query_response(
+                "Nexus fanout coordinator received a single-route query",
+            ))
+        }
         SignedQueryScope::CrossDataspaceFanout
         | SignedQueryScope::TargetAccount(_)
         | SignedQueryScope::TargetAlias(_)
@@ -18624,6 +18792,10 @@ fn asset_definition_home_dataspace_id(
     let (dataspace_alias, is_global) = {
         let state_view = app.state.view();
         let world = state_view.world();
+        if let Some(dataspace) = routing::asset_definition_dataspace_for_read(world, definition_id)?
+        {
+            return Ok(Some(dataspace));
+        }
         if let Some(domain) = world.asset_definition_domains().get(definition_id) {
             (Some(domain.dataspace().as_ref().to_owned()), false)
         } else {
@@ -24422,10 +24594,10 @@ async fn handler_telemetry_live(
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(routing::handle_v1_telemetry_live(
             app.state.clone(),
-            app.kura.clone(),
             app.telemetry.clone(),
             app.peer_telemetry.clone(),
             app.events.clone(),
+            app.clone(),
         )?
         .into_response());
     }
@@ -24443,10 +24615,10 @@ async fn handler_telemetry_live(
     }
     Ok(routing::handle_v1_telemetry_live(
         app.state.clone(),
-        app.kura.clone(),
         app.telemetry.clone(),
         app.peer_telemetry.clone(),
         app.events.clone(),
+        app.clone(),
     )?
     .into_response())
 }
@@ -31949,6 +32121,97 @@ async fn handler_fee_sponsor_program_by_id(
     };
     alias_json_response(StatusCode::OK, program)
 }
+
+#[cfg(feature = "app_api")]
+async fn handler_fee_sponsor_enrollment_by_id(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    use iroha_data_model::nexus::FeeSponsorEnrollmentKey;
+    use iroha_torii_shared::{FeeSponsorEnrollmentByIdRequest, FeeSponsorEnrollmentByIdResponse};
+
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/fee-sponsor-enrollments/by-id",
+    )?;
+    let Some(caller) = visibility.caller() else {
+        return Ok(torii_canonical_auth_required_response(
+            "fee_sponsor_enrollment_signature_required",
+            "fee sponsor enrollment lookup requires canonical request signing",
+        ));
+    };
+    let request: FeeSponsorEnrollmentByIdRequest = norito::json::from_slice(body.as_ref())
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+    let program_id = FeeSponsorProgramId::from_str(&request.program_id);
+    let beneficiary = AccountId::parse_encoded(&request.beneficiary);
+    let (Ok(program_id), Ok(beneficiary)) = (program_id, beneficiary) else {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_fee_sponsor_enrollment_key",
+            "program_id and beneficiary must be canonical native identifiers",
+        ));
+    };
+    if program_id.to_string() != request.program_id
+        || beneficiary.to_string() != request.beneficiary
+    {
+        return Ok(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_fee_sponsor_enrollment_key",
+            "program_id and beneficiary must use their exact canonical encodings",
+        ));
+    }
+    let key = FeeSponsorEnrollmentKey {
+        program_id,
+        beneficiary,
+    };
+    let response = {
+        // Permission, program existence and the row share one native view.
+        // Global ledger-read permissions do not authorize this registrar read.
+        let world = app.state.world_view();
+        let permission = torii_permission_target(CanEnrollFeeSponsorProgram {
+            program_id: key.program_id.clone(),
+        })?;
+        if world.accounts().get(caller).is_none()
+            || (caller != &key.program_id.sponsor
+                && !torii_account_has_permission(&world, caller, &permission))
+        {
+            return Ok(torii_proxy_error_response(
+                StatusCode::FORBIDDEN,
+                "fee_sponsor_enrollment_not_authorized",
+                "enrollment reads require the sponsor or exact program enrollment permission",
+            ));
+        }
+        if world.fee_sponsor_programs().get(&key.program_id).is_none() {
+            return Ok(torii_proxy_error_response(
+                StatusCode::NOT_FOUND,
+                "fee_sponsor_program_not_found",
+                "the exact on-chain fee sponsor program was not found",
+            ));
+        }
+        let enrollment = world.fee_sponsor_enrollments().get(&key).cloned();
+        if enrollment.as_ref().is_some_and(|row| row.key != key) {
+            return Err(Error::Query(
+                iroha_data_model::ValidationFail::InternalError(
+                    "native fee sponsor enrollment key mismatch".to_owned(),
+                ),
+            ));
+        }
+        FeeSponsorEnrollmentByIdResponse { key, enrollment }
+    };
+    alias_json_response(StatusCode::OK, response)
+}
+
 fn fee_quote_rejection_retryable(code: FeeRejectionCode) -> bool {
     matches!(
         code,
@@ -32700,10 +32963,12 @@ async fn handler_ram_lfe_program_policies(
 #[cfg(feature = "app_api")]
 async fn handler_ram_lfe_execute(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(program_id_literal): AxPath<String>,
-    NoritoJson(request): NoritoJson<routing::RamLfeExecuteRequestDto>,
+    body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     check_access(
@@ -32713,6 +32978,11 @@ async fn handler_ram_lfe_execute(
         "v1/ram-lfe/programs/{program_id}/execute",
     )
     .await?;
+    let caller =
+        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let request: routing::RamLfeExecuteRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|error| identifier_conversion_error(error.to_string()))?;
+
     let program_id = iroha_data_model::ram_lfe::RamLfeProgramId::from_str(
         program_id_literal.trim(),
     )
@@ -32728,16 +32998,29 @@ async fn handler_ram_lfe_execute(
     if !program_policy.active {
         return Ok(StatusCode::CONFLICT.into_response());
     }
+    require_identifier_program_owner(&caller, &program_policy)?;
     identifier_resolution::require_supported_program_policy(&program_policy)
         .map_err(identifier_execution_error)?;
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
-    let draft = derive_ram_lfe_request_draft(resolver, &program_policy, &request)?;
+    let draft = derive_ram_lfe_request_draft(
+        resolver,
+        &program_policy,
+        &request,
+        app.state.network_id_ref(),
+    )?;
     let receipt = resolver
         .issue_execution_receipt(&program_policy, &draft)
         .map_err(identifier_execution_error)?;
-    json_ok(ram_lfe_execute_response(&receipt, &draft))
+    let response = ram_lfe_execute_response(&receipt, &draft);
+    let response = json_ok(response)?;
+    identifier_resolution::owner_prf::validate_owner_prf_lease(
+        draft.executed_at_ms,
+        draft.expires_at_ms,
+    )
+    .map_err(identifier_execution_error)?;
+    Ok(response)
 }
 #[cfg(feature = "app_api")]
 async fn handler_ram_lfe_receipt_verify(
@@ -32852,11 +33135,18 @@ async fn handler_identifier_policies(
 #[cfg(feature = "app_api")]
 async fn handler_identifier_resolve(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<routing::IdentifierResolveRequestDto>,
+    body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
     check_access(&app, &headers, Some(remote.ip()), "v1/identifiers/resolve").await?;
+    let caller =
+        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let request: routing::IdentifierResolveRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|error| identifier_conversion_error(error.to_string()))?;
+
     let policy_id = iroha_data_model::identifier::IdentifierPolicyId::from_str(&request.policy_id)
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -32880,6 +33170,10 @@ async fn handler_identifier_resolve(
     if !program_policy.active {
         return Ok(StatusCode::CONFLICT.into_response());
     }
+    require_identifier_program_owner(&caller, &program_policy)?;
+    if caller != policy.owner || policy.program_id != program_policy.program_id {
+        return Err(identifier_owner_unauthorized());
+    }
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
@@ -32888,7 +33182,7 @@ async fn handler_identifier_resolve(
         &policy,
         &program_policy,
         &request,
-        &app.signed_query_admission.network_id(),
+        app.state.network_id_ref(),
     )?;
     let Some(claim) = world.resolve_identifier_claim(&policy.id, &draft.opaque_id) else {
         return Ok(StatusCode::NOT_FOUND.into_response());
@@ -32902,27 +33196,40 @@ async fn handler_identifier_resolve(
     {
         return Ok(StatusCode::CONFLICT.into_response());
     }
-    if claim
-        .expires_at_ms
-        .is_some_and(|expires_at_ms| expires_at_ms <= draft.resolved_at_ms)
-    {
+    let now_ms =
+        identifier_resolution::owner_prf::owner_prf_now_ms().map_err(identifier_execution_error)?;
+    if !identifier_claim_is_live_at(&claim, now_ms) {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
     let receipt = resolver
         .sign_receipt(&policy, &program_policy, &draft, &claim)
         .map_err(identifier_execution_error)?;
-    json_ok(identifier_receipt_response(
+    let response = json_ok(identifier_receipt_response(
         &receipt,
         draft.backend.as_str(),
-    )?)
+    )?)?;
+    let delivery_now_ms =
+        identifier_resolution::owner_prf::owner_prf_now_ms().map_err(identifier_execution_error)?;
+    identifier_resolution::owner_prf::validate_owner_prf_lease_at(
+        receipt.payload.opening.payload.opened_at_ms,
+        receipt.payload.opening.payload.expires_at_ms,
+        delivery_now_ms,
+    )
+    .map_err(identifier_execution_error)?;
+    if !identifier_claim_is_live_at(&claim, delivery_now_ms) {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    Ok(response)
 }
 #[cfg(feature = "app_api")]
 async fn handler_identifier_claim_receipt(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_literal): AxPath<String>,
-    NoritoJson(request): NoritoJson<routing::IdentifierResolveRequestDto>,
+    body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     check_access(
@@ -32932,11 +33239,19 @@ async fn handler_identifier_claim_receipt(
         "v1/accounts/{account_id}/identifiers/claim-receipt",
     )
     .await?;
+    let caller =
+        authenticate_identifier_owner_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let request: routing::IdentifierResolveRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|error| identifier_conversion_error(error.to_string()))?;
+
     let account_id = parse_account_id_for_endpoint(
         &app,
         &account_literal,
         "/v1/accounts/{account_id}/identifiers/claim-receipt",
     )?;
+    // The signed path selects the beneficiary; its ledger account and UAID bind
+    // the receipt. Both active ledger policies authorize the caller below,
+    // allowing the policy owner to act for a distinct beneficiary.
     let policy_id = iroha_data_model::identifier::IdentifierPolicyId::from_str(&request.policy_id)
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -32960,6 +33275,10 @@ async fn handler_identifier_claim_receipt(
     if !program_policy.active {
         return Ok(StatusCode::CONFLICT.into_response());
     }
+    require_identifier_program_owner(&caller, &program_policy)?;
+    if caller != policy.owner || policy.program_id != program_policy.program_id {
+        return Err(identifier_owner_unauthorized());
+    }
     let Some(account) = world.account(&account_id).ok() else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
@@ -32969,20 +33288,125 @@ async fn handler_identifier_claim_receipt(
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
+    let network_id = app.state.network_id_ref().clone();
+    if request.phase == "prepare" {
+        if request.output_opening.is_some() || request.phone_retail_canonicality.is_some() {
+            return Err(identifier_conversion_error(
+                "prepare cannot contain an opening or phone attestation",
+            ));
+        }
+        let normalized = zeroize::Zeroizing::new(
+            policy
+                .normalization
+                .normalize(&request.normalized_input)
+                .map_err(|error| identifier_conversion_error(error.to_string()))?,
+        );
+        if policy.program_id != program_policy.program_id
+            || policy.owner != program_policy.owner
+            || normalized.as_str() != request.normalized_input.as_str()
+        {
+            return Err(identifier_conversion_error(
+                "prepare input must match the exact native policy normalization",
+            ));
+        }
+        let nonce = zeroize::Zeroizing::new(parse_identifier_input_nonce(&request.input_nonce)?);
+        let execution = resolver
+            .execute_owner_prf(
+                &program_policy,
+                &request.normalized_input,
+                &nonce,
+                &network_id,
+            )
+            .map_err(identifier_execution_error)?;
+        let output_opening = resolver
+            .owner_prf_opening(&program_policy, &execution)
+            .map_err(identifier_execution_error)?;
+        let phone_like = policy.id.kind.as_ref() == "phone"
+            || policy.normalization
+                == iroha_data_model::identifier::IdentifierNormalization::PhoneE164
+            || policy.program_id.to_string() == "phone_retail";
+        let phone_retail_canonicality_payload = if phone_like {
+            if !policy.id.is_phone_retail()
+                || policy.normalization
+                    != iroha_data_model::identifier::IdentifierNormalization::PhoneE164
+                || policy.program_id.to_string() != "phone_retail"
+            {
+                return Err(identifier_conversion_error(
+                    "prepare requires the exact phone#retail contract",
+                ));
+            }
+            let key = policy
+                .phone_retail_attestor_public_key
+                .as_ref()
+                .ok_or_else(|| {
+                    identifier_conversion_error(
+                        "phone#retail requires an independently pinned attestor key",
+                    )
+                })?;
+            if key == &program_policy.resolver_public_key
+                || key == &program_policy.output_opening_public_key
+            {
+                return Err(identifier_conversion_error(
+                    "phone attestor must be independent of native resolver and opener",
+                ));
+            }
+            Some(
+                iroha_data_model::identifier::PhoneRetailCanonicalityPayloadV1 {
+                    network_id,
+                    policy_id: policy.id.clone(),
+                    program_id: policy.program_id.clone(),
+                    input_ciphertext_hash: execution.input_ciphertext_hash,
+                    output_ciphertext_hash: execution.output_ciphertext_hash,
+                    opened_output_hash: execution.output_hash,
+                    canonical_phone_nullifier: execution.output_hash,
+                    uaid,
+                    account_id: account_id.clone(),
+                    issued_at_ms: output_opening.payload.opened_at_ms,
+                    expires_at_ms: output_opening.payload.expires_at_ms.ok_or_else(|| {
+                        identifier_conversion_error("native opening requires a bounded expiry")
+                    })?,
+                },
+            )
+        } else {
+            None
+        };
+        let original_opened_at_ms = output_opening.payload.opened_at_ms;
+        let original_expires_at_ms = output_opening.payload.expires_at_ms;
+        let response = json_ok(routing::IdentifierPrfPrepareResponseDto {
+            network_id: hex::encode(network_id.as_bytes()),
+            policy_id: policy.id.to_string(),
+            account_id: account_id.to_string(),
+            uaid: uaid.to_string(),
+            output_opening,
+            phone_retail_canonicality_payload,
+        })?;
+        identifier_resolution::owner_prf::validate_owner_prf_lease(
+            original_opened_at_ms,
+            original_expires_at_ms,
+        )
+        .map_err(identifier_execution_error)?;
+        return Ok(response);
+    }
     let draft = derive_identifier_request_draft(
         resolver,
         &policy,
         &program_policy,
         &request,
-        &app.signed_query_admission.network_id(),
+        app.state.network_id_ref(),
     )?;
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, account_id)
         .map_err(identifier_execution_error)?;
-    json_ok(identifier_receipt_response(
+    let response = json_ok(identifier_receipt_response(
         &receipt,
         draft.backend.as_str(),
-    )?)
+    )?)?;
+    identifier_resolution::owner_prf::validate_owner_prf_lease(
+        receipt.payload.opening.payload.opened_at_ms,
+        receipt.payload.opening.payload.expires_at_ms,
+    )
+    .map_err(identifier_execution_error)?;
+    Ok(response)
 }
 #[cfg(feature = "app_api")]
 async fn handler_identifier_receipt_lookup(
@@ -34576,6 +35000,10 @@ pub struct Torii {
     private_settlement_runtime: private_settlement::PrivateSettlementToriiRuntimeV1,
     bootle_lantern_issuance_runtime:
         Option<Arc<privacy_issuance_api::BootleLanternIssuanceToriiRuntimeV1>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_enrollment: Option<Arc<kagemusha_enrollment::EnrollmentService>>,
+    #[cfg(feature = "app_api")]
+    kagemusha_load_finality: Option<Arc<kagemusha_wallet_finality::FinalityService>>,
     telemetry: routing::MaybeTelemetry,
     online_peers: OnlinePeersProvider,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -36932,6 +37360,7 @@ impl Torii {
             builder, fees;
             QUOTE => limited_canonical_signature_post(handler_fee_quote, quote_body_limit);
             SPONSOR_PROGRAM_BY_ID => limited_canonical_signature_post(handler_fee_sponsor_program_by_id, EXACT_ALIAS_READ_MAX_BODY_BYTES);
+            SPONSOR_ENROLLMENT_BY_ID => limited_canonical_signature_post(handler_fee_sponsor_enrollment_by_id, EXACT_ALIAS_READ_MAX_BODY_BYTES);
         );
     }
     fn add_time_routes(&self, builder: &mut RouterBuilder) {
@@ -37214,7 +37643,10 @@ impl Torii {
             SORAFS_RESERVE_POLICY_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_policy);
             SORAFS_RESERVE_POLICY_PROOF_GET => canonical_signature_get(reserve_policy_proof::handler);
             SORAFS_RESERVE_ACCOUNT_PROOF_GET => canonical_signature_get(reserve_account_proof::handler);
-            KAGEMUSHA_LOAD_ISSUANCE_GET => canonical_signature_get(kagemusha_wallet::handler);
+            KAGEMUSHA_LOAD_ISSUANCE_GET => limited_canonical_account_get(kagemusha_wallet::handler, app_state, 0, 0);
+            KAGEMUSHA_ENROLLMENT_POST => limited_canonical_signature_post(kagemusha_enrollment::handler, iroha_torii_shared::kagemusha_enrollment::ENROLLMENT_SERVICE_REQUEST_MAX_BYTES_V1);
+            KAGEMUSHA_LOAD_EVENT_PROOF_GET => limited_canonical_account_get(kagemusha_wallet::event_handler, app_state, 0, 0);
+            KAGEMUSHA_LOAD_FINALITY_PROOF_GET => limited_canonical_account_get(kagemusha_wallet::finality_handler, app_state, 0, 0);
             SORAFS_RESERVE_PROVIDERS_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers);
             SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => canonical_signature_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider);
             SORAFS_RESERVE_TOP_UP_POST => layered_canonical_signed_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up, contracts_body_limit);
@@ -38394,6 +38826,8 @@ impl Torii {
             // the next Strict restart; Fast never opens their journals or
             // starts their mutation workers.
             config.privacy_bootle_lantern_issuer = None;
+            config.kagemusha_enrollment = None;
+            config.kagemusha_load_finality = None;
             config.webhooks_enabled = false;
             config.zk_attachments_enabled = false;
             config.zk_prover_enabled = false;
@@ -39840,6 +40274,42 @@ impl Torii {
                     "request body limit does not fit the platform address space",
                 )
             })?;
+        #[cfg(not(feature = "app_api"))]
+        if config.kagemusha_enrollment.is_some() {
+            return Err(ToriiBuildError::invalid_configuration(
+                "kagemusha_enrollment",
+                "enrollment requires the shipping app_api surface",
+            ));
+        }
+        #[cfg(feature = "app_api")]
+        let kagemusha_enrollment = config
+            .kagemusha_enrollment
+            .clone()
+            .map(|selected| kagemusha_enrollment::EnrollmentService::open(state.clone(), selected))
+            .transpose()
+            .map_err(|error| {
+                ToriiBuildError::component_initialization("kagemusha_enrollment", error)
+            })?
+            .map(Arc::new);
+        #[cfg(not(feature = "app_api"))]
+        if config.kagemusha_load_finality.is_some() {
+            return Err(ToriiBuildError::invalid_configuration(
+                "kagemusha_load_finality",
+                "Load finality requires the shipping app_api surface",
+            ));
+        }
+        #[cfg(feature = "app_api")]
+        let kagemusha_load_finality = config
+            .kagemusha_load_finality
+            .clone()
+            .map(|selected| {
+                kagemusha_wallet_finality::FinalityService::open(state.clone(), selected)
+            })
+            .transpose()
+            .map_err(|error| {
+                ToriiBuildError::component_initialization("kagemusha_load_finality", error)
+            })?
+            .map(Arc::new);
         let torii = Self {
             build_identity,
             chain_id: Arc::new(chain_id),
@@ -39858,6 +40328,10 @@ impl Torii {
             #[cfg(feature = "app_api")]
             private_settlement_runtime,
             bootle_lantern_issuance_runtime,
+            #[cfg(feature = "app_api")]
+            kagemusha_enrollment,
+            #[cfg(feature = "app_api")]
+            kagemusha_load_finality,
             online_peers,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_telemetry_urls,
@@ -40787,6 +41261,10 @@ impl Torii {
             #[cfg(feature = "app_api")]
             musubi_search: self.musubi_search.clone(),
             bootle_lantern_issuance_runtime: self.bootle_lantern_issuance_runtime.clone(),
+            #[cfg(feature = "app_api")]
+            kagemusha_enrollment: self.kagemusha_enrollment.clone(),
+            #[cfg(feature = "app_api")]
+            kagemusha_load_finality: self.kagemusha_load_finality.clone(),
             kiso: self.kiso.clone(),
             query_service: self.query_service.clone(),
             query_inflight,
@@ -41300,6 +41778,20 @@ impl Torii {
         #[cfg(feature = "app_api")]
         sorafs::stream_token_cleanup::register_worker(app_state.as_ref(), &mut workers)
             .expect("prepared test stream-token cleanup must retain its worker handle");
+        #[cfg(feature = "app_api")]
+        kagemusha_enrollment::register_worker(
+            app_state.as_ref(),
+            shutdown_signal.clone(),
+            &mut workers,
+        )
+        .expect("prepared test enrollment service must retain its worker handle");
+        #[cfg(feature = "app_api")]
+        kagemusha_wallet_finality::register_worker(
+            app_state.as_ref(),
+            shutdown_signal.clone(),
+            &mut workers,
+        )
+        .expect("prepared test finality service must retain its worker handle");
         Ok(TestApiRouterRuntime {
             router,
             shutdown_signal,
@@ -41407,6 +41899,34 @@ impl Torii {
         if let Err(reason) =
             sorafs::stream_token_cleanup::register_worker(app_state.as_ref(), &mut critical_workers)
         {
+            let failure = Report::new(Error::StartServer).attach(reason);
+            return Err(rollback_torii_startup_workers(
+                &shutdown_signal,
+                critical_workers,
+                failure,
+            )
+            .await);
+        }
+        #[cfg(feature = "app_api")]
+        if let Err(reason) = kagemusha_enrollment::register_worker(
+            app_state.as_ref(),
+            shutdown_signal.clone(),
+            &mut critical_workers,
+        ) {
+            let failure = Report::new(Error::StartServer).attach(reason);
+            return Err(rollback_torii_startup_workers(
+                &shutdown_signal,
+                critical_workers,
+                failure,
+            )
+            .await);
+        }
+        #[cfg(feature = "app_api")]
+        if let Err(reason) = kagemusha_wallet_finality::register_worker(
+            app_state.as_ref(),
+            shutdown_signal.clone(),
+            &mut critical_workers,
+        ) {
             let failure = Report::new(Error::StartServer).attach(reason);
             return Err(rollback_torii_startup_workers(
                 &shutdown_signal,

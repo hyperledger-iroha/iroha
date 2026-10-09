@@ -10,6 +10,7 @@
 
 mod clock_guard;
 mod progress;
+mod seed_config;
 mod storage;
 mod transport;
 
@@ -1865,6 +1866,7 @@ impl World {
         let hash = crate::preimage::payload_hash(&self.hasher, &payload);
         self.oracle.built.insert((inst, m, hash));
         self.replicas[r].pending_ready = payload.is_empty().then_some(req);
+        // Deliver the build result after the selected application latency.
         let latency = self.rng.range(profile.build_min, profile.build_max);
         self.schedule(
             at + latency,
@@ -2852,17 +2854,17 @@ pub fn describe_msg(msg: &WireMessage) -> String {
 
 /// Seeds to run: `SUMERAGI_SIM_SEED` (one seed) or `SUMERAGI_SIM_SEEDS` (count, from
 /// `SUMERAGI_SIM_SEED_BASE`), else `default` seeds from 0.
+///
+/// # Panics
+/// Rejects malformed selected settings, a zero count or a range exceeding `u64`.
 pub fn seeds(default: u64) -> Vec<u64> {
     seed_iter(default).collect()
 }
 
 /// Iterate the same configured seed range without retaining a campaign-sized seed list.
+///
+/// # Panics
+/// Rejects malformed selected settings, a zero count or a range exceeding `u64`.
 pub(super) fn seed_iter(default: u64) -> impl Iterator<Item = u64> {
-    let var = |name: &str| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok());
-    if let Some(seed) = var("SUMERAGI_SIM_SEED") {
-        return (seed..seed).chain(Some(seed));
-    }
-    let base = var("SUMERAGI_SIM_SEED_BASE").unwrap_or(0);
-    let count = var("SUMERAGI_SIM_SEEDS").unwrap_or(default);
-    (base..base + count).chain(None)
+    seed_config::from_env(default)
 }

@@ -4,6 +4,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use iroha_data_model::kagemusha::*;
 
+mod deletion;
+pub use deletion::{CustodyDeletionProgressV1, CustodyDeletionReviewV1, ReviewedCustodyDeletionV1};
+
 use super::{AdvanceOutcome, AdvanceRequest, Lookup, ProviderError, SlotStatus};
 use crate::kagemusha_wallet_advance_v1::{
     KagemushaWalletFsV1, KagemushaWalletPlatformV1, KagemushaWalletProviderV1,
@@ -81,6 +84,8 @@ pub trait Custody {
 pub struct AdvanceHandle<F: KagemushaWalletFsV1, P> {
     provider: Arc<Mutex<KagemushaWalletProviderV1<F, P>>>,
     slot: KagemushaWalletSlotIdV1,
+    deletion_owner: Arc<()>,
+    deletion: deletion::DeletionState,
 }
 
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
@@ -90,13 +95,67 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
         Self {
             provider: Arc::new(Mutex::new(provider)),
             slot,
+            deletion_owner: Arc::new(()),
+            deletion: deletion::DeletionState::Open,
         }
     }
+    pub(super) fn try_into_provider(self) -> Result<KagemushaWalletProviderV1<F, P>, Self> {
+        let Self {
+            provider,
+            slot,
+            deletion_owner,
+            deletion,
+        } = self;
+        take_exclusive(provider).map_err(|provider| Self {
+            provider,
+            slot,
+            deletion_owner,
+            deletion,
+        })
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, KagemushaWalletProviderV1<F, P>>, ProviderError> {
+        self.require_custody_operations()?;
         self.provider.lock().map_err(|_| ProviderError::Invalid {
             field: "provider handle poisoned",
         })
     }
+    pub(crate) fn sign_setup(
+        &self,
+        source: [u8; 32],
+        key: &KagemushaDevicePublicKeyV1,
+        domain: KagemushaWalletSigningDomainV1,
+        body: &[u8],
+    ) -> Result<KagemushaDeviceSignatureV1, ProviderError> {
+        self.lock()?
+            .sign_setup(&self.slot, source, key, domain, body)
+    }
+
+    pub(crate) fn sign_activation(
+        &self,
+        source: [u8; 32],
+        key: &KagemushaDevicePublicKeyV1,
+        body: &KagemushaWalletLedgerControlBodyV1,
+    ) -> Result<KagemushaDeviceSignatureV1, ProviderError> {
+        self.lock()?.sign_activation(&self.slot, source, key, body)
+    }
+
+    pub(crate) fn sign_close_loads(
+        &self,
+        source: [u8; 32],
+        key: &KagemushaDevicePublicKeyV1,
+        body: &KagemushaWalletLedgerControlBodyV1,
+    ) -> Result<KagemushaDeviceSignatureV1, ProviderError> {
+        self.lock()?.sign_close_loads(&self.slot, source, key, body)
+    }
+
+    /// Share only native observations with the concrete proof/preparation owner.
+    pub(crate) fn observations(&self) -> NativeObservationsV1<F, P> {
+        NativeObservationsV1 {
+            provider: Arc::clone(&self.provider),
+        }
+    }
+
     /// Create the matching archive capability. Both adapters share one provider and its
     /// exclusive custody lifetime; every archive call uses its protected-storage bracket.
     #[must_use]
@@ -107,6 +166,82 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
             scheme_id,
             wallet_id,
         }
+    }
+}
+
+// Once Arc::try_unwrap succeeds no other thread can poison the mutex. Check poison
+// after that ownership transfer, retaining the exact poisoned cell until explicit close.
+fn take_exclusive<T>(shared: Arc<Mutex<T>>) -> Result<T, Arc<Mutex<T>>> {
+    match Arc::try_unwrap(shared) {
+        Ok(cell) if cell.is_poisoned() => Err(Arc::new(cell)),
+        Ok(cell) => Ok(cell.into_inner().unwrap_or_else(|error| error.into_inner())),
+        Err(shared) => Err(shared),
+    }
+}
+
+#[cfg(test)]
+mod exclusive_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Held(Arc<AtomicUsize>);
+    impl Drop for Held {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn extra_owner_retains_exact_custody_until_unique() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let original = Arc::new(Mutex::new(Held(Arc::clone(&drops))));
+        let other = Arc::clone(&original);
+        let retained = take_exclusive(original).err().expect("shared");
+        assert!(Arc::ptr_eq(&retained, &other));
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(other);
+        let value = take_exclusive(retained).ok().expect("exclusive");
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(value);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn poisoned_unique_custody_is_retained_without_unpoisoning() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let original = Arc::new(Mutex::new(Held(Arc::clone(&drops))));
+        let other = Arc::clone(&original);
+        assert!(
+            std::thread::spawn(move || {
+                let _held = other.lock().expect("unpoisoned");
+                panic!("inject owner failure");
+            })
+            .join()
+            .is_err()
+        );
+        let retained = take_exclusive(original).err().expect("poisoned");
+        assert!(retained.is_poisoned());
+        let retained = take_exclusive(retained).err().expect("still poisoned");
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(retained);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// Private clock capability sharing the actual exclusive provider lifetime.
+/// It grants no payment-key, storage or Advance access.
+pub(crate) struct NativeObservationsV1<F: KagemushaWalletFsV1, P> {
+    provider: Arc<Mutex<KagemushaWalletProviderV1<F, P>>>,
+}
+
+impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> NativeObservationsV1<F, P> {
+    pub(crate) fn time(&self) -> Result<KagemushaWalletMonotonicReadingV1, ProviderError> {
+        self.provider
+            .lock()
+            .map_err(|_| ProviderError::Invalid {
+                field: "provider handle poisoned",
+            })?
+            .monotonic_reading()
     }
 }
 
@@ -210,7 +345,7 @@ impl TransitionOwner {
                 field: "state_owner.request",
             })?
             .bytes;
-        if requests.next().is_some() || bytes.len() > KAGEMUSHA_WALLET_SESSION_MAX_BYTES_V1 {
+        if requests.next().is_some() || bytes.len() > KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 {
             return Err(ProviderError::Invalid {
                 field: "state_owner.request",
             });

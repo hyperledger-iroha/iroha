@@ -180,7 +180,7 @@ struct RawHeader {
     execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
     global_beacon_pulse_hash: Option<HashOf<FinalizedGlobalThresholdBeaconPulseV1>>,
 }
-fn raw(value: BlockHeader) -> RawHeader {
+fn raw(value: &BlockHeader) -> RawHeader {
     RawHeader {
         height: RawBytes(value.height.get().to_le_bytes().to_vec()),
         prev_block_hash: value
@@ -269,7 +269,7 @@ fn inline_actual_header_preserves_nonzero_child_before_trailer_and_original_pref
     for flags in [0, header_flags::COMPACT_LEN] {
         let _flags = DecodeFlagsGuard::enter(flags);
         let bytes = bare(&value);
-        assert_eq!(bytes, bare(&raw(value)));
+        assert_eq!(bytes, bare(&raw(&value)));
         for end in 0..bytes.len() {
             compare_original_error(&bytes[..end], limits);
         }
@@ -277,7 +277,7 @@ fn inline_actual_header_preserves_nonzero_child_before_trailer_and_original_pref
         trailing.push(0xa5);
         compare_original_error(&trailing, limits);
         for height in [vec![0; 8], vec![0; 7], vec![0; 9]] {
-            let mut malformed = raw(value);
+            let mut malformed = raw(&value);
             malformed.height = RawBytes(height);
             let bytes = bare(&malformed);
             for trailer in [false, true] {
@@ -288,7 +288,7 @@ fn inline_actual_header_preserves_nonzero_child_before_trailer_and_original_pref
                 compare_original_error(&source, limits);
             }
         }
-        let mut zero = raw(value);
+        let mut zero = raw(&value);
         zero.height = RawBytes(vec![0; 8]);
         assert!(matches!(
             BlockHeader::decode_inline_payload(&bare(&zero)),
@@ -346,7 +346,7 @@ fn inline_actual_header_nullable_hash_and_digest_arrays_keep_original_framed_arr
         ];
         for leaf in leaves {
             for child in 0..3 {
-                let mut malformed = raw(value);
+                let mut malformed = raw(&value);
                 match child {
                     0 => malformed.prev_block_hash = Some(RawBytes(leaf.clone())),
                     1 => {

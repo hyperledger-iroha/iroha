@@ -690,8 +690,7 @@ impl H {
 
     // ---- message construction -----------------------------------------------------------
 
-    /// A fresh unflagged block of the current height first proposed in `view` by `L(h, view)`
-    /// (the harness application flags nothing, epoch boundaries included; see [`H::flagged`]).
+    /// A fresh block of the current height first proposed in `view` by `L(h, view)`.
     pub fn block(&self, view: u64, payload: &[u8]) -> AvailableBody {
         let topo = &self.core.topo;
         let header = BlockHeader {
@@ -778,8 +777,8 @@ impl H {
         }
     }
 
-    /// A certificate of an unflagged value by exactly `signers` (members of the current
-    /// committee), any number.
+    /// A certificate of a block/result pair by the supplied current-committee signers.
+    /// Deliberately permits nonquorum signer counts for rejection tests.
     pub fn qc_value(
         &self,
         kind: VoteKind,
@@ -814,7 +813,7 @@ impl H {
         }
     }
 
-    /// A certificate of `block` (with its flag) by exactly `signers`.
+    /// A certificate of `block` and its execution result by the supplied signers.
     pub fn qc(
         &self,
         kind: VoteKind,
@@ -832,7 +831,7 @@ impl H {
         self.qc(kind, view, block, &signers)
     }
 
-    /// A vote of an unflagged value.
+    /// A vote for a block hash and its execution result.
     pub fn vote_value(
         &self,
         kind: VoteKind,
@@ -962,7 +961,7 @@ impl H {
         }
     }
 
-    /// An unflagged block of any height with an explicit parent and proposer.
+    /// A block of any height with an explicit parent and proposer.
     pub fn block_at(
         &self,
         height: u64,

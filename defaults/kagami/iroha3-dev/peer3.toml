@@ -18,12 +18,6 @@ trusted_peers_pop = [
   { public_key = "ea013089E0110B3F07AB1CEFAC930756E4DBC25E37D606E4D03513BF4C744DA0F6134DE8B7E52749511C823C230672F736C304", pop_hex = "810957f8c36f3db895f02157573187fb4aadc21256c9cb837369697a2d605942ea8b53880c8f7842d4b7e58ac037cc340afbae35f05adbaad21782e9c80a952318f217e197a8ecbb7ddf4af4633bab3e8256663244aa3fc12c2a08cf93436776" }
 ]
 
-# Required operator-owned Load-role keyring and ordinary ledger submitter.
-# Missing or unadmitted custody prevents validator startup; no enable switch exists.
-[kagemusha_load_authorizer]
-keyring_file = "kagemusha-load-authorizer-peer-3-keyring.nrt"
-submitter_key_file = "kagemusha-load-authorizer-peer-3-submitter-private-key"
-
 [sumeragi]
 role = "validator"
 

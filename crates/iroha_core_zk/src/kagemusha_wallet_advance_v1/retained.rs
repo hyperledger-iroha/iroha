@@ -177,6 +177,9 @@ impl KagemushaWalletTombstoneV1 {
 
 /// Answer of a lookup by operation identity (design `lookup`). `Unknown` means only that no
 /// selected head is recorded here; the state owner's current head stays authoritative.
+// Keep the selected digest inline: its fixed 32 bytes outweigh a Box on 32-bit
+// targets, but adding an allocation would not improve this bounded lookup result.
+#[cfg_attr(target_pointer_width = "32", allow(variant_size_differences))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KagemushaWalletLookupV1<R> {
     /// The released result, byte-identical on every call.

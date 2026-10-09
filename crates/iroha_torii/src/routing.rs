@@ -370,11 +370,19 @@ impl DataspaceReadVisibility {
         world: &impl WorldReadOnly,
         definition_id: &AssetDefinitionId,
     ) -> bool {
-        self.can_read_all
-            || world
-                .asset_definition_domains()
-                .get(definition_id)
-                .is_some_and(|domain| self.allows_domain(world, domain))
+        if self.can_read_all {
+            return true;
+        }
+        // The immutable home determines definition visibility. A holder's bucket or
+        // a mutable alias must never grant access to another namespace's definition.
+        // Global definitions have no owning domain or direct-dataspace binding.
+        use iroha_data_model::asset::AssetDefinitionHome;
+        match world.asset_definition_home(definition_id) {
+            Ok(Some(AssetDefinitionHome::Global)) => self.allows_dataspace(DataSpaceId::UNIVERSAL),
+            Ok(Some(AssetDefinitionHome::Domain(domain))) => self.allows_domain(world, &domain),
+            Ok(Some(AssetDefinitionHome::Dataspace(dataspace))) => self.allows_dataspace(dataspace),
+            Ok(None) | Err(_) => false,
+        }
     }
 
     /// Return whether an asset bucket and its holder belong only to visible routes.
@@ -2802,59 +2810,70 @@ pub struct RamLfeProgramPolicyListDto {
     pub total: u64,
     pub items: Vec<RamLfeProgramPolicySummaryDto>,
 }
-(Debug, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
-/// Execute one RAM-LFE program from a BFV-encrypted input.
+(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
+/// Evaluate an exact signed ledger owner input under the native PRF.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::RamLfeExecuteRequestDto")]
 pub struct RamLfeExecuteRequestDto {
-    pub encrypted_input: String,
+    pub normalized_input: String,
+    pub input_nonce: String,
 }
 }
 impl norito::json::JsonDeserialize for RamLfeExecuteRequestDto {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
+    fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
         let mut object = norito::json::MapVisitor::new(parser)?;
-        let mut encrypted_input = None;
+        let mut normalized_input: Option<zeroize::Zeroizing<String>> = None;
+        let mut input_nonce: Option<zeroize::Zeroizing<String>> = None;
         while let Some(key) = object.next_key()? {
             match key.as_str() {
-                "encrypted_input" => {
-                    if encrypted_input.is_some() {
-                        return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
-                    }
-                    encrypted_input = Some(object.parse_value::<String>()?);
+                "normalized_input" => {
+                    if normalized_input.is_some() { return Err(norito::json::MapVisitor::duplicate_field(key.as_str())); }
+                    normalized_input = Some(zeroize::Zeroizing::new(object.parse_value::<String>()?));
+                }
+                "input_nonce" => {
+                    if input_nonce.is_some() { return Err(norito::json::MapVisitor::duplicate_field(key.as_str())); }
+                    input_nonce = Some(zeroize::Zeroizing::new(object.parse_value::<String>()?));
                 }
                 other => return Err(norito::json::MapVisitor::unknown_field(other)),
             }
         }
         object.finish()?;
+        let normalized_input = normalized_input.ok_or_else(|| norito::json::MapVisitor::missing_field("normalized_input"))?;
+        let input_nonce = input_nonce.ok_or_else(|| norito::json::MapVisitor::missing_field("input_nonce"))?;
         Ok(Self {
-            encrypted_input: encrypted_input
-                .ok_or_else(|| norito::json::MapVisitor::missing_field("encrypted_input"))?,
+            normalized_input: normalized_input.to_string(),
+            input_nonce: input_nonce.to_string(),
         })
     }
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
-        let object = value.as_object().ok_or_else(|| {
-            norito::json::Error::Message("expected RAM-LFE execute request object".into())
-        })?;
-        let mut encrypted_input = None;
+        let object = value.as_object().ok_or_else(|| norito::json::Error::Message("expected owner PRF request object".into()))?;
+        let mut normalized_input: Option<zeroize::Zeroizing<String>> = None;
+        let mut input_nonce: Option<zeroize::Zeroizing<String>> = None;
         for (key, value) in object {
             match key.as_str() {
-                "encrypted_input" => {
-                    if encrypted_input.is_some() {
-                        return Err(norito::json::Error::duplicate_field(key));
-                    }
-                    encrypted_input = Some(
-                        <String as norito::json::JsonDeserialize>::json_from_value(value)?,
-                    );
+                "normalized_input" => {
+                    if normalized_input.is_some() { return Err(norito::json::Error::duplicate_field(key.as_str())); }
+                    normalized_input = Some(zeroize::Zeroizing::new(<String as norito::json::JsonDeserialize>::json_from_value(value)?));
+                }
+                "input_nonce" => {
+                    if input_nonce.is_some() { return Err(norito::json::Error::duplicate_field(key.as_str())); }
+                    input_nonce = Some(zeroize::Zeroizing::new(<String as norito::json::JsonDeserialize>::json_from_value(value)?));
                 }
                 other => return Err(norito::json::Error::unknown_field(other)),
             }
         }
+        let normalized_input = normalized_input.ok_or_else(|| norito::json::Error::missing_field("normalized_input"))?;
+        let input_nonce = input_nonce.ok_or_else(|| norito::json::Error::missing_field("input_nonce"))?;
         Ok(Self {
-            encrypted_input: encrypted_input
-                .ok_or_else(|| norito::json::Error::missing_field("encrypted_input"))?,
+            normalized_input: normalized_input.to_string(),
+            input_nonce: input_nonce.to_string(),
         })
+    }
+}
+impl Drop for RamLfeExecuteRequestDto {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.normalized_input);
+        zeroize::Zeroize::zeroize(&mut self.input_nonce);
     }
 }
 derived_items! {
@@ -2862,9 +2881,12 @@ derived_items! {
 /// Successful response emitted by `/v1/ram-lfe/programs/{program_id}/execute`.
 pub struct RamLfeExecuteResponseDto {
     pub program_id: String,
+    /// Original native canonical ProgramId frame in uppercase hex (at most 4096 bytes).
+    /// It is DATA bound by the signed receipt associated_data_hash, not a new authority.
+    pub program_id_canonical: String,
     pub opaque_hash: String,
     pub receipt_hash: String,
-    pub output_ciphertext: String,
+    pub opaque_output: String,
     pub output_hash: String,
     pub associated_data_hash: String,
     pub executed_at_ms: u64,
@@ -2965,55 +2987,59 @@ pub struct IdentifierPolicyListDto {
     pub total: u64,
     pub items: Vec<IdentifierPolicySummaryDto>,
 }
-(Debug, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
-/// Resolve an encrypted identifier under one policy namespace.
+(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
+/// Current signed owner prepare/claim schema; no encrypted predecessor.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::IdentifierResolveRequestDto")]
 pub struct IdentifierResolveRequestDto {
+    pub phase: String,
     pub policy_id: String,
-    pub encrypted_input: String,
-    pub output_opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
+    pub normalized_input: String,
+    pub input_nonce: String,
     #[norito(default)]
-    pub phone_retail_canonicality:
-        Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub output_opening: Option<iroha_data_model::ram_lfe::RamLfeOutputOpening>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub phone_retail_canonicality: Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1>,
 }
 }
 impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
+    fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
         let mut object = norito::json::MapVisitor::new(parser)?;
+        let mut phase = None;
         let mut policy_id = None;
-        let mut encrypted_input = None;
+        let mut normalized_input: Option<zeroize::Zeroizing<String>> = None;
+        let mut input_nonce: Option<zeroize::Zeroizing<String>> = None;
         let mut output_opening = None;
+        let mut seen_output_opening = false;
         let mut phone_retail_canonicality = None;
         let mut seen_phone_retail_canonicality = false;
         while let Some(key) = object.next_key()? {
             match key.as_str() {
+                "phase" => {
+                    if phase.is_some() { return Err(norito::json::MapVisitor::duplicate_field(key.as_str())); }
+                    phase = Some(object.parse_value::<String>()?);
+                }
                 "policy_id" => {
-                    if policy_id.is_some() {
-                        return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
-                    }
+                    if policy_id.is_some() { return Err(norito::json::MapVisitor::duplicate_field(key.as_str())); }
                     policy_id = Some(object.parse_value::<String>()?);
                 }
-                "encrypted_input" => {
-                    if encrypted_input.is_some() {
-                        return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
-                    }
-                    encrypted_input = Some(object.parse_value::<String>()?);
+                "normalized_input" => {
+                    if normalized_input.is_some() { return Err(norito::json::MapVisitor::duplicate_field(key.as_str())); }
+                    normalized_input = Some(zeroize::Zeroizing::new(object.parse_value::<String>()?));
+                }
+                "input_nonce" => {
+                    if input_nonce.is_some() { return Err(norito::json::MapVisitor::duplicate_field(key.as_str())); }
+                    input_nonce = Some(zeroize::Zeroizing::new(object.parse_value::<String>()?));
                 }
                 "output_opening" => {
-                    if output_opening.is_some() {
-                        return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
-                    }
-                    output_opening = Some(
-                        object.parse_value::<iroha_data_model::ram_lfe::RamLfeOutputOpening>()?,
-                    );
+                    if seen_output_opening { return Err(norito::json::MapVisitor::duplicate_field(key.as_str())); }
+                    seen_output_opening = true;
+                    output_opening = object.parse_value::<Option<iroha_data_model::ram_lfe::RamLfeOutputOpening>>()?;
                 }
                 "phone_retail_canonicality" => {
-                    if seen_phone_retail_canonicality {
-                        return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
-                    }
+                    if seen_phone_retail_canonicality { return Err(norito::json::MapVisitor::duplicate_field(key.as_str())); }
                     seen_phone_retail_canonicality = true;
                     phone_retail_canonicality = object.parse_value::<Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1>>()?;
                 }
@@ -3021,72 +3047,93 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
             }
         }
         object.finish()?;
+        let phase = phase.ok_or_else(|| norito::json::MapVisitor::missing_field("phase"))?;
+        let policy_id = policy_id.ok_or_else(|| norito::json::MapVisitor::missing_field("policy_id"))?;
+        let normalized_input = normalized_input.ok_or_else(|| norito::json::MapVisitor::missing_field("normalized_input"))?;
+        let input_nonce = input_nonce.ok_or_else(|| norito::json::MapVisitor::missing_field("input_nonce"))?;
         Ok(Self {
-            policy_id: policy_id
-                .ok_or_else(|| norito::json::MapVisitor::missing_field("policy_id"))?,
-            encrypted_input: encrypted_input
-                .ok_or_else(|| norito::json::MapVisitor::missing_field("encrypted_input"))?,
-            output_opening: output_opening
-                .ok_or_else(|| norito::json::MapVisitor::missing_field("output_opening"))?,
+            phase,
+            policy_id,
+            normalized_input: normalized_input.to_string(),
+            input_nonce: input_nonce.to_string(),
+            output_opening,
             phone_retail_canonicality,
         })
     }
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
-        let object = value.as_object().ok_or_else(|| {
-            norito::json::Error::Message("expected identifier resolve request object".into())
-        })?;
+        let object = value.as_object().ok_or_else(|| norito::json::Error::Message("expected owner PRF request object".into()))?;
+        let mut phase = None;
         let mut policy_id = None;
-        let mut encrypted_input = None;
+        let mut normalized_input: Option<zeroize::Zeroizing<String>> = None;
+        let mut input_nonce: Option<zeroize::Zeroizing<String>> = None;
         let mut output_opening = None;
+        let mut seen_output_opening = false;
         let mut phone_retail_canonicality = None;
         let mut seen_phone_retail_canonicality = false;
         for (key, value) in object {
             match key.as_str() {
-                "policy_id" => {
-                    if policy_id.is_some() {
-                        return Err(norito::json::Error::duplicate_field(key));
-                    }
-                    policy_id = Some(<String as norito::json::JsonDeserialize>::json_from_value(
-                        value,
-                    )?);
+                "phase" => {
+                    if phase.is_some() { return Err(norito::json::Error::duplicate_field(key.as_str())); }
+                    phase = Some(<String as norito::json::JsonDeserialize>::json_from_value(value)?);
                 }
-                "encrypted_input" => {
-                    if encrypted_input.is_some() {
-                        return Err(norito::json::Error::duplicate_field(key));
-                    }
-                    encrypted_input = Some(
-                        <String as norito::json::JsonDeserialize>::json_from_value(value)?,
-                    );
+                "policy_id" => {
+                    if policy_id.is_some() { return Err(norito::json::Error::duplicate_field(key.as_str())); }
+                    policy_id = Some(<String as norito::json::JsonDeserialize>::json_from_value(value)?);
+                }
+                "normalized_input" => {
+                    if normalized_input.is_some() { return Err(norito::json::Error::duplicate_field(key.as_str())); }
+                    normalized_input = Some(zeroize::Zeroizing::new(<String as norito::json::JsonDeserialize>::json_from_value(value)?));
+                }
+                "input_nonce" => {
+                    if input_nonce.is_some() { return Err(norito::json::Error::duplicate_field(key.as_str())); }
+                    input_nonce = Some(zeroize::Zeroizing::new(<String as norito::json::JsonDeserialize>::json_from_value(value)?));
                 }
                 "output_opening" => {
-                    if output_opening.is_some() {
-                        return Err(norito::json::Error::duplicate_field(key));
-                    }
-                    output_opening = Some(
-                        <iroha_data_model::ram_lfe::RamLfeOutputOpening as norito::json::JsonDeserialize>::json_from_value(value)?,
-                    );
+                    if seen_output_opening { return Err(norito::json::Error::duplicate_field(key.as_str())); }
+                    seen_output_opening = true;
+                    output_opening = <Option<iroha_data_model::ram_lfe::RamLfeOutputOpening> as norito::json::JsonDeserialize>::json_from_value(value)?;
                 }
                 "phone_retail_canonicality" => {
-                    if seen_phone_retail_canonicality {
-                        return Err(norito::json::Error::duplicate_field(key));
-                    }
+                    if seen_phone_retail_canonicality { return Err(norito::json::Error::duplicate_field(key.as_str())); }
                     seen_phone_retail_canonicality = true;
                     phone_retail_canonicality = <Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1> as norito::json::JsonDeserialize>::json_from_value(value)?;
                 }
                 other => return Err(norito::json::Error::unknown_field(other)),
             }
         }
+        let phase = phase.ok_or_else(|| norito::json::Error::missing_field("phase"))?;
+        let policy_id = policy_id.ok_or_else(|| norito::json::Error::missing_field("policy_id"))?;
+        let normalized_input = normalized_input.ok_or_else(|| norito::json::Error::missing_field("normalized_input"))?;
+        let input_nonce = input_nonce.ok_or_else(|| norito::json::Error::missing_field("input_nonce"))?;
         Ok(Self {
-            policy_id: policy_id.ok_or_else(|| norito::json::Error::missing_field("policy_id"))?,
-            encrypted_input: encrypted_input
-                .ok_or_else(|| norito::json::Error::missing_field("encrypted_input"))?,
-            output_opening: output_opening
-                .ok_or_else(|| norito::json::Error::missing_field("output_opening"))?,
+            phase,
+            policy_id,
+            normalized_input: normalized_input.to_string(),
+            input_nonce: input_nonce.to_string(),
+            output_opening,
             phone_retail_canonicality,
         })
     }
 }
+impl Drop for IdentifierResolveRequestDto {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.normalized_input);
+        zeroize::Zeroize::zeroize(&mut self.input_nonce);
+    }
+}
 derived_items! {
+(Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
+/// Original native opening and beneficiary scope for independent phone attestation.
+pub struct IdentifierPrfPrepareResponseDto {
+    /// Exact genesis identity in lowercase raw32 hex.
+    pub network_id: String,
+    pub policy_id: String,
+    pub account_id: String,
+    pub uaid: String,
+    pub output_opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub phone_retail_canonicality_payload: Option<iroha_data_model::identifier::PhoneRetailCanonicalityPayloadV1>,
+}
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Successful response emitted by `/v1/identifiers/resolve`.
 pub struct IdentifierResolveResponseDto {
@@ -3098,107 +3145,24 @@ pub struct IdentifierResolveResponseDto {
 }
 }
 #[cfg(all(test, feature = "app_api"))]
-mod ram_lfe_encrypted_only_request_dto_tests {
+mod identifier_owner_prf_request_dto_tests {
     use super::*;
-    routing_test! { sync ram_lfe_execute_request_rejects_legacy_plaintext_fields
-        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(
-            r#"{"encrypted_input":"ciphertext","input_hex":"74657374"}"#,
-        )
-        .expect_err("RAM-LFE execute requests must reject plaintext input_hex");
-        assert!(error.to_string().contains("input_hex"));
-        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(
-            r#"{"encrypted_input":"ciphertext","plaintext":"test"}"#,
-        )
-        .expect_err("RAM-LFE execute requests must reject plaintext aliases");
-        assert!(error.to_string().contains("plaintext"));
+    routing_test! { sync owner_prf_dto_accepts_only_exact_required_current_fields
+        let execute = r#"{"normalized_input":"alice","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+        assert!(norito::json::from_str::<RamLfeExecuteRequestDto>(execute).is_ok());
+        for input in [r#"{}"#, r#"[]"#, r#"{"normalized_input":1,"input_nonce":"a"}"#, r#"{"normalized_input":"alice"}"#, r#"{"encrypted_input":"ciphertext"}"#, r#"{"normalized_input":"a","normalized_input":"b","input_nonce":"a"}"#, r#"{"normalized_input":"a","input_nonce":"a","input_nonce":"b"}"#, r#"{"normalized_input":"a","input_nonce":"a","input":"b"}"#] {
+            assert!(norito::json::from_str::<RamLfeExecuteRequestDto>(input).is_err(), "{input}");
+        }
     }
-    routing_test! { sync ram_lfe_execute_request_rejects_missing_or_non_string_ciphertext
-        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(r#"{}"#)
-            .expect_err("encrypted input is mandatory");
-        assert!(error.to_string().contains("encrypted_input"));
-        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(r#"{"encrypted_input":123}"#)
-            .expect_err("encrypted input must be a string envelope");
-        assert!(
-            !error.to_string().is_empty(),
-            "non-string ciphertext rejection should report an error"
-        );
-        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(r#"["ciphertext"]"#)
-            .expect_err("RAM-LFE execute request must be a JSON object");
-        assert!(error.to_string().contains("object"));
+    routing_test! { sync owner_claim_dto_rejects_retired_duplicate_and_unknown_fields
+        let current = r#"{"phase":"prepare","policy_id":"phone#retail","normalized_input":"+6771234567","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+        assert!(norito::json::from_str::<IdentifierResolveRequestDto>(current).is_ok());
+        for input in [r#"{"policy_id":"phone#retail","encrypted_input":"ciphertext"}"#, r#"{"phase":"prepare","phase":"claim","policy_id":"p","normalized_input":"a","input_nonce":"a"}"#, r#"{"phase":"claim","policy_id":"p","normalized_input":"a","input_nonce":"a","output_opening":null,"output_opening":null}"#, r#"{"phase":"claim","policy_id":"p","normalized_input":"a","input_nonce":"a","phone_retail_canonicality":null,"phone_retail_canonicality":null}"#] {
+            assert!(norito::json::from_str::<IdentifierResolveRequestDto>(input).is_err(), "{input}");
+        }
     }
-    routing_test! { sync ram_lfe_execute_request_rejects_ciphertext_alias_fields
-        let error =
-            norito::json::from_str::<RamLfeExecuteRequestDto>(r#"{"encryptedInput":"ciphertext"}"#)
-                .expect_err("camelCase encrypted-input aliases must be rejected");
-        assert!(error.to_string().contains("encryptedInput"));
-        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(
-            r#"{"encrypted_input":"ciphertext","ciphertext":"legacy-alias"}"#,
-        )
-        .expect_err("ciphertext aliases must be rejected");
-        assert!(error.to_string().contains("ciphertext"));
-        let error = norito::json::from_str::<RamLfeExecuteRequestDto>(
-            r#"{"encrypted_input":"ciphertext-a","encrypted_input":"ciphertext-b"}"#,
-        )
-        .expect_err("duplicate encrypted inputs must be rejected");
-        assert!(error.to_string().contains("encrypted_input"));
-    }
-    routing_test! { sync identifier_resolve_request_rejects_legacy_plaintext_fields
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext","input_hex":"74657374"}"#,
-        )
-        .expect_err("identifier resolution must reject plaintext input_hex");
-        assert!(error.to_string().contains("input_hex"));
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext","identifier":"alice"}"#,
-        )
-        .expect_err("identifier resolution must reject plaintext identifier aliases");
-        assert!(error.to_string().contains("identifier"));
-    }
-    routing_test! { sync identifier_resolve_request_requires_opening_and_encrypted_input
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext"}"#,
-        )
-        .expect_err("identifier resolution requires an external output opening");
-        assert!(error.to_string().contains("output_opening"));
-        let error =
-            norito::json::from_str::<IdentifierResolveRequestDto>(r#"{"policy_id":"policy"}"#)
-                .expect_err("encrypted input is mandatory");
-        assert!(error.to_string().contains("encrypted_input"));
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"encrypted_input":"ciphertext"}"#,
-        )
-        .expect_err("policy id is mandatory");
-        assert!(error.to_string().contains("policy_id"));
-    }
-    routing_test! { sync identifier_resolve_request_rejects_malformed_encrypted_fields
-        use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":123,"encrypted_input":"ciphertext","output_opening":{}}"#,
-        )
-        .expect_err("policy ids must be strings");
-        assert!(
-            !error.to_string().is_empty(),
-            "non-string policy id rejection should report an error"
-        );
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":"policy","encrypted_input":{"hex":"ciphertext"},"output_opening":{}}"#,
-        )
-        .expect_err("encrypted input must be a string envelope");
-        assert!(
-            !error.to_string().is_empty(),
-            "non-string encrypted input rejection should report an error"
-        );
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":"policy-a","policy_id":"policy-b","encrypted_input":"ciphertext","output_opening":{}}"#,
-        )
-        .expect_err("duplicate policy ids must be rejected");
-        assert!(error.to_string().contains("policy_id"));
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext-a","encrypted_input":"ciphertext-b","output_opening":{}}"#,
-        )
-        .expect_err("duplicate encrypted inputs must be rejected");
-        assert!(error.to_string().contains("encrypted_input"));
+    routing_test! { sync current_owner_request_preserves_nested_opening_strictness
         let signer = KeyPair::try_from_seed(vec![0x35; 32], Algorithm::Ed25519)
             .expect("derive output-opening fixture key");
         let payload = iroha_data_model::ram_lfe::RamLfeOutputOpeningPayload {
@@ -3219,7 +3183,7 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         };
         let opening_json = norito::json::to_string(&opening).expect("encode output-opening fixture");
         let duplicate_opening = [
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening": "#,
+            r#"{"policy_id":"policy","phase":"claim","normalized_input":"alice","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","output_opening": "#,
             opening_json.as_str(),
             r#","output_opening": "#,
             opening_json.as_str(),
@@ -3230,7 +3194,7 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         .expect_err("duplicate output openings must be rejected");
         assert!(error.to_string().contains("output_opening"));
         let valid_request = [
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening": "#,
+            r#"{"policy_id":"policy","phase":"claim","normalized_input":"alice","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","output_opening": "#,
             opening_json.as_str(),
             "}",
         ]
@@ -3244,7 +3208,7 @@ mod ram_lfe_encrypted_only_request_dto_tests {
             opening_json.replacen("\"program_id\":", &duplicate_program_id_key, 1);
         assert_ne!(duplicate_opening_json, opening_json, "fixture has program_id");
         let nested_duplicate = [
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening": "#,
+            r#"{"policy_id":"policy","phase":"claim","normalized_input":"alice","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","output_opening": "#,
             duplicate_opening_json.as_str(),
             "}",
         ]
@@ -3253,7 +3217,7 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         .expect_err("nested duplicate output-opening fields must be rejected");
         assert!(error.to_string().contains("program_id"), "{error}");
         let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":"not-an-opening"}"#,
+            r#"{"policy_id":"policy","phase":"claim","normalized_input":"alice","input_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","output_opening":"not-an-opening"}"#,
         )
         .expect_err("output openings must be structured attestation objects");
         assert!(
@@ -3261,18 +3225,41 @@ mod ram_lfe_encrypted_only_request_dto_tests {
             "non-object output opening rejection should report an error"
         );
     }
+
 }
+
 derived_items! {
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Canonical public identifier-resolution receipt payload.
 pub struct IdentifierResolutionReceiptPayloadDto {
+    /// Mandatory first signed Model field, projected as lowercase raw32 hex.
+    pub network_id: String,
     pub policy_id: String,
     pub execution: RamLfeExecutionReceiptPayloadDto,
-    pub opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
+    pub opening: IdentifierOutputOpeningDto,
     pub opaque_id: String,
     pub receipt_hash: String,
     pub uaid: String,
     pub account_id: String,
+}
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
+/// Flat public receipt opening; prepare and claim requests retain the original typed Model grammar.
+pub struct IdentifierOutputOpeningDto {
+    pub payload: IdentifierOutputOpeningPayloadDto,
+    pub signature: String,
+}
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
+/// Exact public opening projection with canonical lower hexadecimal hashes.
+pub struct IdentifierOutputOpeningPayloadDto {
+    pub program_id: String,
+    pub input_ciphertext_hash: String,
+    pub output_ciphertext_hash: String,
+    pub parameter_digest: String,
+    pub evaluation_key_digest: String,
+    pub opened_output_hash: String,
+    pub opened_at_ms: u64,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<u64>,
 }
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Persisted identifier-claim binding returned by receipt-hash lookup.
@@ -36552,6 +36539,160 @@ mod explorer_lookup_tests {
         (state, public_dataspace, definition_id)
     }
 
+    routing_test! { async global_asset_collection_keeps_exact_holder_and_immutable_home_visibility
+        let (owner, _) = checked_explorer_lookup_account(0x35, "global balance collection owner");
+        let (other, _) = checked_explorer_lookup_account(0x36, "other global balance holder");
+        let private_home = DomainId::try_new("cash", "restricted").expect("private home");
+        let global: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().expect("global XOR");
+        let private = AssetDefinitionId::derive_from_components(private_home.clone(), "private".parse().unwrap());
+        let unknown = AssetDefinitionId::derive_from_components(private_home.clone(), "absent".parse().unwrap());
+        let definition = |id, name, home| dm::AssetDefinition::numeric(
+            id, name, iroha_data_model::asset::AssetBalancePolicy::Global, home,
+        ).build(&owner);
+        let mut world = World::with_assets(
+            [dm::Domain::new(private_home.clone()).build(&owner)],
+            [dm::Account::new(owner.clone()).build(&owner), dm::Account::new(other.clone()).build(&other)],
+            [definition(global.clone(), "XOR", None), definition(private.clone(), "Private", Some(private_home))],
+            [
+                dm::Asset::new(dm::AssetId::new(global.clone(), owner.clone()), iroha_primitives::numeric::Quantity::from(10_u32)),
+                dm::Asset::new(dm::AssetId::new(global.clone(), other.clone()), iroha_primitives::numeric::Quantity::from(99_u32)),
+                dm::Asset::new(dm::AssetId::new(private.clone(), owner.clone()), iroha_primitives::numeric::Quantity::from(7_u32)),
+            ],
+            [],
+        );
+        crate::test_utils::bind_fixture_root(&mut world, iroha_data_model::block::consensus::SumeragiRootScope::Global);
+        let private_dataspace = DataSpaceId::new(7);
+        let catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: private_dataspace, alias: "restricted".to_owned(), description: None, fault_tolerance: 1,
+            },
+        ]).expect("global and private catalog");
+        let state = Arc::new(State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus { dataspace_catalog: catalog, ..Default::default() },
+            LiveQueryStore::start_test(),
+        ));
+        let visibility = DataspaceReadVisibility::exact_account(BTreeSet::from([DataSpaceId::UNIVERSAL]), owner.clone());
+        {
+            let world = state.world_view();
+            assert!(world.asset_definitions().get(&global).unwrap().alias().is_none());
+            assert!(visibility.allows_asset_definition(&world, &global), "global home does not require an alias or domain binding");
+            assert!(!visibility.allows_asset_definition(&world, &private), "a global balance policy does not reveal a private definition home");
+            assert!(!visibility.allows_asset_definition(&world, &unknown));
+            assert!(!visibility.allows_asset(&world, &dm::AssetId::new(global.clone(), other)), "an exact holder read must not expose another holder");
+            let private_only = DataspaceReadVisibility::new(BTreeSet::from([private_dataspace]), false);
+            assert!(!private_only.allows_asset_definition(&world, &global));
+            assert!(private_only.allows_asset_definition(&world, &private));
+        }
+        let page = collection_sources::execute_collection_local(
+            None,
+            &state,
+            &collection_sources::CollectionTarget::AccountAssets(owner.to_string()),
+            iroha_torii_shared::list_query::ListQuery::new(),
+            &MaybeTelemetry::for_tests(),
+            &visibility,
+        ).await.expect("exact holder global balance collection");
+        assert_eq!(page.items.len(), 1, "global balance appears without private-home or other-holder balances");
+        assert_eq!(page.items[0]["asset"].as_str(), Some(global.to_string().as_str()));
+        assert_eq!(page.items[0]["account_id"].as_str(), Some(owner.to_string().as_str()));
+        assert_eq!(page.items[0]["scope"].as_str(), Some("global"));
+        assert_eq!(page.items[0]["quantity"].as_str(), Some("10"));
+    }
+
+    routing_test! { sync definition_visibility_rejects_a_restricted_definition_without_a_home
+        let (owner, _) = checked_explorer_lookup_account(0x37, "invalid restricted definition owner");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("cash", "universal").unwrap(), "invalid".parse().unwrap(),
+        );
+        let definition = dm::AssetDefinition::numeric(
+            definition_id.clone(), "Invalid", iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted, None,
+        ).build(&owner);
+        let home = DataSpaceId::new(7);
+        let mut world = World::with([], [dm::Account::new(owner.clone()).build(&owner)], []);
+        world
+            .insert_direct_asset_definition_with_assets_for_testing(definition, home, [])
+            .expect("admitted direct-home fixture");
+        let visibility = DataspaceReadVisibility::new(BTreeSet::from([home, DataSpaceId::UNIVERSAL]), false);
+        assert!(visibility.allows_asset_definition(&world.view(), &definition_id));
+        {
+            // Seed corruption only inside an uncommitted test checkpoint. The
+            // production constructor correctly rejects this malformed home.
+            let mut block = world.block();
+            let mut tx = block.transaction_without_telemetry(
+                iroha_config::parameters::actual::LaneConfig::default(), 0,
+            );
+            let empty_registry = iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1 {
+                version: iroha_data_model::asset::AssetDefinitionDataspaceRegistryV1::VERSION,
+                bindings: BTreeMap::new(),
+            };
+            tx.parameters_mut_for_testing().get_mut().set_parameter(
+                iroha_data_model::parameter::Parameter::Custom(empty_registry.into_custom_parameter().unwrap()),
+            );
+            assert!(tx.asset_definitions().get(&definition_id).is_some());
+            assert!(tx.asset_definition_home(&definition_id).is_err());
+            assert!(!visibility.allows_asset_definition(&*tx, &definition_id));
+        }
+        assert!(visibility.allows_asset_definition(&world.view(), &definition_id));
+    }
+
+    routing_test! { sync direct_dataspace_definition_visibility_uses_immutable_home
+        let (owner, _) = checked_explorer_lookup_account(0x33, "direct definition visibility owner");
+        let home = DataSpaceId::new(8_648_377_547_929_788_715);
+        let other = DataSpaceId::new(8);
+        let definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("cash", "public").expect("id seed"),
+            "kina".parse().expect("name"),
+        );
+        let mut definition = dm::AssetDefinition::numeric(
+            definition_id.clone(), "Kina", iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted, None,
+        ).build(&owner);
+        definition.alias = Some("kina#public".parse().expect("non-authoritative alias"));
+        let mut world = World::default();
+        world
+            .insert_direct_asset_definition_with_assets_for_testing(definition, home, [])
+            .expect("direct home fixture");
+        let view = world.view();
+        assert!(DataspaceReadVisibility::new(BTreeSet::from([home]), false).allows_asset_definition(&view, &definition_id));
+        assert!(!DataspaceReadVisibility::new(BTreeSet::from([other, DataSpaceId::UNIVERSAL]), false).allows_asset_definition(&view, &definition_id));
+    }
+
+    routing_test! { sync direct_definition_asset_visibility_requires_home_holder_and_bucket
+        let (owner, _) = checked_explorer_lookup_account(0x34, "direct balance visibility owner");
+        let home = DataSpaceId::new(7);
+        let bucket = DataSpaceId::new(8);
+        let definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("cash", "universal").expect("id seed"), "kina".parse().expect("name"),
+        );
+        let definition = dm::AssetDefinition::numeric(
+            definition_id.clone(), "Kina", iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted, None,
+        ).build(&owner);
+        let account = dm::Account::new(owner.clone()).build(&owner);
+        let asset_id = dm::AssetId::with_scope(definition_id.clone(), owner.clone(), iroha_data_model::asset::AssetBalanceScope::Dataspace(bucket));
+        let asset = dm::Asset::new(asset_id.clone(), iroha_primitives::numeric::Quantity::from(1_u32));
+        let mut world = World::with([], [account], []);
+        world
+            .insert_direct_asset_definition_with_assets_for_testing(definition, home, [asset])
+            .expect("direct home fixture");
+        crate::test_utils::bind_fixture_root(&mut world, iroha_data_model::block::consensus::SumeragiRootScope::Global);
+        let catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata { id: home, alias: "home".to_owned(), description: None, fault_tolerance: 1 },
+            iroha_data_model::nexus::DataSpaceMetadata { id: bucket, alias: "bucket".to_owned(), description: None, fault_tolerance: 1 },
+        ]).expect("catalog");
+        let state = Arc::new(State::new_with_pre_genesis_nexus_for_testing(
+            world,
+            iroha_config::parameters::actual::Nexus { dataspace_catalog: catalog, ..Default::default() },
+            LiveQueryStore::start_test(),
+        ));
+        bind_account_alias_for_test(&state, &owner, "holder@universal");
+        let world = state.world_view();
+        for partial in [BTreeSet::from([home, bucket]), BTreeSet::from([home, DataSpaceId::UNIVERSAL]), BTreeSet::from([bucket, DataSpaceId::UNIVERSAL])] {
+            assert!(!DataspaceReadVisibility::new(partial, false).allows_asset(&world, &asset_id));
+        }
+        assert!(DataspaceReadVisibility::new(BTreeSet::from([home, bucket, DataSpaceId::UNIVERSAL]), false).allows_asset(&world, &asset_id));
+    }
+
     routing_test! { sync account_metadata_requires_every_bound_dataspace
         let (state, account_id, public_dataspace, restricted_dataspace) =
             mixed_binding_account_visibility_fixture();
@@ -37919,6 +38060,166 @@ mod explorer_lookup_tests {
             "invalid instruction index should return not found"
         );
     }
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn telemetry_live_polls_owned_history_after_handler_and_releases_each_snapshot() {
+        use iroha_data_model::events::pipeline::{BlockEvent, BlockStatus};
+
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "telemetry".to_owned()).into();
+        let (chain, _) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(vec![instruction])],
+            None,
+            None,
+        );
+        let source = Arc::clone(chain.state());
+        let height = source.committed_height() as u64;
+        assert!(height > 0);
+        let header = crate::history_producer::HistoryProducerOwner::for_test().scope(|| {
+            HistoryReadBudget::new()
+                .read(&source, nonzero_height(height).unwrap())
+                .unwrap()
+                .header()
+                .clone()
+        });
+        let mut app = crate::mk_app_state_for_tests();
+        let working = 48_000_000_usize;
+        let app_mut = Arc::get_mut(&mut app).expect("new test application is uniquely owned");
+        app_mut.query_fanout_working_set_bytes = working;
+        app_mut.query_fanout_inflight = crate::ByteWeightedMemoryPool::new(working).unwrap();
+        let telemetry = MaybeTelemetry::for_tests();
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let response = handle_v1_telemetry_live(
+            source,
+            telemetry.clone(),
+            app.peer_telemetry.clone(),
+            events.clone(),
+            app.clone(),
+        )
+        .unwrap()
+        .into_response();
+        assert!(crate::history_producer::HistoryProducerOwner::current().is_err());
+        let mut body = response.into_body();
+        let first = next_sse_chunk(&mut body).await;
+        assert!(first.starts_with("data: "), "{first}");
+        let payload: norito::json::Value =
+            norito::json::from_str(first.trim_start_matches("data: ").trim()).unwrap();
+        assert_eq!(payload["kind"].as_str(), Some("first"));
+        assert_eq!(payload["network_status"]["block"].as_u64(), Some(height));
+        assert!(!payload["network_status"]["block_created_at"].is_null());
+        assert!(
+            app.query_fanout_inflight
+                .try_acquire_parts([working as u64])
+                .is_some(),
+            "completed scalar snapshot must release its native history backing"
+        );
+        assert!(crate::history_producer::HistoryProducerOwner::current().is_err());
+
+        // The initially due interval tick executes after bootstrap, outside the
+        // handler's task-local scope, and must emit a real changed metric.
+        telemetry
+            .metrics()
+            .await
+            .txs
+            .with_label_values(&["accepted"])
+            .inc();
+        let tick = next_sse_chunk(&mut body).await;
+        assert!(tick.starts_with("data: "), "{tick}");
+        let payload: norito::json::Value =
+            norito::json::from_str(tick.trim_start_matches("data: ").trim()).unwrap();
+        assert_eq!(payload["kind"].as_str(), Some("network_status"));
+        assert_eq!(payload["transactions_accepted"].as_u64(), Some(1));
+
+        telemetry
+            .metrics()
+            .await
+            .txs
+            .with_label_values(&["accepted"])
+            .inc();
+        events
+            .send(
+                BlockEvent {
+                    header,
+                    status: BlockStatus::Committed,
+                }
+                .into(),
+            )
+            .unwrap();
+        let delta = next_sse_chunk(&mut body).await;
+        assert!(delta.starts_with("data: "), "{delta}");
+        let payload: norito::json::Value =
+            norito::json::from_str(delta.trim_start_matches("data: ").trim()).unwrap();
+        assert_eq!(payload["kind"].as_str(), Some("network_status"));
+        assert_eq!(payload["transactions_accepted"].as_u64(), Some(2));
+        assert!(
+            app.query_fanout_inflight
+                .try_acquire_parts([working as u64])
+                .is_some()
+        );
+        assert!(crate::history_producer::HistoryProducerOwner::current().is_err());
+        let retained_app = Arc::downgrade(&app);
+        drop(app);
+        assert!(
+            retained_app.upgrade().is_some(),
+            "deferred stream retains acquisition authority"
+        );
+        drop(body);
+        assert!(
+            retained_app.upgrade().is_none(),
+            "stream drop releases acquisition authority"
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn telemetry_live_refuses_exhausted_history_pool_without_bypassing_admission() {
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "telemetry capacity".to_owned()).into();
+        let (chain, _) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(vec![instruction])],
+            None,
+            None,
+        );
+        let mut app = crate::mk_app_state_for_tests();
+        let working = 48_000_000_usize;
+        let app_mut = Arc::get_mut(&mut app).expect("new test application is uniquely owned");
+        app_mut.query_fanout_working_set_bytes = working;
+        app_mut.query_fanout_inflight = crate::ByteWeightedMemoryPool::new(working).unwrap();
+        let occupied = app
+            .query_fanout_inflight
+            .try_acquire_parts([working as u64])
+            .unwrap();
+        let response = handle_v1_telemetry_live(
+            Arc::clone(chain.state()),
+            MaybeTelemetry::for_tests(),
+            app.peer_telemetry.clone(),
+            app.events.clone(),
+            app.clone(),
+        )
+        .unwrap()
+        .into_response();
+        let mut body = response.into_body();
+        let refused = next_sse_chunk(&mut body).await;
+        assert!(
+            refused.starts_with(':') && refused.contains("error"),
+            "{refused}"
+        );
+        assert!(!refused.contains("data:"));
+        assert!(
+            app.query_fanout_inflight
+                .try_acquire_parts([working as u64])
+                .is_none()
+        );
+        assert!(crate::history_producer::HistoryProducerOwner::current().is_err());
+        drop(body);
+        drop(occupied);
+        assert!(
+            app.query_fanout_inflight
+                .try_acquire_parts([working as u64])
+                .is_some()
+        );
+    }
     routing_test! { async explorer_sse_lag_is_machine_readable_and_terminal
         let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "initial".to_owned()).into();
         let (mut chain, _) = build_chain_with_executables_and_route_plans(
@@ -39251,9 +39552,11 @@ struct TelemetryLiveState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     ticker: tokio::time::Interval,
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     telemetry: MaybeTelemetry,
     peer_telemetry: Arc<crate::telemetry::peers::PeerTelemetryService>,
+    // Retain acquisition authority across deferred body polls, not one cumulative
+    // producer budget for an unbounded stream. Each snapshot admits its own read.
+    history_app: crate::SharedAppState,
     pending: VecDeque<SseEvent>,
     bootstrap_pending: bool,
     prev_peers_info: BTreeMap<String, String>,
@@ -39265,10 +39568,10 @@ struct TelemetryLiveState {
 /// GET `/v1/telemetry/live` — SSE stream with peer and network telemetry deltas.
 pub fn handle_v1_telemetry_live(
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     telemetry: MaybeTelemetry,
     peer_telemetry: Arc<crate::telemetry::peers::PeerTelemetryService>,
     events: EventsSender,
+    history_app: crate::SharedAppState,
 ) -> Result<Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>>, Error> {
     if !telemetry.allows_metrics() {
         return Err(Error::telemetry_profile_forbidden(
@@ -39283,9 +39586,9 @@ pub fn handle_v1_telemetry_live(
             rx: events.subscribe(),
             ticker,
             state,
-            kura,
             telemetry,
             peer_telemetry,
+            history_app,
             pending: VecDeque::new(),
             bootstrap_pending: true,
             prev_peers_info: BTreeMap::new(),
@@ -39302,9 +39605,9 @@ pub fn handle_v1_telemetry_live(
                 if state.bootstrap_pending {
                     match collect_telemetry_live_snapshot(
                         state.state.clone(),
-                        state.kura.clone(),
                         state.telemetry.clone(),
                         state.peer_telemetry.clone(),
+                        &state.history_app,
                     )
                     .await
                     {
@@ -39329,9 +39632,9 @@ pub fn handle_v1_telemetry_live(
                     _ = state.ticker.tick() => {
                         match collect_telemetry_live_snapshot(
                             state.state.clone(),
-                            state.kura.clone(),
                             state.telemetry.clone(),
                             state.peer_telemetry.clone(),
+                            &state.history_app,
                         ).await {
                             Ok(snapshot) => enqueue_telemetry_deltas(&mut state, snapshot),
                             Err(error) => {
@@ -39347,10 +39650,10 @@ pub fn handle_v1_telemetry_live(
                         match recv {
                             Ok(event_box) => {
                                 if committed_block_height(&event_box).is_some() {
-                                    match explorer_network_metrics_snapshot(
+                                    match telemetry_live_network_metrics_snapshot(
                                         state.state.clone(),
-                                        state.kura.clone(),
                                         &state.telemetry,
+                                        &state.history_app,
                                     ).await {
                                         Ok(network) => enqueue_telemetry_network_delta(&mut state, network),
                                         Err(error) => {
@@ -39383,12 +39686,13 @@ pub fn handle_v1_telemetry_live(
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn collect_telemetry_live_snapshot(
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     telemetry: MaybeTelemetry,
     peer_telemetry: Arc<crate::telemetry::peers::PeerTelemetryService>,
+    history_app: &crate::SharedAppState,
 ) -> Result<TelemetryLiveSnapshot, Error> {
     let peer_snapshot = peer_telemetry.snapshot().await;
-    let network_status = explorer_network_metrics_snapshot(state, kura, &telemetry).await?;
+    let network_status =
+        telemetry_live_network_metrics_snapshot(state, &telemetry, history_app).await?;
     Ok(TelemetryLiveSnapshot {
         peers_info: peer_snapshot.peers_info,
         peers_status: peer_snapshot.peers_status,
@@ -39396,6 +39700,20 @@ async fn collect_telemetry_live_snapshot(
         network_status,
     })
 }
+#[cfg(all(feature = "app_api", feature = "telemetry"))]
+async fn telemetry_live_network_metrics_snapshot(
+    state: Arc<CoreState>,
+    telemetry: &MaybeTelemetry,
+    app: &crate::SharedAppState,
+) -> Result<crate::explorer::ExplorerNetworkMetricsDto, Error> {
+    let reservation = crate::try_acquire_new_query_fanout_memory(app)
+        .map_err(|_| crate::native_projection_response::capacity())?;
+    let owner = crate::history_producer::HistoryProducerOwner::from_reservation(&reservation)?;
+    // Only copied metric scalars escape this read; no canonical block backing is
+    // retained in the SSE queue. Keep the real owner until the read completes.
+    explorer_network_metrics_snapshot(state, telemetry, &owner).await
+}
+
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 fn enqueue_telemetry_bootstrap(state: &mut TelemetryLiveState, snapshot: TelemetryLiveSnapshot) {
     let mut peers_info = BTreeMap::new();
@@ -40972,6 +41290,7 @@ fn data_event_kind(event: &iroha_data_model::events::data::DataEvent) -> &'stati
         E::Bridge(_) => "Bridge",
         E::GameSession(_) => "GameSession",
         E::Sccp(_) => "Sccp",
+        E::KagemushaLoadCommitted(_) => "KagemushaLoadCommitted",
     }
 }
 app_api_items! {
@@ -53944,8 +54263,16 @@ pub async fn handle_v1_explorer_health(
         let head_height = state.committed_height() as u64;
         let body = crate::explorer::ExplorerHealthDto {
             head_height,
-            head_created_at: latest_block_created_at(state.as_ref(), head_height)?,
-            sampled_at: crate::explorer_history::HistoryTime(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| explorer_response_capacity_error())?),
+            head_created_at: latest_block_created_at(
+                state.as_ref(),
+                head_height,
+                &owner.canonical_history_budget(),
+            )?,
+            sampled_at: crate::explorer_history::HistoryTime(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|_| explorer_response_capacity_error())?,
+            ),
         };
         owner.json(&body)
     });
@@ -54045,7 +54372,6 @@ impl ExplorerInstructionFilters {
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 pub async fn handle_v1_explorer_metrics(
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     telemetry: MaybeTelemetry,
     visibility: DataspaceReadVisibility,
 ) -> Result<AxResponse, Error> {
@@ -54062,82 +54388,108 @@ pub async fn handle_v1_explorer_metrics(
             telemetry.profile(),
         ));
     }
-    let dto = explorer_network_metrics_snapshot(state, kura, &telemetry).await?;
-    crate::history_producer::HistoryProducerOwner::current()?.json(&dto)
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    let dto = explorer_network_metrics_snapshot(state, &telemetry, &owner).await?;
+    owner.json(&dto)
 }
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn explorer_network_metrics_snapshot(
     state: Arc<CoreState>,
-    kura: Arc<Kura>,
     telemetry: &MaybeTelemetry,
+    owner: &crate::history_producer::HistoryProducerOwner,
 ) -> Result<crate::explorer::ExplorerNetworkMetricsDto, Error> {
     let metrics = telemetry.metrics().await;
-    let world = state.world_view();
-    let peers = world.peers().len() as u64;
-    let domains = world.domains().len() as u64;
-    let accounts = world.accounts().len() as u64;
-    let assets = world.assets().len() as u64 + world.nfts().len() as u64;
-    let finalized_block = state.committed_height() as u64;
-    let transactions_accepted = metrics.txs.with_label_values(&["accepted"]).get();
-    let transactions_rejected = metrics.txs.with_label_values(&["rejected"]).get();
-    let avg_commit_time_ms = metrics.last_commit_time_ms.get();
-    let avg_commit_time = if avg_commit_time_ms == 0 {
-        None
-    } else {
-        Some(crate::explorer::ExplorerDurationDto {
-            ms: avg_commit_time_ms,
+    // Install the native owner only after the asynchronous metrics refresh.
+    // This synchronous scope cannot leak into another task or survive an await.
+    owner.scope(|| {
+        let world = state.world_view();
+        let peers = world.peers().len() as u64;
+        let domains = world.domains().len() as u64;
+        let accounts = world.accounts().len() as u64;
+        let assets = world.assets().len() as u64 + world.nfts().len() as u64;
+        let finalized_block = state.committed_height() as u64;
+        let transactions_accepted = metrics.txs.with_label_values(&["accepted"]).get();
+        let transactions_rejected = metrics.txs.with_label_values(&["rejected"]).get();
+        let avg_commit_time_ms = metrics.last_commit_time_ms.get();
+        let avg_commit_time = if avg_commit_time_ms == 0 {
+            None
+        } else {
+            Some(crate::explorer::ExplorerDurationDto {
+                ms: avg_commit_time_ms,
+            })
+        };
+        let history_budget = owner.canonical_history_budget();
+        let block_created_at =
+            latest_block_created_at(state.as_ref(), finalized_block, &history_budget)?;
+        let avg_block_time =
+            average_block_time_ms(state.as_ref(), finalized_block, 20, &history_budget)?
+                .map(|ms| crate::explorer::ExplorerDurationDto { ms });
+        Ok(crate::explorer::ExplorerNetworkMetricsDto {
+            peers,
+            domains,
+            accounts,
+            assets,
+            transactions_accepted,
+            transactions_rejected,
+            block: finalized_block,
+            block_created_at,
+            finalized_block,
+            avg_commit_time,
+            avg_block_time,
         })
-    };
-    let execution_budget = state.ivm_execution_budget();
-    let block_created_at = latest_block_created_at(state.as_ref(), finalized_block)?;
-    let avg_block_time = average_block_time_ms(kura.as_ref(), finalized_block, 20, &execution_budget)?
-        .map(|ms| crate::explorer::ExplorerDurationDto { ms });
-    Ok(crate::explorer::ExplorerNetworkMetricsDto {
-        peers,
-        domains,
-        accounts,
-        assets,
-        transactions_accepted,
-        transactions_rejected,
-        block: finalized_block,
-        block_created_at,
-        finalized_block,
-        avg_commit_time,
-        avg_block_time,
     })
 }
 fn latest_block_created_at(
     state: &CoreState,
     height: u64,
+    history_budget: &iroha_core::state::CanonicalHistoryReadBudget,
 ) -> Result<Option<crate::explorer_history::HistoryTime>> {
-    let Some(height) = nonzero_height(height) else { return Ok(None); };
-    let block = HistoryReadBudget::new().read(state, height)?;
-    Ok(Some(crate::explorer_history::HistoryTime(block.header().creation_time())))
+    let Some(height) = nonzero_height(height) else {
+        return Ok(None);
+    };
+    let block = state
+        .read_canonical_history_block(height, history_budget)
+        .map_err(crate::canonical_history::query_attempt_error)?;
+    Ok(Some(crate::explorer_history::HistoryTime(
+        block.header().creation_time(),
+    )))
 }
 fn average_block_time_ms(
-    kura: &Kura,
+    state: &CoreState,
     latest: u64,
     window: usize,
-    execution_budget: &iroha_core::state::AllocationBudget,
+    history_budget: &iroha_core::state::CanonicalHistoryReadBudget,
 ) -> Result<Option<u64>> {
-    if latest <= 1 || window == 0 { return Ok(None); }
+    if latest <= 1 || window == 0 {
+        return Ok(None);
+    }
     let mut height = latest;
     let mut prev_ts_ms: Option<u128> = None;
     let mut deltas: Vec<u128> = Vec::new();
     let mut remaining = window;
     while height >= 1 && remaining > 0 {
-        let Some(nonzero_height) = nonzero_height(height) else { break; };
-        let Some(block) = kura.get_block(nonzero_height, execution_budget).map_err(crate::canonical_history::kura_attempt_error)? else { break; };
+        let Some(nonzero_height) = nonzero_height(height) else {
+            break;
+        };
+        let block = state
+            .read_canonical_history_block(nonzero_height, history_budget)
+            .map_err(crate::canonical_history::query_attempt_error)?;
         let ts_ms = block.header().creation_time().as_millis();
         if let Some(prev) = prev_ts_ms {
-            if prev >= ts_ms { deltas.push(prev - ts_ms); }
+            if prev >= ts_ms {
+                deltas.push(prev - ts_ms);
+            }
         }
         prev_ts_ms = Some(ts_ms);
-        if height == 1 { break; }
+        if height == 1 {
+            break;
+        }
         height -= 1;
         remaining -= 1;
     }
-    Ok(if deltas.is_empty() { None } else {
+    Ok(if deltas.is_empty() {
+        None
+    } else {
         let sum: u128 = deltas.iter().copied().sum();
         Some((sum / (deltas.len() as u128)) as u64)
     })
@@ -55307,6 +55659,7 @@ pub async fn handle_v1_explorer_asset_definition_detail(
             &definition_id,
             &visibility,
         ),
+        asset_definition_dataspace_for_read(&world, &definition_id)?,
     );
     let zero_locked_quantity = Quantity::zero();
     if definition_id == governance.voting_asset_id {
@@ -56888,15 +57241,35 @@ fn handle_v1_explorer_block_detail_sync(
     );
     response
 }
+/// Read the immutable direct home without treating corrupt authoritative state as no home.
+pub(crate) fn asset_definition_dataspace_for_read(
+    world: &impl WorldReadOnly,
+    definition_id: &AssetDefinitionId,
+) -> Result<Option<DataSpaceId>, Error> {
+    world.asset_definition_dataspace(definition_id).map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            format!("invalid asset-definition home: {error}"),
+        ))
+    })
+}
 fn asset_definition_to_json_value(
     def: &iroha_data_model::asset::definition::AssetDefinition,
     alias_binding: Option<&AssetAliasBindingDto>,
+    owning_dataspace: Option<DataSpaceId>,
 ) -> Result<norito::json::Value> {
     let mut value = norito::json::to_value(def).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             error.to_string(),
         ))
     })?;
+    if let norito::json::Value::Object(map) = &mut value {
+        map.insert(
+            "owning_dataspace".into(),
+            owning_dataspace.map_or(norito::json::Value::Null, |dataspace| {
+                norito::json::Value::from(dataspace.as_u64().to_string())
+            }),
+        );
+    }
     if let (Some(binding), norito::json::Value::Object(map)) = (alias_binding, &mut value) {
         map.insert(
             "alias".into(),

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Fixed selectors of the sole current finalized-load read route. They identify an original;
+/// Fixed selectors of the committed Load receipt read route. They identify an original;
 /// they do not authorize issuance, prove finality or select a different wallet incarnation.
 public struct ToriiKagemushaWalletLoadSelectionV1: Equatable, Sendable {
     public let schemeID: Data
@@ -24,15 +24,16 @@ public struct ToriiKagemushaWalletLoadSelectionV1: Equatable, Sendable {
     }
 }
 
-/// Exact bounded HTTP original of `KagemushaWalletLoadIssuanceV1`, for Native admission.
+/// Bounded, unverified HTTP original of an unsigned `KagemushaWalletLoadReceiptV1`.
 ///
-/// This holder deliberately exposes no amount, pending verdict, voucher or balance. The
-/// server's canonical issuance has an optional signed voucher; Native must decode it, bind
-/// every original and verify load authorization before any state transition. A 200 response
-/// containing only a pending unsigned body is never spendable value.
+/// The consumer must decode the canonical receipt and bind its request, payer, scheme and
+/// wallet to the expected owner. Before wallet admission it must independently authenticate
+/// the original successful transaction, ordinary chain finality and the complete recursive
+/// Load proof. This transport implements none of those checks and exposes no balance or
+/// admission verdict. The receipt and HTTP success alone never authorize offline value.
 public struct ToriiKagemushaWalletLoadIssuanceOriginalV1: Sendable {
-    /// Includes the maximum canonical account literal/frame (36 KiB), the fixed voucher body,
-    /// a bounded 1 KiB voucher and Norito overhead, with a finite local transport allocation.
+    /// Local online response limit for the unsigned receipt and canonical payer frame.
+    /// The response bound is independent of the canonical account request-header text limit.
     public static let maximumBytes = 64 * 1024
     public let selection: ToriiKagemushaWalletLoadSelectionV1
     public let payerAccountID: String

@@ -969,10 +969,37 @@ def require_parliament_commit_publication(state: str) -> None:
     # admitted sources, witnesses and finality through the ordinary pipeline.
     executor_path = "crates/iroha_core/src/sumeragi/executor.rs"
     executor_source = read(executor_path)
+    # Qc carries no execution witness. The current certificate is captured from
+    # this exact staged execution and must retain the State pool before authority
+    # construction or publication; a refusal latches post-execution recovery.
+    commit = compact_rust(mask_rust(rust_item(
+        executor_source, "    fn commit_inner(", executor_path,
+    )))
+    prepared_custody = compact_rust(mask_rust("""
+        let certificate = staged
+            .executed
+            .commit_certificate()
+            .ok_or("prepared frame lost its certificate")?;
+        if !certificate.admitted_to(&self.state.ivm_execution_budget()) {
+            self.recovery = Some("prepared certificate lost its original pool custody".into());
+            return Err("prepared certificate lost its original pool custody".into());
+        }
+    """))
+    custody = commit.find(prepared_custody)
+    authority = commit.find("letnative_execution=NativeExecutionAuthorization{")
+    visibility = commit.find("matchpublish(overlay){")
+    if (commit.count(prepared_custody) != 1
+            or commit.count("letnative_execution=NativeExecutionAuthorization{") != 1
+            or commit.count("matchpublish(overlay){") != 1
+            or not 0 <= custody < authority < visibility):
+        raise RuntimeError(
+            f"{executor_path}: original prepared certificate must retain pool custody "
+            "and recovery before authority or publication"
+        )
     executor = compact_rust(executor_source)
     require_all(executor_path, executor, (
         "self.prepare_with_origin(block,commit_qc,CommitTelemetryOrigin::Forward)",
-        "require_body_admission(block,&self.execution_budget)?;require_qc_witness_admission(commit_qc,&self.execution_budget)?;self.call(|reply|Request::Prepare(block.clone(),commit_qc.clone(),origin,reply))",
+        "require_body_admission(block,&self.execution_budget)?;self.call(|reply|Request::Prepare(block.clone(),commit_qc.clone(),origin,reply))",
         "Request::Prepare(block,qc,origin,reply)=>{let_=reply.send(self.prepare_with_origin(&block,&qc,origin));}",
         "Request::Replay(block,qc,reply)=>{let_=reply.send(self.replay(&block,&qc));}",
         "pending.matches(block,qc)&&pending.telemetry_origin==origin",
@@ -997,7 +1024,7 @@ def require_parliament_commit_publication(state: str) -> None:
     require_all(executor_path, replay_dispatch, (
         "->Result<(),PublicationError>{"
         "require_body_admission(block,&self.execution_budget)?;"
-        "require_qc_witness_admission(commit_qc,&self.execution_budget)?;"
+        ""
         "self.call(|reply|Request::Replay(block.clone(),commit_qc.clone(),reply))"
         ".unwrap_or_else(||Err(control::stopped()))}",
     ))
@@ -1012,7 +1039,7 @@ def require_parliament_commit_publication(state: str) -> None:
         replay_source, "    fn replay_with_encoder(", replay_path,
     )))
     require_all(replay_path, replay, (
-        "require_body_admission(block,&budget)?;require_qc_witness_admission(qc,&budget)?;",
+        "require_body_admission(block,&budget)?;",
         "returncompleted.acknowledge(block,qc,&budget,&mutencode);",
         "matchself.prepare_with_origin(block,qc,CommitTelemetryOrigin::HistoricalReplay)?{Some(result)ifresult==qc.result=>{}",
         "self.commit(block,qc)?;",
@@ -1023,6 +1050,30 @@ def require_parliament_commit_publication(state: str) -> None:
     retirement = compact_rust(mask_rust(rust_item(
         replay_source, "    fn retire_completed_replay(", replay_path,
     )))
+    # Retirement may hash and release only the certificate of the same published
+    # execution. `invalid` below preserves PublicationError::RecoveryRequired,
+    # including missing-certificate and original-pool custody refusals.
+    replay_custody = compact_rust(mask_rust("""
+        let certificate = staged
+            .executed
+            .commit_certificate()
+            .ok_or_else(|| invalid("published replay lost its certificate"))?;
+        if !certificate.admitted_to(&self.state.ivm_execution_budget()) {
+            return Err(invalid(
+                "published replay certificate lost original pool custody",
+            ));
+        }
+        let header = Hash::new(certificate.consensus_header());
+    """))
+    custody = retirement.find(replay_custody)
+    retirement_move = retirement.find("letlive=self.live.take()")
+    if (retirement.count(replay_custody) != 1
+            or retirement.count("letlive=self.live.take()") != 1
+            or not 0 <= custody < retirement_move):
+        raise RuntimeError(
+            f"{replay_path}: original replay certificate must retain pool custody "
+            "and typed recovery before retirement"
+        )
     require_all(replay_path, retirement, (
         "iforiginal!=qc||live.header!=*block.header()||live.availability!=*block.availability()||live.source!=*block.source()||live.telemetry_origin!=Some(CommitTelemetryOrigin::HistoricalReplay)",
         "letqc=Hash::new(certificate.commit_qc());",
@@ -1230,13 +1281,38 @@ BEACON_SEALED_SESSION_PATH = "crates/iroha_core/src/beacon/session_owner/validat
 BEACON_DKG_OWNER_PATH = "crates/iroha_core/src/beacon/session_owner/dkg.rs"
 
 
+def require_validator_committee_boundary(committee: str) -> None:
+    """Publish only the certified original preparation, generation and beacon credentials."""
+    committee_path = "crates/iroha_core/src/state/validator_committee.rs"
+    boundary = section(committee, "pub(crate) fn finalize_validator_committee_boundary(",
+                       "fn owns_validator(", committee_path)
+    require_all(committee_path, boundary, (
+        "let context = frozen.current();", "let boundary = frozen.boundary();",
+        "boundary.validate_against(context)?", "let snapshot = &boundary.next;",
+        "boundary.height != self._curr_block.height().get()", "context.network_id != self.network_id",
+        "self.block_hashes().hash_at(anchor_index) != Some(&boundary.selection_anchor)",
+        "self.block_hashes().hash_count() != anchor_index + 1",
+        "verify_progress(&self.world, &transition)?",
+        "transition.outcome = Some(*outcome)", "transition.validate()?",
+        ".validate_against_preparing_authorization(&context.authorization)?;",
+        "get(&credentials.beacon.session_id)",
+        "transition.preparation.committee != snapshot.committee",
+        "active_global_beacon_key_session() != Some(previous.session_id)",
+        "old.retire(outcome.first_height)", "next.activate(outcome.first_height)",
+        "beacon_rotation = Some((old, next))", "if let Some((old, next)) = beacon_rotation",
+        "ValidatorEpochDecisionV1::RetainAndCancel",
+        "retention must cancel the exact frozen attempt",
+    ))
+
+
+
 def require_beacon_finalization_roster(committee: str) -> None:
     """Finalization authenticates the original current and frozen target rosters."""
     committee_path = "crates/iroha_core/src/state/validator_committee.rs"
     finalization = section(committee, "pub(crate) fn validate_beacon_finalization(",
                            "impl StateBlock<'_> {", committee_path)
     require_all(committee_path, finalization, (
-        "current_authority(state)?", "validate_against_authority(authority)",
+        "current_authority(state)?", "validate_against_generation(authority)",
         "authority.generation != 0 || authorization.beacon != BeaconEpochBindingV1::Bootstrap",
         "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, authorizing_roster)",
         "validator_committee_transitions()", "validate_against_preparing_authorization(authorization)?",
@@ -1458,7 +1534,7 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
             f"{path}: follower admission must require, refuse and authenticate the committed demand"
         )
     require_all(path, admission, (
-        "record.session.adaptive_dkg.session.authority_generation!=current.authority.generation",
+        "record.session.adaptive_dkg.session.authority_generation!=current.authorization.authority_generation",
         "current.authorization.beacon!=BeaconEpochBindingV1::Installed(installed)",
         "Ok(VerifiedEpochPulse{pulse:Some(pulse),link:Some(link),})",
     ))
@@ -1537,8 +1613,6 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
         activation,
         "GlobalThresholdBeaconChainAnchorV1{height:applied.0,block_hash:parent.iroha_hash(),}",
         ")?)}else{None};",
-        "self.mandatory_attestation=current.mode==ConsensusMode::Npos"
-        "&&context.height==current.authorization.last_height;",
         installed,
     )
     positions = [source.find(token) for token in source_order]
@@ -1555,7 +1629,7 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
                     height: context.height,
                 })?),
             };
-            Ok((control::encode(pulse)?, self.mandatory_attestation))
+            control::encode(pulse).map_err(NativeBeaconError::from)
         }
     """)
     if (not build.endswith(witness)
@@ -1563,6 +1637,25 @@ def require_parliament_beacon_requirement(beacon: str, producer: str) -> None:
             not in build):
         raise RuntimeError(
             f"{producer_path}: a demanded pulse must await actual shares, never an empty witness"
+        )
+    # The current producer verifies original share custody directly before its
+    # first signing call. A cached source/share cannot turn this into a detached
+    # attestation flag or project the signing refusal into a successful output.
+    drive = compact_rust(rust_item(producer, "    pub(crate) fn drive(", producer_path))
+    signing = compact_rust("""
+        if active.own.is_none() {
+            if let (Some(index), Some(signer)) = (active.local, self.signer.as_ref()) {
+                signer
+                    .attest_partial_signing_capability(active.aggregator.session(), index)
+                    .map_err(|_| NativeBeaconError::LocalSigning)?;
+                let partial = signer
+                    .sign_partial(active.aggregator.session(), active.aggregator.payload())
+                    .map_err(|_| NativeBeaconError::LocalSigning)?;
+    """)
+    if drive.count(signing) != 1:
+        raise RuntimeError(
+            f"{producer_path}: native signing must attest original session custody "
+            "and propagate refusal before signing"
         )
     for relative, text in ((path, beacon), (producer_path, producer)):
         for scan in ("requires_beacon_pulse_at(", "classifies_beacon_pulse_unavailable_at(",
@@ -5488,24 +5581,7 @@ def main() -> int:
     committee_path = "crates/iroha_core/src/state/validator_committee.rs"
     committee = read(committee_path)
     require_beacon_finalization_roster(committee)
-    boundary = section(committee, "pub(crate) fn finalize_validator_committee_boundary(",
-                       "fn owns_validator(", committee_path)
-    require_all(committee_path, boundary, (
-        "let context = frozen.current();", "let boundary = frozen.boundary();",
-        "boundary.validate_against(context)?", "let snapshot = &boundary.next;",
-        "boundary.height != self._curr_block.height().get()", "context.network_id != self.network_id",
-        "self.block_hashes().hash_at(anchor_index) != Some(&boundary.selection_anchor)",
-        "self.block_hashes().hash_count() != anchor_index + 1",
-        "verify_progress(&self.world, &transition)?",
-        "transition.outcome = Some(*outcome)", "transition.validate()?",
-        "credentials.authority != snapshot.authority",
-        "transition.preparation.committee != snapshot.committee",
-        "active_global_beacon_key_session() != Some(previous.session_id)",
-        "old.retire(outcome.first_height)", "next.activate(outcome.first_height)",
-        "beacon_rotation = Some((old, next))", "if let Some((old, next)) = beacon_rotation",
-        "ValidatorEpochDecisionV1::RetainAndCancel",
-        "retention must cancel the exact frozen attempt",
-    ))
+    require_validator_committee_boundary(committee)
 
     certificate_state_path = "crates/iroha_core/src/state.rs"
     certificate_state = read(certificate_state_path)

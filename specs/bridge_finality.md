@@ -199,3 +199,21 @@ The Rust client reads these routes with `Client::get_sumeragi_finality_proof`
 proof into the caller's verifier), `Client::get_sumeragi_finality_attestation`
 and `Client::poll_sumeragi_genesis_readiness`. Successful responses are bounded
 by twice the 32 MiB block bound plus 4 MiB.
+
+`get_sumeragi_finality_attestation` returns an opaque
+`AuthenticatedFinalityAttestation` after its canonical decode, body and node-signature
+checks and exact requested height, challenge, network and peer binding. The carrier
+allows only immutable borrowing or consuming conversion to the raw statement; raw
+conversion discards authentication provenance. Deployment HTTP observations retain
+this carrier to avoid repeating the same structural and node-signature verification.
+They still independently bind every response to the observation's selected peer,
+challenge and network and verify its tip against the authenticated contiguous prefix
+and committee. Arbitrary raw sources undergo the full attestation verification.
+
+The deployment verifier retains the exact tip capability produced by checkpoint
+import and successful observation. Within a prefix, it can reuse that capability
+only when the complete offered proof equals the retained tip, including its header,
+canonical block and certificate bytes, ordered committee and proofs of possession.
+Different witnesses still undergo native verification; every node statement still
+needs fresh request binding and authentication. Active enclosing decoder budgets
+retain the original physical reads, allocation charges and refusal behavior.

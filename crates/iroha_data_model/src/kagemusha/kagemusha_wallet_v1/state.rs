@@ -74,7 +74,7 @@ const U128_BYTES: usize = 16;
 /// Exact inline transcript bytes of one state commitment: its canonical 32-byte encoding.
 pub const KAGEMUSHA_WALLET_COMMITMENT_TRANSCRIPT_BYTES_V1: usize = DIGEST_BYTES;
 
-/// σ-field element counts of every effect variant, in tag order: `credit_id`, the voucher,
+/// σ-field element counts of every effect variant, in tag order: `credit_id`, the receipt digest,
 /// Request, Credited, nullifier, charge-quote and update digests are one element each (`P`
 /// values, owner answer B1); the Bootstrap enrollment id and marker digest are two limbs each.
 const EFFECT_FIELD_ITEMS: [usize; 8] = [4, 4, 9, 4, 2, 5, 3, 0];
@@ -149,7 +149,7 @@ pub enum KagemushaWalletLifecycleV1 {
     /// Normal operation.
     #[codec(index = 1)]
     Active,
-    /// New setup and funding closed; existing claims are preserved.
+    /// New receiving quotes and funding closed; remaining value and existing claims persist.
     #[codec(index = 2)]
     Retiring,
 }
@@ -259,7 +259,7 @@ pub struct KagemushaWalletStateCoreV1 {
     pub sequence: u128,
     /// Next payer send ordinal.
     pub next_send: u128,
-    /// Next load voucher ordinal.
+    /// Next ordinary Load ordinal.
     pub next_load: u128,
     /// Next unload redemption ordinal.
     pub next_redeem: u128,
@@ -892,7 +892,7 @@ fn send_descriptor_items_v1(
         .finish())
 }
 
-/// Load leaf of one absorbed voucher in the shared load/redeem recovery map (§3, owner answer
+/// Load leaf of one absorbed ordinary Load receipt in the shared load/redeem recovery map (§3, owner answer
 /// Q3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(
@@ -902,8 +902,8 @@ fn send_descriptor_items_v1(
 pub struct KagemushaWalletLoadLeafV1 {
     /// Load ordinal (the low part of the map key).
     pub ordinal: u128,
-    /// Object digest `P(kgwovch1, ·)` of the absorbed voucher, a canonical σ-field value.
-    pub voucher_digest: [u8; 32],
+    /// Ordinary receipt digest `P_bytes(kgwolod1, transcript)`, a canonical σ-field value.
+    pub receipt_digest: [u8; 32],
     /// Net offline amount added.
     pub amount: u128,
 }
@@ -918,16 +918,16 @@ impl KagemushaWalletLoadLeafV1 {
         kagemusha_wallet_pair_key_v1(KagemushaWalletRecoveryKindV1::Load.tag(), self.ordinal)
     }
 
-    /// Leaf elements: ordinal, voucher digest, amount (3).
+    /// Leaf elements: ordinal, receipt digest, amount (3).
     ///
     /// # Errors
     ///
-    /// Rejects a zero or noncanonical voucher digest.
+    /// Rejects a zero or noncanonical receipt digest.
     pub fn field_items(&self) -> WalletResult<Vec<[u8; 32]>> {
-        require_nonzero_field_v1("load.voucher_digest", &self.voucher_digest)?;
+        require_nonzero_field_v1("load.receipt_digest", &self.receipt_digest)?;
         Ok(WalletFieldItemsV1::with_capacity(3)
             .integer(self.ordinal)
-            .field(&self.voucher_digest)
+            .field(&self.receipt_digest)
             .integer(self.amount)
             .finish())
     }
@@ -1387,7 +1387,7 @@ impl KagemushaWalletQuotaUsageArrayV1 {
         Ok(used)
     }
 
-    /// Rebuild the array for a newly installed quota share (§3.3 RefreshPolicy; owner answers
+    /// Rebuild the array for a newly installed quota share (§3.3 `RefreshPolicy`; owner answers
     /// B4, B5 and B8), checking only the 64 slots of this (the predecessor's) array and the
     /// windows of the new share:
     ///
@@ -1760,6 +1760,10 @@ impl KagemushaWalletCreditDigestLeafV1 {
 /// low leaf (absent, insert). The credit-digest tree stays insert-only and `burned` is fixed at
 /// the first insertion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Both variants retain fixed inline Copy proof witnesses; boxing would introduce heap custody and change the record API"
+)]
 pub enum KagemushaWalletCreditDigestRecordV1 {
     /// `credit_id` is already recorded: its existing leaf and opening.
     Present {
@@ -1892,7 +1896,7 @@ pub enum KagemushaWalletOperationKindV1 {
     /// Install the zero state of a newly enrolled incarnation.
     #[codec(index = 1)]
     Bootstrap,
-    /// Absorb the next finalized load voucher.
+    /// Absorb the next finalized ordinary Load receipt.
     #[codec(index = 2)]
     Load,
     /// Irreversibly debit a payment to a bound receiver.
@@ -1910,7 +1914,7 @@ pub enum KagemushaWalletOperationKindV1 {
     /// Apply one authenticated policy update.
     #[codec(index = 7)]
     RefreshPolicy,
-    /// Close new setup and funding.
+    /// Close new receiving quotes and funding, preserving Send of remaining value.
     #[codec(index = 8)]
     Retiring,
 }
@@ -2030,11 +2034,11 @@ pub enum KagemushaWalletEffectV1 {
         /// `marker_digest` of the generation-0 Enrollment marker (design C3).
         enrollment_marker: [u8; 32],
     },
-    /// Absorb the voucher at the predecessor's `next_load`.
+    /// Absorb the ordinary Load receipt at the predecessor's `next_load`.
     #[codec(index = 2)]
     Load {
-        /// Voucher object digest `P(kgwovch1, ·)`.
-        voucher: [u8; 32],
+        /// Ordinary finalized Load receipt digest.
+        receipt_digest: [u8; 32],
         /// Consumed load ordinal.
         load_ordinal: u128,
         /// Net offline value added to the balance.
@@ -2106,7 +2110,7 @@ pub enum KagemushaWalletEffectV1 {
         /// Successor accepted time floor.
         accepted_time_floor_ms: u64,
     },
-    /// Close new setup and funding; `next_load` is in the statement.
+    /// Close new receiving quotes and funding; `next_load` is in the statement.
     #[codec(index = 8)]
     Retiring,
 }
@@ -2133,7 +2137,7 @@ impl KagemushaWalletEffectV1 {
         self.kind().tag()
     }
 
-    /// Operation-id input of this effect (§4.1): Bootstrap enrollment id, Load voucher,
+    /// Operation-id input of this effect (§4.1): Bootstrap enrollment id, Load receipt digest,
     /// Send and Receive credit id, `ArchiveSent` Credited digest, Unload nullifier,
     /// `RefreshPolicy` update digest, and the zero element for Retiring. Every input other than
     /// the Bootstrap enrollment id (two limbs) is one `P` element
@@ -2146,7 +2150,7 @@ impl KagemushaWalletEffectV1 {
     pub const fn operation_input(&self) -> [u8; 32] {
         match self {
             Self::Bootstrap { enrollment_id, .. } => *enrollment_id,
-            Self::Load { voucher, .. } => *voucher,
+            Self::Load { receipt_digest, .. } => *receipt_digest,
             Self::Send { credit_id, .. } | Self::Receive { credit_id, .. } => *credit_id,
             Self::ArchiveSent { credited, .. } => *credited,
             Self::Unload { nullifier, .. } => *nullifier,
@@ -2174,7 +2178,7 @@ impl KagemushaWalletEffectV1 {
         EFFECT_FIELD_ITEMS[self.index()]
     }
 
-    /// Append this variant's σ-field elements: every `P` value (`credit_id` and the voucher,
+    /// Append this variant's σ-field elements: every `P` value (`credit_id` and the receipt digest,
     /// Request, Credited, nullifier, charge-quote and update digests) is one element; the
     /// Bootstrap enrollment id and marker digest are two limbs each.
     fn write_field_items(&self, items: WalletFieldItemsV1) -> WalletFieldItemsV1 {
@@ -2184,12 +2188,12 @@ impl KagemushaWalletEffectV1 {
                 enrollment_marker,
             } => items.digest(enrollment_id).digest(enrollment_marker),
             Self::Load {
-                voucher,
+                receipt_digest,
                 load_ordinal,
                 amount,
                 online_charge,
             } => items
-                .field(voucher)
+                .field(receipt_digest)
                 .integer(*load_ordinal)
                 .integer(*amount)
                 .integer(*online_charge),
@@ -2251,7 +2255,7 @@ impl KagemushaWalletEffectV1 {
     ///
     /// # Errors
     ///
-    /// Rejects zero identities, a zero or noncanonical `P` value (`credit_id`, voucher, Request,
+    /// Rejects zero identities, a zero or noncanonical `P` value (`credit_id`, receipt digest, Request,
     /// Credited, nullifier and update digests; a noncanonical charge-quote digest), a zero Send,
     /// Receive or Unload amount, a Send whose gross debit overflows or whose accepted interval
     /// is inverted, and an Unload whose online charge exceeds its amount or disagrees with its
@@ -2265,7 +2269,9 @@ impl KagemushaWalletEffectV1 {
                 require_nonzero_v1("effect.enrollment_id", enrollment_id)?;
                 require_nonzero_v1("effect.enrollment_marker", enrollment_marker)
             }
-            Self::Load { voucher, .. } => require_nonzero_field_v1("effect.voucher", voucher),
+            Self::Load { receipt_digest, .. } => {
+                require_nonzero_field_v1("effect.receipt_digest", receipt_digest)
+            }
             Self::Send {
                 credit_id,
                 receiver_wallet_id,
@@ -2736,7 +2742,7 @@ impl KagemushaWalletStatementV1 {
     /// Validate `self` as the direct successor of `predecessor` (§§3.1, 6.3, design §4.2).
     ///
     /// Every operation other than Retiring keeps the lifecycle, so a Retiring wallet keeps
-    /// receiving, loading issued vouchers, sending and unloading (§6.3).
+    /// receiving, loading finalized ordinary receipts, sending and unloading (§6.3).
     ///
     /// # Errors
     ///

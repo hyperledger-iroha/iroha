@@ -18,6 +18,7 @@ use iroha_plonk_gadgets::{
 };
 use iroha_plonk_recursion::verifier::VerifierConfig;
 
+mod lengths;
 mod signatures;
 
 pub(super) fn recursive_program_fixture() -> (crate::a_relation::AProofPlan, OwnPolicy) {
@@ -62,6 +63,8 @@ enum BindMutation {
     Commitment { slot: usize, word: usize },
     ProofProjectionOnly,
     WrongProofProjection,
+    DigestOwner,
+    DigestProjectionOnly { slot: usize, word: usize },
 }
 impl Circuit<Fp> for Objects {
     type Config = Config;
@@ -186,6 +189,13 @@ impl Circuit<Fp> for Objects {
                         })
                         .collect::<Vec<_>>()
                 });
+                let proof_digest = ReceiveProofDigest::from_active(
+                    &mut chip,
+                    &mut region,
+                    &omega,
+                    sigma.active_carrier()?,
+                    sigma.step_digest()?,
+                )?;
                 let objects = ReceiveObjects::decode(
                     &mut chip,
                     &mut bytes,
@@ -202,6 +212,7 @@ impl Circuit<Fp> for Objects {
                         receiver: &receiver,
                         incoming: &incoming,
                         sigma: &sigma,
+                        consuming_digest: proof_digest.digest(),
                     },
                 )?;
                 assert_eq!(objects.context().len(), 6);
@@ -217,6 +228,7 @@ impl Circuit<Fp> for Objects {
                         &receiver,
                         &incoming,
                         &sigma,
+                        &proof_digest,
                     )?;
                 }
                 Ok([
@@ -273,6 +285,7 @@ impl Objects {
         receiver: &LineagePublicCells,
         incoming: &IncomingTransportCells,
         sigma: &SigmaBindingCells,
+        proof_digest: &ReceiveProofDigest,
     ) -> Result<(), Error> {
         use crate::a_relation::{
             IncomingLineageCells,
@@ -466,7 +479,8 @@ impl Objects {
             .map(|object| object.commitment_words().map(|word| word.value()))
             .collect::<Vec<_>>();
         let mutated = match self.mutation {
-            BindMutation::Commitment { slot, word } => Some((slot, word)),
+            BindMutation::Commitment { slot, word }
+            | BindMutation::DigestProjectionOnly { slot, word } => Some((slot, word)),
             BindMutation::ProofProjectionOnly => Some((4, 0)),
             _ => None,
         };
@@ -512,13 +526,32 @@ impl Objects {
             vesta_corrections: &[],
             receive_results: Some(&claims),
         };
+        if matches!(self.mutation, BindMutation::DigestProjectionOnly { .. }) {
+            return proof_digest.bind_context(region, plan, 0, &input);
+        }
         // This tests exact proposed commitments and their typed owners. It
         // intentionally does not certify an A/W chain or signature semantics.
-        let proof = ReceiveProofSources::from_active(incoming, sigma)?;
+        // Proofs consumes a Q projection without a second raw sigma tape.
+        // The complete fixed owner set below must still reject every forged
+        // raw sigma commitment, including when its Objects verdict is false.
+        let projected = SigmaBindingCells::from_incoming(
+            sigma.incoming_statement()?,
+            sigma.key_index().clone(),
+            sigma.proof_chunks().to_vec(),
+        );
+        assert!(projected.active_carrier().is_err());
+        assert!(projected.step_digest().is_err());
+        let proof = ReceiveProofSources::from_active_omega(incoming, &projected)?;
         proof.bind_context(chip, region, plan, &input)?;
         if matches!(self.mutation, BindMutation::ProofProjectionOnly) {
             return Ok(());
         }
+        proof_digest.bind_context(
+            region,
+            plan,
+            u32::from(matches!(self.mutation, BindMutation::DigestOwner)),
+            &input,
+        )?;
         objects
             .signed_sources()
             .bind_context(region, plan, &input)?;
@@ -627,7 +660,6 @@ impl Objects {
         .unwrap()
         .with_operation_tasks(vec![
             OperationTask::required(Variant::Receive)
-                .unwrap()
                 .iter()
                 .copied()
                 .filter(|task| *task != OperationTask::ReceiveEffects)
@@ -727,12 +759,7 @@ impl Objects {
                 u128::from_le_bytes(bytes[16..32].try_into().unwrap()),
             ]
         };
-        let policy = OwnPolicy::new(
-            pair(&source[0][2..34]),
-            pair(&source[2][66..98]),
-            Affine::GENERATOR,
-        )
-        .unwrap();
+        let policy = OwnPolicy::new(pair(&source[2][66..98]), Affine::GENERATOR).unwrap();
         let mut out = Self {
             plan,
             omega,
@@ -927,6 +954,7 @@ fn objects_result_cannot_change_owner_or_splice_context_inputs() {
         BindMutation::Receiver,
         BindMutation::Header,
         BindMutation::ActiveLength,
+        BindMutation::DigestOwner,
     ] {
         let wrong = Objects {
             mutation,
@@ -966,6 +994,30 @@ fn proposed_receive_object_triples_require_every_raw_owner() {
             );
         }
     }
+    let mut burn = c.clone();
+    burn.source[3][0] ^= 1;
+    burn.valid = false;
+    assert!(burn.accepts(), "bound-invalid Payment keeps total burn");
+    for word in 0..3 {
+        let mut forged = burn.clone();
+        forged.mutation = BindMutation::Commitment { slot: 5, word };
+        assert!(
+            !forged.accepts(),
+            "Objects must authenticate sigma raw commitment {word} even on burn",
+        );
+    }
+    for mutation in [
+        BindMutation::QDigest,
+        BindMutation::QIndex,
+        BindMutation::QBytes,
+    ] {
+        let mut forged = burn.clone();
+        forged.mutation = mutation;
+        assert!(
+            !forged.accepts(),
+            "Q projection remains hard-bound to the original sigma on burn",
+        );
+    }
     let mut isolated = c.clone();
     isolated.mutation = BindMutation::ProofProjectionOnly;
     assert!(
@@ -978,4 +1030,76 @@ fn proposed_receive_object_triples_require_every_raw_owner() {
         !complete.accepts(),
         "Objects must reject the same forged combined digest"
     );
+}
+
+#[test]
+fn projected_sigma_keeps_original_lengths_and_over_descriptor_tails() {
+    let base = Objects::fixture().with_context();
+    let view = base.sigma_view();
+    assert!(view > 1);
+    let mut layouts = Vec::new();
+    for length in [0, 1, view - 1, view + 17] {
+        let mut original = base.clone();
+        original.sigma.resize(length, 0x37);
+        original.rebind();
+        assert!(original.accepts(), "bound original length {length}");
+        let assigned = synthesize(&original, 16, None).unwrap();
+        layouts.push((
+            assigned.tables.fixed().to_vec(),
+            assigned.tables.permutation().clone(),
+        ));
+
+        // A length change is part of the Q view's LE32 prefix even when the
+        // descriptor-sized bytes are identical after canonical zero padding.
+        let mut changed_length = original.clone();
+        changed_length.sigma.push(0);
+        for valid in [false, true] {
+            changed_length.valid = valid;
+            assert!(
+                !changed_length.accepts(),
+                "changing original sigma length cannot choose verdict {valid}",
+            );
+        }
+    }
+    for layout in &layouts[1..] {
+        assert_eq!(layout, &layouts[0], "original length never selects layout");
+    }
+
+    let mut original = base;
+    original.sigma.resize(view + 17, 0x37);
+    original.rebind();
+    let mut tail = original.clone();
+    tail.sigma[view + 8] ^= 1;
+    assert_eq!(tail.sigma.len(), original.sigma.len());
+    assert_eq!(&tail.sigma[..view], &original.sigma[..view]);
+    for valid in [false, true] {
+        tail.valid = valid;
+        assert!(
+            !tail.accepts(),
+            "equal Q-sized prefix cannot replace an original tail with verdict {valid}",
+        );
+    }
+    // The changed tail is a different original Payment, even though Q receives
+    // exactly the same length-prefixed descriptor view for both originals.
+    let old_payment = tail.source[3].clone();
+    tail.rebind();
+    tail.valid = true;
+    assert_ne!(tail.source[3], old_payment);
+    assert!(
+        tail.accepts(),
+        "different original remains a total component input"
+    );
+}
+
+#[test]
+fn proof_digest_owner_rejects_combined_digest_raw_lengths_and_raw_commitments() {
+    let c = Objects::fixture().with_context();
+    for (slot, word) in [(4, 0), (4, 1), (4, 2), (5, 1), (5, 2)] {
+        let mut changed = c.clone();
+        changed.mutation = BindMutation::DigestProjectionOnly { slot, word };
+        assert!(
+            !changed.accepts(),
+            "hard digest owner rejects slot={slot} word={word} without a soft result",
+        );
+    }
 }

@@ -1,16 +1,28 @@
 //! Native executable format admission shared by CLI packaging and runtime qualification.
 
-use iroha_fs::{FileSnapshot, RetainedFile};
+use iroha_fs::{FileSnapshot, RetainedBuildInput, RetainedFile};
 use std::{
     env,
     io::{self, Read, Seek, SeekFrom},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use super::{BinaryPin, Result};
 
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+/// Resolve parent aliases while leaving the selected native leaf unfollowed.
+fn selected_program_path(path: &Path) -> io::Result<PathBuf> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| invalid("managed executable has no filename"))?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    Ok(parent.canonicalize()?.join(name))
 }
 
 /// One live selected native program, without persisting an inode or executable bytes.
@@ -23,19 +35,13 @@ pub(super) struct NativeProgram {
 
 impl NativeProgram {
     pub(super) fn capture(path: &Path) -> Result<Self> {
-        // Resolve legitimate parent aliases/components, leaving the selected leaf unfollowed.
-        let name = path
-            .file_name()
-            .ok_or_else(|| invalid("managed executable has no filename"))?;
-        let parent = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        let path = parent.canonicalize()?.join(name);
+        let path = selected_program_path(path)?;
         let mut original = RetainedFile::open_regular(&path)?;
         let snapshot = original.snapshot()?;
         let length = original.file().metadata()?.len();
         admit_native_program(&mut original)?;
+        #[cfg(test)]
+        tests::note_content_hash();
         let mut hasher = blake3::Hasher::new();
         let mut buffer = [0_u8; 64 * 1024];
         let mut offset = 0_u64;
@@ -88,6 +94,34 @@ impl NativeProgram {
     pub(super) fn pin(&self) -> Result<BinaryPin> {
         self.validate()?;
         Ok(self.pin.clone())
+    }
+
+    /// Reuse this content pin only for a freshly joined, unchanged original native object.
+    /// Foreign paths retain independent native format, whole-content and custody admission.
+    pub(super) fn pin_for_path(&self, path: &Path) -> Result<BinaryPin> {
+        let selected = selected_program_path(path)?;
+        if selected != self.pin.path {
+            return Self::capture(path)?.pin();
+        }
+        self.validate()?;
+        let candidate = RetainedFile::open_regular(&selected)?;
+        let joined = (|| -> Result<BinaryPin> {
+            if candidate.snapshot()? != self.snapshot
+                || candidate.identity()? != self.original.identity()?
+            {
+                return Err(
+                    invalid("worker executable differs from its live native admission").into(),
+                );
+            }
+            Ok(self.pin.clone())
+        })();
+        // Keep both opened owners through their final native checks, even when the join refused.
+        // This is a same-operation endpoint observation, not an atomic loaded-image attestation.
+        let candidate_exit = candidate.revalidate();
+        let original_exit = self.validate();
+        candidate_exit?;
+        original_exit?;
+        joined
     }
 
     pub(super) fn path(&self) -> &Path {
@@ -143,9 +177,31 @@ pub fn admit_native_program(file: &mut RetainedFile) -> io::Result<()> {
             return Err(invalid("CLI program is not executable"));
         }
     }
-    file.file_mut().seek(SeekFrom::Start(0))?;
+    admit_native_header(file.file_mut())?;
+    file.revalidate()
+}
+
+/// Admit the same native executable format from a retained Cargo build input.
+///
+/// This supplies format admission only; it never grants installed or private-file authority.
+/// # Errors
+/// Refuses a nonexecutable, wrong-host or malformed original, changed custody and native errors.
+pub fn admit_native_build_input(file: &mut RetainedBuildInput) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if file.permissions()?.mode() & 0o100 == 0 {
+            return Err(invalid("CLI program is not executable"));
+        }
+    }
+    admit_native_header(file)?;
+    file.revalidate()
+}
+
+fn admit_native_header(file: &mut (impl Read + Seek + ?Sized)) -> io::Result<()> {
+    file.seek(SeekFrom::Start(0))?;
     let mut header = [0_u8; 64];
-    file.file_mut().read_exact(&mut header)?;
+    file.read_exact(&mut header)?;
     let native = match (env::consts::OS, env::consts::ARCH) {
         ("macos", arch) => {
             let cpu = match arch {
@@ -202,9 +258,9 @@ pub fn admit_native_program(file: &mut RetainedFile) -> io::Result<()> {
             if header[..2] != *b"MZ" || !(64..=1024 * 1024).contains(&offset) {
                 return Err(invalid("invalid native PE executable"));
             }
-            file.file_mut().seek(SeekFrom::Start(u64::from(offset)))?;
+            file.seek(SeekFrom::Start(u64::from(offset)))?;
             let mut pe = [0_u8; 26];
-            file.file_mut().read_exact(&mut pe)?;
+            file.read_exact(&mut pe)?;
             let flags =
                 u16::from_le_bytes(pe[22..24].try_into().expect("fixed native header field"));
             pe[..4] == *b"PE\0\0"
@@ -222,13 +278,53 @@ pub fn admit_native_program(file: &mut RetainedFile) -> io::Result<()> {
             "CLI artifact is not an executable for this native host",
         ));
     }
-    file.revalidate()?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    std::thread_local! {
+        static CONTENT_HASHES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// Record entry into the actual whole-content hash producer for this test thread.
+    pub(super) fn note_content_hash() {
+        CONTENT_HASHES.with(|slot| {
+            if let Some(count) = slot.get() {
+                slot.set(Some(count + 1));
+            }
+        });
+    }
+
+    /// Restore the previous test-only observation even when the test unwinds.
+    struct ContentHashProbe(Option<usize>);
+
+    impl ContentHashProbe {
+        fn begin() -> Self {
+            Self(CONTENT_HASHES.with(|slot| slot.replace(Some(0))))
+        }
+
+        fn count(&self) -> usize {
+            CONTENT_HASHES.with(|slot| slot.get().expect("active content hash probe"))
+        }
+    }
+
+    impl Drop for ContentHashProbe {
+        fn drop(&mut self) {
+            CONTENT_HASHES.with(|slot| slot.set(self.0));
+        }
+    }
+
+    fn copied_native_program() -> (tempfile::TempDir, PathBuf) {
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = temporary.path().join("native");
+        std::fs::create_dir(&parent).unwrap();
+        let path = parent.join(format!("program{}", env::consts::EXE_SUFFIX));
+        std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+        (temporary, path)
+    }
 
     #[test]
     fn native_program_admits_actual_current_harness_and_refuses_plain_text() {
@@ -239,6 +335,28 @@ mod tests {
         std::fs::write(&path, b"ordinary text is not a native executable").unwrap();
         let mut text = RetainedFile::open_regular(&path).unwrap();
         assert!(admit_native_program(&mut text).is_err());
+    }
+
+    #[test]
+    fn native_build_input_admits_a_real_linked_harness_but_keeps_installed_sources_strict() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("cargo-program");
+        std::fs::copy(std::env::current_exe().unwrap(), &path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::hard_link(&path, temporary.path().join("dependency-program")).unwrap();
+        assert!(RetainedFile::open_regular(&path).is_err());
+        let mut input = RetainedBuildInput::open(&path).unwrap();
+        let before = input.snapshot().unwrap();
+        admit_native_build_input(&mut input).unwrap();
+        assert_eq!(input.snapshot().unwrap(), before);
+        drop(input);
+        std::fs::write(&path, b"not a native executable").unwrap();
+        let mut invalid = RetainedBuildInput::open(&path).unwrap();
+        assert!(admit_native_build_input(&mut invalid).is_err());
     }
 
     fn installed_pair() -> (tempfile::TempDir, super::super::InstalledRuntime) {
@@ -510,5 +628,176 @@ mod tests {
         std::fs::rename(&path, &moved).unwrap();
         std::fs::rename(&moved, &path).unwrap();
         NativeProgram::matching(&pin).unwrap().validate().unwrap();
+    }
+
+    #[test]
+    fn current_program_path_reuses_only_same_native_admission_and_hashes_foreign_paths() {
+        let _resources = super::super::native_test_guard();
+        let hashes = ContentHashProbe::begin();
+        let current = std::env::current_exe().unwrap();
+        let launcher = NativeProgram::capture(&current).unwrap();
+        let pin = launcher.pin().unwrap();
+        assert_eq!(hashes.count(), 1);
+        for path in [
+            current.clone(),
+            current
+                .parent()
+                .unwrap()
+                .join(".")
+                .join(current.file_name().unwrap()),
+        ] {
+            let reused = launcher.pin_for_path(&path).unwrap();
+            assert_eq!(reused.path, pin.path);
+            assert_eq!(reused.blake3, pin.blake3);
+            assert_eq!(hashes.count(), 1);
+        }
+        let (_temporary, foreign_path) = copied_native_program();
+        let foreign = launcher.pin_for_path(&foreign_path).unwrap();
+        assert_eq!(foreign.path, selected_program_path(&foreign_path).unwrap());
+        assert_ne!(foreign.path, pin.path);
+        assert_eq!(foreign.blake3, pin.blake3);
+        assert_eq!(hashes.count(), 2, "foreign content must be freshly hashed");
+        let daemon = NativeProgram::matching(&foreign).unwrap();
+        daemon.validate().unwrap();
+        assert_eq!(
+            hashes.count(),
+            3,
+            "independent daemon admission still hashes"
+        );
+        let missing = foreign_path.with_file_name("absent");
+        assert!(
+            matches!(launcher.pin_for_path(&missing), Err(super::super::Error::Io(error))
+            if error.kind() == io::ErrorKind::NotFound)
+        );
+        assert_eq!(hashes.count(), 3);
+        launcher.validate().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn current_program_path_refuses_same_inode_edits_and_requires_fresh_restored_admission() {
+        use std::{io::Write, os::unix::fs::PermissionsExt};
+        let _resources = super::super::native_test_guard();
+        let (_temporary, path) = copied_native_program();
+        let hashes = ContentHashProbe::begin();
+        let launcher = NativeProgram::capture(&path).unwrap();
+        let pin = launcher.pin().unwrap();
+        let original_identity = launcher.original.identity().unwrap();
+        let length = std::fs::metadata(&path).unwrap().len();
+        let mut writer = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writer.write_all(b"changed native extent").unwrap();
+        writer.sync_all().unwrap();
+        assert_eq!(
+            iroha_fs::FileIdentity::of(&writer).unwrap(),
+            original_identity
+        );
+        assert!(matches!(
+            launcher.pin_for_path(&path),
+            Err(super::super::Error::Io(_))
+        ));
+        assert_eq!(
+            hashes.count(),
+            1,
+            "a changed live object cannot rehash into authority"
+        );
+        writer.set_len(length).unwrap();
+        writer.sync_all().unwrap();
+        drop(writer);
+        assert!(
+            launcher.pin_for_path(&path).is_err(),
+            "restoring bytes does not restore old metadata"
+        );
+        let restored = NativeProgram::matching(&pin).unwrap();
+        assert_eq!(hashes.count(), 2);
+        assert_eq!(restored.original.identity().unwrap(), original_identity);
+        assert_eq!(restored.pin_for_path(&path).unwrap().blake3, pin.blake3);
+        assert_eq!(hashes.count(), 2);
+        let permissions = std::fs::metadata(&path).unwrap().permissions();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(restored.pin_for_path(&path).is_err());
+        std::fs::set_permissions(&path, permissions).unwrap();
+        assert!(restored.pin_for_path(&path).is_err());
+        let restored = NativeProgram::matching(&pin).unwrap();
+        assert_eq!(restored.pin_for_path(&path).unwrap().blake3, pin.blake3);
+        assert_eq!(hashes.count(), 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn current_program_path_refuses_leaf_and_ancestor_replacement_and_keeps_original_retry() {
+        let _resources = super::super::native_test_guard();
+        let (temporary, path) = copied_native_program();
+        let hashes = ContentHashProbe::begin();
+        let launcher = NativeProgram::capture(&path).unwrap();
+        let pin = launcher.pin().unwrap();
+        let displaced = path.with_file_name("original");
+        std::fs::rename(&path, &displaced).unwrap();
+        assert!(matches!(
+            launcher.pin_for_path(&path),
+            Err(super::super::Error::Io(_))
+        ));
+        std::os::unix::fs::symlink(&displaced, &path).unwrap();
+        assert!(launcher.pin_for_path(&path).is_err());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::copy(&displaced, &path).unwrap();
+        assert_ne!(
+            iroha_fs::FileIdentity::of(&std::fs::File::open(&path).unwrap()).unwrap(),
+            launcher.original.identity().unwrap()
+        );
+        assert!(
+            launcher.pin_for_path(&path).is_err(),
+            "equal bytes in a different inode cannot reuse"
+        );
+        assert_eq!(hashes.count(), 1);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(&displaced, &path).unwrap();
+        assert!(
+            launcher.pin_for_path(&path).is_err(),
+            "leaf rename changed the saved snapshot"
+        );
+        let restored = NativeProgram::matching(&pin).unwrap();
+        assert_eq!(restored.pin_for_path(&path).unwrap().blake3, pin.blake3);
+        assert_eq!(hashes.count(), 2);
+        let parent = path.parent().unwrap();
+        let displaced_parent = temporary.path().join("original-parent");
+        std::fs::rename(parent, &displaced_parent).unwrap();
+        assert!(restored.pin_for_path(&path).is_err());
+        std::fs::create_dir(parent).unwrap();
+        std::fs::copy(displaced_parent.join(path.file_name().unwrap()), &path).unwrap();
+        assert!(restored.pin_for_path(&path).is_err());
+        assert_eq!(hashes.count(), 2);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(parent).unwrap();
+        std::fs::rename(&displaced_parent, parent).unwrap();
+        assert_eq!(restored.pin_for_path(&path).unwrap().blake3, pin.blake3);
+        assert_eq!(
+            hashes.count(),
+            2,
+            "the same unchanged file and ancestor regain custody"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn current_program_path_keeps_native_writer_and_replacement_denial_and_original_retry() {
+        let _resources = super::super::native_test_guard();
+        let (_temporary, path) = copied_native_program();
+        let hashes = ContentHashProbe::begin();
+        let launcher = NativeProgram::capture(&path).unwrap();
+        let pin = launcher.pin().unwrap();
+        assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
+        assert!(std::fs::rename(&path, path.with_file_name("displaced.exe")).is_err());
+        assert_eq!(launcher.pin_for_path(&path).unwrap().blake3, pin.blake3);
+        assert_eq!(hashes.count(), 1);
+        drop(launcher);
+        let displaced = path.with_file_name("displaced.exe");
+        std::fs::rename(&path, &displaced).unwrap();
+        std::fs::rename(&displaced, &path).unwrap();
+        let restored = NativeProgram::matching(&pin).unwrap();
+        assert_eq!(restored.pin_for_path(&path).unwrap().blake3, pin.blake3);
+        assert_eq!(hashes.count(), 2);
     }
 }

@@ -20,7 +20,7 @@ Purpose
       killed_by_scenario_only  its named tests passed, a listed scenario failed;
       survived                 nothing failed;
       error                    build/execution failed, timed out, or a filter matched no
-                               executed test. A process failure is not a mutation kill.
+                               declared control. A process failure is not a mutation kill.
 
     Deadlines classify execution as an error. After a deadline the runner waits for
     its owned Cargo child to exit naturally and retains the output without sending
@@ -30,6 +30,9 @@ Purpose
     the original step deadline; ignored or incomplete controls cannot establish a kill.
     A named step is a mutation's exact selector tuple. Baselines run each distinct
     tuple once; baseline and mutant randomized steps run one distinct scenario each.
+    Qualified selectors require their exact full test path; leaf selectors require
+    every exact final path segment in discovery. Cargo substring-selected extras
+    remain fully accounted, but their failures cannot replace a declared control.
     These independent invocations retain the configured per-step deadlines, and any
     step error prevents the aggregate result from qualifying.
 
@@ -37,8 +40,12 @@ Purpose
     (the as-built rules E1-E7 of Appendix E, with their regression tests) and MR-* (revision-4
     rules with det_r4 tests).
 
-    `--core` selects the Core unit-test owner and `SUMERAGI_CORE_MUTATION`;
+    `--core` selects the Core unit-test owner in the test profile and
+    `SUMERAGI_CORE_MUTATION`;
     `--daemon` selects the daemon unit-test owner and `SUMERAGI_DAEMON_MUTATION`.
+    `--model` selects DataModel unit tests in the test profile and its separate `SUMERAGI_MODEL_MUTATION`.
+    `--sdk` and `--deploy` select their own unit-test crates in the test profile, with
+    `SUMERAGI_SDK_MUTATION` and `SUMERAGI_DEPLOY_MUTATION`.
     Each test-only feature guards only its own crate, without mutating dependencies.
 
 Prerequisites
@@ -771,6 +778,114 @@ CORE_MUTATIONS = [
       ["state::state_preverify_backend_admission_tests::unsupported_retired_and_claimed_backends_fail_state_admission",
        "state::state_preverify_backend_admission_tests::native_compiled_descriptor_refusal_preserves_key_admission_and_original_retry"]),
 
+    m("HC147", "native AMX record acquisition: erase the original ordinary-write pool refusal",
+      ["sumeragi::amx::proof_tests::persisted_amx_original_read_retains_acquired_inode_and_exact_pool_through_decode_refusal"]),
+
+    m("HC148", "native AMX record acquisition: drop the acquired original archive after decode refusal",
+      ["sumeragi::amx::proof_tests::persisted_amx_original_read_retains_acquired_inode_and_exact_pool_through_decode_refusal"]),
+
+    m("HC149", "native AMX leg decode: substitute a foreign pool for the actual execution owner",
+      ["sumeragi::amx::native::tests::native_leg_decode_refuses_occupied_original_pool_before_any_copy_and_retries_exact_source"]),
+
+    m("HC150", "native AMX Worker retry: retire the completed original leg and decoder controls",
+      ["sumeragi::executor::amx_retry_tests::original_paid_amx_post_decode_refusal_retains_worker_leg_and_exact_retry"]),
+
+    m("HC151", "native AMX Worker retry: accept a physically replaced original SignedBlock graph",
+      ["sumeragi::executor::amx_retry_tests::completed_amx_worker_bank_refuses_replaced_source_parent_and_foreign_pool"]),
+
+    m("HC152", "native AMX Worker retry: collapse distinct equal Prepare instruction occurrences",
+      ["sumeragi::executor::amx_retry_tests::completed_amx_worker_bank_preserves_equal_occurrences_and_metadata_refusal"]),
+
+    m("HC153", "State membership capture: substitute the committed view for the staged original successor",
+      ["state::storage_transactions::authority::tests::original_publication_pair_matches_real_advance_replace_and_repeat"]),
+
+    m("HC154", "State membership capture: retain the repeated tip in the original successor rollback",
+      ["state::storage_transactions::authority::tests::original_publication_pair_matches_real_advance_replace_and_repeat"]),
+
+    m("HC155", "State membership capture: lend a terminal prepared publication writer",
+      ["state::storage_transactions::block::capture::publication_capture_phase_tests::original_membership_cut_refuses_started_published_unwind_and_completed_phases",
+       "state::storage_transactions::block::detached_publication::publication_capture_phase_tests::detached_membership_cut_refuses_started_published_unwind_and_released_phases"]),
+
+    m("HC156", "State membership capture: accept a refund scope belonging to another original pool",
+      ["state::authority_registry::complete::transaction_membership::tests::original_membership_scope_partial_foreign_and_released_owners_refuse"]),
+
+    m("HC157", "State membership capture: accept a prepared writer from foreign membership storage",
+      ["state::authority_registry::complete::transaction_membership::tests::original_membership_scope_partial_foreign_and_released_owners_refuse"]),
+
+    m("HC158", "State membership capture: accept a membership replacement beside an ordinary frozen World",
+      ["state::authority_registry::complete::transaction_membership::tests::original_membership_scope_partial_foreign_and_released_owners_refuse"]),
+    m("HC159", "native AMX outbound proof: discard the completed original graph after final namespace refusal",
+      ["sumeragi::amx::proof_tests::persisted_amx_completed_proof_retains_exact_graph_through_final_namespace_refusal"]),
+    m("HC160", "pending consensus penalty: erase the original physical compact-key allocator refusal",
+      ["sumeragi::penalties::tests::pending_penalty_peer_key_allocator_refusal_preserves_original_source_and_retries"]),
+
+    m("HC161", "AMX deadline publication: erase the original typed record resource refusal",
+      ["sumeragi::amx::tests::amx_deadline_record_refusal_keeps_original_pending_state_and_typed_retry"]),
+
+    m("HC162", "AMX deadline finalizer: turn local resource refusal into protocol rejection",
+      ["block::valid::tests::amx_deadline_finalizer_preserves_exact_local_refusal_without_rejection"]),
+
+    m("HC167", "native AMX Worker retry: bind immutable decoded legs to a stale State visibility publication",
+      ["sumeragi::executor::amx_retry_tests::original_paid_amx_post_decode_refusal_retains_worker_leg_and_exact_retry"]),
+
+    m("HC168", "retained State package read: reset cumulative traversal work on retry",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_package_read_tests::original_package_read_same_limit_retry_preserves_monotonic_work_and_exact_source"]),
+    m("HC169", "retained State package read: discard completed current positions on later undo allocation refusal",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_package_read_tests::original_package_read_retains_completed_current_index_on_later_physical_refusal"]),
+    m("HC170", "retained State reader retirement: report success while actual original readers remain",
+      ["state::block_field::retained_read::tests::retained_field_readers_and_positions_refuse_thaw_without_a_writer_wait"]),
+    m("HC171", "retained State group callback: return a result after the original State source changes",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_musubi_group_tests::original_musubi_group_callback_state_publication_refuses_and_drops_exact_result"]),
+
+    m("HC172", "retained State revision: accept equal staged allocations under the same predecessor",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_musubi_group_tests::original_musubi_group_equal_same_predecessor_revision_substitution_retains_original_pair"]),
+    m("HC173", "retained State Cell retirement: report success while actual original revision readers remain",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_musubi_group_tests::original_musubi_group_revision_reader_refusal_retains_completed_tables_and_exact_scope"]),
+
+    m("HC174", "retained State predecessor merge: select current instead of undo at an equal key",
+      ["state::publication::retained_rows::predecessor::tests::retained_predecessor_ordered_merge_matches_exact_original_before_rows_in_both_modes"]),
+    m("HC175", "retained State predecessor retry: discard completed descriptor backing and frontiers on later work refusal",
+      ["state::publication::retained_rows::predecessor::tests::retained_predecessor_later_work_refusal_preserves_descriptor_heads_frontiers_and_pool"]),
+
+    m("HC176", "retained semantic capture: discard original completed canonical rows on later local refusal",
+      ["state::authority_registry::leaf::paired::retained_semantic::tests::retained_semantic_original_rows_and_cursor_survive_later_refusal"]),
+
+    m("HC177", "retained State publication: discard successful Musubi validation on later writer refusal",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_state_successful_musubi_validation_survives_late_writer_refusal"]),
+
+    m("HC178", "retained State publication: discard successful live validation after universal scratch refuses",
+      ["state::acquisition_fixture_tests::direct_commit_musubi_scratch_tests::retained_state_live_musubi_success_survives_universal_capacity_refusal"]),
+
+    m("HC179", "retained World cut: discard completed original tail after final shared control refusal",
+      ["sumeragi::executor::publication_tests::original_worker_world_cut_retains_completed_tail_after_final_control_refusal"]),
+
+]
+
+
+# Model resource-custody rules execute only in the owning DataModel unit-test crate.
+MODEL_MUTATIONS = [
+    m("DM1", "AMX instruction custody: deep-copy the original funded instruction graph",
+      ["isi::amx_owner::tests::original_amx_instruction_clone_retains_exact_graph_and_pool_through_last_reader"]),
+    m("DM2", "AMX proof custody: omit the actual Begin participant allocation from admission",
+      ["isi::amx_owner::tests::original_amx_instruction_admits_complete_actual_layouts_before_copy_and_retries_same_pool"]),
+    m("DM3", "AMX instruction custody: retain the final additional ledger instead of refunding its exact credit",
+      ["isi::amx_owner::tests::original_amx_instruction_last_owner_destroys_fields_and_refunds_exact_ledger"]),
+    m("DM4", "AMX Begin source scan: skip the canonical participant field payload context",
+      ["sumeragi_amx::allocation::tests::original_begin_record_scan_preserves_canonical_depth_refusal_and_exact_retry"]),
+    m("DM5", "AMX transaction identity: reconstruct the canonical frame as heap scratch",
+      ["amx_prepare_streaming_allocations::observer_counts_all_three_allocation_routes_and_resets_after_unwind",
+       "amx_prepare_streaming_allocations::transaction_id_streaming_matches_canonical_frames_without_heap_allocations"]),
+    m("DM6", "AMX Begin matching: reconstruct a heap-owning Begin instead of borrowing its original fields",
+      ["amx_prepare_streaming_allocations::observer_counts_all_three_allocation_routes_and_resets_after_unwind",
+       "amx_prepare_streaming_allocations::begin_matches_borrows_original_graph_without_heap_allocations"]),
+    m("DM7", "Native AMX monetary effects: materialize the canonical leg frame as unfunded heap scratch",
+      ["amx_prepare_streaming_allocations::observer_counts_all_three_allocation_routes_and_resets_after_unwind",
+       "amx_prepare_streaming_allocations::native_transfer_effects_stream_exact_monetary_fields_without_heap_allocations"]),
+    m("DM8", "AMX deadline custody: consume pending source before every decision record succeeds",
+      ["sumeragi_amx::tests::sumeragi_amx_expiry_refusal_and_unwind_preserve_original_pending_graph"]),
+    m("DM9", "AMX record encoding: erase the original physical allocation refusal",
+      ["sumeragi_amx::tests::sumeragi_amx_encoding_keeps_exact_physical_allocator_refusal"]),
+
 ]
 
 
@@ -799,6 +914,30 @@ DAEMON_MUTATIONS = [
 ]
 
 
+SDK_MUTATIONS = [
+    m("SDK1", "Public Norito reads: accept missing or foreign response media",
+      ["http::public::tests::public_norito_reads_refuse_missing_foreign_media_and_elapsed_requests",
+       "http::public::tests::public_norito_reads_select_only_fixed_media_and_retain_original_public_policies"]),
+]
+
+DEPLOY_MUTATIONS = [
+    m("DEP1", "Managed AMX sources: reconstruct a lost published capsule over HTTP",
+      ["bootstrap::amx_sources::tests::managed_amx_sources_refuse_partial_removed_and_substituted_custody_without_http_repair",
+       "bootstrap::amx_sources::tests::managed_amx_sources_keep_original_g1_h2_across_advanced_checkpoint_and_reopen",
+       "bootstrap::amx_sources::tests::managed_amx_sources_refuse_incomplete_staging_without_refetch_or_new_deadline"]),
+    m("DEP2", "Managed AMX sources: accept same bytes from a replaced original file inode",
+      ["bootstrap::amx_sources::tests::managed_amx_sources_bind_original_file_identity_and_exact_capsule_inventory",
+       "bootstrap::amx_sources::tests::managed_amx_sources_feed_real_private_staging_and_exact_retained_generation"]),
+    m("DEP3", "Managed AMX sources: omit the live-release check after retained authentication",
+      ["bootstrap::amx_sources::tests::managed_amx_sources_recheck_release_after_retained_authentication_without_refetch"]),
+    m("DEP4", "Managed AMX sources: publish a new capsule after original acquisition expires",
+      ["bootstrap::amx_sources::tests::managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publication"]),
+    m("DEP5", "Managed AMX sources: reopen replaced G1/H2 from an unchanged local record",
+      ["bootstrap::amx_sources::tests::managed_amx_sources_reopen_refuses_identical_g1_h2_replacement_without_http_repair",
+       "bootstrap::amx_sources::tests::managed_amx_sources_reopen_preserves_original_native_pair_and_directory_without_new_reads"]),
+]
+
+
 def index_mutations(mutations):
     """Reject duplicate ids before selecting a test or counting a mutation kill."""
     indexed = {}
@@ -815,19 +954,57 @@ BY_ID = index_mutations(MUTATIONS)
 
 def package_options(args):
     """Select the actual implementation owner without propagating a mutation to dependencies."""
+    if getattr(args, "sdk", False):
+        return "iroha", "mutation-testing", "SUMERAGI_SDK_MUTATION"
+    if getattr(args, "deploy", False):
+        return "iroha_deploy", "mutation-testing", "SUMERAGI_DEPLOY_MUTATION"
+    if getattr(args, "model", False):
+        return "iroha_data_model", "mutation-testing", "SUMERAGI_MODEL_MUTATION"
     if getattr(args, "daemon", False):
         return "irohad_lib", "mutation-testing", "SUMERAGI_DAEMON_MUTATION"
     if getattr(args, "core", False):
         return "iroha_core", "mutation-testing,iroha-core-tests", "SUMERAGI_CORE_MUTATION"
     return CRATE, FEATURES, "SUMERAGI_MUTATION"
 
-TEST_LINE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED|ignored(?:, [^\n]*)?)$", re.M)
 TEST_COMPLETION = re.compile(
     r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; "
     r"(\d+) measured; (\d+) filtered out; finished in \d+(?:\.\d+)?s$", re.M)
 TEST_RUNNING = re.compile(r"^running (\d+) tests?$", re.M)
 TEST_LIST = re.compile(r"^(\S+): test$", re.M)
 TEST_LIST_COMPLETION = re.compile(r"^(\d+) tests?, (\d+) benchmarks?$", re.M)
+
+
+def serial_test_terminals(output):
+    """Bind each inline or logger-split status to its one serial libtest owner.
+
+    The caller also checks discovery, process exit, counts and header/summary
+    order. An orphan, duplicate or unfinished terminal never qualifies a result.
+    """
+    results = []
+    pending = None
+    valid = True
+    offset = 0
+    for line in output.splitlines(keepends=True):
+        text = line.rstrip("\r\n")
+        start = re.fullmatch(r"test (\S+)(?: - should panic)? \.\.\.(?: (.*))?", text)
+        if start:
+            if pending is not None:
+                valid = False
+            pending = (start.group(1), offset)
+            status = start.group(2) or ""
+        else:
+            status = text
+        if re.fullmatch(r"ok|FAILED|ignored(?:, .*?)?", status):
+            if pending is None:
+                valid = False
+            else:
+                name, begin = pending
+                results.append((name, status, begin, offset + len(text)))
+                pending = None
+        if text.startswith("test result:") and pending is not None:
+            valid = False
+        offset += len(line)
+    return results, valid and pending is None
 
 
 @dataclass
@@ -848,6 +1025,9 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     env.pop("SUMERAGI_MUTATION", None)
     env.pop("SUMERAGI_CORE_MUTATION", None)
     env.pop("SUMERAGI_DAEMON_MUTATION", None)
+    env.pop("SUMERAGI_MODEL_MUTATION", None)
+    env.pop("SUMERAGI_SDK_MUTATION", None)
+    env.pop("SUMERAGI_DEPLOY_MUTATION", None)
     crate, features, mutation_env = package_options(args)
     env.pop("SUMERAGI_SIM_SEED", None)
     env.pop("SUMERAGI_SIM_SEED_BASE", None)
@@ -858,7 +1038,8 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     else:
         env.pop("SUMERAGI_SIM_SEEDS", None)
     env["CARGO_TARGET_DIR"] = str(target_dir)
-    profile = getattr(args, "core_profile", None) if getattr(args, "core", False) else None
+    profile = ("test" if any(getattr(args, owner, False) for owner in ("model", "sdk", "deploy")) else
+               (getattr(args, "core_profile", None) or "test") if getattr(args, "core", False) else None)
     profile_options = ["--profile", profile] if profile else ["--release"]
     cmd = ["cargo", "test", "--locked", "-p", crate, *profile_options, "--features", features, "--lib"]
     if no_run:
@@ -891,6 +1072,17 @@ def cargo_test(args, target_dir, mutation, filters, seeds, timeout, log_path, no
     return code, out or "", elapsed
 
 
+def test_selector_matches(selector, name):
+    """Resolve a full test path or every exact leaf, without a substring substitute."""
+    return name == selector if "::" in selector else name.rsplit("::", 1)[-1] == selector
+
+
+def required_test_failures(filters, failed):
+    """Retain only failures of declared controls, separately from selected extras."""
+    return sorted(name for name in failed
+                  if any(test_selector_matches(selector, name) for selector in filters))
+
+
 def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
     """Account for the actual substring selection within one original deadline."""
     started = time.monotonic()
@@ -911,18 +1103,27 @@ def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
         step.status = "execution-error"
         step.detail.append("test discovery did not complete exactly one unique libtest inventory")
         return step
+    missing = [selector for selector in filters
+               if not any(test_selector_matches(selector, name) for name in selected)]
+    if missing:
+        step.status = "missing-test"
+        step.detail.append(f"no discovered declared control: {missing}")
+        return step
+    required = {name for name in selected
+                if any(test_selector_matches(selector, name) for selector in filters)}
     remaining = max(0.0, timeout - elapsed) if timeout else 0
     code, out, runtime_elapsed = cargo_test(
         args, target_dir, mutation,
         [*filters, "--test-threads=1", "--format", "pretty", "--color", "never"],
         seeds, remaining, log_path)
     elapsed = max(time.monotonic() - started, discovery_elapsed + runtime_elapsed)
-    results = TEST_LINE.findall(out)
+    terminals, terminal_owners_valid = serial_test_terminals(out)
+    results = [(name, verdict) for name, verdict, _, _ in terminals]
     ran = sorted({name for name, verdict in results if not verdict.startswith("ignored")})
     failed = sorted({name for name, verdict in results if verdict == "FAILED"})
     step = Step(status="pass", seconds=round(elapsed, 1), failed=failed, ran=ran,
                 selected=selected, log=str(log_path), discovery_log=str(discovery_log))
-    missing = [flt for flt in filters if not any(flt in name for name in ran)]
+    missing = sorted(required - set(ran))
     if code is None or (timeout and elapsed > timeout):
         step.status = "timeout"
         step.detail.append(f"timed out after {timeout}s")
@@ -939,7 +1140,7 @@ def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
         panics = re.findall(r"panicked at [^\n]*\n([^\n]*)", out)
         step.detail = (seeds_failed[:3] + violations[:3] + panics[:3])[:6]
     if missing and step.status in ("pass", "fail"):
-        step.detail.append(f"no executed test matched: {missing}")
+        step.detail.append(f"no executed declared control: {missing}")
         step.status = "missing-test"
     if step.status in ("pass", "fail"):
         expected = "FAILED" if step.status == "fail" else "ok"
@@ -947,14 +1148,13 @@ def run_step(args, target_dir, mutation, filters, seeds, timeout, log_path):
         summaries = TEST_COMPLETION.findall(out)
         summary_lines = re.findall(r"^test result:.*$", out, re.M)
         running = list(TEST_RUNNING.finditer(out))
-        terminals = list(TEST_LINE.finditer(out))
         completions = list(TEST_COMPLETION.finditer(out))
         ordered = (len(running) == len(completions) == 1 and bool(terminals)
-                   and running[0].end() < terminals[0].start()
-                   and terminals[-1].end() < completions[0].start())
+                   and running[0].end() < terminals[0][2]
+                   and terminals[-1][3] < completions[0].start())
         exact = (len(summary_lines) == len(summaries) == 1
                  and [match.group(1) for match in running] == [str(len(selected))]
-                 and ordered
+                 and ordered and terminal_owners_valid
                  and summaries[0][0] == expected
                  and tuple(map(int, summaries[0][1:5])) == (passed, len(failed), 0, 0)
                  and len(results) == len(selected) and len(ran) == len(results)
@@ -975,10 +1175,16 @@ def build(args, target_dir, mutation, log_path):
                 detail=detail, log=str(log_path))
 
 
-def has_switch(mid, *, core=False, daemon=False):
-    if core and daemon:
+def has_switch(mid, *, core=False, daemon=False, model=False, sdk=False, deploy=False):
+    if sum((core, daemon, model, sdk, deploy)) > 1:
         raise ValueError("a mutation has exactly one implementation owner")
-    if daemon:
+    if sdk:
+        cfg, source = "sumeragi_sdk_mutation", REPO / "crates" / "iroha" / "src"
+    elif deploy:
+        cfg, source = "sumeragi_deploy_mutation", REPO / "crates" / "iroha_deploy" / "src"
+    elif model:
+        cfg, source = "sumeragi_model_mutation", REPO / "crates" / "iroha_data_model" / "src"
+    elif daemon:
         cfg, source = "sumeragi_daemon_mutation", REPO / "crates" / "irohad" / "src"
     else:
         cfg = "sumeragi_core_mutation" if core else "sumeragi_mutation"
@@ -998,13 +1204,15 @@ def run_grouped_steps(args, target_dir, mutation, groups, seeds, timeout, logs, 
         else:
             step = run_step(args, target_dir, mutation, filters, seeds, timeout, log)
         steps.append({"filters": list(filters), "deadline_seconds": timeout,
-                      "seeds": seeds, **step.__dict__})
+                      "seeds": seeds, **step.__dict__,
+                      "required_failed": required_test_failures(filters, step.failed)})
     errors = [step["status"] for step in steps if step["status"] not in ("pass", "fail")]
     status = (errors[0] if errors else "fail" if any(step["status"] == "fail" for step in steps)
               else "pass" if steps else "missing-test")
     return {"status": status,
             "seconds": round(sum(step["seconds"] for step in steps), 1),
             "failed": sorted({name for step in steps for name in step["failed"]}),
+            "required_failed": sorted({name for step in steps for name in step["required_failed"]}),
             "ran": sorted({name for step in steps for name in step["ran"]}),
             "selected": sorted({name for step in steps for name in step["selected"]}),
             "steps": steps}
@@ -1018,7 +1226,13 @@ def evaluate(args, target_dir, mu):
         result.update(verdict="error", reason="no named test selectors")
         return result
     started = time.monotonic()
-    if getattr(args, "daemon", False):
+    if getattr(args, "sdk", False):
+        present = has_switch(mu.id, sdk=True)
+    elif getattr(args, "deploy", False):
+        present = has_switch(mu.id, deploy=True)
+    elif getattr(args, "model", False):
+        present = has_switch(mu.id, model=True)
+    elif getattr(args, "daemon", False):
         present = has_switch(mu.id, daemon=True)
     else:
         present = has_switch(mu.id, core=True) if getattr(args, "core", False) else has_switch(mu.id)
@@ -1032,19 +1246,25 @@ def evaluate(args, target_dir, mu):
         return result
     named = run_step(args, target_dir, mu.id, mu.tests, None, args.timeout_test,
                      logs / f"{mu.id}.named.log")
-    result["named"] = named.__dict__
-    killed_by_test = named.status == "fail"
+    named_failed = required_test_failures(mu.tests, named.failed)
+    result["named"] = {**named.__dict__, "required_failed": named_failed}
+    killed_by_test = named.status == "fail" and bool(named_failed)
     scen = None
     if mu.scenarios and not args.fast:
         groups = [(scenario,) for scenario in dict.fromkeys(SCENARIOS[s] for s in mu.scenarios)]
         scen = run_grouped_steps(args, target_dir, mu.id, groups, args.seeds,
                                  args.timeout_scenario, logs, f"{mu.id}.scenario")
         result["scenario"] = scen
-    killed_by_scenario = scen is not None and scen["status"] == "fail"
+    killed_by_scenario = scen is not None and scen["status"] == "fail" and bool(scen["required_failed"])
     if named.status not in ("pass", "fail"):
         result.update(verdict="error", reason=f"named tests: {named.status}")
+    elif named.status == "fail" and not killed_by_test:
+        result.update(verdict="error", reason="named tests: only additional substring-selected tests failed")
     elif scen is not None and scen["status"] not in ("pass", "fail"):
         result.update(verdict="error", reason=f"scenarios: {scen['status']}")
+    elif scen is not None and any(step["status"] == "fail" and not step["required_failed"]
+                                  for step in scen["steps"]):
+        result.update(verdict="error", reason="scenarios: only additional substring-selected tests failed")
     elif killed_by_test:
         result["verdict"] = "killed_by_test"
     elif killed_by_scenario:
@@ -1091,6 +1311,12 @@ def main():
                        help="qualify registered production iroha_core rules with their Core tests")
     owner.add_argument("--daemon", action="store_true",
                        help="qualify registered irohad_lib integration rules with daemon unit tests")
+    owner.add_argument("--model", action="store_true",
+                       help="qualify registered DataModel resource-custody rules with Model unit tests in the test profile")
+    owner.add_argument("--sdk", action="store_true",
+                       help="qualify registered SDK public-read rules with owning unit tests in the test profile")
+    owner.add_argument("--deploy", action="store_true",
+                       help="qualify registered Deploy managed-bootstrap custody rules with owning unit tests in the test profile")
     parser.add_argument("--only", help="comma-separated mutation ids (default: all)")
     parser.add_argument("--jobs", type=int, default=1,
                         help="parallel jobs, each with its own target sub-directory")
@@ -1099,14 +1325,14 @@ def main():
     parser.add_argument("--seeds", type=int, default=200,
                         help="SUMERAGI_SIM_SEEDS for the scenarios (default 200)")
     parser.add_argument("--target-dir", type=Path,
-                        help="dedicated target root (default: target/sumeragi-mutants; --core: target/sumeragi-core-mutants; --daemon: target/sumeragi-daemon-mutants)")
+                        help="dedicated target root (default: target/sumeragi-mutants; --core: target/sumeragi-core-mutants; --daemon: target/sumeragi-daemon-mutants; --model: target/sumeragi-model-mutants; --sdk: target/sumeragi-sdk-mutants; --deploy: target/sumeragi-deploy-mutants)")
     parser.add_argument("--skip-baseline", action="store_true",
                         help="do not run the unmutated build")
     parser.add_argument("--strict", action="store_true",
                         help="also fail when a mutation is killed only by its scenario "
                              "(the literal §13.4 CI rule)")
     parser.add_argument("--core-profile", choices=("release", "test"),
-                        help="Core-only build profile (default: release); identical for baseline and mutant")
+                        help="Core-only build profile (default: test); identical for baseline and mutant")
     parser.add_argument("--timeout-build", type=int, default=1200,
                         help="seconds per build deadline (0 disables its deadline)")
     parser.add_argument("--timeout-test", type=int, default=900,
@@ -1122,13 +1348,18 @@ def main():
     if args.strict and args.skip_baseline:
         parser.error("--strict requires the unmutated baseline")
     if args.target_dir is None:
-        name = ("sumeragi-daemon-mutants" if args.daemon else
+        name = ("sumeragi-sdk-mutants" if args.sdk else
+                "sumeragi-deploy-mutants" if args.deploy else
+                "sumeragi-model-mutants" if args.model else
+                "sumeragi-daemon-mutants" if args.daemon else
                 "sumeragi-core-mutants" if args.core else "sumeragi-mutants")
         args.target_dir = REPO / "target" / name
     args.target_dir = args.target_dir.resolve()
     if args.core_profile is not None and not args.core:
         parser.error("--core-profile requires --core; protocol and daemon qualification use release")
-    table = DAEMON_MUTATIONS if args.daemon else CORE_MUTATIONS if args.core else MUTATIONS
+    table = (SDK_MUTATIONS if args.sdk else DEPLOY_MUTATIONS if args.deploy else
+             MODEL_MUTATIONS if args.model else DAEMON_MUTATIONS if args.daemon else
+             CORE_MUTATIONS if args.core else MUTATIONS)
     by_id = index_mutations(table)
     if min(args.timeout_build, args.timeout_test, args.timeout_scenario) < 0:
         parser.error("timeouts must be nonnegative; 0 waits without terminating a command")
@@ -1169,10 +1400,17 @@ def main():
                 kind, mu = work.get_nowait()
             except queue.Empty:
                 return
-            if kind == "baseline":
-                res = evaluate_baseline(args, target_dir, selected)
-            else:
-                res = evaluate(args, target_dir, mu)
+            try:
+                if kind == "baseline":
+                    res = evaluate_baseline(args, target_dir, selected)
+                else:
+                    res = evaluate(args, target_dir, mu)
+            except Exception as error:
+                # A local guard/build/reader failure is an error for this original
+                # work item, never a test kill. Do not catch process interrupts.
+                res = {"id": "baseline" if kind == "baseline" else mu.id,
+                       "verdict": "error",
+                       "reason": f"worker evaluation raised {type(error).__name__}: {error}"}
             with lock:
                 results[res["id"]] = res
                 done[0] += 1
@@ -1193,7 +1431,7 @@ def main():
         verdicts.setdefault(results[mu.id]["verdict"], []).append(mu.id)
     baseline = results.get("baseline")
     summary = {
-        "baseline": baseline["verdict"] if baseline else "skipped",
+        "baseline": baseline["verdict"] if baseline else ("skipped" if args.skip_baseline else "error"),
         "mutations": len(selected),
         "killed_by_test": verdicts.get("killed_by_test", []),
         "killed_by_scenario_only": verdicts.get("killed_by_scenario_only", []),
@@ -1206,7 +1444,8 @@ def main():
         "generated": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "command": sys.argv,
         "package": package_options(args)[0],
-        "profile": (args.core_profile or "release") if args.core else "release",
+        "profile": ("test" if args.model or args.sdk or args.deploy else
+                    (args.core_profile or "test") if args.core else "release"),
         "seeds": None if args.fast else args.seeds,
         "fast": args.fast,
         "summary": summary,

@@ -14,7 +14,7 @@ fn original() -> Inputs {
         statement: [Fp::ZERO; 26],
     };
     let sigma = (0..64).collect::<Vec<u8>>();
-    let mut raw = (sigma.len() as u32).to_le_bytes().to_vec();
+    let mut raw = u32::try_from(sigma.len()).unwrap().to_le_bytes().to_vec();
     raw.extend(&sigma);
     let statement = hash_with_domain(
         iroha_plonk_gadgets::statement::STATEMENT_DOMAIN,
@@ -26,7 +26,28 @@ fn original() -> Inputs {
     Inputs {
         state,
         sigma,
+        receipt: [0; LoadReceiptCells::BYTES],
         objects: core::array::from_fn(|_| vec![]),
+        finality: SourceNodeEvidence {
+            endpoints: [Fp::ZERO; 6],
+            proof: vec![],
+            pallas: AccumulatorT::new(
+                iroha_plonk::transcript::decode_point::<Ep>(
+                    &iroha_plonk_recursion::PALLAS_TRIVIAL_GENERATOR,
+                )
+                .unwrap(),
+                [Fq::ONE; K],
+            )
+            .unwrap(),
+            vesta: AccumulatorT::new(
+                iroha_plonk::transcript::decode_point::<Eq>(
+                    &iroha_plonk_recursion::VESTA_TRIVIAL_GENERATOR,
+                )
+                .unwrap(),
+                [Fp::ONE; K],
+            )
+            .unwrap(),
+        },
         insertion: IndexedInsert {
             leaf: crate::tree::IndexedLeaf::default(),
             leaf_slot: 0,
@@ -109,10 +130,10 @@ fn load_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
         assert!(q_sigma_part(&bad, 12).is_err(), "mutation{mutation}");
     }
     let p = [
-        0x992d30ed00000001_u64,
-        0x224698fc094cf91b,
+        0x992d_30ed_0000_0001_u64,
+        0x2246_98fc_094c_f91b,
         0,
-        0x4000000000000000,
+        0x4000_0000_0000_0000,
     ];
     let mut repr = [0; 32];
     for (to, word) in repr.chunks_exact_mut(8).zip(p) {
@@ -124,12 +145,10 @@ fn load_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias() {
 }
 
 #[test]
-fn all_five_signed_originals_bind_body_and_each_raw_signature_limb() {
+fn all_three_signed_originals_bind_body_and_each_raw_signature_limb() {
     assert_eq!(
         object_kinds(),
         [
-            ObjectKind::Certificate,
-            ObjectKind::Voucher,
             ObjectKind::Receipt,
             ObjectKind::Certificate,
             ObjectKind::Credential
@@ -137,7 +156,7 @@ fn all_five_signed_originals_bind_body_and_each_raw_signature_limb() {
     );
     for kind in object_kinds() {
         let raw = (0..kind.body_len() + 64)
-            .map(|i| i as u8)
+            .map(|i| u8::try_from(i % 256).unwrap())
             .collect::<Vec<_>>();
         let digest = object_digest(kind, &raw).unwrap();
         for index in [
@@ -198,9 +217,44 @@ fn final_digest_has_exact52_fields_and_keeps_high_foreign_challenge_limbs() {
         .unwrap()
     );
     let part = FoldInput::from_normalized(eq, 16, [Fp::ONE; K]).unwrap();
-    let public = internal_public(digest, &part).unwrap();
+    let public = internal_public(digest, &part, None).unwrap();
     assert_eq!(public.len(), 69);
     assert_eq!(&public[62..65], &[Fp::ZERO, Fp::ONE, Fp::ZERO]);
     assert_eq!(&public[22..42], &public[42..62]);
     assert_eq!(&public[65..69], &public[22..26]);
+}
+
+#[test]
+fn original_key_bounds_reject_empty_oversized_and_excess_domain() {
+    let config = ReadConfig {
+        maximum_bytes: 16,
+        maximum_rows: 1 << 16,
+        coset_cache: iroha_plonk::keys::CosetCachePolicy::OnDemand,
+        msm_budget: MemoryBudget::DEFAULT,
+    };
+    assert_eq!(original_bounds(&[1; 16], 1 << 16, config), Ok(()));
+    assert_eq!(original_bounds(&[], 1 << 16, config), Err(Error::Artifact));
+    assert_eq!(
+        original_bounds(&[1; 17], 1 << 16, config),
+        Err(Error::Artifact)
+    );
+    assert_eq!(
+        original_bounds(&[1], (1 << 16) + 1, config),
+        Err(Error::Artifact)
+    );
+}
+
+#[test]
+fn fifth_checkpoint_is_terminal_and_out_of_range_source_is_rejected() {
+    assert_eq!(A_STAGE_COUNT, 5);
+    assert_eq!(
+        crate::a_relation::schedule::compiled::OperationSchedule::for_variant(Variant::Load)
+            .stage_count(),
+        A_STAGE_COUNT
+    );
+    for stage in 0..A_STAGE_COUNT {
+        assert_eq!(checkpoint_stage(stage), Ok(()));
+    }
+    assert_eq!(checkpoint_stage(A_STAGE_COUNT), Err(Error::Input));
+    assert_eq!(checkpoint_stage(usize::MAX), Err(Error::Input));
 }

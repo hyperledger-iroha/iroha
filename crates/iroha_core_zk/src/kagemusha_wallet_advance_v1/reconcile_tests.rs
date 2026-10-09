@@ -33,7 +33,14 @@ fn intent_only(seed: u8) -> (DeviceV1, KagemushaWalletSlotIdV1) {
         .with(|state| state.generate_unavailable = Some(false));
     let mut provider = device.open();
     assert!(matches!(
-        provider.begin_enrollment(&enrollment_challenge(seed), PROFILE),
+        provider.test_begin_enrollment(
+            &enrollment_challenge(seed),
+            PROFILE,
+            crate::kagemusha_wallet_advance_v1::KagemushaWalletEnrollmentDatesV1 {
+                issued_at_ms: 1,
+                expires_at_ms: 600_001
+            }
+        ),
         Err(KagemushaWalletProviderErrorV1::Unavailable(_))
     ));
     device
@@ -91,7 +98,7 @@ fn wallet_advance_v1_reconcile_without_marker_classifies_and_never_deletes() {
     assert!(names(&device, &slot_dir).contains(&KAGEMUSHA_WALLET_ABANDONED_NAME_V1.to_owned()));
     assert!(device.platform.key_of(&slot).is_some(), "the key is kept");
     assert_eq!(
-        provider.resume_enrollment(
+        provider.test_resume_enrollment(
             &slot,
             crate::kagemusha_wallet_advance_v1::KagemushaWalletChallengeLivenessV1::Live
         ),

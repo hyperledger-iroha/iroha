@@ -595,13 +595,14 @@ async fn advance_to_height(
 ) -> Result<()> {
     let peers = exact_process_roster(network, voters)?;
     let deadline = Instant::now() + WAIT;
+    let clients = peers
+        .iter()
+        .map(|peer| peer.client().client().clone())
+        .collect::<Vec<_>>();
     let mut tick = 0_u64;
     let mut pending_height = None;
     loop {
-        let mut heights = Vec::new();
-        for peer in &peers {
-            heights.push(committee_status::height_until(peer.client().client(), deadline).await?);
-        }
+        let heights = committee_status::heights_until(&clients, deadline).await?;
         ensure!(
             Instant::now() < deadline,
             "current validator quorum stalled before height {target}; heights={heights:?}"
@@ -875,6 +876,20 @@ fn finality_chain_from_proofs(
             block_wire: proof.block_wire,
         });
     }
+    let blocks = authenticate_finality_journal(&journal, chain_id, network_id, end, deadline)?;
+    Ok((journal, blocks))
+}
+
+// Both the original fresh reader and the growing journal run the same complete
+// native verifier. Earlier rows never acquire authority from being retained.
+fn authenticate_finality_journal(
+    journal: &NativeFinalityJournal,
+    chain_id: &iroha_model_base::chain::ChainId,
+    network_id: NetworkId,
+    end: u64,
+    deadline: Instant,
+) -> Result<Vec<CertifiedBlock>> {
+    let limits = finality_limits();
     let cursor = NativeJournalCursor::new(
         chain_id.clone(),
         network_id,
@@ -884,7 +899,7 @@ fn finality_chain_from_proofs(
     )
     .map_err(|error| eyre!(error))?;
     let blocks = with_verified_native_journal(
-        (&journal).into(),
+        journal.into(),
         chain_id,
         &network_id,
         limits,
@@ -901,7 +916,108 @@ fn finality_chain_from_proofs(
         Instant::now() < deadline,
         "committee proof verification deadline elapsed"
     );
-    Ok((journal, blocks))
+    Ok(blocks)
+}
+
+// A terminal ceremony callback owns its original base and every acquired suffix
+// row. Only actual new heights are requested; failure drops those original owners
+// rather than resetting quotas, truncating for retry or refetching old frames.
+// TODO: fund HTTP/DTO graphs and journal metadata/codec scratch independently;
+// unchanged source bounds and native decoder counters are not full pool custody.
+fn append_contiguous_finality_chain_until(
+    client: &Client,
+    network_id: NetworkId,
+    signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
+    journal: NativeFinalityJournal,
+    end: u64,
+    deadline: Instant,
+) -> Result<NativeFinalityJournal> {
+    let source = client.client().with_request_deadline(deadline);
+    append_finality_chain_from_proofs(
+        client.client().chain(),
+        network_id,
+        signed_genesis_hash,
+        journal,
+        end,
+        deadline,
+        |height| source.get_sumeragi_finality_proof(height),
+    )
+}
+
+fn append_finality_chain_from_proofs(
+    chain_id: &iroha_model_base::chain::ChainId,
+    network_id: NetworkId,
+    signed_genesis_hash: iroha::crypto::HashOf<iroha::data_model::block::BlockHeader>,
+    mut journal: NativeFinalityJournal,
+    end: u64,
+    deadline: Instant,
+    mut fetch: impl FnMut(
+        NonZeroU64,
+    ) -> Result<iroha::data_model::sumeragi_finality::SumeragiFinalityProof>,
+) -> Result<NativeFinalityJournal> {
+    ensure!(
+        (2..=MAX_QUALIFICATION_HEIGHT).contains(&end),
+        "committee proof cut exceeds its explicit disposable bound"
+    );
+    ensure!(
+        network_id.into_genesis_hash() == signed_genesis_hash,
+        "network differs from independent signed genesis"
+    );
+    let limits = finality_limits();
+    journal
+        .validate_source(limits)
+        .map_err(|error| eyre!(error))?;
+    let base = u64::try_from(journal.blocks.len())?;
+    ensure!(
+        base >= 2 && base < end,
+        "rotation phase must extend an original H2+ journal"
+    );
+    eprintln!(
+        "rotation finality prefix acquisition: base={base} target={end} planned_new_requests={}",
+        end - base
+    );
+    let mut source_bytes = journal.blocks.iter().try_fold(0_usize, |count, artifact| {
+        count
+            .checked_add(artifact.block_wire.len())
+            .ok_or_else(|| eyre!("committee proof source size overflow"))
+    })?;
+    for height in base + 1..=end {
+        ensure!(
+            Instant::now() < deadline,
+            "committee proof retrieval deadline elapsed"
+        );
+        let proof = fetch(NonZeroU64::new(height).expect("successors are nonzero"))?;
+        ensure!(
+            proof.height() == height,
+            "committee proof differs from requested height"
+        );
+        ensure!(
+            !proof.block_wire.is_empty() && proof.block_wire.len() <= limits.block_bytes,
+            "committee proof exceeds its block source bound"
+        );
+        source_bytes = source_bytes
+            .checked_add(proof.block_wire.len())
+            .ok_or_else(|| eyre!("committee proof source size overflow"))?;
+        ensure!(
+            source_bytes <= limits.journal_bytes,
+            "committee proof exceeds its journal source bound"
+        );
+        proof.decode_checked()?;
+        journal
+            .blocks
+            .try_reserve(1)
+            .map_err(|error| eyre!(error))?;
+        journal.blocks.push(NativeFinalityArtifact {
+            block_wire: proof.block_wire,
+        });
+    }
+    eprintln!(
+        "rotation finality prefix acquired: base={base} target={end} actual_new_rows={}",
+        end - base
+    );
+    authenticate_finality_journal(&journal, chain_id, network_id, end, deadline)?;
+    eprintln!("rotation finality prefix verified: tip={end}");
+    Ok(journal)
 }
 
 async fn stage_genesis_brokers(
@@ -1211,11 +1327,11 @@ async fn execute_rotation_preparation(
     let dkg = run_disposable_rotation_dkg(
         &target_seats,
         &authorizing_seats,
-        &selection_evidence,
+        selection_evidence,
         input,
         provider_revision,
         certificate_height,
-        |height, deadline| {
+        |height, deadline, journal| {
             let admin = admin.clone();
             let voters = current_roster.clone();
             async move {
@@ -1233,14 +1349,14 @@ async fn execute_rotation_preparation(
                     "rotation DKG public phase missed exact h{height} observation"
                 );
                 read_on_dedicated_thread(move || {
-                    Ok(read_contiguous_finality_chain_until(
+                    append_contiguous_finality_chain_until(
                         &admin,
                         network_id,
                         signed_genesis_hash,
+                        journal,
                         height,
                         deadline,
-                    )?
-                    .0)
+                    )
                 })
                 .await
                 .wrap_err("rotation phase finality worker failed")
@@ -2148,7 +2264,11 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
             .iter()
             .map(|peer| peer.id())
             .collect::<Vec<_>>();
-        advance_to_height(&network, &initial_roster, SELECTION).await?;
+        // Selection is certified at the final height of E. Preparation evidence
+        // must also certify an E+1 block under the preparing authorization. The
+        // progress helper stops exactly at its target, so pay for that successor
+        // explicitly instead of relying on an accidental boundary overshoot.
+        advance_to_height(&network, &initial_roster, SELECTION + 1).await?;
         let before = read_validator_committee(&admin, 2).await?;
         let selected = before
             .selected
@@ -2383,6 +2503,224 @@ fn committee_history_public_proofs_require_the_exact_genesis_anchored_prefix() -
         )
         .is_err()
     );
+    Ok(())
+}
+
+#[test]
+fn committee_rotation_history_queries_only_successors_and_reuses_original_frames() -> Result<()> {
+    use iroha_core::{
+        state::{StateReadOnly as _, World},
+        sumeragi::{
+            finality::build_proof,
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        },
+    };
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 30_000))
+        .map_err(|error| eyre!("native history fixture startup failed: {error:?}"))?;
+    // commit_at supplies actual clock-account Log work; these are not empty blocks.
+    for at in 30_001..=30_004 {
+        chain.commit_at(at, Vec::new());
+    }
+    let view = chain.state().view();
+    let chain_id = view.chain_id().clone();
+    let proofs = (1..=5)
+        .map(|height| build_proof(&view, height))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let fetch = |height: NonZeroU64| Ok(proofs[usize::try_from(height.get() - 1)?].clone());
+    let (mut journal, _) = finality_chain_from_proofs(
+        &chain_id,
+        chain.network_id(),
+        chain.genesis().hash(),
+        2,
+        Instant::now() + WAIT,
+        fetch,
+    )?;
+    let mut original = journal
+        .blocks
+        .iter()
+        .map(|artifact| {
+            (
+                artifact.block_wire.as_ptr(),
+                artifact.block_wire.capacity(),
+                artifact.block_wire.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut requested = Vec::new();
+    let deadline = Instant::now() + WAIT;
+    for end in 3..=5 {
+        journal = append_finality_chain_from_proofs(
+            &chain_id,
+            chain.network_id(),
+            chain.genesis().hash(),
+            journal,
+            end,
+            deadline,
+            |height| {
+                requested.push(height.get());
+                fetch(height)
+            },
+        )?;
+        assert_eq!(journal.blocks.len(), usize::try_from(end)?);
+        for (artifact, (pointer, capacity, bytes)) in journal.blocks.iter().zip(&original) {
+            assert_eq!(artifact.block_wire.as_ptr(), *pointer);
+            assert_eq!(artifact.block_wire.capacity(), *capacity);
+            assert_eq!(&artifact.block_wire, bytes);
+        }
+        let retained_count = original.len();
+        original.extend(journal.blocks.iter().skip(retained_count).map(|artifact| {
+            (
+                artifact.block_wire.as_ptr(),
+                artifact.block_wire.capacity(),
+                artifact.block_wire.clone(),
+            )
+        }));
+        let (fresh, _) = finality_chain_from_proofs(
+            &chain_id,
+            chain.network_id(),
+            chain.genesis().hash(),
+            end,
+            deadline,
+            fetch,
+        )?;
+        assert_eq!(
+            norito::encode_canonical(&journal)?,
+            norito::encode_canonical(&fresh)?
+        );
+    }
+    assert_eq!(
+        requested,
+        [3, 4, 5],
+        "old prefix rows must never be fetched again"
+    );
+    Ok(())
+}
+
+#[test]
+fn committee_rotation_history_refuses_changed_prefix_missing_rows_and_expired_deadline()
+-> Result<()> {
+    use iroha_core::{
+        state::{StateReadOnly as _, World},
+        sumeragi::{
+            finality::build_proof,
+            test_chain::{CertifiedTestChain, TestChainConfig},
+        },
+    };
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 40_000))
+        .map_err(|error| eyre!("native history fixture startup failed: {error:?}"))?;
+    chain.commit_at(40_001, Vec::new());
+    chain.commit_at(40_002, Vec::new());
+    let view = chain.state().view();
+    let chain_id = view.chain_id().clone();
+    let proofs = (1..=3)
+        .map(|height| build_proof(&view, height))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let fetch = |height: NonZeroU64| Ok(proofs[usize::try_from(height.get() - 1)?].clone());
+    let (base, _) = finality_chain_from_proofs(
+        &chain_id,
+        chain.network_id(),
+        chain.genesis().hash(),
+        2,
+        Instant::now() + WAIT,
+        fetch,
+    )?;
+    for policy in 0..4 {
+        let mut original = base.clone();
+        let mut end = 3;
+        let mut independent = chain.genesis().hash();
+        let mut deadline = Instant::now() + WAIT;
+        let expected = match policy {
+            0 => {
+                original.blocks.pop();
+                "rotation phase must extend an original H2+ journal"
+            }
+            1 => {
+                end = 2;
+                "rotation phase must extend an original H2+ journal"
+            }
+            2 => {
+                independent = iroha::crypto::HashOf::from_untyped_unchecked(Hash::new(
+                    b"foreign independent genesis",
+                ));
+                "network differs from independent signed genesis"
+            }
+            _ => {
+                deadline = Instant::now();
+                "committee proof retrieval deadline elapsed"
+            }
+        };
+        let error = append_finality_chain_from_proofs(
+            &chain_id,
+            chain.network_id(),
+            independent,
+            original,
+            end,
+            deadline,
+            |_| panic!("invalid prefix/deadline must refuse before fetching"),
+        )
+        .expect_err("terminal admission cannot return a phase journal");
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+    let error = append_finality_chain_from_proofs(
+        &chain_id,
+        chain.network_id(),
+        chain.genesis().hash(),
+        base.clone(),
+        3,
+        Instant::now() + WAIT,
+        |_| Err(eyre!("original successor read refused")),
+    )
+    .expect_err("original source failure terminates the ceremony");
+    assert_eq!(error.to_string(), "original successor read refused");
+    for changed in 0..3 {
+        let mut original = base.clone();
+        let mut successor = proofs[2].clone();
+        match changed {
+            0 => original.blocks[0].block_wire[0] ^= 1,
+            1 => {
+                original.blocks.swap(0, 1);
+            }
+            _ => {
+                successor.committee.pop();
+            }
+        }
+        let mut requested = Vec::new();
+        assert!(
+            append_finality_chain_from_proofs(
+                &chain_id,
+                chain.network_id(),
+                chain.genesis().hash(),
+                original,
+                3,
+                Instant::now() + WAIT,
+                |height| {
+                    requested.push(height.get());
+                    Ok(successor.clone())
+                },
+            )
+            .is_err(),
+            "changed original native prefix/proof metadata must not publish"
+        );
+        assert_eq!(requested, [3]);
+    }
+    let mut requested = Vec::new();
+    assert!(
+        append_finality_chain_from_proofs(
+            &chain_id,
+            chain.network_id(),
+            chain.genesis().hash(),
+            base,
+            3,
+            Instant::now() + WAIT,
+            |height| {
+                requested.push(height.get());
+                Ok(proofs[1].clone())
+            },
+        )
+        .is_err(),
+        "a returned predecessor cannot replace the exact requested successor"
+    );
+    assert_eq!(requested, [3]);
     Ok(())
 }
 

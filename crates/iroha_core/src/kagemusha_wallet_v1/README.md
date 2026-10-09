@@ -2,81 +2,97 @@
 
 `KagemushaWalletLedgerV1` is the closed instruction boundary. Registration requires an
 exact `CanManageKagemushaWallet { asset_definition }` grant and the reserve account's
-own transaction authority. The asset-definition capability owner grants that scoped
-permission through the normal permission instruction; an exact holder may delegate it.
-An asset owner cannot capture another account merely by registering a scheme.
+own transaction authority. Registration permanently binds the network, scheme, asset
+incarnation, scale, reserve account and balance scope. Exact retry does not increment
+permanent reference counts. Ordinary transfer, burn and account/asset teardown cannot
+spend or remove the reserve. Current and rollback snapshot validation checks the reserve
+indexes and each retained issuance's registration, wallet and ordinal bindings.
 
-Registration permanently binds the scheme, asset incarnation, scale, reserve account,
-and balance scope. It records authenticated constant-size reserve/account/definition
-indexes in the canonical World table. Exact registration retry does not increment them.
-No unregister or reserve-withdrawal instruction exists. Ordinary transfer, burn, account
-retirement, asset retirement, and domain teardown cannot spend or remove that reserve.
-Current and rollback snapshot restoration verify every reserve owner/index and the exact
-positive registration reference counts. Missing, mixed or inflated indexes are rejected.
+`IssueLoad` is an ordinary signed transaction instruction. The payer commits the exact
+asset, wallet, request identity, expected next ordinal, amount and optional charge. The
+ledger checks the ordinal before atomically debiting the payer, crediting the reserve and
+retaining the immutable load receipt. A stale ordinal or changed retry cannot debit funds.
+Only a deterministic retry of the original transaction at its original height can return
+the same receipt. A later transaction reusing the request fails; clients recover the original
+receipt through a committed query, including after loads close. Load requires the original
+global root scope and rejects independent private roots before debit; a dataspace lane of
+the global chain remains eligible. Genesis cannot issue loads. Dedicated issuer keys, voucher
+publication and a second publication transaction do not exist.
+
+Committed recovery reads borrow one generation-consistent `StateView` under finite
+record and cumulative decode limits. `CommittedLoadReceipts` checks the payer, registered
+network/scheme/asset, wallet ordinal and original transaction hash/height membership.
+Historical certificate availability does not limit receipt recovery after chain growth.
+The returned receipt is transport data; it grants no finality or offline balance authority.
+Clients independently authenticate native global consensus and the exact successful direct
+transaction with `verify_finalized_kagemusha_wallet_load_v1`, and must verify the complete
+Load proof before crediting value. A caller-supplied receipt or height cannot replace that
+verification. The receipt retains request, scheme, asset, wallet, ordinal, value, charge,
+payer and original transaction/height; later chain growth never replaces it.
+
+Creating that receipt also emits the typed `KagemushaLoadCommittedV1` event with its
+canonical transcript digest. The ordinary execution result commits to the exact event
+bytes, order and count. An exact execution retry emits no second event, and a failed
+enclosing transaction rolls the event back with its debit and receipt. The independent
+event-inclusion verifier requires native global finality and the complete expected
+receipt. Event naming or an unsigned receipt alone cannot authorize offline value.
+
+The output seal retains each Load's counted event path in the same World overlay before
+capturing the World root and execution witness. Each row has a fixed 32-sibling bound and
+contains only its receipt digest, height, root, count and index; it contains no certificate or
+carrier hash. Snapshot validation requires every issuance to retain its matching path.
+`NativeFinalityCursorV1::advance_to_height` advances a charged in-memory prefix from the
+original signed genesis in bounded steps and returns an opaque historical native result.
+`CommittedLoadReceipts::event_evidence_for` joins that result to the indexed original receipt
+and path, checks the certified event root and count, and invokes the model's event verifier.
+The cursor cannot import checkpoint trust or rewind progress. Receipt-only recovery remains
+available without historical certificate custody; authenticated event evidence requires it.
 
 Load deposits and Unload/fee payouts use the existing atomic numeric movement owner,
-including transfer controls, source custody, exact balances, admission, and execution
-transcripts. Both resolved balance buckets must equal the registered scope. The offline
-blacklist is not consulted for Unload. This implements the distinction in design §6:
-full claim face value and historical fees remain fixed; ordinary online asset controls
-can delay execution but do not rewrite a retained claim or create a haircut.
+including transfer controls, source custody, exact balances, admission and execution
+transcripts. Both balance buckets must equal the registered scope. Online asset controls
+can delay payouts but cannot rewrite a retained claim or impose a haircut. An undelivered
+load remains a reserve liability; no timeout refunds it.
 
-The native verifier is a mandatory Rust dependency. `InstallVerifierPack` requires the
-registered reserve account's own authority and its live exact asset management permission.
-It authenticates the complete signed sixteen-selector σ and Ω inventory against the
-registered Scheme and independently selected manifest identity, then retains the exact
-original bytes in one immutable World row. Exact retry preserves that row; replacement
-conflicts. Current and rollback snapshots require its authorizing registration. Every
-proof-consuming instruction mounts that same-overlay installation and fully verifies σ,
-the required Ω and both transported accumulator claims. Missing originals retain
-`ArtifactsUnavailable`; registration and structural G1 checks never authorize a proof.
+The native package verifier is mandatory. `InstallVerifierPack` requires the registered
+reserve account's authority and live exact asset-management permission. It authenticates
+the signed sigma/Omega inventory against the registered scheme and selected manifest,
+then retains the exact original bytes in one immutable World row. Proof-consuming
+instructions mount the same-overlay installation and fully verify sigma, required Omega
+and both transported accumulator claims. Missing originals retain `ArtifactsUnavailable`.
+Model validation and finalized load receipts never replace native proof verification.
 
-One package consumes one confidential operation and reserves one σ verification plus one
-Ω verification when lineage is carried. Aggregate transport bytes include both accumulator
-originals. All transaction/block proof limits are checked together before any reservation
-counter changes or native verification. Complete monetary producer artifacts, fold schedules
-and device/release qualification remain separate work; installing this verifier grants no
-foreign wallet-open capability. Fixture verifiers remain test-only orchestration.
+One package reserves one confidential operation and one sigma verification plus an Omega
+verification when lineage is carried. Aggregate transport bytes include both accumulator
+originals. All transaction/block proof limits are checked together before reservation
+counters change or native verification starts. Fixture verifiers remain test-only
+orchestration.
 
-Finalized issuance reads require a source-verified global CertifiedChain tip under finite
-NativeFinalityLimits, plus exact original transaction membership in that same World cut.
-An issuance body is not a signed voucher. `LoadAuthorizer` only prepares from that concrete
-capability. Its closed PublishVoucher command requires
-`CanPublishKagemushaLoadVoucher { asset_definition, scheme, authorizer_certificate }` and
-the exact historical LoadAuthorization signature/body. Asset governance delegates submission
-authority separately from management. The first bytes are immutable; exact retries succeed
-and another valid signature encoding conflicts. Publication moves no reserve funds.
+The node enrollment journal retains the original E1, approved selection and deadline in
+an explicitly initialized private namespace. Before exposing E1 in a signed pre-key permit,
+it freezes the authenticated worker's configuration and journal incarnation, retains the exact
+preparation and checks the worker's durable acknowledgement. It validates account-signed E5
+and stores the private verifier request before returning its sole Complete dispatch decision.
+A reread `Verifying` attempt permits Recover only. The worker may atomically claim the
+original prepared row once; a claimed row with an unknown result never repeats verification.
+After E5 selection the node cannot issue another Prepare, including after restart or worker
+storage loss. Unknown or unavailable outcomes do not restore a fresh attempt.
+Actual signed pre-key permits are authenticated and retained per native dispatch nonce, and
+Resume requires the previous exact original in the same journal. Worker replies bind the
+entire exchange packet, selected configuration, incarnation and E5. Evidence retains the
+actual first verification time, which may be later than the E5 selection time after recovery;
+retries cannot refresh it. Its exact original precedes a durable `Signing` selection that
+freezes the credential body and an issue time no earlier than that verification. The returned
+E6 must contain that exact body,
+evidence and selected Enrollment certificate; its actual signature is checked before exact
+E6 bytes are retained for delivery. Retries do not refresh issue time or replace the original.
+Publication errors poison the live owner until reopening and reconciliation. Native reads
+distinguish initial absence from later custody failure. This local ordering component does
+not establish KYC, worker provenance, signer custody or protection from a privileged rollback
+of the entire filesystem. TODO: connect the journal to approved current eligibility,
+the authenticated verifier process, Enrollment-role signer and Torii service owner; retain
+the ledger's permanent activation claims at that boundary.
 
-RotateLoadAuthorizer requires the management permission and a root-certified LoadAuthorization
-key. It changes a separate active pointer for future issuance; original registration, historical
-certificates, old issuance and published bytes remain fixed. The authorizer prefers retained
-bytes on retry. The Torii query remains read-only and releases only verified finalized records.
-
-Unsigned issuances atomically retain a pending-publication index under their original signer
-certificate. First publication removes that index in the same World transaction; snapshot and
-undo validation require both directions of the index/source binding. The worker reads bounded
-certificate-prefix pages and never scans or copies permanent issuance history. Its disposable
-cursors provide fair scheduling across historical certificates. Restart or an unknown queue
-result rereads finalized issuance and reconstructs the same deterministic voucher bytes; a
-completed first publication is obtained only from finalized state.
-
-The required daemon section `[kagemusha_load_authorizer]` contains owner-admitted
-`keyring_file` and `submitter_key_file` references. There is no enable or disable setting;
-missing, unsafe or malformed custody prevents startup, including emergency recovery mode.
-The former file is the
-canonical Norito `LoadAuthorizerKeyringV1` (version 1, at most 32 role-certified keys, at most
-65,536 bytes); the latter is a canonical ordinary ledger private key. The submitter needs the
-exact historical certificate submission grant. Keyring scalars and input buffers are wiped on
-drop; diagnostics redact them. No GET route signs, and no client supplies a validity verdict.
-
-`poll_interval_ms`, `page_size`, `block_bytes`, `journal_bytes`, `block_count`,
-`allocated_bytes` and `transaction_ttl_ms` set finite local capacities. `charge_limits` is the
-canonical ordered list of exact online fee kinds, assets and maximum amounts authorized by the
-submitter; the empty default authorizes no fee. These never relax
-finality, signatures or monetary validity. The supervised worker uses ordinary transaction
-admission and queue permissions/fees. Unavailable history, a stopped worker, revoked submission
-permission, or queue rejection retains the reserve liability and its pending work. Submission
-does not provide a durable-completion response.
-
-TODO(G6): qualify complete restart/network operation and the authenticated native A/Ω artifacts.
-No publication fee exemption or reserve debit is used.
+TODO(G3/G6): implement and qualify the compact offline Load relation consuming ordinary consensus evidence,
+complete producer artifacts and the end-to-end device/network flow. The online receipt
+alone grants no foreign wallet-open or proof-acceptance capability.

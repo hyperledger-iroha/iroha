@@ -4,8 +4,8 @@
 This replaces guards that pinned the deleted Halo2 test shards. Mathematical
 and admission behavior is covered by the native Rust proof/mutation suites;
 these checks cover source and shipping dependency retirement only. The
-temporary independent oracle and the separate Orchard dependency remain out
-of scope until their explicitly tracked retirement/carve-out milestones.
+external oracle is deleted. The separate Orchard dependency keeps its own
+package identity and remains outside the retired Axiom stack.
 """
 
 from __future__ import annotations
@@ -34,9 +34,26 @@ MIGRATED_CONSUMERS = (
     "sorafs_manifest",
 )
 
-
 class NativeProverRetirementSourceTest(unittest.TestCase):
     """Require one native consumer path without resurrecting retired dispatch."""
+
+    def test_external_oracle_and_vendor_owners_are_absent(self) -> None:
+        for relative in (
+            "crates/iroha_plonk_oracle", "crates/iroha_plonk/build.rs",
+            "vendor/halo2-axiom", "vendor/halo2-base", "vendor/halo2curves-axiom",
+            "ci/native_prover_oracle.py", "scripts/tests/native_prover_oracle_test.py",
+        ):
+            self.assertFalse((ROOT / relative).exists(), relative)
+
+    def test_native_library_has_no_external_oracle_configuration(self) -> None:
+        source_dir = ROOT / "crates/iroha_plonk/src"
+        sources = sorted(source_dir.rglob("*.rs"))
+        self.assertTrue(sources)
+        for path in sources:
+            source = path.read_text(encoding="utf-8")
+            self.assertNotRegex(source, r"\b(?:iroha_plonk_oracle|ORACLE_BUILD)\b", str(path))
+        manifest = (ROOT / "crates/iroha_plonk/Cargo.toml").read_text(encoding="utf-8")
+        self.assertNotRegex(manifest, r"(?m)^\s*build\s*=")
 
     def test_retired_sources_and_module_declarations_are_absent(self) -> None:
         source_dir = ROOT / "crates/iroha_core_zk/src"

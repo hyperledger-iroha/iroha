@@ -20,8 +20,8 @@
 //! Collection records a source-selected intent before deleting historical witness objects.
 //! A newer verified Ω supplies coverage; Send additionally needs pending-map nonmembership.
 //! Earned-fee Payments have separate custody until their exact finalized payout is verified.
-// TODO(G3/G4): connect the qualified native operation/Λ/Ω artifact loader; qualify the complete
-// custody/proof lifetime on stock phones. Multi-step run relations remain artifact-dependent.
+// TODO(G3/G4): qualify the installed full-catalog native owner through wallet/SDK delivery and
+// the complete custody/proof lifetime on stock phones. Run relations remain artifact-dependent.
 // Persistent replay metadata and unreachable immutable index nodes remain retained; a future
 // compactor must preserve source-selected reachable roots without full-history hot-path scans.
 
@@ -42,20 +42,57 @@ mod collection;
 mod credit_tree;
 mod custody;
 mod fee_claims;
+mod fold_custody;
 mod folding;
 mod index;
+mod lifecycle;
 mod manifest;
+mod map_custody;
+mod map_tree;
+mod native_owner;
+mod native_worker;
+mod policy_custody;
+pub use native_owner::{
+    ActivationFinalityProgressV1, LEDGER_INSTRUCTION_MAX_BYTES_V1, LEDGER_PROOF_MAX_BYTES_V1,
+    LedgerProgressV1, NativeInstallationConfigV1, NativeOpenErrorV1, NativeOpenFailureV1,
+    NativeOperationReviewV1, NativePreparedLedgerLoadV1, NativeReleasedOutputV1,
+    NativeStartupFailureV1, NativeWalletCoordinatorV1, NativeWalletMetadataV1,
+    NativeWalletProofsV1, NativeWalletRuntimeV1, PAYOUT_RECORD_MAX_BYTES_V1,
+    PendingNativeWalletOpenV1, ReviewedOperationV1, UnloadFinalityProgressV1,
+};
+mod preparation_custody;
 mod scheduling;
+mod session_custody;
 mod snapshot;
+mod transition_custody;
 
 pub use archive::{ArchiveKey, ArchiveStore, FsArchive};
-pub use collection::{CollectionStatus, OutgoingAbsent};
-pub use custody::{AdvanceHandle, Custody, ProviderArchive, TransitionOwner};
-pub use fee_claims::{FinalizedPayoutEvidence, RetainedFeeClaim};
+pub use collection::CollectionStatus;
+pub(crate) use custody::NativeObservationsV1;
+pub use custody::{
+    AdvanceHandle, Custody, CustodyDeletionProgressV1, CustodyDeletionReviewV1, ProviderArchive,
+    ReviewedCustodyDeletionV1, TransitionOwner,
+};
+pub use fee_claims::{FEE_CLAIM_MAX_BYTES_V1, FinalizedPayoutEvidence, RetainedFeeClaim};
+pub use fold_custody::FoldCustodyV1;
 pub use folding::{FoldStatus, LineageCache};
 pub use index::{IndexRoot, ObjectStore};
+pub(crate) use lifecycle::ArchiveIntentV1;
+pub use lifecycle::{
+    ChargeOriginalsV1, CreditProjectionV1, NativeIntentV1, NativePreparation, OperationActionV1,
+    OperationRequestV1, PREPARATION_MAX_BYTES, PreparationSourceV1, REQUEST_MAX_BYTES,
+    RequestStatusV1,
+};
+pub use map_custody::{PreparationMapV1, PreparationMapsV1};
+pub(crate) use native_worker::NativeFoldWorkerV1;
+pub(crate) use policy_custody::{
+    BlacklistOriginalReferenceV1, publish_blacklist_original, verify_policy_update_original,
+};
+pub use preparation_custody::{PreparationCustodyV1, PreparationOriginalV1};
 pub use scheduling::{Cancellation, PaymentGuard, Scheduler};
+pub use session_custody::DirectTimeExchangeV1;
 pub use snapshot::{Snapshot, SnapshotFold};
+pub use transition_custody::TransitionCustodyV1;
 
 /// Errors distinguish uncertain custody from invalid input and missing retained witnesses.
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +115,9 @@ pub enum Error {
     /// A previously used credit identity names different canonical Payment bytes.
     #[error("conflicting Payment for an already consumed credit")]
     CreditConflict,
+    /// A lifecycle operation identity already retains different exact user input.
+    #[error("conflicting lifecycle request for an already retained operation")]
+    OperationConflict,
     /// The operation needs Ω of the current head.
     #[error("current head is not folded")]
     FoldRequired,
@@ -90,7 +130,10 @@ pub enum Error {
     /// Payment work cancelled the current sub-proof.
     #[error("fold cancelled at a cooperative boundary")]
     Cancelled,
-    /// A required native proof failed or its implementation is unavailable.
+    /// Reinstallable original proving material is unavailable; monetary custody is retained.
+    #[error("native proof artifacts unavailable: {0}")]
+    ArtifactsUnavailable(&'static str),
+    /// A required native proof, source or key failed verification.
     #[error("native proof rejected: {0}")]
     Proof(&'static str),
 }
@@ -175,12 +218,37 @@ impl FrozenTransition {
 /// for any method. A production implementation must verify σ, all consumed objects and map
 /// roots before Advance, and both Pasta accumulator decides when verifying Ω.
 pub trait NativeProofs {
+    /// Opaque, verified inputs for the final check after durable publication.
+    /// Production tokens retain no advice/proof workspace or caller-supplied verdict.
+    type AdvanceCheck;
+
+    /// Exact admitted enrollment certificate set for this generation-zero credential.
+    /// Later credentials use their source-selected snapshot instead.
+    ///
+    /// # Errors
+    /// The owner has no matching admitted credential or its retained originals are unavailable.
+    fn enrollment_certificates(
+        &self,
+        credential: &KagemushaWalletCredentialV1,
+    ) -> Result<Vec<u8>, Error>;
     /// Trusted scheme and Global chain label selected when the authenticated artifacts were
     /// loaded. Witnesses and payout evidence must never supply or override these identities.
     ///
     /// # Errors
     /// Artifacts or their independently configured scheme/chain binding are unavailable.
     fn ledger_scope(&self) -> Result<(KagemushaWalletSchemeV1, String), Error>;
+
+    /// Verify exact delivery evidence against the original Request and Payment, including
+    /// every native signature/binding check and the installed package or lineage proof.
+    /// This read-only verdict cannot authorize Archive or replace its step and fold proofs.
+    /// # Errors
+    /// Invalid evidence, unavailable artifacts or cancelled verification yield no verdict.
+    fn verify_credited(
+        &self,
+        credited: &KagemushaWalletCreditedV1,
+        request: &KagemushaWalletRequestV1,
+        payment: &KagemushaWalletPaymentV1,
+    ) -> Result<(), Error>;
 
     /// Ordered intermediate proof layouts from the authenticated artifact schedule for this
     /// operation. The final Ω follows these checkpoints and keeps its separate wire bound.
@@ -191,27 +259,46 @@ pub trait NativeProofs {
         &self,
         witness: &ReleasedStep,
         predecessor: Option<&KagemushaWalletFoldRecordV1>,
+        custody: Option<&mut FoldCustodyV1<'_>>,
     ) -> Result<Vec<CheckpointLayout>, Error>;
     /// Verify the transition, inputs and σ against the actual selected predecessor state.
     /// `folded` is the exact Ω already verified and recorded for that predecessor.
+    /// `custody` holds the exact retained preparation and source-selected originals.
     ///
     /// # Errors
     /// Reject invalid/missing proofs, credentials, historical controls, amounts or map roots.
     fn verify_transition(
         &self,
         next: &FrozenTransition,
-        predecessor: Option<&FrozenTransition>,
+        predecessor: Option<&ReleasedStep>,
         folded: Option<&KagemushaWalletFoldRecordV1>,
-    ) -> Result<(), Error>;
+        custody: &mut TransitionCustodyV1<'_>,
+    ) -> Result<Self::AdvanceCheck, Error>;
+
+    /// Consume the verified token immediately before the sole irreversible Advance.
+    /// Enabled Send controls use a fresh native observation here, after archive writes.
+    /// Already selected Pending/Complete retries bypass this new-operation check.
+    ///
+    /// # Errors
+    /// Expired controls, a changed quota window charge or unavailable native clock.
+    fn check_advance(&self, check: Self::AdvanceCheck) -> Result<(), Error>;
 
     /// Verify Ω in full, including its deferred values and both curve accumulator decides.
     ///
     /// # Errors
-    /// Reject any invalid proof, binding, artifact or decide.
-    fn verify_lineage(&self, lineage: &KagemushaWalletLineageV1) -> Result<(), Error>;
+    /// Reject any invalid proof, binding, artifact or decide. Background callers supply
+    /// their operation signal; cancellation yields no proof verdict.
+    fn verify_lineage(
+        &self,
+        lineage: &KagemushaWalletLineageV1,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<(), Error>;
 
-    /// Compute exactly the next sub-proof of one released transition. Poll cancellation at
-    /// every parallel task boundary and release proof workspaces before returning.
+    /// Compute exactly the next sub-proof of one released transition. `checkpoints` holds
+    /// every prior original checkpoint in authenticated schedule order, after the coordinator
+    /// checked its exact layout and durable source chain. Genuine native restoration must
+    /// rederive each prior A/W source in order; the latest proof alone cannot supply that source.
+    /// Poll cancellation at every task boundary and release proof workspaces before returning.
     ///
     /// # Errors
     /// Return `Cancelled` on preemption; reject unavailable/invalid relation inputs.
@@ -219,7 +306,8 @@ pub trait NativeProofs {
         &self,
         witness: &ReleasedStep,
         predecessor: Option<&KagemushaWalletFoldRecordV1>,
-        checkpoint: Option<&[u8]>,
+        checkpoints: &[Vec<u8>],
+        custody: Option<&mut FoldCustodyV1<'_>>,
         cancellation: &Cancellation,
     ) -> Result<FoldProgress, Error>;
 }
@@ -337,29 +425,14 @@ pub struct Coordinator<C, A, N> {
 }
 
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
-    /// Bind a coordinator to one incarnation and a matching archive.
-    ///
-    /// # Errors
-    /// Reject a mismatched archive or a provider marker for another wallet.
-    pub fn new(
+    #[cfg(test)]
+    fn new(
         custody: C,
         archive: A,
         proofs: N,
         scheme_id: [u8; 32],
         wallet_id: [u8; 32],
     ) -> Result<Self, Error> {
-        let (scheme, chain) = proofs.ledger_scope()?;
-        valid(scheme.validate())?;
-        if scheme.scheme_id() != scheme_id
-            || chain.is_empty()
-            || chain.len() > 1024
-            || chain.chars().any(char::is_control)
-        {
-            return Err(Error::Invalid("native artifact ledger scope"));
-        }
-        if archive.binding() != (scheme_id, wallet_id) {
-            return Err(Error::Invalid("archive incarnation"));
-        }
         let mut this = Self {
             custody,
             archive,
@@ -369,15 +442,33 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             scheduler: Scheduler::new(),
             verified_folds: BTreeMap::new(),
         };
-        // Verify durable Ω once during open, before the payment critical path.
-        if !matches!(this.status()?, SlotStatus::Pending(_)) {
-            let (_, manifest) = this.sync_manifest()?;
+        this.initialize()?;
+        Ok(this)
+    }
+
+    // The sole production caller retains this draft until initialization succeeds.
+    // A failed read never consumes the provider or its original proving store.
+    fn initialize(&mut self) -> Result<(), Error> {
+        let (scheme, chain) = self.proofs.ledger_scope()?;
+        valid(scheme.validate())?;
+        if scheme.scheme_id() != self.scheme_id
+            || chain.is_empty()
+            || chain.len() > 1024
+            || chain.chars().any(char::is_control)
+        {
+            return Err(Error::Invalid("native artifact ledger scope"));
+        }
+        if self.archive.binding() != (self.scheme_id, self.wallet_id) {
+            return Err(Error::Invalid("archive incarnation"));
+        }
+        if !matches!(self.status()?, SlotStatus::Pending(_)) {
+            let (_, manifest) = self.sync_manifest()?;
             if let Some(sequence) = manifest.folded {
-                let step = this.indexed_step(&manifest, sequence)?;
-                this.read_fold(&step)?;
+                let step = self.indexed_step(&manifest, sequence)?;
+                self.read_fold(&step)?;
             }
         }
-        Ok(this)
+        Ok(())
     }
 
     /// Share the scheduler with the UI/transport so payment arrival can preempt proving.
@@ -561,15 +652,64 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 return Err(Error::Invalid("recorded predecessor Ω"));
             }
         }
-        self.proofs.verify_transition(
+        let prepared = self.transition_preparation(&manifest, &frozen)?;
+        let selected_source = if let Some(prepared) = &prepared {
+            let previous = predecessor
+                .as_ref()
+                .ok_or(Error::WitnessLost("prepared predecessor"))?;
+            if prepared.source != valid(previous.frozen.capsule.capsule_digest())? {
+                return Err(Error::WitnessLost("prepared transition source"));
+            }
+            Some(self.preparation_source_custody(&manifest, previous, c.kind, folded.as_ref())?)
+        } else {
+            None
+        };
+        let refresh = match c.statement.effect {
+            KagemushaWalletEffectV1::RefreshPolicy { update_kind, .. } => Some(update_kind),
+            _ => None,
+        };
+        let view = selected_source
+            .as_ref()
+            .map(|(source, state)| {
+                PreparationCustodyV1::new(
+                    &mut self.archive,
+                    source,
+                    state,
+                    c.kind,
+                    refresh,
+                    manifest.issued_requests,
+                    manifest.direct_anchors,
+                )
+            })
+            .transpose()?;
+        let mut context = TransitionCustodyV1::new(prepared, view)?;
+        let advance_check = self.proofs.verify_transition(
             &frozen,
-            predecessor.as_ref().map(|s| &s.frozen),
+            predecessor.as_ref(),
             folded.as_ref(),
+            &mut context,
         )?;
+        let mut next_custody = context.finish(&c.successor_state)?;
+        if c.kind == KagemushaWalletOperationKindV1::Bootstrap {
+            if predecessor.is_some() {
+                return Err(Error::Invalid("bootstrap predecessor"));
+            }
+            let certificates = self.proofs.enrollment_certificates(&frozen.credential)?;
+            next_custody = Some(preparation_custody::SourceCustodyV1::bootstrap(
+                &mut self.archive,
+                &c.successor_state,
+                &valid(frozen.credential.to_canonical_bytes())?,
+                &certificates,
+            )?);
+        }
         let digest = valid(c.capsule_digest())?;
+        if let Some(source) = next_custody {
+            self.retain_source_custody(digest, &source)?;
+        }
         self.archive
             .put(ArchiveKey::Capsule(digest), &archive::encode(&frozen)?)?;
         self.status()?;
+        self.proofs.check_advance(advance_check)?;
         let outcome = map_outcome(self.custody.advance(&owner, &request)?);
         if matches!(outcome, Completion::Complete(_)) {
             self.sync_manifest()?;

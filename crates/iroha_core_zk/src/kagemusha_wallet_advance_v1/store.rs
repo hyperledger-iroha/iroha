@@ -10,7 +10,8 @@
 //!   write, `sync_all`, `RENAME_NOREPLACE`, parent `sync_all`. Failures before the rename are
 //!   `NotPublished` (the staging file is discarded); `EEXIST` from the rename is
 //!   `DestinationExists`; an indeterminate rename error or any failure after the rename is
-//!   `Uncertain`. Staging-name exhaustion is never `DestinationExists`.
+//!   `Uncertain`. Staging-name exhaustion is never `DestinationExists`; entropy failure
+//!   is `NotPublished` before file creation, with no fallback name.
 //! - **pair** ([`KagemushaWalletDurableStoreV1::write_new_pair`]): two staged files, two
 //!   syncs, two create-new renames and one parent sync; the outcome is reported per name.
 //! - **same-content rewrite** ([`KagemushaWalletDurableStoreV1::rewrite_same`]): publishes
@@ -19,13 +20,13 @@
 //! - **removal** ([`KagemushaWalletDurableStoreV1::remove_file`]): unlink, then parent sync;
 //!   an already-absent name is synced as absent. Empty directories are removed the same way
 //!   ([`KagemushaWalletDurableStoreV1::remove_dir`]).
-//! - **reads and listings** never report an error as absence; only the OS's `NotFound` is
-//!   `Absent`, and a listing fails as a whole on any entry error.
+//! - **reads and listings** report only initial native-open absence as `Absent`;
+//!   later custody/read failures are unavailable, and any entry error fails a whole listing.
 //!
 //! The mutating primitives are private to the provider: other code gets custody only through
 //! the provider's operations.
 //!
-//! [`KagemushaWalletStdFsV1`] is the `std::fs` backend (Unix). `KagemushaWalletSimFsV1`
+//! [`KagemushaWalletStdFsV1`] uses retained native Unix/Windows custody. `KagemushaWalletSimFsV1`
 //! (tests and the `test-utils` feature) keeps visible and durable state separately for file
 //! data and directory entries, injects deterministic faults at every step, and simulates
 //! process crashes, restarts and power loss.
@@ -49,6 +50,20 @@ use super::{
 
 /// Staging-name attempts before a create-new write gives up.
 const STAGING_ATTEMPTS: u32 = 8;
+
+/// Format a random candidate only after a successful, fallible entropy read.
+/// Exclusive creation and retained descriptors establish custody, not the name itself.
+fn staging_name_with_entropy(
+    fill: impl FnOnce(&mut [u8; 16]) -> io::Result<()>,
+) -> io::Result<String> {
+    let mut random = [0_u8; 16];
+    fill(&mut random)?;
+    Ok(format!(
+        "{}{}",
+        super::layout::KAGEMUSHA_WALLET_STAGING_PREFIX_V1,
+        super::layout::lower_hex(&random)
+    ))
+}
 
 /// Durable custody store over one filesystem backend.
 #[derive(Debug, Clone)]
@@ -433,7 +448,10 @@ impl<F: KagemushaWalletFsV1> KagemushaWalletDurableStoreV1<F> {
     ) -> Result<StagedV1<F::StagedFile>, KagemushaWalletNotPublishedV1> {
         let mut collisions = 0_u32;
         let (staged, mut file) = loop {
-            let staged = self.fs.staging_name();
+            let staged = self
+                .fs
+                .staging_name()
+                .map_err(|error| not_published(&error))?;
             match self.fs.create_new(dir, &staged) {
                 Ok(file) => break (staged, file),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -513,34 +531,34 @@ impl<F: KagemushaWalletFsV1> KagemushaWalletDurableStoreV1<F> {
 // std::fs backend
 // ---------------------------------------------------------------------------------------
 
-#[cfg(unix)]
 pub use self::std_fs::{KagemushaWalletStdFsLockV1, KagemushaWalletStdFsV1};
 
-#[cfg(unix)]
 mod std_fs {
     use super::super::{
-        layout::{KAGEMUSHA_WALLET_LOCK_NAME_V1, KagemushaWalletCustodyDirV1, lower_hex},
+        layout::{KAGEMUSHA_WALLET_LOCK_NAME_V1, KagemushaWalletCustodyDirV1},
         platform::{
             KagemushaWalletEntryKindV1, KagemushaWalletFsV1, KagemushaWalletListedEntryV1,
             KagemushaWalletNotPublishedV1, KagemushaWalletPublishOutcomeV1,
             KagemushaWalletUnavailableV1,
         },
     };
-    use iroha_fs::{
-        CustodyEntryKind, FileIdentity, OwnerDirectory, PrivateDirectory, PublishMode, RetainedFile,
-    };
+    use iroha_fs::{CustodyEntryKind, OwnerDirectory, PrivateDirectory, PublishMode, RetainedFile};
     use std::{
         collections::BTreeMap,
         fs::{File, TryLockError},
         io::{self, Read as _, Write as _},
-        os::unix::fs::MetadataExt as _,
         path::{Path, PathBuf},
         sync::{Arc, Mutex, Weak},
     };
 
     type DirectoryCache = Mutex<BTreeMap<Vec<String>, Arc<PrivateDirectory>>>;
-    type StagingCache = Mutex<BTreeMap<(Vec<String>, String), Weak<FileIdentity>>>;
-    /// Descriptor-relative native custody. The root and each visited child retain their exact
+    #[cfg(windows)]
+    use std::collections::BTreeSet;
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt as _;
+    type OriginalStaging = Mutex<Option<RetainedFile>>;
+    type StagingCache = Mutex<BTreeMap<(Vec<String>, String), Weak<OriginalStaging>>>;
+    /// Retained native custody. The root and each visited child retain their exact
     /// ancestor identities across operations; no pathname reopening can adopt a replacement.
     #[derive(Debug, Clone)]
     pub struct KagemushaWalletStdFsV1 {
@@ -548,6 +566,9 @@ mod std_fs {
         path: PathBuf,
         directories: Arc<DirectoryCache>,
         staging: Arc<StagingCache>,
+        // A consumed child that failed removal can never be reopened as replacement custody.
+        #[cfg(windows)]
+        removal_uncertain: Arc<Mutex<BTreeSet<Vec<String>>>>,
     }
     /// Exclusive ownership lock retaining the same root custody for its whole lifetime.
     #[derive(Debug)]
@@ -558,8 +579,7 @@ mod std_fs {
     /// Original staged descriptor and identity; publication must still name this exact inode.
     #[derive(Debug)]
     pub struct KagemushaWalletStdFsStagedV1 {
-        file: RetainedFile,
-        _identity: Arc<FileIdentity>,
+        file: Arc<OriginalStaging>,
     }
     fn custody_changed(error: io::Error) -> io::Error {
         if error.kind() == io::ErrorKind::NotFound {
@@ -581,16 +601,22 @@ mod std_fs {
         /// Missing or unsafe roots, symlinks, replaced ancestors and genuine native errors.
         pub fn open(root: impl Into<PathBuf>) -> Result<Self, KagemushaWalletUnavailableV1> {
             let path = root.into();
-            let metadata = std::fs::symlink_metadata(&path)
-                .map_err(|e| KagemushaWalletUnavailableV1::from_io(&e))?;
-            if !metadata.is_dir() {
-                return Err(KagemushaWalletUnavailableV1::Io(0));
+            #[cfg(unix)]
+            {
+                let metadata = std::fs::symlink_metadata(&path)
+                    .map_err(|e| KagemushaWalletUnavailableV1::from_io(&e))?;
+                if !metadata.is_dir() {
+                    return Err(KagemushaWalletUnavailableV1::Io(0));
+                }
+                if !root_is_private(metadata.uid(), metadata.mode()) {
+                    return Err(KagemushaWalletUnavailableV1::Io(
+                        rustix::io::Errno::ACCESS.raw_os_error(),
+                    ));
+                }
             }
-            if !root_is_private(metadata.uid(), metadata.mode()) {
-                return Err(KagemushaWalletUnavailableV1::Io(
-                    rustix::io::Errno::ACCESS.raw_os_error(),
-                ));
-            }
+            // Windows admission is the existing protected-current-user NTFS native owner;
+            // no pathname metadata or caller boolean substitutes for its retained DACL/ID.
+
             let root = PrivateDirectory::open(&path)
                 .map_err(|e| KagemushaWalletUnavailableV1::from_io(&e))?;
             Ok(Self {
@@ -598,6 +624,8 @@ mod std_fs {
                 path,
                 directories: Arc::default(),
                 staging: Arc::default(),
+                #[cfg(windows)]
+                removal_uncertain: Arc::default(),
             })
         }
         /// Create and sync one private child of a retained safe parent; never harden an existing
@@ -646,18 +674,33 @@ mod std_fs {
             dir: &KagemushaWalletCustodyDirV1,
         ) -> io::Result<Arc<PrivateDirectory>> {
             self.root.revalidate().map_err(custody_changed)?;
+            // Serialize cache selection with any consuming child-removal transition.
+            let mut cache = self.directories.lock().map_err(|_| poisoned())?;
+            #[cfg(windows)]
+            if self
+                .removal_uncertain
+                .lock()
+                .map_err(|_| poisoned())?
+                .iter()
+                .any(|removed| components(dir).starts_with(removed))
+            {
+                return Err(io::Error::other(
+                    "child removal requires fresh runtime reconciliation",
+                ));
+            }
             let mut current = Arc::clone(&self.root);
             let mut prefix = Vec::new();
-            let mut cache = self.directories.lock().map_err(|_| poisoned())?;
             for component in dir.components() {
                 prefix.push(component.to_owned());
                 if let Some(held) = cache.get(&prefix) {
                     held.revalidate().map_err(custody_changed)?;
                     current = Arc::clone(held);
                 } else {
-                    let opened = current.open_child(component);
-                    current.revalidate().map_err(custody_changed)?;
-                    let child = Arc::new(opened?);
+                    let child = current
+                        .open_child_optional(component)
+                        .map_err(custody_changed)?
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+                    let child = Arc::new(child);
                     cache.insert(prefix.clone(), Arc::clone(&child));
                     current = child;
                 }
@@ -681,14 +724,18 @@ mod std_fs {
                 .ok_or_else(|| {
                     io::Error::other("publication requires the live original staged file")
                 })?;
-            self.directory(dir)?
-                .rename_custody_file(from, to, *original, mode)
+            self.directory(dir)?.revalidate()?;
+            let mut held = original.lock().map_err(|_| poisoned())?;
+            held.as_mut()
+                .ok_or_else(|| io::Error::other("staged original was consumed"))?
+                .rename_custody_file(from, to, mode)
         }
     }
+    #[cfg(unix)]
     pub(super) fn root_is_private(uid: u32, mode: u32) -> bool {
         uid == rustix::process::geteuid().as_raw() && mode & 0o077 == 0
     }
-    #[cfg(test)]
+    #[cfg(all(unix, test))]
     pub(super) const NOFOLLOW: i32 = {
         let bits = rustix::fs::OFlags::NOFOLLOW.bits();
         assert!(bits != 0 && bits <= 0x7fff_ffff);
@@ -702,34 +749,34 @@ mod std_fs {
             dir: &KagemushaWalletCustodyDirV1,
             name: &str,
         ) -> io::Result<Self::StagedFile> {
-            let file = self.directory(dir)?.create_custody_writer(name)?;
-            let identity = Arc::new(file.identity()?);
+            let file = Arc::new(Mutex::new(Some(
+                self.directory(dir)?.create_custody_writer(name)?,
+            )));
             let mut staging = self.staging.lock().map_err(|_| poisoned())?;
             staging.retain(|_, entry| entry.strong_count() > 0);
-            staging.insert(
-                (components(dir), name.to_owned()),
-                Arc::downgrade(&identity),
-            );
-            Ok(KagemushaWalletStdFsStagedV1 {
-                file,
-                _identity: identity,
-            })
+            staging.insert((components(dir), name.to_owned()), Arc::downgrade(&file));
+            Ok(KagemushaWalletStdFsStagedV1 { file })
         }
         fn write_all(&self, file: &mut Self::StagedFile, bytes: &[u8]) -> io::Result<()> {
-            file.file.revalidate()?;
-            file.file.file_mut().write_all(bytes)?;
-            file.file.revalidate()
+            let mut held = file.file.lock().map_err(|_| poisoned())?;
+            let original = held
+                .as_mut()
+                .ok_or_else(|| io::Error::other("staged original was consumed"))?;
+            original.revalidate()?;
+            original.file_mut().write_all(bytes)?;
+            original.revalidate()
         }
         fn sync_staged(&self, file: &Self::StagedFile) -> io::Result<()> {
-            file.file.revalidate()?;
-            file.file.file().sync_all()?;
-            file.file.revalidate()
+            let held = file.file.lock().map_err(|_| poisoned())?;
+            let original = held
+                .as_ref()
+                .ok_or_else(|| io::Error::other("staged original was consumed"))?;
+            original.revalidate()?;
+            original.file().sync_all()?;
+            original.revalidate()
         }
         fn sync_named(&self, dir: &KagemushaWalletCustodyDirV1, name: &str) -> io::Result<()> {
-            let directory = self.directory(dir)?;
-            let file = directory.open_retained_private(name)?;
-            file.file().sync_all()?;
-            file.revalidate()
+            self.directory(dir)?.sync_custody_file(name)
         }
         fn rename_noreplace(
             &self,
@@ -748,19 +795,46 @@ mod std_fs {
             self.rename(dir, from, to, PublishMode::Replace)
         }
         fn unlink(&self, dir: &KagemushaWalletCustodyDirV1, name: &str) -> io::Result<()> {
-            self.directory(dir)?.remove_custody_file(name)
+            let directory = self.directory(dir)?;
+            let original = self
+                .staging
+                .lock()
+                .map_err(|_| poisoned())?
+                .get(&(components(dir), name.to_owned()))
+                .and_then(Weak::upgrade);
+            if let Some(original) = original {
+                let file = original
+                    .lock()
+                    .map_err(|_| poisoned())?
+                    .take()
+                    .ok_or_else(|| io::Error::other("staged original was consumed"))?;
+                file.remove_custody_file(name)
+            } else {
+                directory.remove_custody_file(name)
+            }
         }
         fn sync_dir(&self, dir: &KagemushaWalletCustodyDirV1) -> io::Result<()> {
             self.directory(dir)?.sync()
         }
         fn mkdir(&self, parent: &KagemushaWalletCustodyDirV1, name: &str) -> io::Result<()> {
-            let child = Arc::new(self.directory(parent)?.create_child(name)?);
+            let parent_directory = self.directory(parent)?;
             let mut key = components(parent);
             key.push(name.to_owned());
-            self.directories
+            let mut cache = self.directories.lock().map_err(|_| poisoned())?;
+            #[cfg(windows)]
+            if self
+                .removal_uncertain
                 .lock()
                 .map_err(|_| poisoned())?
-                .insert(key, child);
+                .iter()
+                .any(|removed| key.starts_with(removed))
+            {
+                return Err(io::Error::other(
+                    "child removal requires fresh runtime reconciliation",
+                ));
+            }
+            let child = Arc::new(parent_directory.create_child(name)?);
+            cache.insert(key, child);
             Ok(())
         }
         fn remove_dir(&self, parent: &KagemushaWalletCustodyDirV1, name: &str) -> io::Result<()> {
@@ -768,14 +842,61 @@ mod std_fs {
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "directory name"))?;
             let target = parent.child(&key_name);
             let child = self.directory(&target)?;
-            self.directory(parent)?
-                .remove_custody_directory(name, child.identity()?)?;
-            let key = components(&target);
-            self.directories
-                .lock()
-                .map_err(|_| poisoned())?
-                .retain(|candidate, _| !candidate.starts_with(&key));
-            Ok(())
+            #[cfg(unix)]
+            {
+                self.directory(parent)?
+                    .remove_custody_directory(name, child.identity()?)?;
+                let key = components(&target);
+                self.directories
+                    .lock()
+                    .map_err(|_| poisoned())?
+                    .retain(|candidate, _| !candidate.starts_with(&key));
+                Ok(())
+            }
+            #[cfg(windows)]
+            {
+                // Refuse before consumption when the directory is nonempty or another
+                // original capability is live. Never drop it to make DELETE sharing work.
+                if !child.entries(usize::MAX)?.is_empty() {
+                    return Err(io::ErrorKind::DirectoryNotEmpty.into());
+                }
+                let key = components(&target);
+                let mut cache = self.directories.lock().map_err(|_| poisoned())?;
+                if cache
+                    .keys()
+                    .any(|candidate| candidate != &key && candidate.starts_with(&key))
+                {
+                    return Err(io::ErrorKind::ResourceBusy.into());
+                }
+                let cached = cache
+                    .remove(&key)
+                    .ok_or_else(|| io::Error::other("child cache changed"))?;
+                if !Arc::ptr_eq(&cached, &child) {
+                    cache.insert(key, cached);
+                    return Err(io::Error::other("child cache changed"));
+                }
+                drop(cached);
+                let original = match Arc::try_unwrap(child) {
+                    Ok(original) => original,
+                    Err(original) => {
+                        cache.insert(key, original);
+                        return Err(io::ErrorKind::ResourceBusy.into());
+                    }
+                };
+                self.removal_uncertain
+                    .lock()
+                    .map_err(|_| poisoned())?
+                    .insert(key.clone());
+                drop(cache);
+                let result = original.remove_custody_empty();
+                if result.is_ok() {
+                    self.removal_uncertain
+                        .lock()
+                        .map_err(|_| poisoned())?
+                        .remove(&key);
+                }
+                result
+            }
         }
         fn read(
             &self,
@@ -784,15 +905,17 @@ mod std_fs {
             limit: usize,
         ) -> io::Result<Vec<u8>> {
             let directory = self.directory(dir)?;
-            let opened = directory.open_retained_private(name);
-            directory.revalidate().map_err(custody_changed)?;
-            let original = opened?;
+            let original = directory
+                .open_retained_private_optional(name)
+                .map_err(custody_changed)?
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
             let mut bytes = Vec::new();
-            original
+            let result = original
                 .file()
                 .take(u64::try_from(limit).unwrap_or(u64::MAX))
-                .read_to_end(&mut bytes)?;
+                .read_to_end(&mut bytes);
             original.revalidate().map_err(custody_changed)?;
+            result.map_err(custody_changed)?;
             Ok(bytes)
         }
         fn list(
@@ -800,20 +923,23 @@ mod std_fs {
             dir: &KagemushaWalletCustodyDirV1,
         ) -> io::Result<Vec<KagemushaWalletListedEntryV1>> {
             let directory = self.directory(dir)?;
-            let mut entries = Vec::new();
-            for name in directory.entries(usize::MAX)? {
-                let kind = match directory.custody_entry_kind(&name)? {
-                    CustodyEntryKind::File => KagemushaWalletEntryKindV1::File,
-                    CustodyEntryKind::Directory => KagemushaWalletEntryKindV1::Directory,
-                    CustodyEntryKind::Other => KagemushaWalletEntryKindV1::Other,
-                };
-                let name = name.into_string().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 custody entry")
-                })?;
-                entries.push(KagemushaWalletListedEntryV1 { name, kind });
-            }
-            directory.revalidate()?;
-            Ok(entries)
+            let result = (|| {
+                let mut entries = Vec::new();
+                for name in directory.entries(usize::MAX)? {
+                    let kind = match directory.custody_entry_kind(&name)? {
+                        CustodyEntryKind::File => KagemushaWalletEntryKindV1::File,
+                        CustodyEntryKind::Directory => KagemushaWalletEntryKindV1::Directory,
+                        CustodyEntryKind::Other => KagemushaWalletEntryKindV1::Other,
+                    };
+                    let name = name.into_string().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 custody entry")
+                    })?;
+                    entries.push(KagemushaWalletListedEntryV1 { name, kind });
+                }
+                Ok(entries)
+            })();
+            directory.revalidate().map_err(custody_changed)?;
+            result.map_err(custody_changed)
         }
         fn available_bytes(&self) -> io::Result<u64> {
             self.root.available_bytes()
@@ -834,12 +960,13 @@ mod std_fs {
                 Err(TryLockError::Error(error)) => Err(error),
             }
         }
-        fn staging_name(&self) -> String {
-            format!(
-                "{}{}",
-                super::super::layout::KAGEMUSHA_WALLET_STAGING_PREFIX_V1,
-                lower_hex(&rand::random::<[u8; 16]>())
-            )
+        fn staging_name(&self) -> io::Result<String> {
+            use rand::rand_core::TryRngCore as _;
+            super::staging_name_with_entropy(|bytes| {
+                rand::rngs::OsRng
+                    .try_fill_bytes(bytes)
+                    .map_err(io::Error::other)
+            })
         }
     }
 }
@@ -989,6 +1116,7 @@ mod sim {
         inodes: BTreeMap<u64, SimInodeV1>,
         next_inode: u64,
         next_staging: u64,
+        staging_name_faults: BTreeMap<u64, io::ErrorKind>,
         steps: u64,
         faults: BTreeMap<u64, KagemushaWalletSimFaultV1>,
         trace: Vec<KagemushaWalletSimStepV1>,
@@ -1026,6 +1154,7 @@ mod sim {
                 inodes: BTreeMap::new(),
                 next_inode: 1,
                 next_staging: 0,
+                staging_name_faults: BTreeMap::new(),
                 steps: 0,
                 faults: BTreeMap::new(),
                 trace: Vec::new(),
@@ -1284,9 +1413,19 @@ mod sim {
             self.state().faults.insert(step, fault);
         }
 
-        /// Disarm every pending fault.
+        /// Fail the staging-name request after `before_error` further name requests.
+        /// This is separate from filesystem steps, so existing fault-matrix indices do not move.
+        pub fn inject_staging_name_error(&self, before_error: u64, error: io::ErrorKind) {
+            let mut state = self.state();
+            let index = state.next_staging.saturating_add(before_error);
+            state.staging_name_faults.insert(index, error);
+        }
+
+        /// Disarm every pending filesystem and staging-name fault.
         pub fn clear_faults(&self) {
-            self.state().faults.clear();
+            let mut state = self.state();
+            state.faults.clear();
+            state.staging_name_faults.clear();
         }
 
         /// Whether the simulated process has crashed (every step fails until a restart).
@@ -1378,6 +1517,7 @@ mod sim {
             state.process = state.process.saturating_add(1);
             state.lock = None;
             state.faults.clear();
+            state.staging_name_faults.clear();
         }
 
         /// Visible bytes of file `name` in `dir`, bypassing steps and faults.
@@ -1749,11 +1889,14 @@ mod sim {
             })
         }
 
-        fn staging_name(&self) -> String {
+        fn staging_name(&self) -> io::Result<String> {
             let mut state = self.state();
             let index = state.next_staging;
             state.next_staging = state.next_staging.saturating_add(1);
-            format!("{KAGEMUSHA_WALLET_STAGING_PREFIX_V1}{index:032x}")
+            if let Some(error) = state.staging_name_faults.remove(&index) {
+                return Err(io::Error::from(error));
+            }
+            Ok(format!("{KAGEMUSHA_WALLET_STAGING_PREFIX_V1}{index:032x}"))
         }
     }
 }

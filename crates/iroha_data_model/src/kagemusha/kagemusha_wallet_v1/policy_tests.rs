@@ -1333,12 +1333,12 @@ fn kagemusha_wallet_v1_quota_intersections_and_charges() {
     // An interval spanning midnight is charged in both daily windows and the month.
     let spanning = interval(T0_MS + DAY_MS - 5, T0_MS + DAY_MS + 5);
     let original = state;
-    let (charges, charged) = state
+    let (charges, next_usage) = state
         .check_send_quota(Some(&share), &usage, &spanning, 100)
         .expect("charge");
     assert_eq!(charges.len(), 3);
     assert_eq!(
-        charged
+        next_usage
             .slots()
             .iter()
             .flatten()
@@ -1347,7 +1347,7 @@ fn kagemusha_wallet_v1_quota_intersections_and_charges() {
         [1_000, 100, 100]
     );
     assert!(
-        charged
+        next_usage
             .leaf(1)
             .expect("daily leaf")
             .matches_window(&windows[1])
@@ -1360,7 +1360,7 @@ fn kagemusha_wallet_v1_quota_intersections_and_charges() {
             100,
         )
         .expect("exact sequential native openings"),
-        charged.root()
+        next_usage.root()
     );
     assert_eq!(state, original);
     assert!(is_invalid(
@@ -1419,7 +1419,7 @@ fn kagemusha_wallet_v1_quota_intersections_and_charges() {
         "quota_usage.alignment"
     ));
     assert!(is_invalid(
-        state.check_send_quota(Some(&share), &charged, &spanning, 1),
+        state.check_send_quota(Some(&share), &next_usage, &spanning, 1),
         "state.core.quota_usage_root"
     ));
 }
@@ -1546,11 +1546,11 @@ fn kagemusha_wallet_v1_effective_accepted_time() {
     let mut idle = f.state();
     idle.core.accepted_time_floor_ms = 50;
     assert_eq!(
-        idle.effective_accepted_time(None, &now, 40).expect("idle"),
+        idle.effective_accepted_time(None, None, 40).expect("idle"),
         interval(50, 50)
     );
     assert_eq!(
-        idle.effective_accepted_time(None, &now, 70).expect("idle"),
+        idle.effective_accepted_time(None, None, 70).expect("idle"),
         interval(70, 70)
     );
 
@@ -1560,26 +1560,37 @@ fn kagemusha_wallet_v1_effective_accepted_time() {
     let state = f.controlled_state(None, None, Some(&anchor));
     assert!(state.send_requires_time_anchor());
     assert!(is_invalid(
-        state.effective_accepted_time(None, &now, 0),
+        state.effective_accepted_time(None, None, 0),
         "time_anchor.missing"
+    ));
+    assert!(is_invalid(
+        state.effective_accepted_time(Some(&anchored), None, 0),
+        "time_anchor.observation_missing"
+    ));
+    // A held anchor still requires its observation with all controls disabled.
+    let mut idle_with_anchor = state;
+    idle_with_anchor.core.enabled_controls = 0;
+    assert!(is_invalid(
+        idle_with_anchor.effective_accepted_time(Some(&anchored), None, 0),
+        "time_anchor.observation_missing"
     ));
     // Anchor interval at m = 6_000 is [T + 4_700, T + 5_000].
     assert_eq!(
         state
-            .effective_accepted_time(Some(&anchored), &now, 0)
+            .effective_accepted_time(Some(&anchored), Some(&now), 0)
             .expect("anchored"),
         interval(T0_MS + 4_700, T0_MS + 5_000)
     );
     // The receiver's authenticated time raises L, and U never falls below L.
     assert_eq!(
         state
-            .effective_accepted_time(Some(&anchored), &now, T0_MS + 4_900)
+            .effective_accepted_time(Some(&anchored), Some(&now), T0_MS + 4_900)
             .expect("receiver time"),
         interval(T0_MS + 4_900, T0_MS + 5_000)
     );
     assert_eq!(
         state
-            .effective_accepted_time(Some(&anchored), &now, T0_MS + 9_000)
+            .effective_accepted_time(Some(&anchored), Some(&now), T0_MS + 9_000)
             .expect("receiver time"),
         interval(T0_MS + 9_000, T0_MS + 9_000)
     );
@@ -1594,13 +1605,13 @@ fn kagemusha_wallet_v1_effective_accepted_time() {
     )
     .expect("anchored");
     assert!(is_invalid(
-        state.effective_accepted_time(Some(&uncommitted), &now, 0),
+        state.effective_accepted_time(Some(&uncommitted), Some(&now), 0),
         "state.rest.time_anchor"
     ));
     let mut foreign = f.state();
     foreign.core.wallet_id = [0x0f; 32];
     assert!(is_invalid(
-        foreign.effective_accepted_time(Some(&anchored), &now, 0),
+        foreign.effective_accepted_time(Some(&anchored), Some(&now), 0),
         "time_anchor.wallet_id"
     ));
 }
@@ -2115,7 +2126,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     let mut state = f.controlled_state(None, Some(&share), None);
     let usage = KagemushaWalletQuotaUsageArrayV1::zero_for(&windows).expect("usage");
     assert_eq!(usage.root(), state.core.quota_usage_root);
-    let (charges, charged) = state
+    let (charges, next_usage) = state
         .check_send_quota(Some(&share), &usage, &interval(T0_MS, T0_MS + 10), 400)
         .expect("original quota charges");
     assert_eq!(
@@ -2126,9 +2137,9 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
             400
         )
         .expect("authentic window and usage openings"),
-        charged.root()
+        next_usage.root()
     );
-    state.core.quota_usage_root = charged.root();
+    state.core.quota_usage_root = next_usage.root();
     let original = state;
     let mut lowered = windows.clone();
     lowered[0].limit = 399;
@@ -2136,12 +2147,12 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     let refresh = state
         .refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &lower_share,
-            usage: &charged,
+            usage: &next_usage,
         })
         .expect("lowering a cap never restores consumed quota");
     let kept = refresh.quota_usage.expect("rebuilt array");
-    assert_eq!(kept, charged);
-    assert_eq!(refresh.core.quota_usage_root, charged.root());
+    assert_eq!(kept, next_usage);
+    assert_eq!(refresh.core.quota_usage_root, next_usage.root());
     assert_eq!(refresh.core.time_anchor_max_response_ms, MAX_RESPONSE_MS);
     let mut lower_head = state;
     lower_head.core = refresh.core;
@@ -2156,7 +2167,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     assert!(is_invalid(
         state.refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &changed_share,
-            usage: &charged,
+            usage: &next_usage,
         }),
         "quota_usage.window_end_ms"
     ));
@@ -2164,7 +2175,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     assert!(is_invalid(
         state.refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &omitted_share,
-            usage: &charged,
+            usage: &next_usage,
         }),
         "quota_usage.dropped"
     ));
@@ -2174,7 +2185,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     assert!(is_invalid(
         state.refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &short_share,
-            usage: &charged,
+            usage: &next_usage,
         }),
         "quota_share.window_length"
     ));
@@ -2197,7 +2208,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     assert!(is_invalid(
         state.refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &past_share,
-            usage: &charged,
+            usage: &next_usage,
         }),
         "quota_share.window_start_ms"
     ));
@@ -2219,7 +2230,7 @@ fn kagemusha_wallet_v1_quota_refresh_preserves_consumption_and_original_bounds()
     let refresh = ended
         .refresh_policy(KagemushaWalletPolicyUpdateV1::QuotaShare {
             share: &omitted_share,
-            usage: &charged,
+            usage: &next_usage,
         })
         .expect("ended charged key may leave the array");
     let ended_usage = refresh.quota_usage.expect("rebuilt ended array");
@@ -2374,5 +2385,59 @@ fn kagemusha_wallet_v1_charge_quotes() {
         f.charge_body(KagemushaWalletChargeKindV1::Load, u128::MAX, 1)
             .validate(),
         Err(KagemushaWalletValidationErrorV1::ArithmeticOverflow { .. })
+    ));
+}
+
+#[test]
+fn kagemusha_wallet_v1_speculative_send_recheck_keeps_charge_only_inside_same_windows() {
+    let f = policy_fixture();
+    let anchor = f.time_anchor(T0_MS);
+    let list = f.blacklist(1, T0_MS, vec![entry(0x10)]);
+    let share = f.quota_share(1, sample_windows());
+    let state = f.controlled_state(Some(&list), Some(&share), Some(&anchor));
+    let usage = KagemushaWalletQuotaUsageArrayV1::zero_for(&share.windows).unwrap();
+    let original = state
+        .check_send_quota(Some(&share), &usage, &interval(T0_MS + 10, T0_MS + 20), 10)
+        .unwrap();
+    let later = state
+        .check_send_quota(Some(&share), &usage, &interval(T0_MS + 30, T0_MS + 40), 10)
+        .unwrap();
+    assert_eq!(
+        original, later,
+        "elapsed time alone must not invalidate the retained charge"
+    );
+    let crossed = state
+        .check_send_quota(
+            Some(&share),
+            &usage,
+            &interval(T0_MS + DAY_MS + 10, T0_MS + DAY_MS + 20),
+            10,
+        )
+        .unwrap();
+    assert_ne!(
+        original.0, crossed.0,
+        "the original sigma cannot authorize different touched slots"
+    );
+    assert_ne!(original.1, crossed.1);
+    assert!(is_invalid(
+        state.check_send_quota(
+            Some(&share),
+            &usage,
+            &interval(share.body.expires_at_ms - 1, share.body.expires_at_ms),
+            10
+        ),
+        "quota_share.expired"
+    ));
+    assert!(is_invalid(
+        state.check_lease(&interval(LEASE_MS - 1, LEASE_MS)),
+        "state.lease_expired"
+    ));
+    assert!(is_invalid(
+        state.check_send_blacklist(
+            Some(&list),
+            &[0x15; 32],
+            &interval(T0_MS + DAY_MS, T0_MS + DAY_MS + 1)
+        ),
+        "blacklist.age"
     ));
 }

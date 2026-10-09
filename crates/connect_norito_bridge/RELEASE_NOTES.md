@@ -7,7 +7,11 @@ publication, including slices restored from CI. Its host macOS consumer also
 checks SHA3-256/SHAKE256 known answers, ML-DSA signing/verification and tamper
 rejection, and ML-KEM encapsulation/decapsulation.
 
-Current source ABI: 25. The bridge exports native transaction and instruction
+Current source ABI: 27. Wallet runtime installation now carries the exact
+registration-source original in its C structure and JNI constructor. Artifacts
+built for ABI 26 or earlier are rejected before that changed layout is called.
+Wallet operations use typed native preparation through `execute` and durable
+`request_status`; no generic wallet commit export is supported. The bridge exports native transaction and instruction
 encoding, account admission, SoraFS reference validation, privacy proofs and
 Parliament timed-OVN verification. Its Kotlin/JVM and Java/Android
 `NativeSignerBridge` surface requires native-signer JNI contract revision 7.
@@ -15,6 +19,16 @@ Parliament timed-OVN verification. Its Kotlin/JVM and Java/Android
 Transaction signing requires the genesis-derived `NetworkId`: JNI accepts
 exactly 32 marked hash bytes, while the C and Swift surface accepts canonical
 checksummed `NetworkId` text.
+
+The current iOS wallet source requires 26 C exports. Its three observation and
+account-codec exports preserve the same admitted Native owner and existing
+account identity. Observation selectors 0–3 return bounded, explicitly framed
+DATA in their own result domain; they do not establish monetary completion.
+Setup 45 and result 48 remain the canonical Unload claim interface, while
+setup 46 retains an exact signed Activation attempt and result 49 reports an
+authenticated rejection of that attempt. Prepared Load recovery preserves
+one immutable request-to-ordinal reservation. Kotlin's 19 wallet JNI exports
+remain unchanged. These source changes require newly built matching artifacts.
 
 Canonical KAGEMUSHA wallet objects are owned by
 `iroha_data_model::kagemusha::kagemusha_wallet_v1`. The bridge exposes no
@@ -39,7 +53,7 @@ attempt trust anchors. They verify finality, the fixed witness, membership,
 archive replay, and exact compact binding before borrowing a wallet seed.
 
 The archive checksums below are historical and do not establish a current
-ABI-25/revision-7 artifact. Regenerate, verify, and republish the bridge
+ABI-27/revision-7 artifact. Regenerate, verify, and republish the bridge
 artifacts before cutting an SDK release that depends on the current source
 surface.
 

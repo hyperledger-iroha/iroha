@@ -79,6 +79,84 @@ impl PreparedElementSequence<'_, '_> {
     }
 }
 
+/// Original sequence failure or exact original-pool backing refusal.
+///
+/// Successful logical work is never refunded, including when physical admission
+/// or later framing fails. Formatting either cause requires no diagnostic String.
+#[derive(Debug, thiserror::Error)]
+pub enum SequenceAdmissionError {
+    /// Original canonical framing or active cumulative decode-work failure.
+    #[error(transparent)]
+    Codec(#[from] Error),
+    /// Original finite pool refusal or failure to allocate its admitted layout.
+    #[error(transparent)]
+    Allocation(#[from] iroha_allocation::ChargedBufferError),
+}
+
+/// Canonical spans in exact original-pool backing, borrowing their original input.
+///
+/// No preliminary shape traversal, uncharged span Vec or maximum-sized scratch
+/// bank is needed. The private spans cannot be rebound to different source bytes.
+/// The owner funds only its span allocation; enclosing source, decode controls
+/// and element destinations remain the integrating caller's obligations.
+pub struct ChargedElementSequence<'input> {
+    bytes: &'input [u8],
+    spans: iroha_allocation::ChargedBuffer<SequenceSpan>,
+    used: usize,
+}
+
+impl<'input> ChargedElementSequence<'input> {
+    /// Admit exact span backing at the ordinary sequence planner's allocation point.
+    ///
+    /// The caller provides the original advertised flags and bounded decode
+    /// context. Count, minimum framing and logical span admission precede the
+    /// physical request; the sole scalar walker then checks all element framing
+    /// once, before any element can be decoded. A failed attempt drops partial
+    /// physical storage before returning its credit, while cumulative decode work
+    /// remains consumed. No prepared backing escapes a refusal.
+    ///
+    /// # Errors
+    /// Preserves the original codec cause or exact physical admission refusal.
+    /// An outer field must separately require `as_prepared().used() == bytes.len()`.
+    pub fn try_from_payload(
+        bytes: &'input [u8],
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Self, SequenceAdmissionError> {
+        let (count, _) = read_seq_len_slice(bytes)?;
+        let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
+        validate_header_flags(flags)?;
+        validate_binary_sequence_reservation(bytes, flags, count)?;
+        reserve_decode_sequence_storage::<SequenceSpan>(count)?;
+        let mut spans = iroha_allocation::ChargedBuffer::new(count, budget)?;
+        let used = byte_sequence::visit_binary_sequence_with_count(bytes, flags, count, |span| {
+            spans.push_reserved(span);
+            Ok(())
+        })?;
+        note_payload_access(bytes, used);
+        Ok(Self { bytes, spans, used })
+    }
+
+    /// Borrow the same spans for canonical element decoding without planning again.
+    ///
+    /// The caller retains the original field context and advertised flags while
+    /// decoding. Each call to `decode_elements` consumes the original element-work
+    /// quota; borrowing this view never resets or replenishes decode counters.
+    #[must_use]
+    pub fn as_prepared(&self) -> PreparedElementSequence<'input, '_> {
+        PreparedElementSequence {
+            bytes: self.bytes,
+            spans: self.spans.as_slice(),
+            used: self.used,
+        }
+    }
+
+    /// Whether the actual span backing retains this exact original finite pool.
+    #[must_use]
+    pub fn belongs_to(&self, budget: &iroha_allocation::AllocationBudget) -> bool {
+        self.spans.belongs_to(budget)
+    }
+}
+
 /// Inspect the complete element framing before admitting its actual planning arrays.
 ///
 /// The sole advertised-layout scalar walker checks every original element span.

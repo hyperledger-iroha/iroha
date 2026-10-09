@@ -1,7 +1,7 @@
 //! Package-aware native deployment and authenticated on-chain views.
 use super::*;
 use crate::compiler::CompilerArtifactV1;
-use crate::deployment_runtime::DeploymentSlot;
+use crate::deployment_runtime::{DeploymentSlot, RetainedDeployment, RetryRequest};
 use iroha_contract_deploy::{
     DeploymentError, DeploymentPreflight, DeploymentProgress, DeploymentReceipt, DeploymentRequest,
     DeploymentService,
@@ -102,28 +102,32 @@ pub(super) fn run_deploy(
         &artifact.package,
         &artifact.target,
     )?;
-    let session = DeploymentSlot::open(&slot).map_err(|error| runtime_diagnostic(&error))?;
-    session
-        .ensure_previous_terminal(&service)
+    let session = DeploymentSlot::open_package(&slot, alias.clone())
         .map_err(|error| runtime_diagnostic(&error))?;
-    let prepared = service
-        .prepare(&DeploymentRequest {
+    let retained = prepare_or_resume_deployment(
+        &service,
+        &session,
+        DeploymentRequest {
             artifact: artifact_bytes,
             alias,
             fee_payment,
             governance_approvers: Vec::new(),
-        })
-        .map_err(|error| deployment_diagnostic(&error))?;
-    let journal = session
-        .persist(&service, &prepared)
-        .map_err(|error| runtime_diagnostic(&error))?;
+        },
+        args.prepare,
+        progress,
+    )
+    .map_err(|error| runtime_diagnostic(&error))?;
+    let journal = retained.journal;
+    if let Some(receipt) = retained.receipt {
+        return receipt_output(&receipt, &journal);
+    }
     if args.prepare {
         return Ok(Success {
             message: format!(
                 "Prepared {} for {}\n{}Plan: {}\nNext: {}",
                 artifact.target,
                 build.network.name,
-                render_preflight(prepared.preflight()),
+                render_preflight(&retained.preflight),
                 journal.display(),
                 contract_resume_command(
                     "deploy",
@@ -134,18 +138,54 @@ pub(super) fn run_deploy(
             ),
             data: object([
                 ("journal", Value::from(journal.display().to_string())),
-                ("preflight", deployment_json(prepared.preflight())?),
+                ("preflight", deployment_json(&retained.preflight)?),
             ]),
         });
     }
-    let receipt = service
-        .execute(&prepared, &journal, &mut |event| {
+    Err(Diagnostic::new(
+        ErrorCode::Network,
+        "deployment returned no authenticated receipt",
+    ))
+}
+
+/// Shared fresh package consumer: inspect original publication before signing a new plan.
+fn prepare_or_resume_deployment(
+    service: &DeploymentService,
+    session: &DeploymentSlot,
+    request: DeploymentRequest,
+    prepare_only: bool,
+    progress: &mut dyn FnMut(&str),
+) -> eyre::Result<RetainedDeployment> {
+    let code_hash = ivm::verify_contract_artifact(&request.artifact)
+        .map_err(|error| eyre::eyre!("invalid contract artifact: {error}"))?
+        .code_hash;
+    if let Some(retained) = session.recover_matching(
+        service,
+        RetryRequest {
+            code_hash,
+            alias: &request.alias,
+            fee_payment: &request.fee_payment,
+            prepare_only,
+        },
+        &mut |_| Ok(()),
+        &mut |event| progress(&render_progress(event)),
+    )? {
+        return Ok(retained);
+    }
+    let prepared = service.prepare(&request)?;
+    let journal = session.persist(service, &prepared)?;
+    let receipt = if prepare_only {
+        None
+    } else {
+        Some(session.execute(service, &prepared, &journal, &mut |event| {
             progress(&render_progress(event))
-        })
-        .map_err(|error| {
-            deployment_diagnostic(&error).with_context("journal", journal.display().to_string())
-        })?;
-    receipt_output(&receipt, &journal)
+        })?)
+    };
+    Ok(RetainedDeployment {
+        preflight: prepared.preflight().clone(),
+        journal,
+        receipt,
+    })
 }
 
 /// Cancel an unattempted plan, or resume an exact retained deployment journal without
@@ -166,10 +206,32 @@ fn recover_deployment(
     let _profile = ChainDiscriminantGuard::enter(network.chain_discriminant);
     let service = DeploymentService::new(network.load_client()?)
         .map_err(|error| deployment_diagnostic(&error))?;
+    let journal = retained_deployment_journal(workspace.root(), &network.name, journal)?;
+    let slot = journal.parent().expect("admitted deployment slot");
+    let slot_name = slot
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("admitted slot digest");
+    let mut aliases = network
+        .contracts
+        .iter()
+        .filter(|(key, _)| blake3::hash(key.as_bytes()).to_hex().as_str() == slot_name)
+        .map(|(_, alias)| alias);
+    let alias = aliases
+        .next()
+        .filter(|_| aliases.next().is_none())
+        .ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::Usage,
+                "deployment journal has no exact contract binding in the selected network",
+            )
+        })?;
+    let session = DeploymentSlot::open_package_read(slot, alias.clone())
+        .map_err(|error| runtime_diagnostic(&error))?;
     if args.cancel.is_some() {
-        let cancellation = service
-            .cancel(journal)
-            .map_err(|error| deployment_diagnostic(&error))?;
+        let cancellation = session
+            .cancel(&service, &journal)
+            .map_err(|error| runtime_diagnostic(&error))?;
         return Ok(Success {
             message: format!(
                 "Cancelled unattempted deployment plan: {}",
@@ -182,12 +244,59 @@ fn recover_deployment(
             ]),
         });
     }
-    let receipt = service
-        .resume(journal, &mut |event| progress(&render_progress(event)))
+    let receipt = session
+        .resume(&service, &journal, &mut |event| {
+            progress(&render_progress(event))
+        })
         .map_err(|error| {
-            deployment_diagnostic(&error).with_context("journal", journal.display().to_string())
+            runtime_diagnostic(&error).with_context("journal", journal.display().to_string())
         })?;
-    receipt_output(&receipt, journal)
+    receipt_output(&receipt, &journal)
+}
+
+/// Retain the exact selected workspace/network slot; the candidate itself may be absent
+/// after a Preparing crash, so only its original existing parent is resolved here.
+fn retained_deployment_journal(
+    root: &Path,
+    network: &str,
+    journal: &Path,
+) -> Result<PathBuf, Diagnostic> {
+    network::validate_name(network)?;
+    let invalid = || {
+        Diagnostic::new(
+            ErrorCode::Usage,
+            "deployment journal must be an exact commit under the selected workspace and network",
+        )
+    };
+    let name = journal
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(invalid)?;
+    validate_journal_id(name)?;
+    let parent = journal
+        .parent()
+        .ok_or_else(invalid)?
+        .canonicalize()
+        .map_err(|_| invalid())?;
+    let expected_root = root
+        .join("target/deploy")
+        .join(network)
+        .canonicalize()
+        .map_err(|_| invalid())?;
+    let relative = parent.strip_prefix(&expected_root).map_err(|_| invalid())?;
+    if relative.components().count() != 1 {
+        return Err(invalid());
+    }
+    let slot_name = relative.to_str().ok_or_else(invalid)?;
+    // Slot names are raw BLAKE3 package/target digests, not tagged transaction hashes.
+    if slot_name.len() != 64
+        || !slot_name
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(invalid());
+    }
+    Ok(parent.join(name))
 }
 
 fn runtime_diagnostic(error: &eyre::Report) -> Diagnostic {
@@ -641,6 +750,49 @@ mod view_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_package_retry_reuses_original_plan_after_preparing_or_active_crash() -> eyre::Result<()>
+    {
+        crate::deployment_runtime::resume_tests::assert_package_fresh_retry_preserves_original(
+            prepare_or_resume_deployment,
+        )
+    }
+
+    #[test]
+    fn recovery_journal_retains_selected_workspace_network_and_raw_slot_digest() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let slot = root.join("target/deploy/test").join("00".repeat(32));
+        std::fs::create_dir_all(&slot).unwrap();
+        let id = hex::encode(iroha::crypto::Hash::new(b"original prepared candidate").as_ref());
+        let candidate = slot.join(id);
+        assert!(!candidate.exists());
+        assert_eq!(
+            retained_deployment_journal(&root, "test", &candidate).unwrap(),
+            candidate
+        );
+        assert!(
+            !candidate.exists(),
+            "path admission must not create a missing candidate"
+        );
+        std::fs::create_dir_all(root.join("target/deploy/other")).unwrap();
+        assert!(retained_deployment_journal(&root, "other", &candidate).is_err());
+        let outside = root.join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        assert!(retained_deployment_journal(&outside, "test", &candidate).is_err());
+        let nested = slot.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        assert!(
+            retained_deployment_journal(
+                &root,
+                "test",
+                &nested.join(candidate.file_name().unwrap())
+            )
+            .is_err()
+        );
+        assert!(retained_deployment_journal(&root, "test", &slot.join("not-a-commit")).is_err());
+    }
 
     #[test]
     fn runtime_diagnostic_preserves_the_complete_error_chain() {

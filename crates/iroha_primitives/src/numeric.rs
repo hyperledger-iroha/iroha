@@ -18,7 +18,8 @@ use norito::{
 use num_bigint::{BigInt as UnboundedBigInt, BigUint as UnboundedBigUint, Sign as UnboundedSign};
 use num_traits::{One as _, Signed as _, Zero as _};
 pub use prepared_quantity::{
-    ChargedQuantity, PreparedQuantityDecode, QuantityDecodePlan, QuantityDestinationError,
+    ChargedQuantity, PreparedQuantityDecode, QuantityDecodeAdmissionError, QuantityDecodePlan,
+    QuantityDestinationError,
 };
 use std::{
     alloc::Layout,

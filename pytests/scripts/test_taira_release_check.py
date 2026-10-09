@@ -29,8 +29,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1789 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1822 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1830 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1863 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -870,8 +870,8 @@ class NativeInventoryPreflightTests(unittest.TestCase):
         path.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
             f"with Path({str(self.root / 'calls')!r}).open('a') as f: f.write({name!r} + ':' + '|'.join(sys.argv[1:]) + '\\n')\n"
             f"if '--list' in sys.argv:\n print({''.join(n + ': test' + chr(10) for n in names)!r}); sys.exit({listing_exit})\n"
-            "name=sys.argv[1]\nprint('test '+name+' ... ok')\n"
-            "print('test result: ok. 1 passed; 0 failed; 0 ignored;')\n")
+            "name=sys.argv[1]\nprint('running 1 test')\nprint('test '+name+' ... ok')\n"
+            f"print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; {len(names) - 1} filtered out; finished in 0.01s')\n")
         path.chmod(0o700)
         return str(path)
 
@@ -3155,8 +3155,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                 "if '--list' in sys.argv:\n print('first: test\\nsecond: test\\nthird: test');sys.exit(0)\n"
                 "name=sys.argv[1]\n"
                 "with Path('executed').open('a') as f:f.write(name+'\\n')\n"
-                "print('test '+name+(' ... ok' if name=='second' else ' ... FAILED'))\n"
-                "print('test result: ok. 1 passed; 0 failed; 0 ignored;' if name=='second' else 'fixture failure')\n"
+                "print('running 1 test')\nprint('test '+name+(' ... ok' if name=='second' else ' ... FAILED'))\n"
+                "print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.01s' if name=='second' else 'fixture failure')\n"
                 "sys.exit(0 if name=='second' else 101)\n")
             harness.chmod(0o700)
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -3341,8 +3341,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_exact_one_test_passes(self):
         result = subprocess.CompletedProcess([], 0,
-            "test example ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 99 filtered out\n", "")
-        gate.require_one_pass("example", result)
+            "running 1 test\ntest example ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 99 filtered out; finished in 0.01s\n", "")
+        gate.require_one_pass("example", result, 99)
 
     def test_zero_ignored_wrong_or_failed_test_is_fatal(self):
         outputs = (
@@ -3354,7 +3354,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         for code, output in outputs:
             with self.subTest(code=code, output=output), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaisesRegex(gate.CheckError, "did not execute and pass"):
-                    gate.require_one_pass("example", subprocess.CompletedProcess([], code, output, ""))
+                    gate.require_one_pass("example", subprocess.CompletedProcess([], code, output, ""), 99)
 
 
     def test_frozen_harness_uses_captured_manifest_config_and_no_git_lookup(self):
@@ -3819,8 +3819,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                         output = "".join(name + ": test\n" for name in expected)
                     else:
                         seen.append(command[1])
-                        output = (f"test {command[1]} ... ok\n"
-                                  "test result: ok. 1 passed; 0 failed; 0 ignored;\n")
+                        output = (f"running 1 test\ntest {command[1]} ... ok\n"
+                                  f"test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; {len(expected) - 1} filtered out; finished in 0.01s\n")
                     return subprocess.CompletedProcess(command, 0, output, "")
                 with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
                         "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha_test_runtime_provider_broker": "/broker"})), \
@@ -3844,7 +3844,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             if command[1] == catalog:
                 return subprocess.CompletedProcess(command, 101, "exact cold recovery failed\n", "")
             return subprocess.CompletedProcess(command, 0,
-                f"test {command[1]} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")
+                f"running 1 test\ntest {command[1]} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; {len(expected) - 1} filtered out; finished in 0.01s\n", "")
         with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
                 "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha_test_runtime_provider_broker": "/broker"})), \
              patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")), \
@@ -3910,7 +3910,7 @@ class FocusedNetworkObservationTests(unittest.TestCase):
                 output = name + ": test\n"
             else:
                 executed.append(command[1])
-                output = f"test {name} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n"
+                output = f"running 1 test\ntest {name} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n"
             return subprocess.CompletedProcess(command, 0, output, "")
 
         with patch.object(gate, "compile_network_binaries") as build, \
@@ -5527,7 +5527,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                 payload = (f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
                     "assert Path(sys.argv[0]).is_file()\n"
                     "if '--list' in sys.argv: print('fixture: test'); sys.exit(0)\n"
-                    + ("print('test fixture ... ok\\ntest result: ok. 1 passed; 0 failed; 0 ignored;')\n"
+                    + ("print('running 1 test\\ntest fixture ... ok\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s')\n"
                        if succeeds else "print('diagnostic retained'); sys.exit(101)\n")).encode()
                 original, row, event = self.artifact("core", payload)
                 with patch.object(gate.subprocess, "Popen", return_value=self.process([event])):
@@ -5595,7 +5595,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                     "with log.open('w') as stream:\n"
                     "    for key in ('TEST_NETWORK_BIN_IROHAD', 'TEST_NETWORK_BIN_IROHAD_TAIRA', 'TEST_NETWORK_BIN_IROHA'):\n"
                     "        subprocess.run([os.environ[key]], check=True, stdout=stream)\n"
-                    + ("print('test fixture ... ok\\ntest result: ok. 1 passed; 0 failed; 0 ignored;')\n"
+                    + ("print('running 1 test\\ntest fixture ... ok\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s')\n"
                        if succeeds else "print('network fixture failed after children'); sys.exit(101)\n")).encode()
                 harness, _, _ = self.artifact("network", harness_payload)
                 errors = io.StringIO()
@@ -6342,6 +6342,130 @@ class NativeTestOutputOpenFileTests(unittest.TestCase):
             run.side_effect = TimeoutExpired("lsof", 5)
             self.assertFalse(gate.native_test_output_confirmed_closed(Path("/exact/test")))
 
+
+
+class ExactSingleRegressionAccountingTests(unittest.TestCase):
+    def completed(self, output, code=0):
+        return subprocess.CompletedProcess([], code, output, "")
+
+    def output(self, filtered=99):
+        return ("running 1 test\ntest example ... ok\n\n"
+                f"test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; {filtered} filtered out; finished in 0.01s\n")
+
+    def test_single_regression_uses_the_existing_closed_native_census(self):
+        for filtered in (0, 99, 10000):
+            result = self.completed(self.output(filtered))
+            with self.subTest(filtered=filtered), patch.object(gate, "native_test_batch_failures", wraps=gate.native_test_batch_failures) as census:
+                gate.require_one_pass("example", result, filtered)
+                census.assert_called_once_with(("example",), filtered, result)
+
+    def test_single_regression_refuses_duplicate_contradictory_or_incomplete_output(self):
+        output = self.output()
+        summary = output.splitlines()[-1]
+        cases = {
+            "duplicate summary": output + summary + "\n",
+            "duplicate terminal": output.replace("test example ... ok\n", "test example ... ok\ntest example ... ok\n"),
+            "foreign terminal": output.replace("test example ... ok\n", "test example ... ok\ntest foreign ... ok\n"),
+            "contradictory later result": output + "running 1 test\ntest example ... FAILED\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 99 filtered out; finished in 0.01s\n",
+            "missing running": output.removeprefix("running 1 test\n"),
+            "wrong running": output.replace("running 1 test", "running 2 tests"),
+            "duplicate running": "running 1 test\n" + output,
+            "partial summary": "running 1 test\ntest example ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n",
+            "wrong passed count": output.replace("1 passed;", "2 passed;"),
+            "ignored count": output.replace("0 ignored;", "1 ignored;"),
+            "measured count": output.replace("0 measured;", "1 measured;"),
+            "wrong filtered census": output.replace("99 filtered out;", "98 filtered out;"),
+            "trailing unclosed output": output + "test foreign ... ",
+            "missing selected terminal": output.replace("test example ... ok\n", ""),
+            "failed terminal": output.replace("test example ... ok", "test example ... FAILED"),
+            "failure diagnostics": output.replace("\n\ntest result:", "\nfailures:\n\ntest result:"),
+        }
+        for label, value in cases.items():
+            with self.subTest(label=label), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaisesRegex(gate.CheckError, "did not execute and pass"):
+                    gate.require_one_pass("example", self.completed(value), 99)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(gate.CheckError):
+            gate.require_one_pass("example", self.completed(output, 101), 99)
+
+    def test_single_stage_forwards_the_actual_listing_filtered_census(self):
+        names = ("example", "other", "third")
+        harness = "/ignored/synthetic-native-parser"
+        listing = "".join(name + ": test\n" for name in names)
+        result = self.completed(self.output(2))
+        with patch.object(gate.subprocess, "run", return_value=result) as native, \
+             patch.object(gate, "require_one_pass", wraps=gate.require_one_pass) as accounting, \
+             contextlib.redirect_stdout(io.StringIO()):
+            gate.run_stages(harness, Path("/ignored/synthetic-fixture"), {}, (("fixture", ("example",)),), (), inventories={harness: listing})
+        accounting.assert_called_once_with("example", result, 2)
+        native.assert_called_once_with([harness, "example", "--exact", "--color", "never"], cwd=Path("/ignored/synthetic-fixture"), env={}, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False, pass_fds=(), umask=0o077)
+        with patch.object(gate.subprocess, "run", return_value=self.completed(self.output(1))), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), \
+             self.assertRaises(gate.SelectedRegressionFailures):
+            gate.run_stages(harness, Path("/ignored/synthetic-fixture"), {}, (("fixture", ("example",)),), (), inventories={harness: listing})
+
+
+class NativeExpectedPanicAccountingTests(unittest.TestCase):
+    name = "isi::registry::tests::instruction_registry_rejects_wire_id_collisions"
+
+    @staticmethod
+    def completed(output, code=0):
+        return subprocess.CompletedProcess([], code, output, "")
+
+    def output(self, status="ok"):
+        # This exact passing row occurred in the bound current Model component log.
+        passed, failed = (1, 0) if status == "ok" else (0, 1)
+        outcome = "ok" if status == "ok" else "FAILED"
+        return (f"running 1 test\ntest {self.name} - should panic ... {status}\n\n"
+                f"test result: {outcome}. {passed} passed; {failed} failed; 0 ignored; "
+                "0 measured; 99 filtered out; finished in 0.01s\n")
+
+    def test_expected_panic_pass_retains_exact_original_name(self):
+        self.assertEqual(gate.native_test_batch_failures(
+            (self.name,), 99, self.completed(self.output())), [])
+
+    def test_expected_panic_failure_remains_a_failed_original_test(self):
+        failures = gate.native_test_batch_failures(
+            (self.name,), 99, self.completed(self.output("FAILED"), 101))
+        self.assertEqual(failures, [f"regression did not pass: {self.name} (FAILED)"])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(gate.CheckError):
+            gate.require_one_pass(self.name, self.completed(self.output("FAILED"), 101), 99)
+
+    def test_expected_panic_and_ordinary_results_share_the_exact_census(self):
+        output = (f"running 2 tests\ntest {self.name} - should panic ... ok\n"
+                  "test ordinary ... ok\n\n"
+                  "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; "
+                  "98 filtered out; finished in 0.01s\n")
+        self.assertEqual(gate.native_test_batch_failures(
+            (self.name, "ordinary"), 98, self.completed(output)), [])
+
+    def test_single_regression_admits_the_literal_expected_panic_annotation(self):
+        gate.require_one_pass(self.name, self.completed(self.output()), 99)
+
+    def test_expected_panic_annotation_cannot_hide_duplicate_foreign_or_partial_rows(self):
+        output = self.output()
+        row = f"test {self.name} - should panic ... ok\n"
+        cases = {
+            "duplicate": output.replace(row, row + row),
+            "foreign": output.replace(self.name, "unselected"),
+            "orphan terminal": output.replace(row, "ok\n"),
+            "missing terminal": output.replace(row, f"test {self.name} - should panic ... \n"),
+            "foreign after closure": output + "test unselected - should panic ... ok\n",
+            "missing header": output.removeprefix("running 1 test\n"),
+            "wrong filtered count": output.replace("99 filtered out", "98 filtered out"),
+            "malformed annotation": output.replace(" - should panic", " - should panic again"),
+            "near-miss annotation": output.replace(" - should panic", " - should_panic"),
+        }
+        for label, changed in cases.items():
+            with self.subTest(label=label):
+                self.assertTrue(gate.native_test_batch_failures(
+                    (self.name,), 99, self.completed(changed)))
+
+    def test_ignored_expected_panic_result_cannot_qualify(self):
+        output = self.output().replace("... ok", "... ignored, unavailable")
+        output = output.replace("1 passed; 0 failed; 0 ignored", "0 passed; 0 failed; 1 ignored")
+        self.assertEqual(gate.native_test_batch_failures(
+            (self.name,), 99, self.completed(output)),
+            [f"regression did not pass: {self.name} (ignored)"])
 
 
 if __name__ == "__main__":

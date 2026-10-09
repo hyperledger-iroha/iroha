@@ -11,7 +11,7 @@
 //! typed Norito enum whose wire tag equals the listed value, so an undefined value fails
 //! canonical decoding instead of reaching validation; the `output` transcript carries the
 //! one-byte tag. Their frames therefore carry Norito's four-byte enum tag, which the marker
-//! and capsule digests cover. The retained-input role table (tags 1 to 8) is fixed here; the
+//! and capsule digests cover. The retained-input role table (tags 1 to 10) is fixed here; the
 //! vectors file pins every tag.
 
 use iroha_schema::IntoSchema;
@@ -20,7 +20,8 @@ use norito::codec::{Decode, Encode};
 use super::{
     KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1, KAGEMUSHA_WALLET_COMPLETION_RECORD_MAX_BYTES_V1,
     KAGEMUSHA_WALLET_FOLD_RECORD_MAX_BYTES_V1, KAGEMUSHA_WALLET_MARKER_MAX_BYTES_V1,
-    KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, KAGEMUSHA_WALLET_VERSION_V1, WalletResult,
+    KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1, KAGEMUSHA_WALLET_VERSION_V1,
+    KagemushaWalletPolicyUpdateKindV1, KagemushaWalletQuotaRefreshWitnessV1, WalletResult,
     WalletVersionsV1, decode_frame_v1,
     digest::{KagemushaWalletDigestRoleV1 as Role, WalletTranscriptV1, kagemusha_wallet_digest_v1},
     encode_frame_v1,
@@ -473,7 +474,7 @@ pub fn kagemusha_wallet_output_digest_v1(
 ///
 /// A Send releases its canonical Payment; every other kind releases its package. The digest
 /// covers the statement, the operation-dependent `proof_digest` and, for Receive, the Payment
-/// digest the receipt binds; every other kind input (the Send Request, the Load voucher, the
+/// digest the receipt binds; every other kind input (the Send Request, the original Load receipt and finality evidence, the
 /// Unload nullifier, the `ArchiveSent` Credited digest, the payer credential) is already bound
 /// by the statement. It can therefore be frozen in the capsule before the receipt exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
@@ -561,13 +562,16 @@ pub enum KagemushaWalletRetainedInputRoleV1 {
     /// Canonical Credited evidence consumed by `ArchiveSent`.
     #[codec(index = 3)]
     Credited,
-    /// Canonical load voucher consumed by Load.
+    /// Canonical ordinary Load receipt consumed by Load.
     #[codec(index = 4)]
-    LoadVoucher,
+    LoadReceipt,
     /// Canonical charge quote consumed by Load or Unload.
     #[codec(index = 5)]
     ChargeQuote,
-    /// Canonical signed update consumed by `RefreshPolicy`.
+    /// Exact update custody consumed by `RefreshPolicy`: Blacklist carries the
+    /// bounded native complete-original archive reference; other fixed kinds
+    /// carry the complete inline signed update. Native restores and authenticates
+    /// the full blacklist before using it; the reference is not an issuer verdict.
     #[codec(index = 6)]
     PolicyUpdate,
     /// Canonical certificate set the operation needed.
@@ -576,19 +580,27 @@ pub enum KagemushaWalletRetainedInputRoleV1 {
     /// Canonical credential the operation consumed.
     #[codec(index = 8)]
     Credential,
+    /// Canonical compact ordinary-transaction finality evidence consumed by Load.
+    #[codec(index = 9)]
+    LoadFinality,
+    /// Canonical typed predecessor quota-usage array consumed by a quota refresh.
+    #[codec(index = 10)]
+    QuotaRefreshWitness,
 }
 
 impl KagemushaWalletRetainedInputRoleV1 {
     /// Every role, in tag order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Request,
         Self::Payment,
         Self::Credited,
-        Self::LoadVoucher,
+        Self::LoadReceipt,
         Self::ChargeQuote,
         Self::PolicyUpdate,
         Self::CertificateSet,
         Self::Credential,
+        Self::LoadFinality,
+        Self::QuotaRefreshWitness,
     ];
 
     /// Tag; equal to the Norito wire tag.
@@ -598,11 +610,13 @@ impl KagemushaWalletRetainedInputRoleV1 {
             Self::Request => 1,
             Self::Payment => 2,
             Self::Credited => 3,
-            Self::LoadVoucher => 4,
+            Self::LoadReceipt => 4,
             Self::ChargeQuote => 5,
             Self::PolicyUpdate => 6,
             Self::CertificateSet => 7,
             Self::Credential => 8,
+            Self::LoadFinality => 9,
+            Self::QuotaRefreshWitness => 10,
         }
     }
 }
@@ -637,9 +651,11 @@ impl KagemushaWalletRetainedInputV1 {
 /// every consumed input that Λ verifies for the step and the step itself cannot rebuild.
 ///
 /// Send retains the Request it consumed: the compact Payment binds the receiver's fee schedule
-/// only by digest, and `Λ_send` checks the fee terms against it (§§3.2, 6.2). Load retains the
-/// voucher's `LoadAuthorization` certificate with the voucher, because `Λ_load` verifies the
-/// voucher signature under it (§3.2) and the voucher names it only by digest.
+/// only by digest, and `Λ_send` checks the fee terms against it (§§3.2, 6.2). Load retains
+/// the original receipt and compact finality evidence so restoration verifies the same
+/// ordinary transaction under the independently installed history anchor and source key.
+/// Archive retains the historical payer credential and its certificate set because
+/// a later credential renewal must not replace the exact Send credential.
 // TODO(owner): interim choices kept as is until the owner decides: a Send capsule retains the
 // whole Request message, and no Load or Unload capsule retains a ChargeQuote because `Λ_load`
 // and `Λ_unload` do not verify ChargeQuote signatures (wire record §7).
@@ -651,9 +667,15 @@ const fn required_retained_roles_v1(
         KagemushaWalletOperationKindV1::Receive => {
             &[R::Request, R::Payment, R::CertificateSet, R::Credential]
         }
-        KagemushaWalletOperationKindV1::ArchiveSent => &[R::Request, R::Payment, R::Credited],
+        KagemushaWalletOperationKindV1::ArchiveSent => &[
+            R::Request,
+            R::Payment,
+            R::Credited,
+            R::Credential,
+            R::CertificateSet,
+        ],
         KagemushaWalletOperationKindV1::Send => &[R::Request],
-        KagemushaWalletOperationKindV1::Load => &[R::LoadVoucher, R::CertificateSet],
+        KagemushaWalletOperationKindV1::Load => &[R::LoadReceipt, R::LoadFinality],
         KagemushaWalletOperationKindV1::RefreshPolicy => &[R::PolicyUpdate, R::CertificateSet],
         KagemushaWalletOperationKindV1::Bootstrap
         | KagemushaWalletOperationKindV1::Unload
@@ -709,6 +731,37 @@ pub struct KagemushaWalletRecoveryCapsuleV1 {
 }
 
 impl KagemushaWalletRecoveryCapsuleV1 {
+    /// Decode the one mandatory quota-refresh witness, absent for every other effect.
+    /// Its original frame remains covered by the capsule and signed receipt digest.
+    /// This checks canonical shape; the transition owner must authenticate its root
+    /// against the actual predecessor state before accepting the quota update.
+    ///
+    /// # Errors
+    /// Missing, duplicate, malformed or oversized quota witness, or a witness retained
+    /// for an operation other than a quota-share refresh.
+    pub fn quota_refresh_witness(
+        &self,
+    ) -> WalletResult<Option<KagemushaWalletQuotaRefreshWitnessV1>> {
+        let required = matches!(
+            self.statement.effect,
+            KagemushaWalletEffectV1::RefreshPolicy {
+                update_kind: KagemushaWalletPolicyUpdateKindV1::QuotaShare,
+                ..
+            }
+        );
+        let mut originals = self
+            .retained_inputs
+            .iter()
+            .filter(|input| input.role == KagemushaWalletRetainedInputRoleV1::QuotaRefreshWitness);
+        match (required, originals.next(), originals.next()) {
+            (false, None, None) => Ok(None),
+            (true, Some(original), None) => {
+                KagemushaWalletQuotaRefreshWitnessV1::decode_canonical(&original.bytes).map(Some)
+            }
+            _ => Err(invalid_v1("capsule.quota_refresh_witness")),
+        }
+    }
+
     /// Operation-dependent `proof_digest` the receipt and Advance bind (§4.1).
     ///
     /// # Errors
@@ -840,6 +893,7 @@ impl KagemushaWalletRecoveryCapsuleV1 {
         for input in &self.retained_inputs {
             input.validate()?;
         }
+        let _ = self.quota_refresh_witness()?;
         for role in required_retained_roles_v1(self.kind) {
             if !self.retained_inputs.iter().any(|input| input.role == *role) {
                 return Err(invalid_v1("capsule.retained_inputs"));

@@ -19,6 +19,11 @@ categories.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "kagemusha_wallet_artifacts"
+path = "src/bin/kagemusha_wallet_artifacts.rs"
+required-features = ["dev-tools"]
+
 [[example]]
 name = "confidential_redemption"
 
@@ -28,6 +33,8 @@ path = "tests/grouped.rs"
 required-features = ["zk-tests"]
 
 [features]
+# Offline packaging generators are built only through explicit artifact selection.
+dev-tools = []
 # Every build includes native PIPA-R proving and verification. Defaults also
 # select STARK and advisory pre-verification; test fixtures remain separate.
 default = ["proofs-stark", "zk-preverify"]
@@ -44,6 +51,8 @@ test-utils = []
 zk-tests = ["test-utils"]
 
 [dependencies]
+# Genuine wallet sigma/Q/A/W producers; this crate adds the G1/native custody adapter.
+iroha_kagemusha_proof = { path = "../iroha_kagemusha_proof", default-features = false }
 iroha_plonk_gadgets = { path = "../iroha_plonk_gadgets", default-features = false }
 iroha_plonk = { path = "../iroha_plonk", default-features = false }
 iroha_plonk_recursion = { path = "../iroha_plonk_recursion", default-features = false }
@@ -52,6 +61,8 @@ iroha_fs = { workspace = true }
 iroha_primitives = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "governance", "http"] }
+iroha_sumeragi = { workspace = true }
+iroha_version = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "pqc"] }
 ivm_abi = { workspace = true }
 fastpq_prover = { workspace = true, optional = true }

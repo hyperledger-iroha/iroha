@@ -9,6 +9,9 @@
 //! TODO: compose real operation A proofs and qualify the final wrapper layout
 //! against the joint Payment byte cap before freezing any artifact.
 
+/// Original-key native final Omega producer and canonical durable restore.
+pub mod native;
+
 use crate::a_relation::AFramePlan;
 use ff::{Field, PrimeField};
 use iroha_pasta::{Eq, Fp, Fq, PastaCurve};

@@ -117,6 +117,10 @@ pub struct KagemushaWalletProviderV1<
     pub(super) options: KagemushaWalletProviderOptionsV1,
     pub(super) cache: BTreeMap<KagemushaWalletSlotIdV1, CachedSlotV1>,
     pub(super) pending_reasons: BTreeMap<KagemushaWalletSlotIdV1, KagemushaWalletProviderErrorV1>,
+    pub(super) generation_results:
+        BTreeMap<KagemushaWalletSlotIdV1, super::enrollment::RetainedGeneratedKeyV1>,
+    pub(super) generation_dispatches:
+        BTreeMap<KagemushaWalletSlotIdV1, super::enrollment::RetainedGenerationDispatchV1>,
     sentinel: KagemushaWalletRootSentinelV1,
     _lock: F::Lock,
     _frames: PhantomData<fn() -> (C, R)>,
@@ -188,6 +192,8 @@ where
             options,
             cache: BTreeMap::new(),
             pending_reasons: BTreeMap::new(),
+            generation_results: BTreeMap::new(),
+            generation_dispatches: BTreeMap::new(),
             sentinel,
             _lock: lock,
             _frames: PhantomData,
@@ -296,6 +302,121 @@ where
         owner: &dyn KagemushaWalletTransitionOwnerV1<C, R>,
     ) -> Result<KagemushaWalletSlotStatusV1, KagemushaWalletProviderErrorV1> {
         self.reconcile_slot(slot, Some(owner))
+    }
+
+    /// Read the actual payment key inside protected-storage brackets, without generation.
+    /// Positive lookup remains useful even when the platform cannot prove absence.
+    /// # Errors
+    /// Locked or unavailable storage. An unknown key result remains `Unavailable`.
+    pub fn probe_payment_key(
+        &self,
+        slot: &KagemushaWalletSlotIdV1,
+    ) -> Result<
+        super::KagemushaWalletProbeV1<iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1>,
+        KagemushaWalletProviderErrorV1,
+    > {
+        self.probe_key(slot)
+    }
+
+    /// Read the exact capsule selected by the reconciled current source marker.
+    /// This read capability creates no Selected marker or monetary proof verdict.
+    /// # Errors
+    /// Reconciliation, custody loss or unknown protected-storage/read state; never absence.
+    pub fn current_capsule(
+        &mut self,
+        slot: &KagemushaWalletSlotIdV1,
+    ) -> Result<Option<C>, KagemushaWalletProviderErrorV1> {
+        let status = self.status(slot)?;
+        let record = match status {
+            KagemushaWalletSlotStatusV1::Enrollment(_) => return Ok(None),
+            KagemushaWalletSlotStatusV1::Pending(record)
+            | KagemushaWalletSlotStatusV1::Released(record) => record,
+            KagemushaWalletSlotStatusV1::Terminal(_) => {
+                return Err(KagemushaWalletProviderErrorV1::Terminal);
+            }
+            _ => {
+                return Err(KagemushaWalletProviderErrorV1::Invalid {
+                    field: "current source",
+                });
+            }
+        };
+        self.require_storage()?;
+        let answer = (|| {
+            let selected = record.selected_generation().ok_or(
+                KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                    object: "selected generation",
+                },
+            )?;
+            let (_, _, digest) =
+                record
+                    .head()
+                    .ok_or(KagemushaWalletProviderErrorV1::UnavailableCustodyData {
+                        object: "selected capsule",
+                    })?;
+            let capsule = super::capsule::kagemusha_wallet_load_capsule_v1::<F, C>(
+                &self.store,
+                slot,
+                selected,
+                &digest,
+                &C::marker_binding(record.marker()),
+            )?;
+            Ok(Some(capsule.into_value()))
+        })();
+        self.require_storage().and(answer)
+    }
+
+    /// Read a native sleep-inclusive clock under the same protected custody lifetime.
+    /// No payment key or store is exposed; unknown time never becomes a zero reading.
+    pub(crate) fn monotonic_reading(
+        &self,
+    ) -> Result<
+        iroha_data_model::kagemusha::KagemushaWalletMonotonicReadingV1,
+        KagemushaWalletProviderErrorV1,
+    > {
+        self.require_storage()?;
+        let answer = (|| {
+            let boot_id = self
+                .boot()
+                .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
+            if boot_id == [0; 32] {
+                return Err(KagemushaWalletProviderErrorV1::Unavailable(
+                    KagemushaWalletUnavailableV1::Platform(0),
+                ));
+            }
+            let monotonic_ms = self
+                .platform
+                .monotonic_ms()
+                .map_err(KagemushaWalletProviderErrorV1::Unavailable)?;
+            if self
+                .boot()
+                .map_err(KagemushaWalletProviderErrorV1::Unavailable)?
+                != boot_id
+            {
+                return Err(KagemushaWalletProviderErrorV1::Unavailable(
+                    KagemushaWalletUnavailableV1::Busy,
+                ));
+            }
+            Ok(
+                iroha_data_model::kagemusha::KagemushaWalletMonotonicReadingV1 {
+                    boot_id,
+                    monotonic_ms,
+                },
+            )
+        })();
+        self.require_storage().and(answer)
+    }
+
+    pub(crate) fn prekey_root_identity(&self) -> [u8; 32] {
+        self.sentinel.root_nonce
+    }
+
+    pub(crate) fn enrollment_generation_policy(
+        &self,
+    ) -> Result<super::KagemushaWalletKeyGenerationPolicyV1, KagemushaWalletProviderErrorV1> {
+        self.require_storage()?;
+        self.platform
+            .key_generation_policy()
+            .map_err(KagemushaWalletProviderErrorV1::Unavailable)
     }
 
     /// Current boot identity.

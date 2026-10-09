@@ -56,10 +56,10 @@ pub(super) struct OtherDomains {
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
         usage: Use::Seed,
-        reason: "KAGEMUSHA ledger lookup identifiers: a fixed custody-index key and derived reserve-asset, reserve-definition and pending-publication keys. They address exact identities in the committed ledger; they neither commit State contents nor establish finality, signing authority or completion",
+        reason: "KAGEMUSHA ledger lookup identifiers: a fixed custody-index key, receipt-indexed ordinary Load event paths, and derived reserve-asset and reserve-definition keys. They address exact identities in the committed ledger; they neither commit State contents nor establish finality, signing authority or completion",
         literals: &[
             r"iroha:kagemusha:ledger-custody-index:v1\0",
-            r"iroha:kagemusha:pending-publication:v1\0",
+            r"iroha:kagemusha:ordinary-load-event-path:v1\0",
             r"iroha:kagemusha:reserve-asset:v1\0",
             r"iroha:kagemusha:reserve-definition:v1\0",
         ],

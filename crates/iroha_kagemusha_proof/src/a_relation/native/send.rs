@@ -1,12 +1,21 @@
-//! Genuine native Send five-A/four-W composition from exact original tapes.
+//! Native fixed-mask Send A1/W0/A2/W1/A3/W2/A4/W3/A5 composition.
 //!
-//! Every hard predecessor, own sigma, own authorization, depth32 map and carried
-//! opening is retained. Runtime sessions use installed keys and no witness-selected
-//! profile. The native pre-Advance owner verifies the recipient Credential and
-//! Request signature separately; Send A binds the exact signed Request digest.
-//! TODO: mount complete native G1 preparation and qualify all eight control masks,
-//! producer catalog and final Omega before foreign wallet open.
+//! A1 binds the actual predecessor Omega, original own sigma and exact signed tapes.
+//! A2 inserts Pending; A3 inserts the fee claim and preserves the remaining state.
+//! A4 hard-verifies `Q_sigma`; A5 authenticates the current Credential, direct
+//! Enrollment certificate and own Advance Receipt. The fixed Tagged3 source profile
+//! consumes installed keys, verifies every produced/restored proof and decides every
+//! carried opening. The terminal A5 is only an input to the final Omega producer.
+//! Every mask has an independently installed pipeline and authorized sigma selector.
+//! TODO: qualify the remaining seven masks and complete final Omega catalog.
+//! Original PK imports reconstruct the same source with unknown circuit-only
+//! witnesses and require exact installed descriptor and verifying-key agreement.
 
+#[path = "send/checkpoint.rs"]
+mod checkpoint;
+pub use checkpoint::{CheckpointKind, CheckpointLayout};
+
+use super::artifact::KeyArtifact;
 use core::fmt;
 use std::sync::Arc;
 
@@ -17,10 +26,13 @@ use iroha_pasta::{
 use iroha_plonk::{
     DescriptorBinding, ProverConfig, ProverRandomness, ProvingKey, VerifyingKey, Witness,
     create_proof_owned_with_claim,
-    cs::{Column, ConstraintSystem, Instance, InstanceType},
+    cs::{
+        Column, ConstraintSystem, CurveV1, Instance, InstanceModeV1, InstanceType, ProofSuffixV1,
+        TranscriptV2,
+    },
     frontend::{Circuit, Error as LayoutError, Layouter, Region, SimpleFloorPlanner, Value},
+    keys::pk::artifact::ReadConfig,
     pcs::ipa::PinnedParams,
-    verifier::{accumulate_generator, verify_full},
 };
 use iroha_plonk_gadgets::{
     UintChip,
@@ -39,14 +51,13 @@ use iroha_plonk_recursion::{
     codec::ScalarCells,
     create_fold,
     obligation::ledger::Variant,
-    verifier::{VerifierChip, VerifierConfig, VerifierPlan},
+    verifier::{VerifierChip, VerifierConfig},
 };
 
 use super::super::{
     AProofPlan, LineagePublicCells, ProofMessageCells, SigmaBindingCells, VestaClaimCells,
     context::{ContextInputs, ContextPlan, ContextPredecessor, ContextState},
-    own::ConsumingProofCells,
-    own::OwnPolicy,
+    own::{ConsumingProofCells, OwnPolicy},
     schedule::OperationTask,
     send::{
         SendAuthorization, SendAuthorizationObjects, SendInputs, SendObjects, SendProofBinding,
@@ -73,16 +84,22 @@ use crate::{
 mod tests;
 
 /// Fixed native source profile; private inputs cannot choose another range-bus count.
-pub const SOURCE_RANGE_BUSES: usize = 4;
-/// Exact genuine source schedule has five A stages and four W continuations.
+pub const SOURCE_RANGE_BUSES: usize = 3;
+/// Exact source schedule has five A stages and four W continuations.
 pub const A_STAGE_COUNT: usize = 5;
+/// Exact fixed wrapper count, ending in terminal A5.
+pub const W_STAGE_COUNT: usize = A_STAGE_COUNT - 1;
+const DESCRIPTOR_MAX_BYTES: usize = 1 << 20;
+const VERIFYING_KEY_MAX_BYTES: usize = 1 << 18;
 
 /// Native preparation/proof failure. No failure changes a monetary head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    /// Explicit cancellation; no proof failure or burn verdict is produced.
+    Cancelled,
     /// Installed descriptor/key/schema or fixed policy differs.
     Artifact,
-    /// Original shape, exact tape, history or source checkpoint differs.
+    /// Original shape, exact tape or source checkpoint differs.
     Input,
     /// Native proof, accumulator or complete decide failed.
     Proof,
@@ -95,6 +112,12 @@ impl fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+impl Error {
+    /// Whether the operation was cancelled instead of proving an invalid input.
+    pub fn is_cancelled(self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+}
 
 /// Exact original Q proof and columns, retained by the source native producer.
 #[derive(Clone, Debug)]
@@ -116,34 +139,37 @@ pub struct PredecessorInput {
     pub vesta: [u8; 544],
 }
 
-/// Exact canonical source state openings and Send statement.
-#[derive(Clone, Copy, Debug)]
+/// Exact before/after states and own Send statement from the irreversible Advance.
+#[derive(Clone, Debug)]
 pub struct SendState {
-    /// Hard predecessor core33/rest8/public18.
+    /// Original committed predecessor state.
     pub before: StateWitness,
-    /// Exact successor core33/rest8/public18.
+    /// Exact successor state retained by Advance.
     pub after: StateWitness,
-    /// Original statement26.
+    /// Exact26-field own Send statement.
     pub statement: [Fp; 26],
 }
-/// Original post-Advance inputs converted by native canonical G1 preparation.
+
+/// Post-Advance originals for complete native Send lineage composition.
+/// The G1 owner authenticates canonical custody objects before producing these typed
+/// field transcripts and exact signed-body transcript||signature tapes.
 #[derive(Clone, Debug)]
 pub struct Inputs {
-    /// Same state openings and statement used by sigma and every A stage.
+    /// Exact predecessor/successor core33/rest8/public18 and own statement26.
     pub state: SendState,
-    /// Descriptor-sized original sigma with every selected control proved.
+    /// Exact original unframed sigma bytes also exported by Q0.
     pub sigma: Vec<u8>,
-    /// Original320-byte public predecessor transcript followed by proof/P/V originals.
+    /// Exact public320 transcript followed by original predecessor proof and both claims.
     pub omega: Vec<u8>,
-    /// Current payer Credential, signed Request, fee slot, Enrollment certificate, Receipt.
+    /// Current Credential, Request, `FeeSchedule`, Enrollment certificate, own Advance Receipt.
     pub objects: [Vec<u8>; 5],
-    /// Actual depth32 pending insertion witness.
+    /// Exact depth32 pending-map insertion checked by A2.
     pub pending: IndexedInsert<Fp>,
-    /// Actual depth32 fee insertion or explicit zero-fee no-op witness.
+    /// Exact depth32 fee-map insertion checked by A3.
     pub fee: IndexedInsert<Fp>,
-    /// Q_sigma and hard receipt/currentCredential/Enrollment Q.
+    /// Hard `Q_sigma` followed by own Receipt/current Credential/Enrollment signature Q.
     pub q: [QInput; 2],
-    /// Actual hard predecessor proof and transported claims.
+    /// Actual predecessor proof; its key/profile comes from the installed Plan.
     pub predecessor: PredecessorInput,
 }
 
@@ -159,9 +185,9 @@ pub struct Plan {
     vesta: PinnedParams<Eq>,
 }
 impl Plan {
-    /// Pin the fixed five-stage [[],[],[],[Q0],[Q1]] genuine source schedule.
-    /// Signature slots are hard [receipt,current Credential,Enrollment certificate],
-    /// with the certificate under the fixed installed scheme root.
+    /// Pin predecessor and the fixed [[],[],[],[Q0],[Q1]] schedule with every Send task.
+    /// The hard signature slots are [own Receipt,current Credential,Enrollment certificate],
+    /// with the certificate under the installed root. The mask is fixed by installed keys.
     /// # Errors
     /// Wrong variant/k/schema, absent predecessor or substituted fixed signature/key policy.
     pub fn new(
@@ -187,7 +213,7 @@ impl Plan {
                 .binding()
                 .descriptor()
                 .k
-                != operation.frame().part_source_k() as u8
+                != u8::try_from(operation.frame().part_source_k()).map_err(|_| Error::Artifact)?
         {
             return Err(Error::Artifact);
         }
@@ -218,9 +244,10 @@ impl Plan {
             .map_err(|_| Error::Artifact)?;
         let slots = signatures.slots();
         if slots.len() != 3
-            || slots.iter().any(|s| s.mode != VerifyMode::Hard)
-            || slots[0].key != SignatureKey::Variable
-            || slots[1].key != SignatureKey::Variable
+            || slots.iter().any(|slot| slot.mode != VerifyMode::Hard)
+            || slots[..2]
+                .iter()
+                .any(|slot| slot.key != SignatureKey::Variable)
             || slots[2].key != SignatureKey::Fixed(policy.root)
         {
             return Err(Error::Artifact);
@@ -231,28 +258,33 @@ impl Plan {
             .verifier()
             .binding()
             .descriptor();
-        if d.instance_lengths != [signatures.instance_length() as u32]
+        if d.instance_lengths
+            != [u32::try_from(signatures.instance_length()).map_err(|_| Error::Artifact)?]
             || d.instance_types.as_deref() != Some(&QSignaturePlan::instance_types())
         {
             return Err(Error::Artifact);
         }
-        let context = ContextPlan::with_schedule(
-            operation,
-            vec![vec![], vec![], vec![], vec![0], vec![1]],
-            Some(0),
-            SendStagePlan::context_specs()
-                .map_err(|_| Error::Artifact)?
-                .to_vec(),
+        let sigma_bytes = operation
+            .sigma
+            .class(0)
+            .ok_or(Error::Artifact)?
+            .verifier()
+            .proof_length();
+        if predecessor
+            .proof_length()
+            .checked_add(1088)
+            .and_then(|n| n.checked_add(sigma_bytes))
+            .is_none_or(|n| n > super::super::receive::PAYMENT_PROOF_BUDGET)
+        {
+            return Err(Error::Artifact);
+        }
+        let context = crate::a_relation::schedule::compiled::OperationSchedule::for_variant(
+            operation.frame().variant(),
         )
-        .and_then(|p| {
-            p.with_operation_tasks(vec![
-                vec![OperationTask::SendObjects, OperationTask::SendProof],
-                vec![OperationTask::SendPending],
-                vec![OperationTask::SendFeeAndCarry],
-                vec![],
-                vec![OperationTask::SendAuthorization],
-            ])
-        })
+        .bind(
+            operation,
+            SendStagePlan::context_specs().map_err(|_| Error::Artifact)?,
+        )
         .map_err(|_| Error::Artifact)?;
         SendStagePlan::new(context.clone()).map_err(|_| Error::Artifact)?;
         Ok(Self {
@@ -276,6 +308,18 @@ impl Plan {
     /// # Errors
     /// Wrong tape/length/schema or any native proof/full-accumulator failure.
     pub fn prepare(&self, input: Inputs, budget: MemoryBudget) -> Result<Prepared, Error> {
+        self.prepare_cancellable(input, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn prepare_cancellable(
+        &self,
+        input: Inputs,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Prepared, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         for (kind, raw) in object_kinds().into_iter().zip(&input.objects) {
             if raw.len() != kind.body_len() + 64 {
                 return Err(Error::Input);
@@ -291,21 +335,28 @@ impl Plan {
             return Err(Error::Input);
         }
         check_sigma_tape(&input, self.mask)?;
-        if input.state.statement[11] != Fp::from(u64::from(self.mask))
-            || input.state.before.core[21] != Fp::from(u64::from(self.mask))
-        {
-            return Err(Error::Input);
-        }
         let pallas =
             AccumulatorT::<Ep>::from_bytes(&input.predecessor.pallas).map_err(|_| Error::Input)?;
         let vesta =
             AccumulatorT::<Eq>::from_bytes(&input.predecessor.vesta).map_err(|_| Error::Input)?;
         pallas
-            .decide(&self.pallas, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.pallas, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         vesta
-            .decide(&self.vesta, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let program = self
             .context
             .operation()
@@ -321,68 +372,90 @@ impl Plan {
         }
         let own = terminal_digest(&input.state.before.lineage, &pallas.as_input())?;
         let public = omega_instances(own, &vesta)?;
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.pallas,
             program.binding(),
             &self.predecessor_key,
             &public,
             &input.predecessor.proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
-        let opening = opening_pallas(
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
+        let opening = opening_pallas_cancellable(
             &self.pallas,
             program.binding(),
             &self.predecessor_key,
             &public,
             &input.predecessor.proof,
             budget,
+            cancellation,
         )?;
         let mut openings = Vec::new();
         for (index, q) in input.q.iter().enumerate() {
             let fixed = self.context.operation().q(index).ok_or(Error::Artifact)?;
-            verify_full(
+            iroha_plonk::verifier::verify_full_cancellable(
                 fixed.verifier().params(),
                 fixed.verifier().binding(),
                 &fixed.key,
                 &q.instances,
                 &q.proof,
                 budget,
+                cancellation,
             )
-            .map_err(|_| Error::Proof)?;
-            openings.push(opening_pallas(
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
+            openings.push(opening_pallas_cancellable(
                 fixed.verifier().params(),
                 fixed.verifier().binding(),
                 &fixed.key,
                 &q.instances,
                 &q.proof,
                 budget,
+                cancellation,
             )?);
         }
         let part = q_sigma_part(
             &input.q[0],
             self.context.operation().frame().part_source_k(),
+            self.mask,
         )?;
-        part.decide(&self.vesta, budget).map_err(|_| Error::Proof)?;
-        if input.omega
-            != lineage_bytes(
-                &input.state.before.lineage,
-                &input.predecessor.proof,
-                &pallas,
-                &vesta,
-            )?
-        {
+        part.decide_cancellable(&self.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
+        let omega = lineage_bytes(
+            &input.state.before.lineage,
+            &input.predecessor.proof,
+            &pallas,
+            &vesta,
+        )?;
+        if input.omega != omega {
             return Err(Error::Input);
         }
         let maps = Maps {
-            witness: MapsWitness {
-                before: input.state.before,
-                after: input.state.after,
-                statement: input.state.statement,
-                pending: input.pending,
-                fee: input.fee,
-                objects: core::array::from_fn(|i| input.objects[i].clone()),
-            },
+            witness: input.state,
+            pending: input.pending,
+            fee: input.fee,
+            objects: core::array::from_fn(|i| SignedTape {
+                kind: object_kinds()[i],
+                bytes: input.objects[i].clone(),
+            }),
             known: true,
         };
         let predecessor = Predecessor {
@@ -394,11 +467,8 @@ impl Plan {
         };
         let source = Arc::new(Sources {
             maps,
-            own_objects: core::array::from_fn(|i| SignedTape {
-                bytes: input.objects[i + 3].clone(),
-            }),
-            omega: input.omega,
             sigma: input.sigma,
+            omega,
             q_instances: input.q.each_ref().map(|q| q.instances.clone()).to_vec(),
             q_proofs: input.q.each_ref().map(|q| q.proof.clone()).to_vec(),
             q_openings: openings,
@@ -426,9 +496,8 @@ struct Predecessor {
 #[derive(Clone)]
 struct Sources {
     maps: Maps,
-    own_objects: [SignedTape; 2],
-    omega: Vec<u8>,
     sigma: Vec<u8>,
+    omega: Vec<u8>,
     q_instances: Vec<Vec<Vec<Fq>>>,
     q_proofs: Vec<Vec<u8>>,
     q_openings: Vec<FoldInput<Ep>>,
@@ -440,26 +509,26 @@ struct Sources {
 }
 #[derive(Clone)]
 struct SignedTape {
+    kind: ObjectKind,
     bytes: Vec<u8>,
 }
-#[derive(Clone)]
-struct MapsWitness {
-    before: StateWitness,
-    after: StateWitness,
-    statement: [Fp; 26],
-    pending: IndexedInsert<Fp>,
-    fee: IndexedInsert<Fp>,
-    objects: [Vec<u8>; 3],
+impl SignedTape {
+    fn digest(&self) -> Result<Fp, Error> {
+        object_digest(self.kind, &self.bytes)
+    }
 }
 #[derive(Clone)]
 struct Maps {
-    witness: MapsWitness,
+    witness: SendState,
+    pending: IndexedInsert<Fp>,
+    fee: IndexedInsert<Fp>,
+    objects: [SignedTape; 5],
     known: bool,
 }
 impl Maps {
-    fn value<T: Copy>(&self, v: T) -> Value<T> {
+    fn value<T: Copy>(&self, value: T) -> Value<T> {
         if self.known {
-            Value::known(v)
+            Value::known(value)
         } else {
             Value::unknown()
         }
@@ -496,9 +565,9 @@ impl Maps {
         &self,
         uint: &mut UintChip<'_, Fp>,
         region: &mut Region<'_, Fp>,
-        witness: &IndexedInsert<Fp>,
+        insertion: &IndexedInsert<Fp>,
     ) -> Result<InsertCells, LayoutError> {
-        let leaf = witness.leaf;
+        let leaf = insertion.leaf;
         let words = uint
             .glue()
             .witnesses(
@@ -510,8 +579,8 @@ impl Maps {
         let leaf = LeafCells::from_words(words);
         let mut paths = Vec::new();
         for (index, siblings) in [
-            (witness.leaf_slot, witness.leaf_siblings),
-            (witness.slot, witness.slot_siblings),
+            (insertion.leaf_slot, insertion.leaf_siblings),
+            (insertion.slot, insertion.slot_siblings),
         ] {
             let index = uint
                 .glue()
@@ -538,14 +607,143 @@ struct First {
     fold: Vec<u8>,
     known: bool,
 }
+// Circuit-only witness views. Optional claims become unknown circuit cells;
+// none of these types can create Prepared or a verified checkpoint.
+#[derive(Clone)]
+struct CircuitPredecessor {
+    key: VerifyingKey<Ep>,
+    proof: Vec<u8>,
+    pallas: Option<FoldInput<Ep>>,
+    vesta: Option<AccumulatorT<Eq>>,
+}
+#[derive(Clone)]
+struct CircuitSources {
+    maps: Maps,
+    omega: Vec<u8>,
+    sigma: Vec<u8>,
+    q_instances: Vec<Vec<Vec<Fq>>>,
+    q_proofs: Vec<Vec<u8>>,
+    signature_schema: QSignaturePlan,
+    predecessor: CircuitPredecessor,
+    params: PinnedParams<Ep>,
+    policy: OwnPolicy,
+}
+#[derive(Clone)]
+struct FirstCircuit {
+    source: Arc<CircuitSources>,
+    plan: ContextPlan,
+    fold: Vec<u8>,
+    known: bool,
+}
+impl First {
+    fn circuit(&self) -> FirstCircuit {
+        let source = &self.source;
+        FirstCircuit {
+            source: Arc::new(CircuitSources {
+                maps: source.maps.clone(),
+                omega: source.omega.clone(),
+                sigma: source.sigma.clone(),
+                q_instances: source.q_instances.clone(),
+                q_proofs: source.q_proofs.clone(),
+                signature_schema: source.signature_schema.clone(),
+                predecessor: CircuitPredecessor {
+                    key: source.predecessor.key.clone(),
+                    proof: source.predecessor.proof.clone(),
+                    pallas: Some(source.predecessor.pallas.as_input()),
+                    vesta: Some(source.predecessor.vesta.clone()),
+                },
+                params: source.params.clone(),
+                policy: source.policy,
+            }),
+            plan: self.plan.clone(),
+            fold: self.fold.clone(),
+            known: self.known,
+        }
+    }
+}
+impl FirstCircuit {
+    fn blank(plan: &Plan) -> Result<Self, Error> {
+        let operation = plan.context.operation();
+        let class = operation.sigma.class(0).ok_or(Error::Artifact)?;
+        let predecessor = operation.omega().ok_or(Error::Artifact)?;
+        let state = StateWitness {
+            core: [Fp::ZERO; 33],
+            rest: [Fp::ZERO; 8],
+            lineage: [Fp::ZERO; 18],
+        };
+        let mut q_instances = Vec::new();
+        let mut q_proofs = Vec::new();
+        for index in 0..2 {
+            let q = operation.q(index).ok_or(Error::Artifact)?;
+            q_instances.push(
+                q.verifier()
+                    .binding()
+                    .descriptor()
+                    .instance_lengths
+                    .iter()
+                    .map(|length| vec![Fq::ZERO; *length as usize])
+                    .collect(),
+            );
+            q_proofs.push(vec![0; q.verifier().proof_length()]);
+        }
+        let objects = object_kinds().map(|kind| vec![0; kind.body_len() + 64]);
+        let path = IndexedInsert {
+            leaf: crate::tree::IndexedLeaf::default(),
+            leaf_slot: 0,
+            leaf_siblings: [Fp::ZERO; 32],
+            slot: 1,
+            slot_siblings: [Fp::ZERO; 32],
+        };
+        let omega_length = predecessor
+            .proof_length()
+            .checked_add(320 + 2 * 544)
+            .ok_or(Error::Artifact)?;
+        let source = CircuitSources {
+            maps: Maps {
+                witness: SendState {
+                    before: state,
+                    after: state,
+                    statement: [Fp::ZERO; 26],
+                },
+                pending: path,
+                fee: path,
+                objects: core::array::from_fn(|i| SignedTape {
+                    kind: object_kinds()[i],
+                    bytes: objects[i].clone(),
+                }),
+                known: false,
+            },
+            omega: vec![0; omega_length],
+            sigma: vec![0; class.verifier().proof_length()],
+            q_instances,
+            q_proofs,
+            signature_schema: plan.signatures.clone(),
+            predecessor: CircuitPredecessor {
+                key: plan.predecessor_key.clone(),
+                proof: vec![0; predecessor.proof_length()],
+                pallas: None,
+                vesta: None,
+            },
+            params: plan.pallas.clone(),
+            policy: plan.policy,
+        };
+        Ok(Self {
+            source: Arc::new(source),
+            plan: plan.context.clone(),
+            fold: vec![0; 1120],
+            known: false,
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
-/// Fixed source-stage columns and range buses.
+/// Fixed Tagged3 source columns and exact homogeneous public schema.
 pub struct StageConfig {
     verifier: VerifierConfig<Ep>,
     bytes: BytesConfig,
     public: Column<Instance>,
 }
-impl First {
+impl FirstCircuit {
     fn value<T: Copy>(&self, value: T) -> Value<T> {
         if self.known {
             Value::known(value)
@@ -559,22 +757,39 @@ impl First {
         region: &mut Region<'_, Fp>,
         v: Fq,
     ) -> Result<ScalarCells<Ep>, LayoutError> {
-        let [lo, hi] = foreign_limbs(&v);
-        let lo = chip.uint().assign::<128>(region, self.value(lo))?;
-        let hi = chip.uint().assign::<127>(region, self.value(hi))?;
+        Self::scalar_value(chip, region, self.value(v))
+    }
+    fn scalar_value(
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        value: Value<Fq>,
+    ) -> Result<ScalarCells<Ep>, LayoutError> {
+        let lo = chip
+            .uint()
+            .assign::<128>(region, value.map(|v| foreign_limbs(&v)[0]))?;
+        let hi = chip
+            .uint()
+            .assign::<127>(region, value.map(|v| foreign_limbs(&v)[1]))?;
         ScalarCells::from_limbs(&mut chip.uint(), region, &lo, &hi)
     }
     fn pallas(
         &self,
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
-        input: &FoldInput<Ep>,
+        input: Option<&FoldInput<Ep>>,
     ) -> Result<FoldInputCells<Ep>, LayoutError> {
-        let g = chip.witness_point(region, self.value(Ep::from(*input.g())))?;
-        let challenges = input
-            .challenges()
-            .iter()
-            .map(|v| self.scalar(chip, region, *v))
+        let g = chip.witness_point(
+            region,
+            input.map_or(Value::unknown(), |v| self.value(Ep::from(*v.g()))),
+        )?;
+        let challenges = (0..K)
+            .map(|i| {
+                Self::scalar_value(
+                    chip,
+                    region,
+                    input.map_or(Value::unknown(), |v| self.value(v.challenges()[i])),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
             .map_err(|_| LayoutError::Synthesis)?;
@@ -584,14 +799,30 @@ impl First {
         &self,
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
-        input: &AccumulatorT<Eq>,
+        input: Option<&AccumulatorT<Eq>>,
     ) -> Result<VestaClaimCells, LayoutError> {
-        let (x, y) = Option::from(input.g().coordinates()).ok_or(LayoutError::Synthesis)?;
-        let coordinates = [self.scalar(chip, region, x)?, self.scalar(chip, region, y)?];
+        let coordinates = input
+            .map(|v| Option::<(Fq, Fq)>::from(v.g().coordinates()).ok_or(LayoutError::Synthesis))
+            .transpose()?;
+        let coordinates = [
+            Self::scalar_value(
+                chip,
+                region,
+                coordinates.map_or(Value::unknown(), |(x, _)| self.value(x)),
+            )?,
+            Self::scalar_value(
+                chip,
+                region,
+                coordinates.map_or(Value::unknown(), |(_, y)| self.value(y)),
+            )?,
+        ];
+        let values = core::array::from_fn::<_, K, _>(|i| {
+            input.map_or(Value::unknown(), |v| self.value(v.challenges()[i]))
+        });
         let challenges = chip
             .uint()
             .glue()
-            .witnesses(region, &input.challenges().map(|v| self.value(v)))?
+            .witnesses(region, &values)?
             .try_into()
             .map_err(|_| LayoutError::Synthesis)?;
         VestaClaimCells::constrain(chip, region, 16, coordinates, challenges)
@@ -656,7 +887,7 @@ impl First {
         SigmaBindingCells::from_run(chip, region, statement, index, &run)
     }
 }
-impl First {
+impl FirstCircuit {
     fn objects(
         &self,
         chip: &mut VerifierChip<Ep>,
@@ -670,20 +901,22 @@ impl First {
         ),
         LayoutError,
     > {
-        let sources = self
-            .source
-            .maps
-            .witness
-            .objects
-            .each_ref()
-            .map(|o| o.iter().map(|v| self.value(*v)).collect::<Vec<_>>());
+        let sources: [Vec<_>; 3] = core::array::from_fn(|i| {
+            self.source.maps.objects[i]
+                .bytes
+                .iter()
+                .map(|v| self.value(*v))
+                .collect()
+        });
         let objects =
             SendObjects::decode(chip, bytes, region, sources.each_ref().map(Vec::as_slice))?;
-        let sources = self
-            .source
-            .own_objects
-            .each_ref()
-            .map(|o| o.bytes.iter().map(|v| self.value(*v)).collect::<Vec<_>>());
+        let sources: [Vec<_>; 2] = core::array::from_fn(|i| {
+            self.source.maps.objects[i + 3]
+                .bytes
+                .iter()
+                .map(|v| self.value(*v))
+                .collect()
+        });
         let own = SendAuthorizationObjects::decode(
             chip,
             bytes,
@@ -696,7 +929,7 @@ impl First {
     }
 }
 
-impl Circuit<Fp> for First {
+impl Circuit<Fp> for FirstCircuit {
     type Config = StageConfig;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();
@@ -707,8 +940,9 @@ impl Circuit<Fp> for First {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> StageConfig {
-        let verifier = VerifierConfig::configure_serialized_foreign(meta, SOURCE_RANGE_BUSES)
-            .expect("fixed four-bus native Send profile");
+        let verifier =
+            VerifierConfig::configure_serialized_foreign_tagged(meta, SOURCE_RANGE_BUSES)
+                .expect("fixed native Send Tagged3 profile");
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);
@@ -770,9 +1004,13 @@ impl Circuit<Fp> for First {
                 let pp = self.pallas(
                     &mut chip,
                     &mut region,
-                    &self.source.predecessor.pallas.as_input(),
+                    self.source.predecessor.pallas.as_ref(),
                 )?;
-                let pv = self.vesta(&mut chip, &mut region, &self.source.predecessor.vesta)?;
+                let pv = self.vesta(
+                    &mut chip,
+                    &mut region,
+                    self.source.predecessor.vesta.as_ref(),
+                )?;
                 let input = ContextInputs {
                     own_statement: &statement,
                     incoming_statement: None,
@@ -827,14 +1065,15 @@ impl Circuit<Fp> for First {
                     &pv,
                     &proof,
                 )?;
-                let omega = frame(&self.source.omega)?;
+                let omega = frame(&self.source.omega).map_err(|_| LayoutError::BoundsFailure)?;
                 let omega_run = bytes.run(
                     &mut region,
                     &omega.iter().map(|v| self.value(*v)).collect::<Vec<_>>(),
                     &iroha_plonk_gadgets::bytes::chunk_segments(0, omega.len()),
                     &ConsumingProofCells::omega_segments(self.source.predecessor.proof.len())?,
                 )?;
-                let sigma_tape = frame(&self.source.sigma)?;
+                let sigma_tape =
+                    frame(&self.source.sigma).map_err(|_| LayoutError::BoundsFailure)?;
                 let sigma_run = bytes.run(
                     &mut region,
                     &sigma_tape
@@ -928,9 +1167,46 @@ struct Continuation {
     fold: Vec<u8>,
     pallas: AccumulatorT<Ep>,
     carried: AccumulatorT<Ep>,
-    history: Vec<(AccumulatorT<Ep>, AccumulatorT<Eq>)>,
 }
-impl Circuit<Fp> for Continuation {
+
+#[derive(Clone)]
+struct ContinuationCircuit {
+    first: FirstCircuit,
+    plan: SplitPlan,
+    wrapper: Vec<u8>,
+    vesta: Option<AccumulatorT<Eq>>,
+    fold: Vec<u8>,
+    carried: Option<FoldInput<Ep>>,
+}
+impl Continuation {
+    fn circuit(&self) -> ContinuationCircuit {
+        ContinuationCircuit {
+            first: self.first.circuit(),
+            plan: self.plan.clone(),
+            wrapper: self.wrapper.clone(),
+            vesta: Some(self.vesta.clone()),
+            fold: self.fold.clone(),
+            carried: Some(self.carried.as_input()),
+        }
+    }
+}
+impl ContinuationCircuit {
+    fn blank(first: FirstCircuit, plan: SplitPlan) -> Result<Self, Error> {
+        if !(1..A_STAGE_COUNT).contains(&plan.stage()) {
+            return Err(Error::Artifact);
+        }
+        Ok(Self {
+            first,
+            wrapper: vec![0; plan.wrap().verifier().proof_length()],
+            vesta: None,
+            fold: vec![0; 1120],
+            carried: None,
+
+            plan,
+        })
+    }
+}
+impl Circuit<Fp> for ContinuationCircuit {
     type Config = StageConfig;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();
@@ -941,7 +1217,7 @@ impl Circuit<Fp> for Continuation {
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> StageConfig {
-        First::configure(meta)
+        FirstCircuit::configure(meta)
     }
     fn synthesize(
         &self,
@@ -994,9 +1270,13 @@ impl Circuit<Fp> for Continuation {
                 let pp = first.pallas(
                     &mut chip,
                     &mut region,
-                    &first.source.predecessor.pallas.as_input(),
+                    first.source.predecessor.pallas.as_ref(),
                 )?;
-                let pv = first.vesta(&mut chip, &mut region, &first.source.predecessor.vesta)?;
+                let pv = first.vesta(
+                    &mut chip,
+                    &mut region,
+                    first.source.predecessor.vesta.as_ref(),
+                )?;
                 let input = ContextInputs {
                     own_statement: &statement,
                     incoming_statement: None,
@@ -1018,25 +1298,14 @@ impl Circuit<Fp> for Continuation {
                     vesta_corrections: &[],
                     receive_results: None,
                 };
-                let cp = first.pallas(&mut chip, &mut region, &self.carried.as_input())?;
-                let history = self
-                    .history
-                    .iter()
-                    .map(|(p, v)| {
-                        Ok(crate::a_relation::split::ContextLinkCells {
-                            pallas: first.pallas(&mut chip, &mut region, &p.as_input())?,
-                            vesta: first.vesta(&mut chip, &mut region, v)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, LayoutError>>()?;
-                let cv = first.vesta(&mut chip, &mut region, &self.vesta)?;
+                let cp = first.pallas(&mut chip, &mut region, self.carried.as_ref())?;
+                let cv = first.vesta(&mut chip, &mut region, self.vesta.as_ref())?;
                 let proof = first.carrier(&mut chip, &mut bytes, &mut region, &self.wrapper)?;
                 let resumed = crate::a_relation::split::resume_context(
                     &mut chip,
                     &mut region,
                     &self.plan,
                     &input,
-                    &history,
                     &cp,
                     &cv,
                     &proof,
@@ -1127,16 +1396,12 @@ impl Circuit<Fp> for Continuation {
                         .operation_tasks(self.plan.stage())
                         .ok_or(LayoutError::Synthesis)?;
                     let pending = if tasks.contains(&OperationTask::SendPending) {
-                        Some(maps.insertion(
-                            &mut chip.uint(),
-                            &mut region,
-                            &maps.witness.pending,
-                        )?)
+                        Some(maps.insertion(&mut chip.uint(), &mut region, &maps.pending)?)
                     } else {
                         None
                     };
                     let fee = if tasks.contains(&OperationTask::SendFeeAndCarry) {
-                        Some(maps.insertion(&mut chip.uint(), &mut region, &maps.witness.fee)?)
+                        Some(maps.insertion(&mut chip.uint(), &mut region, &maps.fee)?)
                     } else {
                         None
                     };
@@ -1190,8 +1455,8 @@ impl Circuit<Fp> for Continuation {
 }
 #[derive(Clone)]
 enum StageData {
-    First(First),
-    Continued(Continuation),
+    First(Box<FirstCircuit>),
+    Continued(Box<ContinuationCircuit>),
 }
 /// Actual fixed source A circuit. Its private stage is selected by native checkpoint order.
 #[derive(Clone)]
@@ -1205,13 +1470,13 @@ impl Circuit<Fp> for StageCircuit {
     fn without_witnesses(&self) -> Self {
         Self {
             inner: match &self.inner {
-                StageData::First(c) => StageData::First(c.without_witnesses()),
-                StageData::Continued(c) => StageData::Continued(c.without_witnesses()),
+                StageData::First(c) => StageData::First(Box::new(c.without_witnesses())),
+                StageData::Continued(c) => StageData::Continued(Box::new(c.without_witnesses())),
             },
         }
     }
     fn configure(meta: &mut ConstraintSystem<Fp>) -> StageConfig {
-        First::configure(meta)
+        FirstCircuit::configure(meta)
     }
     fn synthesize(
         &self,
@@ -1242,10 +1507,26 @@ impl Prepared {
             salt.to_repr(),
             config,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         pallas
-            .decide(&self.plan.pallas, config.kernel_budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(
+                &self.plan.pallas,
+                config.kernel_budget,
+                config.cancellation.as_ref(),
+            )
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         Ok(First {
             source: self.source.clone(),
             plan: self.plan.context.clone(),
@@ -1267,88 +1548,311 @@ impl Prepared {
         let public = first_public(&first)?;
         Ok((
             StageCircuit {
-                inner: StageData::First(first),
+                inner: StageData::First(Box::new(first.circuit())),
             },
             public,
         ))
     }
 }
 
-/// Already installed A1/A2/A3/A4/A5 and W0/W1/W2/W3 proving artifacts for this fixed profile.
-/// Authentication and genuine PK import remain the native package owner's responsibility.
+fn artifact_metadata<C: iroha_pasta::PastaCurve>(
+    artifact: &KeyArtifact<C>,
+    curve: CurveV1,
+    lengths: &[u32],
+    types: &[InstanceType],
+) -> Result<(), Error> {
+    let binding = artifact.binding();
+    let d = binding.descriptor();
+    if binding.encoded().len() > DESCRIPTOR_MAX_BYTES
+        || artifact.key().to_bytes().len() > VERIFYING_KEY_MAX_BYTES
+        || d.k != 16
+        || d.curve != curve
+        || d.transcript != TranscriptV2::KagemushaPoseidonRp57Base
+        || d.instance_mode != InstanceModeV1::Direct
+        || d.proof_suffix != ProofSuffixV1::FoldedGenerator
+        || d.instance_lengths.as_slice() != lengths
+        || d.instance_types.as_deref() != Some(types)
+    {
+        return Err(Error::Artifact);
+    }
+    Ok(())
+}
+fn original_bounds(original: &[u8], rows: usize, config: ReadConfig) -> Result<(), Error> {
+    if original.is_empty() || original.len() > config.maximum_bytes || rows > config.maximum_rows {
+        return Err(Error::Artifact);
+    }
+    Ok(())
+}
+
+/// Fixed Send verifier metadata with no retained proving polynomials or PK bytes.
+/// Installation authenticates the plan and verifier identities independently;
+/// metadata consistency alone grants no source/catalog or wallet-open authority.
+/// TODO(G3/G4): connect the complete authenticated producer catalog and original
+/// G1 preparation before enabling the Native wallet owner.
 #[derive(Clone)]
 pub struct Prover {
     plan: Plan,
-    a: [Arc<ProvingKey<Eq>>; 5],
-    w: [Arc<ProvingKey<Ep>>; 4],
-    wrappers: [WKey; 4],
+    a: [KeyArtifact<Eq>; A_STAGE_COUNT],
+    w: [KeyArtifact<Ep>; A_STAGE_COUNT - 1],
+    wrappers: [WKey; A_STAGE_COUNT - 1],
 }
 impl Prover {
-    /// Import the complete fixed typed artifact set, never generating keys from a witness.
+    /// Install all fixed A/W verifier identities without retaining any PK.
+    ///
+    /// The native owner authenticates the complete scheme/provider/root, predecessor,
+    /// Q keys, signature slots and compiled-source catalog independently of inputs.
+    /// Per-stage imports reconstruct exact unknown sources and validate original
+    /// tables and commitments; proving borrows only one key and checks its identity
+    /// before any proof or fold. Metadata matching alone is not source authority.
     /// # Errors
-    /// Nonuniform A descriptors, wrong k/public schema, or wrong W stage/context identity.
+    /// Wrong profile, curve, public schema or installed source descriptor.
     pub fn from_artifacts(
         plan: Plan,
-        a: [Arc<ProvingKey<Eq>>; 5],
-        w: [Arc<ProvingKey<Ep>>; 4],
+        a: [KeyArtifact<Eq>; A_STAGE_COUNT],
+        w: [KeyArtifact<Ep>; A_STAGE_COUNT - 1],
     ) -> Result<Self, Error> {
-        for key in &a {
-            let d = key.binding().descriptor();
-            if d.k != 16
-                || d.instance_lengths != [69]
-                || d.instance_types.as_deref() != Some(&[InstanceType::Bounded])
-                || key.binding() != a[0].binding()
-            {
+        let expected =
+            super::artifact::source_descriptor::<StageCircuit>(()).ok_or(Error::Artifact)?;
+        for artifact in &a {
+            artifact_metadata(artifact, CurveV1::Vesta, &[69], &[InstanceType::Bounded])?;
+            if artifact.binding() != &expected {
                 return Err(Error::Artifact);
             }
-            VerifierPlan::new(key.binding().clone(), plan.vesta.clone())
-                .map_err(|_| Error::Artifact)?;
         }
-        let wrappers = (0..4)
-            .map(|stage| {
+        let mut wrappers = Vec::with_capacity(w.len());
+        for (stage, artifact) in w.iter().enumerate() {
+            artifact_metadata(
+                artifact,
+                CurveV1::Pallas,
+                &[1, 2, 16],
+                &crate::omega::OmegaPlan::instance_types(),
+            )?;
+            wrappers.push(
                 WKey::from_artifact(
                     &plan.context,
                     stage,
-                    w[stage].binding().clone(),
+                    artifact.binding().clone(),
                     plan.pallas.clone(),
-                    w[stage].vk().clone(),
+                    artifact.key().clone(),
                 )
-                .map_err(|_| Error::Artifact)
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .try_into()
-            .map_err(|_| Error::Artifact)?;
+                .map_err(|_| Error::Artifact)?,
+            );
+        }
         Ok(Self {
             plan,
             a,
             w,
-            wrappers,
+            wrappers: wrappers.try_into().map_err(|_| Error::Artifact)?,
         })
+    }
+    /// Import one A original against the exact installed stage and preceding W identity.
+    /// This uses unknown source inputs, never creates accepted claims, and returns one
+    /// owned PK without retaining it or its original bytes. No runtime keygen occurs.
+    /// # Errors
+    /// Wrong stage/cap, changed source/table/commitments or full installed-key mismatch.
+    pub fn import_a(
+        &self,
+        stage: usize,
+        original: &[u8],
+        config: ReadConfig,
+    ) -> Result<ProvingKey<Eq>, Error> {
+        self.import_a_cancellable(stage, original, config, None)
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    pub fn import_a_cancellable(
+        &self,
+        stage: usize,
+        original: &[u8],
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ProvingKey<Eq>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        let artifact = self.a.get(stage).ok_or(Error::Artifact)?;
+        original_bounds(original, artifact.binding().n(), config)?;
+        let circuit = self.plan.source_circuit(
+            stage,
+            stage
+                .checked_sub(1)
+                .map(|previous| self.wrappers[previous].clone()),
+        )?;
+        let key = ProvingKey::from_artifact_v2_cancellable(
+            original,
+            artifact.binding(),
+            &self.plan.vesta,
+            &circuit,
+            config,
+            cancellation,
+        )
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Artifact
+            }
+        })?;
+        artifact.require_prover(&key).map_err(|_| Error::Artifact)?;
+        Ok(key)
+    }
+    /// Import one W original bound to the preceding installed A descriptor and full VK.
+    /// The producer retains neither original bytes nor the returned proving buffers.
+    /// # Errors
+    /// Wrong stage/cap, changed source/table/commitments or full installed-key mismatch.
+    pub fn import_w(
+        &self,
+        stage: usize,
+        original: &[u8],
+        config: ReadConfig,
+    ) -> Result<ProvingKey<Ep>, Error> {
+        self.import_w_cancellable(stage, original, config, None)
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    pub fn import_w_cancellable(
+        &self,
+        stage: usize,
+        original: &[u8],
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ProvingKey<Ep>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        let artifact = self.w.get(stage).ok_or(Error::Artifact)?;
+        original_bounds(original, artifact.binding().n(), config)?;
+        let a = &self.a[stage];
+        let source = self.plan.wrapper_source(stage, a.binding(), a.key())?;
+        let key = ProvingKey::from_artifact_v2_cancellable(
+            original,
+            artifact.binding(),
+            &self.plan.pallas,
+            &source,
+            config,
+            cancellation,
+        )
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Artifact
+            }
+        })?;
+        artifact.require_prover(&key).map_err(|_| Error::Artifact)?;
+        Ok(key)
     }
     /// Check all original proofs/tapes and create a session using only installed artifacts.
     /// # Errors
     /// Any predecessor/Q proof, transported decide or same-tape mismatch.
     pub fn prepare(&self, input: Inputs, budget: MemoryBudget) -> Result<Session<'_>, Error> {
+        self.prepare_cancellable(input, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn prepare_cancellable(
+        &self,
+        input: Inputs,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Session<'_>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         Ok(Session {
             prover: self,
-            prepared: self.plan.prepare(input, budget)?,
+            prepared: self.plan.prepare_cancellable(input, budget, cancellation)?,
         })
     }
     /// Exact installed descriptors in actual A1/W0/A2/W1/A3/W2/A4/W3/A5 checkpoint order.
     #[must_use]
-    pub fn descriptors(&self) -> [&DescriptorBinding; 9] {
-        [
-            self.a[0].binding(),
-            self.w[0].binding(),
-            self.a[1].binding(),
-            self.w[1].binding(),
-            self.a[2].binding(),
-            self.w[2].binding(),
-            self.a[3].binding(),
-            self.w[3].binding(),
-            self.a[4].binding(),
-        ]
+    pub fn descriptors(&self) -> [&DescriptorBinding; A_STAGE_COUNT * 2 - 1] {
+        core::array::from_fn(|index| {
+            if index % 2 == 0 {
+                self.a[index / 2].binding()
+            } else {
+                self.w[index / 2].binding()
+            }
+        })
     }
+}
+
+impl Plan {
+    /// Reconstruct one compiled unknown A source for sequential offline tooling.
+    /// A1 takes no wrapper; every continuation pins its immediately preceding W.
+    /// This creates no prepared operation, accepted claim or monetary authority.
+    /// # Errors
+    /// Out-of-range stage, missing/extra wrapper or wrong fixed stage/context.
+    pub fn source_circuit(
+        &self,
+        stage: usize,
+        previous: Option<WKey>,
+    ) -> Result<StageCircuit, Error> {
+        if stage >= self.context.stage_count() || (stage == 0) != previous.is_none() {
+            return Err(Error::Artifact);
+        }
+        let first = FirstCircuit::blank(self)?;
+        Ok(if stage == 0 {
+            StageCircuit {
+                inner: StageData::First(Box::new(first)),
+            }
+        } else {
+            let split = SplitPlan::new(
+                self.context.clone(),
+                stage,
+                previous.ok_or(Error::Artifact)?,
+                &self.pallas,
+            )
+            .map_err(|_| Error::Artifact)?;
+            StageCircuit {
+                inner: StageData::Continued(Box::new(ContinuationCircuit::blank(first, split)?)),
+            }
+        })
+    }
+
+    /// Reconstruct the unknown W source bound to this stage's exact A verifier.
+    /// The strict original importer uses this same source factory.
+    /// # Errors
+    /// Terminal/out-of-range stage, foreign source profile or invalid A verifier.
+    pub fn wrapper_source(
+        &self,
+        stage: usize,
+        binding: &DescriptorBinding,
+        key: &VerifyingKey<Eq>,
+    ) -> Result<WCircuit, Error> {
+        if stage >= self.context.stage_count().saturating_sub(1)
+            || binding
+                != &super::artifact::source_descriptor::<StageCircuit>(()).ok_or(Error::Artifact)?
+        {
+            return Err(Error::Artifact);
+        }
+        wrapper_source(self, stage, binding, key)
+    }
+}
+
+fn wrapper_source(
+    plan: &Plan,
+    stage: usize,
+    binding: &DescriptorBinding,
+    key: &VerifyingKey<Eq>,
+) -> Result<WCircuit, Error> {
+    let allowed = key.kagemusha_digest(binding).map_err(|_| Error::Artifact)?;
+    let length = iroha_plonk::Protocol::new(binding.descriptor())
+        .map_err(|_| Error::Artifact)?
+        .proof_length();
+    WCircuit::new(
+        &plan.context,
+        stage,
+        binding.clone(),
+        plan.vesta.clone(),
+        vec![allowed],
+        OmegaWitness {
+            key: key.clone(),
+            instances: vec![Fp::ZERO; 69],
+            proof: vec![0; length],
+            length: u32::try_from(length).map_err(|_| Error::Artifact)?,
+            fold: [0; 1120],
+        },
+    )
+    .map(|source| source.without_witnesses())
+    .map_err(|_| Error::Artifact)
 }
 
 /// Source-bound session over the fixed installed Send artifacts.
@@ -1358,54 +1862,104 @@ pub struct Session<'a> {
 }
 impl Session<'_> {
     fn require_source(&self, source: &ACheckpoint) -> Result<(), Error> {
-        if source.stage >= 5 || !Arc::ptr_eq(&source.first.source, &self.prepared.source) {
+        if source.stage >= A_STAGE_COUNT
+            || !Arc::ptr_eq(&source.first.source, &self.prepared.source)
+        {
             return Err(Error::Input);
         }
         Ok(())
     }
-    fn verify_a(&self, source: &ACheckpoint, budget: MemoryBudget) -> Result<(), Error> {
+
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    fn verify_a_cancellable(
+        &self,
+        source: &ACheckpoint,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         self.require_source(source)?;
         let key = &self.prover.a[source.stage];
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.prepared.plan.vesta,
             key.binding(),
-            key.vk(),
-            &[source.public.clone()],
+            key.key(),
+            std::slice::from_ref(&source.public),
             &source.proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         source
             .pallas
-            .decide(&self.prepared.plan.pallas, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.prepared.plan.pallas, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         source
             .part
-            .decide(&self.prepared.plan.vesta, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.prepared.plan.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         source
             .opening
-            .decide(&self.prepared.plan.vesta, budget)
-            .map_err(|_| Error::Proof)
+            .decide_cancellable(&self.prepared.plan.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })
     }
     /// Prove A1 under its installed key, retaining the exact predecessor fold and opening.
     /// # Errors
     /// Fixed artifact/circuit mismatch, failed fold, proof or complete decide.
     pub fn first(
         &self,
+        key: &ProvingKey<Eq>,
         salt: Fp,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<ACheckpoint, Error> {
+        let cancellation = config.cancellation.or(fold.cancellation.as_ref());
+        let config = ProverConfig {
+            cancellation,
+            ..config
+        };
+        let mut normalized_fold = fold.clone();
+        normalized_fold.cancellation = cancellation.cloned();
+        let fold = &normalized_fold;
+
+        self.prover.a[0]
+            .require_prover(key)
+            .map_err(|_| Error::Artifact)?;
         let first = self.prepared.first(salt, fold)?;
         let public = first_public(&first)?;
         let circuit = StageCircuit {
-            inner: StageData::First(first.clone()),
+            inner: StageData::First(Box::new(first.circuit())),
         };
         let (proof, opening) = prove_a(
             &self.prepared.plan,
-            &self.prover.a[0],
+            key,
             &circuit,
             &public,
             randomness,
@@ -1419,7 +1973,7 @@ impl Session<'_> {
             proof,
             pallas: first.pallas.clone(),
             part: first.source.part.clone(),
-            history: vec![],
+
             opening,
         })
     }
@@ -1433,10 +1987,29 @@ impl Session<'_> {
         pallas: &[u8],
         budget: MemoryBudget,
     ) -> Result<ACheckpoint, Error> {
+        self.restore_first_cancellable(proof, pallas, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn restore_first_cancellable(
+        &self,
+        proof: Vec<u8>,
+        pallas: &[u8],
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ACheckpoint, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let pallas = AccumulatorT::<Ep>::from_bytes(pallas).map_err(|_| Error::Input)?;
         pallas
-            .decide(&self.prepared.plan.pallas, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.prepared.plan.pallas, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let first = First {
             source: self.prepared.source.clone(),
             plan: self.prepared.plan.context.clone(),
@@ -1446,22 +2019,30 @@ impl Session<'_> {
         };
         let public = first_public(&first)?;
         let key = &self.prover.a[0];
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.prepared.plan.vesta,
             key.binding(),
-            key.vk(),
-            &[public.clone()],
+            key.key(),
+            std::slice::from_ref(&public),
             &proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
-        let opening = opening_vesta(
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
+        let opening = opening_vesta_cancellable(
             &self.prepared.plan.vesta,
             key.binding(),
-            key.vk(),
-            &[public.clone()],
+            key.key(),
+            std::slice::from_ref(&public),
             &proof,
             budget,
+            cancellation,
         )?;
         Ok(ACheckpoint {
             stage: 0,
@@ -1470,7 +2051,7 @@ impl Session<'_> {
             proof,
             pallas,
             part: self.prepared.source.part.clone(),
-            history: vec![],
+
             opening,
         })
     }
@@ -1481,17 +2062,43 @@ impl Session<'_> {
     pub fn wrapper(
         &self,
         source: &ACheckpoint,
+        key: &ProvingKey<Ep>,
         salt: Fq,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<WCheckpoint, Error> {
-        self.verify_a(source, fold.kernel_budget)?;
-        if source.stage >= 4 {
+        let cancellation = config.cancellation.or(fold.cancellation.as_ref());
+        let config = ProverConfig {
+            cancellation,
+            ..config
+        };
+        let mut normalized_fold = fold.clone();
+        normalized_fold.cancellation = cancellation.cloned();
+        let fold = &normalized_fold;
+
+        self.prover
+            .w
+            .get(source.stage)
+            .ok_or(Error::Input)?
+            .require_prover(key)
+            .map_err(|_| Error::Artifact)?;
+        self.verify_a_cancellable(source, fold.kernel_budget, config.cancellation)?;
+        if source.stage >= A_STAGE_COUNT - 1 {
             return Err(Error::Input);
         }
-        let trivial = AccumulatorT::trivial(&self.prepared.plan.vesta, fold.kernel_budget)
-            .map_err(|_| Error::Proof)?;
+        let trivial = AccumulatorT::trivial_cancellable(
+            &self.prepared.plan.vesta,
+            fold.kernel_budget,
+            config.cancellation,
+        )
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         let (vfold, vesta) = create_fold(
             &self.prepared.plan.vesta,
             &[
@@ -1503,13 +2110,29 @@ impl Session<'_> {
             salt.to_repr(),
             fold,
         )
-        .map_err(|_| Error::Proof)?;
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
         vesta
-            .decide(&self.prepared.plan.vesta, fold.kernel_budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(
+                &self.prepared.plan.vesta,
+                fold.kernel_budget,
+                config.cancellation,
+            )
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let a = &self.prover.a[source.stage];
         let allowed = a
-            .vk()
+            .key()
             .kagemusha_digest(a.binding())
             .map_err(|_| Error::Artifact)?;
         let circuit = WCircuit::new(
@@ -1519,7 +2142,7 @@ impl Session<'_> {
             self.prepared.plan.vesta.clone(),
             vec![allowed],
             OmegaWitness {
-                key: a.vk().clone(),
+                key: a.key().clone(),
                 instances: source.public.clone(),
                 proof: source.proof.clone(),
                 length: u32::try_from(source.proof.len()).map_err(|_| Error::Input)?,
@@ -1528,8 +2151,15 @@ impl Session<'_> {
         )
         .map_err(|_| Error::Input)?;
         let public = omega_instances(source.public[0], &vesta)?;
-        let w = &self.prover.w[source.stage];
-        let witness = Witness::from_circuit(w, &circuit, &public).map_err(|_| Error::Prover)?;
+        let w = key;
+        let witness = Witness::from_circuit_cancellable(w, &circuit, &public, config.cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Prover
+                }
+            })?;
         let output = create_proof_owned_with_claim(
             &self.prepared.plan.pallas,
             w,
@@ -1537,8 +2167,20 @@ impl Session<'_> {
             randomness,
             config,
         )
-        .map_err(|_| Error::Prover)?;
-        self.restore_wrapper(source, output.proof, &vesta.to_bytes(), fold.kernel_budget)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Prover
+            }
+        })?;
+        self.restore_wrapper_cancellable(
+            source,
+            output.proof,
+            &vesta.to_bytes(),
+            fold.kernel_budget,
+            config.cancellation,
+        )
     }
     /// Restore the exact W proof and canonical Vesta obligation for the source A checkpoint.
     /// # Errors
@@ -1550,32 +2192,60 @@ impl Session<'_> {
         vesta: &[u8],
         budget: MemoryBudget,
     ) -> Result<WCheckpoint, Error> {
-        self.verify_a(source, budget)?;
-        if source.stage >= 4 {
+        self.restore_wrapper_cancellable(source, proof, vesta, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn restore_wrapper_cancellable(
+        &self,
+        source: &ACheckpoint,
+        proof: Vec<u8>,
+        vesta: &[u8],
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<WCheckpoint, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        self.verify_a_cancellable(source, budget, cancellation)?;
+        if source.stage >= A_STAGE_COUNT - 1 {
             return Err(Error::Input);
         }
         let vesta = AccumulatorT::<Eq>::from_bytes(vesta).map_err(|_| Error::Input)?;
         vesta
-            .decide(&self.prepared.plan.vesta, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.prepared.plan.vesta, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let public = omega_instances(source.public[0], &vesta)?;
         let w = &self.prover.w[source.stage];
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.prepared.plan.pallas,
             w.binding(),
-            w.vk(),
+            w.key(),
             &public,
             &proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
-        let opening = opening_pallas(
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
+        let opening = opening_pallas_cancellable(
             &self.prepared.plan.pallas,
             w.binding(),
-            w.vk(),
+            w.key(),
             &public,
             &proof,
             budget,
+            cancellation,
         )?;
         Ok(WCheckpoint {
             source: source.clone(),
@@ -1592,7 +2262,7 @@ impl Session<'_> {
     ) -> Result<Continuation, Error> {
         self.require_source(&wrapper.source)?;
         let previous = wrapper.source.stage;
-        if previous >= 4 {
+        if previous >= A_STAGE_COUNT - 1 {
             return Err(Error::Input);
         }
         let split = SplitPlan::new(
@@ -1610,26 +2280,43 @@ impl Session<'_> {
             fold,
             pallas,
             carried: wrapper.source.pallas.clone(),
-            history: wrapper.source.history.clone(),
         })
     }
     /// Prove the next A stage using its installed key and all required Pallas slots.
-    /// Ordered slots are previous carried P, actual W opening, then any fixed stage Q.
+    /// Ordered slots are previous carried P, actual W opening, and that stage's actual Q.
     /// # Errors
     /// Wrong source/stage, omitted obligation, circuit mismatch or any failed full proof.
     pub fn advance(
         &self,
         wrapper: &WCheckpoint,
+        key: &ProvingKey<Eq>,
         salt: Fp,
         fold: &FoldConfig,
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<ACheckpoint, Error> {
-        let restored = self.restore_wrapper(
+        let cancellation = config.cancellation.or(fold.cancellation.as_ref());
+        let config = ProverConfig {
+            cancellation,
+            ..config
+        };
+        let mut normalized_fold = fold.clone();
+        normalized_fold.cancellation = cancellation.cloned();
+        let fold = &normalized_fold;
+
+        let next = wrapper.source.stage.checked_add(1).ok_or(Error::Input)?;
+        self.prover
+            .a
+            .get(next)
+            .ok_or(Error::Input)?
+            .require_prover(key)
+            .map_err(|_| Error::Artifact)?;
+        let restored = self.restore_wrapper_cancellable(
             &wrapper.source,
             wrapper.proof.clone(),
             &wrapper.vesta.to_bytes(),
             fold.kernel_budget,
+            config.cancellation,
         )?;
         let next = restored.source.stage + 1;
         let indices = self
@@ -1645,28 +2332,43 @@ impl Session<'_> {
                 .map(|i| self.prepared.source.q_openings[*i].clone()),
         );
         let (pfold, pallas) =
-            create_fold(&self.prepared.plan.pallas, &claims, salt.to_repr(), fold)
-                .map_err(|_| Error::Proof)?;
+            create_fold(&self.prepared.plan.pallas, &claims, salt.to_repr(), fold).map_err(
+                |error| {
+                    if error.is_cancelled() {
+                        Error::Cancelled
+                    } else {
+                        Error::Proof
+                    }
+                },
+            )?;
         pallas
-            .decide(&self.prepared.plan.pallas, fold.kernel_budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(
+                &self.prepared.plan.pallas,
+                fold.kernel_budget,
+                config.cancellation,
+            )
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let continuation =
             self.continuation(&restored, pallas.clone(), pfold.to_bytes().to_vec())?;
         let public = continuation_public(&continuation)?;
         let circuit = StageCircuit {
-            inner: StageData::Continued(continuation),
+            inner: StageData::Continued(Box::new(continuation.circuit())),
         };
         let (proof, opening) = prove_a(
             &self.prepared.plan,
-            &self.prover.a[next],
+            key,
             &circuit,
             &public,
             randomness,
             config,
             fold.kernel_budget,
         )?;
-        let mut history = restored.source.history.clone();
-        history.push((restored.source.pallas.clone(), restored.vesta.clone()));
         Ok(ACheckpoint {
             stage: next,
             first: restored.source.first,
@@ -1674,14 +2376,13 @@ impl Session<'_> {
             proof,
             pallas,
             part: restored.vesta.as_input(),
-            history,
             opening,
         })
     }
     /// Restore A2/A3/A4/A5 from its verified source W and canonical new Pallas claim.
-    /// Every history/context/public field is derived from the retained source chain.
+    /// Every context/public field is derived from the retained source chain.
     /// # Errors
-    /// Canonical claim, source/history, installed key, proof or complete decide mismatch.
+    /// Canonical claim, source/context, installed key, proof or complete decide mismatch.
     pub fn restore_a(
         &self,
         wrapper: &WCheckpoint,
@@ -1689,39 +2390,66 @@ impl Session<'_> {
         pallas: &[u8],
         budget: MemoryBudget,
     ) -> Result<ACheckpoint, Error> {
-        let restored = self.restore_wrapper(
+        self.restore_a_cancellable(wrapper, proof, pallas, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn restore_a_cancellable(
+        &self,
+        wrapper: &WCheckpoint,
+        proof: Vec<u8>,
+        pallas: &[u8],
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<ACheckpoint, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        let restored = self.restore_wrapper_cancellable(
             &wrapper.source,
             wrapper.proof.clone(),
             &wrapper.vesta.to_bytes(),
             budget,
+            cancellation,
         )?;
         let pallas = AccumulatorT::<Ep>::from_bytes(pallas).map_err(|_| Error::Input)?;
         pallas
-            .decide(&self.prepared.plan.pallas, budget)
-            .map_err(|_| Error::Proof)?;
+            .decide_cancellable(&self.prepared.plan.pallas, budget, cancellation)
+            .map_err(|error| {
+                if error.is_cancelled() {
+                    Error::Cancelled
+                } else {
+                    Error::Proof
+                }
+            })?;
         let continuation = self.continuation(&restored, pallas.clone(), vec![])?;
         let public = continuation_public(&continuation)?;
         let next = restored.source.stage + 1;
         let key = &self.prover.a[next];
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.prepared.plan.vesta,
             key.binding(),
-            key.vk(),
-            &[public.clone()],
+            key.key(),
+            std::slice::from_ref(&public),
             &proof,
             budget,
+            cancellation,
         )
-        .map_err(|_| Error::Proof)?;
-        let opening = opening_vesta(
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
+        let opening = opening_vesta_cancellable(
             &self.prepared.plan.vesta,
             key.binding(),
-            key.vk(),
-            &[public.clone()],
+            key.key(),
+            std::slice::from_ref(&public),
             &proof,
             budget,
+            cancellation,
         )?;
-        let mut history = restored.source.history.clone();
-        history.push((restored.source.pallas.clone(), restored.vesta.clone()));
         Ok(ACheckpoint {
             stage: next,
             first: restored.source.first,
@@ -1729,7 +2457,6 @@ impl Session<'_> {
             proof,
             pallas,
             part: restored.vesta.as_input(),
-            history,
             opening,
         })
     }
@@ -1738,8 +2465,20 @@ impl Session<'_> {
     /// # Errors
     /// A nonterminal/wrong source checkpoint or any failed native proof/decide.
     pub fn terminal(&self, source: &ACheckpoint, budget: MemoryBudget) -> Result<Terminal, Error> {
-        self.verify_a(source, budget)?;
-        if source.stage != 4 {
+        self.terminal_cancellable(source, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn terminal_cancellable(
+        &self,
+        source: &ACheckpoint,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Terminal, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        self.verify_a_cancellable(source, budget, cancellation)?;
+        if source.stage != A_STAGE_COUNT - 1 {
             return Err(Error::Input);
         }
         if source.part.source_k() != 16 {
@@ -1758,7 +2497,7 @@ impl Session<'_> {
     }
 }
 
-/// A fully verified source-bound A checkpoint; ordinal/history/claims are private.
+/// A fully verified source-bound A checkpoint; ordinal/context/claims are private.
 #[derive(Clone)]
 pub struct ACheckpoint {
     stage: usize,
@@ -1767,7 +2506,6 @@ pub struct ACheckpoint {
     proof: Vec<u8>,
     pallas: AccumulatorT<Ep>,
     part: FoldInput<Eq>,
-    history: Vec<(AccumulatorT<Ep>, AccumulatorT<Eq>)>,
     opening: FoldInput<Eq>,
 }
 impl ACheckpoint {
@@ -1792,7 +2530,7 @@ impl ACheckpoint {
         self.pallas.to_bytes()
     }
 }
-/// Fully verified internal W checkpoint bound to its exact source A/history.
+/// Fully verified internal W checkpoint bound to its exact source A/context.
 #[derive(Clone)]
 pub struct WCheckpoint {
     source: ACheckpoint,
@@ -1826,7 +2564,7 @@ pub struct Terminal {
     pub instances: Vec<Fp>,
     /// Full accumulated Pallas claim.
     pub pallas: AccumulatorT<Ep>,
-    /// Full Vesta part forwarded by W2.
+    /// Full Vesta part forwarded by W3.
     pub vesta_part: AccumulatorT<Eq>,
     /// Full predecessor Vesta obligation, distinct from the current part and A opening.
     pub predecessor_vesta: AccumulatorT<Eq>,
@@ -1845,6 +2583,15 @@ fn object_kinds() -> [ObjectKind; 5] {
 }
 
 fn check_sigma_tape(input: &Inputs, mask: u8) -> Result<(), Error> {
+    let expected = Fp::from(u64::from(mask));
+    if mask > 7
+        || input.state.before.core[21] != expected
+        || input.state.after.core[21] != expected
+        || input.state.statement[11] != expected
+    {
+        return Err(Error::Input);
+    }
+    let selector = send_selector(mask)?;
     let bounded = input.q[0].instances.first().ok_or(Error::Input)?;
     let mut raw = u32::try_from(input.sigma.len())
         .map_err(|_| Error::Input)?
@@ -1862,20 +2609,21 @@ fn check_sigma_tape(input: &Inputs, mask: u8) -> Result<(), Error> {
     let statement = Option::<Fq>::from(Fq::from_repr(statement.to_repr())).ok_or(Error::Input)?;
     if bounded.len() != 1 + chunks.len() + K
         || bounded[0] != statement
-        || bounded[1..1 + chunks.len()] != chunks
-        || input.q[0].instances.get(2).map(Vec::as_slice) != Some(&[Fq::from(2 + u64::from(mask))])
+        || bounded[1..=chunks.len()] != chunks
+        || input.q[0].instances.get(2).map(Vec::as_slice) != Some(&[selector])
     {
         return Err(Error::Input);
     }
     Ok(())
 }
 
-fn q_sigma_part(input: &QInput, source_k: u32) -> Result<FoldInput<Eq>, Error> {
+fn q_sigma_part(input: &QInput, source_k: u32, mask: u8) -> Result<FoldInput<Eq>, Error> {
     let [bounded, point, indices, verdicts, source] = input.instances.as_slice() else {
         return Err(Error::Input);
     };
     if point.len() != 2
         || indices.len() != 1
+        || indices.as_slice() != [send_selector(mask)?]
         || verdicts.as_slice() != [Fq::ONE]
         || source.as_slice() != [Fq::from(u64::from(source_k))]
         || bounded.len() < K
@@ -1949,22 +2697,17 @@ fn context_digest(first: &First) -> Result<Fp, Error> {
     for value in source.q_instances.iter().flatten().flatten() {
         words.extend(foreign_limbs(value).map(Fp::from_u128));
     }
-    let originals = source
+    for (object, spec) in source
         .maps
-        .witness
         .objects
         .iter()
-        .cloned()
-        .chain(source.own_objects.iter().map(|o| o.bytes.clone()));
-    for ((raw, kind), spec) in originals
-        .zip(object_kinds())
         .zip(SendStagePlan::context_specs().map_err(|_| Error::Artifact)?)
     {
-        if raw.len() != usize::try_from(spec.capacity).map_err(|_| Error::Input)? {
+        if object.bytes.len() != usize::try_from(spec.capacity).map_err(|_| Error::Input)? {
             return Err(Error::Input);
         }
         let mut bytes = spec.capacity.to_le_bytes().to_vec();
-        bytes.extend(&raw);
+        bytes.extend(&object.bytes);
         let mut tape = vec![
             Fp::from(u64::from(spec.tag)),
             Fp::from(u64::from(spec.capacity)),
@@ -1973,12 +2716,11 @@ fn context_digest(first: &First) -> Result<Fp, Error> {
             tape.push(le_value::<Fp>(chunk).ok_or(Error::Input)?);
         }
         words.extend([
-            object_digest(kind, &raw)?,
+            object.digest()?,
             Fp::from(u64::from(spec.capacity)),
             hash_with_domain(u64::from_le_bytes(*b"kgwctap1"), &tape),
         ]);
     }
-    push_pallas(&mut words, &first.pallas.as_input())?;
     Ok(hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words))
 }
 
@@ -2005,45 +2747,21 @@ fn internal_public(digest: Fp, part: &FoldInput<Eq>) -> Result<Vec<Fp>, Error> {
     Ok(words)
 }
 fn first_public(first: &First) -> Result<Vec<Fp>, Error> {
-    internal_public(context_digest(first)?, &first.source.part)
-}
-fn continued_digest(
-    plan: &ContextPlan,
-    stage: usize,
-    previous: Fp,
-    pallas: &AccumulatorT<Ep>,
-    vesta: &AccumulatorT<Eq>,
-    current: &AccumulatorT<Ep>,
-) -> Result<Fp, Error> {
-    let mut words = vec![
-        Fp::ONE,
-        plan.schema()[1],
-        Fp::from(u64::try_from(stage + 1).map_err(|_| Error::Input)?),
-        previous,
-    ];
-    push_pallas(&mut words, &pallas.as_input())?;
-    words.extend(vesta_words(&vesta.as_input())?);
-    push_pallas(&mut words, &current.as_input())?;
-    Ok(hash_with_domain(u64::from_le_bytes(*b"kgwctx_1"), &words))
+    internal_public(
+        super::support::stage_digest(&first.plan, 0, context_digest(first)?, &first.pallas)
+            .map_err(|_| Error::Input)?,
+        &first.source.part,
+    )
 }
 fn continuation_public(c: &Continuation) -> Result<Vec<Fp>, Error> {
-    if c.history.len() + 1 != c.plan.stage() {
-        return Err(Error::Input);
-    }
     if !c.plan.is_terminal() {
-        let mut digest = context_digest(&c.first)?;
-        for (i, (p, v)) in c.history.iter().enumerate() {
-            let next = c.history.get(i + 1).map_or(&c.carried, |(p, _)| p);
-            digest = continued_digest(&c.first.plan, i + 1, digest, p, v, next)?;
-        }
-        digest = continued_digest(
+        let digest = super::support::stage_digest(
             &c.first.plan,
             c.plan.stage(),
-            digest,
-            &c.carried,
-            &c.vesta,
+            context_digest(&c.first)?,
             &c.pallas,
-        )?;
+        )
+        .map_err(|_| Error::Input)?;
         return internal_public(digest, &c.vesta.as_input());
     }
     let mut words = vec![
@@ -2086,34 +2804,89 @@ fn omega_instances(context: Fp, vesta: &AccumulatorT<Eq>) -> Result<Vec<Vec<Fq>>
     Ok(vec![vec![digest], vec![x, y], challenges])
 }
 
-fn opening_pallas(
+/// Execute the same native check with an explicit operation signal.
+/// # Errors
+/// As the ordinary entry point, or cancellation without a partial verdict.
+fn opening_pallas_cancellable(
     params: &PinnedParams<Ep>,
     binding: &DescriptorBinding,
     key: &VerifyingKey<Ep>,
     instances: &[Vec<Fq>],
     proof: &[u8],
     budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<FoldInput<Ep>, Error> {
-    let claim = accumulate_generator(params, binding, key, instances, proof, budget)
-        .map_err(|_| Error::Proof)?;
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+    let claim = iroha_plonk::verifier::accumulate_generator_cancellable(
+        params,
+        binding,
+        key,
+        instances,
+        proof,
+        budget,
+        cancellation,
+    )
+    .map_err(|error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Proof
+        }
+    })?;
     let input =
         FoldInput::from_opening(*claim.g(), claim.challenges()).map_err(|_| Error::Proof)?;
-    input.decide(params, budget).map_err(|_| Error::Proof)?;
+    input
+        .decide_cancellable(params, budget, cancellation)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
     Ok(input)
 }
-fn opening_vesta(
+
+/// Execute the same native check with an explicit operation signal.
+/// # Errors
+/// As the ordinary entry point, or cancellation without a partial verdict.
+fn opening_vesta_cancellable(
     params: &PinnedParams<Eq>,
     binding: &DescriptorBinding,
     key: &VerifyingKey<Eq>,
     instances: &[Vec<Fp>],
     proof: &[u8],
     budget: MemoryBudget,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<FoldInput<Eq>, Error> {
-    let claim = accumulate_generator(params, binding, key, instances, proof, budget)
-        .map_err(|_| Error::Proof)?;
+    iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+    let claim = iroha_plonk::verifier::accumulate_generator_cancellable(
+        params,
+        binding,
+        key,
+        instances,
+        proof,
+        budget,
+        cancellation,
+    )
+    .map_err(|error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Proof
+        }
+    })?;
     let input =
         FoldInput::from_opening(*claim.g(), claim.challenges()).map_err(|_| Error::Proof)?;
-    input.decide(params, budget).map_err(|_| Error::Proof)?;
+    input
+        .decide_cancellable(params, budget, cancellation)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Proof
+            }
+        })?;
     Ok(input)
 }
 fn prove_a(
@@ -2126,37 +2899,65 @@ fn prove_a(
     budget: MemoryBudget,
 ) -> Result<(Vec<u8>, FoldInput<Eq>), Error> {
     let public = [public.to_vec()];
-    let witness = Witness::from_circuit(key, circuit, &public).map_err(|_| Error::Prover)?;
+    let witness = Witness::from_circuit_cancellable(key, circuit, &public, config.cancellation)
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Prover
+            }
+        })?;
     let output = create_proof_owned_with_claim(&plan.vesta, key, witness, randomness, config)
-        .map_err(|_| Error::Prover)?;
-    verify_full(
+        .map_err(|error| {
+            if error.is_cancelled() {
+                Error::Cancelled
+            } else {
+                Error::Prover
+            }
+        })?;
+    iroha_plonk::verifier::verify_full_cancellable(
         &plan.vesta,
         key.binding(),
         key.vk(),
         &public,
         &output.proof,
         budget,
+        config.cancellation,
     )
-    .map_err(|_| Error::Proof)?;
-    let opening = opening_vesta(
+    .map_err(|error| {
+        if error.is_cancelled() {
+            Error::Cancelled
+        } else {
+            Error::Proof
+        }
+    })?;
+    let opening = opening_vesta_cancellable(
         &plan.vesta,
         key.binding(),
         key.vk(),
         &public,
         &output.proof,
         budget,
+        config.cancellation,
     )?;
     Ok((output.proof, opening))
 }
 
-fn frame(bytes: &[u8]) -> Result<Vec<u8>, LayoutError> {
+fn send_selector(mask: u8) -> Result<Fq, Error> {
+    super::super::schedule::sigma_selector(3, mask)
+        .map(|v| Fq::from(u64::from(v)))
+        .ok_or(Error::Artifact)
+}
+
+fn frame(bytes: &[u8]) -> Result<Vec<u8>, Error> {
     let mut out = u32::try_from(bytes.len())
-        .map_err(|_| LayoutError::BoundsFailure)?
+        .map_err(|_| Error::Input)?
         .to_le_bytes()
         .to_vec();
     out.extend(bytes);
     Ok(out)
 }
+
 fn lineage_bytes(
     fields: &[Fp; 18],
     proof: &[u8],
@@ -2166,45 +2967,28 @@ fn lineage_bytes(
     if fields[0] != Fp::ONE {
         return Err(Error::Input);
     }
-    let mut out = 1_u16.to_le_bytes().to_vec();
-    let mut push128 = |word: Fp| -> Result<(), Error> {
-        let bytes = word.to_repr();
-        if bytes[16..] != [0; 16] {
+    let bounded = |index: usize, length: usize| -> Result<Vec<u8>, Error> {
+        let bytes = fields[index].to_repr();
+        if bytes[length..].iter().any(|v| *v != 0) {
             return Err(Error::Input);
         }
-        out.extend(&bytes[..16]);
-        Ok(())
+        Ok(bytes[..length].to_vec())
     };
+    let mut out = 1u16.to_le_bytes().to_vec();
     for i in [1, 2, 3, 4] {
-        push128(fields[i])?;
+        out.extend(bounded(i, 16)?);
     }
     out.extend(fields[5].to_repr());
     for i in [6, 7] {
-        let bytes = fields[i].to_repr();
-        if bytes[16..] != [0; 16] {
-            return Err(Error::Input);
-        }
-        out.extend(&bytes[..16]);
+        out.extend(bounded(i, 16)?);
     }
     out.extend(fields[8].to_repr());
     out.push(4);
     for i in [10, 9, 12, 11] {
-        let bytes = fields[i].to_repr();
-        if bytes[16..] != [0; 16] {
-            return Err(Error::Input);
-        }
-        out.extend(bytes[..16].iter().rev());
+        out.extend(bounded(i, 16)?.into_iter().rev());
     }
-    let policy = fields[13].to_repr();
-    if policy[13..] != [0; 19] {
-        return Err(Error::Input);
-    }
-    out.extend(&policy[..13]);
-    let burned = fields[14].to_repr();
-    if burned[16..] != [0; 16] {
-        return Err(Error::Input);
-    }
-    out.extend(&burned[..16]);
+    out.extend(bounded(13, 13)?);
+    out.extend(bounded(14, 16)?);
     out.extend(fields[15].to_repr());
     out.extend(fields[16].to_repr());
     if out.len() != 320 {
@@ -2223,12 +3007,11 @@ pub struct Catalog {
 impl Catalog {
     /// Require exactly one installed source pipeline for each global Send selector2..9.
     /// # Errors
-    /// A missing/reordered mask or another scheme/provider/root policy.
+    /// A missing/reordered mask or another fixed provider/root policy.
     pub fn new(masks: [Prover; 8]) -> Result<Self, Error> {
         let first = masks[0].plan.policy;
         for (mask, prover) in masks.iter().enumerate() {
             if usize::from(prover.plan.mask) != mask
-                || prover.plan.policy.scheme != first.scheme
                 || prover.plan.policy.provider != first.provider
                 || prover.plan.policy.root != first.root
             {
@@ -2241,10 +3024,22 @@ impl Catalog {
     /// # Errors
     /// Noncanonical mask, differing opened core, source/tape or native proof/decide failure.
     pub fn prepare(&self, input: Inputs, budget: MemoryBudget) -> Result<Session<'_>, Error> {
+        self.prepare_cancellable(input, budget, None)
+    }
+    /// Execute the same native check with an explicit operation signal.
+    /// # Errors
+    /// As the ordinary entry point, or cancellation without a partial verdict.
+    pub fn prepare_cancellable(
+        &self,
+        input: Inputs,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Session<'_>, Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         let repr = input.state.statement[11].to_repr();
         if repr[0] > 7 || repr[1..] != [0; 31] {
             return Err(Error::Input);
         }
-        self.masks[usize::from(repr[0])].prepare(input, budget)
+        self.masks[usize::from(repr[0])].prepare_cancellable(input, budget, cancellation)
     }
 }

@@ -11,6 +11,9 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
+
+from .native_time_interval import NativeTimeInterval
 
 from .attestation import (
     DurableAppleAssertionCounterStore, RawPlatformProof, android_patch_policy_met,
@@ -96,7 +99,7 @@ def verify_android_wallet_enrollment(
     chain_der: list[bytes], opaque_play_integrity_token: str,
     scope: WalletEnrollmentScope, policy: ConfiguredWalletEnrollmentPolicyV1,
     google: GooglePlayIntegrityVerifier, trusted_time_ms: int, openssl_path: Path,
-    *, challenge_created_at_ms: int,
+    *, challenge_created_at_ms: int, trusted_time_interval: Callable[[], NativeTimeInterval],
 ) -> VerifiedWalletEnrollmentEvidence:
     """Independent hardware, fresh Google revocation and server-decoded PI checks.
 
@@ -104,6 +107,13 @@ def verify_android_wallet_enrollment(
     Google endpoint/OAuth custody stay inside the retained server verifier. Outages retain
     retryable VerificationUnavailable semantics; no caller verdict or software key is used.
     """
+    def current_time() -> int:
+        interval = trusted_time_interval()
+        require(type(interval) is NativeTimeInterval, "private enrollment clock absent")
+        interval.check_both(lambda now: policy.validate_scope(
+            scope.challenge_transcript, challenge_created_at_ms, now))
+        return interval.upper_at_ms
+
     scope.validate()
     _trusted_time(trusted_time_ms)
     require(type(policy) is ConfiguredWalletEnrollmentPolicyV1, "configured policy absent")
@@ -116,15 +126,21 @@ def verify_android_wallet_enrollment(
     raw: RawPlatformProof = verify_android_wallet_payment_key_raw(
         chain_der, scope.challenge_digest(), app.package_name, app.package_version,
         app.app_signing_certificate_sha256, policy.attestation_root_der,
-        selected.attestation_root_sha256, trusted_time_ms, openssl_path,
+        selected.attestation_root_sha256, current_time(), openssl_path,
         allowed_security_levels=selected.allowed_security_levels())
     require(raw.attested_public_key_sec1 == scope.payment_key_sec1,
             "KeyMint attests another payment key")
     # This first producer supports configured Google roots only. Other vendor roots need
     # their actual adapter-owned revocation contract, never a fabricated Google-clear bit.
+    current_time()
     verify_google_chain_not_revoked(chain_der)
+    current_time()
     integrity = google.decode(opaque_play_integrity_token, policy.play_integrity_policy(),
-                              scope.enrollment_key_binding(), trusted_time_ms)
+                              scope.enrollment_key_binding(), current_time())
+    now = current_time()
+    require(integrity.proof.timestamp_ms <= now
+            and now - integrity.proof.timestamp_ms <= selected.play_integrity_maximum_age_ms,
+            "Google evidence expired during verification")
     require(raw.android_security_level in (1, 2) and raw.android_patch_levels is not None,
             "verified Android key facts absent")
     levels = raw.android_patch_levels

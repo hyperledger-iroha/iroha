@@ -21,11 +21,8 @@ use norito::{
     },
 };
 #[cfg(any(test, feature = "transparent_api"))]
-use std::collections::BTreeMap;
-use std::{
-    borrow::Cow, collections::BTreeSet, convert::TryInto, fmt, format, string::String,
-    time::Duration, vec::Vec,
-};
+use std::collections::{BTreeMap, BTreeSet};
+use std::{borrow::Cow, convert::TryInto, fmt, format, string::String, time::Duration, vec::Vec};
 pub mod proofs;
 /// Finality-verified historical retail activation; not a current-state proof.
 pub mod retail_activation_proof;

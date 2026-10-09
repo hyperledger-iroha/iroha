@@ -41,6 +41,38 @@ impl<C: PastaCurve> TranscriptRepr<C> {
             Self::Scalar(C::ScalarExt::from_uniform_bytes(&wide))
         }
     }
+    /// Derive the identical VK binding while checking cancellation between hash chunks.
+    ///
+    /// # Errors
+    /// Returns caller cancellation without a partial binding.
+    pub fn derive_cancellable(
+        v2: bool,
+        profile: TranscriptV2,
+        digest: &[u8; 32],
+        vk: &[u8],
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, iroha_pasta::Cancelled> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        let persona = if v2 {
+            b"Iroha-PlonkVK-v2"
+        } else {
+            b"Iroha-PlonkVK-v1"
+        };
+        let mut hasher = crate::cs::descriptor::Blake2bPersonal::<64>::new(persona);
+        hasher.update(digest);
+        for chunk in vk.chunks(4096) {
+            iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+            hasher.update(chunk);
+        }
+        let wide = hasher.finalize();
+        iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+        Ok(if profile == TranscriptV2::KagemushaPoseidonRp57Base {
+            Self::Base(C::Base::from_uniform_bytes(&wide))
+        } else {
+            Self::Scalar(C::ScalarExt::from_uniform_bytes(&wide))
+        })
+    }
+
     /// Returns a scalar representation only when its profile uses that field.
     #[must_use]
     pub fn scalar(&self) -> Option<&C::ScalarExt> {

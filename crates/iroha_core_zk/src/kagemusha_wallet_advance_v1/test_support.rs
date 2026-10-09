@@ -224,9 +224,15 @@ fn retained_for(kind: KagemushaWalletOperationKindV1) -> Vec<KagemushaWalletReta
         KagemushaWalletOperationKindV1::Receive => {
             &[R::Request, R::Payment, R::CertificateSet, R::Credential]
         }
-        KagemushaWalletOperationKindV1::ArchiveSent => &[R::Request, R::Payment, R::Credited],
+        KagemushaWalletOperationKindV1::ArchiveSent => &[
+            R::Request,
+            R::Payment,
+            R::Credited,
+            R::Credential,
+            R::CertificateSet,
+        ],
         KagemushaWalletOperationKindV1::Send => &[R::Request],
-        KagemushaWalletOperationKindV1::Load => &[R::LoadVoucher, R::CertificateSet],
+        KagemushaWalletOperationKindV1::Load => &[R::LoadReceipt, R::LoadFinality],
         KagemushaWalletOperationKindV1::RefreshPolicy => &[R::PolicyUpdate, R::CertificateSet],
         _ => &[],
     };
@@ -478,6 +484,12 @@ pub(super) struct FakeStateV1 {
     pub(super) anchor_write: AnchorWriteV1,
     /// Boot identity.
     pub(super) boot: Result<[u8; 32], KagemushaWalletUnavailableV1>,
+    /// Test-controlled sleep-inclusive clock result.
+    pub(super) monotonic: Result<u64, KagemushaWalletUnavailableV1>,
+    pub(super) monotonic_script:
+        std::collections::VecDeque<Result<u64, KagemushaWalletUnavailableV1>>,
+    /// Change the boot result during the next clock read to detect mixed observations.
+    pub(super) boot_after_monotonic: Option<Result<[u8; 32], KagemushaWalletUnavailableV1>>,
     /// Storage state answer.
     pub(super) storage: Result<(), KagemushaWalletUnavailableV1>,
     /// Lock storage after this many further successful storage-state answers.
@@ -490,6 +502,18 @@ pub(super) struct FakeStateV1 {
     pub(super) fresh_generation_calls: usize,
     /// Key generation answers `Unavailable` (the key may still be created).
     pub(super) generate_unavailable: Option<bool>,
+    /// Lock protected storage immediately after a successful generation reply (test only).
+    pub(super) lock_after_generation: bool,
+    /// Simulated readback failure after an actual successful key-generation return.
+    pub(super) generation_readback_unavailable: bool,
+    /// Actual returned public key and exact request; never populated from a probe.
+    pub(super) generation_originals: BTreeMap<
+        KagemushaWalletSlotIdV1,
+        (
+            KagemushaWalletKeyGenerationRequestV1,
+            KagemushaDevicePublicKeyV1,
+        ),
+    >,
     /// Signing answers `Unavailable`.
     pub(super) sign_unavailable: bool,
     /// Anchor reads answer `Unavailable`.
@@ -547,12 +571,18 @@ impl FakePlatformV1 {
                 policy,
                 anchor_write: AnchorWriteV1::Normal,
                 boot: Ok(BOOT_A),
+                monotonic: Ok(1_000),
+                monotonic_script: std::collections::VecDeque::new(),
+                boot_after_monotonic: None,
                 storage: Ok(()),
                 storage_lock_after: None,
                 probe_unavailable: false,
                 generation_policy: KagemushaWalletKeyGenerationPolicyV1::DefinitiveAbsence,
                 fresh_generation_calls: 0,
                 generate_unavailable: None,
+                lock_after_generation: false,
+                generation_readback_unavailable: false,
+                generation_originals: BTreeMap::new(),
                 sign_unavailable: false,
                 anchor_read_unavailable: false,
                 delete_refused: false,
@@ -599,6 +629,8 @@ impl FakePlatformV1 {
             state.probe_fault_at = None;
             state.anchor_fault_at = None;
             state.storage_lock_after = None;
+            state.lock_after_generation = false;
+            state.generation_readback_unavailable = false;
             state.storage = Ok(());
         });
     }
@@ -679,6 +711,22 @@ impl FakePlatformV1 {
 }
 
 impl KagemushaWalletPlatformV1 for FakePlatformV1 {
+    fn key_recover_generation_reply(
+        &self,
+        slot: &KagemushaWalletSlotIdV1,
+        request: &KagemushaWalletKeyGenerationRequestV1,
+    ) -> Result<Option<KagemushaDevicePublicKeyV1>, KagemushaWalletUnavailableV1> {
+        self.with(|state| {
+            let Some((original, key)) = state.generation_originals.get(slot) else {
+                return Ok(None);
+            };
+            if original != request || state.generation_readback_unavailable {
+                return Err(KagemushaWalletUnavailableV1::Busy);
+            }
+            Ok(Some(*key))
+        })
+    }
+
     fn key_enumerate(&self) -> Result<Vec<KagemushaWalletSlotIdV1>, KagemushaWalletUnavailableV1> {
         self.with(|state| {
             state.enumerate_calls += 1;
@@ -875,6 +923,18 @@ impl KagemushaWalletPlatformV1 for FakePlatformV1 {
     fn boot_id(&self) -> Result<[u8; 32], KagemushaWalletUnavailableV1> {
         self.with(|state| state.boot)
     }
+
+    fn monotonic_ms(&self) -> Result<u64, KagemushaWalletUnavailableV1> {
+        self.with(|state| {
+            if let Some(boot) = state.boot_after_monotonic.take() {
+                state.boot = boot;
+            }
+            state
+                .monotonic_script
+                .pop_front()
+                .unwrap_or(state.monotonic)
+        })
+    }
 }
 
 impl FakePlatformV1 {
@@ -901,7 +961,17 @@ impl FakePlatformV1 {
                 }
                 None => {
                     state.keys.insert(*slot, key);
-                    KagemushaWalletKeyGenerationV1::Generated(public)
+                    state.generation_originals.insert(*slot, (*request, public));
+                    if state.lock_after_generation {
+                        state.storage = Err(KagemushaWalletUnavailableV1::Locked);
+                    }
+                    if state.generation_readback_unavailable {
+                        KagemushaWalletKeyGenerationV1::Unavailable(
+                            KagemushaWalletUnavailableV1::Busy,
+                        )
+                    } else {
+                        KagemushaWalletKeyGenerationV1::Generated(public)
+                    }
                 }
             }
         })
@@ -1161,7 +1231,14 @@ pub(super) fn enrolled_device(
     let f = wallet_fixture(seed);
     let mut provider = device.open();
     let super::KagemushaWalletEnrollmentStepV1::Enrolled { slot, marker } = provider
-        .begin_enrollment(&enrollment_challenge(seed), PROFILE)
+        .test_begin_enrollment(
+            &enrollment_challenge(seed),
+            PROFILE,
+            crate::kagemusha_wallet_advance_v1::KagemushaWalletEnrollmentDatesV1 {
+                issued_at_ms: 1,
+                expires_at_ms: 600_001,
+            },
+        )
         .expect("begin")
     else {
         panic!("not enrolled");

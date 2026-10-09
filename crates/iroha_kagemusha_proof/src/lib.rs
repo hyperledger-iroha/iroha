@@ -20,9 +20,10 @@
 //! attestation lease in `sigma_send`, and the receiver's blacklist in
 //! `sigma_recv`. The shared vectors of
 //! `fixtures/kagemusha/wallet_v1_vectors.json` pin them
-//! (`tests/digest_parity.rs`). No protocol path uses them yet, and the
-//! artifact set (verifying keys and the frozen proof lengths) remains release
-//! qualification work. Keys use V2 descriptors and the `kgwvkey1` digest.
+//! (`tests/digest_parity.rs`). The native wallet provider and ledger verifier
+//! consume these relations. The complete installed artifact set, actual proof
+//! lengths and end-to-end acceptance remain release qualification work.
+//! Keys use V2 descriptors and the `kgwvkey1` digest.
 //!
 //! # Contents
 //!
@@ -91,6 +92,7 @@ pub mod circuit;
 pub mod consumer;
 mod control_circuit;
 pub mod controls;
+pub mod finality;
 pub mod omega;
 pub mod operation_relation;
 pub mod proof;
@@ -118,6 +120,7 @@ pub use proof::{
 };
 pub use shape::{
     PROOF_BYTES_GATE, ShapeChoice, ShapePolicy, SigmaShape, limb_bits_for, select_shape,
+    wallet_monetary_shape,
 };
 pub use tree::{BlacklistGap, IndexedInsert, IndexedLeaf, QuotaWindow};
 pub use vectors::{Mutation, SAMPLE_RELATION_ID, sample_witness};

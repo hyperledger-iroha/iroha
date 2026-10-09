@@ -40,8 +40,8 @@ pub(in crate::kagemusha::kagemusha_wallet_v1) fn policy_fixture(
             KagemushaWalletEnrollmentPlatformV1::Android {
                 attestation_root_sha256: [4; 32],
                 hardware: KagemushaWalletAndroidHardwareV1::TeeOrStrongBox,
-                patch_floor_yyyymm: 202608,
-                play_integrity_maximum_age_ms: 120000,
+                patch_floor_yyyymm: 202_608,
+                play_integrity_maximum_age_ms: 120_000,
                 require_play_recognized: true,
                 require_licensed: true,
                 minimum_device_integrity: KagemushaWalletPlayIntegrityLevelV1::Device,
@@ -52,8 +52,8 @@ pub(in crate::kagemusha::kagemusha_wallet_v1) fn policy_fixture(
             blacklist_max_age_ms: 0,
             time_anchor_max_response_ms: if apple { 5000 } else { 0 },
         },
-        challenge_lifetime_ms: 120000,
-        attestation_lease_lifetime_ms: if apple { 3600000 } else { 0 },
+        challenge_lifetime_ms: 120_000,
+        attestation_lease_lifetime_ms: if apple { 3_600_000 } else { 0 },
     };
     (app, enrollment)
 }
@@ -243,21 +243,21 @@ fn new_enrollment_policy_rejects_cross_scope_app_platform_and_policy_substitutio
 fn new_enrollment_policy_challenge_and_lease_boundaries_without_defaults() {
     let (_, mut android) = policy_fixture(false);
     android.require_live_challenge(10, 10).unwrap();
-    android.require_live_challenge(10, 120009).unwrap();
-    for (created, now) in [(0, 1), (10, 9), (10, 120010), (u64::MAX - 1, u64::MAX)] {
+    android.require_live_challenge(10, 120_009).unwrap();
+    for (created, now) in [(0, 1), (10, 9), (10, 120_010), (u64::MAX - 1, u64::MAX)] {
         assert!(android.require_live_challenge(created, now).is_err());
     }
     assert_eq!(android.lease_expires_at(10).unwrap(), 0);
     assert!(android.lease_expires_at(0).is_err());
     let (_, mut apple) = policy_fixture(true);
-    assert_eq!(apple.lease_expires_at(10).unwrap(), 3600010);
+    assert_eq!(apple.lease_expires_at(10).unwrap(), 3_600_010);
     assert!(apple.lease_expires_at(u64::MAX - 1).is_err());
     apple.attestation_lease_lifetime_ms = 0;
     assert!(apple.validate().is_err());
     android.attestation_lease_lifetime_ms = 1;
     assert!(android.validate().is_err());
     android.attestation_lease_lifetime_ms = 0;
-    android.challenge_lifetime_ms = 119999;
+    android.challenge_lifetime_ms = 119_999;
     assert!(android.validate().is_err());
     android.challenge_lifetime_ms = 0;
     assert!(android.validate().is_err());

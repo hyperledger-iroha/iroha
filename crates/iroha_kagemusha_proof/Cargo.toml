@@ -32,8 +32,26 @@ iroha_plonk_recursion = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 # `Field`/`PrimeField` traits of the iroha_pasta field types.
 ff = "0.13.1"
+# Curve::to_affine for canonical transported incoming correction points.
+group = "0.13"
+
+# Native untrusted BLS witness generation; the constrained source program
+# checks every transition and remains the sole cryptographic authority.
+ark-bls12-381 = { version = "0.4.0", default-features = false, features = ["curve"] }
+ark-ff = { version = "0.4.2", default-features = false }
+ark-ec = { version = "0.4.2", default-features = false }
+ark-serialize = { version = "0.4.2", default-features = false }
+sha2 = "0.10.9"
 
 [dev-dependencies]
+# Canonical executed-genesis admission for the source-only finality compiler.
+# These test-driver dependencies never enter the production native proof boundary.
+iroha_genesis = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false }
+# Exact canonical CommitQC projection from independently verified captured blocks.
+iroha_sumeragi = { workspace = true }
+# Independent native normal-validator signature and BLS program oracles.
+iroha_crypto = { workspace = true, default-features = false, features = ["bls"] }
 # Deterministic recovery streams for reproducible test proofs.
 rand_chacha = "0.3.1"
 # Thread pools for the measurement harness and the parallel tamper sweep.

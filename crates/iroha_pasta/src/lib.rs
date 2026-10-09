@@ -50,6 +50,9 @@
 //! `tests/cross_impl_encoding.rs` holds the `halo2curves` 0.9 encoding KATs.
 #![forbid(unsafe_code)]
 
+pub mod cancellation;
+pub use cancellation::{CancellationToken, Cancelled};
+
 pub mod curve;
 pub mod fft;
 pub mod field;
@@ -77,3 +80,6 @@ impl core::fmt::Display for LengthMismatch {
 }
 
 impl std::error::Error for LengthMismatch {}
+
+#[cfg(test)]
+mod cancellation_tests;

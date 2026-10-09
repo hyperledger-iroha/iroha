@@ -20,10 +20,9 @@ use iroha_plonk::{
     DescriptorBinding, KeyError, ProverConfig, ProverError, ProverRandomness, ProvingKey,
     VerifyError, VerifyingKey, Witness, create_proof_owned,
     cs::{CurveV1, InstanceModeV1, ProofSuffixV1, TranscriptV2},
-    frontend::Error as LayoutError,
+    frontend::{Circuit, Error as LayoutError},
     keys::pk::artifact::{Error as ArtifactError, ReadConfig},
     pcs::ipa::PinnedParams,
-    verifier::verify_full,
 };
 use iroha_plonk_gadgets::{
     p256::{
@@ -68,6 +67,18 @@ impl fmt::Display for QSignatureError {
     }
 }
 impl std::error::Error for QSignatureError {}
+impl QSignatureError {
+    /// Whether this is cancellation, never an invalid incoming proof or burn witness.
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Layout(error) => matches!(error, iroha_plonk::frontend::Error::Cancelled),
+            Self::Artifact(error) => error.is_cancelled(),
+            Self::Prover(error) => error.is_cancelled(),
+            Self::Verify(error) => error.is_cancelled(),
+            _ => false,
+        }
+    }
+}
 
 /// One immutable installed signature-Q source and its original imported key.
 /// Private fields prevent a witness from changing slot policy or fixed roots.
@@ -76,6 +87,25 @@ pub struct QSignatureProver {
     params: PinnedParams<Ep>,
     key: ProvingKey<Ep>,
 }
+impl QSignaturePlan {
+    /// Reconstruct the exact unknown signature-Q source for offline key tooling.
+    /// Slot order, hard/soft modes and fixed keys remain circuit constants;
+    /// digest/key/signature witnesses are unknown. This creates no accepted
+    /// signature verdict, prepared operation or catalog authority.
+    /// # Errors
+    /// Invalid fixed slot dimensions or source layout.
+    pub fn source_circuit(&self) -> Result<QSignatureCircuit, QSignatureError> {
+        let blank = SignatureWitness {
+            digest: Fp::ZERO,
+            key: [[0; 4]; 2],
+            signature: [[0; 4]; 2],
+        };
+        QSignatureCircuit::new(self.clone(), vec![blank; self.slots().len()])
+            .map(|source| source.without_witnesses())
+            .map_err(QSignatureError::Layout)
+    }
+}
+
 impl QSignatureProver {
     /// Import one original under the exact independently installed slot plan.
     /// No key generation, alternate profile or import fallback is performed.
@@ -83,7 +113,7 @@ impl QSignatureProver {
     /// The complete originals, scheme/catalog scope and resource policy must
     /// already be authenticated by the native installation owner. This method
     /// checks fixed source/key continuity; it grants no catalog admission,
-    /// NativeProofs implementation, wallet-open capability or enrollment identity.
+    /// `NativeProofs` implementation, wallet-open capability or enrollment identity.
     /// Original/domain bounds do not qualify total synthesis/prover memory.
     ///
     /// # Errors
@@ -97,6 +127,30 @@ impl QSignatureProver {
         original: &[u8],
         config: ReadConfig,
     ) -> Result<Self, QSignatureError> {
+        Self::from_original_artifact_cancellable(
+            plan,
+            params,
+            descriptor,
+            installed_vk,
+            original,
+            config,
+            None,
+        )
+    }
+    /// Import the same original with an explicit operation cancellation signal.
+    /// # Errors
+    /// As the ordinary import, or cancellation without a partial installed key.
+    pub fn from_original_artifact_cancellable(
+        plan: QSignaturePlan,
+        params: PinnedParams<Ep>,
+        descriptor: &[u8],
+        installed_vk: &[u8],
+        original: &[u8],
+        config: ReadConfig,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<Self, QSignatureError> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation)
+            .map_err(|_| QSignatureError::Prover(iroha_plonk::ProverError::Cancelled))?;
         if params.k() != 16 {
             return Err(QSignatureError::Parameters);
         }
@@ -130,15 +184,16 @@ impl QSignatureProver {
         VerifyingKey::<Ep>::read(installed_vk, &binding).map_err(|error| {
             QSignatureError::Artifact(ArtifactError::Key(KeyError::VerifyingKey(error)))
         })?;
-        let blank = SignatureWitness {
-            digest: Fp::ZERO,
-            key: [[0; 4]; 2],
-            signature: [[0; 4]; 2],
-        };
-        let circuit = QSignatureCircuit::new(plan.clone(), vec![blank; plan.slots().len()])
-            .map_err(QSignatureError::Layout)?;
-        let key = ProvingKey::from_artifact_v2(original, &binding, &params, &circuit, config)
-            .map_err(QSignatureError::Artifact)?;
+        let circuit = plan.source_circuit()?;
+        let key = ProvingKey::from_artifact_v2_cancellable(
+            original,
+            &binding,
+            &params,
+            &circuit,
+            config,
+            cancellation,
+        )
+        .map_err(QSignatureError::Artifact)?;
         if key.vk().to_bytes() != installed_vk {
             return Err(QSignatureError::UnauthorizedKey);
         }
@@ -189,26 +244,44 @@ impl QSignatureProver {
         randomness: ProverRandomness<'_>,
         config: ProverConfig,
     ) -> Result<QSignatureProof, QSignatureError> {
-        let verdicts = signature_verdicts(&self.plan, witnesses)?;
+        let instances = self.plan.native_instances(witnesses)?;
         let circuit = QSignatureCircuit::new(self.plan.clone(), witnesses.to_vec())
             .map_err(QSignatureError::Layout)?;
-        let instances = circuit
-            .instances(&verdicts)
-            .map_err(QSignatureError::Layout)?;
-        let witness = Witness::from_circuit(&self.key, &circuit, &instances)
-            .map_err(QSignatureError::Prover)?;
+        let witness =
+            Witness::from_circuit_cancellable(&self.key, &circuit, &instances, config.cancellation)
+                .map_err(QSignatureError::Prover)?;
         let bytes = create_proof_owned(&self.params, &self.key, witness, randomness, config)
             .map_err(QSignatureError::Prover)?;
-        verify_full(
+        iroha_plonk::verifier::verify_full_cancellable(
             &self.params,
             self.binding(),
             self.verifying_key(),
             &instances,
             &bytes,
             config.msm_budget,
+            config.cancellation,
         )
         .map_err(QSignatureError::Verify)?;
         Ok(QSignatureProof { bytes, instances })
+    }
+}
+
+impl QSignaturePlan {
+    /// Derive exact Q public values from raw signed objects under this fixed policy.
+    /// Native low-S verification derives every soft verdict and rejects failed hard
+    /// slots. This supplies restoration inputs, never a proof or acceptance grant.
+    /// # Errors
+    /// Wrong slot count, substituted fixed key, invalid hard signature or field encoding.
+    pub fn native_instances(
+        &self,
+        witnesses: &[SignatureWitness],
+    ) -> Result<[Vec<Fq>; 1], QSignatureError> {
+        let verdicts = signature_verdicts(self, witnesses)?;
+        let circuit = QSignatureCircuit::new(self.clone(), witnesses.to_vec())
+            .map_err(QSignatureError::Layout)?;
+        circuit
+            .instances(&verdicts)
+            .map_err(QSignatureError::Layout)
     }
 }
 
@@ -285,6 +358,14 @@ mod tests {
             Err(QSignatureError::Signature)
         ));
         assert_eq!(signature_verdicts(&soft, &[invalid]).unwrap(), [false]);
+        assert!(matches!(
+            hard.native_instances(&[invalid]),
+            Err(QSignatureError::Signature)
+        ));
+        let public = soft.native_instances(&[invalid]).unwrap();
+        assert_eq!(public[0].last(), Some(&Fq::ZERO));
+        assert!(soft.native_instances(&[]).is_err());
+
         assert!(matches!(
             signature_verdicts(&soft, &[]),
             Err(QSignatureError::Layout(_))

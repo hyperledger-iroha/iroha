@@ -120,7 +120,7 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "b2470b224696f4dc2238840cece5bad4d0983541b76f03328f2ddce7eb8fe25e",
+                "4a6568079490fc73ddf6dd052a17fd8f0cc64ba57c2a52acb17b969c0089d2d2",
                 "instruction record capture digest drift"
             );
             let capture: Value =
@@ -212,6 +212,24 @@ where
             .unwrap_or_else(|error| panic!("decode captured {nominal}: {error}"));
         let actual = frame_fields(&capture(value));
         fixture_json::assert_json_matches(expected, &actual, nominal);
+    }
+}
+
+#[test]
+fn retired_load_instruction_without_asset_and_ordinal_is_rejected() {
+    // Exact retired root frames before and after the verifier-install variant
+    // was added. The latter uses the current IssueLoad tag but still lacks the
+    // required asset/ordinal fields; neither payload may be decoded.
+    for retired in [
+        "4e52543000008eef66c2b4be9ed7b2604aec85793350007b000000000000000a09ab00d41fc01a020000000000000000200101010101010101010101010101010101010101010101010101010101010101590400000020020202020202020202020202020202020202020202020202020202020202020220030303030303030303030303030303030303030303030303030303030303030310070000000000000000000000000000000100",
+        "4e52543000008eef66c2b4be9ed7b2604aec85793350007b00000000000000d6e8c972dd8bf2a0020000000000000000200101010101010101010101010101010101010101010101010101010101010101590500000020020202020202020202020202020202020202020202020202020202020202020220030303030303030303030303030303030303030303030303030303030303030310070000000000000000000000000000000100",
+    ] {
+        let retired = unhex(retired);
+        assert!(
+            norito::decode_from_bytes::<super::kagemusha_wallet::KagemushaWalletLedgerV1>(&retired)
+                .is_err(),
+            "retired Load instructions must not decode"
+        );
     }
 }
 
